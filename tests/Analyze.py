@@ -108,7 +108,7 @@ class BloodFlowTester:
             except:
                 pass
             
-            # Method 3: Use coordinates (based on your screenshots - left sidebar)
+            # Method 3: Use coordinates
             print("Using coordinate-based click...")
             rect = self.main_window.rectangle()
             # Click relative to window position
@@ -138,7 +138,7 @@ class BloodFlowTester:
             combos = self.main_window.descendants(control_type="ComboBox")
             
             if combos:
-                scan_dropdown = combos[0]  # Get first combobox (likely the scan selector)
+                scan_dropdown = combos[0]  # Get first combobox
                 scan_dropdown.click_input()
                 time.sleep(1)
                 
@@ -281,7 +281,6 @@ class BloodFlowTester:
                 "total_steps": len(self.test_results["steps_completed"]),
                 "total_errors": len(self.test_results["errors"]),
                 "success_rate": f"{(len(self.test_results['steps_completed']) / 6) * 100:.1f}%",
-          #      "duration": f"{duration_seconds:.2f} seconds"
             }
             
             # Write to file with pretty formatting
