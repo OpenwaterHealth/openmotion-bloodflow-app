@@ -120,11 +120,7 @@ def trigger_field_validation(edit):
     time.sleep(UI_DELAY)
 
 
-def collect_error_text(win, hint: str) -> str:
-    """
-    Heuristic: scan Text controls for strings that contain hint.
-    Set ERROR_HINT broad (e.g., 'Subject', 'ID', 'required') for best capture.
-    """
+def collect_error_text(win, hint: str) -> str: # Look for Text controls containing the hint and return their combined text
     h = hint.lower()
     texts = win.descendants(control_type="Text")
     matches = []

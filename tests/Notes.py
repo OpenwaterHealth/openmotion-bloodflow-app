@@ -14,23 +14,13 @@ TEST_CASES = [
     {"name": "empty", "text": ""},
     {"name": "single_line", "text": "This is a test note"},
     {"name": "multiline", "text": "Line 1\nLine 2\nLine 3"},
-#    {"name": "special_chars", "text": "@#()[]{};:'\",.<>/?\\|+=-_"},
     {"name": "long_text", "text": "A" * 500},
 ]
 
 def now():
     return datetime.now().isoformat(timespec="seconds")
 
-def escape_for_type_keys(s: str) -> str:
-    """
-    pywinauto type_keys uses SendKeys syntax:
-      {TAB} etc are special keys.
-    To type literal { and } we must escape:
-      {  -> {{}   (Send literal '{')
-      }  -> {}}   (Send literal '}')
-
-    Also escape + ^ % ~ which have special meaning in SendKeys.
-    """
+def escape_for_type_keys(s: str) -> str:    # Escape special characters for type_keys
     s = s.replace("{", "{{}")   # literal {
     s = s.replace("}", "{}}")   # literal }
     s = s.replace("+", "{+}")
