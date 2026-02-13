@@ -80,35 +80,9 @@ class BloodFlowTester:
         """Step 2: Click the Analyze button/tab"""
         print("\nStep 2: Clicking 'Analyze' navigation...")
         try:
-            # Try multiple methods to click Analyze
-            
-            # Method 1: Try to find button by various names
-            button_names = ["Analyze", "Analysis", "Data Analysis"]
-            for name in button_names:
-                try:
-                    btn = self.main_window.child_window(title=name, control_type="Button")
-                    if btn.exists():
-                        btn.click_input()
-                        print(f"✓ Clicked '{name}' button")
-                        time.sleep(2)
-                        self._log_step("Click Analyze", True, f"Clicked '{name}' button", "button_search")
-                        return True
-                except:
-                    continue
-            
-            # Method 2: Try to find as a tab
-            try:
-                tab = self.main_window.child_window(title_re=".*Analyz.*", control_type="TabItem")
-                if tab.exists():
-                    tab.click_input()
-                    print("✓ Clicked Analyze tab")
-                    time.sleep(2)
-                    self._log_step("Click Analyze", True, "Clicked Analyze tab", "tab_search")
-                    return True
-            except:
-                pass
-            
-            # Method 3: Use coordinates
+            # Try this methods to click Analyze
+                        
+            # Method: Use coordinates
             print("Using coordinate-based click...")
             rect = self.main_window.rectangle()
             # Click relative to window position
@@ -264,7 +238,7 @@ class BloodFlowTester:
             print(f"✗ {error_msg}")
             return False
     
-    def write_report(self, filename="test_report.json"):
+    def write_report(self, filename="analyze_test_report.json"):
         """Step 6: Write comprehensive JSON report"""
         print(f"\nStep 6: Writing test report to {filename}...")
         try:
