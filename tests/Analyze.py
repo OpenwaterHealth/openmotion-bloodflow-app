@@ -1,12 +1,28 @@
 import time
 import json
+import os
+import argparse
 from datetime import datetime
+from pathlib import Path
 from pywinauto import Desktop
 from pywinauto.keyboard import send_keys
 
+# Default app path - can be overridden with APP_PATH environment variable
+DEFAULT_APP_PATH = os.getenv("APP_PATH", r".\OpenWaterApp.exe")
+
+def find_app_path():
+    """Find OpenWaterApp.exe using the default path"""
+    
+    # Check if default path exists (relative or absolute)
+    default_path = Path(DEFAULT_APP_PATH)
+    if default_path.exists():
+        print(f"Using app path: {default_path.absolute()}")
+        return str(default_path.absolute())
+    
+    raise FileNotFoundError(f"OpenWaterApp.exe not found at: {DEFAULT_APP_PATH}. Set APP_PATH environment variable or place OpenWaterApp.exe in same directory as script.")
 
 class BloodFlowTester:
-    def __init__(self, app_path=r"C:\Users\vpenn\Documents\OpenWaterApp-0p4\OpenWaterApp.exe"):
+    def __init__(self, app_path=None):
         self.app_path = app_path
         self.main_window = None 
         self.test_results = {
@@ -331,7 +347,23 @@ class BloodFlowTester:
 
 def main():
     """Main entry point"""
-    tester = BloodFlowTester(app_path=r"C:\Users\vpenn\Documents\OpenWaterApp-0p4\OpenWaterApp.exe")
+    parser = argparse.ArgumentParser(description='Open-MOTION BloodFlow Test Script')
+    parser.add_argument('--app-path', type=str, help='Path to OpenWaterApp.exe')
+    parser.add_argument('--run', action='store_true', help='Run the test')
+    
+    args = parser.parse_args()
+    
+    # Determine which app path to use
+    if args.app_path:
+        # Use command-line argument if provided
+        app_path = args.app_path
+        print(f"Using app path from argument: {app_path}")
+    else:
+        # Use default path detection
+        app_path = find_app_path()
+    
+    # Create tester with the determined path
+    tester = BloodFlowTester(app_path=app_path)
     
     tester.run_full_test()
 
