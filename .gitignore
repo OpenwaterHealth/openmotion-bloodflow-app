@@ -89,3 +89,4 @@ OpenWaterApp*.zip
 /run-logs/
 
 .claude/
+tests/scan_data/*
