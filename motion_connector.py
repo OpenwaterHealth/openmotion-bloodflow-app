@@ -1536,6 +1536,18 @@ class MOTIONConnector(QObject):
             logger.warning(f"Failed to write EOL test CSV: {e}")
             run_logger.warning(f"Failed to write EOL test CSV: {e}")
 
+        # Emit a single end-of-scan EOL verdict to the Qt capture log window.
+        overall_eol_pass = bool(eol_rows) and all(
+            row.get("mean_test") == "PASS" and row.get("contrast_test") == "PASS"
+            for row in eol_rows
+        )
+        eol_result = "PASS" if overall_eol_pass else "FAIL"
+        status_emoji = "✅" if overall_eol_pass else "❌"
+        eol_msg = f"{status_emoji} EOL criteria result: {eol_result}"
+        self.captureLog.emit(eol_msg)
+        logger.info(eol_msg)
+        run_logger.info(eol_msg)
+
     def _on_safety_trip_during_capture(self):
         """Called on main thread when safety tripped while scan was running: show message and cancel scan in 5 s."""
         if not self._capture_running or self._safety_cancel_scheduled:
