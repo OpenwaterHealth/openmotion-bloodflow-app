@@ -5,8 +5,6 @@ from PyQt6.QtCore import (
     pyqtSlot,
     QVariant,
     QThread,
-    QWaitCondition,
-    QMutex,
     QTimer,
 )
 from pathlib import Path
@@ -201,12 +199,6 @@ class MOTIONConnector(QObject):
         self.connect_signals()
         self._viz_thread = None
         self._viz_worker = None
-        self._console_status_thread = None
-
-        self._tcm = 0.0
-        self._tcl = 0.0
-        self._pdc = 0.0
-        self._telemetry_lock = threading.Lock()
 
         self._tec_voltage = 0.0
         self._tec_temp = 0.0
@@ -244,14 +236,7 @@ class MOTIONConnector(QObject):
         if self._consoleConnected:
             self.on_connected("CONSOLE", "startup")
 
-        # Start console status thread if console is already connected at startup
-        if self._consoleConnected and self._console_status_thread is None:
-            logger.info(
-                "[Connector] Console already connected at startup, starting status thread"
-            )
-            self._console_status_thread = ConsoleStatusThread(self)
-            self._console_status_thread.statusUpdate.connect(self.handleUpdateCapStatus)
-            self._console_status_thread.start()
+        motion_interface.console_module.telemetry.add_listener(self._on_telemetry_update)
 
     def set_eol_thresholds(
         self,
@@ -778,20 +763,6 @@ class MOTIONConnector(QObject):
                 logger.info("Console fan speed set to 50%")
             else:
                 logger.error("Failed to set console fan speed")
-            # Start console status thread when console connects
-            if self._console_status_thread is None:
-                self._console_status_thread = ConsoleStatusThread(self)
-                self._console_status_thread.statusUpdate.connect(
-                    self.handleUpdateCapStatus
-                )
-                self._console_status_thread.start()
-            else:
-                # Wake the status thread so it notices the new console connection immediately
-                try:
-                    if getattr(self, "_console_status_thread", None) is not None:
-                        self._console_status_thread._wait_condition.wakeAll()
-                except Exception:
-                    pass
 
         self.signalConnected.emit(descriptor, port)
         self.connectionStatusChanged.emit()
@@ -832,10 +803,6 @@ class MOTIONConnector(QObject):
                 pass
         elif descriptor.upper() == "CONSOLE":
             self._consoleConnected = False
-            # Stop console status thread when console disconnects
-            if self._console_status_thread:
-                self._console_status_thread.stop()
-                self._console_status_thread = None
 
         logger.info(
             f"Device disconnected: {descriptor} on port {port} and state is {self._state}"
@@ -861,9 +828,55 @@ class MOTIONConnector(QObject):
         self.stateChanged.emit()  # Notify QML of state update
         logger.info(f"Updated state: {self._state}")
 
+    def _on_telemetry_update(self, snap) -> None:
+        if not snap.read_ok:
+            logger.warning("Telemetry poll error: %s", snap.error)
+            return
+
+        try:
+            self.tec_status(snap)
+            run_logger.info(
+                "TEC Status – temp: %.2f set: %.2f tec_c: %.3f tec_v: %.3f good: %s",
+                self._tec_voltage, self._tec_temp,
+                snap.tec_curr_raw, snap.tec_volt_raw, snap.tec_good,
+            )
+        except Exception as exc:
+            logger.error("_on_telemetry_update TEC error: %s", exc)
+
+        try:
+            self.pdu_mon(snap)
+            if snap.pdu_volts:
+                run_logger.info(
+                    "PDU MON ADC0 vals: %s",
+                    " ".join(f"{(v / SCALE_V):.3f}" for v in snap.pdu_volts[:8]),
+                )
+                adc1_scaled = [
+                    (v / SCALE_V) if idx == 6 else (v / SCALE_I)
+                    for idx, v in enumerate(snap.pdu_volts[8:])
+                ]
+                run_logger.info(
+                    "PDU MON ADC1 vals: %s",
+                    " ".join(f"{v:.3f}" for v in adc1_scaled),
+                )
+        except Exception as exc:
+            logger.error("_on_telemetry_update PDU error: %s", exc)
+
+        try:
+            self.readSafetyStatus(snap)
+        except Exception as exc:
+            logger.error("_on_telemetry_update safety error: %s", exc)
+
+        try:
+            run_logger.info(
+                "Analog Values – TCM: %d, TCL: %d, PDC: %.3f",
+                snap.tcm, snap.tcl, snap.pdc,
+            )
+            self._write_runlog_csv_sample(snap.tcm, snap.tcl, snap.pdc, snap.timestamp)
+        except Exception as exc:
+            logger.error("_on_telemetry_update analog error: %s", exc)
+
     @pyqtSlot(str)
     def handleUpdateCapStatus(self, status_msg: str):
-        """Handle status updates from ConsoleStatusThread."""
         logger.debug(f"Console status update: {status_msg}")
 
     @pyqtSlot()
@@ -893,13 +906,6 @@ class MOTIONConnector(QObject):
         """Shutdown connector. Stops capture, then stops status thread and monitoring."""
         logger.info("Shutting down MOTIONConnector...")
         self.stopCapture()
-
-        if self._console_status_thread:
-            try:
-                self._console_status_thread.stop()
-            except Exception as e:
-                logger.warning("Error stopping console status thread: %s", e)
-            self._console_status_thread = None
 
         try:
             if self._interface:
@@ -1133,12 +1139,10 @@ class MOTIONConnector(QObject):
         self._start_runlog(subject_id=subject_id)
 
         def _extra_cols():
-            with self._telemetry_lock:
-                return [
-                    int(self._tcm),
-                    int(self._tcl),
-                    f"{float(self._pdc):.3f}",
-                ]
+            snap = motion_interface.console_module.telemetry.get_snapshot()
+            if snap is not None:
+                return [int(snap.tcm), int(snap.tcl), f"{float(snap.pdc):.3f}"]
+            return [0, 0, "0.000"]
 
         temp_alerted_by_side = {"left": set(), "right": set()}
 
@@ -1430,146 +1434,66 @@ class MOTIONConnector(QObject):
         QTimer.singleShot(5000, self.stopCapture)
 
     @pyqtSlot(result=QVariant)
-    def tec_status(self):
-        """
-        Returns a dict suitable for QML:
-        On error: { ok: False, error: "..." }
-        """
-
-        try:
-            v, i, p, t, ok = motion_interface.console_module.tec_status()
-
-            R_TH = (
-                1 / ((float(v) / (V_REF / 2 * R_3)) - 1 / R_3 + 1 / R_1) - R_2
-            )  # v = OUT1, VOUT1 from ADC
-            Thermistor_Temp = np.interp(
-                R_TH, self._data_RT[:, 1][::-1], self._data_RT[:, 0][::-1]
-            )
-
-            R_SET = (
-                1 / ((float(i) / (V_REF / 2 * R_3)) - 1 / R_3 + 1 / R_1) - R_2
-            )  # i = IN2P, TEMPSET from ADC
-            SET_Temp = np.interp(
-                R_SET, self._data_RT[:, 1][::-1], self._data_RT[:, 0][::-1]
-            )
-
-            self._tec_voltage = round(
-                float(Thermistor_Temp), 2
-            )  # Measured thermistor temperature
-            self._tec_temp = round(float(SET_Temp), 2)  # Measured target setpiont
-            self._tec_monC = round(
-                (float(p) - 0.5 * V_REF) / (25 * R_s), 3
-            )  # p = V_itec
-            self._tec_monV = round((float(t) - 0.5 * V_REF) * 4, 3)  # t = V_vtec
-            self._tec_good = bool(ok)  # TMPGD pin (abs(OUT1-IN2P) < 100mV)
-
-            # Long-run health sample -> goes ONLY to run.log
-
-            run_logger.info(
-                "TEC Status -  temp: %.2f set: %.2f tec_c: %.3f tec_v: %.3f good: %s",
-                self._tec_voltage,
-                self._tec_temp,
-                float(p),
-                float(t),
-                bool(ok),
-            )
-
-            self.tecStatusChanged.emit()
-
-            return True
-
-        except Exception as e:
-            logger.error(f"Error in TEC status operation: {e}")
+    def tec_status(self, snap=None):
+        if snap is None:
+            snap = motion_interface.console_module.telemetry.get_snapshot()
+        if snap is None or not snap.read_ok:
             return False
 
+        v, i, p, t, ok = (
+            snap.tec_v_raw, snap.tec_set_raw,
+            snap.tec_curr_raw, snap.tec_volt_raw, snap.tec_good,
+        )
+
+        R_TH = (
+            1 / ((float(v) / (V_REF / 2 * R_3)) - 1 / R_3 + 1 / R_1) - R_2
+        )
+        Thermistor_Temp = np.interp(
+            R_TH, self._data_RT[:, 1][::-1], self._data_RT[:, 0][::-1]
+        )
+
+        R_SET = (
+            1 / ((float(i) / (V_REF / 2 * R_3)) - 1 / R_3 + 1 / R_1) - R_2
+        )
+        SET_Temp = np.interp(
+            R_SET, self._data_RT[:, 1][::-1], self._data_RT[:, 0][::-1]
+        )
+
+        self._tec_voltage = round(float(Thermistor_Temp), 2)
+        self._tec_temp = round(float(SET_Temp), 2)
+        self._tec_monC = round((float(p) - 0.5 * V_REF) / (25 * R_s), 3)
+        self._tec_monV = round((float(t) - 0.5 * V_REF) * 4, 3)
+        self._tec_good = bool(ok)
+
+        self.tecStatusChanged.emit()
+        return True
+
     @pyqtSlot(result=QVariant)
-    def pdu_mon(self):
-        """
-        Returns a dict (QVariant) for QML:
-        On success:
-          {
+    def pdu_mon(self, snap=None):
+        if snap is None:
+            snap = motion_interface.console_module.telemetry.get_snapshot()
+        if snap is None or not snap.read_ok or not snap.pdu_raws:
+            return {"ok": False, "error": "no data"}
+
+        self._pdu_raws = list(snap.pdu_raws)
+        self._pdu_vals = list(snap.pdu_volts)
+        self.pduMonChanged.emit()
+
+        return {
             "ok": True,
-            "adc0": {"raws": [...8...], "vals": [...8...]},
-            "adc1": {"raws": [...8...], "vals": [...8...]},
-          }
-        On error:
-          { "ok": False, "error": "..." }
-        """
-        try:
-            pdu = motion_interface.console_module.read_pdu_mon()
-            if pdu is None:
-                logger.error("PDU MON: no data")
-                return {"ok": False, "error": "no data"}
-
-            temp1, temp2, temp3 = motion_interface.console_module.get_temperatures()
-
-            # Cache for QML bindings
-            self._pdu_raws = list(pdu.raws)
-            self._pdu_vals = list(pdu.volts)
-
-            # Emit change for any bound properties
-            self.pduMonChanged.emit()
-
-            adc1_scaled = [
-                (v / SCALE_V)
-                if i == 6
-                else (v / SCALE_I)  # i is ADC1 channel index 0..7
-                for i, v in enumerate(self._pdu_vals[8:])
-            ]
-
-            run_logger.info(
-                "PDU MON ADC0 vals: %s",
-                " ".join(f"{(v / SCALE_V):.3f}" for v in self._pdu_vals[:8]),
-            )
-
-            run_logger.info(
-                "PDU MON ADC1 vals: %s", " ".join(f"{i:.3f}" for i in adc1_scaled)
-            )
-
-            run_logger.info(
-                "TEMP MON: MCU: %.2f SAFETY: %.2f TA: %.2f", temp1, temp2, temp3
-            )
-
-            # Return QML-friendly dict
-            return {
-                "ok": True,
-                "adc0": {
-                    "raws": self._pdu_raws[:8],
-                    "vals": self._pdu_vals[:8],
-                },
-                "adc1": {
-                    "raws": self._pdu_raws[8:],
-                    "vals": self._pdu_vals[8:],
-                },
-            }
-
-        except Exception as e:
-            logger.error("Error in PDU MON operation: %s", e)
-            return {"ok": False, "error": str(e)}
+            "adc0": {"raws": self._pdu_raws[:8], "vals": self._pdu_vals[:8]},
+            "adc1": {"raws": self._pdu_raws[8:], "vals": self._pdu_vals[8:]},
+        }
 
     @pyqtSlot()
-    def readSafetyStatus(self):
-        # Replace this with your actual console status check
+    def readSafetyStatus(self, snap=None):
+        if snap is None:
+            snap = motion_interface.console_module.telemetry.get_snapshot()
+        if snap is None:
+            logger.warning("readSafetyStatus: no telemetry snapshot yet")
+            return
         try:
-            muxIdx = 1
-            i2cAddr = 0x41
-            offset = 0x24
-            data_len = 1  # Number of bytes to read
-
-            channels = {"SE": 6, "SO": 7}
-            statuses = {}
-
-            for label, channel in channels.items():
-                status = self.i2cReadBytes(
-                    "CONSOLE", muxIdx, channel, i2cAddr, offset, data_len
-                )
-                if status:
-                    statuses[label] = status[0]
-                else:
-                    raise Exception("readSafetyStatus error (I2C read error)")
-
-            status_text = f"SE: 0x{statuses['SE']:02X}, SO: 0x{statuses['SO']:02X}"
-            if (statuses["SE"] & 0x0F) == 0 and (statuses["SO"] & 0x0F) == 0:
+            if snap.safety_ok:
                 if self._safetyFailure:
                     self.safetyFailure = False
             else:
@@ -1579,9 +1503,8 @@ class MOTIONConnector(QObject):
                     self.laserStateChanged.emit(False)
                     if self._capture_running and not self._safety_cancel_scheduled:
                         self.safetyTripDuringCaptureRequested.emit()
-
         except Exception as e:
-            logger.error(f"readSafetyStatus status query failed: {e}")
+            logger.error(f"readSafetyStatus failed: {e}")
             self.safetyFailure = True
             if self._capture_running and not self._safety_cancel_scheduled:
                 self.safetyTripDuringCaptureRequested.emit()
@@ -2386,117 +2309,3 @@ class _VizWorker(QObject):
             self.error.emit(str(e))
 
 
-# --- Console Status Thread ---
-class ConsoleStatusThread(QThread):
-    statusUpdate = pyqtSignal(str)
-
-    def __init__(self, connector: MOTIONConnector, parent=None):
-        super().__init__(parent)
-        self.connector = connector
-        self._running = True
-        self._mutex = QMutex()
-        self._wait_condition = QWaitCondition()
-        self.last_run = time.time()
-
-    def run(self):
-        """Run loop that calls readSafetyStatus() every 1000ms when console is connected."""
-        logger.info("Console status thread started")
-        while self._running:
-            now = time.time()
-            # run the heavy work ~1 Hz
-            # Check if console is connected before reading safety status
-            if (
-                now - self.last_run >= DATA_ACQ_INTERVAL
-                and self.connector._consoleConnected
-            ):
-                start_tick = time.time()
-                try:
-                    #
-                    # 1. TEC status poll
-                    #
-                    # This updates _tec_* fields inside connector and emits tecStatusChanged
-                    self.connector.tec_status()
-
-                    #
-                    # 2. PDU Mon poll
-                    #
-                    self.connector.pdu_mon()
-
-                    # 3. Safety / interlock state
-                    self.connector.readSafetyStatus()
-
-                    #
-                    # 4. Analog telemetry (tcm/tcl/pdc)
-                    #
-
-                    muxIdx = 1
-                    i2cAddr = 0x41
-
-                    tcm_raw = self.connector.getLsyncCount()
-                    tcl_raw = self.connector.i2cReadBytes(
-                        "CONSOLE", muxIdx, 4, i2cAddr, 0x10, 4
-                    )
-                    pdc_raw = self.connector.i2cReadBytes(
-                        "CONSOLE", muxIdx, 7, i2cAddr, 0x1C, 2
-                    )
-
-                    logger.debug(
-                        f"tcm_raw: {tcm_raw} tcl_raw: {tcl_raw} pdc_raw: {pdc_raw}"
-                    )
-
-                    if tcl_raw and pdc_raw:
-                        tcm = int(tcm_raw)
-                        tcl = int.from_bytes(tcl_raw, byteorder="little")
-                        pdc = int.from_bytes(pdc_raw, byteorder="little") * 1.9  # mA
-                        ts = time.time()
-
-                        with self.connector._telemetry_lock:
-                            if (
-                                tcl != self.connector._tcl
-                                or tcm != self.connector._tcm
-                                or pdc != self.connector._pdc
-                            ):
-                                self.connector._tcl = tcl
-                                self.connector._tcm = tcm
-                                self.connector._pdc = pdc
-
-                        run_logger.info(
-                            f"Analog Values - TCM: {tcm}, TCL: {tcl}, PDC: {pdc:.3f}"
-                        )
-                        self.connector._write_runlog_csv_sample(tcm, tcl, pdc, ts)
-                    else:
-                        logger.error("Failed to read analog telemetry values")
-
-                except Exception as e:
-                    logger.error(f"Console status query failed: {e}")
-                    self.statusUpdate.emit(f"Safety status read error: {e}")
-
-                # mark we ran this 1Hz tick (use tick start so we maintain a stable cadence)
-                self.last_run = start_tick
-
-                # log how long the tick took
-                duration = time.time() - start_tick
-                logger.debug(
-                    "ConsoleStatusThread tick duration: %.1f ms", duration * 1000.0
-                )
-
-            # compute a smarter wait: sleep until next scheduled tick (but clamp to sensible bounds)
-            now_after = time.time()
-            elapsed = now_after - self.last_run
-            remaining = DATA_ACQ_INTERVAL - elapsed
-            # minimum wait 50ms to avoid tight spin; maximum 1000ms
-            wait_ms = int(max(50, min(1000, remaining * 1000))) if remaining > 0 else 50
-
-            # sleep/wait for up to wait_ms, or until stop()/wakeAll() is called
-            self._mutex.lock()
-            try:
-                self._wait_condition.wait(self._mutex, wait_ms)
-            finally:
-                self._mutex.unlock()
-
-    def stop(self):
-        """Called from another thread to stop the thread gracefully."""
-        self._running = False
-        self._wait_condition.wakeAll()
-        self.quit()
-        self.wait()
