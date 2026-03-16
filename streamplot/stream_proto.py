@@ -14,6 +14,13 @@ import multiprocessing as mp
 
 import bfplot
 from bfplot import BFPlot
+from session_samples import Sample
+from session_samples import SessionSamples
+
+from bfcompute import CamCalib
+from bfcompute import BFComputer
+from bfcompute import BFValue
+from bfcompute import ValueAvailable
 
 indicate = True#enable console output indicating queue len
 
@@ -34,18 +41,26 @@ class ProducerBase(Thread):
 class DataProducerMockup(ProducerBase):
     def __init__(self, count, period_s, stop_event, in_csv_path=None):
         super().__init__(period_s, stop_event)
-        self.count = count
+        self.csv_path = "C:/Users/ethan/Projects/ow-bloodflow-app/scan_data/scan_owTM2GXS_20260214_125021_left_mask99.csv"
+        self.sd = SessionSamples();
+        self.count = self.sd.read_csv(self.csv_path)
+        self.id = 0
     """Override"""
     def run(self):
         for i in range(self.count):
             if self.stop_event.is_set():
                 break
-            # Simulate data generation
-            v1 = np.float32(np.random.rand())
-            v2 = np.float32(np.random.rand())
-            v3 = np.float32(np.random.rand())
-            v4 = np.float32(np.random.rand())
-            data = {"id": i, "value1": v1, "value2": v2, "value3": v3, "value4": v4, "timestamp": time.time()}
+            if False:
+                # Simulate data generation
+                v1 = np.float32(np.random.rand())
+                v2 = np.float32(np.random.rand())
+                v3 = np.float32(np.random.rand())
+                v4 = np.float32(np.random.rand())
+                data = {"id": i, "value1": v1, "value2": v2, "value3": v3, "value4": v4, "timestamp": time.time()}
+            else:
+                data = self.sd.get(self.id)
+                self.id += 1
+                self.id = self.id if self.id < self.count else 0
             self.out_q.put(data)
             self.produced_event.set()
             if indicate: print(f"* {self.out_q.qsize()}")
@@ -63,22 +78,27 @@ class DataProcessorMockup(Thread):
         self.produced_event = Event()
         self.produced_event.clear()
         self.stop_event = stop_event
+        self.camcalib = CamCalib()
+        self.computer = BFComputer(4)#!!!
     """Override"""
     def run(self):
         while not self.stop_event.is_set():
             try:
-                data = self.in_q.get(timeout=1)
-                if data is SENTINEL:
+                sample = self.in_q.get(timeout=1)
+                if sample is SENTINEL:
                     #self.out_q_1.put(SENTINEL)
                     #self.out_q_mp.put(SENTINEL)
                     break
                 # Process data
-                processed = (data["timestamp"], data["value1"] , data["value2"] , data["value3"] , data["value4"] )
-                self.out_q_1.put(processed)
-                self.out_q_mp.put(processed)
-                self.produced_event.set()
-                if indicate: print(f"= :{self.out_q_1.qsize()} :{self.out_q_mp.qsize()}")
-                QApplication.processEvents()
+                processed_sample = self.computer.compute(sample)
+                if processed_sample.available:
+                    v = processed_sample.value
+                    processed = (v.timestamp, v.bfi, v.bvi, v.bfi, v.bvi)
+                    self.out_q_1.put(processed)
+                    self.out_q_mp.put(processed)
+                    self.produced_event.set()
+                    if indicate: print(f"= :{self.out_q_1.qsize()} :{self.out_q_mp.qsize()}")
+                    QApplication.processEvents()
                 self.in_q.task_done()
             except Empty: continue
     def process(self):
@@ -225,4 +245,3 @@ if __name__ == "__main__":
     for t in threads: 
         t.join()
     pass
-
