@@ -1,4 +1,4 @@
-# OpenMOTION Bloodflow Application
+# Open-MOTION Bloodflow Application
 
 Python Application UI for OPEN Motion Bloodflow monitoring 
 
