@@ -32,6 +32,7 @@ from omotion.config import (
     DEBUG_FLAG_USB_PRINTF,
     DEBUG_FLAG_FAKE_DATA,
     DEBUG_FLAG_HISTO_THROTTLE,
+    DEBUG_FLAG_HISTO_CMP,
     DEBUG_FLAG_COMM_VERBOSE,
     DEBUG_FLAG_CMD_VERBOSE,
 )
@@ -147,6 +148,7 @@ class MOTIONConnector(QObject):
         sensor_debug_logging=False,
         camera_fake_data=False,
         histo_throttle=False,
+        histo_cmp=False,
         output_path=None,
         power_off_unused_cameras=False,
         comm_verbose=False,
@@ -162,6 +164,7 @@ class MOTIONConnector(QObject):
         self._histo_throttle = bool(histo_throttle)
         self._comm_verbose = bool(comm_verbose)
         self._verbose_command_handling = bool(verbose_command_handling)
+        self._histo_cmp = bool(histo_cmp)
         self._output_base = output_path or os.getcwd()
         self._power_off_unused_cameras = bool(power_off_unused_cameras)
 
@@ -320,6 +323,8 @@ class MOTIONConnector(QObject):
             flags |= DEBUG_FLAG_COMM_VERBOSE
         if self._verbose_command_handling:
             flags |= DEBUG_FLAG_CMD_VERBOSE
+        if self._histo_cmp:
+            flags |= DEBUG_FLAG_HISTO_CMP
         return flags
 
     def _schedule_sensor_init(self, side: str):
@@ -345,14 +350,13 @@ class MOTIONConnector(QObject):
         if flags != 0 and sensor is not None and sensor.is_connected():
             logger.info(
                 "Setting debug flags 0x%x on %s sensor "
-                "(debug_logging=%s, fake_data=%s, histoThrottle=%s, commVerbose=%s, verboseCommand=%s)",
+                "(debug_logging=%s, fake_data=%s, histoThrottle=%s, histoCmp=%s)",
                 flags,
                 side,
                 self._sensor_debug_logging,
                 self._camera_fake_data,
                 getattr(self, "_histo_throttle", False),
-                getattr(self, "_comm_verbose", False),
-                getattr(self, "_verbose_command_handling", False),
+                getattr(self, "_histo_cmp", False),
             )
             if not sensor.set_debug_flags(flags):
                 logger.warning("Failed to set debug flags on %s sensor", side)
