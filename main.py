@@ -63,6 +63,8 @@ def _load_app_config() -> dict:
         "output_path": None,  # None = use cwd; str = base directory for scan_data, app-logs, run-logs
         "histoThrottle": False,
         "powerOffUnusedCameras": False,
+        "commVerbose": False,  # Enable cmd id and "." prints from MCU
+        "verboseCommandHandling": False,  # Enable printf in MCU command handlers
         "eol_min_mean_per_camera": [0] * 8,
         "eol_min_contrast_per_camera": [0] * 8,
     }
@@ -186,6 +188,8 @@ def main():
         camera_fake_data=app_config.get("cameraFakeData", False),
         histo_throttle=app_config.get("histoThrottle", False),
         power_off_unused_cameras=app_config.get("powerOffUnusedCameras", False),
+        comm_verbose=app_config.get("commVerbose", False),
+        verbose_command_handling=app_config.get("verboseCommandHandling", False),
         output_path=output_base,
     )
     connector.set_eol_thresholds(
@@ -256,9 +260,6 @@ def main():
     except KeyboardInterrupt:
         logger.info("Application interrupted by user.")
     finally:
-        # print out logger tree
-        logger.info("Logger tree:")
-        logger.info(logger.manager.loggerDict)
         loop.close()
 
 
