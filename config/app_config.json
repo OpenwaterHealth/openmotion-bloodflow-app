@@ -6,6 +6,7 @@
   "sensorDebugLogging": true,
   "cameraFakeData": false,
   "histoThrottle": false,
+  "histoCmp": true,
   "powerOffUnusedCameras": false,
   "commVerbose": true,
   "verboseCommandHandling": true,

@@ -62,6 +62,7 @@ def _load_app_config() -> dict:
         "cameraFakeData": False,
         "output_path": None,  # None = use cwd; str = base directory for scan_data, app-logs, run-logs
         "histoThrottle": False,
+        "histoCmp": False,
         "powerOffUnusedCameras": False,
         "commVerbose": False,  # Enable cmd id and "." prints from MCU
         "verboseCommandHandling": False,  # Enable printf in MCU command handlers
@@ -187,6 +188,7 @@ def main():
         sensor_debug_logging=app_config.get("sensorDebugLogging", False),
         camera_fake_data=app_config.get("cameraFakeData", False),
         histo_throttle=app_config.get("histoThrottle", False),
+        histo_cmp=app_config.get("histoCmp", False),
         power_off_unused_cameras=app_config.get("powerOffUnusedCameras", False),
         comm_verbose=app_config.get("commVerbose", False),
         verbose_command_handling=app_config.get("verboseCommandHandling", False),
