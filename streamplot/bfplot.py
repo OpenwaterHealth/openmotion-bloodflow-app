@@ -68,6 +68,12 @@ class BFPlot():
             self.data2.pop(0)
         if plot:
             self.set_data_event.set()#trigger redraw
+    """ """
+    def init_plot_data(self, d1, d2):
+        for i in range(len(self.data1)):
+            self.data1[i] = d1
+            self.data2[i] = d2
+        pass
     """Simulate data"""
     def update_plot_sin(self):
         self.ssig += 1

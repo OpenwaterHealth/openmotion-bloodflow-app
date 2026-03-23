@@ -11,6 +11,14 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton
 from PyQt6.QtCore import QTimer
 
 import multiprocessing as mp
+import csv
+
+import uuid
+
+# Generate a random UUID (version 4)
+#random_guid = uuid.uuid4()
+# Convert the UUID object to a string format with hyphens
+#guid_string = str(random_guid)
 
 import bfplot
 from bfplot import BFPlot
@@ -21,6 +29,8 @@ from bfcompute import CamCalib
 from bfcompute import BFComputer
 from bfcompute import BFValue
 from bfcompute import ValueAvailable
+
+from bfstorage import SamplesDBsqlite
 
 indicate = True#enable console output indicating queue len
 
@@ -41,33 +51,35 @@ class ProducerBase(Thread):
 class DataProducerMockup(ProducerBase):
     def __init__(self, count, period_s, stop_event, in_csv_path=None):
         super().__init__(period_s, stop_event)
-        self.csv_path = "C:/Users/ethan/Projects/ow-bloodflow-app/scan_data/scan_owTM2GXS_20260214_125021_left_mask99.csv"
+        #self.csv_path = "C:/Users/ethan/Projects/ow-bloodflow-app/scan_data/scan_owTM2GXS_20260214_125021_left_mask99.csv"
+        #self.csv_path = "C:/Users/ethan/Projects/ow-bloodflow-app/scan_data/scan_owTM2GXS_20260214_124944_left_mask99.csv"
+        self.csv_path = "C:/Users/ethan/Projects/ow-bloodflow-app/scan_data/scan_owTM2GXS_20260214_124553_left_mask99.csv"
         self.sd = SessionSamples();
         self.count = self.sd.read_csv(self.csv_path)
         self.id = 0
+        self.out_q_raw_store = Queue(maxsize=self.q_max_size); 
     """Override"""
     def run(self):
-        for i in range(self.count):
-            if self.stop_event.is_set():
-                break
-            if False:
-                # Simulate data generation
-                v1 = np.float32(np.random.rand())
-                v2 = np.float32(np.random.rand())
-                v3 = np.float32(np.random.rand())
-                v4 = np.float32(np.random.rand())
-                data = {"id": i, "value1": v1, "value2": v2, "value3": v3, "value4": v4, "timestamp": time.time()}
-            else:
+        pass
+        try:
+            for i in range(self.count):
+                if self.stop_event.is_set():
+                    break
                 data = self.sd.get(self.id)
                 self.id += 1
                 self.id = self.id if self.id < self.count else 0
-            self.out_q.put(data)
-            self.produced_event.set()
-            if indicate: print(f"* {self.out_q.qsize()}")
-            time.sleep(self.period_s)
-            QApplication.processEvents()
+                self.out_q.put(data)
+                self.out_q_raw_store.put(data)
+                self.produced_event.set()
+                if indicate: print(f"* {self.out_q.qsize()}")
+                time.sleep(self.period_s)
+                QApplication.processEvents()
+                pass
+            self.out_q.put(SENTINEL) # Signal end
+            self.out_q_raw_store.put(SENTINEL) # Signal end
+        except Exception as e:
+            print(e)
             pass
-        self.out_q.put(SENTINEL) # Signal end
 """DataProcessor mockup"""
 class DataProcessorMockup(Thread):
     def __init__(self, in_q, stop_event):
@@ -82,25 +94,30 @@ class DataProcessorMockup(Thread):
         self.computer = BFComputer(4)#!!!
     """Override"""
     def run(self):
-        while not self.stop_event.is_set():
-            try:
-                sample = self.in_q.get(timeout=1)
-                if sample is SENTINEL:
-                    #self.out_q_1.put(SENTINEL)
-                    #self.out_q_mp.put(SENTINEL)
-                    break
-                # Process data
-                processed_sample = self.computer.compute(sample)
-                if processed_sample.available:
-                    v = processed_sample.value
-                    processed = (v.timestamp, v.bfi, v.bvi, v.bfi, v.bvi)
-                    self.out_q_1.put(processed)
-                    self.out_q_mp.put(processed)
-                    self.produced_event.set()
-                    if indicate: print(f"= :{self.out_q_1.qsize()} :{self.out_q_mp.qsize()}")
-                    QApplication.processEvents()
-                self.in_q.task_done()
-            except Empty: continue
+        pass
+        try:
+            while not self.stop_event.is_set():
+                try:
+                    sample = self.in_q.get(timeout=1)
+                    if sample is SENTINEL:
+                        self.out_q_1.put(SENTINEL)
+                        self.out_q_mp.put(SENTINEL)
+                        break
+                    # Process data
+                    processed_sample = self.computer.compute(sample)
+                    if processed_sample.available:
+                        v = processed_sample.value
+                        processed = (v.timestamp, v.bfi, v.bvi, v.bfi, v.bvi)
+                        self.out_q_1.put(processed)
+                        self.out_q_mp.put(processed)
+                        self.produced_event.set()
+                        if indicate: print(f"= :{self.out_q_1.qsize()} :{self.out_q_mp.qsize()}")
+                        QApplication.processEvents()
+                    self.in_q.task_done()
+                except Empty: continue
+        except Exception as e:
+            print(e)
+        pass
     def process(self):
         #read:
         #from: cam_id,frame_id,timestamp_s, 0, ... 1023, temperature,sum,tcm,tcl,pdc
@@ -113,23 +130,87 @@ class ConsumerBase(Thread):
         self.in_q = in_q
         self.produced_event = produced_event
         self.stop_event = stop_event
-"""DataStorage mockup"""
-class DataStorageMockup(ConsumerBase):
-    def __init__(self, in_q, produced_event, stop_event):
+"""DataStorage mockups"""
+class RawDataStorageMockup(ConsumerBase):
+    def __init__(self,uid, session_id, in_q, produced_event, stop_event):
         super().__init__(in_q, produced_event, stop_event)
+        self.uid = uid
+        self.session_id = session_id
+        self.raw_data = []
     """Override"""
     def run(self):
-        with open("data.csv", "w") as f:
+        self.raw_data = []
+        try:
             while not self.stop_event.is_set():
                 try:
                     self.produced_event.wait()
-                    data = self.in_q.get(timeout=1)
-                    if data is SENTINEL:
+                    sample = self.in_q.get(timeout=1)
+                    if sample is SENTINEL:
                         break
-                    f.write(f"{data[0]},{data[1]}\n")
-                    if indicate: print(">")
+                    self.raw_data.append(sample)
+                    if indicate: print(">>")
                     self.in_q.task_done()
-                except Empty: continue
+                except Empty:
+                   continue
+            self.store()
+            pass
+        except Exception as e:
+            print(e)
+        pass
+    """ """
+    def store(self):
+        #store collected raw_data
+        db = "raw_db.sqlite"
+        sdb = SamplesDBsqlite(db, self.uid)
+        sdb.insert(self.session_id, self.raw_data)
+        print("Stored raw session data")
+        #sdb.view_content()
+        pass
+    """ """
+    def get_record(self, id):
+        try:
+            self.export_data = []
+            pass
+        except Exception as e:
+            pass
+        pass
+    """ """
+    def export2csv(self, id):
+        with open(f"{id}_raw_data.csv", "w",  newline='') as f:
+            #get record from db
+            self.get_record(id)
+            writer = csv.writer(f)
+            # Write the header row using field names
+            writer.writerow(Sample._fields)
+            writer.writerows(self.export_data)
+        pass
+""" """
+class ProcessedDataStorageMockup(ConsumerBase):
+    def __init__(self, uid, session_id, in_q, produced_event, stop_event):
+        super().__init__(in_q, produced_event, stop_event)
+        self.uid = uid
+        self.session_id = session_id
+    """Override"""
+    def run(self):
+        pass
+        try:
+            with open("processed_data.csv", "w") as f:
+                writer = csv.writer(f)
+                # Write the header row using field names
+                writer.writerow(BFValue._fields)
+                while not self.stop_event.is_set():
+                    try:
+                        self.produced_event.wait()
+                        data = self.in_q.get(timeout=1)
+                        if data is SENTINEL:
+                            break
+                        writer.writerow(data)
+                        if indicate: print(">")
+                        self.in_q.task_done()
+                    except Empty: continue
+            pass
+        except Exception as e:
+            print(e)
         pass
 """ """
 class DataPlotter(ConsumerBase):
@@ -150,9 +231,12 @@ class DataPlotter(ConsumerBase):
                 if data is SENTINEL:
                     #self.timer.stop()
                     #self.stop_event.set()
-                    #break
+                    break
                     pass
-                if self.count %1 == 0:
+                if self.count >= 20:#!!!
+                    if self.count == 20:
+                        self.left_plot.init_plot_data(data[1], data[2])
+                        self.right_plot.init_plot_data(data[3], data[4])
                     plot = True 
                 else: 
                     plot = False
@@ -218,26 +302,31 @@ if __name__ == "__main__":
     central_layout.addLayout(plot_layout)
     central_layout.addWidget(QPushButton("_"))
 
+    #subject
+    uid = uuid.uuid4()
+    #Session
+    session_id = 1
     #Data pipeline
     plot_x_size = 250
     count= 1000000000
-    period_s = 0.025
+    period_s = 0.010
     stop_event = Event()
+    #produce
     producer = DataProducerMockup(count, period_s, stop_event)
+    #store raw
+    raw_storage = RawDataStorageMockup(uid, session_id, producer.out_q_raw_store, producer.produced_event, stop_event)
+    #process
     processor = DataProcessorMockup(producer.out_q, stop_event)
-    storage = DataStorageMockup(processor.out_q_1, processor.produced_event, stop_event)
-    if False:#True:
-        #Run plot separatelly
-        threads = [producer, processor, storage]
-        plot_process = mp.Process(target=run_data_plot, args=(processor.out_q_mp, ))
-        plot_process.start()
-    else:
-        #Run plot in the main thread
-         data_plotter = DataPlotter(plot_layout, plot_x_size, processor.out_q_mp)
-         threads = [producer, processor, storage, data_plotter]
-    pass
+    #store processed
+    storage = ProcessedDataStorageMockup(uid, session_id, processor.out_q_1, processor.produced_event, stop_event)
+    #plot
+    data_plotter = DataPlotter(plot_layout, plot_x_size, processor.out_q_mp)
+    #threads
+    threads = [producer, raw_storage, processor, storage, data_plotter]
     for t in threads: 
+        print(t)
         t.start()
+    #UI
     win_main.show()
     ex = app.exec()
     sys.exit(ex)

@@ -14,6 +14,7 @@ from session_samples import SessionSamples
 
 import profile_hist
 from profile_hist import ExecutionTimer
+
 """ """
 class ValueAvailable():
     def __init__(self, available=False, value=None):

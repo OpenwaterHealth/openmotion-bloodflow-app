@@ -7,3 +7,5 @@ Stream prototyping:
 stream_proto.py - main
 session_samples.py: simulation of stream by reading rows from csv file
 bfcompute.py: simplified implementation of BF/BV calculation from histograms
+bfstorage.py: interface and implementation of SQLite storage for raw session data
+
