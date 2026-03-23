@@ -9,7 +9,7 @@ import queue
 import threading
 import logging
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("openmotion.bloodflow-app.data_processing")
 
 
 try:
@@ -187,14 +187,22 @@ class DataProcessor:
                     else:
                         other_fail += 1
 
-                    # Resync
-                    pat = b"\xaa\x00\x41"
+                    # Resync: search for next valid packet header
                     old_off = off
-                    off = off + 1
-                    nxt = data.obj.find(pat, off)
-                    if nxt != -1:
-                        off = nxt
-                        bad_header_packets.append((old_off, off))
+                    search_from = off + 1
+                    found_sync = False
+                    while search_from + MIN_PACKET_SIZE <= len(data):
+                        nxt = data.obj.find(b"\xaa\x00", search_from)
+                        if nxt == -1 or nxt + PACKET_HEADER_SIZE > len(data):
+                            break
+                        candidate_size = struct.unpack_from("<I", data, nxt + 2)[0]
+                        if MIN_PACKET_SIZE <= candidate_size <= 32837:
+                            off = nxt
+                            bad_header_packets.append((old_off, off))
+                            found_sync = True
+                            break
+                        search_from = nxt + 1
+                    if found_sync:
                         continue
                     break
 
@@ -221,6 +229,9 @@ class DataProcessor:
         Returns the number of rows written.
         """
         rows_written = 0
+        pkts_parsed = 0
+        parse_errors = 0
+        pkts_received = 0
 
         while not stop_evt.is_set() or not q.empty():
             try:
@@ -228,6 +239,7 @@ class DataProcessor:
                 data = q.get(timeout=0.100)
                 if data:
                     buffer_accumulator.extend(data)
+                    pkts_received += 1
                 q.task_done()
             except queue.Empty:
                 continue
@@ -241,6 +253,7 @@ class DataProcessor:
                         self.parse_histogram_packet(pkt_view)
                     )
                     offset += consumed
+                    pkts_parsed += 1
                     # Write CSV rows for each camera in this packet
                     ts_val = timestamp_sec if timestamp_sec is not None else 0.0
                     for cam_id, hist in hists.items():
@@ -268,14 +281,32 @@ class DataProcessor:
                             )
 
                 except ValueError as e:
-                    # Try to resync on error
-                    pat = b"\xaa\x00\x41"
+                    parse_errors += 1
+                    logger.warning(
+                        f"[PARSER] error #{parse_errors} after {pkts_parsed} good pkts "
+                        f"(buf={len(buffer_accumulator)}, offset={offset}): {e}"
+                    )
+                    # Try to resync: search for next valid packet header (SOF + TYPE_HISTO)
+                    # and validate that the size field is plausible.
                     old_off = offset
-                    offset += 1
-                    nxt = buffer_accumulator.find(pat, offset)
-                    if nxt != -1:
-                        offset = nxt
-                        logger.warning(f"Parser error, resyncing: {e}")
+                    search_from = offset + 1
+                    found_sync = False
+                    while search_from + MIN_PACKET_SIZE <= len(buffer_accumulator):
+                        nxt = buffer_accumulator.find(b"\xaa\x00", search_from)
+                        if nxt == -1 or nxt + PACKET_HEADER_SIZE > len(buffer_accumulator):
+                            break
+                        # Validate size field is plausible
+                        candidate_size = struct.unpack_from("<I", buffer_accumulator, nxt + 2)[0]
+                        if MIN_PACKET_SIZE <= candidate_size <= 32837:
+                            offset = nxt
+                            found_sync = True
+                            logger.warning(
+                                f"Parser error at offset {old_off}, resynced to {nxt} "
+                                f"(skipped {nxt - old_off} bytes): {e}"
+                            )
+                            break
+                        search_from = nxt + 1
+                    if found_sync:
                         continue
                     else:
                         # Can't find next packet, wait for more data
@@ -284,6 +315,14 @@ class DataProcessor:
             # Remove processed data from buffer
             if offset > 0:
                 del buffer_accumulator[:offset]
+
+        if pkts_received > 0:
+            logger.info(
+                f"[PARSER] Stream done: {pkts_received} pkts received, "
+                f"{pkts_parsed} parsed OK, {parse_errors} errors, "
+                f"{rows_written} CSV rows, "
+                f"residual buffer={len(buffer_accumulator)} bytes"
+            )
 
         return rows_written
 
