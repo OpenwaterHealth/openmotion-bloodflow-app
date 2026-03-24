@@ -172,7 +172,7 @@ def run_sensor_duration_test(app_path):
 
         # Move RIGHT slowly until >= 1800
         max_val = min_val
-        for _ in range(2000): #
+        for _ in range(500): 
             slider.type_keys("{RIGHT}", set_foreground=True)
             time.sleep(0.05)
             v = read_duration()
@@ -219,7 +219,9 @@ def run_sensor_duration_test(app_path):
                 start_btn.set_focus()
                 time.sleep(1)
                 start_btn.click()
-                time.sleep(300) # wait for scan to start
+                scan_duration = read_duration()
+                wait_time = (scan_duration + 100) if scan_duration is not None else 400
+                time.sleep(wait_time)  # wait for scan duration + 100 seconds buffer
                 report["start_scan"]["clicked"] = True
             else:
                 report["start_scan"]["clicked"] = False
