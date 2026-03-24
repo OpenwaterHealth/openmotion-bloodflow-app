@@ -21,7 +21,7 @@ The OpenWater Bloodflow App is a PyQt6/QML desktop application that interfaces w
 |---|---|---|---|
 | `_interface` | `MOTIONInterface` | No | Singleton SDK handle |
 | `_state` | `int` (enum: 0–4) | Yes | System FSM state (DISCONNECTED → READY → RUNNING) |
-| `_leftSensorConnected` | `bool` | Yes | Left sensor USB connection status |
+| `_leftSensorConnected` | `bool` | Yes | Left sensor USB connection status |         
 | `_rightSensorConnected` | `bool` | Yes | Right sensor USB connection status |
 | `_consoleConnected` | `bool` | Yes | Console USB connection status |
 | `_laserOn` | `bool` | Yes | Laser active flag |
