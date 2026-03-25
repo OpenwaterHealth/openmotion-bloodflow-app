@@ -1832,6 +1832,7 @@ class MOTIONConnector(QObject):
         )
         if not started:
             self._config_running = False
+            self.configFinished.emit(False, "Configuration could not start")
 
     @pyqtSlot()
     def cancelConfigureCameraSensors(self):

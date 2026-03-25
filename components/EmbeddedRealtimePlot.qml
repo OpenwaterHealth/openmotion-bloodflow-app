@@ -23,6 +23,20 @@ Rectangle {
     property int plotRows: (leftActiveCount === 8 || rightActiveCount === 8) ? 4 : 2
     property bool showBfiBvi: true  // true = BFI/BVI, false = Mean/StdDev
 
+    // Preview masks — update the grid layout whenever camera selection changes,
+    // even before scanning starts, so blank plot frames are always visible.
+    property int previewLeftMask: 0x99
+    property int previewRightMask: 0x00
+    onPreviewLeftMaskChanged:  if (!running) _applyPreviewLayout()
+    onPreviewRightMaskChanged: if (!running) _applyPreviewLayout()
+
+    function _applyPreviewLayout() {
+        const order = _buildSeriesOrder(previewLeftMask, previewRightMask)
+        seriesOrder = order
+        seriesData = ({})
+        for (let i = 0; i < order.length; i++) _ensureSeries(order[i], false)
+    }
+
     function _seriesKey(side, camId) {
         return side + ":" + camId
     }
@@ -75,6 +89,8 @@ Rectangle {
         return order
     }
 
+    Component.onCompleted: _applyPreviewLayout()
+
     function reset() {
         seriesData = ({})
         seriesOrder = []
@@ -89,7 +105,10 @@ Rectangle {
         for (let i = 0; i < order.length; i++) _ensureSeries(order[i], false)
     }
 
-    function stopScan() { running = false }
+    function stopScan() {
+        running = false
+        Qt.callLater(_applyPreviewLayout)  // restore blank frames after scan ends
+    }
 
     function handleBfiSample(side, camId, timestampSec, bfiVal) {
         if (!running) return

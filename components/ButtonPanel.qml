@@ -82,7 +82,7 @@ Rectangle {
         // ===== BOX 2: Session Info =====
         // User Settings
         PanelButton {
-            iconText: "\ueb37"  // person icon
+            iconText: "\ueb1f"  // person/user icon
             label: "User"
             onClicked: panel.userSettingsClicked()
         }

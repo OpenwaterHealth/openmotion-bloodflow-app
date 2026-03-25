@@ -129,6 +129,8 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
             showBfiBvi: settingsModal.showBfiBvi
+            previewLeftMask: bloodFlow.leftMask
+            previewRightMask: bloodFlow.rightMask
         }
     }
 
@@ -288,11 +290,10 @@ Rectangle {
 
         function onConfigFinished(ok, err) {
             bloodFlow.configuring = false
+            bloodFlow.camerasReady = true  // always unblock; allConnected is the real gate
             if (ok) {
-                bloodFlow.camerasReady = true
                 console.log("Camera configuration complete")
             } else {
-                bloodFlow.camerasReady = false
                 console.log("Camera configuration failed: " + err)
             }
         }
