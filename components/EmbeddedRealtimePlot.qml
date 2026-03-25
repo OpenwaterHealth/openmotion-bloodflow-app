@@ -173,18 +173,6 @@ Rectangle {
         anchors.margins: 10
         spacing: 6
 
-        // Header row
-        RowLayout {
-            Layout.fillWidth: true; spacing: 10
-            Text {
-                text: running ? "Realtime " + (showBfiBvi ? "BFI/BVI" : "Mean/StdDev") + " (Last " + windowSeconds + "s)" : "Data Viewer"
-                color: "#FFFFFF"
-                font.pixelSize: 16
-                font.weight: Font.DemiBold
-            }
-            Item { Layout.fillWidth: true }
-        }
-
         // Plot grid
         GridLayout {
             id: plotGrid
