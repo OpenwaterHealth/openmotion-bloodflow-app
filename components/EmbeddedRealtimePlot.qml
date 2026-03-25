@@ -188,66 +188,31 @@ Rectangle {
                     Layout.fillHeight: true
                     Layout.preferredHeight: (plotGrid.height - (plotArea.plotRows - 1) * plotGrid.rowSpacing) / plotArea.plotRows
 
-                    RowLayout {
+                    ColumnLayout {
                         anchors.fill: parent
                         anchors.margins: 6
-                        spacing: 6
+                        spacing: 4
 
-                        // BFI/BVI values on the left, stacked vertically, large font
-                        ColumnLayout {
-                            Layout.preferredWidth: 70
-                            Layout.fillHeight: true
-                            spacing: 4
-                            Layout.alignment: Qt.AlignVCenter
-
+                        // Header row: label + latest BFI/BVI values
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
                             Text {
                                 text: plotArea._labelFor(seriesKey)
                                 color: "#FFFFFF"
-                                font.pixelSize: 11
-                                font.weight: Font.Bold
-                                horizontalAlignment: Text.AlignHCenter
-                                Layout.alignment: Qt.AlignHCenter
+                                font.pixelSize: 12
                             }
-
-                            Rectangle {
-                                Layout.fillWidth: true
-                                Layout.preferredHeight: 1
-                                color: "#3E4E6F"
-                            }
-
+                            Item { Layout.fillWidth: true }
                             Text {
-                                text: "BFI"
+                                text: "BFI: " + plotArea._formatValue((plotArea.seriesData[seriesKey] || {}).latestBfi)
                                 color: plotArea.bfiColor
-                                font.pixelSize: 10
-                                horizontalAlignment: Text.AlignHCenter
-                                Layout.alignment: Qt.AlignHCenter
+                                font.pixelSize: 12
                             }
                             Text {
-                                text: plotArea._formatValue((plotArea.seriesData[seriesKey] || {}).latestBfi)
-                                color: plotArea.bfiColor
-                                font.pixelSize: 20
-                                font.weight: Font.Bold
-                                horizontalAlignment: Text.AlignHCenter
-                                Layout.alignment: Qt.AlignHCenter
-                            }
-
-                            Text {
-                                text: "BVI"
+                                text: "BVI: " + plotArea._formatValue((plotArea.seriesData[seriesKey] || {}).latestBvi)
                                 color: plotArea.bviColor
-                                font.pixelSize: 10
-                                horizontalAlignment: Text.AlignHCenter
-                                Layout.alignment: Qt.AlignHCenter
+                                font.pixelSize: 12
                             }
-                            Text {
-                                text: plotArea._formatValue((plotArea.seriesData[seriesKey] || {}).latestBvi)
-                                color: plotArea.bviColor
-                                font.pixelSize: 20
-                                font.weight: Font.Bold
-                                horizontalAlignment: Text.AlignHCenter
-                                Layout.alignment: Qt.AlignHCenter
-                            }
-
-                            Item { Layout.fillHeight: true }
                         }
 
                         // Plot canvas

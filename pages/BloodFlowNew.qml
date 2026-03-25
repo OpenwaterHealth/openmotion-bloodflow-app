@@ -41,8 +41,9 @@ Rectangle {
         var defaultIdx = (AppFlags && AppFlags.defaultCameraIndex !== undefined)
             ? AppFlags.defaultCameraIndex : 4;  // "Outer"
         var mask = patternToMask(defaultIdx);
-        leftMask = mask;
-        rightMask = 0x00;
+        // Apply default to whichever sensors are connected
+        if (MOTIONInterface.leftSensorConnected)  leftMask  = mask;
+        if (MOTIONInterface.rightSensorConnected) rightMask = mask;
         // If sensors connected, start flash immediately
         if (MOTIONInterface.leftSensorConnected || MOTIONInterface.rightSensorConnected) {
             flashDefaultCameras();
@@ -262,6 +263,12 @@ Rectangle {
             if ((descriptor || "").toUpperCase().indexOf("SENSOR") >= 0) {
                 Qt.callLater(function() {
                     if (!bloodFlow.scanning && !bloodFlow.configuring) {
+                        // Apply default mask to the newly connected sensor
+                        var defaultIdx = (AppFlags && AppFlags.defaultCameraIndex !== undefined)
+                            ? AppFlags.defaultCameraIndex : 4;
+                        var mask = patternToMask(defaultIdx);
+                        if (MOTIONInterface.leftSensorConnected)  bloodFlow.leftMask  = mask;
+                        if (MOTIONInterface.rightSensorConnected) bloodFlow.rightMask = mask;
                         flashDefaultCameras()
                     }
                 })
