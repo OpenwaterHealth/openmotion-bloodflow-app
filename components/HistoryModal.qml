@@ -186,8 +186,8 @@ Item {
 
                         GridLayout {
                             columns: 4; columnSpacing: 16; rowSpacing: 6; Layout.fillWidth: true
-                            Text { text: "Subject:"; color: "#BDC3C7"; font.pixelSize: 13 }
-                            Text { text: selected.subjectId || "-"; color: "white"; font.pixelSize: 13 }
+                            Text { text: "Session ID:"; color: "#BDC3C7"; font.pixelSize: 13 }
+                            Text { text: selected.sessionId || "-"; color: "white"; font.pixelSize: 13 }
                             Text { text: "Date:"; color: "#BDC3C7"; font.pixelSize: 13 }
                             Text { text: selected.timestamp ? friendlyDate(selected.timestamp) : "-"; color: "white"; font.pixelSize: 13 }
 

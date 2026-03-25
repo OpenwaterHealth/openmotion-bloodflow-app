@@ -73,62 +73,114 @@ Rectangle {
         MOTIONInterface.startConfigureCameraSensors(leftMask, rightMask);
     }
 
-    // LAYOUT: ButtonPanel | DataViewer
-    RowLayout {
+    // LAYOUT: full-height column → session header bar + (ButtonPanel | DataViewer)
+    ColumnLayout {
         anchors.fill: parent
         anchors.margins: 8
-        spacing: 8
+        spacing: 6
 
-        // Left: Button Panel
-        ButtonPanel {
-            id: buttonPanel
-            Layout.fillHeight: true
-            Layout.preferredWidth: 80
-            scanning: bloodFlow.scanning
-            camerasReady: bloodFlow.camerasReady && !bloodFlow.configuring
+        // ── Session ID header bar ─────────────────────────────────────────
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 34
+            color: "#252528"
+            radius: 8
+            border.color: "#3E4E6F"
+            border.width: 1
 
-            onStartStopClicked: {
-                if (bloodFlow.scanning) {
-                    // Stop
-                    scanRunner.cancel()
-                } else {
-                    // Check session ID
-                    if (!MOTIONInterface.subjectId || MOTIONInterface.subjectId.length === 0) {
-                        userSettingsModal.open()
-                        return
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 14
+                anchors.rightMargin: 14
+                spacing: 10
+
+                Text {
+                    text: "OpenMotion BloodFlow"
+                    color: "#FFFFFF"
+                    font.pixelSize: 14
+                    font.weight: Font.Bold
+                }
+
+                Rectangle { width: 1; height: 18; color: "#3E4E6F" }
+
+                Text { text: "Session:"; color: "#7F8C8D"; font.pixelSize: 13 }
+                Text {
+                    text: MOTIONInterface.sessionId || "—"
+                    color: "#4A90E2"
+                    font.pixelSize: 13
+                    font.weight: Font.DemiBold
+                }
+
+                Item { Layout.fillWidth: true }
+
+                Text {
+                    id: clockText
+                    color: "#7F8C8D"
+                    font.pixelSize: 12
+                    function refresh() {
+                        var d = new Date()
+                        text = d.toLocaleTimeString(Qt.locale(), "HH:mm:ss")
                     }
-                    // Start scan — write to bloodFlow.scanning so the binding stays intact
-                    bloodFlow.scanning = true
-                    scanDialog.message = "Scanning..."
-                    scanDialog.stageText = "Preparing..."
-                    scanDialog.progress = 1
-                    embeddedPlot.startScan(bloodFlow.leftMask, bloodFlow.rightMask)
-                    scanRunner.start()
+                    Component.onCompleted: refresh()
+                }
+                Timer {
+                    interval: 1000; repeat: true; running: true
+                    onTriggered: clockText.refresh()
                 }
             }
-
-            onScanSettingsClicked: {
-                scanSettingsModal.setInitialSelection(
-                    maskToArray(leftMask),
-                    maskToArray(rightMask)
-                )
-                scanSettingsModal.open()
-            }
-            onUserSettingsClicked: userSettingsModal.open()
-            onNotesClicked: notesModal.open()
-            onHistoryClicked: historyModal.open()
-            onLogClicked: scanDialog.open()
-            onSettingsClicked: settingsModal.open()
         }
 
-        // Right: Data Viewer (embedded realtime plot)
-        EmbeddedRealtimePlot {
-            id: embeddedPlot
+        // ── ButtonPanel | DataViewer ──────────────────────────────────────
+        RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            showBfiBvi: settingsModal.showBfiBvi
-            previewLeftMask: bloodFlow.leftMask
-            previewRightMask: bloodFlow.rightMask
+            spacing: 8
+
+            ButtonPanel {
+                id: buttonPanel
+                Layout.fillHeight: true
+                Layout.preferredWidth: 80
+                scanning: bloodFlow.scanning
+                camerasReady: bloodFlow.camerasReady && !bloodFlow.configuring
+
+                onStartStopClicked: {
+                    if (bloodFlow.scanning) {
+                        scanRunner.cancel()
+                    } else {
+                        if (!MOTIONInterface.sessionId || MOTIONInterface.sessionId.length === 0) {
+                            sessionModal.open()
+                            return
+                        }
+                        bloodFlow.scanning = true
+                        scanDialog.message = "Scanning..."
+                        scanDialog.stageText = "Preparing..."
+                        scanDialog.progress = 1
+                        embeddedPlot.startScan(bloodFlow.leftMask, bloodFlow.rightMask)
+                        scanRunner.start()
+                    }
+                }
+
+                onScanSettingsClicked: {
+                    scanSettingsModal.setInitialSelection(
+                        maskToArray(leftMask),
+                        maskToArray(rightMask)
+                    )
+                    scanSettingsModal.open()
+                }
+                onSessionClicked: sessionModal.open()
+                onHistoryClicked: historyModal.open()
+                onLogClicked: scanDialog.open()
+                onSettingsClicked: settingsModal.open()
+            }
+
+            EmbeddedRealtimePlot {
+                id: embeddedPlot
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                showBfiBvi: settingsModal.showBfiBvi
+                previewLeftMask: bloodFlow.leftMask
+                previewRightMask: bloodFlow.rightMask
+            }
         }
     }
 
@@ -148,12 +200,8 @@ Rectangle {
         }
     }
 
-    UserSettingsModal {
-        id: userSettingsModal
-    }
-
-    NotesModal {
-        id: notesModal
+    SessionModal {
+        id: sessionModal
     }
 
     HistoryModal {
@@ -183,7 +231,7 @@ Rectangle {
         leftMask: bloodFlow.leftMask
         rightMask: bloodFlow.rightMask
         durationSec: bloodFlow.durationSec
-        subjectId: MOTIONInterface.subjectId
+        subjectId: MOTIONInterface.sessionId
         dataDir: MOTIONInterface.directory
         disableLaser: false
         laserOn: true

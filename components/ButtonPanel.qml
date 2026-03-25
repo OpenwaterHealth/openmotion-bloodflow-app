@@ -29,8 +29,7 @@ Rectangle {
 
     signal startStopClicked()
     signal scanSettingsClicked()
-    signal userSettingsClicked()
-    signal notesClicked()
+    signal sessionClicked()
     signal historyClicked()
     signal logClicked()
     signal settingsClicked()
@@ -73,18 +72,11 @@ Rectangle {
         }
 
         // ===== BOX 2: Session Info =====
-        // User Settings
+        // Session (ID + Notes)
         PanelButton {
             iconText: "\ueb1f"  // person/user icon
-            label: "User"
-            onClicked: panel.userSettingsClicked()
-        }
-
-        // Notes
-        PanelButton {
-            iconText: "\uea8b"  // clipboard icon
-            label: "Notes"
-            onClicked: panel.notesClicked()
+            label: "Session"
+            onClicked: panel.sessionClicked()
         }
 
         // --- Divider ---

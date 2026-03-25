@@ -83,7 +83,8 @@ class MOTIONConnector(QObject):
     safetyTripDuringCaptureRequested = pyqtSignal()  # Emitted when safety trips while scan running (main-thread slot shows message & schedules cancel)
     triggerStateChanged = pyqtSignal()  # Signal to notify QML of trigger state changes
     directoryChanged = pyqtSignal()  # Signal to notify QML of directory changes
-    subjectIdChanged = pyqtSignal()  # Signal to notify QML of subject ID changes
+    sessionIdChanged = pyqtSignal()  # Signal to notify QML of session ID changes
+    subjectIdChanged = pyqtSignal()  # Deprecated alias — same as sessionIdChanged
     sensorDeviceInfoReceived = pyqtSignal(str, str)  # (fw_version, device_id)
     consoleDeviceInfoReceived = pyqtSignal(str, str)  # (fw_version, device_id)
     temperatureSensorUpdated = pyqtSignal(float)  # Temperature data
@@ -234,8 +235,8 @@ class MOTIONConnector(QObject):
         self._directory = default_dir
         logger.info(f"[Connector] Default directory initialized to: {self._directory}")
 
-        self._subject_id = self.generate_subject_id()
-        logger.info(f"[Connector] Generated subject ID: {self._subject_id}")
+        self._subject_id = self.generate_session_id()
+        logger.info(f"[Connector] Generated session ID: {self._subject_id}")
 
         # Emit synthetic connect events for devices already connected at startup
         if self._leftSensorConnected:
@@ -697,10 +698,10 @@ class MOTIONConnector(QObject):
             run_logger.error(f"Failed to log laser information: {e}")
 
     # --- GETTERS/SETTERS FOR Qt PROPERTIES ---
-    def getSubjectId(self) -> str:
+    def getSessionId(self) -> str:
         return self._subject_id
 
-    def setSubjectId(self, value: str):
+    def setSessionId(self, value: str):
         if not value:
             return
         # normalize to "ow" + alphanumerics (uppercase)
@@ -712,7 +713,19 @@ class MOTIONConnector(QObject):
         new_val = "ow" + rest
         if new_val != self._subject_id:
             self._subject_id = new_val
-            self.subjectIdChanged.emit()
+            self.sessionIdChanged.emit()
+            self.subjectIdChanged.emit()  # keep deprecated alias working
+
+    sessionId = pyqtProperty(
+        str, fget=getSessionId, fset=setSessionId, notify=sessionIdChanged
+    )
+
+    # Deprecated alias — external code that still uses subjectId keeps working
+    def getSubjectId(self) -> str:
+        return self._subject_id
+
+    def setSubjectId(self, value: str):
+        self.setSessionId(value)
 
     subjectId = pyqtProperty(
         str, fget=getSubjectId, fset=setSubjectId, notify=subjectIdChanged
@@ -1004,25 +1017,36 @@ class MOTIONConnector(QObject):
 
     @pyqtSlot(result=list)
     def get_scan_list(self):
-        """Return sorted list of scans like 'owABCD12_YYYYMMDD_HHMMSS'."""
+        """Return sorted list of scan IDs.
+
+        Supports two filename formats:
+          New: {YYYYMMDD_HHMMSS}_{sessionId}_notes.txt
+          Old: scan_{sessionId}_{YYYYMMDD_HHMMSS}_notes.txt
+        """
         base_path = Path(self._directory)
         if not base_path.exists():
             return []
 
         ids = []
-        for f in base_path.glob("scan_*_notes.txt"):
+        for f in base_path.glob("*_notes.txt"):
             if not f.is_file():
                 continue
-            stem = f.stem  # e.g., "scan_owIZGDFP_20250808_120740_notes"
-            # strip leading "scan_" and trailing "_notes"
+            stem = f.stem  # strip ".txt" → "..._notes"
+            if not stem.endswith("_notes"):
+                continue
+            stem = stem[:-6]  # strip "_notes"
+
             if stem.startswith("scan_"):
+                # Old format: scan_{sessionId}_{ts}  → keep as-is for details lookup
                 stem = stem[5:]
-            if stem.endswith("_notes"):
-                stem = stem[:-6]
+
             ids.append(stem)
 
-        # sort by timestamp desc; assumes format owXXXXXX_YYYYMMDD_HHMMSS
         def ts_key(s):
+            # New format starts with YYYYMMDD (8 digits)
+            if re.match(r'^\d{8}_\d{6}', s):
+                return s[:15]       # YYYYMMDD_HHMMSS
+            # Old format: sessionId_YYYYMMDD_HHMMSS
             parts = s.split("_", 1)
             return parts[1] if len(parts) == 2 else s
 
@@ -1031,27 +1055,36 @@ class MOTIONConnector(QObject):
     @pyqtSlot(str, result=QVariant)
     def get_scan_details(self, scan_id: str):
         """
-        scan_id like 'owIZGDFP_20250808_120740' (no 'scan_' prefix).
+        scan_id is either:
+          New format: 'YYYYMMDD_HHMMSS_sessionId'
+          Old format: 'sessionId_YYYYMMDD_HHMMSS'
         """
         base = Path(self._directory)
-        try:
-            subject, ts = scan_id.split("_", 1)
-        except ValueError:
-            return {}
 
-        notes_path = base / f"scan_{scan_id}_notes.txt"
-        left = next(base.glob(f"scan_{scan_id}_left_mask*.csv"), None)
-        right = next(base.glob(f"scan_{scan_id}_right_mask*.csv"), None)
+        # Detect format by checking if it starts with a date
+        if re.match(r'^\d{8}_\d{6}_', scan_id):
+            # New format: YYYYMMDD_HHMMSS_sessionId
+            parts = scan_id.split("_", 2)
+            ts = parts[0] + "_" + parts[1]
+            subject = parts[2] if len(parts) > 2 else ""
+            notes_path = base / f"{scan_id}_notes.txt"
+            left  = next(base.glob(f"{scan_id}_left_mask*.csv"), None)
+            right = next(base.glob(f"{scan_id}_right_mask*.csv"), None)
+        else:
+            # Old format: sessionId_YYYYMMDD_HHMMSS
+            parts = scan_id.split("_", 1)
+            subject = parts[0]
+            ts = parts[1] if len(parts) > 1 else ""
+            notes_path = base / f"scan_{scan_id}_notes.txt"
+            left  = next(base.glob(f"scan_{scan_id}_left_mask*.csv"), None)
+            right = next(base.glob(f"scan_{scan_id}_right_mask*.csv"), None)
 
-        # Extract mask from each file separately
         left_mask = ""
         right_mask = ""
-
         if left:
             m = re.search(r"_mask([0-9A-Fa-f]+)\.csv$", left.name)
             if m:
                 left_mask = m.group(1)
-
         if right:
             m = re.search(r"_mask([0-9A-Fa-f]+)\.csv$", right.name)
             if m:
@@ -1064,7 +1097,8 @@ class MOTIONConnector(QObject):
             pass
 
         return {
-            "subjectId": subject,
+            "sessionId": subject,
+            "subjectId": subject,   # deprecated alias kept for compatibility
             "timestamp": ts,
             "leftMask": left_mask,
             "rightMask": right_mask,
@@ -1098,9 +1132,12 @@ class MOTIONConnector(QObject):
             self._scan_notes = value
             self.scanNotesChanged.emit()
 
-    def generate_subject_id(self):
+    def generate_session_id(self):
         suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
         return f"ow{suffix}"
+
+    def generate_subject_id(self):  # deprecated alias
+        return self.generate_session_id()
 
     # --- CONSOLE COMMUNICATION METHODS ---
     @pyqtSlot()
@@ -1231,7 +1268,7 @@ class MOTIONConnector(QObject):
             if result.left_path or result.right_path:
                 try:
                     notes_filename = (
-                        f"scan_{subject_id}_{result.scan_timestamp}_notes.txt"
+                        f"{result.scan_timestamp}_{subject_id}_notes.txt"
                     )
                     notes_path = os.path.join(data_dir, notes_filename)
                     with open(notes_path, "w", encoding="utf-8") as nf:
