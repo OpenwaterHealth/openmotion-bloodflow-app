@@ -8,8 +8,8 @@ import pandas as pd
 
 @dataclass
 class CheckConfig:
-    expected_sum: int = 2_457_606     # your default
-    max_frame_id: int = 255           # rollover at 255 -> 0
+    expected_sum: int = 2_457_606  # your default
+    max_frame_id: int = 255  # rollover at 255 -> 0
 
 
 @dataclass
@@ -108,7 +108,9 @@ class CSVIntegrityChecker:
             cam_hist_counts={int(k): int(v) for k, v in cam_counts.items()},
             skipped_percentage=skipped_percentage,
             details={
-                "expected_cam_count": expected_cam_count if expected_cam_count is not None else 0,
+                "expected_cam_count": expected_cam_count
+                if expected_cam_count is not None
+                else 0,
                 "bad_sum_rows": int(error_counts["bad_sum"]),
                 "skipped_expected_fids": expected_fids,  # optional list of (cycle, expected_fid)
             },
@@ -119,10 +121,18 @@ class CSVIntegrityChecker:
 def _parse_args():
     p = argparse.ArgumentParser(description="Check histogram CSV integrity")
     p.add_argument("--csv", required=True, help="Path to input CSV file")
-    p.add_argument("--expected-sum", type=int, default=CheckConfig.expected_sum,
-                   help=f"Expected histogram sum per row (default: {CheckConfig.expected_sum})")
-    p.add_argument("--max-frame-id", type=int, default=CheckConfig.max_frame_id,
-                   help="Max frame id before rollover (default: 255)")
+    p.add_argument(
+        "--expected-sum",
+        type=int,
+        default=CheckConfig.expected_sum,
+        help=f"Expected histogram sum per row (default: {CheckConfig.expected_sum})",
+    )
+    p.add_argument(
+        "--max-frame-id",
+        type=int,
+        default=CheckConfig.max_frame_id,
+        help="Max frame id before rollover (default: 255)",
+    )
     return p.parse_args()
 
 
@@ -142,10 +152,15 @@ def main():
         print(f"  {k}: {v}")
 
     if res.skipped_percentage:
-        print(f"\n[INFO] Percentage of skipped frame_ids: {res.skipped_percentage:.2f}%")
+        print(
+            f"\n[INFO] Percentage of skipped frame_ids: {res.skipped_percentage:.2f}%"
+        )
 
-    print("\n[PASS] CSV passed all integrity checks." if res.passed
-          else "\n[FAIL] One or more checks failed.")
+    print(
+        "\n[PASS] CSV passed all integrity checks."
+        if res.passed
+        else "\n[FAIL] One or more checks failed."
+    )
 
 
 if __name__ == "__main__":

@@ -6,7 +6,6 @@ import json
 import warnings
 import logging
 import datetime
-from pathlib import Path
 
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication, QMessageBox
@@ -15,7 +14,7 @@ from PyQt6.QtCore import qInstallMessageHandler, QtMsgType
 from qasync import QEventLoop
 
 from motion_connector import MOTIONConnector
-from pathlib import Path
+from omotion.Interface import MOTIONInterface
 from utils.single_instance import check_single_instance, cleanup_single_instance
 from version import get_version
 from utils.resource_path import resource_path
@@ -30,6 +29,7 @@ logger.setLevel(logging.INFO)  # or INFO depending on what you want to see
 # Suppress PyQt6 DeprecationWarnings related to SIP
 warnings.simplefilter("ignore", DeprecationWarning)
 
+
 # Wire up the things that get logged out of QT app to the proper logs
 def qt_message_handler(msg_type, context, message):
     """Custom Qt message handler to forward QML console.log() messages to the run log."""
@@ -41,15 +41,16 @@ def qt_message_handler(msg_type, context, message):
         QtMsgType.QtCriticalMsg: logging.ERROR,
         QtMsgType.QtFatalMsg: logging.CRITICAL,
     }
-    
+
     # Get the logging level (default to INFO for console.log)
     log_level = log_level_map.get(msg_type, logging.INFO)
-    
+
     qml_message = f"QML: {message}"
-    
+
     logger = logging.getLogger("openmotion.bloodflow-app.qml-console")
     logger.setLevel(logging.INFO)  # or INFO depending on what you want to see
     logger.info(qml_message)
+
 
 def _load_app_config() -> dict:
     """Load application config from config/app_config.json. Returns defaults if missing or invalid."""
@@ -62,7 +63,10 @@ def _load_app_config() -> dict:
         "cameraFakeData": False,
         "output_path": None,  # None = use cwd; str = base directory for scan_data, app-logs, run-logs
         "histoThrottle": False,
+        "histoCmp": False,
         "powerOffUnusedCameras": False,
+        "commVerbose": False,  # Enable cmd id and "." prints from MCU
+        "verboseCommandHandling": False,  # Enable printf in MCU command handlers
         "eol_min_mean_per_camera": [0] * 8,
         "eol_min_contrast_per_camera": [0] * 8,
     }
@@ -73,12 +77,21 @@ def _load_app_config() -> dict:
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             loaded = json.load(f)
-        out = {**defaults, **{k: v for k, v in loaded.items() if k in defaults or k == "output_path"}}
-        logger.info("Loaded app config from %s: realtimePlotEnabled=%s, advancedSensors=%s",
-                    config_path, out.get("realtimePlotEnabled"), out.get("advancedSensors"))
+        out = {
+            **defaults,
+            **{k: v for k, v in loaded.items() if k in defaults or k == "output_path"},
+        }
+        logger.info(
+            "Loaded app config from %s: realtimePlotEnabled=%s, advancedSensors=%s",
+            config_path,
+            out.get("realtimePlotEnabled"),
+            out.get("advancedSensors"),
+        )
         return out
     except (json.JSONDecodeError, OSError) as e:
-        logger.warning("Could not load app config from %s: %s; using defaults", config_path, e)
+        logger.warning(
+            "Could not load app config from %s: %s; using defaults", config_path, e
+        )
         return defaults
 
 
@@ -91,11 +104,13 @@ def main():
         msg_box.setIcon(QMessageBox.Icon.Warning)
         msg_box.setWindowTitle("OpenWater Bloodflow")
         msg_box.setText("Another instance of the application is already running.")
-        msg_box.setInformativeText("Please close the existing instance before opening a new one.")
+        msg_box.setInformativeText(
+            "Please close the existing instance before opening a new one."
+        )
         msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
         msg_box.exec()
         sys.exit(1)
-    
+
     os.environ["QT_QUICK_CONTROLS_STYLE"] = "Material"
     os.environ["QT_QUICK_CONTROLS_MATERIAL_THEME"] = "Dark"
     os.environ["QT_LOGGING_RULES"] = "qt.qpa.fonts=false"
@@ -107,28 +122,30 @@ def main():
 
     # Configure logging
     formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(name)s - %(message)s'
+        "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
     )
-    #Configure console logging
+    # Configure console logging
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-    #Configure file logging
+    # Configure file logging
     app_config = _load_app_config()
     output_base = app_config.get("output_path") or os.getcwd()
     run_dir = os.path.join(output_base, "app-logs")
     os.makedirs(run_dir, exist_ok=True)
-    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S") # Build timestamp like 20251029_124455
+    ts = datetime.datetime.now().strftime(
+        "%Y%m%d_%H%M%S"
+    )  # Build timestamp like 20251029_124455
     logfile_path = os.path.join(run_dir, f"ow-bloodflowapp-{ts}.log")
 
-    file_handler = logging.FileHandler(logfile_path, mode='w', encoding='utf-8')
+    file_handler = logging.FileHandler(logfile_path, mode="w", encoding="utf-8")
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
     logger.info(f"logging to {logfile_path}")
-    
+
     # Configure the SDK logger hierarchy to use the same handlers
     sdk_logger = logging.getLogger("openmotion.sdk")
     sdk_logger.setLevel(logging.INFO)
@@ -137,39 +154,47 @@ def main():
     sdk_logger.propagate = False  # Don't propagate to root, use our handlers
 
     qInstallMessageHandler(qt_message_handler)
-    
-    app = QApplication(sys.argv) 
-        
+
+    app = QApplication(sys.argv)
+
     # Windows-specific: Set application user model ID for proper taskbar grouping
     if sys.platform == "win32":
         try:
             import ctypes
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("OpenWaterHealth.BloodflowApp")
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "OpenWaterHealth.BloodflowApp"
+            )
         except Exception:
             pass  # Ignore if not available
-    
+
     icon_path = str(resource_path("assets", "images", "favicon.ico"))
     app.setWindowIcon(QIcon(icon_path))
-    
+
     # Set application properties for Windows taskbar
     app.setApplicationName("OpenWater Bloodflow")
     app.setApplicationVersion(APP_VERSION)
     app.setOrganizationName("OpenWater Health")
-    
+
     engine = QQmlApplicationEngine()
 
     # Apply CLI overrides to already-loaded app_config
     if my_args.advanced_sensors:
         app_config["advancedSensors"] = True
 
+    interface = MOTIONInterface()
     connector = MOTIONConnector(
+        interface=interface,
         advanced_sensors=app_config.get("advancedSensors", True),
         force_laser_fail=app_config.get("forceLaserFail", False),
         camera_temp_alert_threshold_c=app_config.get("cameraTempAlertThresholdC", 105),
         sensor_debug_logging=app_config.get("sensorDebugLogging", False),
         camera_fake_data=app_config.get("cameraFakeData", False),
         histo_throttle=app_config.get("histoThrottle", False),
+        histo_cmp=app_config.get("histoCmp", False),
         power_off_unused_cameras=app_config.get("powerOffUnusedCameras", False),
+        comm_verbose=app_config.get("commVerbose", False),
+        verbose_command_handling=app_config.get("verboseCommandHandling", False),
         output_path=output_base,
     )
     connector.set_eol_thresholds(
@@ -177,10 +202,13 @@ def main():
         app_config.get("eol_min_contrast_per_camera"),
     )
     qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MOTIONInterface", connector)
-    engine.rootContext().setContextProperty("AppFlags", {
-        "advancedSensors": app_config.get("advancedSensors", True),
-        "realtimePlotEnabled": app_config.get("realtimePlotEnabled", False),
-    })
+    engine.rootContext().setContextProperty(
+        "AppFlags",
+        {
+            "advancedSensors": app_config.get("advancedSensors", True),
+            "realtimePlotEnabled": app_config.get("realtimePlotEnabled", False),
+        },
+    )
     engine.rootContext().setContextProperty("appVersion", APP_VERSION)
 
     # Load the QML file
@@ -229,16 +257,16 @@ def main():
             loop.run_forever()
     except RuntimeError as e:
         if "Event loop stopped before Future completed" in str(e):
-            logger.warning("App closed while a Future was still running (safe to ignore)")
+            logger.warning(
+                "App closed while a Future was still running (safe to ignore)"
+            )
         else:
             logger.error(f"Runtime error: {e}")
     except KeyboardInterrupt:
         logger.info("Application interrupted by user.")
     finally:
-        #print out logger tree
-        logger.info("Logger tree:")
-        logger.info(logger.manager.loggerDict)
         loop.close()
+
 
 if __name__ == "__main__":
     main()

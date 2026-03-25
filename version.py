@@ -11,6 +11,7 @@ Resulting APP_VERSION:
     "0.4.3+3.gabc1234"        – incremental build
     "0.4.3+3.gabc1234.dirty"  – dirty working tree
 """
+
 import subprocess
 import os
 
@@ -24,6 +25,7 @@ def get_version() -> str:
     # Inside a PyInstaller bundle there is no .git directory;
     # return whatever was stamped at build time.
     import sys
+
     if getattr(sys, "frozen", False):
         return _FALLBACK_VERSION
 

@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 import os
 
+
 def app_base_dir() -> Path:
     """
     Returns a directory that contains bundled resources:
@@ -17,8 +18,11 @@ def app_base_dir() -> Path:
         base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
     else:
         # running from source
-        base = Path(__file__).resolve().parent.parent  # adjust if you prefer a different root
+        base = (
+            Path(__file__).resolve().parent.parent
+        )  # adjust if you prefer a different root
     return base
+
 
 def resource_path(*relative_parts: str) -> Path:
     """

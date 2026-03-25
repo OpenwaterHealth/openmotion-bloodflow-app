@@ -1,5 +1,14 @@
-from PyQt6.QtCore import QObject, pyqtSignal, pyqtProperty, pyqtSlot, QVariant, QThread, QWaitCondition, QMutex, QTimer
-from typing import List
+from PyQt6.QtCore import (
+    QObject,
+    pyqtSignal,
+    pyqtProperty,
+    pyqtSlot,
+    QVariant,
+    QThread,
+    QWaitCondition,
+    QMutex,
+    QTimer,
+)
 from pathlib import Path
 import logging
 import base58
@@ -17,26 +26,32 @@ import string
 import platform
 import socket
 
-from motion_singleton import motion_interface  
+from omotion.Interface import MOTIONInterface
 
-from omotion.config import DEBUG_FLAG_USB_PRINTF, DEBUG_FLAG_FAKE_DATA, DEBUG_FLAG_HISTO_THROTTLE
+from omotion.config import (
+    DEBUG_FLAG_USB_PRINTF,
+    DEBUG_FLAG_FAKE_DATA,
+    DEBUG_FLAG_HISTO_THROTTLE,
+    DEBUG_FLAG_HISTO_CMP,
+    DEBUG_FLAG_COMM_VERBOSE,
+    DEBUG_FLAG_CMD_VERBOSE,
+)
 from processing.data_processing import DataProcessor, HISTO_BINS
 from processing.visualize_bloodflow import VisualizeBloodflow
 from utils.resource_path import resource_path
-import struct
 import numpy as np
 import pandas as pd
 
 # constants for calculations
 SCALE_V = 0.0909
 SCALE_I = 0.25
-V_REF = 2.459 # Should be 2.5V but empirical measurements don't match
-R_1 = 18000 #(R221)
-R_2 = 8160  #(R224)
-R_3 = 49900 #(R225)
-R230 = 300E3
-R234 = 300E3
-R_s = 0.020 #(R217)
+V_REF = 2.459  # Should be 2.5V but empirical measurements don't match
+R_1 = 18000  # (R221)
+R_2 = 8160  # (R224)
+R_3 = 49900  # (R225)
+R230 = 300e3
+R234 = 300e3
+R_s = 0.020  # (R217)
 TEC_VOLTAGE_DEFAULT = -0.07  # volts (DVT1a=-0.07, EVT2=1.16)
 DATA_ACQ_INTERVAL = 1.0
 
@@ -53,10 +68,11 @@ run_logger = logging.getLogger("bloodflow-app.runlog")
 
 # Define system states
 DISCONNECTED = 0
-SENSOR_CONNECTED  = 1
+SENSOR_CONNECTED = 1
 CONSOLE_CONNECTED = 2
 READY = 3
 RUNNING = 4
+
 
 class MOTIONConnector(QObject):
     # Ensure signals are correctly defined
@@ -80,46 +96,75 @@ class MOTIONConnector(QObject):
     rgbStateReceived = pyqtSignal(int, str)  # (state, state_text)
     errorOccurred = pyqtSignal(str)
     vizFinished = pyqtSignal()
-    visualizingChanged = pyqtSignal(bool)  
+    visualizingChanged = pyqtSignal(bool)
 
     configProgress = pyqtSignal(int)
     configLog = pyqtSignal(str)
     configFinished = pyqtSignal(bool, str)
 
     # capture signals
-    captureProgress = pyqtSignal(int)                       # 0..100
-    captureLog = pyqtSignal(str)                            # log lines
-    captureFinished = pyqtSignal(bool, str, str, str)       # ok, error, leftPath, rightPath
+    captureProgress = pyqtSignal(int)  # 0..100
+    captureLog = pyqtSignal(str)  # log lines
+    captureFinished = pyqtSignal(bool, str, str, str)  # ok, error, leftPath, rightPath
     scanNotesChanged = pyqtSignal()
-    scanMeanSampled = pyqtSignal(str, int, float, float)  # side, cam_id, timestamp_s, mean
-    scanContrastSampled = pyqtSignal(str, int, float, float)  # side, cam_id, timestamp_s, contrast
-    scanBfiSampled = pyqtSignal(str, int, float, float)   # side, cam_id, timestamp_s, bfi
-    scanBviSampled = pyqtSignal(str, int, float, float)   # side, cam_id, timestamp_s, bvi
-    scanBfiCorrectedSampled = pyqtSignal(str, int, float, float)  # side, cam_id, timestamp_s, bfi
-    scanBviCorrectedSampled = pyqtSignal(str, int, float, float)  # side, cam_id, timestamp_s, bvi
+    scanMeanSampled = pyqtSignal(
+        str, int, float, float
+    )  # side, cam_id, timestamp_s, mean
+    scanContrastSampled = pyqtSignal(
+        str, int, float, float
+    )  # side, cam_id, timestamp_s, contrast
+    scanBfiSampled = pyqtSignal(
+        str, int, float, float
+    )  # side, cam_id, timestamp_s, bfi
+    scanBviSampled = pyqtSignal(
+        str, int, float, float
+    )  # side, cam_id, timestamp_s, bvi
+    scanBfiCorrectedSampled = pyqtSignal(
+        str, int, float, float
+    )  # side, cam_id, timestamp_s, bfi
+    scanBviCorrectedSampled = pyqtSignal(
+        str, int, float, float
+    )  # side, cam_id, timestamp_s, bvi
 
     # post-processing signals
     postProgress = pyqtSignal(int)
     postLog = pyqtSignal(str)
     postFinished = pyqtSignal(bool, str, str, str)  # ok, err, leftCsv, rightCsv
-    
+
     pduMonChanged = pyqtSignal()
 
     tecStatusChanged = pyqtSignal()
     tecDacChanged = pyqtSignal()
 
-    def __init__(self, config_dir="config", parent=None, advanced_sensors=False, log_level=logging.INFO,
-                 force_laser_fail=False, camera_temp_alert_threshold_c=105.0,
-                 sensor_debug_logging=False, camera_fake_data=False, histo_throttle=False,
-                 output_path=None, power_off_unused_cameras=False):
+    def __init__(
+        self,
+        interface: MOTIONInterface,
+        config_dir="config",
+        parent=None,
+        advanced_sensors=False,
+        log_level=logging.INFO,
+        force_laser_fail=False,
+        camera_temp_alert_threshold_c=105.0,
+        sensor_debug_logging=False,
+        camera_fake_data=False,
+        histo_throttle=False,
+        histo_cmp=False,
+        output_path=None,
+        power_off_unused_cameras=False,
+        comm_verbose=False,
+        verbose_command_handling=False,
+    ):
         super().__init__(parent)
-        self._interface = motion_interface
+        self._interface = interface
         self._advanced_sensors = advanced_sensors
         self._force_laser_fail = force_laser_fail
         self._camera_temp_alert_threshold_c = float(camera_temp_alert_threshold_c)
         self._sensor_debug_logging = bool(sensor_debug_logging)
         self._camera_fake_data = bool(camera_fake_data)
         self._histo_throttle = bool(histo_throttle)
+        self._comm_verbose = bool(comm_verbose)
+        self._verbose_command_handling = bool(verbose_command_handling)
+        self._histo_cmp = bool(histo_cmp)
         self._output_base = output_path or os.getcwd()
         self._power_off_unused_cameras = bool(power_off_unused_cameras)
 
@@ -130,7 +175,9 @@ class MOTIONConnector(QObject):
         self._csv_output_directory = os.path.expanduser("~")
 
         # Check if console and sensor are connected
-        console_connected, left_sensor_connected, right_sensor_connected = motion_interface.is_device_connected()
+        console_connected, left_sensor_connected, right_sensor_connected = (
+            self._interface.is_device_connected()
+        )
 
         self._leftSensorConnected = left_sensor_connected
         self._rightSensorConnected = right_sensor_connected
@@ -144,7 +191,9 @@ class MOTIONConnector(QObject):
         self.laser_params = self._load_laser_params(config_dir)
         self._tec_voltage_default = self._load_tec_params(config_dir)
 
-        self._eol_min_mean_per_camera = None  # list of 8 or None; set via set_eol_thresholds()
+        self._eol_min_mean_per_camera = (
+            None  # list of 8 or None; set via set_eol_thresholds()
+        )
         self._eol_min_contrast_per_camera = None
 
         self._post_thread = None
@@ -156,7 +205,7 @@ class MOTIONConnector(QObject):
         self._safety_cancel_scheduled = False  # True after scheduling cancel-due-to-safety; cleared when capture ends
         self._capture_left_path = ""
         self._capture_right_path = ""
-        self._scan_notes = ""  
+        self._scan_notes = ""
         self.connect_signals()
         self._viz_thread = None
         self._viz_worker = None
@@ -164,7 +213,9 @@ class MOTIONConnector(QObject):
 
         self._corr_queue = queue.Queue()
         self._corr_stop = threading.Event()
-        self._corr_thread = threading.Thread(target=self._correction_worker, daemon=True)
+        self._corr_thread = threading.Thread(
+            target=self._correction_worker, daemon=True
+        )
         self._corr_thread.start()
 
         self._tcm = 0.0
@@ -172,24 +223,24 @@ class MOTIONConnector(QObject):
         self._pdc = 0.0
         self._telemetry_lock = threading.Lock()
 
-        self._tec_voltage   = 0.0
-        self._tec_temp      = 0.0
-        self._tec_monV      = 0.0
-        self._tec_monC      = 0.0
-        self._tec_good      = False
+        self._tec_voltage = 0.0
+        self._tec_temp = 0.0
+        self._tec_monV = 0.0
+        self._tec_monC = 0.0
+        self._tec_good = False
 
-        self._tec_dac       = 0.0
+        self._tec_dac = 0.0
 
         self._pdu_raws = [0] * 16
         self._pdu_vals = [0.0] * 16
 
         # --- per-trigger run log support ---
-        self._runlog_handler = None         # logging.FileHandler or None
-        self._runlog_path = None            # str or None
-        self._runlog_active = False         # bool
-        self._runlog_csv_path = None        # str or None
-        self._runlog_csv_file = None        # open file handle or None
-        self._runlog_csv_writer = None      # csv.writer or None
+        self._runlog_handler = None  # logging.FileHandler or None
+        self._runlog_path = None  # str or None
+        self._runlog_active = False  # bool
+        self._runlog_csv_path = None  # str or None
+        self._runlog_csv_file = None  # open file handle or None
+        self._runlog_csv_writer = None  # csv.writer or None
         self._runlog_csv_lock = threading.Lock()
 
         default_dir = os.path.join(self._output_base, "scan_data")
@@ -210,7 +261,9 @@ class MOTIONConnector(QObject):
 
         # Start console status thread if console is already connected at startup
         if self._consoleConnected and self._console_status_thread is None:
-            logger.info("[Connector] Console already connected at startup, starting status thread")
+            logger.info(
+                "[Connector] Console already connected at startup, starting status thread"
+            )
             self._console_status_thread = ConsoleStatusThread(self)
             self._console_status_thread.statusUpdate.connect(self.handleUpdateCapStatus)
             self._console_status_thread.start()
@@ -221,8 +274,16 @@ class MOTIONConnector(QObject):
         min_contrast_per_camera=None,
     ):
         """Set EOL test thresholds per camera (index 0-7). None or list of up to 8 numbers."""
-        self._eol_min_mean_per_camera = min_mean_per_camera if isinstance(min_mean_per_camera, (list, tuple)) else None
-        self._eol_min_contrast_per_camera = min_contrast_per_camera if isinstance(min_contrast_per_camera, (list, tuple)) else None
+        self._eol_min_mean_per_camera = (
+            min_mean_per_camera
+            if isinstance(min_mean_per_camera, (list, tuple))
+            else None
+        )
+        self._eol_min_contrast_per_camera = (
+            min_contrast_per_camera
+            if isinstance(min_contrast_per_camera, (list, tuple))
+            else None
+        )
 
     def _configure_logging(self, log_level):
 
@@ -239,7 +300,9 @@ class MOTIONConnector(QObject):
             if os.path.exists(candidate):
                 df = pd.read_csv(candidate)
                 self._data_RT = np.array(df)
-                logger.info(f"Loaded RT model from {candidate} shape={self._data_RT.shape}")
+                logger.info(
+                    f"Loaded RT model from {candidate} shape={self._data_RT.shape}"
+                )
             else:
                 self._data_RT = None
                 logger.warning(f"RT model file not found at {candidate}")
@@ -256,6 +319,12 @@ class MOTIONConnector(QObject):
             flags |= DEBUG_FLAG_FAKE_DATA
         if self._histo_throttle:
             flags |= DEBUG_FLAG_HISTO_THROTTLE
+        if self._comm_verbose:
+            flags |= DEBUG_FLAG_COMM_VERBOSE
+        if self._verbose_command_handling:
+            flags |= DEBUG_FLAG_CMD_VERBOSE
+        if self._histo_cmp:
+            flags |= DEBUG_FLAG_HISTO_CMP
         return flags
 
     def _schedule_sensor_init(self, side: str):
@@ -281,18 +350,21 @@ class MOTIONConnector(QObject):
         if flags != 0 and sensor is not None and sensor.is_connected():
             logger.info(
                 "Setting debug flags 0x%x on %s sensor "
-                "(debug_logging=%s, fake_data=%s, histoThrottle=%s)",
-                flags, side,
+                "(debug_logging=%s, fake_data=%s, histoThrottle=%s, histoCmp=%s)",
+                flags,
+                side,
                 self._sensor_debug_logging,
                 self._camera_fake_data,
                 getattr(self, "_histo_throttle", False),
+                getattr(self, "_histo_cmp", False),
             )
             if not sensor.set_debug_flags(flags):
                 logger.warning("Failed to set debug flags on %s sensor", side)
         elif flags != 0:
             logger.info(
                 "Skipping debug flag set on %s sensor (flags=0x%x, sensor_present=%s, connected=%s)",
-                side, flags,
+                side,
+                flags,
                 sensor is not None,
                 getattr(sensor, "is_connected", lambda: False)() if sensor else False,
             )
@@ -301,23 +373,33 @@ class MOTIONConnector(QObject):
 
         # Power on all cameras, fill the ID cache (serial numbers, connection info), then power off
         try:
-            sensor = self._interface.sensors.get(side) if self._interface and self._interface.sensors else None
+            sensor = (
+                self._interface.sensors.get(side)
+                if self._interface and self._interface.sensors
+                else None
+            )
             if sensor is not None and sensor.is_connected():
                 enable_power = getattr(sensor, "enable_camera_power", None)
                 disable_power = getattr(sensor, "disable_camera_power", None)
                 refresh_cache = getattr(sensor, "refresh_id_cache", None)
                 if enable_power and disable_power and refresh_cache:
                     if enable_power(0xFF):
-                        logger.info("Powered on all cameras on %s sensor for ID cache fill", side)
+                        logger.info(
+                            "Powered on all cameras on %s sensor for ID cache fill",
+                            side,
+                        )
                         time.sleep(0.5)  # settle time
                         refresh_cache()
                         logger.info("Filled ID cache on %s sensor", side)
-                        if(self._power_off_unused_cameras):
+                        if self._power_off_unused_cameras:
                             disable_power(0xFF)
                             time.sleep(0.05)
                             logger.info("Powered off all cameras on %s sensor", side)
                     else:
-                        logger.warning("Could not power on cameras on %s sensor for ID cache fill", side)
+                        logger.warning(
+                            "Could not power on cameras on %s sensor for ID cache fill",
+                            side,
+                        )
                         refresh_cache()  # try anyway in case some cameras are already on
                 elif refresh_cache:
                     refresh_cache()  # fallback: fill cache without power cycle (may get zeros for off cameras)
@@ -347,20 +429,19 @@ class MOTIONConnector(QObject):
         self._runlog_csv_path = os.path.join(run_dir, f"run-{safe_subject}_{ts}.csv")
 
         # Create handler with immediate flushing (delay=False ensures file is opened immediately)
-        run_handler = logging.FileHandler(self._runlog_path,
-                                          mode='w',
-                                          encoding='utf-8',
-                                          delay=False)
+        run_handler = logging.FileHandler(
+            self._runlog_path, mode="w", encoding="utf-8", delay=False
+        )
         # Match the global formatter you already defined at top of file
-        run_handler.setFormatter(logging.Formatter(
-            '%(asctime)s - %(levelname)s - %(message)s'
-        ))
+        run_handler.setFormatter(
+            logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+        )
 
         run_handler.setLevel(logging.INFO)
 
         # Attach this handler to run_logger ONLY
         run_logger.addHandler(run_handler)
-        
+
         # Ensure run_logger has a level set (in case it wasn't configured)
         if run_logger.level == logging.NOTSET:
             run_logger.setLevel(logging.INFO)
@@ -371,9 +452,13 @@ class MOTIONConnector(QObject):
 
         # Initialize CSV telemetry log (same basename as run log)
         try:
-            self._runlog_csv_file = open(self._runlog_csv_path, "w", newline="", encoding="utf-8")
+            self._runlog_csv_file = open(
+                self._runlog_csv_path, "w", newline="", encoding="utf-8"
+            )
             self._runlog_csv_writer = csv.writer(self._runlog_csv_file)
-            self._runlog_csv_writer.writerow(["timestamp", "unix_ms", "tcm", "tcl", "pdc"])
+            self._runlog_csv_writer.writerow(
+                ["timestamp", "unix_ms", "tcm", "tcl", "pdc"]
+            )
             self._runlog_csv_file.flush()
         except Exception as e:
             logger.error(f"Failed to open run CSV log: {e}")
@@ -383,20 +468,23 @@ class MOTIONConnector(QObject):
         # --- Gather version info for header ---
         # SDK version (MOTION SDK / sensor SDK)
         try:
-            sdk_ver = self._interface.get_sdk_version()  # same as get_sdk_version() slot :contentReference[oaicite:4]{index=4}
+            sdk_ver = (
+                self._interface.get_sdk_version()
+            )  # same as get_sdk_version() slot :contentReference[oaicite:4]{index=4}
         except Exception as e:
             sdk_ver = f"ERROR({e})"
 
         # App version (from constant we defined at top)
         try:
             from main import APP_VERSION
-            app_ver = APP_VERSION # from main.py
+
+            app_ver = APP_VERSION  # from main.py
         except Exception as e:
             app_ver = f"ERROR({e})"
 
         # Console firmware version (from console module) :contentReference[oaicite:5]{index=5}
         try:
-            fw_ver = motion_interface.console_module.get_version()
+            fw_ver = self._interface.console_module.get_version()
         except Exception as e:
             fw_ver = f"ERROR({e})"
 
@@ -415,13 +503,13 @@ class MOTIONConnector(QObject):
         self.log_device_information()
         self.log_laser_information()
         self._read_and_log_camera_uids()
-        
+
         # Flush the handler to ensure header is written immediately
         try:
             self._runlog_handler.flush()
         except Exception as e:
             logger.error(f"Error flushing run log handler after header: {e}")
-        
+
         # Also drop a breadcrumb to the main logger so humans see it in console/UI log:
         logger.info(f"[RUNLOG] started -> {self._runlog_path}")
 
@@ -477,21 +565,27 @@ class MOTIONConnector(QObject):
             self._runlog_csv_writer = None
             self._runlog_csv_path = None
 
-    def _write_runlog_csv_sample(self, tcm: int, tcl: int, pdc: float, timestamp: float):
+    def _write_runlog_csv_sample(
+        self, tcm: int, tcl: int, pdc: float, timestamp: float
+    ):
         if not self._runlog_active or self._runlog_csv_writer is None:
             return
-        iso_ts = datetime.datetime.fromtimestamp(timestamp).isoformat(timespec="milliseconds")
+        iso_ts = datetime.datetime.fromtimestamp(timestamp).isoformat(
+            timespec="milliseconds"
+        )
         unix_ms = int(timestamp * 1000)
         with self._runlog_csv_lock:
             if self._runlog_csv_writer is None:
                 return
             try:
-                self._runlog_csv_writer.writerow([iso_ts, unix_ms, tcm, tcl, f"{pdc:.3f}"])
+                self._runlog_csv_writer.writerow(
+                    [iso_ts, unix_ms, tcm, tcl, f"{pdc:.3f}"]
+                )
                 self._runlog_csv_file.flush()
             except Exception as e:
                 logger.error(f"Failed to write run CSV sample: {e}")
 
-    def log_system_information(self,logger):
+    def log_system_information(self, logger):
         """Log system information including hostname, OS details, and hardware information."""
         try:
             hostname = socket.gethostname()
@@ -505,11 +599,12 @@ class MOTIONConnector(QObject):
             run_logger.info(f"Version: {platform.version()}")
             run_logger.info(f"Architecture: {platform.machine()}")
             run_logger.info(f"Processor: {platform.processor()}")
-            
+
             # Additional hardware information
             if platform.system() == "Windows":
                 try:
                     import ctypes
+
                     # Get total physical memory
                     class MEMORYSTATUSEX(ctypes.Structure):
                         _fields_ = [
@@ -523,7 +618,7 @@ class MOTIONConnector(QObject):
                             ("ullAvailVirtual", ctypes.c_ulonglong),
                             ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
                         ]
-                    
+
                     memStatus = MEMORYSTATUSEX()
                     memStatus.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
                     ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(memStatus))
@@ -531,10 +626,12 @@ class MOTIONConnector(QObject):
                     run_logger.info(f"Total Physical Memory: {total_memory_gb:.2f} GB")
                 except Exception:
                     pass
-            
+
             # Python version
             run_logger.info(f"Python Version: {platform.python_version()}")
-            run_logger.info(f"Python Implementation: {platform.python_implementation()}")
+            run_logger.info(
+                f"Python Implementation: {platform.python_implementation()}"
+            )
 
         except Exception as e:
             run_logger.warning(f"Failed to log system information: {e}")
@@ -545,51 +642,56 @@ class MOTIONConnector(QObject):
             run_logger.info("=" * 80)
             run_logger.info("DEVICE INFORMATION")
             run_logger.info("=" * 80)
-            
+
             # Console information
             if self._consoleConnected:
                 try:
-                    fw_version = motion_interface.console_module.get_version()
-                    hw_id = motion_interface.console_module.get_hardware_id()
+                    fw_version = self._interface.console_module.get_version()
+                    hw_id = self._interface.console_module.get_hardware_id()
                     device_id = base58.b58encode(bytes.fromhex(hw_id)).decode()
-                    run_logger.info(f"Console - Firmware: {fw_version}, Device ID: {device_id}")
+                    run_logger.info(
+                        f"Console - Firmware: {fw_version}, Device ID: {device_id}"
+                    )
                 except Exception as e:
                     run_logger.warning(f"Console - Failed to get device info: {e}")
             else:
                 run_logger.info("Console - Not connected")
-            
+
             # Left sensor information
             if self._leftSensorConnected:
                 try:
-                    sensor = motion_interface.sensors.get("left")
+                    sensor = self._interface.sensors.get("left")
                     if sensor is not None:
                         fw_version = sensor.get_version()
                         hw_id = sensor.get_hardware_id()
                         device_id = base58.b58encode(bytes.fromhex(hw_id)).decode()
-                        run_logger.info(f"Left Sensor - Firmware: {fw_version}, Device ID: {device_id}")
+                        run_logger.info(
+                            f"Left Sensor - Firmware: {fw_version}, Device ID: {device_id}"
+                        )
                     else:
                         run_logger.warning("Left Sensor - Sensor object is None")
                 except Exception as e:
                     run_logger.warning(f"Left Sensor - Failed to get device info: {e}")
             else:
                 run_logger.info("Left Sensor - Not connected")
-            
+
             # Right sensor information
             if self._rightSensorConnected:
                 try:
-                    sensor = motion_interface.sensors.get("right")
+                    sensor = self._interface.sensors.get("right")
                     if sensor is not None:
                         fw_version = sensor.get_version()
                         hw_id = sensor.get_hardware_id()
                         device_id = base58.b58encode(bytes.fromhex(hw_id)).decode()
-                        run_logger.info(f"Right Sensor - Firmware: {fw_version}, Device ID: {device_id}")
+                        run_logger.info(
+                            f"Right Sensor - Firmware: {fw_version}, Device ID: {device_id}"
+                        )
                     else:
                         run_logger.warning("Right Sensor - Sensor object is None")
                 except Exception as e:
                     run_logger.warning(f"Right Sensor - Failed to get device info: {e}")
             else:
                 run_logger.info("Right Sensor - Not connected")
-            
 
         except Exception as e:
             run_logger.error(f"Failed to log device information: {e}")
@@ -604,13 +706,14 @@ class MOTIONConnector(QObject):
             # print laser parameters as read from the device
             laser_params = self.laser_params
             for param in laser_params:
-                run_logger.info(f"Mux Index: {param['muxIdx']}, Channel: {param['channel']}, I2C Address: {param['i2cAddr']}, Offset: {param['offset']}, Data to Send: {param['dataToSend']}")
+                run_logger.info(
+                    f"Mux Index: {param['muxIdx']}, Channel: {param['channel']}, I2C Address: {param['i2cAddr']}, Offset: {param['offset']}, Data to Send: {param['dataToSend']}"
+                )
             run_logger.info("=" * 80)
-
 
         except Exception as e:
             run_logger.error(f"Failed to log laser information: {e}")
-    
+
     # --- GETTERS/SETTERS FOR Qt PROPERTIES ---
     def getSubjectId(self) -> str:
         return self._subject_id
@@ -629,8 +732,10 @@ class MOTIONConnector(QObject):
             self._subject_id = new_val
             self.subjectIdChanged.emit()
 
-    subjectId = pyqtProperty(str, fget=getSubjectId, fset=setSubjectId, notify=subjectIdChanged)
-    
+    subjectId = pyqtProperty(
+        str, fget=getSubjectId, fset=setSubjectId, notify=subjectIdChanged
+    )
+
     @pyqtProperty(bool, notify=connectionStatusChanged)
     def leftSensorConnected(self):
         """Expose Sensor connection status to QML."""
@@ -640,7 +745,7 @@ class MOTIONConnector(QObject):
     def rightSensorConnected(self):
         """Expose Sensor connection status to QML."""
         return self._rightSensorConnected
-    
+
     @pyqtProperty(bool, notify=connectionStatusChanged)
     def consoleConnected(self):
         """Expose Console connection status to QML."""
@@ -650,12 +755,12 @@ class MOTIONConnector(QObject):
     def laserOn(self):
         """Expose Console connection status to QML."""
         return self._laserOn
-    
+
     @pyqtProperty(bool, notify=safetyFailureStateChanged)
     def safetyFailure(self):
         """Expose Console connection status to QML."""
         return self._safetyFailure
-    
+
     @safetyFailure.setter
     def safetyFailure(self, value: bool):
         if self._safetyFailure != value:
@@ -666,11 +771,11 @@ class MOTIONConnector(QObject):
     def state(self):
         """Expose state as a QML property."""
         return self._state
-    
+
     @pyqtProperty(str, notify=triggerStateChanged)
     def triggerState(self):
         return self._trigger_state
-    
+
     # --- DEVICE CONNECTION / DISCONNECTION / STATE MANAGEMENT METHODS ---
     @pyqtSlot(str, str)
     def on_connected(self, descriptor, port):
@@ -685,18 +790,22 @@ class MOTIONConnector(QObject):
             self._schedule_sensor_init("right")
         elif desc == "CONSOLE":
             self._consoleConnected = True
-            if motion_interface.console_module.tec_voltage(self._tec_voltage_default):
+            if self._interface.console_module.tec_voltage(self._tec_voltage_default):
                 logger.info(f"Console TEC voltage set to {self._tec_voltage_default}V")
             else:
-                logger.error(f"Failed to set console TEC voltage to {self._tec_voltage_default}V")
-            if motion_interface.console_module.set_fan_speed(fan_speed=100):
+                logger.error(
+                    f"Failed to set console TEC voltage to {self._tec_voltage_default}V"
+                )
+            if self._interface.console_module.set_fan_speed(fan_speed=100):
                 logger.info("Console fan speed set to 50%")
             else:
                 logger.error("Failed to set console fan speed")
             # Start console status thread when console connects
             if self._console_status_thread is None:
                 self._console_status_thread = ConsoleStatusThread(self)
-                self._console_status_thread.statusUpdate.connect(self.handleUpdateCapStatus)
+                self._console_status_thread.statusUpdate.connect(
+                    self.handleUpdateCapStatus
+                )
                 self._console_status_thread.start()
             else:
                 # Wake the status thread so it notices the new console connection immediately
@@ -707,7 +816,7 @@ class MOTIONConnector(QObject):
                     pass
 
         self.signalConnected.emit(descriptor, port)
-        self.connectionStatusChanged.emit() 
+        self.connectionStatusChanged.emit()
         self.update_state()
 
     @pyqtSlot(str, str)
@@ -716,16 +825,30 @@ class MOTIONConnector(QObject):
         if descriptor.upper() == "SENSOR_LEFT":
             self._leftSensorConnected = False
             try:
-                sensor = self._interface.sensors.get("left") if self._interface and self._interface.sensors else None
-                if sensor is not None and getattr(sensor, "clear_id_cache", None) is not None:
+                sensor = (
+                    self._interface.sensors.get("left")
+                    if self._interface and self._interface.sensors
+                    else None
+                )
+                if (
+                    sensor is not None
+                    and getattr(sensor, "clear_id_cache", None) is not None
+                ):
                     sensor.clear_id_cache()
             except Exception:
                 pass
         elif descriptor.upper() == "SENSOR_RIGHT":
             self._rightSensorConnected = False
             try:
-                sensor = self._interface.sensors.get("right") if self._interface and self._interface.sensors else None
-                if sensor is not None and getattr(sensor, "clear_id_cache", None) is not None:
+                sensor = (
+                    self._interface.sensors.get("right")
+                    if self._interface and self._interface.sensors
+                    else None
+                )
+                if (
+                    sensor is not None
+                    and getattr(sensor, "clear_id_cache", None) is not None
+                ):
                     sensor.clear_id_cache()
             except Exception:
                 pass
@@ -736,14 +859,18 @@ class MOTIONConnector(QObject):
                 self._console_status_thread.stop()
                 self._console_status_thread = None
 
-        logger.info(f"Device disconnected: {descriptor} on port {port} and state is {self._state}")
+        logger.info(
+            f"Device disconnected: {descriptor} on port {port} and state is {self._state}"
+        )
         self.signalDisconnected.emit(descriptor, port)
-        self.connectionStatusChanged.emit() 
+        self.connectionStatusChanged.emit()
         self.update_state()
- 
+
     def update_state(self):
         """Update system state based on connection and configuration."""
-        if not self._consoleConnected and ((not self._leftSensorConnected) or (not self._rightSensorConnected)):
+        if not self._consoleConnected and (
+            (not self._leftSensorConnected) or (not self._rightSensorConnected)
+        ):
             self._state = DISCONNECTED
         elif self._leftSensorConnected and not self._consoleConnected:
             self._state = SENSOR_CONNECTED
@@ -755,7 +882,7 @@ class MOTIONConnector(QObject):
             self._state = RUNNING
         self.stateChanged.emit()  # Notify QML of state update
         logger.info(f"Updated state: {self._state}")
-   
+
     @pyqtSlot(str)
     def handleUpdateCapStatus(self, status_msg: str):
         """Handle status updates from ConsoleStatusThread."""
@@ -788,8 +915,12 @@ class MOTIONConnector(QObject):
                     sensor = interface.sensors.get(side)
                     if sensor and sensor.is_connected():
                         try:
-                            interface.run_on_sensors("disable_camera", 0xFF, target=side)
-                            if hasattr(sensor, "uart") and hasattr(sensor.uart, "histo"):
+                            interface.run_on_sensors(
+                                "disable_camera", 0xFF, target=side
+                            )
+                            if hasattr(sensor, "uart") and hasattr(
+                                sensor.uart, "histo"
+                            ):
                                 sensor.uart.histo.stop_streaming()
                         except Exception as e:
                             logger.warning("Error disabling cameras on %s: %s", side, e)
@@ -827,16 +958,24 @@ class MOTIONConnector(QObject):
     # --- SCAN MANAGEMENT METHODS ---
     @pyqtSlot(result=list)
     def _load_laser_params(self, config_dir):
-        filename = "laser_params_fault.json" if self._force_laser_fail else "laser_params.json"
-        config_path = resource_path("config", filename) if config_dir == "config" else Path(config_dir) / filename
+        filename = (
+            "laser_params_fault.json" if self._force_laser_fail else "laser_params.json"
+        )
+        config_path = (
+            resource_path("config", filename)
+            if config_dir == "config"
+            else Path(config_dir) / filename
+        )
         if not config_path.exists():
             logger.error(f"[Connector] Laser parameter file not found: {config_path}")
-            return []  
-        
+            return []
+
         try:
             with open(config_path, "r") as f:
                 params = json.load(f)
-            logger.info(f"[Connector] Loaded {len(params)} laser parameter sets from {config_path}")
+            logger.info(
+                f"[Connector] Loaded {len(params)} laser parameter sets from {config_path}"
+            )
             return params
         except FileNotFoundError:
             logger.error(f"[Connector] Laser parameter file not found: {config_path}")
@@ -844,31 +983,45 @@ class MOTIONConnector(QObject):
         except json.JSONDecodeError as e:
             logger.error(f"[Connector] Invalid JSON in {config_path}: {e}")
             return []
-    
+
     def _load_tec_params(self, config_dir):
         """Load TEC parameters from tec_params.json and return the voltage value."""
-        config_path = resource_path("config", "tec_params.json") if config_dir == "config" else Path(config_dir) / "tec_params.json"
-        
+        config_path = (
+            resource_path("config", "tec_params.json")
+            if config_dir == "config"
+            else Path(config_dir) / "tec_params.json"
+        )
+
         if not config_path.exists():
-            logger.warning(f"[Connector] TEC parameter file not found: {config_path}, using default value {TEC_VOLTAGE_DEFAULT}V")
+            logger.warning(
+                f"[Connector] TEC parameter file not found: {config_path}, using default value {TEC_VOLTAGE_DEFAULT}V"
+            )
             return TEC_VOLTAGE_DEFAULT
-        
+
         try:
             with open(config_path, "r") as f:
                 params = json.load(f)
             voltage = params.get("TEC_VOLTAGE_DEFAULT", TEC_VOLTAGE_DEFAULT)
-            logger.info(f"[Connector] Loaded TEC voltage from {config_path}: {voltage}V")
+            logger.info(
+                f"[Connector] Loaded TEC voltage from {config_path}: {voltage}V"
+            )
             return voltage
         except FileNotFoundError:
-            logger.warning(f"[Connector] TEC parameter file not found: {config_path}, using default value {TEC_VOLTAGE_DEFAULT}V")
+            logger.warning(
+                f"[Connector] TEC parameter file not found: {config_path}, using default value {TEC_VOLTAGE_DEFAULT}V"
+            )
             return TEC_VOLTAGE_DEFAULT
         except json.JSONDecodeError as e:
-            logger.error(f"[Connector] Invalid JSON in {config_path}: {e}, using default value {TEC_VOLTAGE_DEFAULT}V")
+            logger.error(
+                f"[Connector] Invalid JSON in {config_path}: {e}, using default value {TEC_VOLTAGE_DEFAULT}V"
+            )
             return TEC_VOLTAGE_DEFAULT
         except Exception as e:
-            logger.error(f"[Connector] Error loading TEC parameters: {e}, using default value {TEC_VOLTAGE_DEFAULT}V")
+            logger.error(
+                f"[Connector] Error loading TEC parameters: {e}, using default value {TEC_VOLTAGE_DEFAULT}V"
+            )
             return TEC_VOLTAGE_DEFAULT
-            
+
     @pyqtSlot(result=list)
     def get_scan_list(self):
         """Return sorted list of scans like 'owABCD12_YYYYMMDD_HHMMSS'."""
@@ -892,6 +1045,7 @@ class MOTIONConnector(QObject):
         def ts_key(s):
             parts = s.split("_", 1)
             return parts[1] if len(parts) == 2 else s
+
         return sorted(ids, key=ts_key, reverse=True)
 
     @pyqtSlot(str, result=QVariant)
@@ -906,18 +1060,18 @@ class MOTIONConnector(QObject):
             return {}
 
         notes_path = base / f"scan_{scan_id}_notes.txt"
-        left  = next(base.glob(f"scan_{scan_id}_left_mask*.csv"), None)
+        left = next(base.glob(f"scan_{scan_id}_left_mask*.csv"), None)
         right = next(base.glob(f"scan_{scan_id}_right_mask*.csv"), None)
 
         # Extract mask from each file separately
         left_mask = ""
         right_mask = ""
-        
+
         if left:
             m = re.search(r"_mask([0-9A-Fa-f]+)\.raw$", left.name)
             if m:
                 left_mask = m.group(1)
-        
+
         if right:
             m = re.search(r"_mask([0-9A-Fa-f]+)\.raw$", right.name)
             if m:
@@ -948,42 +1102,52 @@ class MOTIONConnector(QObject):
     def directory(self, path):
         # Normalize incoming QML "file:///" path
         if path.startswith("file:///"):
-            path = path[8:] if path[9] != ':' else path[8:]
+            path = path[8:] if path[9] != ":" else path[8:]
         self._directory = path
         logger.debug(f"[Connector] Default directory set to: {self._directory}")
         self.directoryChanged.emit()
 
-    @pyqtProperty(str, notify=scanNotesChanged)   # <-- add notify
+    @pyqtProperty(str, notify=scanNotesChanged)  # <-- add notify
     def scanNotes(self):
-         return self._scan_notes
+        return self._scan_notes
 
     @scanNotes.setter
     def scanNotes(self, value: str):
         value = value or ""
         if value != self._scan_notes:
             self._scan_notes = value
-            self.scanNotesChanged.emit()  
+            self.scanNotesChanged.emit()
 
     def generate_subject_id(self):
-        suffix = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+        suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
         return f"ow{suffix}"
-        
+
     # --- CONSOLE COMMUNICATION METHODS ---
     @pyqtSlot()
     def queryConsoleInfo(self):
         """Fetch and emit device information."""
         try:
-            fw_version = motion_interface.console_module.get_version()
+            fw_version = self._interface.console_module.get_version()
             logger.info(f"Version: {fw_version}")
-            hw_id = motion_interface.console_module.get_hardware_id()
+            hw_id = self._interface.console_module.get_hardware_id()
             device_id = base58.b58encode(bytes.fromhex(hw_id)).decode()
             self.consoleDeviceInfoReceived.emit(fw_version, device_id)
-            logger.info(f"Console Device Info - Firmware: {fw_version}, Device ID: {device_id}")
+            logger.info(
+                f"Console Device Info - Firmware: {fw_version}, Device ID: {device_id}"
+            )
         except Exception as e:
             logger.error(f"Error querying device info: {e}")
 
     @pyqtSlot(str, int, int, int, str, bool, result=bool)
-    def startCapture(self, subject_id: str, duration_sec: int, left_camera_mask: int, right_camera_mask: int, data_dir: str, disable_laser: bool) -> bool:
+    def startCapture(
+        self,
+        subject_id: str,
+        duration_sec: int,
+        left_camera_mask: int,
+        right_camera_mask: int,
+        data_dir: str,
+        disable_laser: bool,
+    ) -> bool:
         """Start capture asynchronously; returns True if kicked off."""
         logger.info(
             f"startCapture(subject_id={subject_id}, dur={duration_sec}s, "
@@ -996,7 +1160,9 @@ class MOTIONConnector(QObject):
             return False
 
         if self._safetyFailure:
-            self.captureLog.emit("Scan cannot start: laser safety system is tripped. Clear the safety interlock first.")
+            self.captureLog.emit(
+                "Scan cannot start: laser safety system is tripped. Clear the safety interlock first."
+            )
             return False
 
         # sanitize/prepare
@@ -1009,7 +1175,7 @@ class MOTIONConnector(QObject):
         # Determine which sides we will actually capture (mask != 0 and sensor connected)
         interface = self._interface
         sides_info = [
-            ("left",  left_camera_mask,  interface.sensors.get("left")),
+            ("left", left_camera_mask, interface.sensors.get("left")),
             ("right", right_camera_mask, interface.sensors.get("right")),
         ]
         active_sides = []
@@ -1018,12 +1184,16 @@ class MOTIONConnector(QObject):
                 logger.info(f"{side} mask is 0x00 — skipping {side} capture.")
                 continue
             if not (sensor and sensor.is_connected()):
-                logger.warning(f"{side} sensor not connected — skipping {side} capture.")
+                logger.warning(
+                    f"{side} sensor not connected — skipping {side} capture."
+                )
                 continue
             active_sides.append((side, mask, sensor))
 
         if not active_sides:
-            self.captureLog.emit("No active sensors to capture (both masks 0x00 or disconnected).")
+            self.captureLog.emit(
+                "No active sensors to capture (both masks 0x00 or disconnected)."
+            )
             return False
 
         logger.info("Capture worker thread starting…")
@@ -1047,7 +1217,7 @@ class MOTIONConnector(QObject):
             try:
                 # Start the per-run log now before any other logging
                 self._start_runlog(subject_id=subject_id)
-                
+
                 ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 logger.info("Preparing capture…")
                 self.captureLog.emit("Preparing capture…")
@@ -1057,20 +1227,26 @@ class MOTIONConnector(QObject):
                     logger.info("Enabling external frame sync…")
                     self.captureLog.emit("Enabling external frame sync…")
                     for side, _, _ in active_sides:
-                        res = interface.run_on_sensors("enable_camera_fsin_ext", target=side)
+                        res = interface.run_on_sensors(
+                            "enable_camera_fsin_ext", target=side
+                        )
                         if not _ok_from_result(res, side):
-                            logger.error(f"Failed to enable external frame sync on {side}.")
+                            logger.error(
+                                f"Failed to enable external frame sync on {side}."
+                            )
                             err = f"Failed to enable external frame sync on {side}."
                             self.captureLog.emit(err)
                             raise RuntimeError(err)
-                time.sleep(.1)
+                time.sleep(0.1)
                 # Enable cameras per side with that side's mask
                 logger.info("Enabling cameras…")
                 self.captureLog.emit("Enabling cameras…")
                 for side, mask, _ in active_sides:
                     res = interface.run_on_sensors("enable_camera", mask, target=side)
                     if not _ok_from_result(res, side):
-                        logger.error(f"Failed to enable camera on {side} (mask 0x{mask:02X}).")
+                        logger.error(
+                            f"Failed to enable camera on {side} (mask 0x{mask:02X})."
+                        )
                         err = f"Failed to enable camera on {side} (mask 0x{mask:02X})."
                         self.captureLog.emit(err)
                         raise RuntimeError(err)
@@ -1115,10 +1291,9 @@ class MOTIONConnector(QObject):
                     err = "Failed to start trigger."
                     self.captureLog.emit(err)
                     raise RuntimeError(err)
-                
 
                 logger.info("TRIGGER STARTED")
-                
+
                 self._trigger_state = "ON"
                 self.triggerStateChanged.emit()
 
@@ -1147,7 +1322,9 @@ class MOTIONConnector(QObject):
                 for side, mask, _ in active_sides:
                     res = interface.run_on_sensors("disable_camera", mask, target=side)
                     if not _ok_from_result(res, side):
-                        self.captureLog.emit(f"Failed to disable camera on {side} (mask 0x{mask:02X}).")
+                        self.captureLog.emit(
+                            f"Failed to disable camera on {side} (mask 0x{mask:02X})."
+                        )
                 # Stop sensor streaming
                 self.captureLog.emit("Stop Sensors Streaming...")
                 for side, mask, sensor in active_sides:
@@ -1193,6 +1370,7 @@ class MOTIONConnector(QObject):
                 self._capture_thread = None
                 self.captureFinished.emit(ok, err, left_path, right_path)
                 self._stop_runlog()
+
         # launch worker
         self._capture_thread = threading.Thread(target=_worker, daemon=True)
         self._capture_thread.start()
@@ -1253,7 +1431,9 @@ class MOTIONConnector(QObject):
                 label = f"camera {cam_id}"
 
             mean_val = float(per_cam_mean[idx])
-            avg_contrast = float(per_cam_contrast[idx]) if per_cam_contrast is not None else None
+            avg_contrast = (
+                float(per_cam_contrast[idx]) if per_cam_contrast is not None else None
+            )
 
             if per_cam_contrast is None:
                 logger.info("  %s mean: %.0f", label, mean_val)
@@ -1269,9 +1449,19 @@ class MOTIONConnector(QObject):
             # Get cached security UID and HWID from SDK (sensor retains these)
             side_key = (side or "").lower()
             cid = int(cam_id) if cam_id is not None and cam_id != "" else -1
-            sensor = self._interface.sensors.get(side_key) if self._interface and self._interface.sensors else None
-            if sensor is not None and hasattr(sensor, "get_cached_camera_security_uid") and hasattr(sensor, "get_cached_hardware_id"):
-                security_id = sensor.get_cached_camera_security_uid(cid) if cid >= 0 else ""
+            sensor = (
+                self._interface.sensors.get(side_key)
+                if self._interface and self._interface.sensors
+                else None
+            )
+            if (
+                sensor is not None
+                and hasattr(sensor, "get_cached_camera_security_uid")
+                and hasattr(sensor, "get_cached_hardware_id")
+            ):
+                security_id = (
+                    sensor.get_cached_camera_security_uid(cid) if cid >= 0 else ""
+                )
                 hwid = sensor.get_cached_hardware_id()
             else:
                 security_id = ""
@@ -1281,9 +1471,13 @@ class MOTIONConnector(QObject):
             cam_idx = cid if cid >= 0 else idx
             min_mean = None
             min_contrast = None
-            if self._eol_min_mean_per_camera and cam_idx < len(self._eol_min_mean_per_camera):
+            if self._eol_min_mean_per_camera and cam_idx < len(
+                self._eol_min_mean_per_camera
+            ):
                 min_mean = self._eol_min_mean_per_camera[cam_idx]
-            if self._eol_min_contrast_per_camera and cam_idx < len(self._eol_min_contrast_per_camera):
+            if self._eol_min_contrast_per_camera and cam_idx < len(
+                self._eol_min_contrast_per_camera
+            ):
                 min_contrast = self._eol_min_contrast_per_camera[cam_idx]
 
             if min_mean is not None and not isinstance(min_mean, (int, float)):
@@ -1299,17 +1493,19 @@ class MOTIONConnector(QObject):
             else:
                 contrast_test = "PASS" if avg_contrast >= min_contrast else "FAIL"
 
-            eol_rows.append({
-                "camera_index": idx,
-                "side": side or "",
-                "cam_id": cam_id if cam_id is not None else "",
-                "mean": mean_val,
-                "avg_contrast": avg_contrast if avg_contrast is not None else "",
-                "mean_test": mean_test,
-                "contrast_test": contrast_test,
-                "security_id": security_id or "",
-                "hwid": hwid or "",
-            })
+            eol_rows.append(
+                {
+                    "camera_index": idx,
+                    "side": side or "",
+                    "cam_id": cam_id if cam_id is not None else "",
+                    "mean": mean_val,
+                    "avg_contrast": avg_contrast if avg_contrast is not None else "",
+                    "mean_test": mean_test,
+                    "contrast_test": contrast_test,
+                    "security_id": security_id or "",
+                    "hwid": hwid or "",
+                }
+            )
 
         # Write CSV to app-logs/eol-test-csvs
         try:
@@ -1320,7 +1516,17 @@ class MOTIONConnector(QObject):
             with open(eol_path, "w", newline="", encoding="utf-8") as f:
                 w = csv.DictWriter(
                     f,
-                    fieldnames=["camera_index", "side", "cam_id", "mean", "avg_contrast", "mean_test", "contrast_test", "security_id", "hwid"],
+                    fieldnames=[
+                        "camera_index",
+                        "side",
+                        "cam_id",
+                        "mean",
+                        "avg_contrast",
+                        "mean_test",
+                        "contrast_test",
+                        "security_id",
+                        "hwid",
+                    ],
                 )
                 w.writeheader()
                 w.writerows(eol_rows)
@@ -1330,12 +1536,26 @@ class MOTIONConnector(QObject):
             logger.warning(f"Failed to write EOL test CSV: {e}")
             run_logger.warning(f"Failed to write EOL test CSV: {e}")
 
+        # Emit a single end-of-scan EOL verdict to the Qt capture log window.
+        overall_eol_pass = bool(eol_rows) and all(
+            row.get("mean_test") == "PASS" and row.get("contrast_test") == "PASS"
+            for row in eol_rows
+        )
+        eol_result = "PASS" if overall_eol_pass else "FAIL"
+        status_emoji = "✅" if overall_eol_pass else "❌"
+        eol_msg = f"{status_emoji} EOL criteria result: {eol_result}"
+        self.captureLog.emit(eol_msg)
+        logger.info(eol_msg)
+        run_logger.info(eol_msg)
+
     def _on_safety_trip_during_capture(self):
         """Called on main thread when safety tripped while scan was running: show message and cancel scan in 5 s."""
         if not self._capture_running or self._safety_cancel_scheduled:
             return
         self._safety_cancel_scheduled = True
-        self.captureLog.emit("Laser safety system tripped. Scan will be cancelled in 5 seconds.")
+        self.captureLog.emit(
+            "Laser safety system tripped. Scan will be cancelled in 5 seconds."
+        )
         QTimer.singleShot(5000, self.stopCapture)
 
     @pyqtSlot(result=QVariant)
@@ -1346,25 +1566,41 @@ class MOTIONConnector(QObject):
         """
 
         try:
-            v, i, p, t, ok = motion_interface.console_module.tec_status()
+            v, i, p, t, ok = self._interface.console_module.tec_status()
 
-            R_TH = 1/((float(v) / (V_REF/2*R_3)) - 1/R_3 + 1/R_1) - R_2 # v = OUT1, VOUT1 from ADC
-            Thermistor_Temp = np.interp(R_TH, self._data_RT[:,1][::-1], self._data_RT[:,0][::-1])
+            R_TH = (
+                1 / ((float(v) / (V_REF / 2 * R_3)) - 1 / R_3 + 1 / R_1) - R_2
+            )  # v = OUT1, VOUT1 from ADC
+            Thermistor_Temp = np.interp(
+                R_TH, self._data_RT[:, 1][::-1], self._data_RT[:, 0][::-1]
+            )
 
-            R_SET = 1/((float(i) / (V_REF/2*R_3)) - 1/R_3 + 1/R_1) - R_2 # i = IN2P, TEMPSET from ADC
-            SET_Temp = np.interp(R_SET, self._data_RT[:,1][::-1], self._data_RT[:,0][::-1])
+            R_SET = (
+                1 / ((float(i) / (V_REF / 2 * R_3)) - 1 / R_3 + 1 / R_1) - R_2
+            )  # i = IN2P, TEMPSET from ADC
+            SET_Temp = np.interp(
+                R_SET, self._data_RT[:, 1][::-1], self._data_RT[:, 0][::-1]
+            )
 
-            self._tec_voltage   = round(float(Thermistor_Temp), 2) # Measured thermistor temperature
-            self._tec_temp      = round(float(SET_Temp), 2) # Measured target setpiont
-            self._tec_monC      = round((float(p) - 0.5*V_REF) / (25*R_s), 3) # p = V_itec
-            self._tec_monV      = round((float(t) - 0.5*V_REF) * 4, 3) # t = V_vtec
-            self._tec_good      = bool(ok) # TMPGD pin (abs(OUT1-IN2P) < 100mV)
+            self._tec_voltage = round(
+                float(Thermistor_Temp), 2
+            )  # Measured thermistor temperature
+            self._tec_temp = round(float(SET_Temp), 2)  # Measured target setpiont
+            self._tec_monC = round(
+                (float(p) - 0.5 * V_REF) / (25 * R_s), 3
+            )  # p = V_itec
+            self._tec_monV = round((float(t) - 0.5 * V_REF) * 4, 3)  # t = V_vtec
+            self._tec_good = bool(ok)  # TMPGD pin (abs(OUT1-IN2P) < 100mV)
 
             # Long-run health sample -> goes ONLY to run.log
-                
+
             run_logger.info(
                 "TEC Status -  temp: %.2f set: %.2f tec_c: %.3f tec_v: %.3f good: %s",
-                self._tec_voltage, self._tec_temp, float(p), float(t), bool(ok)
+                self._tec_voltage,
+                self._tec_temp,
+                float(p),
+                float(t),
+                bool(ok),
             )
 
             self.tecStatusChanged.emit()
@@ -1389,41 +1625,40 @@ class MOTIONConnector(QObject):
           { "ok": False, "error": "..." }
         """
         try:
-            pdu = motion_interface.console_module.read_pdu_mon()
+            pdu = self._interface.console_module.read_pdu_mon()
             if pdu is None:
                 logger.error("PDU MON: no data")
                 return {"ok": False, "error": "no data"}
-            
-            temp1, temp2, temp3 = motion_interface.console_module.get_temperatures()  
+
+            temp1, temp2, temp3 = self._interface.console_module.get_temperatures()
 
             # Cache for QML bindings
             self._pdu_raws = list(pdu.raws)
             self._pdu_vals = list(pdu.volts)
 
-            
             # Emit change for any bound properties
             self.pduMonChanged.emit()
 
             adc1_scaled = [
-                (v / SCALE_V) if i == 6 else (v / SCALE_I)  # i is ADC1 channel index 0..7
+                (v / SCALE_V)
+                if i == 6
+                else (v / SCALE_I)  # i is ADC1 channel index 0..7
                 for i, v in enumerate(self._pdu_vals[8:])
             ]
 
             run_logger.info(
                 "PDU MON ADC0 vals: %s",
-                " ".join(f"{(v/SCALE_V):.3f}" for v in self._pdu_vals[:8])
-            )
-            
-            run_logger.info(
-                "PDU MON ADC1 vals: %s",
-                " ".join(f"{i:.3f}" for i in adc1_scaled)
+                " ".join(f"{(v / SCALE_V):.3f}" for v in self._pdu_vals[:8]),
             )
 
             run_logger.info(
-                "TEMP MON: MCU: %.2f SAFETY: %.2f TA: %.2f",
-                temp1, temp2, temp3
+                "PDU MON ADC1 vals: %s", " ".join(f"{i:.3f}" for i in adc1_scaled)
             )
-        
+
+            run_logger.info(
+                "TEMP MON: MCU: %.2f SAFETY: %.2f TA: %.2f", temp1, temp2, temp3
+            )
+
             # Return QML-friendly dict
             return {
                 "ok": True,
@@ -1447,22 +1682,21 @@ class MOTIONConnector(QObject):
         try:
             muxIdx = 1
             i2cAddr = 0x41
-            offset = 0x24  
+            offset = 0x24
             data_len = 1  # Number of bytes to read
 
-            channels = {
-                "SE": 6,
-                "SO": 7
-            }
+            channels = {"SE": 6, "SO": 7}
             statuses = {}
 
             for label, channel in channels.items():
-                status = self.i2cReadBytes("CONSOLE", muxIdx, channel, i2cAddr, offset, data_len)
+                status = self.i2cReadBytes(
+                    "CONSOLE", muxIdx, channel, i2cAddr, offset, data_len
+                )
                 if status:
-                    statuses[label] = status[0]                
+                    statuses[label] = status[0]
                 else:
                     raise Exception("readSafetyStatus error (I2C read error)")
-                
+
             status_text = f"SE: 0x{statuses['SE']:02X}, SO: 0x{statuses['SO']:02X}"
             if (statuses["SE"] & 0x0F) == 0 and (statuses["SO"] & 0x0F) == 0:
                 if self._safetyFailure:
@@ -1482,29 +1716,46 @@ class MOTIONConnector(QObject):
                 self.safetyTripDuringCaptureRequested.emit()
 
     @pyqtSlot(str, int, int, int, int, int, result=QVariant)
-    def i2cReadBytes(self, target: str, mux_idx: int, channel: int, i2c_addr: int, offset: int, data_len: int):
+    def i2cReadBytes(
+        self,
+        target: str,
+        mux_idx: int,
+        channel: int,
+        i2c_addr: int,
+        offset: int,
+        data_len: int,
+    ):
         """Send i2c read to device"""
         try:
             # logger.info(f"I2C Read Request -> target={target}, mux_idx={mux_idx}, channel={channel}, "
-                # f"i2c_addr=0x{int(i2c_addr):02X}, offset=0x{int(offset):02X}, read_len={int(data_len)}"
-            # )            
+            # f"i2c_addr=0x{int(i2c_addr):02X}, offset=0x{int(offset):02X}, read_len={int(data_len)}"
+            # )
 
-            if target == "CONSOLE":                
-                fpga_data, fpga_data_len = motion_interface.console_module.read_i2c_packet(mux_index=mux_idx, channel=channel, device_addr=i2c_addr, reg_addr=offset, read_len=data_len)
+            if target == "CONSOLE":
+                fpga_data, fpga_data_len = (
+                    self._interface.console_module.read_i2c_packet(
+                        mux_index=mux_idx,
+                        channel=channel,
+                        device_addr=i2c_addr,
+                        reg_addr=offset,
+                        read_len=data_len,
+                    )
+                )
                 if fpga_data is None or fpga_data_len == 0:
-                    logger.error(f"readI2CBytes failed (I2C read error)")
+                    logger.error("readI2CBytes failed (I2C read error)")
                     return []
                 else:
                     # logger.info(f"Read I2C Success")
                     # logger.info(f"Raw bytes: {fpga_data.hex(' ')}")  # Print as hex bytes separated by spaces
-                    return list(fpga_data[:fpga_data_len]) 
-                
+                    return list(fpga_data[:fpga_data_len])
+
             elif target == "SENSOR_LEFT" or target == "SENSOR_RIGHT":
-                logger.error(f"I2C Read Not Implemented")
+                logger.error("I2C Read Not Implemented")
                 return []
         except Exception as e:
             logger.error(f"Error sending i2c read command: {e}")
             return []
+
     @pyqtSlot(int)
     def setRGBState(self, state):
         """Set the RGB state using integer values."""
@@ -1513,47 +1764,53 @@ class MOTIONConnector(QObject):
             if state not in valid_states:
                 logger.error(f"Invalid RGB state value: {state}")
                 return
-            if motion_interface.console_module.set_rgb_led(state) == state:
+            if self._interface.console_module.set_rgb_led(state) == state:
                 logger.info(f"RGB state set to: {state}")
             else:
                 logger.error(f"Failed to set RGB state to: {state}")
         except Exception as e:
             logger.error(f"Error setting RGB state: {e}")
+
     @pyqtSlot()
     def queryRGBState(self):
         """Fetch and emit RGB state."""
         try:
-            state = motion_interface.console_module.get_rgb_led()
-            state_text = {0: "Off", 1: "IND1", 2: "IND2", 3: "IND3"}.get(state, "Unknown")
+            state = self._interface.console_module.get_rgb_led()
+            state_text = {0: "Off", 1: "IND1", 2: "IND2", 3: "IND3"}.get(
+                state, "Unknown"
+            )
 
             logger.info(f"RGB State: {state_text}")
             self.rgbStateReceived.emit(state, state_text)  # Emit both values
         except Exception as e:
             logger.error(f"Error querying RGB state: {e}")
+
     @pyqtSlot(result=QVariant)
     def queryTriggerConfig(self):
-        trigger_setting = motion_interface.console_module.get_trigger_json()
+        trigger_setting = self._interface.console_module.get_trigger_json()
         if trigger_setting:
             if isinstance(trigger_setting, str):
                 updateTrigger = json.loads(trigger_setting)
             else:
                 updateTrigger = trigger_setting
-            if updateTrigger["TriggerStatus"] == 2:               
+            if updateTrigger["TriggerStatus"] == 2:
                 self._trigger_state = "ON"
-                self.triggerStateChanged.emit()            
+                self.triggerStateChanged.emit()
                 return trigger_setting or {}
-       
+
         self._trigger_state = "OFF"
         self.triggerStateChanged.emit()
-                
+
         return trigger_setting or {}
-    
+
     @pyqtSlot(str, result=bool)
     def setTrigger(self, triggerjson):  # Lock auto-released at function exit
         try:
             json_trigger_data = json.loads(triggerjson)
-            
-            trigger_setting = motion_interface.console_module.set_trigger_json(data=json_trigger_data)
+
+            trigger_setting = self._interface.console_module.set_trigger_json(
+                data=json_trigger_data
+            )
             if trigger_setting:
                 logger.info(f"Trigger Setting: {trigger_setting}")
                 return True
@@ -1572,29 +1829,29 @@ class MOTIONConnector(QObject):
         except Exception as e:
             logger.error(f"Unexpected error while setting trigger: {e}")
             return False
-    
+
     @pyqtSlot(result=bool)
     def startTrigger(self):
-        success = motion_interface.console_module.start_trigger()
+        success = self._interface.console_module.start_trigger()
         if success:
             self._trigger_state = "ON"
             self.triggerStateChanged.emit()
             logger.info("Trigger started successfully.")
         return success
-        
+
     @pyqtSlot()
     def stopTrigger(self):
-        motion_interface.console_module.stop_trigger()
+        self._interface.console_module.stop_trigger()
         self._trigger_state = "OFF"
-        self.triggerStateChanged.emit()        
+        self.triggerStateChanged.emit()
         self._stop_runlog()
-        logger.info("Trigger stopped.")   
+        logger.info("Trigger stopped.")
 
     @pyqtSlot(result=int)
     def getFsyncCount(self):
         """Get the Fsync count from the console."""
         try:
-            fsync_count = motion_interface.console_module.get_fsync_pulsecount()
+            fsync_count = self._interface.console_module.get_fsync_pulsecount()
             logger.info(f"Fsync Count: {fsync_count}")
             return fsync_count
         except Exception as e:
@@ -1605,7 +1862,7 @@ class MOTIONConnector(QObject):
     def getLsyncCount(self):
         """Get the Fsync count from the console."""
         try:
-            lsync_count = motion_interface.console_module.get_lsync_pulsecount()
+            lsync_count = self._interface.console_module.get_lsync_pulsecount()
             logger.debug(f"Lsync Count: {lsync_count}")
             return lsync_count
         except Exception as e:
@@ -1620,7 +1877,7 @@ class MOTIONConnector(QObject):
         except Exception as e:
             logger.error(f"setLaserPowerFromConfig error: {e}")
             return False
-         
+
     def set_laser_power_from_config(self, interface):
         logger.info("[Connector] Setting laser power from config...")
         for idx, laser_param in enumerate(self.laser_params, start=1):
@@ -1638,15 +1895,19 @@ class MOTIONConnector(QObject):
             )
 
             if not interface.console_module.write_i2c_packet(
-                mux_index=muxIdx, channel=channel,
-                device_addr=i2cAddr, reg_addr=offset,
-                data=dataToSend
+                mux_index=muxIdx,
+                channel=channel,
+                device_addr=i2cAddr,
+                reg_addr=offset,
+                data=dataToSend,
             ):
-                logger.error(f"Failed to set laser power (muxIdx={muxIdx}, channel={channel})")
+                logger.error(
+                    f"Failed to set laser power (muxIdx={muxIdx}, channel={channel})"
+                )
                 return False
         logger.info("Laser power set successfully.")
         return True
-    
+
     # --- SENSOR COMMUNICATION METHODS ---
     def _read_and_log_camera_uids(self):
         """
@@ -1658,27 +1919,29 @@ class MOTIONConnector(QObject):
             logger.info("=== Reading camera security UIDs ===")
             if self._runlog_active:
                 run_logger.info("=== Reading camera security UIDs ===")
-            
+
             # Get all sensors (left and right)
             sensors = []
-            if self._leftSensorConnected and "left" in motion_interface.sensors:
-                sensors.append(("left", motion_interface.sensors["left"]))
-            if self._rightSensorConnected and "right" in motion_interface.sensors:
-                sensors.append(("right", motion_interface.sensors["right"]))
-            
+            if self._leftSensorConnected and "left" in self._interface.sensors:
+                sensors.append(("left", self._interface.sensors["left"]))
+            if self._rightSensorConnected and "right" in self._interface.sensors:
+                sensors.append(("right", self._interface.sensors["right"]))
+
             if not sensors:
                 logger.warning("No sensors connected, cannot read camera UIDs")
                 if self._runlog_active:
                     run_logger.warning("No sensors connected, cannot read camera UIDs")
                 return
-            
+
             # Read UIDs for all cameras (0-7) on each connected sensor.
             # Prefer cached values (populated at sensor init) to avoid polling at scan start.
             for sensor_name, sensor in sensors:
                 logger.info(f"Reading camera UIDs from {sensor_name} sensor...")
                 if self._runlog_active:
                     run_logger.info(f"Reading camera UIDs from {sensor_name} sensor...")
-                cache_populated = getattr(sensor, "_cached_camera_uids", None) is not None
+                cache_populated = (
+                    getattr(sensor, "_cached_camera_uids", None) is not None
+                )
                 get_cached = getattr(sensor, "get_cached_camera_security_uid", None)
                 read_uid = getattr(sensor, "read_camera_security_uid", None)
                 for camera_id in range(8):
@@ -1689,25 +1952,45 @@ class MOTIONConnector(QObject):
                         elif read_uid:
                             uid_bytes = read_uid(camera_id)
                             time.sleep(0.05)
-                            uid_hex = ''.join(f'{b:02X}' for b in uid_bytes)
+                            uid_hex = "".join(f"{b:02X}" for b in uid_bytes)
                         else:
                             continue
-                        display_uid = f"0x{uid_hex}" if uid_hex and not uid_hex.startswith("0x") else (uid_hex or "0x000000000000")
-                        if not uid_hex or set(uid_hex.replace("0x", "").upper()) <= {"0"}:
-                            logger.info(f"  Camera {camera_id + 1}: Not present (UID: {display_uid})")
+                        display_uid = (
+                            f"0x{uid_hex}"
+                            if uid_hex and not uid_hex.startswith("0x")
+                            else (uid_hex or "0x000000000000")
+                        )
+                        if not uid_hex or set(uid_hex.replace("0x", "").upper()) <= {
+                            "0"
+                        }:
+                            logger.info(
+                                f"  Camera {camera_id + 1}: Not present (UID: {display_uid})"
+                            )
                             if self._runlog_active:
-                                run_logger.info(f"  Camera {camera_id + 1}: Not present (UID: {display_uid})")
+                                run_logger.info(
+                                    f"  Camera {camera_id + 1}: Not present (UID: {display_uid})"
+                                )
                             self.configLog.emit(f"Camera {camera_id + 1}: Not present")
                         else:
-                            logger.info(f"  Camera {camera_id + 1}: UID = {display_uid}")
+                            logger.info(
+                                f"  Camera {camera_id + 1}: UID = {display_uid}"
+                            )
                             if self._runlog_active:
-                                run_logger.info(f"  Camera {camera_id + 1}: UID = {display_uid}")
-                            self.configLog.emit(f"Camera {camera_id + 1} UID: {display_uid}")
+                                run_logger.info(
+                                    f"  Camera {camera_id + 1}: UID = {display_uid}"
+                                )
+                            self.configLog.emit(
+                                f"Camera {camera_id + 1} UID: {display_uid}"
+                            )
                     except Exception as e:
-                        logger.error(f"Error reading UID for camera {camera_id + 1} on {sensor_name} sensor: {e}")
+                        logger.error(
+                            f"Error reading UID for camera {camera_id + 1} on {sensor_name} sensor: {e}"
+                        )
                         if self._runlog_active:
-                            run_logger.error(f"Error reading UID for camera {camera_id + 1} on {sensor_name} sensor: {e}")
-            
+                            run_logger.error(
+                                f"Error reading UID for camera {camera_id + 1} on {sensor_name} sensor: {e}"
+                            )
+
             logger.info("=== Camera UID read complete ===")
             if self._runlog_active:
                 run_logger.info("=== Camera UID read complete ===")
@@ -1717,15 +2000,18 @@ class MOTIONConnector(QObject):
                 run_logger.error(f"Error reading camera UIDs: {e}")
 
     @pyqtSlot(int, int)
-    def startConfigureCameraSensors(self, left_camera_mask:int, right_camera_mask:int):
-        if self._config_thread: return
+    def startConfigureCameraSensors(
+        self, left_camera_mask: int, right_camera_mask: int
+    ):
+        if self._config_thread:
+            return
 
         # Power on cameras for each side before programming FPGAs (same as at scan start)
-        if(self._power_off_unused_cameras):
+        if self._power_off_unused_cameras:
             logger.info("Powering on cameras before programming FPGAs…")
             sides_info = [
                 ("left", left_camera_mask, self.interface.sensors.get("left")),
-                ("right",right_camera_mask, self.interface.sensors.get("right")),
+                ("right", right_camera_mask, self.interface.sensors.get("right")),
             ]
             for side, mask, sensor in sides_info:
                 if mask == 0 or not (sensor and sensor.is_connected()):
@@ -1735,17 +2021,27 @@ class MOTIONConnector(QObject):
                     if not power_status or len(power_status) != 8:
                         logger.warning(f"{side}: could not get camera power status")
                         continue
-                    off_mask = sum(1 << i for i in range(8) if power_status[i] and not (mask & (1 << i)))
+                    off_mask = sum(
+                        1 << i
+                        for i in range(8)
+                        if power_status[i] and not (mask & (1 << i))
+                    )
                     on_mask = mask & 0xFF
                     if off_mask:
                         if sensor.disable_camera_power(off_mask):
-                            logger.warning(f"{side}: powered off cameras not in mask (0x{off_mask:02X})")
+                            logger.warning(
+                                f"{side}: powered off cameras not in mask (0x{off_mask:02X})"
+                            )
                         time.sleep(0.05)
                     if on_mask:
                         if sensor.enable_camera_power(on_mask):
-                            logger.warning(f"{side}: powered on cameras (mask 0x{on_mask:02X})")
+                            logger.warning(
+                                f"{side}: powered on cameras (mask 0x{on_mask:02X})"
+                            )
                         else:
-                            logger.warning(f"Failed to power on cameras on {side} (mask 0x{on_mask:02X}).")
+                            logger.warning(
+                                f"Failed to power on cameras on {side} (mask 0x{on_mask:02X})."
+                            )
                             return
                         time.sleep(0.5)
                 except Exception as e:
@@ -1761,30 +2057,34 @@ class MOTIONConnector(QObject):
 
     @pyqtSlot()
     def cancelConfigureCameraSensors(self):
-        if self._config_thread: self._config_thread.stop()
-
-    def _on_config_finished(self, ok:bool, err:str):
         if self._config_thread:
-            self._config_thread.quit(); self._config_thread.wait(2000); self._config_thread = None
+            self._config_thread.stop()
+
+    def _on_config_finished(self, ok: bool, err: str):
+        if self._config_thread:
+            self._config_thread.quit()
+            self._config_thread.wait(2000)
+            self._config_thread = None
         self.configFinished.emit(ok, err)
 
     @pyqtSlot(str)
-    def querySensorAccelerometer (self, target: str):
+    def querySensorAccelerometer(self, target: str):
         """Fetch and emit Accelerometer data."""
         try:
-            if target == "SENSOR_LEFT" or target == "SENSOR_RIGHT":                
+            if target == "SENSOR_LEFT" or target == "SENSOR_RIGHT":
                 sensor_tag = "left" if target == "SENSOR_LEFT" else "right"
             else:
                 logger.error(f"Invalid target for sensor info query: {target}")
                 return
-            
+
             # Check if sensor is connected
-            if (sensor_tag == "left" and not self._leftSensorConnected) or \
-               (sensor_tag == "right" and not self._rightSensorConnected):
+            if (sensor_tag == "left" and not self._leftSensorConnected) or (
+                sensor_tag == "right" and not self._rightSensorConnected
+            ):
                 logger.error(f"{sensor_tag.capitalize()} sensor not connected")
                 return
-            
-            sensor = motion_interface.sensors[sensor_tag]
+
+            sensor = self._interface.sensors[sensor_tag]
             if sensor is None:
                 logger.error(f"{sensor_tag.capitalize()} sensor object is None")
                 return
@@ -1795,16 +2095,16 @@ class MOTIONConnector(QObject):
             logger.error(f"Error querying Accelerometer data: {e}")
 
     @pyqtSlot()
-    def querySensorGyroscope (self, target: str):
+    def querySensorGyroscope(self, target: str):
         """Fetch and emit Gyroscope data."""
         try:
-            if target == "SENSOR_LEFT" or target == "SENSOR_RIGHT":                
+            if target == "SENSOR_LEFT" or target == "SENSOR_RIGHT":
                 sensor_tag = "left" if target == "SENSOR_LEFT" else "right"
             else:
                 logger.error(f"Invalid target for sensor info query: {target}")
                 return
 
-            gyro  = motion_interface.sensors[sensor_tag].imu_get_gyroscope()
+            gyro = self._interface.sensors[sensor_tag].imu_get_gyroscope()
             logger.info(f"Gyro  (raw): X={gyro[0]}, Y={gyro[1]}, Z={gyro[2]}")
             self.gyroscopeSensorUpdated.emit(gyro[0], gyro[1], gyro[2])
         except Exception as e:
@@ -1814,44 +2114,43 @@ class MOTIONConnector(QObject):
     def softResetSensor(self, target: str):
         """reset hardware Sensor device."""
         try:
-            
             if target == "CONSOLE":
-                if motion_interface.console_module.soft_reset():
-                    logger.info(f"Software Reset Sent")
+                if self._interface.console_module.soft_reset():
+                    logger.info("Software Reset Sent")
                 else:
-                    logger.error(f"Failed to send Software Reset")
+                    logger.error("Failed to send Software Reset")
             elif target == "SENSOR_LEFT" or target == "SENSOR_RIGHT":
-                sensor_tag = "left" if target == "SENSOR_LEFT" else "right"                    
-                if motion_interface.sensors[sensor_tag].soft_reset():
-                    logger.info(f"Software Reset Sent")
+                sensor_tag = "left" if target == "SENSOR_LEFT" else "right"
+                if self._interface.sensors[sensor_tag].soft_reset():
+                    logger.info("Software Reset Sent")
                 else:
-                    logger.error(f"Failed to send Software Reset")
+                    logger.error("Failed to send Software Reset")
         except Exception as e:
             logger.error(f"Error Sending Software Reset: {e}")
 
-    
     @pyqtSlot(str)
     def querySensorTemperature(self, target: str):
         """Fetch and emit Temperature data."""
         try:
-            if target == "SENSOR_LEFT" or target == "SENSOR_RIGHT":                
+            if target == "SENSOR_LEFT" or target == "SENSOR_RIGHT":
                 sensor_tag = "left" if target == "SENSOR_LEFT" else "right"
             else:
                 logger.error(f"Invalid target for sensor info query: {target}")
                 return
-            
+
             # Check if sensor is connected
-            if (sensor_tag == "left" and not self._leftSensorConnected) or \
-               (sensor_tag == "right" and not self._rightSensorConnected):
+            if (sensor_tag == "left" and not self._leftSensorConnected) or (
+                sensor_tag == "right" and not self._rightSensorConnected
+            ):
                 logger.error(f"{sensor_tag.capitalize()} sensor not connected")
                 return
-            
-            sensor = motion_interface.sensors[sensor_tag]
+
+            sensor = self._interface.sensors[sensor_tag]
             if sensor is None:
                 logger.error(f"{sensor_tag.capitalize()} sensor object is None")
                 return
-                
-            imu_temp = sensor.imu_get_temperature()  
+
+            imu_temp = sensor.imu_get_temperature()
             logger.info(f"Temperature Data - IMU Temp: {imu_temp}")
             self.temperatureSensorUpdated.emit(imu_temp)
         except Exception as e:
@@ -1861,41 +2160,45 @@ class MOTIONConnector(QObject):
     def querySensorInfo(self, target: str):
         """Fetch and emit device information."""
         try:
-            if target == "SENSOR_LEFT" or target == "SENSOR_RIGHT":                
+            if target == "SENSOR_LEFT" or target == "SENSOR_RIGHT":
                 sensor_tag = "left" if target == "SENSOR_LEFT" else "right"
             else:
                 logger.error(f"Invalid target for sensor info query: {target}")
                 return
-            
+
             # Check if sensor is connected
-            if (sensor_tag == "left" and not self._leftSensorConnected) or \
-               (sensor_tag == "right" and not self._rightSensorConnected):
+            if (sensor_tag == "left" and not self._leftSensorConnected) or (
+                sensor_tag == "right" and not self._rightSensorConnected
+            ):
                 logger.error(f"{sensor_tag.capitalize()} sensor not connected")
                 return
-            
-            sensor = motion_interface.sensors[sensor_tag]
+
+            sensor = self._interface.sensors[sensor_tag]
             if sensor is None:
                 logger.error(f"{sensor_tag.capitalize()} sensor object is None")
                 return
-                
+
             fw_version = sensor.get_version()
             logger.info(f"Version: {fw_version}")
             hw_id = sensor.get_hardware_id()
             device_id = base58.b58encode(bytes.fromhex(hw_id)).decode()
             self.sensorDeviceInfoReceived.emit(fw_version, device_id)
-            logger.info(f"Sensor Device Info - Firmware: {fw_version}, Device ID: {device_id}")
+            logger.info(
+                f"Sensor Device Info - Firmware: {fw_version}, Device ID: {device_id}"
+            )
         except Exception as e:
             logger.error(f"Error querying device info: {e}")
+
     # Fan control methods
     @pyqtSlot(str, bool, result=bool)
     def setFanControl(self, sensor_side: str, fan_on: bool) -> bool:
         """
         Set fan control for the specified sensor.
-        
+
         Args:
             sensor_side (str): "left" or "right"
             fan_on (bool): True to turn fan ON, False to turn fan OFF
-            
+
         Returns:
             bool: True if command was sent successfully, False otherwise
         """
@@ -1913,14 +2216,16 @@ class MOTIONConnector(QObject):
             else:
                 logger.error(f"Invalid sensor side: {sensor_side}")
                 return False
-                
+
             if result:
-                logger.info(f"Fan control set to {'ON' if fan_on else 'OFF'} for {sensor_side} sensor")
+                logger.info(
+                    f"Fan control set to {'ON' if fan_on else 'OFF'} for {sensor_side} sensor"
+                )
             else:
                 logger.error(f"Failed to set fan control for {sensor_side} sensor")
-                
+
             return result
-            
+
         except Exception as e:
             logger.error(f"Error setting fan control: {e}")
             return False
@@ -1929,10 +2234,10 @@ class MOTIONConnector(QObject):
     def getFanControlStatus(self, sensor_side: str) -> bool:
         """
         Get fan control status for the specified sensor.
-        
+
         Args:
             sensor_side (str): "left" or "right"
-            
+
         Returns:
             bool: True if fan is ON, False if fan is OFF
         """
@@ -1950,34 +2255,51 @@ class MOTIONConnector(QObject):
             else:
                 logger.error(f"Invalid sensor side: {sensor_side}")
                 return False
-                
-            logger.info(f"Fan status for {sensor_side} sensor: {'ON' if status else 'OFF'}")
+
+            logger.info(
+                f"Fan status for {sensor_side} sensor: {'ON' if status else 'OFF'}"
+            )
             return status
-            
+
         except Exception as e:
             logger.error(f"Error getting fan control status: {e}")
             return False
 
     # --- BLOODFLOW VISUALIZATION / POST-PROCESSING METHODS ---
     @pyqtSlot(str, str, float, float, bool, result=bool)
-    def visualize_bloodflow(self, left_csv: str, right_csv: str, t1: float = 0.0, t2: float = 120.0, plot_contrast: bool = False) -> bool:
-        left_csv  = (left_csv or "").strip()
+    def visualize_bloodflow(
+        self,
+        left_csv: str,
+        right_csv: str,
+        t1: float = 0.0,
+        t2: float = 120.0,
+        plot_contrast: bool = False,
+    ) -> bool:
+        left_csv = (left_csv or "").strip()
         right_csv = (right_csv or "").strip()
-        if left_csv.lower().endswith(".raw"):  left_csv  = left_csv[:-4]  + ".csv"
-        if right_csv.lower().endswith(".raw"): right_csv = right_csv[:-4] + ".csv"
+        if left_csv.lower().endswith(".raw"):
+            left_csv = left_csv[:-4] + ".csv"
+        if right_csv.lower().endswith(".raw"):
+            right_csv = right_csv[:-4] + ".csv"
 
         if not left_csv and not right_csv:
-            self.errorOccurred.emit("No files selected. Please pick a left and/or right CSV.")
+            self.errorOccurred.emit(
+                "No files selected. Please pick a left and/or right CSV."
+            )
             return False
 
         missing = []
-        if left_csv and not Path(left_csv).exists():   missing.append(f"Left file not found:\n{left_csv}")
-        if right_csv and not Path(right_csv).exists(): missing.append(f"Right file not found:\n{right_csv}")
+        if left_csv and not Path(left_csv).exists():
+            missing.append(f"Left file not found:\n{left_csv}")
+        if right_csv and not Path(right_csv).exists():
+            missing.append(f"Right file not found:\n{right_csv}")
         if missing:
             self.errorOccurred.emit("\n\n".join(missing))
             return False
 
-        logger.info(f"Visualizing bloodflow: left_csv={left_csv}, right_csv={right_csv}, t1={t1}, t2={t2}, plot_contrast={plot_contrast}")
+        logger.info(
+            f"Visualizing bloodflow: left_csv={left_csv}, right_csv={right_csv}, t1={t1}, t2={t2}, plot_contrast={plot_contrast}"
+        )
 
         # start spinner
         self.visualizingChanged.emit(True)
@@ -2004,13 +2326,16 @@ class MOTIONConnector(QObject):
             from processing.visualize_bloodflow import VisualizeBloodflow
 
             # Close any existing matplotlib figures to prevent multiple windows from old scans
-            plt.close('all')
+            plt.close("all")
 
-            bfi = payload["bfi"]; bvi = payload["bvi"]
+            bfi = payload["bfi"]
+            bvi = payload["bvi"]
             camera_inds = payload["camera_inds"]
-            contrast= payload["contrast"]; mean = payload["mean"]
+            contrast = payload["contrast"]
+            mean = payload["mean"]
             nmodules = payload["nmodules"]
-            t1 = payload["t1"]; t2 = payload["t2"]
+            t1 = payload["t1"]
+            t2 = payload["t2"]
 
             viz = VisualizeBloodflow(left_csv="", right_csv="", t1=t1, t2=t2)
             viz._BFI = bfi
@@ -2043,6 +2368,7 @@ class MOTIONConnector(QObject):
         # Show the figure on the main thread
         try:
             import matplotlib.pyplot as plt
+
             plt.show(block=False)
         except Exception as e:
             self.errorOccurred.emit(f"Visualization display failed:\n{e}")
@@ -2098,7 +2424,9 @@ class MOTIONConnector(QObject):
 
                 # Process RIGHT
                 if right_raw and os.path.isfile(right_raw):
-                    self.postLog.emit(f"Processing RIGHT: {os.path.basename(right_raw)}")
+                    self.postLog.emit(
+                        f"Processing RIGHT: {os.path.basename(right_raw)}"
+                    )
                     self.postProgress.emit(55)
                     right_csv = _to_csv_path(right_raw)
                     proc.process_bin_file(right_raw, right_csv)
@@ -2119,7 +2447,9 @@ class MOTIONConnector(QObject):
                 # clear thread handle before emitting
                 self._post_thread = None
                 self.postFinished.emit(ok, err, left_csv or "", right_csv or "")
-                logger.info(f"Post-process finished: ok={ok}, err={err}, left_csv={left_csv}, right_csv={right_csv}")
+                logger.info(
+                    f"Post-process finished: ok={ok}, err={err}, left_csv={left_csv}, right_csv={right_csv}"
+                )
 
         self._post_thread = threading.Thread(target=_worker, daemon=True)
         self._post_thread.start()
@@ -2137,7 +2467,7 @@ class MOTIONConnector(QObject):
     @pyqtSlot(str)
     def emitError(self, msg):
         self.errorOccurred.emit(msg)
-        
+
     @pyqtSlot(result=str)
     def get_sdk_version(self):
         return self._interface.get_sdk_version()
@@ -2147,8 +2477,10 @@ class MOTIONConnector(QObject):
         """Handle incoming data from the LIFU device."""
         logger.info(f"Data received from {descriptor}: {message}")
         self.signalDataReceived.emit(descriptor, message)
-    
-    def _write_stream_to_file(self, q: queue.Queue, stop_evt: threading.Event, filename: str, side: str):
+
+    def _write_stream_to_file(
+        self, q: queue.Queue, stop_evt: threading.Event, filename: str, side: str
+    ):
         """
         Parse streaming binary data and write to CSV file.
         Uses the parser from parse_data_v2.py to convert binary packets to CSV rows.
@@ -2159,25 +2491,44 @@ class MOTIONConnector(QObject):
                 csv_writer = csv.writer(f)
                 # Write CSV header
                 csv_writer.writerow(
-                    ["cam_id", "frame_id", "timestamp_s", *range(1024), "temperature", "sum", "tcm", "tcl", "pdc"]
+                    [
+                        "cam_id",
+                        "frame_id",
+                        "timestamp_s",
+                        *range(1024),
+                        "temperature",
+                        "sum",
+                        "tcm",
+                        "tcl",
+                        "pdc",
+                    ]
                 )
-                
+
                 # Buffer to accumulate incoming data
                 buffer_accumulator = bytearray()
-                
+
                 # Parse and write data using the helper function
                 proc = DataProcessor()
+
                 def _extra_cols():
                     with self._telemetry_lock:
-                        return [int(self._tcm), int(self._tcl), f"{float(self._pdc):.3f}"]
-                _temp_alerted = set()  # cam_ids that have already triggered 105°C alert this scan
+                        return [
+                            int(self._tcm),
+                            int(self._tcl),
+                            f"{float(self._pdc):.3f}",
+                        ]
+
+                _temp_alerted = (
+                    set()
+                )  # cam_ids that have already triggered 105°C alert this scan
+
                 def _on_row(cam_id, frame_id, ts_val, hist, row_sum, temp):
                     try:
                         # Alert (and log) if camera temperature reaches threshold; do not interrupt scan
                         threshold = self._camera_temp_alert_threshold_c
                         if temp >= threshold and cam_id not in _temp_alerted:
                             _temp_alerted.add(cam_id)
-                            msg = f"ALERT: Camera {cam_id+1} ({side}) temperature {temp:.1f}°C >= {threshold:.0f}°C threshold."
+                            msg = f"ALERT: Camera {cam_id + 1} ({side}) temperature {temp:.1f}°C >= {threshold:.0f}°C threshold."
                             self.captureLog.emit(msg)
                             run_logger.warning(msg)
                             logger.warning(msg)
@@ -2195,14 +2546,20 @@ class MOTIONConnector(QObject):
 
                         module_idx = 0 if side == "left" else 1
                         cam_pos = int(cam_id) % 8
-                        if module_idx >= _BFI_C_MIN.shape[0] or cam_pos >= _BFI_C_MIN.shape[1]:
+                        if (
+                            module_idx >= _BFI_C_MIN.shape[0]
+                            or cam_pos >= _BFI_C_MIN.shape[1]
+                        ):
                             bfi_val = contrast * 10.0
                         else:
                             cmin = float(_BFI_C_MIN[module_idx, cam_pos])
                             cmax = float(_BFI_C_MAX[module_idx, cam_pos])
                             cden = (cmax - cmin) or 1.0
                             bfi_val = (1.0 - ((contrast - cmin) / cden)) * 10.0
-                        if module_idx >= _BFI_I_MIN.shape[0] or cam_pos >= _BFI_I_MIN.shape[1]:
+                        if (
+                            module_idx >= _BFI_I_MIN.shape[0]
+                            or cam_pos >= _BFI_I_MIN.shape[1]
+                        ):
                             bvi_val = mean_val * 10.0
                         else:
                             imin = float(_BFI_I_MIN[module_idx, cam_pos])
@@ -2210,37 +2567,63 @@ class MOTIONConnector(QObject):
                             iden = (imax - imin) or 1.0
                             bvi_val = (1.0 - ((mean_val - imin) / iden)) * 10.0
                         timestamp = float(ts_val) if ts_val else time.time()
-                        self.scanMeanSampled.emit(side, int(cam_id), float(timestamp), mean_val)
-                        self.scanContrastSampled.emit(side, int(cam_id), float(timestamp), float(contrast))
-                        self.scanBfiSampled.emit(side, int(cam_id), float(timestamp), float(bfi_val))
-                        self.scanBviSampled.emit(side, int(cam_id), float(timestamp), float(bvi_val))
-                        self._corr_queue.put((side, int(cam_id), float(timestamp), mean_val, float(bfi_val), float(bvi_val)))
+                        self.scanMeanSampled.emit(
+                            side, int(cam_id), float(timestamp), mean_val
+                        )
+                        self.scanContrastSampled.emit(
+                            side, int(cam_id), float(timestamp), float(contrast)
+                        )
+                        self.scanBfiSampled.emit(
+                            side, int(cam_id), float(timestamp), float(bfi_val)
+                        )
+                        self.scanBviSampled.emit(
+                            side, int(cam_id), float(timestamp), float(bvi_val)
+                        )
+                        self._corr_queue.put(
+                            (
+                                side,
+                                int(cam_id),
+                                float(timestamp),
+                                mean_val,
+                                float(bfi_val),
+                                float(bvi_val),
+                            )
+                        )
                     except Exception:
                         # Don't let plotting errors break the writer thread
                         return
 
                 rows_written = proc.parse_stream_to_csv(
-                    q, stop_evt, csv_writer, buffer_accumulator, extra_cols_fn=_extra_cols, on_row_fn=_on_row
+                    q,
+                    stop_evt,
+                    csv_writer,
+                    buffer_accumulator,
+                    extra_cols_fn=_extra_cols,
+                    on_row_fn=_on_row,
                 )
-                
+
                 logger.info(f"Wrote {rows_written} rows to {filename}")
-                
+
         except Exception as e:
             self.captureLog.emit(f"Writer error ({filename}): {e}")
             logger.error(f"Writer error ({filename}): {e}", exc_info=True)
-       
+
     def connect_signals(self):
         """Connect LIFUInterface signals to QML."""
-        motion_interface.signal_connect.connect(self.on_connected)
-        motion_interface.signal_disconnect.connect(self.on_disconnected)
-        motion_interface.signal_data_received.connect(self.on_data_received)
-        self.safetyTripDuringCaptureRequested.connect(self._on_safety_trip_during_capture)
+        self._interface.signal_connect.connect(self.on_connected)
+        self._interface.signal_disconnect.connect(self.on_disconnected)
+        self._interface.signal_data_received.connect(self.on_data_received)
+        self.safetyTripDuringCaptureRequested.connect(
+            self._on_safety_trip_during_capture
+        )
 
     def _correction_worker(self):
         per_camera_state = {}
         while not self._corr_stop.is_set():
             try:
-                side, cam_id, timestamp, mean_val, bfi_val, bvi_val = self._corr_queue.get(timeout=0.25)
+                side, cam_id, timestamp, mean_val, bfi_val, bvi_val = (
+                    self._corr_queue.get(timeout=0.25)
+                )
             except queue.Empty:
                 continue
             key = (side, cam_id)
@@ -2271,13 +2654,14 @@ class MOTIONConnector(QObject):
 
     @property
     def interface(self):
-        return motion_interface
-    
+        return self._interface
+
+
 # --- worker to run visualiztion ---
 class _VizWorker(QObject):
     finished = pyqtSignal()
     error = pyqtSignal(str)
-    resultsReady = pyqtSignal(object)   # emits a dict with arrays/metadata
+    resultsReady = pyqtSignal(object)  # emits a dict with arrays/metadata
 
     def __init__(self, left_csv, right_csv, t1, t2, plot_contrast=False):
         super().__init__()
@@ -2291,6 +2675,7 @@ class _VizWorker(QObject):
     def run(self):
         try:
             from processing.visualize_bloodflow import VisualizeBloodflow
+
             # Convert empty strings to None for optional right_csv, but ensure left_csv is valid
             left_path = self.left_csv if self.left_csv else None
             right_path = self.right_csv if self.right_csv else None
@@ -2299,42 +2684,57 @@ class _VizWorker(QObject):
                 self.error.emit("No valid CSV file provided for visualization")
                 self.finished.emit()
                 return
-                
+
             viz = VisualizeBloodflow(left_path, right_path, t1=self.t1, t2=self.t2)
-            viz.compute()       
+            viz.compute()
 
             # Save results CSV based on left_csv or right_csv naming rule
             if self.left_csv:
-                new_file_name = re.sub(r"_left.*\.csv$", "_bfi_results.csv", self.left_csv)
+                new_file_name = re.sub(
+                    r"_left.*\.csv$", "_bfi_results.csv", self.left_csv
+                )
             else:
-                new_file_name = re.sub(r"_right.*\.csv$", "_bfi_results.csv", self.right_csv)
+                new_file_name = re.sub(
+                    r"_right.*\.csv$", "_bfi_results.csv", self.right_csv
+                )
             viz.save_results_csv(new_file_name)
             logger.info(f"Results CSV saved to: {new_file_name}")
 
             bfi, bvi, cam_inds, contrast, mean = viz.get_results()
-            payload = {"bfi": bfi, "bvi": bvi, "camera_inds": cam_inds, "contrast": contrast, "mean": mean,
-                       "nmodules": 2 if self.right_csv else 1,
-                       "sides": viz._sides,
-                       "freq": viz.frequency_hz, "t1": viz.t1, "t2": viz.t2,
-                       "plot_contrast": self.plot_contrast}
+            payload = {
+                "bfi": bfi,
+                "bvi": bvi,
+                "camera_inds": cam_inds,
+                "contrast": contrast,
+                "mean": mean,
+                "nmodules": 2 if self.right_csv else 1,
+                "sides": viz._sides,
+                "freq": viz.frequency_hz,
+                "t1": viz.t1,
+                "t2": viz.t2,
+                "plot_contrast": self.plot_contrast,
+            }
             self.resultsReady.emit(payload)
             self.finished.emit()
         except Exception as e:
             self.error.emit(str(e))
+
 
 # --- worker to run config off the GUI thread ---
 class _ConfigureWorker(QThread):
     progress = pyqtSignal(int)
     log = pyqtSignal(str)
     finished = pyqtSignal(bool, str)
-    def __init__(self, interface, left_camera_mask:int, right_camera_mask:int):
+
+    def __init__(self, interface, left_camera_mask: int, right_camera_mask: int):
         super().__init__()
         self.interface = interface
         self.left_camera_mask = left_camera_mask
         self.right_camera_mask = right_camera_mask
         self._stop = False
 
-    def stop(self): self._stop = True
+    def stop(self):
+        self._stop = True
 
     def run(self):
         # Log masks for both modules
@@ -2345,14 +2745,16 @@ class _ConfigureWorker(QThread):
         )
 
         # Build (side, position) tasks based on masks
-        left_positions  = [i for i in range(8) if (self.left_camera_mask  & (1 << i))]
+        left_positions = [i for i in range(8) if (self.left_camera_mask & (1 << i))]
         right_positions = [i for i in range(8) if (self.right_camera_mask & (1 << i))]
 
         if not left_positions and not right_positions:
             self.finished.emit(False, "Empty camera masks (left & right)")
             return
 
-        tasks = [("left", p) for p in left_positions] + [("right", p) for p in right_positions]
+        tasks = [("left", p) for p in left_positions] + [
+            ("right", p) for p in right_positions
+        ]
 
         # Each task has two steps: program_fpga and camera_configure_registers
         total = len(tasks) * 2
@@ -2431,6 +2833,7 @@ class _ConfigureWorker(QThread):
         logger.info("FPGAs programmed & registers configured")
         self.finished.emit(True, "")
 
+
 # --- Console Status Thread ---
 class ConsoleStatusThread(QThread):
     statusUpdate = pyqtSignal(str)
@@ -2443,7 +2846,6 @@ class ConsoleStatusThread(QThread):
         self._wait_condition = QWaitCondition()
         self.last_run = time.time()
 
-
     def run(self):
         """Run loop that calls readSafetyStatus() every 1000ms when console is connected."""
         logger.info("Console status thread started")
@@ -2451,7 +2853,10 @@ class ConsoleStatusThread(QThread):
             now = time.time()
             # run the heavy work ~1 Hz
             # Check if console is connected before reading safety status
-            if now - self.last_run >= DATA_ACQ_INTERVAL and self.connector._consoleConnected:
+            if (
+                now - self.last_run >= DATA_ACQ_INTERVAL
+                and self.connector._consoleConnected
+            ):
                 start_tick = time.time()
                 try:
                     #
@@ -2459,7 +2864,7 @@ class ConsoleStatusThread(QThread):
                     #
                     # This updates _tec_* fields inside connector and emits tecStatusChanged
                     self.connector.tec_status()
-                    
+
                     #
                     # 2. PDU Mon poll
                     #
@@ -2467,31 +2872,37 @@ class ConsoleStatusThread(QThread):
 
                     # 3. Safety / interlock state
                     self.connector.readSafetyStatus()
-                    
+
                     #
                     # 4. Analog telemetry (tcm/tcl/pdc)
                     #
-                    
+
                     muxIdx = 1
                     i2cAddr = 0x41
-            
+
                     tcm_raw = self.connector.getLsyncCount()
-                    tcl_raw = self.connector.i2cReadBytes("CONSOLE", muxIdx, 4, i2cAddr, 0x10, 4)
-                    pdc_raw = self.connector.i2cReadBytes("CONSOLE", muxIdx, 7, i2cAddr, 0x1C, 2)
-                    
-                    logger.debug(f"tcm_raw: {tcm_raw} tcl_raw: {tcl_raw} pdc_raw: {pdc_raw}")
+                    tcl_raw = self.connector.i2cReadBytes(
+                        "CONSOLE", muxIdx, 4, i2cAddr, 0x10, 4
+                    )
+                    pdc_raw = self.connector.i2cReadBytes(
+                        "CONSOLE", muxIdx, 7, i2cAddr, 0x1C, 2
+                    )
+
+                    logger.debug(
+                        f"tcm_raw: {tcm_raw} tcl_raw: {tcl_raw} pdc_raw: {pdc_raw}"
+                    )
 
                     if tcl_raw and pdc_raw:
                         tcm = int(tcm_raw)
-                        tcl = int.from_bytes(tcl_raw, byteorder='little')
-                        pdc = int.from_bytes(pdc_raw, byteorder='little') * 1.9  # mA
+                        tcl = int.from_bytes(tcl_raw, byteorder="little")
+                        pdc = int.from_bytes(pdc_raw, byteorder="little") * 1.9  # mA
                         ts = time.time()
 
                         with self.connector._telemetry_lock:
                             if (
-                                tcl != self.connector._tcl or
-                                tcm != self.connector._tcm or
-                                pdc != self.connector._pdc
+                                tcl != self.connector._tcl
+                                or tcm != self.connector._tcm
+                                or pdc != self.connector._pdc
                             ):
                                 self.connector._tcl = tcl
                                 self.connector._tcm = tcm
@@ -2513,7 +2924,9 @@ class ConsoleStatusThread(QThread):
 
                 # log how long the tick took
                 duration = time.time() - start_tick
-                logger.debug("ConsoleStatusThread tick duration: %.1f ms", duration * 1000.0)
+                logger.debug(
+                    "ConsoleStatusThread tick duration: %.1f ms", duration * 1000.0
+                )
 
             # compute a smarter wait: sleep until next scheduled tick (but clamp to sensible bounds)
             now_after = time.time()
