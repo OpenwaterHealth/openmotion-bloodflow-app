@@ -83,12 +83,28 @@ Item {
     // Dialog panel
     Rectangle {
         width: 520
-        height: 420
+        height: 500
         radius: 12
         color: "#1E1E20"
         border.color: "#3E4E6F"
         border.width: 2
         anchors.centerIn: parent
+
+        // X close button
+        Rectangle {
+            width: 28; height: 28; radius: 14
+            color: xArea.containsMouse ? "#C0392B" : "#2A2A2E"
+            border.color: "#5A6B8C"; border.width: 1
+            anchors.top: parent.top; anchors.right: parent.right
+            anchors.topMargin: 10; anchors.rightMargin: 10
+            z: 10
+            Behavior on color { ColorAnimation { duration: 120 } }
+            Text { anchors.centerIn: parent; text: "✕"; color: "#FFFFFF"; font.pixelSize: 13 }
+            MouseArea {
+                id: xArea; anchors.fill: parent; hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor; onClicked: root.close()
+            }
+        }
 
         ColumnLayout {
             anchors.fill: parent
@@ -162,27 +178,7 @@ Item {
                 }
             }
 
-            // Close button
-            Button {
-                text: "Apply"
-                Layout.alignment: Qt.AlignHCenter
-                Layout.preferredWidth: 120
-                Layout.preferredHeight: 40
-                hoverEnabled: true
-                contentItem: Text {
-                    text: parent.text
-                    font.pixelSize: 14
-                    color: "#FFFFFF"
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                }
-                background: Rectangle {
-                    color: parent.hovered ? "#4A90E2" : "#3A3F4B"
-                    border.color: parent.hovered ? "#FFFFFF" : "#BDC3C7"
-                    radius: 6
-                }
-                onClicked: root.close()
-            }
+            Item { Layout.preferredHeight: 8 }
         }
 
         Keys.onReleased: function(event) {
