@@ -1313,7 +1313,7 @@ class MOTIONConnector(QObject):
             on_progress_fn=lambda pct: self.captureProgress.emit(int(pct)),
             on_trigger_state_fn=_on_trigger_state,
             on_sample_fn=_on_sample,
-            on_corrected_fn=_on_corrected,
+            on_uncorrected_fn=_on_corrected,
             on_error_fn=lambda e: self.captureLog.emit(f"Capture error: {e}"),
             on_side_stream_fn=lambda side, filepath: self.captureLog.emit(
                 f"[{side.upper()}] Streaming to: {os.path.basename(filepath)}"
