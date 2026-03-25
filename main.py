@@ -68,6 +68,7 @@ def _load_app_config() -> dict:
         "verboseCommandHandling": False,  # Enable printf in MCU command handlers
         "eol_min_mean_per_camera": [0] * 8,
         "eol_min_contrast_per_camera": [0] * 8,
+        "defaultCameraIndex": 4,
     }
     config_path = resource_path("config", "app_config.json")
     if not config_path.exists():
@@ -204,6 +205,7 @@ def main():
         {
             "advancedSensors": app_config.get("advancedSensors", True),
             "realtimePlotEnabled": app_config.get("realtimePlotEnabled", False),
+            "defaultCameraIndex": app_config.get("defaultCameraIndex", 4),
         },
     )
     engine.rootContext().setContextProperty("appVersion", APP_VERSION)
