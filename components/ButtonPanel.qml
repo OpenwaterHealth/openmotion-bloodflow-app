@@ -28,8 +28,7 @@ Rectangle {
     }
 
     signal startStopClicked()
-    signal cameraClicked()
-    signal scanTimeClicked()
+    signal scanSettingsClicked()
     signal userSettingsClicked()
     signal notesClicked()
     signal historyClicked()
@@ -57,18 +56,11 @@ Rectangle {
             onClicked: panel.startStopClicked()
         }
 
-        // Camera Selection
+        // Scan Settings (camera + duration)
         PanelButton {
-            iconText: "\uea54"  // camera icon
-            label: "Camera"
-            onClicked: panel.cameraClicked()
-        }
-
-        // Scan Time
-        PanelButton {
-            iconText: "\uea7d"  // clock icon
-            label: "Time"
-            onClicked: panel.scanTimeClicked()
+            iconText: "\uea5c"  // sliders/tune icon
+            label: "Scan\nSettings"
+            onClicked: panel.scanSettingsClicked()
         }
 
         // --- Divider ---
@@ -208,6 +200,8 @@ Rectangle {
                 font.pixelSize: 10
                 color: btnItem.enabled ? (btnItem.highlighted ? "white" : "#7F8C8D") : "#555555"
                 horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+                Layout.preferredWidth: 64
                 Layout.alignment: Qt.AlignHCenter
             }
         }

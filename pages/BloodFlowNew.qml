@@ -107,15 +107,13 @@ Rectangle {
                 }
             }
 
-            onCameraClicked: {
-                cameraModal.setInitialSelection(
+            onScanSettingsClicked: {
+                scanSettingsModal.setInitialSelection(
                     maskToArray(leftMask),
                     maskToArray(rightMask)
                 )
-                cameraModal.open()
+                scanSettingsModal.open()
             }
-
-            onScanTimeClicked: scanTimeModal.open()
             onUserSettingsClicked: userSettingsModal.open()
             onNotesClicked: notesModal.open()
             onHistoryClicked: historyModal.open()
@@ -135,25 +133,18 @@ Rectangle {
     }
 
     // ===== MODALS =====
-    CameraSelectionModal {
-        id: cameraModal
+    ScanSettingsModal {
+        id: scanSettingsModal
         onSelectionChanged: function(newLeftMask, newRightMask) {
+            bloodFlow.freeRun = scanSettingsModal.freeRun
+            bloodFlow.durationSec = scanSettingsModal.freeRun ? 43200 : scanSettingsModal.durationSec
             if (newLeftMask !== bloodFlow.leftMask || newRightMask !== bloodFlow.rightMask) {
                 bloodFlow.leftMask = newLeftMask
                 bloodFlow.rightMask = newRightMask
-                // Camera selection changed - need to re-flash
                 if (!scanning) {
                     flashDefaultCameras()
                 }
             }
-        }
-    }
-
-    ScanTimeModal {
-        id: scanTimeModal
-        onAccepted: {
-            bloodFlow.freeRun = scanTimeModal.freeRun
-            bloodFlow.durationSec = scanTimeModal.freeRun ? 43200 : scanTimeModal.durationSec
         }
     }
 
