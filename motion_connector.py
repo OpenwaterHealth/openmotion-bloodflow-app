@@ -1048,12 +1048,12 @@ class MOTIONConnector(QObject):
         right_mask = ""
 
         if left:
-            m = re.search(r"_mask([0-9A-Fa-f]+)\.raw$", left.name)
+            m = re.search(r"_mask([0-9A-Fa-f]+)\.csv$", left.name)
             if m:
                 left_mask = m.group(1)
 
         if right:
-            m = re.search(r"_mask([0-9A-Fa-f]+)\.raw$", right.name)
+            m = re.search(r"_mask([0-9A-Fa-f]+)\.csv$", right.name)
             if m:
                 right_mask = m.group(1)
 
@@ -1221,6 +1221,14 @@ class MOTIONConnector(QObject):
         def _on_complete(result):
             if result.ok:
                 self.captureLog.emit("Capture session complete.")
+            else:
+                if result.error:
+                    self.captureLog.emit(f"Capture error: {result.error}")
+
+            # Always write the notes file when any data was captured so that the
+            # scan is discoverable in the history viewer regardless of whether it
+            # ran to completion or was stopped early.
+            if result.left_path or result.right_path:
                 try:
                     notes_filename = (
                         f"scan_{subject_id}_{result.scan_timestamp}_notes.txt"
@@ -1231,13 +1239,12 @@ class MOTIONConnector(QObject):
                     logger.info(f"Saved scan notes to {notes_path}")
                 except Exception as e:
                     logger.error(f"Failed to save scan notes: {e}")
+
+            if result.ok:
                 try:
                     self._log_scan_image_stats(result.left_path, result.right_path)
                 except Exception as e:
                     logger.error(f"Failed to compute scan image stats: {e}")
-            else:
-                if result.error:
-                    self.captureLog.emit(f"Capture error: {result.error}")
 
             self._capture_left_path = result.left_path
             self._capture_right_path = result.right_path
