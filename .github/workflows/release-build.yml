@@ -36,10 +36,10 @@ jobs:
           conda activate omotion
           python -m pip install --upgrade pip
 
-          # Fetch latest OpenMOTION-Pylib wheel from GitHub Releases
+          # Fetch latest openmotion-sdk wheel from GitHub Releases
           WHL_URL=$(python -c "
           import json, urllib.request, sys
-          url = 'https://api.github.com/repos/OpenwaterHealth/OpenMOTION-Pylib/releases/latest'
+          url = 'https://api.github.com/repos/OpenwaterHealth/openmotion-sdk/releases/latest'
           try:
               data = json.load(urllib.request.urlopen(url))
               for a in data.get('assets', []):
@@ -55,7 +55,7 @@ jobs:
             pip install "$WHL_URL"
           else
             echo "No wheel found – falling back to source install"
-            pip install git+https://github.com/OpenwaterHealth/OpenMOTION-Pylib.git
+            pip install git+https://github.com/OpenwaterHealth/openmotion-sdk.git
           fi
 
           pip install -r requirements.txt
