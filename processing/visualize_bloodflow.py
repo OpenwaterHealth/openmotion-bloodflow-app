@@ -110,6 +110,10 @@ class VisualizeBloodflow:
             histos2, camera_inds2, timept2, temperature2 = self._readdata(
                 self.right_csv
             )
+            # Truncate time dimension to the shorter of the two sensors
+            min_timepts = min(histos.shape[1], histos2.shape[1])
+            histos = histos[:, :min_timepts, :]
+            histos2 = histos2[:, :min_timepts, :]
             histos = np.concatenate((histos, histos2), axis=0)
             camera_inds = np.concatenate((camera_inds, camera_inds2), axis=0)
             sides = np.concatenate((sides, np.array(["right"] * len(camera_inds2))))
@@ -271,8 +275,8 @@ class VisualizeBloodflow:
         t = np.arange(x.shape[1], dtype=float) / self.frequency_hz
         # sanitize t2
         t1, t2 = self.t1, (t[-1] if self.t2 <= self.t1 or self.t2 == 0 else self.t2)
-        ind1 = int(self.frequency_hz * t1)
-        ind2 = int(self.frequency_hz * t2)
+        ind1 = min(int(self.frequency_hz * t1), x.shape[1])
+        ind2 = min(int(self.frequency_hz * t2), x.shape[1])
 
         # Determine which modules we actually have
         has_left = any(self._sides[i] == "left" for i in range(len(camera_inds)))
@@ -342,60 +346,72 @@ class VisualizeBloodflow:
 
         # Plot actual camera data (left_cams, right_cams already computed above) - iterate through all cameras using _sides array
         for ind_cam in range(len(camera_inds)):
-            # Determine module (column) from _sides array
-            is_left = self._sides[ind_cam] == "left"
+            try:
+                # Determine module (column) from _sides array
+                is_left = self._sides[ind_cam] == "left"
 
-            # Map to column index based on what modules exist
-            if has_left and has_right:
-                module_col = 0 if is_left else 1
-            elif has_left:
-                module_col = 0
-            else:  # has_right only
-                module_col = 0
+                # Map to column index based on what modules exist
+                if has_left and has_right:
+                    module_col = 0 if is_left else 1
+                elif has_left:
+                    module_col = 0
+                else:  # has_right only
+                    module_col = 0
 
-            if module_col >= ncols:
-                continue
+                if module_col >= ncols:
+                    continue
 
-            cam_id = int(camera_inds[ind_cam])
+                cam_id = int(camera_inds[ind_cam])
 
-            # Map camera to sequential position within its module (0-3)
-            if is_left:
-                cam_position = next(
-                    i for i, (idx, _) in enumerate(left_cams) if idx == ind_cam
+                # Map camera to sequential position within its module (0-3)
+                if is_left:
+                    cam_position = next(
+                        i for i, (idx, _) in enumerate(left_cams) if idx == ind_cam
+                    )
+                else:
+                    cam_position = next(
+                        i for i, (idx, _) in enumerate(right_cams) if idx == ind_cam
+                    )
+
+                # Map position to subplot row using Birmingham mapping
+                subplot_row = position_to_row.get(cam_position, cam_position)
+
+                if subplot_row >= nrows:
+                    continue
+
+                ax_mj = ax[subplot_row, module_col]
+
+                # Check if this camera has meaningful data in the plot window
+                cam_x = x[ind_cam, ind1:ind2]
+                cam_y = y[ind_cam, ind1:ind2]
+                if len(cam_x) == 0 or (np.all(cam_x == 0) and np.all(cam_y == 0)):
+                    continue
+
+                # Clear the placeholder text
+                ax_mj.clear()
+
+                # Plot the actual data
+                line1 = ax_mj.plot(
+                    t[ind1:ind2], cam_x, "k", linewidth=2, label=legend[0]
                 )
-            else:
-                cam_position = next(
-                    i for i, (idx, _) in enumerate(right_cams) if idx == ind_cam
+                ax2 = ax_mj.twinx()
+                line2 = ax2.plot(
+                    t[ind1:ind2], cam_y, "r", linewidth=1, label=legend[1]
                 )
+                ax2.tick_params(axis="y", colors="red")
 
-            # Map position to subplot row using Birmingham mapping
-            subplot_row = position_to_row.get(cam_position, cam_position)
+                # keep legacy inversion condition if someone passes ('contrast','mean')
+                if legend[0] == "contrast":
+                    ax_mj.invert_yaxis()
+                if legend[1] == "mean":
+                    ax2.invert_yaxis()
 
-            ax_mj = ax[subplot_row, module_col]
-
-            # Clear the placeholder text
-            ax_mj.clear()
-
-            # Plot the actual data
-            line1 = ax_mj.plot(
-                t[ind1:ind2], x[ind_cam, ind1:ind2], "k", linewidth=2, label=legend[0]
-            )
-            ax2 = ax_mj.twinx()
-            line2 = ax2.plot(
-                t[ind1:ind2], y[ind_cam, ind1:ind2], "r", linewidth=1, label=legend[1]
-            )
-            ax2.tick_params(axis="y", colors="red")
-
-            # keep legacy inversion condition if someone passes ('contrast','mean')
-            if legend[0] == "contrast":
-                ax_mj.invert_yaxis()
-            if legend[1] == "mean":
-                ax2.invert_yaxis()
-
-            lines = line1 + line2
-            labels = [l.get_label() for l in lines]
-            ax_mj.legend(lines, labels)
-            ax_mj.set_ylabel(f"Camera {cam_id + 1}")
+                lines = line1 + line2
+                labels = [l.get_label() for l in lines]
+                ax_mj.legend(lines, labels)
+                ax_mj.set_ylabel(f"Camera {cam_id + 1}")
+            except Exception as e:
+                print(f"Warning: skipping camera index {ind_cam} due to error: {e}")
 
         # Titles/labels based on what modules we have
         if has_left and has_right:
