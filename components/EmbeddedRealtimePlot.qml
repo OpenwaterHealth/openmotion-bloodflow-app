@@ -563,10 +563,10 @@ Rectangle {
 
     Connections {
         target: MOTIONInterface
-        function onScanBfiCorrectedSampled(side, camId, timestampSec, bfiVal) {
+        function onScanBfiSampled(side, camId, timestampSec, bfiVal) {
             plotArea.handleBfiSample(side, camId, timestampSec, bfiVal)
         }
-        function onScanBviCorrectedSampled(side, camId, timestampSec, bviVal) {
+        function onScanBviSampled(side, camId, timestampSec, bviVal) {
             plotArea.handleBviSample(side, camId, timestampSec, bviVal)
         }
     }
