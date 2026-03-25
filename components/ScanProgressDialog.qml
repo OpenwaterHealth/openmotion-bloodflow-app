@@ -23,7 +23,7 @@ Item {
         logArea.cursorPosition = logArea.length
     }
 
-    // Dimmed backdrop
+    // Dimmed backdrop — click outside to close
     Rectangle {
         anchors.fill: parent
         color: "#00000088"
@@ -31,15 +31,15 @@ Item {
             anchors.fill: parent
             acceptedButtons: Qt.AllButtons
             hoverEnabled: true
-            onClicked: {}   // block clicks
+            onClicked: root.close()
         }
     }
 
     // Dialog panel
     Rectangle {
         id: panel
-        width: 460
-        height: 320
+        width: 920
+        height: 640
         radius: 10
         color: "#1E1E20"
         border.color: "#3E4E6F"
@@ -131,37 +131,20 @@ Item {
                 }
             }
 
-            // Buttons
-            RowLayout {
+            // Close hint
+            Text {
+                text: "Click outside to close"
+                color: "#555560"
+                font.pixelSize: 11
+                horizontalAlignment: Text.AlignHCenter
                 Layout.alignment: Qt.AlignHCenter
-                spacing: 12
-                Button {
-                    id: cancelButton
-                    text: root.done ? "Close" : "Cancel Scan" 
-                    Layout.preferredWidth: 160
-                    Layout.preferredHeight: 40
-                    hoverEnabled: true
-                    contentItem: Text {
-                        text: parent.text
-                        font.pixelSize: 16
-                        color: "#BDC3C7"
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    background: Rectangle {
-                        color: parent.hovered ? "#4A90E2" : "#3A3F4B"
-                        border.color: parent.hovered ? "#FFFFFF" : "#BDC3C7"
-                        radius: 6
-                    }
-                    onClicked: root.cancelRequested()
-                }
             }
         }
 
-        // ESC to cancel (no arrow funcs in QML)
+        // ESC to close
         Keys.onReleased: function(event) {
             if (event.key === Qt.Key_Escape) {
-                root.cancelRequested()
+                root.close()
                 event.accepted = true
             }
         }

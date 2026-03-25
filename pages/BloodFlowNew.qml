@@ -88,7 +88,7 @@ Rectangle {
             camerasReady: bloodFlow.camerasReady && !bloodFlow.configuring
 
             onStartStopClicked: {
-                if (scanning) {
+                if (bloodFlow.scanning) {
                     // Stop
                     scanRunner.cancel()
                 } else {
@@ -97,12 +97,11 @@ Rectangle {
                         userSettingsModal.open()
                         return
                     }
-                    // Start scan
-                    scanning = true
+                    // Start scan — write to bloodFlow.scanning so the binding stays intact
+                    bloodFlow.scanning = true
                     scanDialog.message = "Scanning..."
                     scanDialog.stageText = "Preparing..."
                     scanDialog.progress = 1
-                    scanDialog.open()
                     embeddedPlot.startScan(bloodFlow.leftMask, bloodFlow.rightMask)
                     scanRunner.start()
                 }
@@ -120,6 +119,7 @@ Rectangle {
             onUserSettingsClicked: userSettingsModal.open()
             onNotesClicked: notesModal.open()
             onHistoryClicked: historyModal.open()
+            onLogClicked: scanDialog.open()
             onSettingsClicked: settingsModal.open()
         }
 
@@ -183,13 +183,6 @@ Rectangle {
 
     ScanProgressDialog {
         id: scanDialog
-        onCancelRequested: {
-            if (scanDialog.done) {
-                scanDialog.close()
-            } else {
-                scanRunner.cancel()
-            }
-        }
     }
 
     // ===== SCAN RUNNER =====
@@ -216,11 +209,9 @@ Rectangle {
         })
 
         onStageUpdate: function(txt) {
-            if (!scanDialog.visible) scanDialog.open()
             scanDialog.stageText = txt
         }
         onProgressUpdate: function(pct) {
-            if (!scanDialog.visible) scanDialog.open()
             scanDialog.progress = pct
         }
         onMessageOut: function(line) {

@@ -33,6 +33,7 @@ Rectangle {
     signal userSettingsClicked()
     signal notesClicked()
     signal historyClicked()
+    signal logClicked()
     signal settingsClicked()
 
     FontLoader {
@@ -109,6 +110,13 @@ Rectangle {
             iconText: "\uea7f"  // history/clock-arrow icon
             label: "History"
             onClicked: panel.historyClicked()
+        }
+
+        // Log viewer
+        PanelButton {
+            iconText: "\uea65"  // list/log icon
+            label: "Log"
+            onClicked: panel.logClicked()
         }
 
         // Status indicator (not clickable)
