@@ -111,17 +111,18 @@ class MOTIONConnector(QObject):
         str, int, float, float
     )  # side, cam_id, timestamp_s, contrast
     scanBfiSampled = pyqtSignal(
-        str, int, float, float
-    )  # side, cam_id, timestamp_s, bfi
+        str, int, int, float, float
+    )  # side, cam_id, frame_id, timestamp_s, bfi
     scanBviSampled = pyqtSignal(
-        str, int, float, float
-    )  # side, cam_id, timestamp_s, bvi
+        str, int, int, float, float
+    )  # side, cam_id, frame_id, timestamp_s, bvi
     scanBfiCorrectedSampled = pyqtSignal(
         str, int, float, float
-    )  # side, cam_id, timestamp_s, bfi
+    )  # side, cam_id, timestamp_s, bfi  (kept for backward compat)
     scanBviCorrectedSampled = pyqtSignal(
         str, int, float, float
-    )  # side, cam_id, timestamp_s, bvi
+    )  # side, cam_id, timestamp_s, bvi  (kept for backward compat)
+    scanCorrectedBatch = pyqtSignal('QVariantList')  # list of {side,camId,frameId,ts,bfi,bvi}
 
     # post-processing signals
     postProgress = pyqtSignal(int)
@@ -1228,32 +1229,37 @@ class MOTIONConnector(QObject):
                 float(sample.timestamp_s),
                 float(sample.contrast),
             )
-            self.scanBfiSampled.emit(
-                current_side,
-                int(sample.cam_id),
-                float(sample.timestamp_s),
-                float(sample.bfi),
-            )
-            self.scanBviSampled.emit(
-                current_side,
-                int(sample.cam_id),
-                float(sample.timestamp_s),
-                float(sample.bvi),
-            )
 
-        def _on_corrected(sample):
-            self.scanBfiCorrectedSampled.emit(
+        def _on_uncorrected(sample):
+            """Fires for every non-dark frame (~40 Hz). Feeds the realtime plot."""
+            self.scanBfiSampled.emit(
                 sample.side,
                 int(sample.cam_id),
+                int(sample.absolute_frame_id),
                 float(sample.timestamp_s),
                 float(sample.bfi_corrected),
             )
-            self.scanBviCorrectedSampled.emit(
+            self.scanBviSampled.emit(
                 sample.side,
                 int(sample.cam_id),
+                int(sample.absolute_frame_id),
                 float(sample.timestamp_s),
                 float(sample.bvi_corrected),
             )
+
+        def _on_corrected_batch(batch):
+            """Fires every ~15 s with dark-frame-corrected values for the last interval."""
+            payload = []
+            for s in batch.samples:
+                payload.append({
+                    'side': s.side,
+                    'camId': int(s.cam_id),
+                    'frameId': int(s.absolute_frame_id),
+                    'ts': float(s.timestamp_s),
+                    'bfi': float(s.bfi_corrected),
+                    'bvi': float(s.bvi_corrected),
+                })
+            self.scanCorrectedBatch.emit(payload)
 
         def _on_complete(result):
             if result.ok:
@@ -1313,7 +1319,8 @@ class MOTIONConnector(QObject):
             on_progress_fn=lambda pct: self.captureProgress.emit(int(pct)),
             on_trigger_state_fn=_on_trigger_state,
             on_sample_fn=_on_sample,
-            on_uncorrected_fn=_on_corrected,
+            on_uncorrected_fn=_on_uncorrected,
+            on_corrected_batch_fn=_on_corrected_batch,
             on_error_fn=lambda e: self.captureLog.emit(f"Capture error: {e}"),
             on_side_stream_fn=lambda side, filepath: self.captureLog.emit(
                 f"[{side.upper()}] Streaming to: {os.path.basename(filepath)}"

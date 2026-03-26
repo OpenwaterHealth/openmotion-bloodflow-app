@@ -142,7 +142,7 @@ Rectangle {
     // These are called from signal handlers and must be as fast as possible.
     // No Object.assign, no QML property assignments other than latestTimestamp.
 
-    function handleBfiSample(side, camId, ts, val) {
+    function handleBfiSample(side, camId, frameId, ts, val) {
         if (!running) return
 
         // Profiling: track inter-sample interval for rate estimate
@@ -157,20 +157,54 @@ Rectangle {
 
         const key = _seriesKey(side, camId)
         _ensureEntry(key)
-        _store[key].bfi.push({ t: ts, v: val })
+        _store[key].bfi.push({ t: ts, v: val, fid: frameId })
         _store[key].latestBfi = val
         _dirty[key] = true
         if (ts > latestTimestamp) latestTimestamp = ts
     }
 
-    function handleBviSample(side, camId, ts, val) {
+    function handleBviSample(side, camId, frameId, ts, val) {
         if (!running) return
         const key = _seriesKey(side, camId)
         _ensureEntry(key)
-        _store[key].bvi.push({ t: ts, v: val })
+        _store[key].bvi.push({ t: ts, v: val, fid: frameId })
         _store[key].latestBvi = val
         _dirty[key] = true
         if (ts > latestTimestamp) latestTimestamp = ts
+    }
+
+    // Binary search for a frame ID in a sorted-by-fid array. Returns index or -1.
+    function _findFid(arr, fid) {
+        let lo = 0, hi = arr.length - 1
+        while (lo <= hi) {
+            const mid = (lo + hi) >>> 1
+            if (arr[mid].fid === fid) return mid
+            if (arr[mid].fid < fid) lo = mid + 1
+            else hi = mid - 1
+        }
+        return -1
+    }
+
+    // Called when the SDK emits a corrected batch (~every 15 s).
+    // Overwrites the stored uncorrected values in-place for matching frame IDs.
+    function handleCorrectedBatch(samples) {
+        if (!running) return
+        for (let i = 0; i < samples.length; i++) {
+            const s = samples[i]
+            const key = _seriesKey(s.side, s.camId)
+            if (!_store[key]) continue
+            const bi = _findFid(_store[key].bfi, s.frameId)
+            if (bi >= 0) {
+                _store[key].bfi[bi].v = s.bfi
+                _store[key].latestBfi = s.bfi
+            }
+            const vi = _findFid(_store[key].bvi, s.frameId)
+            if (vi >= 0) {
+                _store[key].bvi[vi].v = s.bvi
+                _store[key].latestBvi = s.bvi
+            }
+            _dirty[key] = true
+        }
     }
 
     // ── Bounds (called only when dirty, result cached in _store) ─────────────────────
@@ -563,11 +597,14 @@ Rectangle {
 
     Connections {
         target: MOTIONInterface
-        function onScanBfiSampled(side, camId, timestampSec, bfiVal) {
-            plotArea.handleBfiSample(side, camId, timestampSec, bfiVal)
+        function onScanBfiSampled(side, camId, frameId, timestampSec, bfiVal) {
+            plotArea.handleBfiSample(side, camId, frameId, timestampSec, bfiVal)
         }
-        function onScanBviSampled(side, camId, timestampSec, bviVal) {
-            plotArea.handleBviSample(side, camId, timestampSec, bviVal)
+        function onScanBviSampled(side, camId, frameId, timestampSec, bviVal) {
+            plotArea.handleBviSample(side, camId, frameId, timestampSec, bviVal)
+        }
+        function onScanCorrectedBatch(samples) {
+            plotArea.handleCorrectedBatch(samples)
         }
     }
 }
