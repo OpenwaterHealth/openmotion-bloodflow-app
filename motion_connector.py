@@ -150,6 +150,8 @@ class MOTIONConnector(QObject):
         power_off_unused_cameras=False,
         comm_verbose=False,
         verbose_command_handling=False,
+        write_raw_csv=True,
+        raw_csv_duration_sec=None,
     ):
         super().__init__(parent)
         self._interface = motion_interface
@@ -165,6 +167,8 @@ class MOTIONConnector(QObject):
         self._verbose_command_handling = bool(verbose_command_handling)
         self._output_base = output_path or os.getcwd()
         self._power_off_unused_cameras = bool(power_off_unused_cameras)
+        self._write_raw_csv = bool(write_raw_csv)
+        self._raw_csv_duration_sec = float(raw_csv_duration_sec) if raw_csv_duration_sec is not None else None
 
         # Configure logging with the provided level
         self._configure_logging(log_level)
@@ -1306,6 +1310,8 @@ class MOTIONConnector(QObject):
             right_camera_mask=right_camera_mask,
             data_dir=data_dir,
             disable_laser=disable_laser,
+            write_raw_csv=self._write_raw_csv,
+            raw_csv_duration_sec=self._raw_csv_duration_sec,
         )
 
         def _on_trigger_state(state: str):

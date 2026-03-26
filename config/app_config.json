@@ -12,5 +12,7 @@
   "verboseCommandHandling": true,
   "eol_min_mean_per_camera": [130, 230, 250, 280, 280, 250, 230, 130],
   "eol_min_contrast_per_camera": [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25],
-  "defaultCameraIndex": 4
+  "defaultCameraIndex": 4,
+  "writeRawCsv": true,
+  "rawCsvDurationSec": null
 }

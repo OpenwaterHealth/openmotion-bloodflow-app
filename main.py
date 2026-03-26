@@ -193,6 +193,8 @@ def main():
         power_off_unused_cameras=app_config.get("powerOffUnusedCameras", False),
         comm_verbose=app_config.get("commVerbose", False),
         verbose_command_handling=app_config.get("verboseCommandHandling", False),
+        write_raw_csv=app_config.get("writeRawCsv", True),
+        raw_csv_duration_sec=app_config.get("rawCsvDurationSec", None),
         output_path=output_base,
     )
     connector.set_eol_thresholds(
