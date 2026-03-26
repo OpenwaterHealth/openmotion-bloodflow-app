@@ -19,7 +19,7 @@ Window {
     property real latestTimestamp: 0
     property color bfiColor: "#E74C3C"
     property color bviColor: "#3498DB"
-    property int plotColumns: 4
+    property int plotColumns: 2
     property int leftActiveCount: 0
     property int rightActiveCount: 0
     property int plotRows: (leftActiveCount === 8 || rightActiveCount === 8) ? 4 : 2
@@ -62,6 +62,8 @@ Window {
         const rightCams = _activeCamsFromMask(rightMask)
         leftActiveCount = leftCams.length
         rightActiveCount = rightCams.length
+        // 2 columns per active side (each row shows a near/far pair per side)
+        plotColumns = (leftCams.length > 0 ? 2 : 0) + (rightCams.length > 0 ? 2 : 0)
 
         const rows = (leftCams.length === 8 || rightCams.length === 8) ? 4 : 2
         const lastIdx = (rows * 2) - 1

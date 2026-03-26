@@ -15,6 +15,6 @@
   "defaultCameraIndex": 4,
   "writeRawCsv": true,
   "rawCsvDurationSec": null,
-  "leftMask": 153,
-  "rightMask": 153
+  "leftMask": 102,
+  "rightMask": 102
 }

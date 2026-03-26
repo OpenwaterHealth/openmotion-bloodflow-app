@@ -69,8 +69,8 @@ def _load_app_config() -> dict:
         "eol_min_mean_per_camera": [0] * 8,
         "eol_min_contrast_per_camera": [0] * 8,
         "defaultCameraIndex": 4,
-        "leftMask": 0x99,   # 0b10011001 — cameras 1,4,5,8 (Outer pattern)
-        "rightMask": 0x99,
+        "leftMask": 0x66,   # 0b01100110 — cameras 2,3,6,7 (Middle pattern)
+        "rightMask": 0x66,
     }
     config_path = resource_path("config", "app_config.json")
     if not config_path.exists():
