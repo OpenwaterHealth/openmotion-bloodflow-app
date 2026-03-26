@@ -14,5 +14,7 @@
   "eol_min_contrast_per_camera": [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25],
   "defaultCameraIndex": 4,
   "writeRawCsv": true,
-  "rawCsvDurationSec": null
+  "rawCsvDurationSec": null,
+  "leftMask": 153,
+  "rightMask": 153
 }

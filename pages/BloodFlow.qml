@@ -18,6 +18,8 @@ Rectangle {
 
     property bool advancedSensors: (AppFlags && AppFlags.advancedSensors) ? AppFlags.advancedSensors : false
     property bool realtimePlotEnabled: (AppFlags && AppFlags.realtimePlotEnabled) ? AppFlags.realtimePlotEnabled : false
+    property int defaultLeftMask:  (AppFlags && AppFlags.leftMask  !== undefined) ? AppFlags.leftMask  : 0x99
+    property int defaultRightMask: (AppFlags && AppFlags.rightMask !== undefined) ? AppFlags.rightMask : 0x99
     // property to store selected directory
     property string defaultDataDir: ""
 
@@ -34,7 +36,7 @@ Rectangle {
         ListElement { name: "All";  maskHex: "0xFF" }  
     }
 
-    // Convert to mask
+    // Convert boolean array -> integer mask.  bitMap[i] is the bit position for array index i.
     function maskFromArray(arr) {
         if (!arr || arr.length !== 8) return 0;
         const bitMap = [7, 6, 5, 4, 3, 2, 1, 0];  // index i -> bit number
@@ -43,6 +45,24 @@ Rectangle {
             if (arr[i]) m |= (1 << bitMap[i]);
         }
         return m;
+    }
+
+    // Convert integer mask -> boolean array (inverse of maskFromArray).
+    function arrayFromMask(mask) {
+        const bitMap = [7, 6, 5, 4, 3, 2, 1, 0];
+        var arr = [];
+        for (var i = 0; i < 8; i++) {
+            arr.push(Boolean(mask & (1 << bitMap[i])));
+        }
+        return arr;
+    }
+
+    // Return the sensorPatterns combo-box index whose maskHex matches mask, or 0 (None) if not found.
+    function indexForMask(mask) {
+        for (var i = 0; i < sensorPatterns.count; i++) {
+            if (parseInt(sensorPatterns.get(i).maskHex, 16) === mask) return i;
+        }
+        return 0;
     }
 
     // Reactive masks (auto-update when sensorActive arrays change)
@@ -290,14 +310,8 @@ Rectangle {
                             }
 
                             Component.onCompleted: {
-                                if (advancedSensors) {
-                                    currentIndex = 4    // default to "Outer"
-                                    leftSensorView.sensorActive = [true,false,false,true,true,false,false,true] // 0x99
-                                } else {
-                                    currentIndex = 4    // default to "Outer"
-                                    // manually trigger case 1 if only one option
-                                    leftSensorView.sensorActive = [true,false,false,true,true,false,false,true] // 0x99
-                                }
+                                currentIndex = indexForMask(bloodFlow.defaultLeftMask)
+                                leftSensorView.sensorActive = arrayFromMask(bloodFlow.defaultLeftMask)
                             }
                         }
                     }
@@ -338,22 +352,10 @@ Rectangle {
                             }
 
                             Component.onCompleted: {
-                                if (advancedSensors) {
-                                    currentIndex = 4    // default to "Outer"
-                                    rightSensorView.sensorActive = [true,false,false,true,true,false,false,true]      //0x99                             
-                                } else {
-                                    // manually trigger case 1 if only one option
-                                    currentIndex = 4    // default to "Outer"
-                                    rightSensorView.sensorActive = [true,false,false,true,true,false,false,true] // 0x99
-                                }
+                                currentIndex = indexForMask(bloodFlow.defaultRightMask)
+                                rightSensorView.sensorActive = arrayFromMask(bloodFlow.defaultRightMask)
                             }
                         }
-                    }
-
-                    Component.onCompleted: {
-                        // Force default selection handlers to run so sensorActive arrays are set
-                        leftSensorSelector.currentIndex = 1;
-                        rightSensorSelector.currentIndex = 0;
                     }
                 }
             }
@@ -646,21 +648,20 @@ Rectangle {
             console.log("Data from " + descriptor + ": " + message);
         }
         
-        function onConnectionStatusChanged() {          
+        function onConnectionStatusChanged() {
             if (!MOTIONInterface.leftSensorConnected) {
                 leftSensorSelector.currentIndex = 0
                 leftSensorView.resetCamerasWhenDisconnected()
-            }
-            else{
-                leftSensorSelector.currentIndex = 4
-                leftSensorView.sensorActive = [true,false,false,true,true,false,false,true];
+            } else {
+                leftSensorSelector.currentIndex = indexForMask(bloodFlow.defaultLeftMask)
+                leftSensorView.sensorActive = arrayFromMask(bloodFlow.defaultLeftMask)
             }
             if (!MOTIONInterface.rightSensorConnected) {
                 rightSensorSelector.currentIndex = 0
                 rightSensorView.resetCamerasWhenDisconnected()
-            } else{
-                rightSensorSelector.currentIndex = 4
-                rightSensorView.sensorActive = [true,false,false,true,true,false,false,true];
+            } else {
+                rightSensorSelector.currentIndex = indexForMask(bloodFlow.defaultRightMask)
+                rightSensorView.sensorActive = arrayFromMask(bloodFlow.defaultRightMask)
             }
         }
         

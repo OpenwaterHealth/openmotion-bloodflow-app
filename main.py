@@ -69,6 +69,8 @@ def _load_app_config() -> dict:
         "eol_min_mean_per_camera": [0] * 8,
         "eol_min_contrast_per_camera": [0] * 8,
         "defaultCameraIndex": 4,
+        "leftMask": 0x99,   # 0b10011001 — cameras 1,4,5,8 (Outer pattern)
+        "rightMask": 0x99,
     }
     config_path = resource_path("config", "app_config.json")
     if not config_path.exists():
@@ -208,6 +210,8 @@ def main():
             "advancedSensors": app_config.get("advancedSensors", True),
             "realtimePlotEnabled": app_config.get("realtimePlotEnabled", False),
             "defaultCameraIndex": app_config.get("defaultCameraIndex", 4),
+            "leftMask": app_config.get("leftMask", 0x99),
+            "rightMask": app_config.get("rightMask", 0x99),
         },
     )
     engine.rootContext().setContextProperty("appVersion", APP_VERSION)
