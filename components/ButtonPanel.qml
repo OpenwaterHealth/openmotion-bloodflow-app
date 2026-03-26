@@ -12,6 +12,7 @@ Rectangle {
     border.width: 1
 
     property bool scanning: false
+    property bool waiting: false       // true while cameras are flashing / scan is arming
     property bool camerasReady: false  // true when camera flash is complete
 
     // Status color logic
@@ -45,19 +46,81 @@ Rectangle {
         spacing: 4
 
         // ===== BOX 1: Scan Controls =====
-        // Start/Stop
-        PanelButton {
-            iconText: scanning ? "\ue9b7" : "\uea4c"  // stop : play
-            label: scanning ? "Stop" : "Start"
-            enabled: panel.camerasReady && panel.allConnected
-            highlighted: scanning
-            highlightColor: scanning ? "#E74C3C" : "#2ECC71"
-            onClicked: panel.startStopClicked()
+        // Start/Stop — coloured circle badge behind the icon
+        Item {
+            Layout.preferredWidth: 68
+            Layout.preferredHeight: 68
+            Layout.alignment: Qt.AlignHCenter
+
+            // Coloured circle
+            Rectangle {
+                id: startStopCircle
+                anchors.top: parent.top
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: 36; height: 36; radius: 18
+                color: panel.scanning ? "#E74C3C"
+                     : panel.waiting  ? "#F1C40F"
+                     :                  "#2ECC71"
+                Behavior on color { ColorAnimation { duration: 150 } }
+
+                // Play triangle (start / waiting)
+                Canvas {
+                    anchors.centerIn: parent
+                    width: 16; height: 16
+                    visible: !panel.scanning
+                    onPaint: {
+                        var ctx = getContext("2d")
+                        ctx.clearRect(0, 0, width, height)
+                        ctx.fillStyle = "#FFFFFF"
+                        ctx.beginPath()
+                        ctx.moveTo(3, 1); ctx.lineTo(15, 8); ctx.lineTo(3, 15)
+                        ctx.closePath(); ctx.fill()
+                    }
+                }
+
+                // Stop square
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: 11; height: 11
+                    color: "#FFFFFF"
+                    visible: panel.scanning
+                }
+            }
+
+            Text {
+                anchors.top: startStopCircle.bottom
+                anchors.topMargin: 3
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: panel.scanning ? "Stop" : "Start"
+                font.pixelSize: 10
+                color: (panel.camerasReady && panel.allConnected) ? "#BDC3C7" : "#555555"
+                horizontalAlignment: Text.AlignHCenter
+            }
+
+            // Hover / press highlight background
+            Rectangle {
+                anchors.fill: parent
+                radius: 10
+                color: ssArea.containsMouse ? "#2E2E33" : "transparent"
+                border.color: ssArea.containsMouse ? "#5A6B8C" : "transparent"
+                border.width: 1
+                z: -1
+                Behavior on color { ColorAnimation { duration: 150 } }
+            }
+
+            MouseArea {
+                id: ssArea
+                anchors.fill: parent
+                hoverEnabled: panel.camerasReady && panel.allConnected
+                enabled: panel.camerasReady && panel.allConnected
+                cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                onClicked: panel.startStopClicked()
+            }
         }
 
         // Scan Settings (camera + duration)
         PanelButton {
-            iconText: "\uea5c"  // sliders/tune icon
+            iconText: "\uea48"  // camera/aperture icon
             label: "Scan\nSettings"
             onClicked: panel.scanSettingsClicked()
         }
@@ -103,6 +166,19 @@ Rectangle {
             onClicked: panel.logClicked()
         }
 
+        // ── spacer pushes Box 4 to the bottom ──
+        Item { Layout.fillHeight: true }
+
+        // --- Divider ---
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 1
+            Layout.topMargin: 4
+            Layout.bottomMargin: 4
+            color: "#3E4E6F"
+        }
+
+        // ===== BOX 4: Bottom controls =====
         // Status indicator (not clickable)
         Item {
             Layout.preferredWidth: 68
@@ -145,8 +221,6 @@ Rectangle {
             label: "Settings"
             onClicked: panel.settingsClicked()
         }
-
-        Item { Layout.fillHeight: true }
     }
 
     // Reusable panel button component

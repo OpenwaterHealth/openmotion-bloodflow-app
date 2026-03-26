@@ -113,20 +113,6 @@ Rectangle {
 
                 Item { Layout.fillWidth: true }
 
-                Text {
-                    id: clockText
-                    color: "#7F8C8D"
-                    font.pixelSize: 12
-                    function refresh() {
-                        var d = new Date()
-                        text = d.toLocaleTimeString(Qt.locale(), "HH:mm:ss")
-                    }
-                    Component.onCompleted: refresh()
-                }
-                Timer {
-                    interval: 1000; repeat: true; running: true
-                    onTriggered: clockText.refresh()
-                }
             }
         }
 
@@ -141,6 +127,7 @@ Rectangle {
                 Layout.fillHeight: true
                 Layout.preferredWidth: 80
                 scanning: bloodFlow.scanning
+                waiting: bloodFlow.configuring
                 camerasReady: bloodFlow.camerasReady && !bloodFlow.configuring
 
                 onStartStopClicked: {
