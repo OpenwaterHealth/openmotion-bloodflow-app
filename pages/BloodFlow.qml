@@ -16,8 +16,6 @@ Rectangle {
     radius: 20
     opacity: 0.95 // Slight transparency for the content area
 
-    property bool advancedSensors: (AppFlags && AppFlags.advancedSensors) ? AppFlags.advancedSensors : false
-    property bool realtimePlotEnabled: (AppFlags && AppFlags.realtimePlotEnabled) ? AppFlags.realtimePlotEnabled : false
     property int defaultLeftMask:  (AppFlags && AppFlags.leftMask  !== undefined) ? AppFlags.leftMask  : 0x99
     property int defaultRightMask: (AppFlags && AppFlags.rightMask !== undefined) ? AppFlags.rightMask : 0x99
     // property to store selected directory
@@ -550,7 +548,7 @@ Rectangle {
                             onEditingFinished: {
                                 let v = parseInt(text);
                                 if (isNaN(v)) v = controlPanel.durationSec;
-                                v = advancedSensors? Math.max(0, Math.min(43200, v)) : Math.max(0, Math.min(43200 , v));
+                                v = Math.max(0, Math.min(43200, v));
                                 controlPanel.durationSec = v;
                                 durationSlider.value = v;
                                 text = String(v);
@@ -604,9 +602,7 @@ Rectangle {
                                 scanDialog.stageText = "Preparing…";
                                 scanDialog.progress = 1;
                                 scanDialog.open();
-                                if (realtimePlotEnabled) {
-                                    meanPlotWindow.startScan(bloodFlow.leftMask, bloodFlow.rightMask);
-                                }
+                                meanPlotWindow.startScan(bloodFlow.leftMask, bloodFlow.rightMask);
                                 scanRunner.start();
                             }
                         }
@@ -734,9 +730,7 @@ Rectangle {
             if (err === "Canceled") {
                 // Cancel should CLOSE the dialog
                 scanDialog.close()
-                if (realtimePlotEnabled) {
-                    meanPlotWindow.stopScan()
-                }
+                meanPlotWindow.stopScan()
                 return
             }
 
@@ -745,9 +739,7 @@ Rectangle {
                 scanDialog.stageText = "Error during capture";
                 // keep it open so you can read the error
                 scanDialog.done = true
-                if (realtimePlotEnabled) {
-                    meanPlotWindow.stopScan()
-                }
+                meanPlotWindow.stopScan()
                 return;
             }
 
@@ -755,9 +747,7 @@ Rectangle {
             scanDialog.stageText = "Capture complete"
             scanDialog.progress = 100
             scanDialog.done = true
-            if (realtimePlotEnabled) {
-                meanPlotWindow.stopScan()
-            }
+            meanPlotWindow.stopScan()
             // scanDialog.close();
         }
     }

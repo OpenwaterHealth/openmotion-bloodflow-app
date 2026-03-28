@@ -44,8 +44,9 @@ Rectangle {
     property real _profRenderMs:      0.0    // wall-clock time for last _timerTick (ms)
     property real _profCanvasMsAvg:   0.0    // mean canvas onPaint time this tick (ms)
     property int  _profTotalPoints:   0      // sum of all data points currently in memory
-    property real _profLastSampleWall: 0.0   // Date.now() of most recent sample
     property var  _profPaintAccum:    []     // paint-time samples within a tick
+    property int  _profLastTickSampleCount: 0   // _profSampleCount snapshot from last tick
+    property real _profLastTickWall:        0.0 // Date.now() of last tick start
 
     // ── Series helpers ────────────────────────────────────────────────────────────────
 
@@ -121,8 +122,9 @@ Rectangle {
         _profRenderMs       = 0.0
         _profCanvasMsAvg    = 0.0
         _profTotalPoints    = 0
-        _profLastSampleWall = 0.0
-        _profPaintAccum     = []
+        _profPaintAccum          = []
+        _profLastTickSampleCount = 0
+        _profLastTickWall        = 0.0
     }
 
     function startScan(leftMask, rightMask) {
@@ -145,14 +147,6 @@ Rectangle {
     function handleBfiSample(side, camId, frameId, ts, val) {
         if (!running) return
 
-        // Profiling: track inter-sample interval for rate estimate
-        const nowMs = Date.now()
-        if (_profLastSampleWall > 0) {
-            const dtSec = (nowMs - _profLastSampleWall) * 0.001
-            if (dtSec > 0)
-                _profSampleRateHz = 0.85 * _profSampleRateHz + 0.15 / dtSec
-        }
-        _profLastSampleWall = nowMs
         _profSampleCount++
 
         const key = _seriesKey(side, camId)
@@ -228,6 +222,19 @@ Rectangle {
         if (!visible) return
         const tickT0 = Date.now()
         _profPaintAccum = []   // reset per-canvas paint accumulator each tick
+
+        // Compute sample rate from delta in the monotonic _profSampleCount
+        // divided by actual elapsed wall time — no separate counter to reset.
+        if (_profLastTickWall > 0) {
+            const dtSec = (tickT0 - _profLastTickWall) * 0.001
+            if (dtSec > 0) {
+                const deltaSamples = _profSampleCount - _profLastTickSampleCount
+                const instantHz    = deltaSamples / dtSec
+                _profSampleRateHz  = 0.85 * _profSampleRateHz + 0.15 * instantHz
+            }
+        }
+        _profLastTickSampleCount = _profSampleCount
+        _profLastTickWall        = tickT0
 
         const nowTs = latestTimestamp > 0 ? latestTimestamp : (Date.now() * 0.001)
         const cutoff = nowTs - windowSeconds

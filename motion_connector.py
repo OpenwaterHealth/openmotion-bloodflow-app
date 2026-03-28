@@ -138,7 +138,6 @@ class MOTIONConnector(QObject):
         self,
         config_dir="config",
         parent=None,
-        advanced_sensors=False,
         log_level=logging.INFO,
         force_laser_fail=False,
         camera_temp_alert_threshold_c=105.0,
@@ -157,7 +156,6 @@ class MOTIONConnector(QObject):
         super().__init__(parent)
         self._interface = motion_interface
         self._scan_workflow = self._interface.scan_workflow
-        self._advanced_sensors = advanced_sensors
         self._force_laser_fail = force_laser_fail
         self._camera_temp_alert_threshold_c = float(camera_temp_alert_threshold_c)
         self._sensor_debug_logging = bool(sensor_debug_logging)

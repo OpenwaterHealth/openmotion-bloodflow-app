@@ -13,7 +13,6 @@ Rectangle {
     color: "#1C1C1E"
     radius: 0
 
-    property bool realtimePlotEnabled: (AppFlags && AppFlags.realtimePlotEnabled) ? AppFlags.realtimePlotEnabled : false
     property bool scanning: false
     property bool camerasReady: true  // starts true, goes false when camera selection changes
     property bool configuring: false  // true during camera flash
@@ -38,12 +37,10 @@ Rectangle {
 
     // Apply default cameras from config
     function applyDefaultCameras() {
-        var defaultIdx = (AppFlags && AppFlags.defaultCameraIndex !== undefined)
-            ? AppFlags.defaultCameraIndex : 4;  // "Outer"
-        var mask = patternToMask(defaultIdx);
-        // Apply default to whichever sensors are connected
-        if (MOTIONInterface.leftSensorConnected)  leftMask  = mask;
-        if (MOTIONInterface.rightSensorConnected) rightMask = mask;
+        var defLeft  = (AppFlags && AppFlags.leftMask  !== undefined) ? AppFlags.leftMask  : 0x99;
+        var defRight = (AppFlags && AppFlags.rightMask !== undefined) ? AppFlags.rightMask : 0x99;
+        if (MOTIONInterface.leftSensorConnected)  leftMask  = defLeft;
+        if (MOTIONInterface.rightSensorConnected) rightMask = defRight;
         // If sensors connected, start flash immediately
         if (MOTIONInterface.leftSensorConnected || MOTIONInterface.rightSensorConnected) {
             flashDefaultCameras();
@@ -283,11 +280,10 @@ Rectangle {
                 Qt.callLater(function() {
                     if (!bloodFlow.scanning && !bloodFlow.configuring) {
                         // Apply default mask to the newly connected sensor
-                        var defaultIdx = (AppFlags && AppFlags.defaultCameraIndex !== undefined)
-                            ? AppFlags.defaultCameraIndex : 4;
-                        var mask = patternToMask(defaultIdx);
-                        if (MOTIONInterface.leftSensorConnected)  bloodFlow.leftMask  = mask;
-                        if (MOTIONInterface.rightSensorConnected) bloodFlow.rightMask = mask;
+                        var defLeft  = (AppFlags && AppFlags.leftMask  !== undefined) ? AppFlags.leftMask  : 0x99;
+                        var defRight = (AppFlags && AppFlags.rightMask !== undefined) ? AppFlags.rightMask : 0x99;
+                        if (MOTIONInterface.leftSensorConnected)  bloodFlow.leftMask  = defLeft;
+                        if (MOTIONInterface.rightSensorConnected) bloodFlow.rightMask = defRight;
                         if (AppFlags && AppFlags.autoConfigureOnStartup !== false)
                             flashDefaultCameras()
                     }
