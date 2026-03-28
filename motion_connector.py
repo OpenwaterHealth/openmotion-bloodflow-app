@@ -152,6 +152,7 @@ class MOTIONConnector(QObject):
         verbose_command_handling=False,
         write_raw_csv=True,
         raw_csv_duration_sec=None,
+        uncorrected_only=False,
     ):
         super().__init__(parent)
         self._interface = motion_interface
@@ -169,6 +170,7 @@ class MOTIONConnector(QObject):
         self._power_off_unused_cameras = bool(power_off_unused_cameras)
         self._write_raw_csv = bool(write_raw_csv)
         self._raw_csv_duration_sec = float(raw_csv_duration_sec) if raw_csv_duration_sec is not None else None
+        self._uncorrected_only = bool(uncorrected_only)
 
         # Configure logging with the provided level
         self._configure_logging(log_level)
@@ -1326,7 +1328,7 @@ class MOTIONConnector(QObject):
             on_trigger_state_fn=_on_trigger_state,
             on_sample_fn=_on_sample,
             on_uncorrected_fn=_on_uncorrected,
-            on_corrected_batch_fn=_on_corrected_batch,
+            on_corrected_batch_fn=None if self._uncorrected_only else _on_corrected_batch,
             on_error_fn=lambda e: self.captureLog.emit(f"Capture error: {e}"),
             on_side_stream_fn=lambda side, filepath: self.captureLog.emit(
                 f"[{side.upper()}] Streaming to: {os.path.basename(filepath)}"

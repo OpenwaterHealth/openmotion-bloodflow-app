@@ -288,7 +288,8 @@ Rectangle {
                         var mask = patternToMask(defaultIdx);
                         if (MOTIONInterface.leftSensorConnected)  bloodFlow.leftMask  = mask;
                         if (MOTIONInterface.rightSensorConnected) bloodFlow.rightMask = mask;
-                        flashDefaultCameras()
+                        if (AppFlags && AppFlags.autoConfigureOnStartup !== false)
+                            flashDefaultCameras()
                     }
                 })
             }

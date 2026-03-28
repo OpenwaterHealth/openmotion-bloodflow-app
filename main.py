@@ -71,6 +71,8 @@ def _load_app_config() -> dict:
         "defaultCameraIndex": 4,
         "leftMask": 0x66,   # 0b01100110 — cameras 2,3,6,7 (Middle pattern)
         "rightMask": 0x66,
+        "uncorrectedOnly": False,
+        "autoConfigureOnStartup": True,
     }
     config_path = resource_path("config", "app_config.json")
     if not config_path.exists():
@@ -197,6 +199,7 @@ def main():
         verbose_command_handling=app_config.get("verboseCommandHandling", False),
         write_raw_csv=app_config.get("writeRawCsv", True),
         raw_csv_duration_sec=app_config.get("rawCsvDurationSec", None),
+        uncorrected_only=app_config.get("uncorrectedOnly", False),
         output_path=output_base,
     )
     connector.set_eol_thresholds(
@@ -212,6 +215,7 @@ def main():
             "defaultCameraIndex": app_config.get("defaultCameraIndex", 4),
             "leftMask": app_config.get("leftMask", 0x99),
             "rightMask": app_config.get("rightMask", 0x99),
+            "autoConfigureOnStartup": app_config.get("autoConfigureOnStartup", True),
         },
     )
     engine.rootContext().setContextProperty("appVersion", APP_VERSION)

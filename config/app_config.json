@@ -16,5 +16,7 @@
   "writeRawCsv": true,
   "rawCsvDurationSec": null,
   "leftMask": 102,
-  "rightMask": 102
+  "rightMask": 102,
+  "uncorrectedOnly": true,
+  "autoConfigureOnStartup": false
 }
