@@ -51,6 +51,7 @@ Rectangle {
             Layout.preferredWidth: 68
             Layout.preferredHeight: 68
             Layout.alignment: Qt.AlignHCenter
+            Layout.topMargin: 8
 
             // Coloured circle
             Rectangle {

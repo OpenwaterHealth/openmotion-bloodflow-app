@@ -45,6 +45,13 @@ Item {
         return m
     }
 
+    function maskToPatternIndex(mask) {
+        for (var i = 0; i < sensorPatterns.count; i++) {
+            if (parseInt(sensorPatterns.get(i).maskHex, 16) === mask) return i
+        }
+        return -1
+    }
+
     function applyPatternToSensor(index, side) {
         var pattern
         switch (index) {
@@ -79,6 +86,10 @@ Item {
         rightSensorActive = rightArr
         leftSensorView.sensorActive = leftArr
         rightSensorView.sensorActive = rightArr
+        var li = maskToPatternIndex(maskFromArray(leftArr))
+        var ri = maskToPatternIndex(maskFromArray(rightArr))
+        if (li >= 0) leftSelector.currentIndex = li
+        if (ri >= 0) rightSelector.currentIndex = ri
     }
 
     // Dimmed backdrop
@@ -164,7 +175,11 @@ Item {
                         enabled: MOTIONInterface.leftSensorConnected
                         opacity: enabled ? 1.0 : 0.4
                         onCurrentIndexChanged: applyPatternToSensor(currentIndex, "left")
-                        Component.onCompleted: currentIndex = 4
+                        Component.onCompleted: {
+                            var defMask = (AppFlags && AppFlags.leftMask !== undefined) ? AppFlags.leftMask : 0x99
+                            var idx = maskToPatternIndex(defMask)
+                            currentIndex = (idx >= 0) ? idx : 4
+                        }
                     }
                 }
 
@@ -189,7 +204,11 @@ Item {
                         enabled: MOTIONInterface.rightSensorConnected
                         opacity: enabled ? 1.0 : 0.4
                         onCurrentIndexChanged: applyPatternToSensor(currentIndex, "right")
-                        Component.onCompleted: currentIndex = 0
+                        Component.onCompleted: {
+                            var defMask = (AppFlags && AppFlags.rightMask !== undefined) ? AppFlags.rightMask : 0x99
+                            var idx = maskToPatternIndex(defMask)
+                            currentIndex = (idx >= 0) ? idx : 0
+                        }
                     }
                 }
             }
