@@ -24,6 +24,24 @@ Rectangle {
     // Duration from scan time modal
     property bool freeRun: false
     property int durationSec: 3600  // default 1 hour
+    property int elapsedSec: 0
+
+    function formatSec(s) {
+        var h = Math.floor(s / 3600)
+        var m = Math.floor((s % 3600) / 60)
+        var sec = s % 60
+        return String(h).padStart(2, '0') + ":" +
+               String(m).padStart(2, '0') + ":" +
+               String(sec).padStart(2, '0')
+    }
+
+    Timer {
+        id: scanTimer
+        interval: 1000
+        repeat: true
+        running: bloodFlow.scanning
+        onTriggered: bloodFlow.elapsedSec += 1
+    }
 
     // Convert mask to active array for camera selection modal
     function maskToArray(mask) {
@@ -110,6 +128,24 @@ Rectangle {
 
                 Item { Layout.fillWidth: true }
 
+                Rectangle { width: 1; height: 18; color: "#3E4E6F" }
+
+                Text {
+                    text: {
+                        if (bloodFlow.freeRun) {
+                            return bloodFlow.scanning
+                                ? "Free Run  " + bloodFlow.formatSec(bloodFlow.elapsedSec)
+                                : "Free Run"
+                        }
+                        return bloodFlow.scanning
+                            ? bloodFlow.formatSec(bloodFlow.elapsedSec) + " / " + bloodFlow.formatSec(bloodFlow.durationSec)
+                            : bloodFlow.formatSec(bloodFlow.durationSec)
+                    }
+                    color: bloodFlow.scanning ? "#2ECC71" : "#7F8C8D"
+                    font.pixelSize: 13
+                    font.family: "Courier New"
+                }
+
             }
         }
 
@@ -139,6 +175,7 @@ Rectangle {
                         scanDialog.message = "Scanning..."
                         scanDialog.stageText = "Preparing..."
                         scanDialog.progress = 1
+                        bloodFlow.elapsedSec = 0
                         embeddedPlot.startScan(bloodFlow.leftMask, bloodFlow.rightMask)
                         scanRunner.start()
                     }
@@ -162,6 +199,11 @@ Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 showBfiBvi: settingsModal.showBfiBvi
+                autoScale:  settingsModal.autoScale
+                bfiMin:     settingsModal.bfiMin
+                bfiMax:     settingsModal.bfiMax
+                bviMin:     settingsModal.bviMin
+                bviMax:     settingsModal.bviMax
                 previewLeftMask: bloodFlow.leftMask
                 previewRightMask: bloodFlow.rightMask
             }

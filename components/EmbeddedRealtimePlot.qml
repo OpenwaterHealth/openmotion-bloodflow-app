@@ -22,6 +22,13 @@ Rectangle {
     property int  plotRows: (leftActiveCount === 8 || rightActiveCount === 8) ? 4 : 2
     property bool showBfiBvi: true
 
+    // Plot scaling
+    property bool autoScale: true
+    property real bfiMin:    0.0
+    property real bfiMax:    10.0
+    property real bviMin:    0.0
+    property real bviMax:    10.0
+
     // Preview masks — update grid layout on camera selection change, even before scanning
     property int previewLeftMask: 0x99
     property int previewRightMask: 0x00
@@ -262,8 +269,15 @@ Rectangle {
 
             // Update cached bounds and display strings only if new data arrived
             if (_dirty[key]) {
-                s.bfiBounds = _calcBounds(s.bfi)
-                s.bviBounds = _calcBounds(s.bvi)
+                if (plotArea.autoScale) {
+                    s.bfiBounds = _calcBounds(s.bfi)
+                    s.bviBounds = _calcBounds(s.bvi)
+                } else {
+                    const bfiR = plotArea.bfiMax - plotArea.bfiMin || 1
+                    const bviR = plotArea.bviMax - plotArea.bviMin || 1
+                    s.bfiBounds = { minVal: plotArea.bfiMin, maxVal: plotArea.bfiMax, range: bfiR }
+                    s.bviBounds = { minVal: plotArea.bviMin, maxVal: plotArea.bviMax, range: bviR }
+                }
                 newDisplay[key] = {
                     bfi: isFinite(s.latestBfi) ? s.latestBfi.toFixed(2) : "--",
                     bvi: isFinite(s.latestBvi) ? s.latestBvi.toFixed(2) : "--"

@@ -1358,8 +1358,12 @@ class MOTIONConnector(QObject):
             logger.warning("Scan stats skipped; no CSV files available.")
             return
 
-        viz = VisualizeBloodflow(left_csv, right_csv)
-        viz.compute()
+        try:
+            viz = VisualizeBloodflow(left_csv, right_csv)
+            viz.compute()
+        except Exception:
+            logger.exception("Scan stats failed during VisualizeBloodflow.compute()")
+            return
         _, _, camera_inds, contrast, mean = viz.get_results()
         if mean is None or mean.size == 0:
             logger.warning("Scan stats skipped; mean array was empty.")
@@ -2186,6 +2190,7 @@ class MOTIONConnector(QObject):
                 fig = viz.plot(("BFI", "BVI"))
             plt.show(block=False)
         except Exception as e:
+            logger.exception("Visualization display failed")
             self.errorOccurred.emit(f"Visualization display failed:\n{e}")
         finally:
             self.visualizingChanged.emit(False)
@@ -2204,6 +2209,7 @@ class MOTIONConnector(QObject):
 
             plt.show(block=False)
         except Exception as e:
+            logger.exception("Visualization display failed")
             self.errorOccurred.emit(f"Visualization display failed:\n{e}")
         finally:
             self.visualizingChanged.emit(False)
@@ -2383,6 +2389,7 @@ class _VizWorker(QObject):
             self.resultsReady.emit(payload)
             self.finished.emit()
         except Exception as e:
+            logger.exception("VisualizeBloodflow worker failed")
             self.error.emit(str(e))
 
 

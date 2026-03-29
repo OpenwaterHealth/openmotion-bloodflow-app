@@ -118,32 +118,53 @@ class VisualizeBloodflow:
 
         self._sides = sides
 
-        # raise an error if the number of points acquired in either histogram is less than the dark_interval
-        if histos.shape[1] < self.dark_interval:
-            raise ValueError(
-                "The number of points acquired in either histogram is less than the dark_interval"
-            )
-
         # baseline adjust & noise floor
         histos = histos.astype(float, copy=False)
         histos[:, :, 0] -= 6
         histos[histos < self.noisy_bin_min] = 0
 
-        # crop data so that final frame is dark
-        ntimepts = int(
-            self.dark_interval * np.floor(histos.shape[1] / self.dark_interval) + 1
-        )
-        histos = histos[:, :ntimepts, :]
+        short_scan = histos.shape[1] < self.dark_interval
+        dark_corrected = True
 
-        # get dark histograms (every dark_interval frames)
-        inds_dark = np.arange(0, ntimepts, self.dark_interval)
+        if short_scan:
+            ntimepts = histos.shape[1]
+            if ntimepts < 3:
+                raise ValueError(
+                    f"Scan too short ({ntimepts} frames): need at least 3 frames "
+                    "(dark, illuminated…, dark)."
+                )
+            frame_totals = histos.sum(axis=(0, 2))  # (ntimepts,) – summed over cams & bins
+            illum_median = float(np.median(frame_totals[1:-1]))
+            if illum_median > 0 and frame_totals[-1] > 0.3 * illum_median:
+                import warnings
+                warnings.warn(
+                    f"Short scan ({ntimepts} frames): final frame does not appear to be a "
+                    f"dark frame (last-frame counts {frame_totals[-1]:.0f} vs illuminated "
+                    f"median {illum_median:.0f}). Showing uncorrected data.",
+                    stacklevel=2,
+                )
+                print(
+                    f"WARNING: Short scan ({ntimepts} frames): final frame does not appear "
+                    f"to be a dark frame ({frame_totals[-1]:.0f} vs median {illum_median:.0f}). "
+                    "Showing uncorrected data."
+                )
+                dark_corrected = False
+            inds_dark = np.array([0, ntimepts - 1])
+        else:
+            # crop data so that final frame is dark
+            ntimepts = int(
+                self.dark_interval * np.floor(histos.shape[1] / self.dark_interval) + 1
+            )
+            histos = histos[:, :ntimepts, :]
+            inds_dark = np.arange(0, ntimepts, self.dark_interval)
+
         ndark = len(inds_dark)
         histos_dark = np.zeros((len(camera_inds), ndark, 1024), dtype=float)
         for i in range(ndark):
             histos_dark[:, i, :] = histos[:, int(inds_dark[i]), :]
 
         # replace the 0th dark histogram with the first "good" dark histogram frame
-        first_good_dark_frame_index = 9
+        first_good_dark_frame_index = min(9, ntimepts - 2)
         histos_dark[:, 0, :] = histos[:, first_good_dark_frame_index, :]
 
         # dark stats
@@ -171,6 +192,10 @@ class VisualizeBloodflow:
         u1_dark[:, -1] = temp1[:, -1]
         var_dark[:, -1] = tempv[:, -1]
 
+        if not dark_corrected:
+            u1_dark[:] = 0
+            var_dark[:] = 0
+
         # laser stats
         u1 = self._moments(bins, histos, 1)
         u2 = self._moments(bins, histos, 2)
@@ -197,8 +222,9 @@ class VisualizeBloodflow:
             )
 
         # remove first and last (dark) frames
-        mean = mean[:, 1:-1]
-        contrast = contrast[:, 1:-1]
+        if dark_corrected:
+            mean = mean[:, 1:-1]
+            contrast = contrast[:, 1:-1]
 
         # compute BFI/BVI
         BFI = np.zeros(contrast.shape, dtype=float)
