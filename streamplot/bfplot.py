@@ -1,10 +1,14 @@
 import sys
 import numpy as np
-from PyQt6.QtWidgets import QApplication
+#from PyQt6.QtWidgets import QApplication
+
 from pyqtgraph.Qt import QtCore, QtWidgets
 import pyqtgraph as pg
 import random
 from threading import Thread, Event
+
+from PySide6.QtCore import QObject, QTimer, Slot, Signal, Property
+from PySide6.QtWidgets import QApplication
 
 class BFPlot():
     def __init__(self, mark, layout, window_size,  data1=None, data2=None):

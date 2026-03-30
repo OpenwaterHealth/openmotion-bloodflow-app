@@ -4,11 +4,38 @@ import random
 import numpy as np
 from queue import Queue, Empty
 from threading import Thread, Event
+from PySide6.QtCore import QObject, QTimer, Slot, Signal, Property
+from PySide6 import QtWidgets
+from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QPushButton
+from PySide6.QtQuick import QQuickView
+from PySide6.QtQml import QQmlApplicationEngine
+
 import pyqtgraph as pg
-from pyqtgraph.Qt import QtCore
-from PyQt6 import QtWidgets
-from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton
-from PyQt6.QtCore import QTimer
+#from pyqtgraph.Qt import QtCore
+#from PyQt6 import QtWidgets
+#from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton
+#from PyQt6.QtWidgets import QMainWindow, QPushButton
+
+import PySide6
+from PySide6 import QtCore
+from PySide6.QtCore import QObject
+from PySide6.QtCore import QTimer
+from PySide6.QtCore import Slot
+from PySide6.QtCore import Signal
+from PySide6.QtCore import Property
+
+from PySide6.QtCore import QObject
+from PySide6.QtCore import QTimer
+from PySide6.QtCore import Slot
+from PySide6.QtCore import Signal
+from PySide6.QtCore import Property
+
+from PySide6.QtWidgets import QApplication
+from PySide6.QtQuick import QQuickView
+from PySide6.QtQml import QQmlApplicationEngine
+
+
 
 import multiprocessing as mp
 import csv
@@ -87,6 +114,7 @@ class DataProcessorMockup(Thread):
         self.in_q = in_q
         self.out_q_1 = Queue(maxsize=10000)#!!!
         self.out_q_mp = mp.Queue(maxsize=10000)
+        self.out_q_qml = mp.Queue(maxsize=10000)
         self.produced_event = Event()
         self.produced_event.clear()
         self.stop_event = stop_event
@@ -102,6 +130,7 @@ class DataProcessorMockup(Thread):
                     if sample is SENTINEL:
                         self.out_q_1.put(SENTINEL)
                         self.out_q_mp.put(SENTINEL)
+                        self.out_q_qml.put(SENTINEL)
                         break
                     # Process data
                     processed_sample = self.computer.compute(sample)
@@ -110,8 +139,9 @@ class DataProcessorMockup(Thread):
                         processed = (v.timestamp, v.bfi, v.bvi, v.bfi, v.bvi)
                         self.out_q_1.put(processed)
                         self.out_q_mp.put(processed)
+                        self.out_q_qml.put(processed)
                         self.produced_event.set()
-                        if indicate: print(f"= :{self.out_q_1.qsize()} :{self.out_q_mp.qsize()}")
+                        if indicate: print(f"= :{self.out_q_1.qsize()} :{self.out_q_mp.qsize()} :{self.out_q_qml.qsize()}")
                         QApplication.processEvents()
                     self.in_q.task_done()
                 except Empty: continue
@@ -255,6 +285,60 @@ class DataPlotter(ConsumerBase):
         while True:#not self.stop_event.is_set():
             self.update_plot()
         pass
+
+""" """
+class BFProducer(QObject):
+    bfUpdated = Signal(float, float, float, float, float)
+    """ """
+    def __init__(self):
+        super().__init__()
+        self.x = 0
+    """ """
+    @Slot()
+    def update_bf(self, x, d1, d2, d3, d4):
+        self.x += 1
+        self.bfUpdated.emit(self.x, d1, d2, d3, d4)
+""" """
+class DataPlotterQML(ConsumerBase):
+    def __init__(self, layout, plot_x_size, in_q_mp):
+        super().__init__(in_q_mp, None, None)
+        self.plot_x_size = plot_x_size
+        self.count = 0
+        self.layout = layout
+        self.x = 0
+        self.bfProducer = BFProducer()
+    """ """
+    def update_plot(self):
+        try:
+            while True: # Process all available items
+                #self.produced_event.wait()
+                data = self.in_q.get_nowait()
+                self.count += 1
+                if data is SENTINEL:
+                    #self.timer.stop()
+                    #self.stop_event.set()
+                    break
+                    pass
+                if self.count >= 20:#!!!
+                    #if self.count == 20:
+                    #    self.left_plot.init_plot_data(data[1], data[2])
+                    #    self.right_plot.init_plot_data(data[3], data[4])
+                    plot = True 
+                else: 
+                    plot = False
+                self.x += 1        
+                self.bfProducer.update_bf(self.x, data[1], data[2], data[3], data[4])
+                if indicate:
+                   print("|")
+                   sys.stdout.flush()
+                self.in_q.task_done()
+        except Exception as ex:
+            pass
+    """Override"""
+    def run(self):
+        while True:#not self.stop_event.is_set():
+            self.update_plot()
+        pass
 """Separate process function"""
 def run_data_plot(q_mp):
     app = QtWidgets.QApplication(sys.argv)
@@ -284,7 +368,7 @@ def run_data_plot(q_mp):
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
     win_main = QtWidgets.QMainWindow()
-    win_main.setWindowTitle("BF BV plot proto")
+    win_main.setWindowTitle("BF BV plot PyQtgraph")
     win_main.resize(800, 400)
     central_widget = QtWidgets.QWidget()
     win_main.setCentralWidget(central_widget)
@@ -321,13 +405,24 @@ if __name__ == "__main__":
     storage = ProcessedDataStorageMockup(uid, session_id, processor.out_q_1, processor.produced_event, stop_event)
     #plot
     data_plotter = DataPlotter(plot_layout, plot_x_size, processor.out_q_mp)
+    #plot QML
+    data_plotter_qml = DataPlotterQML(plot_layout, plot_x_size, processor.out_q_qml)
     #threads
-    threads = [producer, raw_storage, processor, storage, data_plotter]
+    threads = [producer, raw_storage, processor, storage, data_plotter, data_plotter_qml]
     for t in threads: 
         print(t)
         t.start()
     #UI
     win_main.show()
+
+    #QML
+    engine = QQmlApplicationEngine()
+    # Expose Python object to QML
+    engine.rootContext().setContextProperty("bfSystem", data_plotter_qml.bfProducer)
+    engine.load("bfplot_qml_app.qml")
+    if not engine.rootObjects():
+        sys.exit(-1)
+    #
     ex = app.exec()
     sys.exit(ex)
 
