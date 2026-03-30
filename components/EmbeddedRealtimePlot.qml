@@ -22,12 +22,13 @@ Rectangle {
     property int  plotRows: (leftActiveCount === 8 || rightActiveCount === 8) ? 4 : 2
     property bool showBfiBvi: true
 
-    // Plot scaling
-    property bool autoScale: true
-    property real bfiMin:    0.0
-    property real bfiMax:    10.0
-    property real bviMin:    0.0
-    property real bviMax:    10.0
+    // Fixed plot bounds — defaults [0, 10], configurable from Settings
+    property real bfiMin: 0.0
+    property real bfiMax: 10.0
+    property real bviMin: 0.0
+    property real bviMax: 10.0
+    readonly property var bfiBounds: ({ minVal: bfiMin, maxVal: bfiMax, range: (bfiMax - bfiMin) || 1.0 })
+    readonly property var bviBounds: ({ minVal: bviMin, maxVal: bviMax, range: (bviMax - bviMin) || 1.0 })
 
     // Preview masks — update grid layout on camera selection change, even before scanning
     property int previewLeftMask: 0x99
@@ -35,27 +36,25 @@ Rectangle {
     onPreviewLeftMaskChanged:  if (!running) _applyPreviewLayout()
     onPreviewRightMaskChanged: if (!running) _applyPreviewLayout()
 
-    // ── Internal JS-only store (mutated in-place; no QML property-change spam) ──────
-    // _store[key] = { bfi:[], bvi:[], latestBfi, latestBvi, bfiBounds, bviBounds }
+    // Data store: _store[key] = { bfi: [{t, v, fid},...], bvi: [{t, v, fid},...],
+    //                              latestBfi, latestBvi, bfiBounds, bviBounds }
     property var _store: ({})
-    property var _dirty: ({})   // key → true when new samples have arrived
 
-    // ── Display values updated once per timer tick (drives Text bindings at ~10 Hz) ──
-    // Shape: { key: { bfi: "1.23", bvi: "0.45" } }
+    // Display values shown in each panel header (updated once per timer tick)
     property var displayValues: ({})
 
-    // ── Profiling ────────────────────────────────────────────────────────────────────
+    // Profiling
     property bool showProfiling:      false
-    property int  _profSampleCount:   0      // cumulative samples received this run
-    property real _profSampleRateHz:  0.0    // EMA of sample rate (samples/sec, all cameras)
-    property real _profRenderMs:      0.0    // wall-clock time for last _timerTick (ms)
-    property real _profCanvasMsAvg:   0.0    // mean canvas onPaint time this tick (ms)
-    property int  _profTotalPoints:   0      // sum of all data points currently in memory
-    property var  _profPaintAccum:    []     // paint-time samples within a tick
-    property int  _profLastTickSampleCount: 0   // _profSampleCount snapshot from last tick
-    property real _profLastTickWall:        0.0 // Date.now() of last tick start
+    property int  _profSampleCount:   0
+    property real _profSampleRateHz:  0.0
+    property real _profRenderMs:      0.0
+    property real _profCanvasMsAvg:   0.0
+    property int  _profTotalPoints:   0
+    property var  _profPaintAccum:    []
+    property int  _profLastTickSampleCount: 0
+    property real _profLastTickWall:        0.0
 
-    // ── Series helpers ────────────────────────────────────────────────────────────────
+    // ── Series helpers ────────────────────────────────────────────────────────
 
     function _seriesKey(side, camId) { return side + ":" + camId }
 
@@ -97,20 +96,13 @@ Rectangle {
 
     function _ensureEntry(key) {
         if (_store[key]) return
-        _store[key] = {
-            bfi: [], bvi: [],
-            latestBfi: NaN, latestBvi: NaN,
-            bfiBounds: { minVal: 0, maxVal: 1, range: 1 },
-            bviBounds: { minVal: 0, maxVal: 1, range: 1 }
-        }
-        _dirty[key] = false
+        _store[key] = { bfi: [], bvi: [], latestBfi: NaN, latestBvi: NaN }
     }
 
     function _applyPreviewLayout() {
         const order = _buildSeriesOrder(previewLeftMask, previewRightMask)
-        seriesOrder  = order
-        _store       = ({})
-        _dirty       = ({})
+        seriesOrder   = order
+        _store        = ({})
         displayValues = ({})
         for (let i = 0; i < order.length; i++) _ensureEntry(order[i])
     }
@@ -119,16 +111,14 @@ Rectangle {
 
     function reset() {
         _store        = ({})
-        _dirty        = ({})
         displayValues = ({})
         seriesOrder   = []
         latestTimestamp = 0
-        // Reset profiling counters
-        _profSampleCount    = 0
-        _profSampleRateHz   = 0.0
-        _profRenderMs       = 0.0
-        _profCanvasMsAvg    = 0.0
-        _profTotalPoints    = 0
+        _profSampleCount         = 0
+        _profSampleRateHz        = 0.0
+        _profRenderMs            = 0.0
+        _profCanvasMsAvg         = 0.0
+        _profTotalPoints         = 0
         _profPaintAccum          = []
         _profLastTickSampleCount = 0
         _profLastTickWall        = 0.0
@@ -147,20 +137,15 @@ Rectangle {
         Qt.callLater(_applyPreviewLayout)
     }
 
-    // ── Sample ingestion ─────────────────────────────────────────────────────────────
-    // These are called from signal handlers and must be as fast as possible.
-    // No Object.assign, no QML property assignments other than latestTimestamp.
+    // ── Sample ingestion ──────────────────────────────────────────────────────
 
     function handleBfiSample(side, camId, frameId, ts, val) {
         if (!running) return
-
         _profSampleCount++
-
         const key = _seriesKey(side, camId)
         _ensureEntry(key)
         _store[key].bfi.push({ t: ts, v: val, fid: frameId })
         _store[key].latestBfi = val
-        _dirty[key] = true
         if (ts > latestTimestamp) latestTimestamp = ts
     }
 
@@ -170,68 +155,43 @@ Rectangle {
         _ensureEntry(key)
         _store[key].bvi.push({ t: ts, v: val, fid: frameId })
         _store[key].latestBvi = val
-        _dirty[key] = true
         if (ts > latestTimestamp) latestTimestamp = ts
     }
 
-    // Binary search for a frame ID in a sorted-by-fid array. Returns index or -1.
-    function _findFid(arr, fid) {
-        let lo = 0, hi = arr.length - 1
-        while (lo <= hi) {
-            const mid = (lo + hi) >>> 1
-            if (arr[mid].fid === fid) return mid
-            if (arr[mid].fid < fid) lo = mid + 1
-            else hi = mid - 1
-        }
-        return -1
-    }
-
-    // Called when the SDK emits a corrected batch (~every 15 s).
-    // Overwrites the stored uncorrected values in-place for matching frame IDs.
+    // Called when the SDK emits a corrected batch. Overwrites stored uncorrected
+    // values in-place for matching frame IDs.
     function handleCorrectedBatch(samples) {
         if (!running) return
         for (let i = 0; i < samples.length; i++) {
             const s = samples[i]
             const key = _seriesKey(s.side, s.camId)
             if (!_store[key]) continue
-            const bi = _findFid(_store[key].bfi, s.frameId)
-            if (bi >= 0) {
-                _store[key].bfi[bi].v = s.bfi
-                _store[key].latestBfi = s.bfi
+            // Find matching frame by linear scan
+            for (let j = 0; j < _store[key].bfi.length; j++) {
+                if (_store[key].bfi[j].fid === s.frameId) {
+                    _store[key].bfi[j].v = s.bfi
+                    _store[key].latestBfi = s.bfi
+                    break
+                }
             }
-            const vi = _findFid(_store[key].bvi, s.frameId)
-            if (vi >= 0) {
-                _store[key].bvi[vi].v = s.bvi
-                _store[key].latestBvi = s.bvi
+            for (let j = 0; j < _store[key].bvi.length; j++) {
+                if (_store[key].bvi[j].fid === s.frameId) {
+                    _store[key].bvi[j].v = s.bvi
+                    _store[key].latestBvi = s.bvi
+                    break
+                }
             }
-            _dirty[key] = true
         }
     }
 
-    // ── Bounds (called only when dirty, result cached in _store) ─────────────────────
-
-    function _calcBounds(arr) {
-        const n = arr.length
-        if (n === 0) return { minVal: 0, maxVal: 1, range: 1 }
-        let mx = -1e38, mn = 1e38
-        for (let i = 0; i < n; i++) {
-            const v = arr[i].v
-            if (v > mx) mx = v
-            if (v < mn) mn = v
-        }
-        if (mn === mx) { mn -= 1; mx += 1 }
-        return { minVal: mn, maxVal: mx, range: mx - mn }
-    }
-
-    // ── Timer tick: prune → update bounds/display → repaint ──────────────────────────
+    // ── Timer tick: prune old data → repaint ─────────────────────────────────
 
     function _timerTick() {
         if (!visible) return
         const tickT0 = Date.now()
-        _profPaintAccum = []   // reset per-canvas paint accumulator each tick
+        _profPaintAccum = []
 
-        // Compute sample rate from delta in the monotonic _profSampleCount
-        // divided by actual elapsed wall time — no separate counter to reset.
+        // Sample rate calculation
         if (_profLastTickWall > 0) {
             const dtSec = (tickT0 - _profLastTickWall) * 0.001
             if (dtSec > 0) {
@@ -243,70 +203,48 @@ Rectangle {
         _profLastTickSampleCount = _profSampleCount
         _profLastTickWall        = tickT0
 
-        const nowTs = latestTimestamp > 0 ? latestTimestamp : (Date.now() * 0.001)
+        const nowTs  = latestTimestamp > 0 ? latestTimestamp : (Date.now() * 0.001)
         const cutoff = nowTs - windowSeconds
 
-        let newDisplay      = Object.assign({}, displayValues)
-        let anyDisplayDirty = false
-        let totalPts        = 0
+        let totalPts   = 0
+        let newDisplay = {}
 
-        const n = seriesOrder.length
-        for (let i = 0; i < n; i++) {
+        for (let i = 0; i < seriesOrder.length; i++) {
             const key = seriesOrder[i]
             const s   = _store[key]
             if (!s) continue
 
-            // Prune via binary search + single splice (O(log N) + O(1) amortised)
-            let lo = 0, hi = s.bfi.length
-            while (lo < hi) { const mid = (lo + hi) >>> 1; s.bfi[mid].t < cutoff ? lo = mid + 1 : hi = mid }
-            if (lo > 0) s.bfi.splice(0, lo)
+            // Remove points older than the window (simple forward scan)
+            let removeCount = 0
+            while (removeCount < s.bfi.length && s.bfi[removeCount].t < cutoff) removeCount++
+            if (removeCount > 0) s.bfi.splice(0, removeCount)
 
-            lo = 0; hi = s.bvi.length
-            while (lo < hi) { const mid = (lo + hi) >>> 1; s.bvi[mid].t < cutoff ? lo = mid + 1 : hi = mid }
-            if (lo > 0) s.bvi.splice(0, lo)
+            removeCount = 0
+            while (removeCount < s.bvi.length && s.bvi[removeCount].t < cutoff) removeCount++
+            if (removeCount > 0) s.bvi.splice(0, removeCount)
 
             totalPts += s.bfi.length + s.bvi.length
 
-            // Update cached bounds and display strings only if new data arrived
-            if (_dirty[key]) {
-                if (plotArea.autoScale) {
-                    s.bfiBounds = _calcBounds(s.bfi)
-                    s.bviBounds = _calcBounds(s.bvi)
-                } else {
-                    const bfiR = plotArea.bfiMax - plotArea.bfiMin || 1
-                    const bviR = plotArea.bviMax - plotArea.bviMin || 1
-                    s.bfiBounds = { minVal: plotArea.bfiMin, maxVal: plotArea.bfiMax, range: bfiR }
-                    s.bviBounds = { minVal: plotArea.bviMin, maxVal: plotArea.bviMax, range: bviR }
-                }
-                newDisplay[key] = {
-                    bfi: isFinite(s.latestBfi) ? s.latestBfi.toFixed(2) : "--",
-                    bvi: isFinite(s.latestBvi) ? s.latestBvi.toFixed(2) : "--"
-                }
-                anyDisplayDirty = true
-                _dirty[key] = false
+            newDisplay[key] = {
+                bfi: isFinite(s.latestBfi) ? s.latestBfi.toFixed(2) : "--",
+                bvi: isFinite(s.latestBvi) ? s.latestBvi.toFixed(2) : "--"
             }
 
-            // Trigger canvas repaint for this series
+            // Repaint this series' canvas
             const item = plotRepeater.itemAt(i)
             if (item && item.plotCanvas) item.plotCanvas.requestPaint()
         }
 
-        // Single QML property write for all display text — one change notification
-        if (anyDisplayDirty) displayValues = newDisplay
-
-        // Profiling bookkeeping (deferred so paint times can accumulate)
+        displayValues    = newDisplay
         _profTotalPoints = totalPts
         _profRenderMs    = Date.now() - tickT0
     }
 
-    // Called by each canvas after it finishes painting to log its render time
     function _recordPaintTime(ms) {
         _profPaintAccum.push(ms)
-        if (_profPaintAccum.length > 0) {
-            let sum = 0
-            for (let i = 0; i < _profPaintAccum.length; i++) sum += _profPaintAccum[i]
-            _profCanvasMsAvg = sum / _profPaintAccum.length
-        }
+        let sum = 0
+        for (let i = 0; i < _profPaintAccum.length; i++) sum += _profPaintAccum[i]
+        _profCanvasMsAvg = sum / _profPaintAccum.length
     }
 
     Timer {
@@ -316,7 +254,7 @@ Rectangle {
         onTriggered: plotArea._timerTick()
     }
 
-    // ── Layout ───────────────────────────────────────────────────────────────────────
+    // ── Layout ────────────────────────────────────────────────────────────────
 
     ColumnLayout {
         anchors.fill: parent
@@ -352,7 +290,6 @@ Rectangle {
                         anchors.margins: 6
                         spacing: 4
 
-                        // Header: label + BFI/BVI values (updated at timer rate, not per-sample)
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 6
@@ -389,20 +326,14 @@ Rectangle {
                                 const h   = height - 2 * pad
                                 if (w <= 0 || h <= 0) return
 
-                                const nowTs = plotArea.latestTimestamp > 0
+                                const nowTs  = plotArea.latestTimestamp > 0
                                     ? plotArea.latestTimestamp : (Date.now() * 0.001)
                                 const xMin   = nowTs - plotArea.windowSeconds
-                                const xRange = plotArea.windowSeconds   // == xMax - xMin
+                                const xRange = plotArea.windowSeconds
 
-                                // Read from in-place JS store (no QML property overhead)
-                                const s   = plotArea._store[seriesKey]
-                                    || { bfi: [], bvi: [],
-                                         bfiBounds: { minVal: 0, maxVal: 1, range: 1 },
-                                         bviBounds: { minVal: 0, maxVal: 1, range: 1 } }
-                                const bfiSeries = s.bfi
-                                const bviSeries = s.bvi
+                                const s = plotArea._store[seriesKey] || { bfi: [], bvi: [] }
 
-                                // Background grid — all 5 horizontals in one path
+                                // Background grid
                                 ctx.strokeStyle = "#2A2A2E"
                                 ctx.lineWidth   = 0.5
                                 ctx.beginPath()
@@ -413,7 +344,7 @@ Rectangle {
                                 }
                                 ctx.stroke()
 
-                                // Axes — L + bottom in one path
+                                // Axes
                                 ctx.strokeStyle = "#3E4E6F"
                                 ctx.lineWidth   = 1
                                 ctx.beginPath()
@@ -422,48 +353,35 @@ Rectangle {
                                 ctx.lineTo(pad + w, pad + h)
                                 ctx.stroke()
 
-                                // Draw a data series with adaptive subsampling.
-                                // We cap visible vertices at MAX_PTS to bound render time
-                                // regardless of how much data has accumulated.
+                                // Draw all points in a series — no subsampling
                                 function drawSeries(series, color, bounds) {
-                                    const n = series.length
-                                    if (n < 2) return
-                                    const MAX_PTS = 400
-                                    const step    = n > MAX_PTS ? Math.ceil(n / MAX_PTS) : 1
-                                    const invR    = bounds.range > 0 ? 1.0 / bounds.range : 1.0
-                                    const mn      = bounds.minVal
+                                    if (series.length < 2) return
+                                    const invR = bounds.range > 0 ? 1.0 / bounds.range : 1.0
+                                    const mn   = bounds.minVal
                                     ctx.strokeStyle = color
                                     ctx.lineWidth   = 2
                                     ctx.beginPath()
-                                    // First point
-                                    let pt = series[0]
-                                    ctx.moveTo(pad + ((pt.t - xMin) / xRange) * w,
-                                               pad + h - ((pt.v - mn) * invR) * h)
-                                    for (let j = step; j < n; j += step) {
-                                        pt = series[j]
-                                        ctx.lineTo(pad + ((pt.t - xMin) / xRange) * w,
-                                                   pad + h - ((pt.v - mn) * invR) * h)
-                                    }
-                                    // Always include the final point for accuracy
-                                    if (step > 1) {
-                                        pt = series[n - 1]
+                                    ctx.moveTo(pad + ((series[0].t - xMin) / xRange) * w,
+                                               pad + h - ((series[0].v - mn) * invR) * h)
+                                    for (let j = 1; j < series.length; j++) {
+                                        const pt = series[j]
                                         ctx.lineTo(pad + ((pt.t - xMin) / xRange) * w,
                                                    pad + h - ((pt.v - mn) * invR) * h)
                                     }
                                     ctx.stroke()
                                 }
 
-                                drawSeries(bfiSeries, plotArea.bfiColor, s.bfiBounds)
-                                drawSeries(bviSeries, plotArea.bviColor, s.bviBounds)
+                                drawSeries(s.bfi, plotArea.bfiColor, plotArea.bfiBounds)
+                                if (plotArea.showBfiBvi)
+                                    drawSeries(s.bvi, plotArea.bviColor, plotArea.bviBounds)
 
-                                if (bfiSeries.length === 0 && bviSeries.length === 0) {
+                                if (s.bfi.length === 0 && s.bvi.length === 0) {
                                     ctx.fillStyle  = "#7F8C8D"
                                     ctx.textAlign  = "center"
                                     ctx.font       = "12px sans-serif"
                                     ctx.fillText("Waiting for data...", pad + w / 2, pad + h / 2)
                                 }
 
-                                // Report paint time to profiler
                                 plotArea._recordPaintTime(Date.now() - paintT0)
                             }
                         }
@@ -473,19 +391,18 @@ Rectangle {
         }
 
         Text {
-            visible:            seriesOrder.length === 0
-            text:               running ? "Waiting for camera data..." : "Press Start to begin scanning"
-            color:              "#7F8C8D"
-            font.pixelSize:     18
+            visible:             seriesOrder.length === 0
+            text:                running ? "Waiting for camera data..." : "Press Start to begin scanning"
+            color:               "#7F8C8D"
+            font.pixelSize:      18
             horizontalAlignment: Text.AlignHCenter
-            Layout.alignment:   Qt.AlignHCenter
-            Layout.fillWidth:   true
+            Layout.alignment:    Qt.AlignHCenter
+            Layout.fillWidth:    true
         }
     }
 
-    // ── Profiling overlay ─────────────────────────────────────────────────────────────
+    // ── Profiling overlay ─────────────────────────────────────────────────────
 
-    // Toggle button — always visible in top-right corner
     Rectangle {
         id: profToggleBtn
         anchors.top:   parent.top
@@ -513,7 +430,6 @@ Rectangle {
         }
     }
 
-    // Profiling panel — appears below the toggle button
     Rectangle {
         id: profPanel
         visible:       plotArea.showProfiling
@@ -537,7 +453,6 @@ Rectangle {
             }
             spacing: 3
 
-            // ── Header ──
             Text {
                 text:           "─── GUI Profiling ───"
                 color:          "#4A90E2"
@@ -545,7 +460,6 @@ Rectangle {
                 font.weight:    Font.Bold
             }
 
-            // ── SDK throughput (if this is low, the bottleneck is the SDK) ──
             Text {
                 text: {
                     const r   = plotArea._profSampleRateHz
@@ -557,7 +471,6 @@ Rectangle {
                 font.family:    "Consolas"
             }
 
-            // ── GUI render time (if this approaches 100 ms, the GUI is the bottleneck) ──
             Text {
                 text: {
                     const ms  = plotArea._profRenderMs
@@ -570,7 +483,6 @@ Rectangle {
                 font.family:    "Consolas"
             }
 
-            // ── Canvas render time ──
             Text {
                 text: {
                     const ms  = plotArea._profCanvasMsAvg
@@ -586,7 +498,6 @@ Rectangle {
                 font.family:    "Consolas"
             }
 
-            // ── Data points ──
             Text {
                 text:           "Data pts:   %1 total".arg(plotArea._profTotalPoints)
                 color:          "#C9D1D9"
@@ -594,7 +505,6 @@ Rectangle {
                 font.family:    "Consolas"
             }
 
-            // ── Sample count ──
             Text {
                 text:           "Samples rx: %1".arg(plotArea._profSampleCount)
                 color:          "#C9D1D9"
@@ -602,7 +512,6 @@ Rectangle {
                 font.family:    "Consolas"
             }
 
-            // ── Guide ──
             Rectangle { width: parent.width; height: 1; color: "#2A3040" }
             Text {
                 text:           "Red/orange = that layer is the\nbottleneck. SDK rate low → SDK;\nTick/canvas high → GUI."
@@ -614,7 +523,7 @@ Rectangle {
         }
     }
 
-    // ── Signal connections ────────────────────────────────────────────────────────────
+    // ── Signal connections ────────────────────────────────────────────────────
 
     Connections {
         target: MOTIONInterface

@@ -14,7 +14,6 @@ Item {
     property int defaultCameraIndex: 4  // "Outer" by default
     property string dataOutputPath: MOTIONInterface.directory
     property bool showBfiBvi: true  // true = BFI/BVI, false = Mean/StdDev
-    property bool autoScale: true
     property real bfiMin: 0.0
     property real bfiMax: 10.0
     property real bviMin: 0.0
@@ -227,49 +226,22 @@ Item {
                 Layout.fillWidth: true
 
                 Text {
-                    text: "Plot Scaling"
+                    text: "Plot Bounds"
                     color: "#BDC3C7"
                     font.pixelSize: 16
                     font.weight: Font.DemiBold
                 }
 
-                RowLayout {
-                    spacing: 16; Layout.alignment: Qt.AlignLeft
-
-                    Text {
-                        text: "Fixed"
-                        color: !root.autoScale ? "#4A90E2" : "#BDC3C7"
-                        font.pixelSize: 14
-                        font.weight: !root.autoScale ? Font.Bold : Font.Normal
-                    }
-
-                    Switch {
-                        checked: root.autoScale
-                        onCheckedChanged: root.autoScale = checked
-                    }
-
-                    Text {
-                        text: "Auto"
-                        color: root.autoScale ? "#4A90E2" : "#BDC3C7"
-                        font.pixelSize: 14
-                        font.weight: root.autoScale ? Font.Bold : Font.Normal
-                    }
-                }
-
-                // Fixed range inputs — only shown when autoscale is off
                 GridLayout {
-                    visible: !root.autoScale
                     columns: 3
                     columnSpacing: 10
                     rowSpacing: 6
                     Layout.fillWidth: true
 
-                    // Header row
                     Item {}
                     Text { text: "Min"; color: "#7F8C8D"; font.pixelSize: 13; horizontalAlignment: Text.AlignHCenter; Layout.alignment: Qt.AlignHCenter }
                     Text { text: "Max"; color: "#7F8C8D"; font.pixelSize: 13; horizontalAlignment: Text.AlignHCenter; Layout.alignment: Qt.AlignHCenter }
 
-                    // BFI row
                     Text { text: "BFI"; color: "#E74C3C"; font.pixelSize: 14; Layout.alignment: Qt.AlignVCenter }
                     TextField {
                         Layout.preferredWidth: 80; Layout.preferredHeight: 32
@@ -288,7 +260,6 @@ Item {
                         onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bfiMax = v; text = root.bfiMax.toFixed(1) }
                     }
 
-                    // BVI row
                     Text { text: "BVI"; color: "#3498DB"; font.pixelSize: 14; Layout.alignment: Qt.AlignVCenter }
                     TextField {
                         Layout.preferredWidth: 80; Layout.preferredHeight: 32

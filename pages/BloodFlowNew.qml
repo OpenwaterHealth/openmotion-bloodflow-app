@@ -199,7 +199,6 @@ Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 showBfiBvi: settingsModal.showBfiBvi
-                autoScale:  settingsModal.autoScale
                 bfiMin:     settingsModal.bfiMin
                 bfiMax:     settingsModal.bfiMax
                 bviMin:     settingsModal.bviMin
