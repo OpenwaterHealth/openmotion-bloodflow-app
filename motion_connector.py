@@ -1207,7 +1207,8 @@ class MOTIONConnector(QObject):
 
         temp_alerted_by_side = {"left": set(), "right": set()}
 
-        def _on_sample(sample):
+        def _on_uncorrected(sample):
+            """Fires for every non-dark frame (~40 Hz). Feeds the realtime plot."""
             current_side = sample.side
             alerted = temp_alerted_by_side.setdefault(current_side, set())
             threshold = self._camera_temp_alert_threshold_c
@@ -1234,21 +1235,19 @@ class MOTIONConnector(QObject):
                 float(sample.contrast),
             )
 
-        def _on_uncorrected(sample):
-            """Fires for every non-dark frame (~40 Hz). Feeds the realtime plot."""
             self.scanBfiSampled.emit(
                 sample.side,
                 int(sample.cam_id),
                 int(sample.absolute_frame_id),
                 float(sample.timestamp_s),
-                float(sample.bfi_corrected),
+                float(sample.bfi),
             )
             self.scanBviSampled.emit(
                 sample.side,
                 int(sample.cam_id),
                 int(sample.absolute_frame_id),
                 float(sample.timestamp_s),
-                float(sample.bvi_corrected),
+                float(sample.bvi),
             )
 
         def _on_corrected_batch(batch):
@@ -1260,8 +1259,8 @@ class MOTIONConnector(QObject):
                     'camId': int(s.cam_id),
                     'frameId': int(s.absolute_frame_id),
                     'ts': float(s.timestamp_s),
-                    'bfi': float(s.bfi_corrected),
-                    'bvi': float(s.bvi_corrected),
+                    'bfi': float(s.bfi),
+                    'bvi': float(s.bvi),
                 })
             self.scanCorrectedBatch.emit(payload)
 
@@ -1324,7 +1323,6 @@ class MOTIONConnector(QObject):
             on_log_fn=lambda msg: self.captureLog.emit(msg),
             on_progress_fn=lambda pct: self.captureProgress.emit(int(pct)),
             on_trigger_state_fn=_on_trigger_state,
-            on_sample_fn=_on_sample,
             on_uncorrected_fn=_on_uncorrected,
             on_corrected_batch_fn=None if self._uncorrected_only else _on_corrected_batch,
             on_error_fn=lambda e: self.captureLog.emit(f"Capture error: {e}"),
