@@ -80,16 +80,15 @@ class DataProducerMockup(ProducerBase):
         super().__init__(period_s, stop_event)
         #self.csv_path = "C:/Users/ethan/Projects/ow-bloodflow-app/scan_data/scan_owTM2GXS_20260214_125021_left_mask99.csv"
         #self.csv_path = "C:/Users/ethan/Projects/ow-bloodflow-app/scan_data/scan_owTM2GXS_20260214_124944_left_mask99.csv"
-        self.csv_path = "C:/Users/ethan/Projects/ow-bloodflow-app/scan_data/scan_owTM2GXS_20260214_124553_left_mask99.csv"
+        self.csv_path = r"C:\Users\gvigelet\CURRENT_WORK\openwater\openmotion-bloodflow-app\scan_data\scan_owZDZG9Y_20260330_124100_left_mask99.csv"
         self.sd = SessionSamples();
         self.count = self.sd.read_csv(self.csv_path)
         self.id = 0
         self.out_q_raw_store = Queue(maxsize=self.q_max_size); 
     """Override"""
     def run(self):
-        pass
         try:
-            for i in range(self.count):
+            for _ in range(self.count):
                 if self.stop_event.is_set():
                     break
                 data = self.sd.get(self.id)
@@ -101,12 +100,10 @@ class DataProducerMockup(ProducerBase):
                 if indicate: print(f"* {self.out_q.qsize()}")
                 time.sleep(self.period_s)
                 QApplication.processEvents()
-                pass
-            self.out_q.put(SENTINEL) # Signal end
-            self.out_q_raw_store.put(SENTINEL) # Signal end
+            self.out_q.put(SENTINEL)  # Signal end
+            self.out_q_raw_store.put(SENTINEL)  # Signal end
         except Exception as e:
-            print(e)
-            pass
+            print(f"Producer error: {e}", file=sys.stderr)
 """DataProcessor mockup"""
 class DataProcessorMockup(Thread):
     def __init__(self, in_q, stop_event):
@@ -122,7 +119,6 @@ class DataProcessorMockup(Thread):
         self.computer = BFComputer(4)#!!!
     """Override"""
     def run(self):
-        pass
         try:
             while not self.stop_event.is_set():
                 try:
@@ -144,10 +140,10 @@ class DataProcessorMockup(Thread):
                         if indicate: print(f"= :{self.out_q_1.qsize()} :{self.out_q_mp.qsize()} :{self.out_q_qml.qsize()}")
                         QApplication.processEvents()
                     self.in_q.task_done()
-                except Empty: continue
+                except Empty:
+                    continue
         except Exception as e:
-            print(e)
-        pass
+            print(f"Processor error: {e}", file=sys.stderr)
     def process(self):
         #read:
         #from: cam_id,frame_id,timestamp_s, 0, ... 1023, temperature,sum,tcm,tcl,pdc
@@ -181,12 +177,10 @@ class RawDataStorageMockup(ConsumerBase):
                     if indicate: print(">>")
                     self.in_q.task_done()
                 except Empty:
-                   continue
+                    continue
             self.store()
-            pass
         except Exception as e:
-            print(e)
-        pass
+            print(f"Raw storage error: {e}", file=sys.stderr)
     """ """
     def store(self):
         #store collected raw_data
@@ -222,9 +216,8 @@ class ProcessedDataStorageMockup(ConsumerBase):
         self.session_id = session_id
     """Override"""
     def run(self):
-        pass
         try:
-            with open("processed_data.csv", "w") as f:
+            with open("processed_data.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write the header row using field names
                 writer.writerow(BFValue._fields)
@@ -237,15 +230,14 @@ class ProcessedDataStorageMockup(ConsumerBase):
                         writer.writerow(data)
                         if indicate: print(">")
                         self.in_q.task_done()
-                    except Empty: continue
-            pass
+                    except Empty:
+                        continue
         except Exception as e:
-            print(e)
-        pass
+            print(f"Processed storage error: {e}", file=sys.stderr)
 """ """
 class DataPlotter(ConsumerBase):
-    def __init__(self, layout, plot_x_size, in_q_mp):
-        super().__init__(in_q_mp, None, None)
+    def __init__(self, layout, plot_x_size, in_q_mp, stop_event):
+        super().__init__(in_q_mp, None, stop_event)
         self.plot_x_size = plot_x_size
         self.count = 0
         self.layout = layout
@@ -254,15 +246,15 @@ class DataPlotter(ConsumerBase):
     """ """
     def update_plot(self):
         try:
-            while True: # Process all available items
+            while not self.stop_event.is_set():  # Process all available items
                 #self.produced_event.wait()
                 data = self.in_q.get_nowait()
                 self.count += 1
                 if data is SENTINEL:
                     #self.timer.stop()
                     #self.stop_event.set()
+                    self.stop_event.set()
                     break
-                    pass
                 if self.count >= 20:#!!!
                     if self.count == 20:
                         self.left_plot.init_plot_data(data[1], data[2])
@@ -276,15 +268,15 @@ class DataPlotter(ConsumerBase):
                 if indicate:
                    print("|")
                    sys.stdout.flush()
-                self.in_q.task_done()
-
+                # mp.Queue does not support task_done
+        except Empty:
+            return
         except Exception as ex:
-            pass
+            print(f"Plotter error: {ex}", file=sys.stderr)
     """Override"""
     def run(self):
-        while True:#not self.stop_event.is_set():
+        while not self.stop_event.is_set():
             self.update_plot()
-        pass
 
 """ """
 class BFProducer(QObject):
@@ -300,8 +292,8 @@ class BFProducer(QObject):
         self.bfUpdated.emit(self.x, d1, d2, d3, d4)
 """ """
 class DataPlotterQML(ConsumerBase):
-    def __init__(self, layout, plot_x_size, in_q_mp):
-        super().__init__(in_q_mp, None, None)
+    def __init__(self, layout, plot_x_size, in_q_mp, stop_event):
+        super().__init__(in_q_mp, None, stop_event)
         self.plot_x_size = plot_x_size
         self.count = 0
         self.layout = layout
@@ -310,15 +302,15 @@ class DataPlotterQML(ConsumerBase):
     """ """
     def update_plot(self):
         try:
-            while True: # Process all available items
+            while not self.stop_event.is_set():  # Process all available items
                 #self.produced_event.wait()
                 data = self.in_q.get_nowait()
                 self.count += 1
                 if data is SENTINEL:
                     #self.timer.stop()
                     #self.stop_event.set()
+                    self.stop_event.set()
                     break
-                    pass
                 if self.count >= 20:#!!!
                     #if self.count == 20:
                     #    self.left_plot.init_plot_data(data[1], data[2])
@@ -331,16 +323,17 @@ class DataPlotterQML(ConsumerBase):
                 if indicate:
                    print("|")
                    sys.stdout.flush()
-                self.in_q.task_done()
+                # mp.Queue does not support task_done
+        except Empty:
+            return
         except Exception as ex:
-            pass
+            print(f"QML plotter error: {ex}", file=sys.stderr)
     """Override"""
     def run(self):
-        while True:#not self.stop_event.is_set():
+        while not self.stop_event.is_set():
             self.update_plot()
-        pass
 """Separate process function"""
-def run_data_plot(q_mp):
+def run_data_plot(q_mp, stop_event):
     app = QtWidgets.QApplication(sys.argv)
     win = QtWidgets.QMainWindow()
     win.setWindowTitle("BF BV plot proto")
@@ -351,13 +344,14 @@ def run_data_plot(q_mp):
     layout = QtWidgets.QVBoxLayout(central_widget)
     layout.setSpacing(0)
     plot_x_size = 500
-    data_plotter = DataPlotter(layout, plot_x_size, q_mp)
+    data_plotter = DataPlotter(layout, plot_x_size, q_mp, stop_event)
     threads = [data_plotter]
     for t in threads: 
         t.start()
     #
     win.show()
     ex = app.exec()
+    stop_event.set()
     sys.exit(ex)
     #
     for t in threads: 
@@ -404,9 +398,9 @@ if __name__ == "__main__":
     #store processed
     storage = ProcessedDataStorageMockup(uid, session_id, processor.out_q_1, processor.produced_event, stop_event)
     #plot
-    data_plotter = DataPlotter(plot_layout, plot_x_size, processor.out_q_mp)
+    data_plotter = DataPlotter(plot_layout, plot_x_size, processor.out_q_mp, stop_event)
     #plot QML
-    data_plotter_qml = DataPlotterQML(plot_layout, plot_x_size, processor.out_q_qml)
+    data_plotter_qml = DataPlotterQML(plot_layout, plot_x_size, processor.out_q_qml, stop_event)
     #threads
     threads = [producer, raw_storage, processor, storage, data_plotter, data_plotter_qml]
     for t in threads: 
@@ -421,11 +415,20 @@ if __name__ == "__main__":
     engine.rootContext().setContextProperty("bfSystem", data_plotter_qml.bfProducer)
     engine.load("bfplot_qml_app.qml")
     if not engine.rootObjects():
+        stop_event.set()
         sys.exit(-1)
-    #
-    ex = app.exec()
+    try:
+        ex = app.exec()
+    except Exception as e:
+        print(f"App error: {e}", file=sys.stderr)
+        ex = 1
+    finally:
+        stop_event.set()
+        for q in [producer.out_q, producer.out_q_raw_store, processor.out_q_1, processor.out_q_mp, processor.out_q_qml]:
+            try:
+                q.put_nowait(SENTINEL)
+            except Exception:
+                pass
+        for t in threads:
+            t.join(timeout=2)
     sys.exit(ex)
-
-    for t in threads: 
-        t.join()
-    pass
