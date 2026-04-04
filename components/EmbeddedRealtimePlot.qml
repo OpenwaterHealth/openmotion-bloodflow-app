@@ -23,13 +23,22 @@ Rectangle {
     property bool showBfiBvi: true
     property bool developerMode: (AppFlags && AppFlags.developerMode) ? true : false
 
-    // Fixed plot bounds — defaults [0, 10], configurable from Settings
+    // Fixed plot bounds — configurable from Settings
     property real bfiMin: 0.0
     property real bfiMax: 10.0
     property real bviMin: 0.0
     property real bviMax: 10.0
-    readonly property var bfiBounds: ({ minVal: bfiMin, maxVal: bfiMax, range: (bfiMax - bfiMin) || 1.0 })
-    readonly property var bviBounds: ({ minVal: bviMin, maxVal: bviMax, range: (bviMax - bviMin) || 1.0 })
+    property real meanMin: 0.0
+    property real meanMax: 500.0
+    property real contrastMin: 0.0
+    property real contrastMax: 1.0
+    readonly property var bfiBounds:      ({ minVal: bfiMin,      maxVal: bfiMax,      range: (bfiMax      - bfiMin)      || 1.0 })
+    readonly property var bviBounds:      ({ minVal: bviMin,      maxVal: bviMax,      range: (bviMax      - bviMin)      || 1.0 })
+    readonly property var meanBounds:     ({ minVal: meanMin,     maxVal: meanMax,     range: (meanMax     - meanMin)     || 1.0 })
+    readonly property var contrastBounds: ({ minVal: contrastMin, maxVal: contrastMax, range: (contrastMax - contrastMin) || 1.0 })
+
+    property color meanColor:     "#2ECC71"
+    property color contrastColor: "#9B59B6"
 
     // Preview masks — update grid layout on camera selection change, even before scanning
     property int previewLeftMask: 0x99
@@ -97,7 +106,12 @@ Rectangle {
 
     function _ensureEntry(key) {
         if (_store[key]) return
-        _store[key] = { bfi: [], bvi: [], latestBfi: NaN, latestBvi: NaN, latestTemp: NaN }
+        _store[key] = {
+            bfi: [], bvi: [], mean: [], contrast: [],
+            latestBfi: NaN, latestBvi: NaN,
+            latestMean: NaN, latestContrast: NaN,
+            latestTemp: NaN
+        }
     }
 
     function _applyPreviewLayout() {
@@ -166,6 +180,24 @@ Rectangle {
         _store[key].latestTemp = tempC
     }
 
+    function handleMeanSample(side, camId, ts, val) {
+        if (!running) return
+        const key = _seriesKey(side, camId)
+        _ensureEntry(key)
+        _store[key].mean.push({ t: ts, v: val })
+        _store[key].latestMean = val
+        if (ts > latestTimestamp) latestTimestamp = ts
+    }
+
+    function handleContrastSample(side, camId, ts, val) {
+        if (!running) return
+        const key = _seriesKey(side, camId)
+        _ensureEntry(key)
+        _store[key].contrast.push({ t: ts, v: val })
+        _store[key].latestContrast = val
+        if (ts > latestTimestamp) latestTimestamp = ts
+    }
+
     // Called when the SDK emits a corrected batch. Overwrites stored uncorrected
     // values in-place for matching frame IDs.
     function handleCorrectedBatch(samples) {
@@ -224,19 +256,29 @@ Rectangle {
 
             // Remove points older than the window (simple forward scan)
             let removeCount = 0
-            while (removeCount < s.bfi.length && s.bfi[removeCount].t < cutoff) removeCount++
+            while (removeCount < s.bfi.length      && s.bfi[removeCount].t      < cutoff) removeCount++
             if (removeCount > 0) s.bfi.splice(0, removeCount)
 
             removeCount = 0
-            while (removeCount < s.bvi.length && s.bvi[removeCount].t < cutoff) removeCount++
+            while (removeCount < s.bvi.length      && s.bvi[removeCount].t      < cutoff) removeCount++
             if (removeCount > 0) s.bvi.splice(0, removeCount)
 
-            totalPts += s.bfi.length + s.bvi.length
+            removeCount = 0
+            while (removeCount < s.mean.length     && s.mean[removeCount].t     < cutoff) removeCount++
+            if (removeCount > 0) s.mean.splice(0, removeCount)
+
+            removeCount = 0
+            while (removeCount < s.contrast.length && s.contrast[removeCount].t < cutoff) removeCount++
+            if (removeCount > 0) s.contrast.splice(0, removeCount)
+
+            totalPts += s.bfi.length + s.bvi.length + s.mean.length + s.contrast.length
 
             newDisplay[key] = {
-                bfi:  isFinite(s.latestBfi)  ? s.latestBfi.toFixed(2)  : "--",
-                bvi:  isFinite(s.latestBvi)  ? s.latestBvi.toFixed(2)  : "--",
-                temp: isFinite(s.latestTemp) ? s.latestTemp.toFixed(1) : "--"
+                bfi:      isFinite(s.latestBfi)      ? s.latestBfi.toFixed(2)      : "--",
+                bvi:      isFinite(s.latestBvi)      ? s.latestBvi.toFixed(2)      : "--",
+                mean:     isFinite(s.latestMean)     ? s.latestMean.toFixed(1)     : "--",
+                contrast: isFinite(s.latestContrast) ? s.latestContrast.toFixed(3) : "--",
+                temp:     isFinite(s.latestTemp)     ? s.latestTemp.toFixed(1)     : "--"
             }
 
             // Repaint this series' canvas
@@ -316,13 +358,17 @@ Rectangle {
                                 font.family:    "Consolas"
                             }
                             Text {
-                                text:  "BFI: " + ((plotArea.displayValues[seriesKey] || {}).bfi || "--")
-                                color: plotArea.bfiColor
+                                text:  plotArea.showBfiBvi
+                                       ? "BFI: "  + ((plotArea.displayValues[seriesKey] || {}).bfi      || "--")
+                                       : "Mean: " + ((plotArea.displayValues[seriesKey] || {}).mean     || "--")
+                                color: plotArea.showBfiBvi ? plotArea.bfiColor : plotArea.meanColor
                                 font.pixelSize: 12
                             }
                             Text {
-                                text:  "BVI: " + ((plotArea.displayValues[seriesKey] || {}).bvi || "--")
-                                color: plotArea.bviColor
+                                text:  plotArea.showBfiBvi
+                                       ? "BVI: "  + ((plotArea.displayValues[seriesKey] || {}).bvi      || "--")
+                                       : "Cont: " + ((plotArea.displayValues[seriesKey] || {}).contrast || "--")
+                                color: plotArea.showBfiBvi ? plotArea.bviColor : plotArea.contrastColor
                                 font.pixelSize: 12
                             }
                         }
@@ -337,9 +383,10 @@ Rectangle {
                                 const ctx = getContext("2d")
                                 ctx.clearRect(0, 0, width, height)
 
-                                const pad = 20
-                                const w   = width  - 2 * pad
-                                const h   = height - 2 * pad
+                                // Asymmetric padding: left/right make room for Y-axis labels
+                                const padL = 38, padR = 24, padT = 16, padB = 16
+                                const w = width  - padL - padR
+                                const h = height - padT - padB
                                 if (w <= 0 || h <= 0) return
 
                                 const nowTs  = plotArea.latestTimestamp > 0
@@ -347,16 +394,18 @@ Rectangle {
                                 const xMin   = nowTs - plotArea.windowSeconds
                                 const xRange = plotArea.windowSeconds
 
-                                const s = plotArea._store[seriesKey] || { bfi: [], bvi: [] }
+                                const s = plotArea._store[seriesKey]
+                                         || { bfi: [], bvi: [], mean: [], contrast: [] }
+                                const showBfi = plotArea.showBfiBvi
 
                                 // Background grid
                                 ctx.strokeStyle = "#2A2A2E"
                                 ctx.lineWidth   = 0.5
                                 ctx.beginPath()
                                 for (let gi = 0; gi <= 4; gi++) {
-                                    const gy = pad + (h / 4) * gi
-                                    ctx.moveTo(pad,     gy)
-                                    ctx.lineTo(pad + w, gy)
+                                    const gy = padT + (h / 4) * gi
+                                    ctx.moveTo(padL,         gy)
+                                    ctx.lineTo(padL + w,     gy)
                                 }
                                 ctx.stroke()
 
@@ -364,12 +413,12 @@ Rectangle {
                                 ctx.strokeStyle = "#3E4E6F"
                                 ctx.lineWidth   = 1
                                 ctx.beginPath()
-                                ctx.moveTo(pad,     pad)
-                                ctx.lineTo(pad,     pad + h)
-                                ctx.lineTo(pad + w, pad + h)
+                                ctx.moveTo(padL,     padT)
+                                ctx.lineTo(padL,     padT + h)
+                                ctx.lineTo(padL + w, padT + h)
                                 ctx.stroke()
 
-                                // Draw all points in a series — no subsampling
+                                // Draw a data series
                                 function drawSeries(series, color, bounds) {
                                     if (series.length < 2) return
                                     const invR = bounds.range > 0 ? 1.0 / bounds.range : 1.0
@@ -377,25 +426,63 @@ Rectangle {
                                     ctx.strokeStyle = color
                                     ctx.lineWidth   = 2
                                     ctx.beginPath()
-                                    ctx.moveTo(pad + ((series[0].t - xMin) / xRange) * w,
-                                               pad + h - ((series[0].v - mn) * invR) * h)
+                                    ctx.moveTo(padL + ((series[0].t - xMin) / xRange) * w,
+                                               padT + h - ((series[0].v - mn) * invR) * h)
                                     for (let j = 1; j < series.length; j++) {
                                         const pt = series[j]
-                                        ctx.lineTo(pad + ((pt.t - xMin) / xRange) * w,
-                                                   pad + h - ((pt.v - mn) * invR) * h)
+                                        ctx.lineTo(padL + ((pt.t - xMin) / xRange) * w,
+                                                   padT + h - ((pt.v - mn) * invR) * h)
                                     }
                                     ctx.stroke()
                                 }
 
-                                drawSeries(s.bfi, plotArea.bfiColor, plotArea.bfiBounds)
-                                if (plotArea.showBfiBvi)
-                                    drawSeries(s.bvi, plotArea.bviColor, plotArea.bviBounds)
+                                // Y-axis label helper — 3 ticks: min, mid, max
+                                function fmtVal(v, range) {
+                                    if (range <= 2)  return v.toFixed(2)
+                                    if (range <= 20) return v.toFixed(1)
+                                    return v.toFixed(0)
+                                }
+                                function drawYLabels(bounds, color, isLeft) {
+                                    ctx.font         = "9px sans-serif"
+                                    ctx.textBaseline = "middle"
+                                    ctx.fillStyle    = color
+                                    for (let ti = 0; ti <= 2; ti++) {
+                                        const frac = ti / 2.0
+                                        const val  = bounds.minVal + frac * bounds.range
+                                        const y    = padT + h * (1.0 - frac)
+                                        if (isLeft) {
+                                            ctx.textAlign = "right"
+                                            ctx.fillText(fmtVal(val, bounds.range), padL - 4, y)
+                                        } else {
+                                            ctx.textAlign = "left"
+                                            ctx.fillText(fmtVal(val, bounds.range), padL + w + 4, y)
+                                        }
+                                    }
+                                }
 
-                                if (s.bfi.length === 0 && s.bvi.length === 0) {
-                                    ctx.fillStyle  = "#7F8C8D"
-                                    ctx.textAlign  = "center"
-                                    ctx.font       = "12px sans-serif"
-                                    ctx.fillText("Waiting for data...", pad + w / 2, pad + h / 2)
+                                // Draw series and labels based on mode
+                                if (showBfi) {
+                                    drawSeries(s.bfi, plotArea.bfiColor, plotArea.bfiBounds)
+                                    drawSeries(s.bvi, plotArea.bviColor, plotArea.bviBounds)
+                                    drawYLabels(plotArea.bfiBounds, plotArea.bfiColor, true)
+                                    drawYLabels(plotArea.bviBounds, plotArea.bviColor, false)
+                                } else {
+                                    drawSeries(s.mean,     plotArea.meanColor,     plotArea.meanBounds)
+                                    drawSeries(s.contrast, plotArea.contrastColor, plotArea.contrastBounds)
+                                    drawYLabels(plotArea.meanBounds,     plotArea.meanColor,     true)
+                                    drawYLabels(plotArea.contrastBounds, plotArea.contrastColor, false)
+                                }
+
+                                // "Waiting for data" placeholder
+                                const hasData = showBfi
+                                    ? (s.bfi.length > 0 || s.bvi.length > 0)
+                                    : (s.mean.length > 0 || s.contrast.length > 0)
+                                if (!hasData) {
+                                    ctx.fillStyle    = "#7F8C8D"
+                                    ctx.textAlign    = "center"
+                                    ctx.textBaseline = "middle"
+                                    ctx.font         = "12px sans-serif"
+                                    ctx.fillText("Waiting for data...", padL + w / 2, padT + h / 2)
                                 }
 
                                 plotArea._recordPaintTime(Date.now() - paintT0)
@@ -548,6 +635,12 @@ Rectangle {
         }
         function onScanBviSampled(side, camId, frameId, timestampSec, bviVal) {
             plotArea.handleBviSample(side, camId, frameId, timestampSec, bviVal)
+        }
+        function onScanMeanSampled(side, camId, timestampSec, meanVal) {
+            plotArea.handleMeanSample(side, camId, timestampSec, meanVal)
+        }
+        function onScanContrastSampled(side, camId, timestampSec, contrastVal) {
+            plotArea.handleContrastSample(side, camId, timestampSec, contrastVal)
         }
         function onScanCorrectedBatch(samples) {
             plotArea.handleCorrectedBatch(samples)

@@ -11,14 +11,20 @@ Item {
     z: 9998
 
     // Settings values
-    property int defaultLeftMaskIndex: 4   // "Outer" by default
-    property int defaultRightMaskIndex: 4
+    property int  defaultLeftMaskIndex:  4
+    property int  defaultRightMaskIndex: 4
     property string dataOutputPath: MOTIONInterface.directory
-    property bool showBfiBvi: true  // true = BFI/BVI, false = Mean/StdDev
-    property real bfiMin: 0.0
-    property real bfiMax: 10.0
-    property real bviMin: 0.0
-    property real bviMax: 10.0
+
+    // Seeded from AppFlags (which is loaded from app_config.json at startup)
+    property bool showBfiBvi:   (AppFlags && AppFlags.showBfiBvi   !== undefined) ? AppFlags.showBfiBvi   : true
+    property real bfiMin:       (AppFlags && AppFlags.bfiMin       !== undefined) ? AppFlags.bfiMin       : 0.0
+    property real bfiMax:       (AppFlags && AppFlags.bfiMax       !== undefined) ? AppFlags.bfiMax       : 10.0
+    property real bviMin:       (AppFlags && AppFlags.bviMin       !== undefined) ? AppFlags.bviMin       : 0.0
+    property real bviMax:       (AppFlags && AppFlags.bviMax       !== undefined) ? AppFlags.bviMax       : 10.0
+    property real meanMin:      (AppFlags && AppFlags.meanMin      !== undefined) ? AppFlags.meanMin      : 0.0
+    property real meanMax:      (AppFlags && AppFlags.meanMax      !== undefined) ? AppFlags.meanMax      : 500.0
+    property real contrastMin:  (AppFlags && AppFlags.contrastMin  !== undefined) ? AppFlags.contrastMin  : 0.0
+    property real contrastMax:  (AppFlags && AppFlags.contrastMax  !== undefined) ? AppFlags.contrastMax  : 1.0
 
     signal settingsChanged()
 
@@ -46,6 +52,13 @@ Item {
             maskFromIndex(defaultLeftMaskIndex),
             maskFromIndex(defaultRightMaskIndex)
         )
+        MOTIONInterface.saveDisplaySettings(
+            showBfiBvi,
+            bfiMin, bfiMax,
+            bviMin, bviMax,
+            meanMin, meanMax,
+            contrastMin, contrastMax
+        )
         settingsChanged()
         root.visible = false
     }
@@ -72,7 +85,7 @@ Item {
 
     Rectangle {
         width: Math.min(parent.width - 80, 650)
-        height: Math.min(parent.height - 40, 640)
+        height: Math.min(parent.height - 40, 780)
         radius: 12
         color: "#1E1E20"
         border.color: "#3E4E6F"
@@ -311,6 +324,42 @@ Item {
                         font.pixelSize: 13; color: "white"; horizontalAlignment: Text.AlignHCenter
                         background: Rectangle { color: "#2E2E33"; radius: 4; border.color: "#3E4E6F"; border.width: 1 }
                         onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bviMax = v; text = root.bviMax.toFixed(1) }
+                    }
+
+                    Text { text: "Mean"; color: "#2ECC71"; font.pixelSize: 14; Layout.alignment: Qt.AlignVCenter }
+                    TextField {
+                        Layout.preferredWidth: 80; Layout.preferredHeight: 32
+                        text: root.meanMin.toFixed(0)
+                        inputMethodHints: Qt.ImhFormattedNumbersOnly
+                        font.pixelSize: 13; color: "white"; horizontalAlignment: Text.AlignHCenter
+                        background: Rectangle { color: "#2E2E33"; radius: 4; border.color: "#3E4E6F"; border.width: 1 }
+                        onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.meanMin = v; text = root.meanMin.toFixed(0) }
+                    }
+                    TextField {
+                        Layout.preferredWidth: 80; Layout.preferredHeight: 32
+                        text: root.meanMax.toFixed(0)
+                        inputMethodHints: Qt.ImhFormattedNumbersOnly
+                        font.pixelSize: 13; color: "white"; horizontalAlignment: Text.AlignHCenter
+                        background: Rectangle { color: "#2E2E33"; radius: 4; border.color: "#3E4E6F"; border.width: 1 }
+                        onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.meanMax = v; text = root.meanMax.toFixed(0) }
+                    }
+
+                    Text { text: "Contrast"; color: "#9B59B6"; font.pixelSize: 14; Layout.alignment: Qt.AlignVCenter }
+                    TextField {
+                        Layout.preferredWidth: 80; Layout.preferredHeight: 32
+                        text: root.contrastMin.toFixed(2)
+                        inputMethodHints: Qt.ImhFormattedNumbersOnly
+                        font.pixelSize: 13; color: "white"; horizontalAlignment: Text.AlignHCenter
+                        background: Rectangle { color: "#2E2E33"; radius: 4; border.color: "#3E4E6F"; border.width: 1 }
+                        onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.contrastMin = v; text = root.contrastMin.toFixed(2) }
+                    }
+                    TextField {
+                        Layout.preferredWidth: 80; Layout.preferredHeight: 32
+                        text: root.contrastMax.toFixed(2)
+                        inputMethodHints: Qt.ImhFormattedNumbersOnly
+                        font.pixelSize: 13; color: "white"; horizontalAlignment: Text.AlignHCenter
+                        background: Rectangle { color: "#2E2E33"; radius: 4; border.color: "#3E4E6F"; border.width: 1 }
+                        onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.contrastMax = v; text = root.contrastMax.toFixed(2) }
                     }
                 }
             }

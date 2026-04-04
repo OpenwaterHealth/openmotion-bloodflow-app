@@ -70,6 +70,15 @@ def _load_app_config() -> dict:
         "uncorrectedOnly": False,
         "autoConfigureOnStartup": True,
         "developerMode": False,
+        "showBfiBvi": True,
+        "bfiMin": 0.0,
+        "bfiMax": 10.0,
+        "bviMin": 0.0,
+        "bviMax": 10.0,
+        "meanMin": 0.0,
+        "meanMax": 500.0,
+        "contrastMin": 0.0,
+        "contrastMax": 1.0,
     }
     config_path = resource_path("config", "app_config.json")
     if not config_path.exists():
@@ -195,10 +204,19 @@ def main():
     engine.rootContext().setContextProperty(
         "AppFlags",
         {
-            "leftMask": app_config.get("leftMask", 0x99),
-            "rightMask": app_config.get("rightMask", 0x99),
+            "leftMask":             app_config.get("leftMask", 0x99),
+            "rightMask":            app_config.get("rightMask", 0x99),
             "autoConfigureOnStartup": app_config.get("autoConfigureOnStartup", True),
-            "developerMode": app_config.get("developerMode", False),
+            "developerMode":        app_config.get("developerMode", False),
+            "showBfiBvi":           app_config.get("showBfiBvi", True),
+            "bfiMin":               app_config.get("bfiMin", 0.0),
+            "bfiMax":               app_config.get("bfiMax", 10.0),
+            "bviMin":               app_config.get("bviMin", 0.0),
+            "bviMax":               app_config.get("bviMax", 10.0),
+            "meanMin":              app_config.get("meanMin", 0.0),
+            "meanMax":              app_config.get("meanMax", 500.0),
+            "contrastMin":          app_config.get("contrastMin", 0.0),
+            "contrastMax":          app_config.get("contrastMax", 1.0),
         },
     )
     engine.rootContext().setContextProperty("appVersion", APP_VERSION)

@@ -34,5 +34,14 @@
   "rightMask": 102,
   "uncorrectedOnly": true,
   "autoConfigureOnStartup": false,
-  "developerMode": true
+  "developerMode": true,
+  "showBfiBvi": false,
+  "bfiMin": 0.0,
+  "bfiMax": 10.0,
+  "bviMin": 0.0,
+  "bviMax": 10.0,
+  "meanMin": 0.0,
+  "meanMax": 200.0,
+  "contrastMin": 0.0,
+  "contrastMax": 0.7
 }

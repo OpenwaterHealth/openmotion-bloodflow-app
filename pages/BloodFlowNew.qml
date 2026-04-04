@@ -198,12 +198,16 @@ Rectangle {
                 id: embeddedPlot
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                showBfiBvi: settingsModal.showBfiBvi
-                bfiMin:     settingsModal.bfiMin
-                bfiMax:     settingsModal.bfiMax
-                bviMin:     settingsModal.bviMin
-                bviMax:     settingsModal.bviMax
-                previewLeftMask: bloodFlow.leftMask
+                showBfiBvi:  settingsModal.showBfiBvi
+                bfiMin:      settingsModal.bfiMin
+                bfiMax:      settingsModal.bfiMax
+                bviMin:      settingsModal.bviMin
+                bviMax:      settingsModal.bviMax
+                meanMin:     settingsModal.meanMin
+                meanMax:     settingsModal.meanMax
+                contrastMin: settingsModal.contrastMin
+                contrastMax: settingsModal.contrastMax
+                previewLeftMask:  bloodFlow.leftMask
                 previewRightMask: bloodFlow.rightMask
             }
         }

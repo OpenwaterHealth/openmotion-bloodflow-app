@@ -1140,6 +1140,42 @@ class MOTIONConnector(QObject):
     def defaultRightMask(self):
         return self._default_right_mask
 
+    @pyqtSlot(bool, float, float, float, float, float, float, float, float)
+    def saveDisplaySettings(
+        self,
+        show_bfi_bvi: bool,
+        bfi_min: float, bfi_max: float,
+        bvi_min: float, bvi_max: float,
+        mean_min: float, mean_max: float,
+        contrast_min: float, contrast_max: float,
+    ):
+        """Persist realtime-plot display settings to config/app_config.json."""
+        config_path = resource_path("config", "app_config.json")
+        try:
+            if config_path.exists():
+                with open(config_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            else:
+                data = {}
+            data["showBfiBvi"]   = bool(show_bfi_bvi)
+            data["bfiMin"]       = float(bfi_min)
+            data["bfiMax"]       = float(bfi_max)
+            data["bviMin"]       = float(bvi_min)
+            data["bviMax"]       = float(bvi_max)
+            data["meanMin"]      = float(mean_min)
+            data["meanMax"]      = float(mean_max)
+            data["contrastMin"]  = float(contrast_min)
+            data["contrastMax"]  = float(contrast_max)
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            logger.info(
+                f"[Connector] Saved display settings: showBfiBvi={show_bfi_bvi}, "
+                f"BFI=[{bfi_min},{bfi_max}], BVI=[{bvi_min},{bvi_max}], "
+                f"Mean=[{mean_min},{mean_max}], Contrast=[{contrast_min},{contrast_max}]"
+            )
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning(f"[Connector] Could not save display settings: {e}")
+
     @pyqtSlot(int, int)
     def saveDefaultMasks(self, left_mask: int, right_mask: int):
         """Persist leftMask and rightMask to config/app_config.json."""
