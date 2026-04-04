@@ -19,8 +19,6 @@ import time
 import random
 import re
 import string
-import platform
-import socket
 
 from motion_singleton import motion_interface
 
@@ -189,6 +187,7 @@ class MOTIONConnector(QObject):
         self._running = False
         self._trigger_state = "OFF"
         self._state = DISCONNECTED
+        self._last_fan_status: dict[str, bool | None] = {"left": None, "right": None}
         self.laser_params = self._load_laser_params(config_dir)
         self._tec_voltage_default = self._load_tec_params(config_dir)
 
@@ -376,17 +375,11 @@ class MOTIONConnector(QObject):
                 refresh_cache = getattr(sensor, "refresh_id_cache", None)
                 if enable_power and disable_power and refresh_cache:
                     if enable_power(0xFF):
-                        logger.info(
-                            "Powered on all cameras on %s sensor for ID cache fill",
-                            side,
-                        )
                         time.sleep(0.5)  # settle time
                         refresh_cache()
-                        logger.info("Filled ID cache on %s sensor", side)
                         if self._power_off_unused_cameras:
                             disable_power(0xFF)
                             time.sleep(0.05)
-                            logger.info("Powered off all cameras on %s sensor", side)
                     else:
                         logger.warning(
                             "Could not power on cameras on %s sensor for ID cache fill",
@@ -397,6 +390,7 @@ class MOTIONConnector(QObject):
                     refresh_cache()  # fallback: fill cache without power cycle (may get zeros for off cameras)
         except Exception as e:
             logger.debug("Could not refresh sensor ID cache for %s: %s", side, e)
+        self._interface.log_sensor_info(side)
         self.connectionStatusChanged.emit()
 
     def _start_runlog(self, subject_id: str = None):
@@ -490,10 +484,6 @@ class MOTIONConnector(QObject):
         run_logger.info(f"SDK Version: {sdk_ver}")
         run_logger.info(f"Console Firmware: {fw_ver}")
 
-        # Log system information, device information, laser information, and camera UIDs
-        self.log_system_information(logger)
-        self.log_device_information()
-        self.log_laser_information()
         self._read_and_log_camera_uids()
 
         # Flush the handler to ensure header is written immediately
@@ -576,135 +566,6 @@ class MOTIONConnector(QObject):
                 self._runlog_csv_file.flush()
             except Exception as e:
                 logger.error(f"Failed to write run CSV sample: {e}")
-
-    def log_system_information(self, logger):
-        """Log system information including hostname, OS details, and hardware information."""
-        try:
-            hostname = socket.gethostname()
-            run_logger.info("=" * 80)
-            run_logger.info("SYSTEM INFORMATION")
-            run_logger.info("=" * 80)
-            run_logger.info(f"Hostname: {hostname}")
-            run_logger.info(f"Platform: {platform.platform()}")
-            run_logger.info(f"System: {platform.system()}")
-            run_logger.info(f"Release: {platform.release()}")
-            run_logger.info(f"Version: {platform.version()}")
-            run_logger.info(f"Architecture: {platform.machine()}")
-            run_logger.info(f"Processor: {platform.processor()}")
-
-            # Additional hardware information
-            if platform.system() == "Windows":
-                try:
-                    import ctypes
-
-                    # Get total physical memory
-                    class MEMORYSTATUSEX(ctypes.Structure):
-                        _fields_ = [
-                            ("dwLength", ctypes.c_ulong),
-                            ("dwMemoryLoad", ctypes.c_ulong),
-                            ("ullTotalPhys", ctypes.c_ulonglong),
-                            ("ullAvailPhys", ctypes.c_ulonglong),
-                            ("ullTotalPageFile", ctypes.c_ulonglong),
-                            ("ullAvailPageFile", ctypes.c_ulonglong),
-                            ("ullTotalVirtual", ctypes.c_ulonglong),
-                            ("ullAvailVirtual", ctypes.c_ulonglong),
-                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-                        ]
-
-                    memStatus = MEMORYSTATUSEX()
-                    memStatus.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
-                    ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(memStatus))
-                    total_memory_gb = memStatus.ullTotalPhys / (1024**3)
-                    run_logger.info(f"Total Physical Memory: {total_memory_gb:.2f} GB")
-                except Exception:
-                    pass
-
-            # Python version
-            run_logger.info(f"Python Version: {platform.python_version()}")
-            run_logger.info(
-                f"Python Implementation: {platform.python_implementation()}"
-            )
-
-        except Exception as e:
-            run_logger.warning(f"Failed to log system information: {e}")
-
-    def log_device_information(self):
-        """Log information about connected sensors and console to the run log."""
-        try:
-            run_logger.info("=" * 80)
-            run_logger.info("DEVICE INFORMATION")
-            run_logger.info("=" * 80)
-
-            # Console information
-            if self._consoleConnected:
-                try:
-                    fw_version = motion_interface.console_module.get_version()
-                    hw_id = motion_interface.console_module.get_hardware_id()
-                    device_id = base58.b58encode(bytes.fromhex(hw_id)).decode()
-                    run_logger.info(
-                        f"Console - Firmware: {fw_version}, Device ID: {device_id}"
-                    )
-                except Exception as e:
-                    run_logger.warning(f"Console - Failed to get device info: {e}")
-            else:
-                run_logger.info("Console - Not connected")
-
-            # Left sensor information
-            if self._leftSensorConnected:
-                try:
-                    sensor = motion_interface.sensors.get("left")
-                    if sensor is not None:
-                        fw_version = sensor.get_version()
-                        hw_id = sensor.get_hardware_id()
-                        device_id = base58.b58encode(bytes.fromhex(hw_id)).decode()
-                        run_logger.info(
-                            f"Left Sensor - Firmware: {fw_version}, Device ID: {device_id}"
-                        )
-                    else:
-                        run_logger.warning("Left Sensor - Sensor object is None")
-                except Exception as e:
-                    run_logger.warning(f"Left Sensor - Failed to get device info: {e}")
-            else:
-                run_logger.info("Left Sensor - Not connected")
-
-            # Right sensor information
-            if self._rightSensorConnected:
-                try:
-                    sensor = motion_interface.sensors.get("right")
-                    if sensor is not None:
-                        fw_version = sensor.get_version()
-                        hw_id = sensor.get_hardware_id()
-                        device_id = base58.b58encode(bytes.fromhex(hw_id)).decode()
-                        run_logger.info(
-                            f"Right Sensor - Firmware: {fw_version}, Device ID: {device_id}"
-                        )
-                    else:
-                        run_logger.warning("Right Sensor - Sensor object is None")
-                except Exception as e:
-                    run_logger.warning(f"Right Sensor - Failed to get device info: {e}")
-            else:
-                run_logger.info("Right Sensor - Not connected")
-
-        except Exception as e:
-            run_logger.error(f"Failed to log device information: {e}")
-
-    def log_laser_information(self):
-        """Log laser information to the run log."""
-        try:
-            run_logger.info("=" * 80)
-            run_logger.info("LASER INFORMATION")
-            run_logger.info("=" * 80)
-
-            # print laser parameters as read from the device
-            laser_params = self.laser_params
-            for param in laser_params:
-                run_logger.info(
-                    f"Mux Index: {param['muxIdx']}, Channel: {param['channel']}, I2C Address: {param['i2cAddr']}, Offset: {param['offset']}, Data to Send: {param['dataToSend']}"
-                )
-            run_logger.info("=" * 80)
-
-        except Exception as e:
-            run_logger.error(f"Failed to log laser information: {e}")
 
     # --- GETTERS/SETTERS FOR Qt PROPERTIES ---
     def getSessionId(self) -> str:
@@ -794,6 +655,7 @@ class MOTIONConnector(QObject):
             self._schedule_sensor_init("right")
         elif desc == "CONSOLE":
             self._consoleConnected = True
+            self._interface.log_console_info()
             if motion_interface.console_module.tec_voltage(self._tec_voltage_default):
                 logger.info(f"Console TEC voltage set to {self._tec_voltage_default}V")
             else:
@@ -814,6 +676,7 @@ class MOTIONConnector(QObject):
         """Handle device disconnection."""
         if descriptor.upper() == "SENSOR_LEFT":
             self._leftSensorConnected = False
+            self._last_fan_status["left"] = None
             try:
                 sensor = (
                     self._interface.sensors.get("left")
@@ -829,6 +692,7 @@ class MOTIONConnector(QObject):
                 pass
         elif descriptor.upper() == "SENSOR_RIGHT":
             self._rightSensorConnected = False
+            self._last_fan_status["right"] = None
             try:
                 sensor = (
                     self._interface.sensors.get("right")
@@ -867,7 +731,7 @@ class MOTIONConnector(QObject):
         elif self._consoleConnected and self._leftSensorConnected and self._running:
             self._state = RUNNING
         self.stateChanged.emit()  # Notify QML of state update
-        logger.info(f"Updated state: {self._state}")
+        logger.debug(f"Updated state: {self._state}")
 
     def _on_telemetry_update(self, snap) -> None:
         if not snap.read_ok:
@@ -2151,9 +2015,11 @@ class MOTIONConnector(QObject):
                 logger.error(f"Invalid sensor side: {sensor_side}")
                 return False
 
-            logger.info(
-                f"Fan status for {sensor_side} sensor: {'ON' if status else 'OFF'}"
-            )
+            if status != self._last_fan_status.get(sensor_side.lower()):
+                self._last_fan_status[sensor_side.lower()] = status
+                logger.info(
+                    f"Fan status for {sensor_side} sensor: {'ON' if status else 'OFF'}"
+                )
             return status
 
         except Exception as e:

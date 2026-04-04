@@ -134,7 +134,7 @@ Item {
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: 24
-            spacing: 20
+            spacing: 0
 
             Text {
                 text: "Settings"
@@ -142,10 +142,21 @@ Item {
                 font.pixelSize: 22
                 font.weight: Font.Bold
                 Layout.alignment: Qt.AlignHCenter
+                Layout.bottomMargin: 16
             }
 
             // Separator
-            Rectangle { Layout.fillWidth: true; height: 1; color: "#3E4E6F" }
+            Rectangle { Layout.fillWidth: true; height: 1; color: "#3E4E6F"; Layout.bottomMargin: 4 }
+
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+
+                ColumnLayout {
+                    width: parent.width
+                    spacing: 20
 
             // Default Camera Configuration
             ColumnLayout {
@@ -387,8 +398,43 @@ Item {
                 }
             }
 
-            Item { Layout.fillHeight: true }
-        }
+            // Developer section — hidden unless developerMode is on
+            ColumnLayout {
+                spacing: 8
+                Layout.fillWidth: true
+                visible: MOTIONInterface.appConfig.developerMode ? true : false
+
+                Rectangle { Layout.fillWidth: true; height: 1; color: "#3E4E6F" }
+
+                Text {
+                    text: "Developer"
+                    color: "#BDC3C7"
+                    font.pixelSize: 16
+                    font.weight: Font.DemiBold
+                }
+
+                Button {
+                    text: "Soft Reset Console"
+                    Layout.preferredHeight: 36
+                    hoverEnabled: true
+                    contentItem: Text {
+                        text: parent.text; font.pixelSize: 13; color: "#BDC3C7"
+                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle {
+                        color: parent.hovered ? "#E67E22" : "#3A3F4B"
+                        border.color: parent.hovered ? "#FFFFFF" : "#BDC3C7"; radius: 4
+                    }
+                    onClicked: MOTIONInterface.softResetSensor("CONSOLE")
+                }
+            }
+
+                    Item { height: 8 }
+
+                    } // inner ColumnLayout
+                } // ScrollView
+
+        } // outer ColumnLayout
 
         Keys.onReleased: function(event) {
             if (event.key === Qt.Key_Escape) { root.close(); event.accepted = true }

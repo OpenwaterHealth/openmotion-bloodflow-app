@@ -161,6 +161,10 @@ def main():
     sdk_logger.addHandler(file_handler)
     sdk_logger.propagate = False  # Don't propagate to root, use our handlers
 
+    # Log host system info now that handlers are in place
+    from motion_singleton import motion_interface
+    motion_interface.log_system_info()
+
     qInstallMessageHandler(qt_message_handler)
 
     app = QApplication(sys.argv)
