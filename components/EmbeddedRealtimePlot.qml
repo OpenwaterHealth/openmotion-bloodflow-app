@@ -508,6 +508,7 @@ Rectangle {
 
     Rectangle {
         id: profToggleBtn
+        visible:       plotArea.developerMode
         anchors.top:   parent.top
         anchors.right: parent.right
         anchors.topMargin:   12
@@ -535,7 +536,7 @@ Rectangle {
 
     Rectangle {
         id: profPanel
-        visible:       plotArea.showProfiling
+        visible:       plotArea.developerMode && plotArea.showProfiling
         anchors.top:   profToggleBtn.bottom
         anchors.right: parent.right
         anchors.topMargin:   4

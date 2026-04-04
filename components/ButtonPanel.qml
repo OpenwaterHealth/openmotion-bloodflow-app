@@ -161,8 +161,9 @@ Rectangle {
             onClicked: panel.historyClicked()
         }
 
-        // Log viewer
+        // Log viewer (developer mode only)
         PanelButton {
+            visible: MOTIONInterface.appConfig.developerMode ? true : false
             iconText: "\uea65"  // list/log icon
             label: "Log"
             onClicked: panel.logClicked()
