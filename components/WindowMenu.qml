@@ -130,6 +130,7 @@ Rectangle {
                 buttonIcon: "\ue9b3" // Exit (close) icon
                 Layout.alignment: Qt.AlignHCenter
                 onClicked: {
+                    console.log("User pressed quit button")
                     Qt.quit(); // Close the application
                 }
             }
