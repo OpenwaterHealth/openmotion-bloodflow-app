@@ -222,7 +222,7 @@ Item {
                         Text { text: "Actions"; color: "white"; font.pixelSize: 15 }
 
                         Button {
-                            text: "Visualize BFI/BVI"
+                            text: "Visualize BFI/BVI (legacy)"
                             Layout.fillWidth: true; Layout.preferredHeight: 36
                             enabled: !!(selected.leftPath || selected.rightPath)
                             hoverEnabled: enabled
@@ -242,7 +242,7 @@ Item {
                         }
 
                         Button {
-                            text: "Visualize Contrast/Mean"
+                            text: "Visualize Contrast/Mean (legacy)"
                             Layout.fillWidth: true; Layout.preferredHeight: 36
                             enabled: !!(selected.leftPath || selected.rightPath)
                             hoverEnabled: enabled
@@ -262,7 +262,7 @@ Item {
                         }
 
                         Button {
-                            text: "Plot Corrected Scan"
+                            text: "Visualize BFI/BVI"
                             Layout.fillWidth: true; Layout.preferredHeight: 36
                             enabled: !!(selected.correctedPath)
                             hoverEnabled: enabled
@@ -282,7 +282,7 @@ Item {
                         }
 
                         Button {
-                            text: "Plot Mean / Contrast"
+                            text: "Visualize Contrast/Mean"
                             Layout.fillWidth: true; Layout.preferredHeight: 36
                             enabled: !!(selected.correctedPath)
                             hoverEnabled: enabled
@@ -321,10 +321,21 @@ Item {
         }
     }
 
+    Dialogs.MessageDialog {
+        id: histErrDialog
+        title: "Visualization Error"
+        text: ""
+    }
+
     Connections {
         target: MOTIONInterface
         function onVizFinished() { root.visualizing = false }
         function onVisualizingChanged(b) { root.visualizing = b }
         function onDirectoryChanged() { if (root.visible) refreshScans() }
+        function onErrorOccurred(msg) {
+            root.visualizing = false
+            histErrDialog.text = msg || "Unknown error."
+            histErrDialog.visible = true
+        }
     }
 }
