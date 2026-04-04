@@ -80,6 +80,8 @@ def _load_app_config() -> dict:
         "contrastMin": 0.0,
         "contrastMax": 1.0,
         "dataDirectory": None,
+        "writeRawCsv": True,
+        "rawCsvDurationSec": None,
     }
     config_path = resource_path("config", "app_config.json")
     if not config_path.exists():

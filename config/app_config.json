@@ -30,7 +30,7 @@
     0.25
   ],
   "writeRawCsv": true,
-  "rawCsvDurationSec": null,
+  "rawCsvDurationSec": 60,
   "leftMask": 102,
   "rightMask": 102,
   "uncorrectedOnly": true,
