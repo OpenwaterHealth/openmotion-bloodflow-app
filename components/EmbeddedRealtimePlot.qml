@@ -21,6 +21,7 @@ Rectangle {
     property int  rightActiveCount: 0
     property int  plotRows: (leftActiveCount === 8 || rightActiveCount === 8) ? 4 : 2
     property bool showBfiBvi: true
+    property bool developerMode: (AppFlags && AppFlags.developerMode) ? true : false
 
     // Fixed plot bounds — defaults [0, 10], configurable from Settings
     property real bfiMin: 0.0
@@ -96,7 +97,7 @@ Rectangle {
 
     function _ensureEntry(key) {
         if (_store[key]) return
-        _store[key] = { bfi: [], bvi: [], latestBfi: NaN, latestBvi: NaN }
+        _store[key] = { bfi: [], bvi: [], latestBfi: NaN, latestBvi: NaN, latestTemp: NaN }
     }
 
     function _applyPreviewLayout() {
@@ -156,6 +157,13 @@ Rectangle {
         _store[key].bvi.push({ t: ts, v: val, fid: frameId })
         _store[key].latestBvi = val
         if (ts > latestTimestamp) latestTimestamp = ts
+    }
+
+    function handleTempSample(side, camId, tempC) {
+        if (!running) return
+        const key = _seriesKey(side, camId)
+        _ensureEntry(key)
+        _store[key].latestTemp = tempC
     }
 
     // Called when the SDK emits a corrected batch. Overwrites stored uncorrected
@@ -226,8 +234,9 @@ Rectangle {
             totalPts += s.bfi.length + s.bvi.length
 
             newDisplay[key] = {
-                bfi: isFinite(s.latestBfi) ? s.latestBfi.toFixed(2) : "--",
-                bvi: isFinite(s.latestBvi) ? s.latestBvi.toFixed(2) : "--"
+                bfi:  isFinite(s.latestBfi)  ? s.latestBfi.toFixed(2)  : "--",
+                bvi:  isFinite(s.latestBvi)  ? s.latestBvi.toFixed(2)  : "--",
+                temp: isFinite(s.latestTemp) ? s.latestTemp.toFixed(1) : "--"
             }
 
             // Repaint this series' canvas
@@ -299,6 +308,13 @@ Rectangle {
                                 font.pixelSize: 12
                             }
                             Item { Layout.fillWidth: true }
+                            Text {
+                                visible:        plotArea.developerMode
+                                text:           ((plotArea.displayValues[seriesKey] || {}).temp || "--") + "°C"
+                                color:          "#F39C12"
+                                font.pixelSize: 11
+                                font.family:    "Consolas"
+                            }
                             Text {
                                 text:  "BFI: " + ((plotArea.displayValues[seriesKey] || {}).bfi || "--")
                                 color: plotArea.bfiColor
@@ -535,6 +551,9 @@ Rectangle {
         }
         function onScanCorrectedBatch(samples) {
             plotArea.handleCorrectedBatch(samples)
+        }
+        function onScanCameraTemperature(side, camId, tempC) {
+            plotArea.handleTempSample(side, camId, tempC)
         }
     }
 }

@@ -33,5 +33,6 @@
   "leftMask": 102,
   "rightMask": 102,
   "uncorrectedOnly": true,
-  "autoConfigureOnStartup": false
+  "autoConfigureOnStartup": false,
+  "developerMode": true
 }

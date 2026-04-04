@@ -69,6 +69,7 @@ def _load_app_config() -> dict:
         "rightMask": 0x66,
         "uncorrectedOnly": False,
         "autoConfigureOnStartup": True,
+        "developerMode": False,
     }
     config_path = resource_path("config", "app_config.json")
     if not config_path.exists():
@@ -197,6 +198,7 @@ def main():
             "leftMask": app_config.get("leftMask", 0x99),
             "rightMask": app_config.get("rightMask", 0x99),
             "autoConfigureOnStartup": app_config.get("autoConfigureOnStartup", True),
+            "developerMode": app_config.get("developerMode", False),
         },
     )
     engine.rootContext().setContextProperty("appVersion", APP_VERSION)

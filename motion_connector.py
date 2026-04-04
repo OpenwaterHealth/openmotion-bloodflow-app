@@ -123,6 +123,7 @@ class MOTIONConnector(QObject):
         str, int, float, float
     )  # side, cam_id, timestamp_s, bvi  (kept for backward compat)
     scanCorrectedBatch = pyqtSignal('QVariantList')  # list of {side,camId,frameId,ts,bfi,bvi}
+    scanCameraTemperature = pyqtSignal(str, int, float)  # side, cam_id, temperature_c
 
     # post-processing signals
     postProgress = pyqtSignal(int)
@@ -1284,6 +1285,11 @@ class MOTIONConnector(QObject):
                 int(sample.absolute_frame_id),
                 float(sample.timestamp_s),
                 float(sample.bvi),
+            )
+            self.scanCameraTemperature.emit(
+                sample.side,
+                int(sample.cam_id),
+                float(sample.temperature_c),
             )
 
         def _on_corrected_batch(batch):
