@@ -899,24 +899,24 @@ class MOTIONConnector(QObject):
         """Return sorted list of scan IDs.
 
         Supports two filename formats:
-          New: {YYYYMMDD_HHMMSS}_{sessionId}_notes.txt
-          Old: scan_{sessionId}_{YYYYMMDD_HHMMSS}_notes.txt
+          New: {YYYYMMDD_HHMMSS}_{sessionId}_corrected.csv
+          Old: scan_{sessionId}_{YYYYMMDD_HHMMSS}_corrected.csv
         """
         base_path = Path(self._directory)
         if not base_path.exists():
             return []
 
         ids = []
-        for f in base_path.glob("*_notes.txt"):
+        for f in base_path.glob("*_corrected.csv"):
             if not f.is_file():
                 continue
-            stem = f.stem  # strip ".txt" → "..._notes"
-            if not stem.endswith("_notes"):
+            stem = f.stem  # strip ".csv" → "..._corrected"
+            if not stem.endswith("_corrected"):
                 continue
-            stem = stem[:-6]  # strip "_notes"
+            stem = stem[:-10]  # strip "_corrected"
 
             if stem.startswith("scan_"):
-                # Old format: scan_{sessionId}_{ts}  → keep as-is for details lookup
+                # Old format: scan_{sessionId}_{ts}
                 stem = stem[5:]
 
             ids.append(stem)

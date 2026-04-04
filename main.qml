@@ -33,7 +33,6 @@ ApplicationWindow {
             sdkVerText: "" + MOTIONInterface.get_sdk_version()
         }
 
-        // Main Content: New BloodFlow page (no sidebar)
         Item {
             anchors.fill: parent
             anchors.topMargin: 65
@@ -41,7 +40,7 @@ ApplicationWindow {
             anchors.bottomMargin: 8
             anchors.leftMargin: 8
 
-            BloodFlowNew {
+            BloodFlow {
                 anchors.fill: parent
             }
         }

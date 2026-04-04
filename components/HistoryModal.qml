@@ -159,7 +159,7 @@ Item {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 36
                     model: scans
-                    delegate: ItemDelegate { width: parent.width; text: modelData }
+                    delegate: ItemDelegate { width: scanPicker.width; text: modelData }
                     onCurrentIndexChanged: {
                         if (currentIndex >= 0 && currentIndex < scans.length) {
                             try { selected = MOTIONInterface.get_scan_details(scans[currentIndex]) || {} }

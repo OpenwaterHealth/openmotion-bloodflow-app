@@ -1,9 +1,7 @@
 import QtQuick 6.0
 import QtQuick.Controls 6.0
 import QtQuick.Layouts 6.0
-import OpenMotion 1.0 
-import QtQuick.Dialogs as Dialogs
-
+import OpenMotion 1.0
 
 import "../components"
 import "./scan"
@@ -12,688 +10,247 @@ Rectangle {
     id: bloodFlow
     width: parent.width
     height: parent.height
-    color: "#29292B" // Background color for Page 1
-    radius: 20
-    opacity: 0.95 // Slight transparency for the content area
+    color: "#1C1C1E"
+    radius: 0
 
-    property int defaultLeftMask:  MOTIONInterface.appConfig.leftMask  !== undefined ? MOTIONInterface.appConfig.leftMask  : 0x99
-    property int defaultRightMask: MOTIONInterface.appConfig.rightMask !== undefined ? MOTIONInterface.appConfig.rightMask : 0x99
-    // property to store selected directory
-    property string defaultDataDir: ""
+    property bool scanning: false
+    property bool camerasReady: true  // starts true, goes false when camera selection changes
+    property bool configuring: false  // true during camera flash
 
-    ListModel {
-        id: sensorPatterns
-        ListElement { name: "None"; maskHex: "0x00" }
-        ListElement { name: "Near"; maskHex: "0x5A" }
-        ListElement { name: "Middle";  maskHex: "0x66" } 
-        ListElement { name: "Far";  maskHex: "0x55" }  
-        ListElement { name: "Outer";  maskHex: "0x99" }  
-        ListElement { name: "Left";  maskHex: "0x0F" }  
-        ListElement { name: "Right";  maskHex: "0xF0" }  
-        ListElement { name: "Third Row";  maskHex: "0x42" }  
-        ListElement { name: "All";  maskHex: "0xFF" }  
+    // Camera masks (updated by camera selection modal)
+    property int leftMask: 0x99   // default "Outer"
+    property int rightMask: 0x00
+
+    // Duration from scan time modal
+    property bool freeRun: false
+    property int durationSec: 3600  // default 1 hour
+    property int elapsedSec: 0
+
+    function formatSec(s) {
+        var h = Math.floor(s / 3600)
+        var m = Math.floor((s % 3600) / 60)
+        var sec = s % 60
+        return String(h).padStart(2, '0') + ":" +
+               String(m).padStart(2, '0') + ":" +
+               String(sec).padStart(2, '0')
     }
 
-    // Convert boolean array -> integer mask.  bitMap[i] is the bit position for array index i.
-    function maskFromArray(arr) {
-        if (!arr || arr.length !== 8) return 0;
-        const bitMap = [7, 6, 5, 4, 3, 2, 1, 0];  // index i -> bit number
-        var m = 0;
-        for (var i = 0; i < 8; i++) {
-            if (arr[i]) m |= (1 << bitMap[i]);
-        }
-        return m;
+    Timer {
+        id: scanTimer
+        interval: 1000
+        repeat: true
+        running: bloodFlow.scanning
+        onTriggered: bloodFlow.elapsedSec += 1
     }
 
-    // Convert integer mask -> boolean array (inverse of maskFromArray).
-    function arrayFromMask(mask) {
+    // Convert mask to active array for camera selection modal
+    function maskToArray(mask) {
         const bitMap = [7, 6, 5, 4, 3, 2, 1, 0];
-        var arr = [];
+        var arr = [false, false, false, false, false, false, false, false];
         for (var i = 0; i < 8; i++) {
-            arr.push(Boolean(mask & (1 << bitMap[i])));
+            if (mask & (1 << bitMap[i])) arr[i] = true;
         }
         return arr;
     }
 
-    // Return the sensorPatterns combo-box index whose maskHex matches mask, or 0 (None) if not found.
-    function indexForMask(mask) {
-        for (var i = 0; i < sensorPatterns.count; i++) {
-            if (parseInt(sensorPatterns.get(i).maskHex, 16) === mask) return i;
+    // Apply default cameras from config
+    function applyDefaultCameras() {
+        var cfg      = MOTIONInterface.appConfig;
+        var defLeft  = cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99;
+        var defRight = cfg.rightMask !== undefined ? cfg.rightMask : 0x99;
+        if (MOTIONInterface.leftSensorConnected)  leftMask  = defLeft;
+        if (MOTIONInterface.rightSensorConnected) rightMask = defRight;
+        if (cfg.autoConfigureOnStartup !== false &&
+                (MOTIONInterface.leftSensorConnected || MOTIONInterface.rightSensorConnected)) {
+            flashDefaultCameras();
         }
-        return 0;
     }
 
-    // Reactive masks (auto-update when sensorActive arrays change)
-    property int leftMask:  maskFromArray(leftSensorView.sensorActive)
-    property int rightMask: maskFromArray(rightSensorView.sensorActive)
+    function patternToMask(index) {
+        switch(index) {
+            case 0: return 0x00;
+            case 1: return 0x5A;
+            case 2: return 0x66;
+            case 3: return 0xA5;
+            case 4: return 0x99;
+            case 5: return 0x0F;
+            case 6: return 0xF0;
+            case 7: return 0x42;
+            case 8: return 0xFF;
+            default: return 0x99;
+        }
+    }
 
-    // LAYOUT
-    RowLayout {
+    function flashDefaultCameras() {
+        if (configuring || scanning) return;
+        camerasReady = false;
+        configuring = true;
+        console.log("Auto-flashing cameras: left=0x" + leftMask.toString(16) + " right=0x" + rightMask.toString(16));
+        MOTIONInterface.startConfigureCameraSensors(leftMask, rightMask);
+    }
+
+    // LAYOUT: full-height column → session header bar + (ButtonPanel | DataViewer)
+    ColumnLayout {
         anchors.fill: parent
-        anchors.leftMargin: 30   // extra left space
-        anchors.topMargin: 10
-        anchors.rightMargin: 10
-        anchors.bottomMargin: 10
-        spacing: 10
+        anchors.margins: 8
+        spacing: 6
 
-        // Left Column (Input Panel)
-        ColumnLayout {
-            spacing: 20
+        // ── Session ID header bar ─────────────────────────────────────────
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 34
+            color: "#252528"
+            radius: 8
+            border.color: "#3E4E6F"
+            border.width: 1
 
-            // Info container
-            Rectangle {
-                id: patientInfo
-                width: 500
-                height: 500
-                color: "#1E1E20"
-                radius: 10
-                border.color: "#3E4E6F"
-                border.width: 2
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 14
+                anchors.rightMargin: 14
+                spacing: 10
 
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 20
-                    spacing: 20
+                Text {
+                    text: "OpenMotion BloodFlow"
+                    color: "#FFFFFF"
+                    font.pixelSize: 14
+                    font.weight: Font.Bold
+                }
 
-                    // Title
-                    Text {
-                        text: "Patient Info"
-                        font.pixelSize: 20
-                        color: "#FFFFFF"
-                        Layout.alignment: Qt.AlignHCenter
+                Rectangle { width: 1; height: 18; color: "#3E4E6F" }
+
+                Text { text: "Session:"; color: "#7F8C8D"; font.pixelSize: 13 }
+                Text {
+                    text: MOTIONInterface.sessionId || "—"
+                    color: "#4A90E2"
+                    font.pixelSize: 13
+                    font.weight: Font.DemiBold
+                }
+
+                Item { Layout.fillWidth: true }
+
+                Rectangle { width: 1; height: 18; color: "#3E4E6F" }
+
+                Text {
+                    text: {
+                        if (bloodFlow.freeRun) {
+                            return bloodFlow.scanning
+                                ? "Free Run  " + bloodFlow.formatSec(bloodFlow.elapsedSec)
+                                : "Free Run"
+                        }
+                        return bloodFlow.scanning
+                            ? bloodFlow.formatSec(bloodFlow.elapsedSec) + " / " + bloodFlow.formatSec(bloodFlow.durationSec)
+                            : bloodFlow.formatSec(bloodFlow.durationSec)
                     }
+                    color: bloodFlow.scanning ? "#2ECC71" : "#7F8C8D"
+                    font.pixelSize: 13
+                    font.family: "Courier New"
+                }
 
-                    // Subject ID Field
-                    RowLayout {
-                        spacing: 10
-                        Layout.fillWidth: true
+            }
+        }
 
-                        Text {
-                            text: "Subject ID:"
-                            font.pixelSize: 16
-                            color: "#BDC3C7"
-                            Layout.alignment: Qt.AlignVCenter
+        // ── ButtonPanel | DataViewer ──────────────────────────────────────
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            spacing: 8
+
+            ButtonPanel {
+                id: buttonPanel
+                Layout.fillHeight: true
+                Layout.preferredWidth: 80
+                scanning: bloodFlow.scanning
+                waiting: bloodFlow.configuring
+                camerasReady: bloodFlow.camerasReady && !bloodFlow.configuring
+
+                onStartStopClicked: {
+                    if (bloodFlow.scanning) {
+                        scanRunner.cancel()
+                    } else {
+                        if (!MOTIONInterface.sessionId || MOTIONInterface.sessionId.length === 0) {
+                            sessionModal.open()
+                            return
                         }
-
-                        TextField {
-                            id: subjectIdField
-                            text: MOTIONInterface.subjectId
-                            font.pixelSize: 16
-                            color: "white"
-                            Layout.fillWidth: true
-                            background: Rectangle {
-                                color: "#2E2E33"
-                                radius: 4
-                                border.color: "#3E4E6F"
-                                border.width: 1
-                            }
-
-                            // push UI -> backend when user commits
-                            onEditingFinished: {
-                                if (text !== MOTIONInterface.subjectId)
-                                    MOTIONInterface.subjectId = text
-                            }
-                        }
-                    }
-
-                    // Notes Field (multi-line) - FIXED
-                    ColumnLayout {
-                        spacing: 6
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-
-                        Text {
-                            text: "Notes:"
-                            font.pixelSize: 16
-                            color: "#BDC3C7"
-                            horizontalAlignment: Text.AlignLeft
-                            Layout.alignment: Qt.AlignLeft
-                        }
-
-                        Rectangle {
-                            color: "#2E2E33"
-                            radius: 6
-                            border.color: "#3E4E6F"
-                            border.width: 1
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-
-                            TextArea {
-                                id: notesField
-                                anchors.fill: parent
-                                anchors.margins: 15
-                                font.pixelSize: 14
-                                color: "white"
-                                wrapMode: Text.Wrap
-                                background: null  // Use parent rectangle
-
-                                text: MOTIONInterface.scanNotes   // Initial value from backend
-                                onTextChanged: MOTIONInterface.scanNotes = text  // Push updates back
-                            }
-                        }
+                        bloodFlow.scanning = true
+                        scanDialog.message = "Scanning..."
+                        scanDialog.stageText = "Preparing..."
+                        scanDialog.progress = 1
+                        bloodFlow.elapsedSec = 0
+                        embeddedPlot.startScan(bloodFlow.leftMask, bloodFlow.rightMask)
+                        scanRunner.start()
                     }
                 }
-            }
 
-            // Data container
-            Rectangle {
-                id: dataDirInfo
-                width: 500
-                height: 160
-                color: "#1E1E20"
-                radius: 10
-                border.color: "#3E4E6F"
-                border.width: 2
-                enabled: true
-
-                // Default Data Directory Selection
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 10
-                    spacing: 10
-
-                    Text {
-                        text: "Default Data Directory:"
-                        font.pixelSize: 16
-                        color: "#BDC3C7"
-                    }
-
-                    TextField {
-                        id: directoryField
-                        text: MOTIONInterface.directory
-                        readOnly: true
-                        font.pixelSize: 14
-                        color: "white"
-                        Layout.fillWidth: true
-                        background: Rectangle {
-                            color: "#2E2E33"
-                            radius: 4
-                            border.color: "#3E4E6F"
-                            border.width: 1
-                        }
-                    }
-                    
-                    Button {
-                        id: btnBrowse
-                        text: "Browse"
-                        Layout.preferredWidth: 120
-                        Layout.preferredHeight: 40
-                        Layout.alignment: Qt.AlignRight
-                        hoverEnabled: enabled          
-
-                        contentItem: Text {
-                            text: parent.text
-                            font.pixelSize: 14
-                            color: parent.enabled ? "#BDC3C7" : "#7F8C8D"
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        background: Rectangle {
-                            color: !parent.enabled ? "#3A3F4B" : parent.hovered ? "#4A90E2" : "#3A3F4B"
-                            border.color: !parent.enabled ? "#7F8C8D" : parent.hovered ? "#FFFFFF" : "#BDC3C7"
-                            radius: 4
-                        }
-                        onClicked: {
-                            folderDialog.open()
-                        }
-                    }
-
-                    Dialogs.FolderDialog {
-                        id: folderDialog
-                        title: "Select Default Data Directory"
-                        currentFolder: Qt.platform.os === "windows"
-                            ? "file:///" + MOTIONInterface.directory.replace("\\", "/")
-                            : MOTIONInterface.directory
-
-                        onAccepted: {
-                            MOTIONInterface.directory = folderDialog.selectedFolder.toString().replace("file:///", "")
-                        }
-                    }
+                onScanSettingsClicked: {
+                    scanSettingsModal.setInitialSelection(
+                        maskToArray(leftMask),
+                        maskToArray(rightMask)
+                    )
+                    scanSettingsModal.open()
                 }
-            }
-        }
-
-        // RIGHT COLUMN (Status Panel + Histogram)
-        ColumnLayout {
-            spacing: 20
-
-            // Sensor Panel
-            Rectangle {
-                id: sensorSelection
-                width: 500
-                height: 360
-                color: "#1E1E20"
-                radius: 10
-                border.color: "#3E4E6F"
-                border.width: 2
-                
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.margins: 20
-                    spacing: 40
-
-                    // Left Sensor Column
-                    ColumnLayout {
-                        spacing: 10
-                        Layout.alignment: Qt.AlignHCenter
-
-                        SensorView {
-                            id: leftSensorView
-                            title: "Left Sensor"
-                            sensorSide: "left"
-                            connector: MOTIONInterface
-                        }
-
-                        ComboBox {
-                            id: leftSensorSelector
-                            Layout.preferredWidth: 200
-                            Layout.preferredHeight: 40
-                            model: sensorPatterns
-                            textRole: "name" 
-                            enabled: MOTIONInterface.leftSensorConnected
-                            opacity: enabled ? 1.0 : 0.4
-
-                            onCurrentIndexChanged: {
-                                switch (currentIndex) {
-                                    case 0: leftSensorView.sensorActive = [false,false,false,false,false,false,false,false]; break;  // 0x00
-                                    case 1: leftSensorView.sensorActive = [false,true,false,true,true,false,true,false]; break;  // 0x5A
-                                    case 2: leftSensorView.sensorActive = [false,true,true,false,false,true,true,false]; break;  // 0x66
-                                    case 3: leftSensorView.sensorActive = [true,false,true,false,false,true,false,true]; break;  // 0xA5
-                                    case 4: leftSensorView.sensorActive = [true,false,false,true,true,false,false,true]; break;  // 0x99
-                                    case 5: leftSensorView.sensorActive = [false,false,false,false,true,true,true,true]; break;  // 0x0F
-                                    case 6: leftSensorView.sensorActive = [true,true,true,true,false,false,false,false]; break;  // 0xF0
-                                    case 7: leftSensorView.sensorActive = [false,true,false,false,false,false,true,false]; break;  // 0x42 Third Row
-                                    case 8: leftSensorView.sensorActive = [true,true,true,true,true,true,true,true]; break;  // 0xFF
-                                }
-                            }
-
-                            Component.onCompleted: {
-                                currentIndex = indexForMask(bloodFlow.defaultLeftMask)
-                                leftSensorView.sensorActive = arrayFromMask(bloodFlow.defaultLeftMask)
-                            }
-                        }
-                    }
-
-                    // Right Sensor Column
-                    ColumnLayout {
-                        spacing: 10
-                        Layout.alignment: Qt.AlignHCenter
-
-                        SensorView {
-                            id: rightSensorView
-                            title: "Right Sensor"
-                            sensorSide: "right"
-                            connector: MOTIONInterface
-                        }
-
-                        ComboBox {
-                            id: rightSensorSelector
-                            Layout.preferredWidth: 200
-                            Layout.preferredHeight: 40
-                            model: sensorPatterns
-                            textRole: "name" 
-                            enabled: MOTIONInterface.rightSensorConnected
-                            opacity: enabled ? 1.0 : 0.4
-
-                            onCurrentIndexChanged: {
-                                switch (currentIndex) {
-                                    case 0: rightSensorView.sensorActive = [false,false,false,false,false,false,false,false]; break;  // 0x00
-                                    case 1: rightSensorView.sensorActive = [false,true,false,true,true,false,true,false]; break;  // 0x5A
-                                    case 2: rightSensorView.sensorActive = [false,true,true,false,false,true,true,false]; break;  // 0x66
-                                    case 3: rightSensorView.sensorActive = [true,false,true,false,false,true,false,true]; break;  // 0xA5
-                                    case 4: rightSensorView.sensorActive = [true,false,false,true,true,false,false,true]; break;  // 0x99
-                                    case 5: rightSensorView.sensorActive = [false,false,false,false,true,true,true,true]; break;  // 0x0F
-                                    case 6: rightSensorView.sensorActive = [true,true,true,true,false,false,false,false]; break;  // 0xF0
-                                    case 7: rightSensorView.sensorActive = [false,true,false,false,false,false,true,false]; break;  // 0x42 Third Row
-                                    case 8: rightSensorView.sensorActive = [true,true,true,true,true,true,true,true]; break;  // 0xFF
-                                }                                
-                            }
-
-                            Component.onCompleted: {
-                                currentIndex = indexForMask(bloodFlow.defaultRightMask)
-                                rightSensorView.sensorActive = arrayFromMask(bloodFlow.defaultRightMask)
-                            }
-                        }
-                    }
-                }
+                onSessionClicked: sessionModal.open()
+                onHistoryClicked: historyModal.open()
+                onLogClicked: scanDialog.open()
+                onSettingsClicked: settingsModal.open()
             }
 
-            // Status Panel (Connection Indicators)
-            Rectangle {
-                id: statusPanel
-                width: 500
-                height: 120
-                color: "#1E1E20"
-                radius: 10
-                border.color: "#3E4E6F"
-                border.width: 2
-                
-
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.margins: 10
-                    spacing: 20
-
-                    // Right Column: status and indicators
-                    ColumnLayout {
-                        spacing: 10
-                        Layout.preferredWidth: statusPanel.width/2
-                        Layout.fillHeight: true
-                        Layout.alignment: Qt.AlignVCenter | Qt.AlignHCenter
-
-                        Item { Layout.fillWidth: true }
-
-                        RowLayout {
-                            spacing: 30
-                            Layout.alignment: Qt.AlignHCenter
-
-                            // Sensor Indicator
-                            ColumnLayout {
-                                spacing: 2
-                                Layout.alignment: Qt.AlignHCenter
-
-                                Text {
-                                    text: "Sensors"
-                                    font.pixelSize: 14
-                                    color: "#BDC3C7"
-                                    horizontalAlignment: Text.AlignHCenter
-                                }
-
-                                RowLayout {
-                                    spacing: 4
-                                    Layout.alignment: Qt.AlignHCenter
-
-                                    Rectangle {
-                                        width: 20; height: 20; radius: 10
-                                        color: MOTIONInterface.leftSensorConnected ? "green" : "red"
-                                        border.color: "black"; border.width: 1
-                                    }
-
-                                    Rectangle {
-                                        width: 20; height: 20; radius: 10
-                                        color: MOTIONInterface.rightSensorConnected ? "green" : "red"
-                                        border.color: "black"; border.width: 1
-                                    }
-                                }
-                            }
-
-                            // Console Indicator
-                            ColumnLayout {
-                                spacing: 4
-                                Layout.alignment: Qt.AlignHCenter
-
-                                Text {
-                                    text: "Console"
-                                    font.pixelSize: 14
-                                    color: "#BDC3C7"
-                                    horizontalAlignment: Text.AlignHCenter
-                                    Layout.alignment: Qt.AlignHCenter
-                                }
-
-                                Rectangle {
-                                    width: 20; height: 20; radius: 10
-                                    color: MOTIONInterface.consoleConnected ? "green" : "red"
-                                    border.color: "black"; border.width: 1
-                                    Layout.alignment: Qt.AlignHCenter
-                                }
-                            }
-
-                            // Laser Indicator
-                            ColumnLayout {
-                                spacing: 4
-                                Layout.alignment: Qt.AlignHCenter
-
-                                Text {
-                                    text: "Laser"
-                                    font.pixelSize: 14
-                                    color: "#BDC3C7"
-                                    horizontalAlignment: Text.AlignHCenter
-                                    Layout.alignment: Qt.AlignHCenter
-                                }
-
-                                Rectangle {
-                                    width: 20; height: 20; radius: 10
-                                    color: MOTIONInterface.triggerState === "ON" ? "green" : "red"
-                                    border.color: "black"; border.width: 1
-                                    Layout.alignment: Qt.AlignHCenter
-                                }
-                            }
-
-                            // Failure Indicator
-                            RowLayout {
-                                spacing: 6
-                                Layout.alignment: Qt.AlignHCenter
-
-                                ColumnLayout {
-                                    spacing: 4
-                                    Layout.alignment: Qt.AlignHCenter
-
-                                    Text {
-                                        text: "Safety"
-                                        font.pixelSize: 14
-                                        color: "#BDC3C7"
-                                        horizontalAlignment: Text.AlignHCenter
-                                        Layout.alignment: Qt.AlignHCenter
-                                    }
-
-                                    Rectangle {
-                                        width: 20; height: 20; radius: 10
-                                        color: MOTIONInterface.safetyFailure ? "red" : "green"
-                                        border.color: "black"; border.width: 1
-                                        Layout.alignment: Qt.AlignHCenter
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Controls
-            Rectangle {
-                id: controlPanel
-                width: 500
-                height: 160
-                color: "#1E1E20"
-                radius: 10
-                border.color: "#3E4E6F"
-                border.width: 2
-
-                // public duration value (seconds)
-                property int durationSec: 16
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 16
-                    spacing: 12
-
-                    // === Duration row ===
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 12
-
-                        Text {
-                            text: "Duration:"
-                            color: "#BDC3C7"
-                            font.pixelSize: 14
-                            Layout.alignment: Qt.AlignVCenter
-                        }
-
-                        Slider {
-                            id: durationSlider
-                            from: 16
-                            to: 43200
-                            stepSize: 1
-                            snapMode: Slider.SnapOnRelease
-                            value: controlPanel.durationSec
-                            Layout.fillWidth: true
-                            onValueChanged: controlPanel.durationSec = Math.round(value)
-                        }
-
-                        TextField {
-                            id: durationEdit
-                            text: String(controlPanel.durationSec)
-                            inputMethodHints: Qt.ImhDigitsOnly
-                            validator: IntValidator { bottom: 0; top: 43200  }
-                            font.pixelSize: 14
-                            color: "white"
-                            horizontalAlignment: Text.AlignHCenter
-                            Layout.preferredWidth: 80
-                            background: Rectangle {
-                                color: "#2E2E33"; radius: 4
-                                border.color: "#3E4E6F"; border.width: 1
-                            }
-
-                            // keep in sync with slider, clamp 0..43200 
-                            onEditingFinished: {
-                                let v = parseInt(text);
-                                if (isNaN(v)) v = controlPanel.durationSec;
-                                v = Math.max(0, Math.min(43200, v));
-                                controlPanel.durationSec = v;
-                                durationSlider.value = v;
-                                text = String(v);
-                            }
-                        }
-
-                        Text {
-                            text: "sec"
-                            color: "#BDC3C7"
-                            font.pixelSize: 14
-                            Layout.alignment: Qt.AlignVCenter
-                        }
-                    }
-
-                    // spacer pushes buttons to bottom
-                    Item { Layout.fillHeight: true }
-
-                    // === Bottom buttons ===
-                    RowLayout {
-                        Layout.alignment: Qt.AlignHCenter
-                        spacing: 40
-
-                        Button {
-                            id: btnStartScan
-                            text: "Start Scan"
-                            Layout.preferredWidth: 140
-                            Layout.preferredHeight: 60
-                            hoverEnabled: enabled
-                            enabled: MOTIONInterface.consoleConnected && (MOTIONInterface.leftSensorConnected || MOTIONInterface.rightSensorConnected)
-
-                            contentItem: Text {
-                                text: parent.text
-                                font.pixelSize: 16
-                                color: parent.enabled ? "#BDC3C7" : "#7F8C8D"
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
-                            }
-                            background: Rectangle {
-                                color: !parent.enabled ? "#3A3F4B" : parent.hovered ? "#4A90E2" : "#3A3F4B"
-                                border.color: !parent.enabled ? "#7F8C8D" : parent.hovered ? "#FFFFFF" : "#BDC3C7"
-                                radius: 4
-                            }
-                            onClicked: {
-                                console.log("Start Scan", controlPanel.durationSec, "sec");
-                                // start scan
-                                // MOTIONInterface.startTrigger() 
-                                //scanDialog.message = "Scanning"
-                                //scanDialog.open()
-                                
-                                scanDialog.message = "Scanning…";
-                                scanDialog.stageText = "Preparing…";
-                                scanDialog.progress = 1;
-                                scanDialog.open();
-                                meanPlotWindow.startScan(bloodFlow.leftMask, bloodFlow.rightMask);
-                                scanRunner.start();
-                            }
-                        }
-                        
-                    }
-                }
-            }
-
-
-        }
-
-    }
-    
-    // **Connections for MOTIONConnector signals**
-    Connections {
-        target: MOTIONInterface
-
-        function onSignalConnected(descriptor, port) {
-            console.log(descriptor + " connected on " + port);
-
-            if ((descriptor || "").toUpperCase() === "CONSOLE") {
-                
+            EmbeddedRealtimePlot {
+                id: embeddedPlot
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                showBfiBvi:  settingsModal.showBfiBvi
+                bfiMin:      settingsModal.bfiMin
+                bfiMax:      settingsModal.bfiMax
+                bviMin:      settingsModal.bviMin
+                bviMax:      settingsModal.bviMax
+                meanMin:     settingsModal.meanMin
+                meanMax:     settingsModal.meanMax
+                contrastMin: settingsModal.contrastMin
+                contrastMax: settingsModal.contrastMax
+                previewLeftMask:  bloodFlow.leftMask
+                previewRightMask: bloodFlow.rightMask
             }
         }
-
-        function onSignalDisconnected(descriptor, port) {
-            console.log(descriptor + " disconnected from " + port);
-
-            if ((descriptor || "").toUpperCase() === "CONSOLE") {
-            }
-        }
-
-        function onSignalDataReceived(descriptor, message) {
-            console.log("Data from " + descriptor + ": " + message);
-        }
-        
-        function onConnectionStatusChanged() {
-            if (!MOTIONInterface.leftSensorConnected) {
-                leftSensorSelector.currentIndex = 0
-                leftSensorView.resetCamerasWhenDisconnected()
-            } else {
-                leftSensorSelector.currentIndex = indexForMask(bloodFlow.defaultLeftMask)
-                leftSensorView.sensorActive = arrayFromMask(bloodFlow.defaultLeftMask)
-            }
-            if (!MOTIONInterface.rightSensorConnected) {
-                rightSensorSelector.currentIndex = 0
-                rightSensorView.resetCamerasWhenDisconnected()
-            } else {
-                rightSensorSelector.currentIndex = indexForMask(bloodFlow.defaultRightMask)
-                rightSensorView.sensorActive = arrayFromMask(bloodFlow.defaultRightMask)
-            }
-        }
-        
-        function onLaserStateChanged() {          
-        }
-        
-        function onSafetyFailureStateChanged() {          
-        }
-
     }
 
-    Component.onDestruction: {
-        console.log("Closing UI, clearing MOTIONInterface...");
+    // ===== MODALS =====
+    ScanSettingsModal {
+        id: scanSettingsModal
+        onSelectionChanged: function(newLeftMask, newRightMask) {
+            bloodFlow.freeRun = scanSettingsModal.freeRun
+            bloodFlow.durationSec = scanSettingsModal.freeRun ? 43200 : scanSettingsModal.durationSec
+            bloodFlow.leftMask = newLeftMask
+            bloodFlow.rightMask = newRightMask
+        }
+    }
+
+    SessionModal {
+        id: sessionModal
+    }
+
+    HistoryModal {
+        id: historyModal
+    }
+
+    SettingsModal {
+        id: settingsModal
     }
 
     ScanProgressDialog {
         id: scanDialog
-        onCancelRequested: {
-            if (scanDialog.done) {
-                // After success or error review, Close should just dismiss
-                scanDialog.close()
-            } else {
-                // While running, Cancel should actually cancel the scan
-                scanRunner.cancel()
-            }
-        }
     }
 
+    // ===== SCAN RUNNER =====
     ScanRunner {
         id: scanRunner
-        // connector: use the globally-exposed connector if it exists, else null
         connector: MOTIONInterface
-
-        // inputs with safe fallbacks
         leftMask: bloodFlow.leftMask
         rightMask: bloodFlow.rightMask
-        
-        durationSec: controlPanel.durationSec
-        subjectId: subjectIdField.text
-        dataDir: directoryField.text
-        disableLaser: false                        // add a checkbox later 
+        durationSec: bloodFlow.durationSec
+        subjectId: MOTIONInterface.sessionId
+        dataDir: MOTIONInterface.directory
+        disableLaser: false
         laserOn: true
         laserPower: 50
         triggerConfig: (typeof appTriggerConfig !== "undefined") ? appTriggerConfig : ({
@@ -707,47 +264,92 @@ Rectangle {
             "EnableTaTrigger": true
         })
 
-
         onStageUpdate: function(txt) {
-            if (!scanDialog.visible) scanDialog.open();
-            scanDialog.stageText = txt;
+            scanDialog.stageText = txt
         }
         onProgressUpdate: function(pct) {
-            if (!scanDialog.visible) scanDialog.open();
-            scanDialog.progress = pct;
+            scanDialog.progress = pct
         }
-        onMessageOut: function(line) { 
+        onMessageOut: function(line) {
             scanDialog.appendLog(line)
             console.log(line)
         }
         onScanFinished: function(ok, err, left, right) {
+            bloodFlow.scanning = false
 
             if (err === "Canceled") {
-                // Cancel should CLOSE the dialog
                 scanDialog.close()
-                meanPlotWindow.stopScan()
+                embeddedPlot.stopScan()
                 return
             }
 
             if (!ok) {
-                scanDialog.appendLog("ERROR: " + err);
-                scanDialog.stageText = "Error during capture";
-                // keep it open so you can read the error
+                scanDialog.appendLog("ERROR: " + err)
+                scanDialog.stageText = "Error during capture"
                 scanDialog.done = true
-                meanPlotWindow.stopScan()
-                return;
+                embeddedPlot.stopScan()
+                return
             }
 
-            // Success: keep open if you want, but make the button say Close
             scanDialog.stageText = "Capture complete"
             scanDialog.progress = 100
             scanDialog.done = true
-            meanPlotWindow.stopScan()
-            // scanDialog.close();
+            embeddedPlot.stopScan()
         }
     }
 
-    RealtimeMeanPlotWindow {
-        id: meanPlotWindow
+    // ===== CONNECTIONS =====
+    Connections {
+        target: MOTIONInterface
+
+        function onSignalConnected(descriptor, port) {
+            console.log(descriptor + " connected on " + port)
+            // Auto-flash default cameras when sensors connect
+            if ((descriptor || "").toUpperCase().indexOf("SENSOR") >= 0) {
+                Qt.callLater(function() {
+                    if (!bloodFlow.scanning && !bloodFlow.configuring) {
+                        var cfg      = MOTIONInterface.appConfig;
+                        var defLeft  = cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99;
+                        var defRight = cfg.rightMask !== undefined ? cfg.rightMask : 0x99;
+                        if (MOTIONInterface.leftSensorConnected)  bloodFlow.leftMask  = defLeft;
+                        if (MOTIONInterface.rightSensorConnected) bloodFlow.rightMask = defRight;
+                        if (cfg.autoConfigureOnStartup !== false)
+                            flashDefaultCameras()
+                    }
+                })
+            }
+        }
+
+        function onSignalDisconnected(descriptor, port) {
+            console.log(descriptor + " disconnected from " + port)
+        }
+
+        function onConnectionStatusChanged() {
+            // Reset camera ready state if sensors disconnect
+            if (!MOTIONInterface.leftSensorConnected && !MOTIONInterface.rightSensorConnected) {
+                bloodFlow.camerasReady = false
+            }
+        }
+
+        function onConfigFinished(ok, err) {
+            bloodFlow.configuring = false
+            bloodFlow.camerasReady = true  // always unblock; allConnected is the real gate
+            if (ok) {
+                console.log("Camera configuration complete")
+            } else {
+                console.log("Camera configuration failed: " + err)
+            }
+        }
+
+        function onLaserStateChanged() {}
+        function onSafetyFailureStateChanged() {}
+    }
+
+    Component.onCompleted: {
+        applyDefaultCameras()
+    }
+
+    Component.onDestruction: {
+        console.log("Closing UI, clearing MOTIONInterface...")
     }
 }
