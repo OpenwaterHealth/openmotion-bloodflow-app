@@ -1077,16 +1077,18 @@ class MOTIONConnector(QObject):
             ts = parts[0] + "_" + parts[1]
             subject = parts[2] if len(parts) > 2 else ""
             notes_path = base / f"{scan_id}_notes.txt"
-            left  = next(base.glob(f"{scan_id}_left_mask*.csv"), None)
-            right = next(base.glob(f"{scan_id}_right_mask*.csv"), None)
+            left      = next(base.glob(f"{scan_id}_left_mask*.csv"), None)
+            right     = next(base.glob(f"{scan_id}_right_mask*.csv"), None)
+            corrected = next(base.glob(f"{scan_id}_corrected.csv"), None)
         else:
             # Old format: sessionId_YYYYMMDD_HHMMSS
             parts = scan_id.split("_", 1)
             subject = parts[0]
             ts = parts[1] if len(parts) > 1 else ""
             notes_path = base / f"scan_{scan_id}_notes.txt"
-            left  = next(base.glob(f"scan_{scan_id}_left_mask*.csv"), None)
-            right = next(base.glob(f"scan_{scan_id}_right_mask*.csv"), None)
+            left      = next(base.glob(f"scan_{scan_id}_left_mask*.csv"), None)
+            right     = next(base.glob(f"scan_{scan_id}_right_mask*.csv"), None)
+            corrected = next(base.glob(f"scan_{scan_id}_corrected.csv"), None)
 
         left_mask = ""
         right_mask = ""
@@ -1113,6 +1115,7 @@ class MOTIONConnector(QObject):
             "rightMask": right_mask,
             "leftPath": str(left) if left else "",
             "rightPath": str(right) if right else "",
+            "correctedPath": str(corrected) if corrected else "",
             "notesPath": str(notes_path),
             "notes": notes,
         }
@@ -2264,6 +2267,68 @@ class MOTIONConnector(QObject):
             self.visualizingChanged.emit(False)
             self.vizFinished.emit()
 
+    @pyqtSlot(str, result=bool)
+    def visualize_corrected(self, corrected_csv: str) -> bool:
+        """Plot BFI/BVI from a _corrected.csv using plot_corrected_scan from the SDK."""
+        return self._launch_correct_viz(corrected_csv, mode="bfi")
+
+    @pyqtSlot(str, result=bool)
+    def visualize_corrected_signal(self, corrected_csv: str) -> bool:
+        """Plot contrast/mean from a _corrected.csv using plot_corrected_scan from the SDK."""
+        return self._launch_correct_viz(corrected_csv, mode="signal")
+
+    def _launch_correct_viz(self, corrected_csv: str, mode: str) -> bool:
+        corrected_csv = (corrected_csv or "").strip()
+        if not corrected_csv:
+            self.errorOccurred.emit("No corrected CSV file found for this scan.")
+            return False
+        if not Path(corrected_csv).exists():
+            self.errorOccurred.emit(f"Corrected CSV not found:\n{corrected_csv}")
+            return False
+
+        logger.info(f"Visualizing corrected scan ({mode}): {corrected_csv}")
+        self.visualizingChanged.emit(True)
+
+        self._correct_viz_thread = QThread(self)
+        self._correct_viz_worker = _CorrectVizWorker(corrected_csv, mode=mode)
+        self._correct_viz_worker.moveToThread(self._correct_viz_thread)
+
+        self._correct_viz_thread.started.connect(self._correct_viz_worker.run)
+        self._correct_viz_worker.resultsReady.connect(self._onCorrectVizResults)
+        self._correct_viz_worker.error.connect(self._onCorrectVizError)
+        self._correct_viz_worker.finished.connect(self._correct_viz_thread.quit)
+        self._correct_viz_worker.finished.connect(self._correct_viz_worker.deleteLater)
+        self._correct_viz_thread.finished.connect(self._correct_viz_thread.deleteLater)
+        self._correct_viz_thread.start()
+        return True
+
+    @pyqtSlot(object)
+    def _onCorrectVizResults(self, payload: dict):
+        try:
+            import matplotlib.pyplot as plt
+            plt.close("all")
+            mod = payload["mod"]
+            kwargs = dict(
+                cells=payload["cells"],
+                row_map=payload["row_map"],
+                col_map=payload["col_map"],
+                n_rows=payload["n_rows"],
+                n_cols=payload["n_cols"],
+            )
+            mod._make_figure(payload["df"], mode=payload["mode"], **kwargs)
+            plt.show(block=False)
+        except Exception as e:
+            logger.exception("Corrected scan visualization display failed")
+            self.errorOccurred.emit(f"Visualization display failed:\n{e}")
+        finally:
+            self.visualizingChanged.emit(False)
+            self.vizFinished.emit()
+
+    @pyqtSlot(str)
+    def _onCorrectVizError(self, msg: str):
+        self.visualizingChanged.emit(False)
+        self.errorOccurred.emit(f"Corrected visualization failed:\n{msg}")
+
     @pyqtSlot(str, str, result=bool)
     def startPostProcess(self, left_raw: str, right_raw: str) -> bool:
         """
@@ -2376,6 +2441,62 @@ class MOTIONConnector(QObject):
     @property
     def interface(self):
         return motion_interface
+
+
+def _load_plot_corrected_scan():
+    """Load plot_corrected_scan.py from the SDK data-processing folder."""
+    import importlib.util
+    script_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "openmotion-sdk", "data-processing", "plot_corrected_scan.py",
+    )
+    if not os.path.isfile(script_path):
+        raise FileNotFoundError(f"plot_corrected_scan.py not found at: {script_path}")
+    spec = importlib.util.spec_from_file_location("plot_corrected_scan", script_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class _CorrectVizWorker(QObject):
+    finished = pyqtSignal()
+    error = pyqtSignal(str)
+    resultsReady = pyqtSignal(object)
+
+    def __init__(self, corrected_csv: str, mode: str = "bfi"):
+        super().__init__()
+        self.corrected_csv = corrected_csv
+        self.mode = mode
+
+    @pyqtSlot()
+    def run(self):
+        try:
+            import pandas as pd
+            mod = _load_plot_corrected_scan()
+            df = pd.read_csv(self.corrected_csv)
+            if "timestamp_s" not in df.columns:
+                raise ValueError(
+                    "'timestamp_s' column not found — is this a _corrected.csv file?"
+                )
+            active_sides = mod._requested_sides(df, "both")
+            if not active_sides:
+                raise ValueError("No camera data found in corrected CSV.")
+            cells = mod._active_cells(df, active_sides)
+            row_map, col_map, n_rows, n_cols = mod._collapse(cells)
+            self.resultsReady.emit({
+                "mod": mod,
+                "df": df,
+                "cells": cells,
+                "row_map": row_map,
+                "col_map": col_map,
+                "n_rows": n_rows,
+                "n_cols": n_cols,
+                "mode": self.mode,
+            })
+        except Exception as e:
+            self.error.emit(str(e))
+        finally:
+            self.finished.emit()
 
 
 # --- worker to run visualiztion ---

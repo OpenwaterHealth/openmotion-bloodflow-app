@@ -261,6 +261,46 @@ Item {
                             }
                         }
 
+                        Button {
+                            text: "Plot Corrected Scan"
+                            Layout.fillWidth: true; Layout.preferredHeight: 36
+                            enabled: !!(selected.correctedPath)
+                            hoverEnabled: enabled
+                            contentItem: Text {
+                                text: parent.text; font.pixelSize: 13
+                                color: parent.enabled ? "#BDC3C7" : "#7F8C8D"
+                                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                            }
+                            background: Rectangle {
+                                color: !parent.enabled ? "#3A3F4B" : parent.hovered ? "#4A90E2" : "#3A3F4B"
+                                border.color: !parent.enabled ? "#7F8C8D" : parent.hovered ? "#FFFFFF" : "#BDC3C7"; radius: 4
+                            }
+                            onClicked: {
+                                root.visualizing = true
+                                MOTIONInterface.visualize_corrected(selected.correctedPath || "")
+                            }
+                        }
+
+                        Button {
+                            text: "Plot Mean / Contrast"
+                            Layout.fillWidth: true; Layout.preferredHeight: 36
+                            enabled: !!(selected.correctedPath)
+                            hoverEnabled: enabled
+                            contentItem: Text {
+                                text: parent.text; font.pixelSize: 13
+                                color: parent.enabled ? "#BDC3C7" : "#7F8C8D"
+                                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                            }
+                            background: Rectangle {
+                                color: !parent.enabled ? "#3A3F4B" : parent.hovered ? "#4A90E2" : "#3A3F4B"
+                                border.color: !parent.enabled ? "#7F8C8D" : parent.hovered ? "#FFFFFF" : "#BDC3C7"; radius: 4
+                            }
+                            onClicked: {
+                                root.visualizing = true
+                                MOTIONInterface.visualize_corrected_signal(selected.correctedPath || "")
+                            }
+                        }
+
                         Item { Layout.fillHeight: true }
                     }
                 }
