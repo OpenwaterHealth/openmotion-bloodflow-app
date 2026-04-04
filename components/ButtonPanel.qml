@@ -51,51 +51,52 @@ Rectangle {
             Layout.preferredWidth: 68
             Layout.preferredHeight: 68
             Layout.alignment: Qt.AlignHCenter
-            Layout.topMargin: 8
 
-            // Coloured circle
-            Rectangle {
-                id: startStopCircle
-                anchors.top: parent.top
-                anchors.horizontalCenter: parent.horizontalCenter
-                width: 36; height: 36; radius: 18
-                color: panel.scanning ? "#E74C3C"
-                     : panel.waiting  ? "#F1C40F"
-                     :                  "#2ECC71"
-                Behavior on color { ColorAnimation { duration: 150 } }
+            ColumnLayout {
+                anchors.centerIn: parent
+                spacing: 3
 
-                // Play triangle (start / waiting)
-                Canvas {
-                    anchors.centerIn: parent
-                    width: 16; height: 16
-                    visible: !panel.scanning
-                    onPaint: {
-                        var ctx = getContext("2d")
-                        ctx.clearRect(0, 0, width, height)
-                        ctx.fillStyle = "#FFFFFF"
-                        ctx.beginPath()
-                        ctx.moveTo(3, 1); ctx.lineTo(15, 8); ctx.lineTo(3, 15)
-                        ctx.closePath(); ctx.fill()
+                // Coloured circle
+                Rectangle {
+                    id: startStopCircle
+                    Layout.alignment: Qt.AlignHCenter
+                    width: 36; height: 36; radius: 18
+                    color: panel.scanning ? "#E74C3C"
+                         : panel.waiting  ? "#F1C40F"
+                         :                  "#2ECC71"
+                    Behavior on color { ColorAnimation { duration: 150 } }
+
+                    // Play triangle (start / waiting)
+                    Canvas {
+                        anchors.centerIn: parent
+                        width: 16; height: 16
+                        visible: !panel.scanning
+                        onPaint: {
+                            var ctx = getContext("2d")
+                            ctx.clearRect(0, 0, width, height)
+                            ctx.fillStyle = "#FFFFFF"
+                            ctx.beginPath()
+                            ctx.moveTo(3, 1); ctx.lineTo(15, 8); ctx.lineTo(3, 15)
+                            ctx.closePath(); ctx.fill()
+                        }
+                    }
+
+                    // Stop square
+                    Rectangle {
+                        anchors.centerIn: parent
+                        width: 11; height: 11
+                        color: "#FFFFFF"
+                        visible: panel.scanning
                     }
                 }
 
-                // Stop square
-                Rectangle {
-                    anchors.centerIn: parent
-                    width: 11; height: 11
-                    color: "#FFFFFF"
-                    visible: panel.scanning
+                Text {
+                    text: panel.scanning ? "Stop" : "Start"
+                    font.pixelSize: 10
+                    color: (panel.camerasReady && panel.allConnected) ? "#BDC3C7" : "#555555"
+                    horizontalAlignment: Text.AlignHCenter
+                    Layout.alignment: Qt.AlignHCenter
                 }
-            }
-
-            Text {
-                anchors.top: startStopCircle.bottom
-                anchors.topMargin: 3
-                anchors.horizontalCenter: parent.horizontalCenter
-                text: panel.scanning ? "Stop" : "Start"
-                font.pixelSize: 10
-                color: (panel.camerasReady && panel.allConnected) ? "#BDC3C7" : "#555555"
-                horizontalAlignment: Text.AlignHCenter
             }
 
             // Hover / press highlight background
