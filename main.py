@@ -82,6 +82,7 @@ def _load_app_config() -> dict:
         "dataDirectory": None,
         "writeRawCsv": True,
         "rawCsvDurationSec": None,
+        "invertPlotAxes": True,
     }
     config_path = resource_path("config", "app_config.json")
     if not config_path.exists():

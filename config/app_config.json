@@ -1,7 +1,7 @@
 {
   "forceLaserFail": false,
   "cameraTempAlertThresholdC": 90,
-  "sensorDebugLogging": false,
+  "sensorDebugLogging": true,
   "cameraFakeData": false,
   "output_path": null,
   "histoThrottle": false,
@@ -29,14 +29,12 @@
     0.25,
     0.25
   ],
-  "writeRawCsv": true,
-  "rawCsvDurationSec": 60,
   "leftMask": 102,
   "rightMask": 102,
   "uncorrectedOnly": true,
   "autoConfigureOnStartup": false,
   "developerMode": true,
-  "showBfiBvi": false,
+  "showBfiBvi": true,
   "bfiMin": 0.0,
   "bfiMax": 10.0,
   "bviMin": 0.0,
@@ -45,5 +43,8 @@
   "meanMax": 200.0,
   "contrastMin": 0.0,
   "contrastMax": 0.7,
-  "dataDirectory": null
+  "dataDirectory": null,
+  "writeRawCsv": false,
+  "rawCsvDurationSec": 60,
+  "invertPlotAxes": true
 }

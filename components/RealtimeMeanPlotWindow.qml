@@ -19,6 +19,7 @@ Window {
     property real latestTimestamp: 0
     property color bfiColor: "#E74C3C"
     property color bviColor: "#3498DB"
+    property bool invertPlotAxes: MOTIONInterface.appConfig.invertPlotAxes !== undefined ? !!MOTIONInterface.appConfig.invertPlotAxes : true
     property int plotColumns: 2
     property int leftActiveCount: 0
     property int rightActiveCount: 0
@@ -311,13 +312,17 @@ Window {
                                 function drawSeries(series, color, bounds) {
                                     if (series.length < 2)
                                         return
+                                    const invert = meanWindow.invertPlotAxes
                                     ctx.strokeStyle = color
                                     ctx.lineWidth = 2
                                     ctx.beginPath()
                                     for (let j = 0; j < series.length; j++) {
                                         const pt = series[j]
                                         const x = pad + ((pt.t - xMin) / (xMax - xMin)) * w
-                                        const y = pad + h - ((pt.v - bounds.minVal) / bounds.range) * h
+                                        const frac = (pt.v - bounds.minVal) / bounds.range
+                                        const y = invert
+                                            ? pad + frac * h
+                                            : pad + h - frac * h
                                         if (j === 0)
                                             ctx.moveTo(x, y)
                                         else

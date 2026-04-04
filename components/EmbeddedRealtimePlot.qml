@@ -22,6 +22,7 @@ Rectangle {
     property int  plotRows: (leftActiveCount === 8 || rightActiveCount === 8) ? 4 : 2
     property bool showBfiBvi: true
     property bool developerMode: MOTIONInterface.appConfig.developerMode ? true : false
+    property bool invertPlotAxes: MOTIONInterface.appConfig.invertPlotAxes !== undefined ? !!MOTIONInterface.appConfig.invertPlotAxes : true
 
     // Fixed plot bounds — configurable from Settings
     property real bfiMin: 0.0
@@ -421,17 +422,19 @@ Rectangle {
                                 // Draw a data series
                                 function drawSeries(series, color, bounds) {
                                     if (series.length < 2) return
-                                    const invR = bounds.range > 0 ? 1.0 / bounds.range : 1.0
-                                    const mn   = bounds.minVal
+                                    const invR   = bounds.range > 0 ? 1.0 / bounds.range : 1.0
+                                    const mn     = bounds.minVal
+                                    const invert = plotArea.invertPlotAxes
                                     ctx.strokeStyle = color
                                     ctx.lineWidth   = 2
                                     ctx.beginPath()
-                                    ctx.moveTo(padL + ((series[0].t - xMin) / xRange) * w,
-                                               padT + h - ((series[0].v - mn) * invR) * h)
+                                    const yFor = (v) => invert
+                                        ? padT + ((v - mn) * invR) * h
+                                        : padT + h - ((v - mn) * invR) * h
+                                    ctx.moveTo(padL + ((series[0].t - xMin) / xRange) * w, yFor(series[0].v))
                                     for (let j = 1; j < series.length; j++) {
                                         const pt = series[j]
-                                        ctx.lineTo(padL + ((pt.t - xMin) / xRange) * w,
-                                                   padT + h - ((pt.v - mn) * invR) * h)
+                                        ctx.lineTo(padL + ((pt.t - xMin) / xRange) * w, yFor(pt.v))
                                     }
                                     ctx.stroke()
                                 }
@@ -446,9 +449,12 @@ Rectangle {
                                     ctx.font         = "9px sans-serif"
                                     ctx.textBaseline = "middle"
                                     ctx.fillStyle    = color
+                                    const invert     = plotArea.invertPlotAxes
                                     for (let ti = 0; ti <= 2; ti++) {
                                         const frac = ti / 2.0
-                                        const val  = bounds.minVal + frac * bounds.range
+                                        const val  = invert
+                                            ? bounds.maxVal - frac * bounds.range
+                                            : bounds.minVal + frac * bounds.range
                                         const y    = padT + h * (1.0 - frac)
                                         if (isLeft) {
                                             ctx.textAlign = "right"
