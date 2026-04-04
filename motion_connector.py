@@ -390,7 +390,7 @@ class MOTIONConnector(QObject):
                     refresh_cache()  # fallback: fill cache without power cycle (may get zeros for off cameras)
         except Exception as e:
             logger.debug("Could not refresh sensor ID cache for %s: %s", side, e)
-        self._interface.log_sensor_info(side)
+        # self._interface.log_sensor_info(side)
         self.connectionStatusChanged.emit()
 
     def _start_runlog(self, subject_id: str = None):
