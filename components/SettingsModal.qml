@@ -11,7 +11,8 @@ Item {
     z: 9998
 
     // Settings values
-    property int defaultCameraIndex: 4  // "Outer" by default
+    property int defaultLeftMaskIndex: 4   // "Outer" by default
+    property int defaultRightMaskIndex: 4
     property string dataOutputPath: MOTIONInterface.directory
     property bool showBfiBvi: true  // true = BFI/BVI, false = Mean/StdDev
     property real bfiMin: 0.0
@@ -21,27 +22,45 @@ Item {
 
     signal settingsChanged()
 
+    function maskToIndex(mask) {
+        for (var i = 0; i < cameraPatterns.count; i++) {
+            if (parseInt(cameraPatterns.get(i).maskHex, 16) === mask) return i
+        }
+        return 4  // fall back to "Outer"
+    }
+
+    function maskFromIndex(index) {
+        if (index < 0 || index >= cameraPatterns.count) return 0x99
+        return parseInt(cameraPatterns.get(index).maskHex, 16)
+    }
+
     function open() {
+        defaultLeftMaskIndex  = maskToIndex(MOTIONInterface.defaultLeftMask)
+        defaultRightMaskIndex = maskToIndex(MOTIONInterface.defaultRightMask)
         dataPathField.text = MOTIONInterface.directory
         root.visible = true
     }
     function close() {
         MOTIONInterface.directory = dataPathField.text
+        MOTIONInterface.saveDefaultMasks(
+            maskFromIndex(defaultLeftMaskIndex),
+            maskFromIndex(defaultRightMaskIndex)
+        )
         settingsChanged()
         root.visible = false
     }
 
     ListModel {
         id: cameraPatterns
-        ListElement { name: "None" }
-        ListElement { name: "Near" }
-        ListElement { name: "Middle" }
-        ListElement { name: "Far" }
-        ListElement { name: "Outer" }
-        ListElement { name: "Left" }
-        ListElement { name: "Right" }
-        ListElement { name: "Third Row" }
-        ListElement { name: "All" }
+        ListElement { name: "None";      maskHex: "0x00" }
+        ListElement { name: "Near";      maskHex: "0x5A" }
+        ListElement { name: "Middle";    maskHex: "0x66" }
+        ListElement { name: "Far";       maskHex: "0x55" }
+        ListElement { name: "Outer";     maskHex: "0x99" }
+        ListElement { name: "Left";      maskHex: "0x0F" }
+        ListElement { name: "Right";     maskHex: "0xF0" }
+        ListElement { name: "Third Row"; maskHex: "0x42" }
+        ListElement { name: "All";       maskHex: "0xFF" }
     }
 
     // Dimmed backdrop
@@ -107,16 +126,32 @@ Item {
                 RowLayout {
                     spacing: 12; Layout.fillWidth: true
 
-                    Text { text: "Pattern:"; color: "#BDC3C7"; font.pixelSize: 14; Layout.alignment: Qt.AlignVCenter }
+                    Text { text: "Left Sensor:"; color: "#BDC3C7"; font.pixelSize: 14; Layout.alignment: Qt.AlignVCenter; Layout.preferredWidth: 90 }
 
                     ComboBox {
-                        id: defaultCameraCombo
-                        Layout.preferredWidth: 200
+                        id: defaultLeftCombo
+                        Layout.preferredWidth: 160
                         Layout.preferredHeight: 36
                         model: cameraPatterns
                         textRole: "name"
-                        currentIndex: root.defaultCameraIndex
-                        onCurrentIndexChanged: root.defaultCameraIndex = currentIndex
+                        currentIndex: root.defaultLeftMaskIndex
+                        onCurrentIndexChanged: root.defaultLeftMaskIndex = currentIndex
+                    }
+                }
+
+                RowLayout {
+                    spacing: 12; Layout.fillWidth: true
+
+                    Text { text: "Right Sensor:"; color: "#BDC3C7"; font.pixelSize: 14; Layout.alignment: Qt.AlignVCenter; Layout.preferredWidth: 90 }
+
+                    ComboBox {
+                        id: defaultRightCombo
+                        Layout.preferredWidth: 160
+                        Layout.preferredHeight: 36
+                        model: cameraPatterns
+                        textRole: "name"
+                        currentIndex: root.defaultRightMaskIndex
+                        onCurrentIndexChanged: root.defaultRightMaskIndex = currentIndex
                     }
                 }
             }

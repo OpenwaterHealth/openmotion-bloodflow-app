@@ -183,6 +183,8 @@ def main():
         raw_csv_duration_sec=app_config.get("rawCsvDurationSec", None),
         uncorrected_only=app_config.get("uncorrectedOnly", False),
         output_path=output_base,
+        default_left_mask=app_config.get("leftMask", 0x66),
+        default_right_mask=app_config.get("rightMask", 0x66),
     )
     connector.set_eol_thresholds(
         app_config.get("eol_min_mean_per_camera"),

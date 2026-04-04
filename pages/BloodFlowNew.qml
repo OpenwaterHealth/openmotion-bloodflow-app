@@ -59,8 +59,8 @@ Rectangle {
         var defRight = (AppFlags && AppFlags.rightMask !== undefined) ? AppFlags.rightMask : 0x99;
         if (MOTIONInterface.leftSensorConnected)  leftMask  = defLeft;
         if (MOTIONInterface.rightSensorConnected) rightMask = defRight;
-        // If sensors connected, start flash immediately
-        if (MOTIONInterface.leftSensorConnected || MOTIONInterface.rightSensorConnected) {
+        if (AppFlags && AppFlags.autoConfigureOnStartup !== false &&
+                (MOTIONInterface.leftSensorConnected || MOTIONInterface.rightSensorConnected)) {
             flashDefaultCameras();
         }
     }
@@ -215,13 +215,8 @@ Rectangle {
         onSelectionChanged: function(newLeftMask, newRightMask) {
             bloodFlow.freeRun = scanSettingsModal.freeRun
             bloodFlow.durationSec = scanSettingsModal.freeRun ? 43200 : scanSettingsModal.durationSec
-            if (newLeftMask !== bloodFlow.leftMask || newRightMask !== bloodFlow.rightMask) {
-                bloodFlow.leftMask = newLeftMask
-                bloodFlow.rightMask = newRightMask
-                if (!scanning) {
-                    flashDefaultCameras()
-                }
-            }
+            bloodFlow.leftMask = newLeftMask
+            bloodFlow.rightMask = newRightMask
         }
     }
 
@@ -235,14 +230,6 @@ Rectangle {
 
     SettingsModal {
         id: settingsModal
-        onSettingsChanged: {
-            // Apply default camera config if changed
-            var newMask = patternToMask(settingsModal.defaultCameraIndex)
-            if (newMask !== bloodFlow.leftMask && !scanning) {
-                bloodFlow.leftMask = newMask
-                flashDefaultCameras()
-            }
-        }
     }
 
     ScanProgressDialog {

@@ -133,6 +133,7 @@ class MOTIONConnector(QObject):
 
     tecStatusChanged = pyqtSignal()
     tecDacChanged = pyqtSignal()
+    defaultMasksChanged = pyqtSignal()
 
     def __init__(
         self,
@@ -152,6 +153,8 @@ class MOTIONConnector(QObject):
         write_raw_csv=True,
         raw_csv_duration_sec=None,
         uncorrected_only=False,
+        default_left_mask=0x66,
+        default_right_mask=0x66,
     ):
         super().__init__(parent)
         self._interface = motion_interface
@@ -169,6 +172,8 @@ class MOTIONConnector(QObject):
         self._write_raw_csv = bool(write_raw_csv)
         self._raw_csv_duration_sec = float(raw_csv_duration_sec) if raw_csv_duration_sec is not None else None
         self._uncorrected_only = bool(uncorrected_only)
+        self._default_left_mask = int(default_left_mask)
+        self._default_right_mask = int(default_right_mask)
 
         # Configure logging with the provided level
         self._configure_logging(log_level)
@@ -1125,6 +1130,37 @@ class MOTIONConnector(QObject):
         self._directory = path
         logger.debug(f"[Connector] Default directory set to: {self._directory}")
         self.directoryChanged.emit()
+
+    @pyqtProperty(int, notify=defaultMasksChanged)
+    def defaultLeftMask(self):
+        return self._default_left_mask
+
+    @pyqtProperty(int, notify=defaultMasksChanged)
+    def defaultRightMask(self):
+        return self._default_right_mask
+
+    @pyqtSlot(int, int)
+    def saveDefaultMasks(self, left_mask: int, right_mask: int):
+        """Persist leftMask and rightMask to config/app_config.json."""
+        config_path = resource_path("config", "app_config.json")
+        try:
+            if config_path.exists():
+                with open(config_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            else:
+                data = {}
+            data["leftMask"] = left_mask
+            data["rightMask"] = right_mask
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            self._default_left_mask = left_mask
+            self._default_right_mask = right_mask
+            self.defaultMasksChanged.emit()
+            logger.info(
+                f"[Connector] Saved default masks: left=0x{left_mask:02X}, right=0x{right_mask:02X}"
+            )
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning(f"[Connector] Could not save default masks: {e}")
 
     @pyqtProperty(str, notify=scanNotesChanged)  # <-- add notify
     def scanNotes(self):
