@@ -3,6 +3,7 @@
   "cameraTempAlertThresholdC": 90,
   "sensorDebugLogging": false,
   "cameraFakeData": false,
+  "output_path": null,
   "histoThrottle": false,
   "histoCmp": false,
   "powerOffUnusedCameras": false,
@@ -43,5 +44,6 @@
   "meanMin": 0.0,
   "meanMax": 200.0,
   "contrastMin": 0.0,
-  "contrastMax": 0.7
+  "contrastMax": 0.7,
+  "dataDirectory": null
 }

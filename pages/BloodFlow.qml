@@ -16,8 +16,8 @@ Rectangle {
     radius: 20
     opacity: 0.95 // Slight transparency for the content area
 
-    property int defaultLeftMask:  (AppFlags && AppFlags.leftMask  !== undefined) ? AppFlags.leftMask  : 0x99
-    property int defaultRightMask: (AppFlags && AppFlags.rightMask !== undefined) ? AppFlags.rightMask : 0x99
+    property int defaultLeftMask:  MOTIONInterface.appConfig.leftMask  !== undefined ? MOTIONInterface.appConfig.leftMask  : 0x99
+    property int defaultRightMask: MOTIONInterface.appConfig.rightMask !== undefined ? MOTIONInterface.appConfig.rightMask : 0x99
     // property to store selected directory
     property string defaultDataDir: ""
 

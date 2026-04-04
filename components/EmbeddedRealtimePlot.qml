@@ -21,7 +21,7 @@ Rectangle {
     property int  rightActiveCount: 0
     property int  plotRows: (leftActiveCount === 8 || rightActiveCount === 8) ? 4 : 2
     property bool showBfiBvi: true
-    property bool developerMode: (AppFlags && AppFlags.developerMode) ? true : false
+    property bool developerMode: MOTIONInterface.appConfig.developerMode ? true : false
 
     // Fixed plot bounds — configurable from Settings
     property real bfiMin: 0.0

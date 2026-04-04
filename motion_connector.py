@@ -134,47 +134,40 @@ class MOTIONConnector(QObject):
 
     tecStatusChanged = pyqtSignal()
     tecDacChanged = pyqtSignal()
-    defaultMasksChanged = pyqtSignal()
+    appConfigChanged = pyqtSignal()
 
     def __init__(
         self,
+        app_config=None,
+        output_path=None,
         config_dir="config",
         parent=None,
         log_level=logging.INFO,
-        force_laser_fail=False,
-        camera_temp_alert_threshold_c=105.0,
-        sensor_debug_logging=False,
-        camera_fake_data=False,
-        histo_throttle=False,
-        histo_cmp=False,
-        output_path=None,
-        power_off_unused_cameras=False,
-        comm_verbose=False,
-        verbose_command_handling=False,
-        write_raw_csv=True,
-        raw_csv_duration_sec=None,
-        uncorrected_only=False,
-        default_left_mask=0x66,
-        default_right_mask=0x66,
     ):
         super().__init__(parent)
+        cfg = app_config or {}
+
+        # Store the full config dict — exposed to QML as appConfig property
+        self._app_config = dict(cfg)
+
         self._interface = motion_interface
         self._scan_workflow = self._interface.scan_workflow
-        self._force_laser_fail = force_laser_fail
-        self._camera_temp_alert_threshold_c = float(camera_temp_alert_threshold_c)
-        self._sensor_debug_logging = bool(sensor_debug_logging)
-        self._camera_fake_data = bool(camera_fake_data)
-        self._histo_throttle = bool(histo_throttle)
-        self._histo_cmp = bool(histo_cmp)
-        self._comm_verbose = bool(comm_verbose)
-        self._verbose_command_handling = bool(verbose_command_handling)
-        self._output_base = output_path or os.getcwd()
-        self._power_off_unused_cameras = bool(power_off_unused_cameras)
-        self._write_raw_csv = bool(write_raw_csv)
-        self._raw_csv_duration_sec = float(raw_csv_duration_sec) if raw_csv_duration_sec is not None else None
-        self._uncorrected_only = bool(uncorrected_only)
-        self._default_left_mask = int(default_left_mask)
-        self._default_right_mask = int(default_right_mask)
+
+        # Unpack operational settings from config
+        self._force_laser_fail            = bool(cfg.get("forceLaserFail", False))
+        self._camera_temp_alert_threshold_c = float(cfg.get("cameraTempAlertThresholdC", 105.0))
+        self._sensor_debug_logging        = bool(cfg.get("sensorDebugLogging", False))
+        self._camera_fake_data            = bool(cfg.get("cameraFakeData", False))
+        self._histo_throttle              = bool(cfg.get("histoThrottle", False))
+        self._histo_cmp                   = bool(cfg.get("histoCmp", False))
+        self._comm_verbose                = bool(cfg.get("commVerbose", False))
+        self._verbose_command_handling    = bool(cfg.get("verboseCommandHandling", False))
+        self._output_base                 = output_path or cfg.get("output_path") or os.getcwd()
+        self._power_off_unused_cameras    = bool(cfg.get("powerOffUnusedCameras", False))
+        self._write_raw_csv               = bool(cfg.get("writeRawCsv", True))
+        raw_csv                           = cfg.get("rawCsvDurationSec")
+        self._raw_csv_duration_sec        = float(raw_csv) if raw_csv is not None else None
+        self._uncorrected_only            = bool(cfg.get("uncorrectedOnly", False))
 
         # Configure logging with the provided level
         self._configure_logging(log_level)
@@ -199,10 +192,10 @@ class MOTIONConnector(QObject):
         self.laser_params = self._load_laser_params(config_dir)
         self._tec_voltage_default = self._load_tec_params(config_dir)
 
-        self._eol_min_mean_per_camera = (
-            None  # list of 8 or None; set via set_eol_thresholds()
-        )
-        self._eol_min_contrast_per_camera = None
+        eol_mean     = cfg.get("eol_min_mean_per_camera")
+        eol_contrast = cfg.get("eol_min_contrast_per_camera")
+        self._eol_min_mean_per_camera     = list(eol_mean)     if isinstance(eol_mean,     (list, tuple)) else None
+        self._eol_min_contrast_per_camera = list(eol_contrast) if isinstance(eol_contrast, (list, tuple)) else None
 
         self._post_thread = None
         self._post_cancel = threading.Event()
@@ -241,10 +234,15 @@ class MOTIONConnector(QObject):
         self._runlog_csv_writer = None  # csv.writer or None
         self._runlog_csv_lock = threading.Lock()
 
-        default_dir = os.path.join(self._output_base, "scan_data")
-        os.makedirs(default_dir, exist_ok=True)
-        self._directory = default_dir
-        logger.info(f"[Connector] Default directory initialized to: {self._directory}")
+        configured_data_dir = cfg.get("dataDirectory")
+        if configured_data_dir:
+            os.makedirs(configured_data_dir, exist_ok=True)
+            self._directory = configured_data_dir
+        else:
+            default_dir = os.path.join(self._output_base, "scan_data")
+            os.makedirs(default_dir, exist_ok=True)
+            self._directory = default_dir
+        logger.info(f"[Connector] Directory initialized to: {self._directory}")
 
         self._subject_id = self.generate_session_id()
         logger.info(f"[Connector] Generated session ID: {self._subject_id}")
@@ -1129,75 +1127,50 @@ class MOTIONConnector(QObject):
         if path.startswith("file:///"):
             path = path[8:] if path[9] != ":" else path[8:]
         self._directory = path
-        logger.debug(f"[Connector] Default directory set to: {self._directory}")
+        self._app_config["dataDirectory"] = path
+        self._save_app_config()
+        logger.debug(f"[Connector] Directory set to: {self._directory}")
         self.directoryChanged.emit()
+        self.appConfigChanged.emit()
 
-    @pyqtProperty(int, notify=defaultMasksChanged)
-    def defaultLeftMask(self):
-        return self._default_left_mask
+    # ── App config — generic read/write API ──────────────────────────────────
 
-    @pyqtProperty(int, notify=defaultMasksChanged)
-    def defaultRightMask(self):
-        return self._default_right_mask
+    @pyqtProperty('QVariantMap', notify=appConfigChanged)
+    def appConfig(self):
+        return self._app_config
 
-    @pyqtSlot(bool, float, float, float, float, float, float, float, float)
-    def saveDisplaySettings(
-        self,
-        show_bfi_bvi: bool,
-        bfi_min: float, bfi_max: float,
-        bvi_min: float, bvi_max: float,
-        mean_min: float, mean_max: float,
-        contrast_min: float, contrast_max: float,
-    ):
-        """Persist realtime-plot display settings to config/app_config.json."""
+    # Config keys that must always be stored as plain integers
+    _INT_CONFIG_KEYS = {"leftMask", "rightMask"}
+
+    def _save_app_config(self):
+        """Write the in-memory config dict back to app_config.json."""
         config_path = resource_path("config", "app_config.json")
+        # Coerce mask fields to int — QML passes JS numbers as Python float
+        out = dict(self._app_config)
+        for key in self._INT_CONFIG_KEYS:
+            if key in out and out[key] is not None:
+                out[key] = int(out[key])
         try:
-            if config_path.exists():
-                with open(config_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            else:
-                data = {}
-            data["showBfiBvi"]   = bool(show_bfi_bvi)
-            data["bfiMin"]       = float(bfi_min)
-            data["bfiMax"]       = float(bfi_max)
-            data["bviMin"]       = float(bvi_min)
-            data["bviMax"]       = float(bvi_max)
-            data["meanMin"]      = float(mean_min)
-            data["meanMax"]      = float(mean_max)
-            data["contrastMin"]  = float(contrast_min)
-            data["contrastMax"]  = float(contrast_max)
             with open(config_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-            logger.info(
-                f"[Connector] Saved display settings: showBfiBvi={show_bfi_bvi}, "
-                f"BFI=[{bfi_min},{bfi_max}], BVI=[{bvi_min},{bvi_max}], "
-                f"Mean=[{mean_min},{mean_max}], Contrast=[{contrast_min},{contrast_max}]"
-            )
-        except (OSError, json.JSONDecodeError) as e:
-            logger.warning(f"[Connector] Could not save display settings: {e}")
+                json.dump(out, f, indent=2)
+        except OSError as e:
+            logger.warning(f"[Connector] Could not write app_config.json: {e}")
 
-    @pyqtSlot(int, int)
-    def saveDefaultMasks(self, left_mask: int, right_mask: int):
-        """Persist leftMask and rightMask to config/app_config.json."""
-        config_path = resource_path("config", "app_config.json")
-        try:
-            if config_path.exists():
-                with open(config_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            else:
-                data = {}
-            data["leftMask"] = left_mask
-            data["rightMask"] = right_mask
-            with open(config_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-            self._default_left_mask = left_mask
-            self._default_right_mask = right_mask
-            self.defaultMasksChanged.emit()
-            logger.info(
-                f"[Connector] Saved default masks: left=0x{left_mask:02X}, right=0x{right_mask:02X}"
-            )
-        except (OSError, json.JSONDecodeError) as e:
-            logger.warning(f"[Connector] Could not save default masks: {e}")
+    @pyqtSlot(str, 'QVariant')
+    def setConfig(self, key: str, value):
+        """Update a single config key, persist to disk, and notify QML."""
+        self._app_config[key] = value
+        self._save_app_config()
+        self.appConfigChanged.emit()
+        logger.debug(f"[Connector] Config set: {key} = {value!r}")
+
+    @pyqtSlot('QVariantMap')
+    def saveConfigs(self, configs: dict):
+        """Update multiple config keys at once, persist to disk, and notify QML."""
+        self._app_config.update(configs)
+        self._save_app_config()
+        self.appConfigChanged.emit()
+        logger.debug(f"[Connector] Config saved: {sorted(configs.keys())}")
 
     @pyqtProperty(str, notify=scanNotesChanged)  # <-- add notify
     def scanNotes(self):

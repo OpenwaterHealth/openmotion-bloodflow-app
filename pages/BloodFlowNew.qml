@@ -55,11 +55,12 @@ Rectangle {
 
     // Apply default cameras from config
     function applyDefaultCameras() {
-        var defLeft  = (AppFlags && AppFlags.leftMask  !== undefined) ? AppFlags.leftMask  : 0x99;
-        var defRight = (AppFlags && AppFlags.rightMask !== undefined) ? AppFlags.rightMask : 0x99;
+        var cfg      = MOTIONInterface.appConfig;
+        var defLeft  = cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99;
+        var defRight = cfg.rightMask !== undefined ? cfg.rightMask : 0x99;
         if (MOTIONInterface.leftSensorConnected)  leftMask  = defLeft;
         if (MOTIONInterface.rightSensorConnected) rightMask = defRight;
-        if (AppFlags && AppFlags.autoConfigureOnStartup !== false &&
+        if (cfg.autoConfigureOnStartup !== false &&
                 (MOTIONInterface.leftSensorConnected || MOTIONInterface.rightSensorConnected)) {
             flashDefaultCameras();
         }
@@ -311,12 +312,12 @@ Rectangle {
             if ((descriptor || "").toUpperCase().indexOf("SENSOR") >= 0) {
                 Qt.callLater(function() {
                     if (!bloodFlow.scanning && !bloodFlow.configuring) {
-                        // Apply default mask to the newly connected sensor
-                        var defLeft  = (AppFlags && AppFlags.leftMask  !== undefined) ? AppFlags.leftMask  : 0x99;
-                        var defRight = (AppFlags && AppFlags.rightMask !== undefined) ? AppFlags.rightMask : 0x99;
+                        var cfg      = MOTIONInterface.appConfig;
+                        var defLeft  = cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99;
+                        var defRight = cfg.rightMask !== undefined ? cfg.rightMask : 0x99;
                         if (MOTIONInterface.leftSensorConnected)  bloodFlow.leftMask  = defLeft;
                         if (MOTIONInterface.rightSensorConnected) bloodFlow.rightMask = defRight;
-                        if (AppFlags && AppFlags.autoConfigureOnStartup !== false)
+                        if (cfg.autoConfigureOnStartup !== false)
                             flashDefaultCameras()
                     }
                 })

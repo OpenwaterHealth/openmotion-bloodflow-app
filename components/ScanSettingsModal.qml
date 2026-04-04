@@ -176,7 +176,8 @@ Item {
                         opacity: enabled ? 1.0 : 0.4
                         onCurrentIndexChanged: applyPatternToSensor(currentIndex, "left")
                         Component.onCompleted: {
-                            var defMask = (AppFlags && AppFlags.leftMask !== undefined) ? AppFlags.leftMask : 0x99
+                            var defMask = MOTIONInterface.appConfig.leftMask !== undefined
+                                          ? MOTIONInterface.appConfig.leftMask : 0x99
                             var idx = maskToPatternIndex(defMask)
                             currentIndex = (idx >= 0) ? idx : 4
                         }
@@ -205,7 +206,8 @@ Item {
                         opacity: enabled ? 1.0 : 0.4
                         onCurrentIndexChanged: applyPatternToSensor(currentIndex, "right")
                         Component.onCompleted: {
-                            var defMask = (AppFlags && AppFlags.rightMask !== undefined) ? AppFlags.rightMask : 0x99
+                            var defMask = MOTIONInterface.appConfig.rightMask !== undefined
+                                          ? MOTIONInterface.appConfig.rightMask : 0x99
                             var idx = maskToPatternIndex(defMask)
                             currentIndex = (idx >= 0) ? idx : 0
                         }

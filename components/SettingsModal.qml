@@ -10,23 +10,34 @@ Item {
     visible: false
     z: 9998
 
-    // Settings values
+    // Settings values — initialised from live config on creation; open() re-syncs
     property int  defaultLeftMaskIndex:  4
     property int  defaultRightMaskIndex: 4
     property string dataOutputPath: MOTIONInterface.directory
-
-    // Seeded from AppFlags (which is loaded from app_config.json at startup)
-    property bool showBfiBvi:   (AppFlags && AppFlags.showBfiBvi   !== undefined) ? AppFlags.showBfiBvi   : true
-    property real bfiMin:       (AppFlags && AppFlags.bfiMin       !== undefined) ? AppFlags.bfiMin       : 0.0
-    property real bfiMax:       (AppFlags && AppFlags.bfiMax       !== undefined) ? AppFlags.bfiMax       : 10.0
-    property real bviMin:       (AppFlags && AppFlags.bviMin       !== undefined) ? AppFlags.bviMin       : 0.0
-    property real bviMax:       (AppFlags && AppFlags.bviMax       !== undefined) ? AppFlags.bviMax       : 10.0
-    property real meanMin:      (AppFlags && AppFlags.meanMin      !== undefined) ? AppFlags.meanMin      : 0.0
-    property real meanMax:      (AppFlags && AppFlags.meanMax      !== undefined) ? AppFlags.meanMax      : 500.0
-    property real contrastMin:  (AppFlags && AppFlags.contrastMin  !== undefined) ? AppFlags.contrastMin  : 0.0
-    property real contrastMax:  (AppFlags && AppFlags.contrastMax  !== undefined) ? AppFlags.contrastMax  : 1.0
+    property bool showBfiBvi:  true
+    property real bfiMin:      0.0
+    property real bfiMax:      10.0
+    property real bviMin:      0.0
+    property real bviMax:      10.0
+    property real meanMin:     0.0
+    property real meanMax:     500.0
+    property real contrastMin: 0.0
+    property real contrastMax: 1.0
 
     signal settingsChanged()
+
+    Component.onCompleted: {
+        var cfg = MOTIONInterface.appConfig
+        showBfiBvi   = cfg.showBfiBvi   !== undefined ? cfg.showBfiBvi   : true
+        bfiMin       = cfg.bfiMin       !== undefined ? cfg.bfiMin       : 0.0
+        bfiMax       = cfg.bfiMax       !== undefined ? cfg.bfiMax       : 10.0
+        bviMin       = cfg.bviMin       !== undefined ? cfg.bviMin       : 0.0
+        bviMax       = cfg.bviMax       !== undefined ? cfg.bviMax       : 10.0
+        meanMin      = cfg.meanMin      !== undefined ? cfg.meanMin      : 0.0
+        meanMax      = cfg.meanMax      !== undefined ? cfg.meanMax      : 500.0
+        contrastMin  = cfg.contrastMin  !== undefined ? cfg.contrastMin  : 0.0
+        contrastMax  = cfg.contrastMax  !== undefined ? cfg.contrastMax  : 1.0
+    }
 
     function maskToIndex(mask) {
         for (var i = 0; i < cameraPatterns.count; i++) {
@@ -41,24 +52,36 @@ Item {
     }
 
     function open() {
-        defaultLeftMaskIndex  = maskToIndex(MOTIONInterface.defaultLeftMask)
-        defaultRightMaskIndex = maskToIndex(MOTIONInterface.defaultRightMask)
+        var cfg = MOTIONInterface.appConfig
+        defaultLeftMaskIndex  = maskToIndex(cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99)
+        defaultRightMaskIndex = maskToIndex(cfg.rightMask !== undefined ? cfg.rightMask : 0x99)
+        showBfiBvi   = cfg.showBfiBvi   !== undefined ? cfg.showBfiBvi   : true
+        bfiMin       = cfg.bfiMin       !== undefined ? cfg.bfiMin       : 0.0
+        bfiMax       = cfg.bfiMax       !== undefined ? cfg.bfiMax       : 10.0
+        bviMin       = cfg.bviMin       !== undefined ? cfg.bviMin       : 0.0
+        bviMax       = cfg.bviMax       !== undefined ? cfg.bviMax       : 10.0
+        meanMin      = cfg.meanMin      !== undefined ? cfg.meanMin      : 0.0
+        meanMax      = cfg.meanMax      !== undefined ? cfg.meanMax      : 500.0
+        contrastMin  = cfg.contrastMin  !== undefined ? cfg.contrastMin  : 0.0
+        contrastMax  = cfg.contrastMax  !== undefined ? cfg.contrastMax  : 1.0
         dataPathField.text = MOTIONInterface.directory
         root.visible = true
     }
     function close() {
         MOTIONInterface.directory = dataPathField.text
-        MOTIONInterface.saveDefaultMasks(
-            maskFromIndex(defaultLeftMaskIndex),
-            maskFromIndex(defaultRightMaskIndex)
-        )
-        MOTIONInterface.saveDisplaySettings(
-            showBfiBvi,
-            bfiMin, bfiMax,
-            bviMin, bviMax,
-            meanMin, meanMax,
-            contrastMin, contrastMax
-        )
+        MOTIONInterface.saveConfigs({
+            "leftMask":    maskFromIndex(defaultLeftMaskIndex),
+            "rightMask":   maskFromIndex(defaultRightMaskIndex),
+            "showBfiBvi":  showBfiBvi,
+            "bfiMin":      bfiMin,
+            "bfiMax":      bfiMax,
+            "bviMin":      bviMin,
+            "bviMax":      bviMax,
+            "meanMin":     meanMin,
+            "meanMax":     meanMax,
+            "contrastMin": contrastMin,
+            "contrastMax": contrastMax
+        })
         settingsChanged()
         root.visible = false
     }

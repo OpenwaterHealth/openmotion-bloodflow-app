@@ -79,6 +79,7 @@ def _load_app_config() -> dict:
         "meanMax": 500.0,
         "contrastMin": 0.0,
         "contrastMax": 1.0,
+        "dataDirectory": None,
     }
     config_path = resource_path("config", "app_config.json")
     if not config_path.exists():
@@ -91,6 +92,10 @@ def _load_app_config() -> dict:
             **defaults,
             **{k: v for k, v in loaded.items() if k in defaults or k == "output_path"},
         }
+        # Ensure mask fields are always integers (guard against float drift from JSON)
+        for key in ("leftMask", "rightMask"):
+            if key in out and out[key] is not None:
+                out[key] = int(out[key])
         logger.info("Loaded app config from %s", config_path)
         return out
     except (json.JSONDecodeError, OSError) as e:
@@ -179,46 +184,8 @@ def main():
 
     engine = QQmlApplicationEngine()
 
-    connector = MOTIONConnector(
-        force_laser_fail=app_config.get("forceLaserFail", False),
-        camera_temp_alert_threshold_c=app_config.get("cameraTempAlertThresholdC", 105),
-        sensor_debug_logging=app_config.get("sensorDebugLogging", False),
-        camera_fake_data=app_config.get("cameraFakeData", False),
-        histo_throttle=app_config.get("histoThrottle", False),
-        histo_cmp=app_config.get("histoCmp", False),
-        power_off_unused_cameras=app_config.get("powerOffUnusedCameras", False),
-        comm_verbose=app_config.get("commVerbose", False),
-        verbose_command_handling=app_config.get("verboseCommandHandling", False),
-        write_raw_csv=app_config.get("writeRawCsv", True),
-        raw_csv_duration_sec=app_config.get("rawCsvDurationSec", None),
-        uncorrected_only=app_config.get("uncorrectedOnly", False),
-        output_path=output_base,
-        default_left_mask=app_config.get("leftMask", 0x66),
-        default_right_mask=app_config.get("rightMask", 0x66),
-    )
-    connector.set_eol_thresholds(
-        app_config.get("eol_min_mean_per_camera"),
-        app_config.get("eol_min_contrast_per_camera"),
-    )
+    connector = MOTIONConnector(app_config=app_config, output_path=output_base)
     qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MOTIONInterface", connector)
-    engine.rootContext().setContextProperty(
-        "AppFlags",
-        {
-            "leftMask":             app_config.get("leftMask", 0x99),
-            "rightMask":            app_config.get("rightMask", 0x99),
-            "autoConfigureOnStartup": app_config.get("autoConfigureOnStartup", True),
-            "developerMode":        app_config.get("developerMode", False),
-            "showBfiBvi":           app_config.get("showBfiBvi", True),
-            "bfiMin":               app_config.get("bfiMin", 0.0),
-            "bfiMax":               app_config.get("bfiMax", 10.0),
-            "bviMin":               app_config.get("bviMin", 0.0),
-            "bviMax":               app_config.get("bviMax", 10.0),
-            "meanMin":              app_config.get("meanMin", 0.0),
-            "meanMax":              app_config.get("meanMax", 500.0),
-            "contrastMin":          app_config.get("contrastMin", 0.0),
-            "contrastMax":          app_config.get("contrastMax", 1.0),
-        },
-    )
     engine.rootContext().setContextProperty("appVersion", APP_VERSION)
 
     # Load the QML file
