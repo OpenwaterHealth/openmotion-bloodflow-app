@@ -504,24 +504,40 @@ class VisualizeBloodflow:
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         FRAME_ID_MAX = 256
 
-        x = np.array(pd.read_csv(csv_path))
-        ind1 = np.where(x[:, 1] == 1)[0][0]  # 1st line in csv with good data
-        x = x[ind1:, :]
-        camera = x[:, 0]
-        timept = x[:, 1]
-        temperature = x[:, 1026]
+        df = pd.read_csv(csv_path)
+
+        # New format: cam_id, frame_id, timestamp_s, 0..1023, temperature, sum, ...
+        # Old format: camera, frame_id, 0..1023, temperature, ...
+        if "timestamp_s" in df.columns:
+            camera      = df["cam_id"].values.astype(float)
+            timept_raw  = df["frame_id"].values.astype(float)
+            temperature = df["temperature"].values.astype(float)
+            histo_cols  = [str(i) for i in range(1024)]
+            histos      = df[histo_cols].values.astype(float)
+        else:
+            x           = df.values
+            camera      = x[:, 0]
+            timept_raw  = x[:, 1]
+            temperature = x[:, 1026]
+            histos      = x[:, 2:1026]
+
+        # Find first frame_id == 1
+        ind1 = np.where(timept_raw == 1)[0][0]
+        camera      = camera[ind1:]
+        timept_raw  = timept_raw[ind1:]
+        temperature = temperature[ind1:]
+        histos      = histos[ind1:]
 
         camera_inds = np.unique(camera)
-        ncameras = len(camera_inds)
-        rollovers = np.insert(np.cumsum((np.diff(timept) < 0)), 0, 0)
-
-        timept = rollovers * FRAME_ID_MAX + timept
-        ntimepts = int(np.amax(timept))
+        ncameras    = len(camera_inds)
+        rollovers   = np.insert(np.cumsum((np.diff(timept_raw) < 0)), 0, 0)
+        timept      = rollovers * FRAME_ID_MAX + timept_raw
+        ntimepts    = int(np.amax(timept))
 
         data = np.zeros((ncameras, ntimepts, 1024), dtype=float)
         for i in range(len(camera)):
             idx = np.where(camera_inds == camera[i])[0][0]
-            data[idx, int(timept[i]) - 1, :] = x[i, 2:1026]
+            data[idx, int(timept[i]) - 1, :] = histos[i]
 
         return data, camera_inds, timept, temperature
 
