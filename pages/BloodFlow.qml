@@ -620,11 +620,6 @@ Rectangle {
     Connections {
         target: MOTIONInterface
 
-        // Forward captureLog messages to QML console.log (which gets logged via qt_message_handler)
-        function onCaptureLog(line) {
-            console.log("Capture log: "+line)
-        }
-
         function onSignalConnected(descriptor, port) {
             console.log(descriptor + " connected on " + port);
 
@@ -723,7 +718,7 @@ Rectangle {
         }
         onMessageOut: function(line) { 
             scanDialog.appendLog(line)
-            console.log("Scan message: " + line)
+            console.log(line)
         }
         onScanFinished: function(ok, err, left, right) {
 

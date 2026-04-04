@@ -272,7 +272,7 @@ Rectangle {
         }
         onMessageOut: function(line) {
             scanDialog.appendLog(line)
-            console.log("Scan message: " + line)
+            console.log(line)
         }
         onScanFinished: function(ok, err, left, right) {
             bloodFlow.scanning = false
@@ -301,10 +301,6 @@ Rectangle {
     // ===== CONNECTIONS =====
     Connections {
         target: MOTIONInterface
-
-        function onCaptureLog(line) {
-            console.log("Capture log: " + line)
-        }
 
         function onSignalConnected(descriptor, port) {
             console.log(descriptor + " connected on " + port)
