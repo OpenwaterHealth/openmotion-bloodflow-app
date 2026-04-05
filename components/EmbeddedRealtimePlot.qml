@@ -42,8 +42,8 @@ Rectangle {
     property color contrastColor: "#9B59B6"
 
     // Preview masks — update grid layout on camera selection change, even before scanning
-    property int previewLeftMask: 0x99
-    property int previewRightMask: 0x00
+    property int previewLeftMask: 0x66
+    property int previewRightMask: 0x66
     onPreviewLeftMaskChanged:  if (!running) _applyPreviewLayout()
     onPreviewRightMaskChanged: if (!running) _applyPreviewLayout()
 
