@@ -141,7 +141,17 @@ def main():
 
     # Configure file logging
     app_config = _load_app_config()
-    output_base = app_config.get("output_path") or os.getcwd()
+    output_base = app_config.get("output_path")
+    if not output_base:
+        # Default to cwd, but fall back to ~/Documents/OpenWater Bloodflow
+        # if cwd is not writable (e.g. launched from Finder where cwd is "/")
+        candidate = os.getcwd()
+        if os.access(candidate, os.W_OK):
+            output_base = candidate
+        else:
+            output_base = os.path.join(
+                os.path.expanduser("~"), "Documents", "OpenWater Bloodflow"
+            )
     run_dir = os.path.join(output_base, "app-logs")
     os.makedirs(run_dir, exist_ok=True)
     ts = datetime.datetime.now().strftime(

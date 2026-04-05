@@ -134,6 +134,22 @@ class MOTIONConnector(QObject):
     tecDacChanged = pyqtSignal()
     appConfigChanged = pyqtSignal()
 
+    @staticmethod
+    def _default_output_base() -> str:
+        """Return a writable base directory for logs and scan data.
+
+        Uses the current working directory when it is writable (typical
+        for development runs).  When cwd is read-only — e.g. ``/`` on
+        macOS when the .app bundle is launched from Finder — falls back
+        to ``~/Documents/OpenWater Bloodflow``.
+        """
+        cwd = os.getcwd()
+        if os.access(cwd, os.W_OK):
+            return cwd
+        return os.path.join(
+            os.path.expanduser("~"), "Documents", "OpenWater Bloodflow"
+        )
+
     def __init__(
         self,
         app_config=None,
@@ -160,7 +176,7 @@ class MOTIONConnector(QObject):
         self._histo_cmp                   = bool(cfg.get("histoCmp", False))
         self._comm_verbose                = bool(cfg.get("commVerbose", False))
         self._verbose_command_handling    = bool(cfg.get("verboseCommandHandling", False))
-        self._output_base                 = output_path or cfg.get("output_path") or os.getcwd()
+        self._output_base                 = output_path or cfg.get("output_path") or self._default_output_base()
         self._power_off_unused_cameras    = bool(cfg.get("powerOffUnusedCameras", False))
         self._write_raw_csv               = bool(cfg.get("writeRawCsv", True))
         raw_csv                           = cfg.get("rawCsvDurationSec")

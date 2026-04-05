@@ -34,7 +34,7 @@
   "uncorrectedOnly": true,
   "autoConfigureOnStartup": false,
   "developerMode": true,
-  "showBfiBvi": true,
+  "showBfiBvi": false,
   "bfiMin": 0.0,
   "bfiMax": 10.0,
   "bviMin": 0.0,
