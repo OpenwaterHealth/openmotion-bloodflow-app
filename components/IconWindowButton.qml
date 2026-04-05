@@ -19,6 +19,11 @@ Item {
     // Signal for click handling
     signal clicked()
 
+    FontLoader {
+        id: iconFont
+        source: "../assets/fonts/keenicons-outline.ttf"
+    }
+
     // Background
     Rectangle {
         id: background
@@ -33,6 +38,7 @@ Item {
     Text {
         id: icon
         text: buttonIcon
+        font.family: iconFont.name
         font.pixelSize: 24 // Icon size
         color: mouseArea.pressed ? activeIconColor : (mouseArea.containsMouse ? hoverIconColor : iconColor)
         anchors.centerIn: parent
