@@ -279,9 +279,10 @@ Rectangle {
         }
 
         function onConnectionStatusChanged() {
-            // Reset camera ready state if sensors disconnect
             if (!MOTIONInterface.leftSensorConnected && !MOTIONInterface.rightSensorConnected) {
                 bloodFlow.camerasReady = false
+            } else if (MOTIONInterface.leftSensorConnected || MOTIONInterface.rightSensorConnected) {
+                bloodFlow.camerasReady = true
             }
         }
 
