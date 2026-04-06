@@ -1151,6 +1151,7 @@ class MOTIONConnector(QObject):
 
         self._capture_stop = threading.Event()
         self._capture_running = True
+        self._capture_start_time = time.time()
         self._capture_left_path = ""
         self._capture_right_path = ""
         self._start_runlog(subject_id=subject_id)
@@ -1233,6 +1234,17 @@ class MOTIONConnector(QObject):
             else:
                 if result.error:
                     self.captureLog.emit(f"Capture error: {result.error}")
+
+            # Compute scan duration and append to notes
+            elapsed = time.time() - self._capture_start_time
+            hours = int(elapsed // 3600)
+            minutes = int((elapsed % 3600) // 60)
+            seconds = int(elapsed % 60)
+            duration_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            status = "completed" if result.ok else ("stopped" if result.canceled else "error")
+            duration_line = f"\n---\nScan {status} — duration: {duration_str}"
+            self._scan_notes = (self._scan_notes.strip() + duration_line)
+            self.scanNotesChanged.emit()
 
             # Always write the notes file so that the scan is discoverable in
             # the history viewer regardless of whether data CSVs were produced.
