@@ -21,19 +21,13 @@ Rectangle {
     property int leftMask: 0x99   // default "Outer"
     property int rightMask: 0x00
 
+    // Session ID (exposed for header bar)
+    property string sessionId: MOTIONInterface.sessionId || ""
+
     // Duration from scan time modal
     property bool freeRun: false
     property int durationSec: 3600  // default 1 hour
     property int elapsedSec: 0
-
-    function formatSec(s) {
-        var h = Math.floor(s / 3600)
-        var m = Math.floor((s % 3600) / 60)
-        var sec = s % 60
-        return String(h).padStart(2, '0') + ":" +
-               String(m).padStart(2, '0') + ":" +
-               String(sec).padStart(2, '0')
-    }
 
     Timer {
         id: scanTimer
@@ -88,66 +82,11 @@ Rectangle {
         MOTIONInterface.startConfigureCameraSensors(leftMask, rightMask);
     }
 
-    // LAYOUT: full-height column → session header bar + (ButtonPanel | DataViewer)
+    // LAYOUT: full-height → ButtonPanel | DataViewer
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 8
         spacing: 6
-
-        // ── Session ID header bar ─────────────────────────────────────────
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 34
-            color: "#252528"
-            radius: 8
-            border.color: "#3E4E6F"
-            border.width: 1
-
-            RowLayout {
-                anchors.fill: parent
-                anchors.leftMargin: 14
-                anchors.rightMargin: 14
-                spacing: 10
-
-                Text {
-                    text: "OpenMotion BloodFlow"
-                    color: "#FFFFFF"
-                    font.pixelSize: 14
-                    font.weight: Font.Bold
-                }
-
-                Rectangle { width: 1; height: 18; color: "#3E4E6F" }
-
-                Text { text: "Session:"; color: "#7F8C8D"; font.pixelSize: 13 }
-                Text {
-                    text: MOTIONInterface.sessionId || "—"
-                    color: "#4A90E2"
-                    font.pixelSize: 13
-                    font.weight: Font.DemiBold
-                }
-
-                Item { Layout.fillWidth: true }
-
-                Rectangle { width: 1; height: 18; color: "#3E4E6F" }
-
-                Text {
-                    text: {
-                        if (bloodFlow.freeRun) {
-                            return bloodFlow.scanning
-                                ? "Free Run  " + bloodFlow.formatSec(bloodFlow.elapsedSec)
-                                : "Free Run"
-                        }
-                        return bloodFlow.scanning
-                            ? bloodFlow.formatSec(bloodFlow.elapsedSec) + " / " + bloodFlow.formatSec(bloodFlow.durationSec)
-                            : bloodFlow.formatSec(bloodFlow.durationSec)
-                    }
-                    color: bloodFlow.scanning ? "#2ECC71" : "#7F8C8D"
-                    font.pixelSize: 13
-                    font.family: "Courier New"
-                }
-
-            }
-        }
 
         // ── ButtonPanel | DataViewer ──────────────────────────────────────
         RowLayout {

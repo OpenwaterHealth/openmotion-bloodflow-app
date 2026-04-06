@@ -9,11 +9,24 @@ Rectangle {
     color: "#1E1E20" // Header background color
     radius: 20
 
-    // Properties to configure the title and logo
-    property string titleText: "Default Title" // Default title
+    // Properties to configure the logo
     property string logoSource: "" // Default to no logo
-    property string appVerText: "v0.0.0" // Default
-    property string sdkVerText: "v0.0.0" // Default
+
+    // Session bar state (bound from BloodFlow page)
+    property string sessionId: ""
+    property bool   scanning: false
+    property bool   freeRun: false
+    property int    elapsedSec: 0
+    property int    durationSec: 3600
+
+    function formatSec(s) {
+        var h = Math.floor(s / 3600)
+        var m = Math.floor((s % 3600) / 60)
+        var sec = s % 60
+        return String(h).padStart(2, '0') + ":" +
+               String(m).padStart(2, '0') + ":" +
+               String(sec).padStart(2, '0')
+    }
 
     // Drag functionality
     MouseArea {
@@ -48,54 +61,56 @@ Rectangle {
             }
         }
 
-        // Spacer before title
-        Item {
+        // Session info bar (replaces old title + version block)
+        Rectangle {
             Layout.fillWidth: true
-        }
+            Layout.preferredHeight: 34
+            color: "#252528"
+            radius: 8
+            border.color: "#3E4E6F"
+            border.width: 1
 
-        // Title and Version Container
-        RowLayout {
-            spacing: 8
-            Layout.alignment: Qt.AlignHCenter
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 14
+                anchors.rightMargin: 14
+                spacing: 10
 
-            // Title
-            Text {
-                text: windowMenu.titleText // Use the configurable title text
-                color: "white"
-                font.pixelSize: 24
-                font.weight: Font.Bold // Make the text bold
-                verticalAlignment: Text.AlignVCenter
-                horizontalAlignment: Text.AlignHCenter
-            }
-
-            // Version Info (App + SDK stacked vertically)
-            ColumnLayout {
-                spacing: 2
-                Layout.alignment: Qt.AlignVCenter
-
-                // App Version
+                Text { text: "Session:"; color: "#7F8C8D"; font.pixelSize: 13 }
                 Text {
-                    text: "APP: "+windowMenu.appVerText
-                    color: "#AAAAAA"
-                    font.pixelSize: 12
-                    font.weight: Font.Medium
-                    horizontalAlignment: Text.AlignRight
+                    text: windowMenu.sessionId || "—"
+                    color: "#4A90E2"
+                    font.pixelSize: 13
+                    font.weight: Font.DemiBold
                 }
 
-                // SDK Version
+                Item { Layout.fillWidth: true }
+
                 Text {
-                    text: "SDK: "+windowMenu.sdkVerText
-                    color: "#AAAAAA"
-                    font.pixelSize: 12
-                    font.weight: Font.Medium
-                    horizontalAlignment: Text.AlignRight
+                    text: "OpenMotion BloodFlow"
+                    color: "#FFFFFF"
+                    font.pixelSize: 14
+                    font.weight: Font.Bold
+                }
+
+                Item { Layout.fillWidth: true }
+
+                Text {
+                    text: {
+                        if (windowMenu.freeRun) {
+                            return windowMenu.scanning
+                                ? "Free Run  " + windowMenu.formatSec(windowMenu.elapsedSec)
+                                : "Free Run"
+                        }
+                        return windowMenu.scanning
+                            ? windowMenu.formatSec(windowMenu.elapsedSec) + " / " + windowMenu.formatSec(windowMenu.durationSec)
+                            : windowMenu.formatSec(windowMenu.durationSec)
+                    }
+                    color: windowMenu.scanning ? "#2ECC71" : "#7F8C8D"
+                    font.pixelSize: 13
+                    font.family: "Courier New"
                 }
             }
-        }
-
-        // Spacer after title
-        Item {
-            Layout.fillWidth: true
         }
 
         // Window control buttons

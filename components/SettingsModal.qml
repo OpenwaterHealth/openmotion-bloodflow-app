@@ -429,6 +429,34 @@ Item {
                 }
             }
 
+            // Separator
+            Rectangle { Layout.fillWidth: true; height: 1; color: "#3E4E6F" }
+
+            // Version Info
+            ColumnLayout {
+                spacing: 4
+                Layout.fillWidth: true
+
+                Text {
+                    text: "Version Info"
+                    color: "#BDC3C7"
+                    font.pixelSize: 16
+                    font.weight: Font.DemiBold
+                }
+
+                Text {
+                    text: "APP: " + appVersion
+                    color: "#AAAAAA"
+                    font.pixelSize: 13
+                }
+
+                Text {
+                    text: "SDK: " + MOTIONInterface.get_sdk_version()
+                    color: "#AAAAAA"
+                    font.pixelSize: 13
+                }
+            }
+
                     Item { height: 8 }
 
                     } // inner ColumnLayout

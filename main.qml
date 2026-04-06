@@ -27,10 +27,14 @@ ApplicationWindow {
             anchors.left: parent.left
             anchors.right: parent.right
 
-            titleText: "OpenMotion BloodFlow"
             logoSource: "../assets/images/OpenwaterLogo.png"
-            appVerText: "" + appVersion
-            sdkVerText: "" + MOTIONInterface.get_sdk_version()
+
+            // Bind session bar state from BloodFlow page
+            sessionId:   bloodFlowPage.sessionId
+            scanning:    bloodFlowPage.scanning
+            freeRun:     bloodFlowPage.freeRun
+            elapsedSec:  bloodFlowPage.elapsedSec
+            durationSec: bloodFlowPage.durationSec
         }
 
         Item {
@@ -41,6 +45,7 @@ ApplicationWindow {
             anchors.leftMargin: 8
 
             BloodFlow {
+                id: bloodFlowPage
                 anchors.fill: parent
             }
         }
