@@ -30,7 +30,7 @@ Rectangle {
 
     signal startStopClicked()
     signal scanSettingsClicked()
-    signal sessionClicked()
+    signal notesClicked()
     signal historyClicked()
     signal logClicked()
     signal settingsClicked()
@@ -136,12 +136,11 @@ Rectangle {
             color: "#3E4E6F"
         }
 
-        // ===== BOX 2: Session Info =====
-        // Session (ID + Notes)
+        // ===== BOX 2: Notes =====
         PanelButton {
-            iconText: "\ueb1f"  // person/user icon
-            label: "Session"
-            onClicked: panel.sessionClicked()
+            iconText: "\uea7f"  // notes/document icon
+            label: "Notes"
+            onClicked: panel.notesClicked()
         }
 
         // --- Divider ---
@@ -156,7 +155,7 @@ Rectangle {
         // ===== BOX 3: System =====
         // History
         PanelButton {
-            iconText: "\uea7f"  // history/clock-arrow icon
+            iconText: "\uea4e"  // folder icon
             label: "History"
             onClicked: panel.historyClicked()
         }

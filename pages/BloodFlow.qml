@@ -105,11 +105,11 @@ Rectangle {
                 onStartStopClicked: {
                     if (bloodFlow.scanning) {
                         scanRunner.cancel()
+                        scanDialog.close()
+                        embeddedPlot.stopScan()
+                        notesModal.open()
                     } else {
-                        if (!MOTIONInterface.sessionId || MOTIONInterface.sessionId.length === 0) {
-                            sessionModal.open()
-                            return
-                        }
+                        MOTIONInterface.newSession()
                         bloodFlow.scanning = true
                         scanDialog.message = "Scanning..."
                         scanDialog.stageText = "Preparing..."
@@ -126,7 +126,7 @@ Rectangle {
                     )
                     scanSettingsModal.open()
                 }
-                onSessionClicked: sessionModal.open()
+                onNotesClicked: notesModal.open()
                 onHistoryClicked: historyModal.open()
                 onLogClicked: scanDialog.open()
                 onSettingsClicked: settingsModal.open()
@@ -162,8 +162,8 @@ Rectangle {
         }
     }
 
-    SessionModal {
-        id: sessionModal
+    NotesModal {
+        id: notesModal
     }
 
     HistoryModal {
@@ -222,6 +222,7 @@ Rectangle {
             if (err === "Canceled") {
                 scanDialog.close()
                 embeddedPlot.stopScan()
+                notesModal.open()
                 return
             }
 
@@ -237,6 +238,7 @@ Rectangle {
             scanDialog.progress = 100
             scanDialog.done = true
             embeddedPlot.stopScan()
+            notesModal.open()
         }
     }
 

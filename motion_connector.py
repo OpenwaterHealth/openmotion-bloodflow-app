@@ -222,6 +222,7 @@ class MOTIONConnector(QObject):
         self._capture_left_path = ""
         self._capture_right_path = ""
         self._scan_notes = ""
+        self._scan_notes_path = ""  # path to current scan's notes file on disk
         self._scan_workflow.set_realtime_calibration(
             _BFI_C_MIN, _BFI_C_MAX, _BFI_I_MIN, _BFI_I_MAX
         )
@@ -804,7 +805,7 @@ class MOTIONConnector(QObject):
     def stopCapture(self):
         """Stop capture (Cancel button or app close). Ceases scan, disables cameras, waits for worker."""
         if self._capture_running:
-            self.captureLog.emit("Cancel requested.")
+            self.captureLog.emit("Stop requested.")
 
         self._capture_stop.set()
         try:
@@ -1071,6 +1072,15 @@ class MOTIONConnector(QObject):
         if value != self._scan_notes:
             self._scan_notes = value
             self.scanNotesChanged.emit()
+        # Always persist to disk when a notes file path exists, even if the
+        # in-memory value didn't change (covers the first save after capture).
+        if self._scan_notes_path:
+            try:
+                with open(self._scan_notes_path, "w", encoding="utf-8") as nf:
+                    nf.write(self._scan_notes.strip() + "\n")
+                logger.info(f"Notes saved to disk: {self._scan_notes_path}")
+            except Exception as e:
+                logger.error(f"Failed to update scan notes on disk: {e}")
 
     def generate_session_id(self):
         suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
@@ -1078,6 +1088,17 @@ class MOTIONConnector(QObject):
 
     def generate_subject_id(self):  # deprecated alias
         return self.generate_session_id()
+
+    @pyqtSlot()
+    def newSession(self):
+        """Generate a fresh session ID and clear notes for a new scan."""
+        self._subject_id = self.generate_session_id()
+        self._scan_notes = ""
+        self._scan_notes_path = ""
+        self.sessionIdChanged.emit()
+        self.subjectIdChanged.emit()
+        self.scanNotesChanged.emit()
+        logger.info(f"New session started: {self._subject_id}")
 
     # --- CONSOLE COMMUNICATION METHODS ---
     @pyqtSlot()
@@ -1207,24 +1228,25 @@ class MOTIONConnector(QObject):
         def _on_complete(result):
             if result.ok:
                 self.captureLog.emit("Capture session complete.")
+            elif result.canceled:
+                self.captureLog.emit("Scan stopped.")
             else:
                 if result.error:
                     self.captureLog.emit(f"Capture error: {result.error}")
 
-            # Always write the notes file when any data was captured so that the
-            # scan is discoverable in the history viewer regardless of whether it
-            # ran to completion or was stopped early.
-            if result.left_path or result.right_path:
-                try:
-                    notes_filename = (
-                        f"{result.scan_timestamp}_{subject_id}_notes.txt"
-                    )
-                    notes_path = os.path.join(data_dir, notes_filename)
-                    with open(notes_path, "w", encoding="utf-8") as nf:
-                        nf.write(self._scan_notes.strip() + "\n")
-                    logger.info(f"Saved scan notes to {notes_path}")
-                except Exception as e:
-                    logger.error(f"Failed to save scan notes: {e}")
+            # Always write the notes file so that the scan is discoverable in
+            # the history viewer regardless of whether data CSVs were produced.
+            try:
+                notes_filename = (
+                    f"{result.scan_timestamp}_{subject_id}_notes.txt"
+                )
+                notes_path = os.path.join(data_dir, notes_filename)
+                with open(notes_path, "w", encoding="utf-8") as nf:
+                    nf.write(self._scan_notes.strip() + "\n")
+                self._scan_notes_path = notes_path
+                logger.info(f"Saved scan notes to {notes_path}")
+            except Exception as e:
+                logger.error(f"Failed to save scan notes: {e}")
 
             if result.ok:
                 try:
