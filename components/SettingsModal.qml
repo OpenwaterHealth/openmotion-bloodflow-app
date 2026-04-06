@@ -15,6 +15,8 @@ Item {
     property int  defaultRightMaskIndex: 4
     property string dataOutputPath: MOTIONInterface.directory
     property bool showBfiBvi:  true
+    property bool autoScale:        false
+    property bool autoScalePerPlot: false
     property real bfiMin:      0.0
     property real bfiMax:      10.0
     property real bviMin:      0.0
@@ -29,6 +31,8 @@ Item {
     Component.onCompleted: {
         var cfg = MOTIONInterface.appConfig
         showBfiBvi   = cfg.showBfiBvi   !== undefined ? cfg.showBfiBvi   : true
+        autoScale        = cfg.autoScale        !== undefined ? cfg.autoScale        : false
+        autoScalePerPlot = cfg.autoScalePerPlot !== undefined ? cfg.autoScalePerPlot : false
         bfiMin       = cfg.bfiMin       !== undefined ? cfg.bfiMin       : 0.0
         bfiMax       = cfg.bfiMax       !== undefined ? cfg.bfiMax       : 10.0
         bviMin       = cfg.bviMin       !== undefined ? cfg.bviMin       : 0.0
@@ -56,6 +60,8 @@ Item {
         defaultLeftMaskIndex  = maskToIndex(cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99)
         defaultRightMaskIndex = maskToIndex(cfg.rightMask !== undefined ? cfg.rightMask : 0x99)
         showBfiBvi   = cfg.showBfiBvi   !== undefined ? cfg.showBfiBvi   : true
+        autoScale        = cfg.autoScale        !== undefined ? cfg.autoScale        : false
+        autoScalePerPlot = cfg.autoScalePerPlot !== undefined ? cfg.autoScalePerPlot : false
         bfiMin       = cfg.bfiMin       !== undefined ? cfg.bfiMin       : 0.0
         bfiMax       = cfg.bfiMax       !== undefined ? cfg.bfiMax       : 10.0
         bviMin       = cfg.bviMin       !== undefined ? cfg.bviMin       : 0.0
@@ -73,6 +79,8 @@ Item {
             "leftMask":    maskFromIndex(defaultLeftMaskIndex),
             "rightMask":   maskFromIndex(defaultRightMaskIndex),
             "showBfiBvi":  showBfiBvi,
+            "autoScale":         autoScale,
+            "autoScalePerPlot":  autoScalePerPlot,
             "bfiMin":      bfiMin,
             "bfiMax":      bfiMax,
             "bviMin":      bviMin,
@@ -295,6 +303,35 @@ Item {
                         color: root.showBfiBvi ? "#4A90E2" : "#BDC3C7"
                         font.pixelSize: 14
                         font.weight: root.showBfiBvi ? Font.Bold : Font.Normal
+                    }
+                }
+
+                RowLayout {
+                    spacing: 16; Layout.alignment: Qt.AlignLeft
+                    Text {
+                        text: "Autoscale Y-axes"
+                        color: root.autoScale ? "#4A90E2" : "#BDC3C7"
+                        font.pixelSize: 14
+                        font.weight: root.autoScale ? Font.Bold : Font.Normal
+                    }
+                    Switch {
+                        checked: root.autoScale
+                        onCheckedChanged: root.autoScale = checked
+                    }
+                }
+
+                RowLayout {
+                    spacing: 16; Layout.alignment: Qt.AlignLeft
+                    visible: root.autoScale
+                    Text {
+                        text: "    Per-plot scaling"
+                        color: root.autoScalePerPlot ? "#4A90E2" : "#BDC3C7"
+                        font.pixelSize: 14
+                        font.weight: root.autoScalePerPlot ? Font.Bold : Font.Normal
+                    }
+                    Switch {
+                        checked: root.autoScalePerPlot
+                        onCheckedChanged: root.autoScalePerPlot = checked
                     }
                 }
             }

@@ -83,6 +83,9 @@ def _load_app_config() -> dict:
         "writeRawCsv": True,
         "rawCsvDurationSec": None,
         "invertPlotAxes": True,
+        "autoScale": False,
+        "autoScalePerPlot": False,
+        "fdaMode": False,
     }
     config_path = resource_path("config", "app_config.json")
     if not config_path.exists():

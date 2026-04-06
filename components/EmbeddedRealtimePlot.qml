@@ -33,10 +33,62 @@ Rectangle {
     property real meanMax: 500.0
     property real contrastMin: 0.0
     property real contrastMax: 1.0
-    readonly property var bfiBounds:      ({ minVal: bfiMin,      maxVal: bfiMax,      range: (bfiMax      - bfiMin)      || 1.0 })
-    readonly property var bviBounds:      ({ minVal: bviMin,      maxVal: bviMax,      range: (bviMax      - bviMin)      || 1.0 })
-    readonly property var meanBounds:     ({ minVal: meanMin,     maxVal: meanMax,     range: (meanMax     - meanMin)     || 1.0 })
-    readonly property var contrastBounds: ({ minVal: contrastMin, maxVal: contrastMax, range: (contrastMax - contrastMin) || 1.0 })
+    readonly property var _fixedBfiBounds:      ({ minVal: bfiMin,      maxVal: bfiMax,      range: (bfiMax      - bfiMin)      || 1.0 })
+    readonly property var _fixedBviBounds:      ({ minVal: bviMin,      maxVal: bviMax,      range: (bviMax      - bviMin)      || 1.0 })
+    readonly property var _fixedMeanBounds:     ({ minVal: meanMin,     maxVal: meanMax,     range: (meanMax     - meanMin)     || 1.0 })
+    readonly property var _fixedContrastBounds: ({ minVal: contrastMin, maxVal: contrastMax, range: (contrastMax - contrastMin) || 1.0 })
+
+    // Autoscaling
+    property bool autoScale: false
+    property bool autoScalePerPlot: false
+    property int  _autoTickCounter: 0
+    property var  _autoBfiBounds:      ({ minVal: bfiMin,      maxVal: bfiMax,      range: (bfiMax      - bfiMin)      || 1.0 })
+    property var  _autoBviBounds:      ({ minVal: bviMin,      maxVal: bviMax,      range: (bviMax      - bviMin)      || 1.0 })
+    property var  _autoMeanBounds:     ({ minVal: meanMin,     maxVal: meanMax,     range: (meanMax     - meanMin)     || 1.0 })
+    property var  _autoContrastBounds: ({ minVal: contrastMin, maxVal: contrastMax, range: (contrastMax - contrastMin) || 1.0 })
+
+    readonly property var bfiBounds:      autoScale ? _autoBfiBounds      : _fixedBfiBounds
+    readonly property var bviBounds:      autoScale ? _autoBviBounds      : _fixedBviBounds
+    readonly property var meanBounds:     autoScale ? _autoMeanBounds     : _fixedMeanBounds
+    readonly property var contrastBounds: autoScale ? _autoContrastBounds : _fixedContrastBounds
+
+    function _boundsFromArray(arr) {
+        var vals = []
+        for (var j = 0; j < arr.length; j++) {
+            var v = arr[j].v
+            if (isFinite(v)) vals.push(v)
+        }
+        if (vals.length < 4) return null
+        vals.sort(function(a, b) { return a - b })
+        var lo = vals[Math.floor(vals.length * 0.02)]
+        var hi = vals[Math.floor(vals.length * 0.98)]
+        if (!isFinite(lo) || !isFinite(hi)) return null
+        if (lo === hi) { lo -= 0.5; hi += 0.5 }
+        var pad = (hi - lo) * 0.1
+        lo -= pad; hi += pad
+        return { minVal: lo, maxVal: hi, range: (hi - lo) || 1.0 }
+    }
+
+    function _computeAutoBounds(field) {
+        // Aggregate across all visible series
+        var merged = []
+        for (var i = 0; i < seriesOrder.length; i++) {
+            var arr = (_store[seriesOrder[i]] || {})[field]
+            if (!arr) continue
+            for (var j = 0; j < arr.length; j++) merged.push(arr[j])
+        }
+        return _boundsFromArray(merged)
+    }
+
+    function _computePerPlotAutoBounds(field) {
+        for (var i = 0; i < seriesOrder.length; i++) {
+            var key = seriesOrder[i]
+            var s   = _store[key]
+            if (!s) continue
+            var b = _boundsFromArray(s[field] || [])
+            if (b) s["auto_" + field] = b
+        }
+    }
 
     property color meanColor:     "#2ECC71"
     property color contrastColor: "#9B59B6"
@@ -289,6 +341,35 @@ Rectangle {
 
         displayValues    = newDisplay
         _profTotalPoints = totalPts
+
+        // Recompute autoscale bounds once per second (every 10 ticks) for active mode
+        if (autoScale) {
+            _autoTickCounter++
+            if (_autoTickCounter >= 10) {
+                _autoTickCounter = 0
+                if (autoScalePerPlot) {
+                    if (showBfiBvi) {
+                        _computePerPlotAutoBounds("bfi")
+                        _computePerPlotAutoBounds("bvi")
+                    } else {
+                        _computePerPlotAutoBounds("mean")
+                        _computePerPlotAutoBounds("contrast")
+                    }
+                    // Force repaint of all canvases since per-plot bounds changed
+                    for (var pi = 0; pi < seriesOrder.length; pi++) {
+                        var it = plotRepeater.itemAt(pi)
+                        if (it && it.plotCanvas) it.plotCanvas.requestPaint()
+                    }
+                } else if (showBfiBvi) {
+                    var b1 = _computeAutoBounds("bfi"); if (b1) _autoBfiBounds = b1
+                    var b2 = _computeAutoBounds("bvi"); if (b2) _autoBviBounds = b2
+                } else {
+                    var b3 = _computeAutoBounds("mean");     if (b3) _autoMeanBounds     = b3
+                    var b4 = _computeAutoBounds("contrast"); if (b4) _autoContrastBounds = b4
+                }
+            }
+        }
+
         _profRenderMs    = Date.now() - tickT0
     }
 
@@ -466,17 +547,24 @@ Rectangle {
                                     }
                                 }
 
+                                // Resolve effective bounds (per-plot autoscale overrides)
+                                const perPlot = plotArea.autoScale && plotArea.autoScalePerPlot
+                                const bfiB      = (perPlot && s.auto_bfi)      ? s.auto_bfi      : plotArea.bfiBounds
+                                const bviB      = (perPlot && s.auto_bvi)      ? s.auto_bvi      : plotArea.bviBounds
+                                const meanB     = (perPlot && s.auto_mean)     ? s.auto_mean     : plotArea.meanBounds
+                                const contrastB = (perPlot && s.auto_contrast) ? s.auto_contrast : plotArea.contrastBounds
+
                                 // Draw series and labels based on mode
                                 if (showBfi) {
-                                    drawSeries(s.bfi, plotArea.bfiColor, plotArea.bfiBounds)
-                                    drawSeries(s.bvi, plotArea.bviColor, plotArea.bviBounds)
-                                    drawYLabels(plotArea.bfiBounds, plotArea.bfiColor, true)
-                                    drawYLabels(plotArea.bviBounds, plotArea.bviColor, false)
+                                    drawSeries(s.bfi, plotArea.bfiColor, bfiB)
+                                    drawSeries(s.bvi, plotArea.bviColor, bviB)
+                                    drawYLabels(bfiB, plotArea.bfiColor, true)
+                                    drawYLabels(bviB, plotArea.bviColor, false)
                                 } else {
-                                    drawSeries(s.mean,     plotArea.meanColor,     plotArea.meanBounds)
-                                    drawSeries(s.contrast, plotArea.contrastColor, plotArea.contrastBounds)
-                                    drawYLabels(plotArea.meanBounds,     plotArea.meanColor,     true)
-                                    drawYLabels(plotArea.contrastBounds, plotArea.contrastColor, false)
+                                    drawSeries(s.mean,     plotArea.meanColor,     meanB)
+                                    drawSeries(s.contrast, plotArea.contrastColor, contrastB)
+                                    drawYLabels(meanB,     plotArea.meanColor,     true)
+                                    drawYLabels(contrastB, plotArea.contrastColor, false)
                                 }
 
                                 // "Waiting for data" placeholder
