@@ -39,7 +39,6 @@ Rectangle {
         id: scanTimer
         interval: 1000
         repeat: true
-        running: bloodFlow.scanning
         onTriggered: bloodFlow.elapsedSec += 1
     }
 
@@ -176,7 +175,6 @@ Rectangle {
                         scanDialog.message = "Scanning..."
                         scanDialog.stageText = "Preparing..."
                         scanDialog.progress = 1
-                        bloodFlow.elapsedSec = 0
                         embeddedPlot.startScan(bloodFlow.leftMask, bloodFlow.rightMask)
                         scanRunner.start()
                     }
@@ -266,6 +264,10 @@ Rectangle {
 
         onStageUpdate: function(txt) {
             scanDialog.stageText = txt
+            if (scanRunner._stage === "capture") {
+                bloodFlow.elapsedSec = 0
+                scanTimer.start()
+            }
         }
         onProgressUpdate: function(pct) {
             scanDialog.progress = pct
@@ -275,6 +277,7 @@ Rectangle {
             console.log(line)
         }
         onScanFinished: function(ok, err, left, right) {
+            scanTimer.stop()
             bloodFlow.scanning = false
 
             if (err === "Canceled") {
