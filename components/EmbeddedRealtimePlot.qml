@@ -361,14 +361,14 @@ Rectangle {
                             Text {
                                 text:  plotArea.showBfiBvi
                                        ? "BFI: "  + ((plotArea.displayValues[seriesKey] || {}).bfi      || "--")
-                                       : "Mean: " + ((plotArea.displayValues[seriesKey] || {}).mean     || "--")
+                                       : "μ: "    + ((plotArea.displayValues[seriesKey] || {}).mean     || "--")
                                 color: plotArea.showBfiBvi ? plotArea.bfiColor : plotArea.meanColor
                                 font.pixelSize: 12
                             }
                             Text {
                                 text:  plotArea.showBfiBvi
                                        ? "BVI: "  + ((plotArea.displayValues[seriesKey] || {}).bvi      || "--")
-                                       : "Cont: " + ((plotArea.displayValues[seriesKey] || {}).contrast || "--")
+                                       : "σ: "    + ((plotArea.displayValues[seriesKey] || {}).contrast || "--")
                                 color: plotArea.showBfiBvi ? plotArea.bviColor : plotArea.contrastColor
                                 font.pixelSize: 12
                             }
