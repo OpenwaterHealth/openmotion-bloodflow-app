@@ -51,6 +51,52 @@ ApplicationWindow {
         }
     }
 
+    // Bottom-right resize handle (hidden when maximized)
+    Item {
+        id: resizeHandle
+        width: 18
+        height: 18
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        visible: window.visibility !== Window.Maximized
+
+        // Diagonal grip lines
+        Canvas {
+            anchors.fill: parent
+            anchors.margins: 3
+            onPaint: {
+                var ctx = getContext("2d")
+                ctx.strokeStyle = "#5A6B8C"
+                ctx.lineWidth = 1
+                var s = width
+                for (var i = 0; i < 3; i++) {
+                    var off = i * 4
+                    ctx.beginPath()
+                    ctx.moveTo(s - off, s)
+                    ctx.lineTo(s, s - off)
+                    ctx.stroke()
+                }
+            }
+        }
+
+        MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.SizeFDiagCursor
+            property point clickPos
+            onPressed: function(mouse) {
+                clickPos = Qt.point(mouse.x, mouse.y)
+            }
+            onPositionChanged: function(mouse) {
+                var dx = mouse.x - clickPos.x
+                var dy = mouse.y - clickPos.y
+                var newW = Math.max(800, window.width + dx)
+                var newH = Math.max(600, window.height + dy)
+                window.width = newW
+                window.height = newH
+            }
+        }
+    }
+
     Connections {
         target: MOTIONInterface
     }

@@ -126,20 +126,18 @@ Rectangle {
                     window.showMinimized(); // Minimize the window
                 }
             }
-/*
             // Maximize/Restore Button
             IconWindowButton {
-                buttonIcon: "\ueb18" // Maximize/restore icon
+                buttonIcon: window.visibility === Window.Maximized ? "\uea47" : "\ueb18"
                 Layout.alignment: Qt.AlignHCenter
                 onClicked: {
                     if (window.visibility === Window.Maximized) {
-                        window.showNormal(); // Restore to normal size
+                        window.showNormal();
                     } else {
-                        window.showMaximized(); // Maximize the window
+                        window.showMaximized();
                     }
                 }
             }
-*/
             // Exit Button
             IconWindowButton {
                 buttonIcon: "\ue9b3" // Exit (close) icon
