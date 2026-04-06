@@ -82,73 +82,83 @@ Rectangle {
         MOTIONInterface.startConfigureCameraSensors(leftMask, rightMask);
     }
 
-    // LAYOUT: full-height → ButtonPanel | DataViewer
-    ColumnLayout {
-        anchors.fill: parent
+    // ButtonPanel — sits above modal backdrops so it's always clickable
+    ButtonPanel {
+        id: buttonPanel
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.left: parent.left
         anchors.margins: 8
-        spacing: 6
+        width: 80
+        z: 10000
 
-        // ── ButtonPanel | DataViewer ──────────────────────────────────────
-        RowLayout {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            spacing: 8
+        scanning: bloodFlow.scanning
+        waiting: bloodFlow.configuring
+        camerasReady: bloodFlow.camerasReady && !bloodFlow.configuring
 
-            ButtonPanel {
-                id: buttonPanel
-                Layout.fillHeight: true
-                Layout.preferredWidth: 80
-                scanning: bloodFlow.scanning
-                waiting: bloodFlow.configuring
-                camerasReady: bloodFlow.camerasReady && !bloodFlow.configuring
-
-                onStartStopClicked: {
-                    if (bloodFlow.scanning) {
-                        scanRunner.cancel()
-                        scanDialog.close()
-                        embeddedPlot.stopScan()
-                        notesModal.open()
-                    } else {
-                        MOTIONInterface.newSession()
-                        bloodFlow.scanning = true
-                        scanDialog.message = "Scanning..."
-                        scanDialog.stageText = "Preparing..."
-                        scanDialog.progress = 1
-                        embeddedPlot.startScan(bloodFlow.leftMask, bloodFlow.rightMask)
-                        scanRunner.start()
-                    }
-                }
-
-                onScanSettingsClicked: {
-                    scanSettingsModal.setInitialSelection(
-                        maskToArray(leftMask),
-                        maskToArray(rightMask)
-                    )
-                    scanSettingsModal.open()
-                }
-                onNotesClicked: notesModal.open()
-                onHistoryClicked: historyModal.open()
-                onLogClicked: scanDialog.open()
-                onSettingsClicked: settingsModal.open()
-            }
-
-            EmbeddedRealtimePlot {
-                id: embeddedPlot
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                showBfiBvi:  settingsModal.showBfiBvi
-                bfiMin:      settingsModal.bfiMin
-                bfiMax:      settingsModal.bfiMax
-                bviMin:      settingsModal.bviMin
-                bviMax:      settingsModal.bviMax
-                meanMin:     settingsModal.meanMin
-                meanMax:     settingsModal.meanMax
-                contrastMin: settingsModal.contrastMin
-                contrastMax: settingsModal.contrastMax
-                previewLeftMask:  bloodFlow.leftMask
-                previewRightMask: bloodFlow.rightMask
+        onStartStopClicked: {
+            if (bloodFlow.scanning) {
+                scanRunner.cancel()
+                scanDialog.close()
+                embeddedPlot.stopScan()
+                notesModal.open()
+            } else {
+                MOTIONInterface.newSession()
+                bloodFlow.scanning = true
+                scanDialog.message = "Scanning..."
+                scanDialog.stageText = "Preparing..."
+                scanDialog.progress = 1
+                embeddedPlot.startScan(bloodFlow.leftMask, bloodFlow.rightMask)
+                scanRunner.start()
             }
         }
+
+        onScanSettingsClicked: {
+            var wasOpen = scanSettingsModal.visible
+            closeAllModals()
+            if (!wasOpen) {
+                scanSettingsModal.setInitialSelection(
+                    maskToArray(leftMask),
+                    maskToArray(rightMask)
+                )
+                scanSettingsModal.open()
+            }
+        }
+        onNotesClicked:    { var o = notesModal.visible;    closeAllModals(); if (!o) notesModal.open() }
+        onHistoryClicked:  { var o = historyModal.visible;  closeAllModals(); if (!o) historyModal.open() }
+        onLogClicked:      { var o = scanDialog.visible;    closeAllModals(); if (!o) scanDialog.open() }
+        onSettingsClicked: { var o = settingsModal.visible; closeAllModals(); if (!o) settingsModal.open() }
+    }
+
+    // Data viewer — fills remaining space to the right of ButtonPanel
+    EmbeddedRealtimePlot {
+        id: embeddedPlot
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.left: buttonPanel.right
+        anchors.right: parent.right
+        anchors.margins: 8
+        anchors.leftMargin: 16
+
+        showBfiBvi:  settingsModal.showBfiBvi
+        bfiMin:      settingsModal.bfiMin
+        bfiMax:      settingsModal.bfiMax
+        bviMin:      settingsModal.bviMin
+        bviMax:      settingsModal.bviMax
+        meanMin:     settingsModal.meanMin
+        meanMax:     settingsModal.meanMax
+        contrastMin: settingsModal.contrastMin
+        contrastMax: settingsModal.contrastMax
+        previewLeftMask:  bloodFlow.leftMask
+        previewRightMask: bloodFlow.rightMask
+    }
+
+    function closeAllModals() {
+        if (scanSettingsModal.visible) scanSettingsModal.close()
+        if (notesModal.visible)        notesModal.close()
+        if (historyModal.visible)      historyModal.close()
+        if (settingsModal.visible)     settingsModal.close()
+        if (scanDialog.visible)        scanDialog.close()
     }
 
     // ===== MODALS =====
