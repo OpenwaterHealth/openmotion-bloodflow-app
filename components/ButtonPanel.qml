@@ -122,42 +122,18 @@ Rectangle {
 
         // Scan Settings (camera + duration)
         PanelButton {
-            iconText: "\uea48"  // camera/aperture icon
+            iconText: "\ueabf"  // setting-3 icon
             label: "Scan\nSettings"
             onClicked: panel.scanSettingsClicked()
         }
 
-        // --- Divider ---
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 1
-            Layout.topMargin: 4
-            Layout.bottomMargin: 4
-            color: "#3E4E6F"
-        }
+        Rectangle { Layout.preferredWidth: 52; Layout.preferredHeight: 1; Layout.topMargin: 4; Layout.bottomMargin: 4; Layout.alignment: Qt.AlignHCenter; color: "#3E4E6F" }
 
-        // ===== BOX 2: Notes =====
+        // Notes
         PanelButton {
             iconText: "\uea7f"  // notes/document icon
             label: "Notes"
             onClicked: panel.notesClicked()
-        }
-
-        // --- Divider ---
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 1
-            Layout.topMargin: 4
-            Layout.bottomMargin: 4
-            color: "#3E4E6F"
-        }
-
-        // ===== BOX 3: System =====
-        // History
-        PanelButton {
-            iconText: "\uea4e"  // folder icon
-            label: "History"
-            onClicked: panel.historyClicked()
         }
 
         // Log viewer (developer mode only)
@@ -168,20 +144,10 @@ Rectangle {
             onClicked: panel.logClicked()
         }
 
-        // ── spacer pushes Box 4 to the bottom ──
+        // ── spacer pushes bottom controls down ──
         Item { Layout.fillHeight: true }
 
-        // --- Divider ---
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 1
-            Layout.topMargin: 4
-            Layout.bottomMargin: 4
-            color: "#3E4E6F"
-        }
-
-        // ===== BOX 4: Bottom controls =====
-        // Status indicator (not clickable)
+        // Connection status indicator
         Item {
             Layout.preferredWidth: 68
             Layout.preferredHeight: 68
@@ -198,7 +164,6 @@ Rectangle {
                     border.width: 1
                     Layout.alignment: Qt.AlignHCenter
 
-                    // Pulse animation when scanning
                     SequentialAnimation on opacity {
                         running: panel.scanning
                         loops: Animation.Infinite
@@ -208,7 +173,7 @@ Rectangle {
                 }
 
                 Text {
-                    text: "Status"
+                    text: "Connection"
                     color: "#7F8C8D"
                     font.pixelSize: 10
                     horizontalAlignment: Text.AlignHCenter
@@ -217,9 +182,20 @@ Rectangle {
             }
         }
 
+        Rectangle { Layout.preferredWidth: 52; Layout.preferredHeight: 1; Layout.topMargin: 4; Layout.bottomMargin: 4; Layout.alignment: Qt.AlignHCenter; color: "#3E4E6F" }
+
+        // History
+        PanelButton {
+            iconText: "\ue96b"  // book icon
+            label: "History"
+            onClicked: panel.historyClicked()
+        }
+
+        Rectangle { Layout.preferredWidth: 52; Layout.preferredHeight: 1; Layout.topMargin: 4; Layout.bottomMargin: 4; Layout.alignment: Qt.AlignHCenter; color: "#3E4E6F" }
+
         // Settings
         PanelButton {
-            iconText: "\ueabf"  // gear icon
+            iconText: "\ueabe"  // setting-2 icon
             label: "Settings"
             onClicked: panel.settingsClicked()
         }

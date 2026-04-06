@@ -19,6 +19,7 @@ Rectangle {
     property int    elapsedSec: 0
     property int    durationSec: 3600
 
+
     function formatSec(s) {
         var h = Math.floor(s / 3600)
         var m = Math.floor((s % 3600) / 60)
