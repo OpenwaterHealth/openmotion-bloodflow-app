@@ -17,6 +17,16 @@ Rectangle {
     property color bviColor: "#3498DB"
     property bool  bviLowPassEnabled: false
     property real  bviLowPassCutoffHz: 40.0
+
+    // Display clamps — values outside [low, high] are shown as "--"
+    property real bfiClampLow:  0.0
+    property real bfiClampHigh: 10.0
+    property real bviClampLow:  0.0
+    property real bviClampHigh: 10.0
+    function _clampedDisplay(v, lo, hi, digits) {
+        if (!isFinite(v) || v <= lo || v >= hi) return "--"
+        return v.toFixed(digits)
+    }
     readonly property real _bviAlpha: {
         var fs = 40.0
         var dt = 1.0 / fs
@@ -283,8 +293,8 @@ Rectangle {
                     font.weight: Font.DemiBold
                 }
                 Text {
-                    text: isFinite(sideRoot.sideData.latestBfi)
-                          ? sideRoot.sideData.latestBfi.toFixed(2) : "--"
+                    text: root._clampedDisplay(sideRoot.sideData.latestBfi,
+                                                root.bfiClampLow, root.bfiClampHigh, 2)
                     color: "#FFFFFF"
                     font.pixelSize: 72
                     font.weight: Font.Bold
@@ -300,8 +310,8 @@ Rectangle {
                     font.weight: Font.DemiBold
                 }
                 Text {
-                    text: isFinite(sideRoot.sideData.latestBvi)
-                          ? sideRoot.sideData.latestBvi.toFixed(2) : "--"
+                    text: root._clampedDisplay(sideRoot.sideData.latestBvi,
+                                                root.bviClampLow, root.bviClampHigh, 2)
                     color: "#FFFFFF"
                     font.pixelSize: 72
                     font.weight: Font.Bold

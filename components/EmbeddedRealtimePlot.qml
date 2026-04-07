@@ -23,6 +23,16 @@ Rectangle {
     property bool showBfiBvi: true
     property bool bviLowPassEnabled: false
     property real bviLowPassCutoffHz: 40.0
+
+    // Display clamps — values outside [low, high] are shown as "--"
+    property real bfiClampLow:  0.0
+    property real bfiClampHigh: 10.0
+    property real bviClampLow:  0.0
+    property real bviClampHigh: 10.0
+    function _clampedDisplay(v, lo, hi, digits) {
+        if (!isFinite(v) || v <= lo || v >= hi) return "--"
+        return v.toFixed(digits)
+    }
     readonly property real _bviAlpha: {
         // 1-pole IIR: alpha = dt / (RC + dt), RC = 1/(2*pi*fc), dt = 1/fs (40 Hz)
         var fs = 40.0
@@ -346,8 +356,8 @@ Rectangle {
             totalPts += s.bfi.length + s.bvi.length + s.mean.length + s.contrast.length
 
             newDisplay[key] = {
-                bfi:      isFinite(s.latestBfi)      ? s.latestBfi.toFixed(2)      : "--",
-                bvi:      isFinite(s.latestBvi)      ? s.latestBvi.toFixed(2)      : "--",
+                bfi:      _clampedDisplay(s.latestBfi, bfiClampLow, bfiClampHigh, 2),
+                bvi:      _clampedDisplay(s.latestBvi, bviClampLow, bviClampHigh, 2),
                 mean:     isFinite(s.latestMean)     ? s.latestMean.toFixed(1)     : "--",
                 contrast: isFinite(s.latestContrast) ? s.latestContrast.toFixed(3) : "--",
                 temp:     isFinite(s.latestTemp)     ? s.latestTemp.toFixed(1)     : "--"

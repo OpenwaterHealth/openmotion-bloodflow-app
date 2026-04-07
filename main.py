@@ -90,6 +90,10 @@ def _load_app_config() -> dict:
         "bviColor": "#3498DB",
         "bviLowPassEnabled": False,
         "bviLowPassCutoffHz": 40.0,
+        "bfiClampLow": 0.0,
+        "bfiClampHigh": 10.0,
+        "bviClampLow": 0.0,
+        "bviClampHigh": 10.0,
     }
     config_path = resource_path("config", "app_config.json")
     if not config_path.exists():

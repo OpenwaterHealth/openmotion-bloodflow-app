@@ -163,6 +163,10 @@ Rectangle {
         bviColor: settingsModal.bviColor
         bviLowPassEnabled:  settingsModal.bviLowPassEnabled
         bviLowPassCutoffHz: settingsModal.bviLowPassCutoffHz
+        bfiClampLow:  MOTIONInterface.appConfig.bfiClampLow  !== undefined ? MOTIONInterface.appConfig.bfiClampLow  : 0.0
+        bfiClampHigh: MOTIONInterface.appConfig.bfiClampHigh !== undefined ? MOTIONInterface.appConfig.bfiClampHigh : 10.0
+        bviClampLow:  MOTIONInterface.appConfig.bviClampLow  !== undefined ? MOTIONInterface.appConfig.bviClampLow  : 0.0
+        bviClampHigh: MOTIONInterface.appConfig.bviClampHigh !== undefined ? MOTIONInterface.appConfig.bviClampHigh : 10.0
         autoScale:        settingsModal.autoScale
         autoScalePerPlot: settingsModal.autoScalePerPlot
         bfiMin:      settingsModal.bfiMin
@@ -186,6 +190,10 @@ Rectangle {
         bviColor: settingsModal.bviColor
         bviLowPassEnabled:  settingsModal.bviLowPassEnabled
         bviLowPassCutoffHz: settingsModal.bviLowPassCutoffHz
+        bfiClampLow:  MOTIONInterface.appConfig.bfiClampLow  !== undefined ? MOTIONInterface.appConfig.bfiClampLow  : 0.0
+        bfiClampHigh: MOTIONInterface.appConfig.bfiClampHigh !== undefined ? MOTIONInterface.appConfig.bfiClampHigh : 10.0
+        bviClampLow:  MOTIONInterface.appConfig.bviClampLow  !== undefined ? MOTIONInterface.appConfig.bviClampLow  : 0.0
+        bviClampHigh: MOTIONInterface.appConfig.bviClampHigh !== undefined ? MOTIONInterface.appConfig.bviClampHigh : 10.0
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         anchors.left: buttonPanel.right
