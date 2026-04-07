@@ -43,11 +43,12 @@
   "meanMax": 200.0,
   "contrastMin": 0.0,
   "contrastMax": 0.7,
-  "dataDirectory": "C:\\Users\\ethan\\Projects\\scan_data",
+  "dataDirectory": null,
   "writeRawCsv": false,
   "rawCsvDurationSec": 60,
   "invertPlotAxes": true,
   "autoScale": true,
-  "autoScalePerPlot": false,
-  "fdaMode": false
+  "autoScalePerPlot": true,
+  "fdaMode": false,
+  "plotWindowSec": 3
 }

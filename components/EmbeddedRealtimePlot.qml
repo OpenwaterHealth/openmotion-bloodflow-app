@@ -64,7 +64,7 @@ Rectangle {
         var hi = vals[Math.floor(vals.length * 0.98)]
         if (!isFinite(lo) || !isFinite(hi)) return null
         if (lo === hi) { lo -= 0.5; hi += 0.5 }
-        var pad = (hi - lo) * 0.1
+        var pad = (hi - lo) * 0.25
         lo -= pad; hi += pad
         return { minVal: lo, maxVal: hi, range: (hi - lo) || 1.0 }
     }
