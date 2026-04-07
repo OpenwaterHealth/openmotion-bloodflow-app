@@ -49,7 +49,9 @@
   "autoScale": true,
   "autoScalePerPlot": true,
   "reducedMode": false,
-  "plotWindowSec": 3,
+  "plotWindowSec": 15,
   "bfiColor": "#ffffff",
-  "bviColor": "#3437db"
+  "bviColor": "#3437db",
+  "bviLowPassEnabled": false,
+  "bviLowPassCutoffHz": 40.0
 }

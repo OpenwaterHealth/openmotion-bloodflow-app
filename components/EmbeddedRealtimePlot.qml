@@ -21,6 +21,15 @@ Rectangle {
     property int  rightActiveCount: 0
     property int  plotRows: (leftActiveCount === 8 || rightActiveCount === 8) ? 4 : 2
     property bool showBfiBvi: true
+    property bool bviLowPassEnabled: false
+    property real bviLowPassCutoffHz: 40.0
+    readonly property real _bviAlpha: {
+        // 1-pole IIR: alpha = dt / (RC + dt), RC = 1/(2*pi*fc), dt = 1/fs (40 Hz)
+        var fs = 40.0
+        var dt = 1.0 / fs
+        var rc = 1.0 / (2.0 * Math.PI * Math.max(0.01, bviLowPassCutoffHz))
+        return dt / (rc + dt)
+    }
     property bool developerMode: MOTIONInterface.appConfig.developerMode ? true : false
     // Mean/contrast axes invert; BFI/BVI axes do not.
     readonly property bool invertPlotAxes: !showBfiBvi
@@ -164,7 +173,8 @@ Rectangle {
             bfi: [], bvi: [], mean: [], contrast: [],
             latestBfi: NaN, latestBvi: NaN,
             latestMean: NaN, latestContrast: NaN,
-            latestTemp: NaN
+            latestTemp: NaN,
+            bviLpState: NaN
         }
     }
 
@@ -222,8 +232,16 @@ Rectangle {
         if (!running) return
         const key = _seriesKey(side, camId)
         _ensureEntry(key)
-        _store[key].bvi.push({ t: ts, v: val, fid: frameId })
-        _store[key].latestBvi = val
+        var s = _store[key]
+        var outVal = val
+        if (bviLowPassEnabled && isFinite(val)) {
+            var prev = s.bviLpState
+            if (!isFinite(prev)) prev = val
+            outVal = prev + _bviAlpha * (val - prev)
+            s.bviLpState = outVal
+        }
+        s.bvi.push({ t: ts, v: outVal, fid: frameId })
+        s.latestBvi = outVal
         if (ts > latestTimestamp) latestTimestamp = ts
     }
 

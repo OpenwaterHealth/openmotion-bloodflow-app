@@ -21,6 +21,8 @@ Item {
     property int    plotWindowSec: 15
     property color  bfiColor: "#E74C3C"
     property color  bviColor: "#3498DB"
+    property bool   bviLowPassEnabled:  false
+    property real   bviLowPassCutoffHz: 40.0
     property real bfiMin:      0.0
     property real bfiMax:      10.0
     property real bviMin:      0.0
@@ -41,6 +43,8 @@ Item {
         plotWindowSec    = cfg.plotWindowSec    !== undefined ? cfg.plotWindowSec    : 15
         bfiColor         = cfg.bfiColor         !== undefined ? cfg.bfiColor         : "#E74C3C"
         bviColor         = cfg.bviColor         !== undefined ? cfg.bviColor         : "#3498DB"
+        bviLowPassEnabled  = cfg.bviLowPassEnabled  !== undefined ? cfg.bviLowPassEnabled  : false
+        bviLowPassCutoffHz = cfg.bviLowPassCutoffHz !== undefined ? cfg.bviLowPassCutoffHz : 40.0
         bfiMin       = cfg.bfiMin       !== undefined ? cfg.bfiMin       : 0.0
         bfiMax       = cfg.bfiMax       !== undefined ? cfg.bfiMax       : 10.0
         bviMin       = cfg.bviMin       !== undefined ? cfg.bviMin       : 0.0
@@ -74,6 +78,8 @@ Item {
         plotWindowSec    = cfg.plotWindowSec    !== undefined ? cfg.plotWindowSec    : 15
         bfiColor         = cfg.bfiColor         !== undefined ? cfg.bfiColor         : "#E74C3C"
         bviColor         = cfg.bviColor         !== undefined ? cfg.bviColor         : "#3498DB"
+        bviLowPassEnabled  = cfg.bviLowPassEnabled  !== undefined ? cfg.bviLowPassEnabled  : false
+        bviLowPassCutoffHz = cfg.bviLowPassCutoffHz !== undefined ? cfg.bviLowPassCutoffHz : 40.0
         bfiMin       = cfg.bfiMin       !== undefined ? cfg.bfiMin       : 0.0
         bfiMax       = cfg.bfiMax       !== undefined ? cfg.bfiMax       : 10.0
         bviMin       = cfg.bviMin       !== undefined ? cfg.bviMin       : 0.0
@@ -97,6 +103,8 @@ Item {
             "plotWindowSec":     plotWindowSec,
             "bfiColor":          "" + bfiColor,
             "bviColor":          "" + bviColor,
+            "bviLowPassEnabled":  bviLowPassEnabled,
+            "bviLowPassCutoffHz": bviLowPassCutoffHz,
             "bfiMin":      bfiMin,
             "bfiMax":      bfiMax,
             "bviMin":      bviMin,
@@ -344,6 +352,25 @@ Item {
                     Switch {
                         checked: root.autoScale
                         onCheckedChanged: root.autoScale = checked
+                    }
+                }
+
+                RowLayout {
+                    spacing: 16; Layout.alignment: Qt.AlignLeft
+                    Text {
+                        text: "BVI Low-Pass Filter"
+                        color: root.bviLowPassEnabled ? "#4A90E2" : "#BDC3C7"
+                        font.pixelSize: 14
+                        font.weight: root.bviLowPassEnabled ? Font.Bold : Font.Normal
+                    }
+                    Switch {
+                        checked: root.bviLowPassEnabled
+                        onCheckedChanged: root.bviLowPassEnabled = checked
+                    }
+                    Text {
+                        text: "(" + root.bviLowPassCutoffHz.toFixed(0) + " Hz)"
+                        color: "#7F8C8D"
+                        font.pixelSize: 12
                     }
                 }
 

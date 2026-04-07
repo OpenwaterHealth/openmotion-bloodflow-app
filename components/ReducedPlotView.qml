@@ -15,14 +15,22 @@ Rectangle {
     property real latestTimestamp: 0
     property color bfiColor: "#E74C3C"
     property color bviColor: "#3498DB"
+    property bool  bviLowPassEnabled: false
+    property real  bviLowPassCutoffHz: 40.0
+    readonly property real _bviAlpha: {
+        var fs = 40.0
+        var dt = 1.0 / fs
+        var rc = 1.0 / (2.0 * Math.PI * Math.max(0.01, bviLowPassCutoffHz))
+        return dt / (rc + dt)
+    }
 
     // Per-side aggregated data. Pending entries are keyed by frameId; once enough
     // cameras have reported (or a newer frame arrives) the entry is averaged and
     // pushed onto the bfi/bvi series.
     property var leftData:  ({ bfi: [], bvi: [], pendingBfi: ({}), pendingBvi: ({}),
-                                latestBfi: NaN, latestBvi: NaN })
+                                latestBfi: NaN, latestBvi: NaN, bviLpState: NaN })
     property var rightData: ({ bfi: [], bvi: [], pendingBfi: ({}), pendingBvi: ({}),
-                                latestBfi: NaN, latestBvi: NaN })
+                                latestBfi: NaN, latestBvi: NaN, bviLpState: NaN })
 
     // Auto-scaled bounds (recomputed once per second)
     property var leftBfiBounds:  ({ minVal: 0.0, maxVal: 10.0, range: 10.0 })
@@ -32,9 +40,9 @@ Rectangle {
 
     function reset() {
         leftData  = { bfi: [], bvi: [], pendingBfi: ({}), pendingBvi: ({}),
-                      latestBfi: NaN, latestBvi: NaN }
+                      latestBfi: NaN, latestBvi: NaN, bviLpState: NaN }
         rightData = { bfi: [], bvi: [], pendingBfi: ({}), pendingBvi: ({}),
-                      latestBfi: NaN, latestBvi: NaN }
+                      latestBfi: NaN, latestBvi: NaN, bviLpState: NaN }
         latestTimestamp = 0
     }
 
@@ -46,6 +54,12 @@ Rectangle {
         var e = pending[fid]
         if (!e || e.count === 0) return
         var avg = e.sum / e.count
+        if (field === "bvi" && root.bviLowPassEnabled) {
+            var prev = data.bviLpState
+            if (!isFinite(prev)) prev = avg
+            avg = prev + root._bviAlpha * (avg - prev)
+            data.bviLpState = avg
+        }
         data[field].push({ t: e.ts, v: avg })
         if (field === "bfi") data.latestBfi = avg
         else                 data.latestBvi = avg

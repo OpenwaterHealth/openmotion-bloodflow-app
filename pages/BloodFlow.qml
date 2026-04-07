@@ -161,6 +161,8 @@ Rectangle {
         windowSeconds: settingsModal.plotWindowSec
         bfiColor: settingsModal.bfiColor
         bviColor: settingsModal.bviColor
+        bviLowPassEnabled:  settingsModal.bviLowPassEnabled
+        bviLowPassCutoffHz: settingsModal.bviLowPassCutoffHz
         autoScale:        settingsModal.autoScale
         autoScalePerPlot: settingsModal.autoScalePerPlot
         bfiMin:      settingsModal.bfiMin
@@ -182,6 +184,8 @@ Rectangle {
         windowSeconds: settingsModal.plotWindowSec
         bfiColor: settingsModal.bfiColor
         bviColor: settingsModal.bviColor
+        bviLowPassEnabled:  settingsModal.bviLowPassEnabled
+        bviLowPassCutoffHz: settingsModal.bviLowPassCutoffHz
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         anchors.left: buttonPanel.right
