@@ -14,7 +14,7 @@ Rectangle {
     property bool scanning: false
     property bool waiting: false       // true while cameras are flashing / scan is arming
     property bool camerasReady: false  // true when camera flash is complete
-    property bool fdaMode: false       // FDA mode hides scan-settings button
+    property bool reducedMode: false       // FDA mode hides scan-settings button
 
     // Status color logic
     property bool allConnected: MOTIONInterface.consoleConnected &&
@@ -123,14 +123,14 @@ Rectangle {
 
         // Scan Settings (camera + duration)
         PanelButton {
-            visible: !panel.fdaMode
+            visible: !panel.reducedMode
             iconText: "\ueabf"  // setting-3 icon
             label: "Scan\nSettings"
             onClicked: panel.scanSettingsClicked()
         }
 
         Rectangle {
-            visible: !panel.fdaMode
+            visible: !panel.reducedMode
             Layout.preferredWidth: 52; Layout.preferredHeight: 1
             Layout.topMargin: 4; Layout.bottomMargin: 4
             Layout.alignment: Qt.AlignHCenter; color: "#3E4E6F"

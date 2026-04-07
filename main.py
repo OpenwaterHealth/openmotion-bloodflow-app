@@ -85,7 +85,7 @@ def _load_app_config() -> dict:
         "invertPlotAxes": True,
         "autoScale": False,
         "autoScalePerPlot": False,
-        "fdaMode": False,
+        "reducedMode": False,
         "plotWindowSec": 15,
         "bfiColor": "#E74C3C",
         "bviColor": "#3498DB",

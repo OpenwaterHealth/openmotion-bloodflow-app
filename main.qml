@@ -33,7 +33,7 @@ ApplicationWindow {
             sessionId:   bloodFlowPage.sessionId
             scanning:    bloodFlowPage.scanning
             freeRun:     bloodFlowPage.freeRun
-            fdaMode:     bloodFlowPage.fdaMode
+            reducedMode:     bloodFlowPage.reducedMode
             elapsedSec:  bloodFlowPage.elapsedSec
             durationSec: bloodFlowPage.durationSec
         }

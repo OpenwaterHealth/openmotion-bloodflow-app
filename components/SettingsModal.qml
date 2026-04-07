@@ -17,7 +17,7 @@ Item {
     property bool showBfiBvi:  true
     property bool autoScale:        false
     property bool autoScalePerPlot: false
-    property bool fdaMode:          false
+    property bool reducedMode:          false
     property int    plotWindowSec: 15
     property color  bfiColor: "#E74C3C"
     property color  bviColor: "#3498DB"
@@ -37,7 +37,7 @@ Item {
         showBfiBvi   = cfg.showBfiBvi   !== undefined ? cfg.showBfiBvi   : true
         autoScale        = cfg.autoScale        !== undefined ? cfg.autoScale        : false
         autoScalePerPlot = cfg.autoScalePerPlot !== undefined ? cfg.autoScalePerPlot : false
-        fdaMode          = cfg.fdaMode          !== undefined ? cfg.fdaMode          : false
+        reducedMode          = cfg.reducedMode          !== undefined ? cfg.reducedMode          : false
         plotWindowSec    = cfg.plotWindowSec    !== undefined ? cfg.plotWindowSec    : 15
         bfiColor         = cfg.bfiColor         !== undefined ? cfg.bfiColor         : "#E74C3C"
         bviColor         = cfg.bviColor         !== undefined ? cfg.bviColor         : "#3498DB"
@@ -70,7 +70,7 @@ Item {
         showBfiBvi   = cfg.showBfiBvi   !== undefined ? cfg.showBfiBvi   : true
         autoScale        = cfg.autoScale        !== undefined ? cfg.autoScale        : false
         autoScalePerPlot = cfg.autoScalePerPlot !== undefined ? cfg.autoScalePerPlot : false
-        fdaMode          = cfg.fdaMode          !== undefined ? cfg.fdaMode          : false
+        reducedMode          = cfg.reducedMode          !== undefined ? cfg.reducedMode          : false
         plotWindowSec    = cfg.plotWindowSec    !== undefined ? cfg.plotWindowSec    : 15
         bfiColor         = cfg.bfiColor         !== undefined ? cfg.bfiColor         : "#E74C3C"
         bviColor         = cfg.bviColor         !== undefined ? cfg.bviColor         : "#3498DB"
@@ -93,7 +93,7 @@ Item {
             "showBfiBvi":  showBfiBvi,
             "autoScale":         autoScale,
             "autoScalePerPlot":  autoScalePerPlot,
-            "fdaMode":           fdaMode,
+            "reducedMode":           reducedMode,
             "plotWindowSec":     plotWindowSec,
             "bfiColor":          "" + bfiColor,
             "bviColor":          "" + bviColor,
@@ -534,13 +534,13 @@ Item {
             // Separator
             Rectangle { Layout.fillWidth: true; height: 1; color: "#3E4E6F" }
 
-            // FDA Mode
+            // Reduced Mode
             ColumnLayout {
                 spacing: 8
                 Layout.fillWidth: true
 
                 Text {
-                    text: "FDA Mode"
+                    text: "Reduced Mode"
                     color: "#BDC3C7"
                     font.pixelSize: 16
                     font.weight: Font.DemiBold
@@ -549,19 +549,19 @@ Item {
                 RowLayout {
                     spacing: 16; Layout.alignment: Qt.AlignLeft
                     Text {
-                        text: "Enable FDA Mode"
-                        color: root.fdaMode ? "#4A90E2" : "#BDC3C7"
+                        text: "Enable Reduced Mode"
+                        color: root.reducedMode ? "#4A90E2" : "#BDC3C7"
                         font.pixelSize: 14
-                        font.weight: root.fdaMode ? Font.Bold : Font.Normal
+                        font.weight: root.reducedMode ? Font.Bold : Font.Normal
                     }
                     Switch {
-                        checked: root.fdaMode
-                        onCheckedChanged: root.fdaMode = checked
+                        checked: root.reducedMode
+                        onCheckedChanged: root.reducedMode = checked
                     }
                 }
 
                 Text {
-                    text: "Restart the app for FDA Mode changes to take effect."
+                    text: "Restart the app for Reduced Mode changes to take effect."
                     color: "#7F8C8D"
                     font.pixelSize: 11
                     font.italic: true

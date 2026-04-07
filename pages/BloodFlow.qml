@@ -19,7 +19,7 @@ Rectangle {
 
     // FDA mode (read from app config). Forces Middle camera pattern + free run,
     // hides scan-settings button, and swaps in the FDA plot view.
-    property bool fdaMode: MOTIONInterface.appConfig.fdaMode === true
+    property bool reducedMode: MOTIONInterface.appConfig.reducedMode === true
 
     // Camera masks (updated by camera selection modal)
     property int leftMask: 0x99   // default "Outer"
@@ -29,11 +29,11 @@ Rectangle {
     property string sessionId: MOTIONInterface.sessionId || ""
 
     // Duration from scan time modal
-    property bool freeRun: fdaMode
-    property int durationSec: fdaMode ? 43200 : 3600  // 12h in FDA mode, 1h default
+    property bool freeRun: reducedMode
+    property int durationSec: reducedMode ? 43200 : 3600  // 12h in FDA mode, 1h default
 
     onFdaModeChanged: {
-        if (fdaMode) {
+        if (reducedMode) {
             freeRun = true
             durationSec = 43200
             leftMask = 0x66
@@ -62,8 +62,8 @@ Rectangle {
     // Apply default cameras from config
     function applyDefaultCameras() {
         var cfg      = MOTIONInterface.appConfig;
-        var defLeft  = fdaMode ? 0x66 : (cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99);
-        var defRight = fdaMode ? 0x66 : (cfg.rightMask !== undefined ? cfg.rightMask : 0x99);
+        var defLeft  = reducedMode ? 0x66 : (cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99);
+        var defRight = reducedMode ? 0x66 : (cfg.rightMask !== undefined ? cfg.rightMask : 0x99);
         if (MOTIONInterface.leftSensorConnected)  leftMask  = defLeft;
         if (MOTIONInterface.rightSensorConnected) rightMask = defRight;
         if (cfg.autoConfigureOnStartup !== false &&
@@ -108,13 +108,13 @@ Rectangle {
         scanning: bloodFlow.scanning
         waiting: bloodFlow.configuring
         camerasReady: bloodFlow.camerasReady && !bloodFlow.configuring
-        fdaMode: bloodFlow.fdaMode
+        reducedMode: bloodFlow.reducedMode
 
         onStartStopClicked: {
             if (bloodFlow.scanning) {
                 scanRunner.cancel()
                 scanDialog.close()
-                if (bloodFlow.fdaMode) fdaPlot.stopScan()
+                if (bloodFlow.reducedMode) reducedPlot.stopScan()
                 else                   embeddedPlot.stopScan()
                 notesModal.open()
             } else {
@@ -123,7 +123,7 @@ Rectangle {
                 scanDialog.message = "Scanning..."
                 scanDialog.stageText = "Preparing..."
                 scanDialog.progress = 1
-                if (bloodFlow.fdaMode) fdaPlot.startScan()
+                if (bloodFlow.reducedMode) reducedPlot.startScan()
                 else                   embeddedPlot.startScan(bloodFlow.leftMask, bloodFlow.rightMask)
                 scanRunner.start()
             }
@@ -149,7 +149,7 @@ Rectangle {
     // Data viewer — fills remaining space to the right of ButtonPanel
     EmbeddedRealtimePlot {
         id: embeddedPlot
-        visible: !bloodFlow.fdaMode
+        visible: !bloodFlow.reducedMode
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         anchors.left: buttonPanel.right
@@ -176,9 +176,9 @@ Rectangle {
     }
 
     // FDA-mode data viewer — two big aggregated plots
-    FdaPlotView {
-        id: fdaPlot
-        visible: bloodFlow.fdaMode
+    ReducedPlotView {
+        id: reducedPlot
+        visible: bloodFlow.reducedMode
         windowSeconds: settingsModal.plotWindowSec
         bfiColor: settingsModal.bfiColor
         bviColor: settingsModal.bviColor
@@ -268,7 +268,7 @@ Rectangle {
 
             if (err === "Canceled") {
                 scanDialog.close()
-                if (bloodFlow.fdaMode) fdaPlot.stopScan(); else embeddedPlot.stopScan()
+                if (bloodFlow.reducedMode) reducedPlot.stopScan(); else embeddedPlot.stopScan()
                 notesModal.open()
                 return
             }
@@ -277,14 +277,14 @@ Rectangle {
                 scanDialog.appendLog("ERROR: " + err)
                 scanDialog.stageText = "Error during capture"
                 scanDialog.done = true
-                if (bloodFlow.fdaMode) fdaPlot.stopScan(); else embeddedPlot.stopScan()
+                if (bloodFlow.reducedMode) reducedPlot.stopScan(); else embeddedPlot.stopScan()
                 return
             }
 
             scanDialog.stageText = "Capture complete"
             scanDialog.progress = 100
             scanDialog.done = true
-            if (bloodFlow.fdaMode) fdaPlot.stopScan(); else embeddedPlot.stopScan()
+            if (bloodFlow.reducedMode) reducedPlot.stopScan(); else embeddedPlot.stopScan()
             notesModal.open()
         }
     }
@@ -300,8 +300,8 @@ Rectangle {
                 Qt.callLater(function() {
                     if (!bloodFlow.scanning && !bloodFlow.configuring) {
                         var cfg      = MOTIONInterface.appConfig;
-                        var defLeft  = bloodFlow.fdaMode ? 0x66 : (cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99);
-                        var defRight = bloodFlow.fdaMode ? 0x66 : (cfg.rightMask !== undefined ? cfg.rightMask : 0x99);
+                        var defLeft  = bloodFlow.reducedMode ? 0x66 : (cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99);
+                        var defRight = bloodFlow.reducedMode ? 0x66 : (cfg.rightMask !== undefined ? cfg.rightMask : 0x99);
                         if (MOTIONInterface.leftSensorConnected)  bloodFlow.leftMask  = defLeft;
                         if (MOTIONInterface.rightSensorConnected) bloodFlow.rightMask = defRight;
                         if (cfg.autoConfigureOnStartup !== false)
@@ -338,7 +338,7 @@ Rectangle {
     }
 
     Component.onCompleted: {
-        if (fdaMode) {
+        if (reducedMode) {
             freeRun = true
             durationSec = 43200
             leftMask = 0x66

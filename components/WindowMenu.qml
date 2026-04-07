@@ -16,7 +16,7 @@ Rectangle {
     property string sessionId: ""
     property bool   scanning: false
     property bool   freeRun: false
-    property bool   fdaMode: false
+    property bool   reducedMode: false
     property int    elapsedSec: 0
     property int    durationSec: 3600
 
@@ -100,7 +100,7 @@ Rectangle {
                 Text {
                     text: {
                         if (windowMenu.freeRun) {
-                            if (windowMenu.fdaMode) {
+                            if (windowMenu.reducedMode) {
                                 return windowMenu.scanning
                                     ? windowMenu.formatSec(windowMenu.elapsedSec) : ""
                             }
