@@ -18,6 +18,7 @@ Item {
     property bool autoScale:        false
     property bool autoScalePerPlot: false
     property bool fdaMode:          false
+    property int  plotWindowSec:    15
     property real bfiMin:      0.0
     property real bfiMax:      10.0
     property real bviMin:      0.0
@@ -35,6 +36,7 @@ Item {
         autoScale        = cfg.autoScale        !== undefined ? cfg.autoScale        : false
         autoScalePerPlot = cfg.autoScalePerPlot !== undefined ? cfg.autoScalePerPlot : false
         fdaMode          = cfg.fdaMode          !== undefined ? cfg.fdaMode          : false
+        plotWindowSec    = cfg.plotWindowSec    !== undefined ? cfg.plotWindowSec    : 15
         bfiMin       = cfg.bfiMin       !== undefined ? cfg.bfiMin       : 0.0
         bfiMax       = cfg.bfiMax       !== undefined ? cfg.bfiMax       : 10.0
         bviMin       = cfg.bviMin       !== undefined ? cfg.bviMin       : 0.0
@@ -65,6 +67,7 @@ Item {
         autoScale        = cfg.autoScale        !== undefined ? cfg.autoScale        : false
         autoScalePerPlot = cfg.autoScalePerPlot !== undefined ? cfg.autoScalePerPlot : false
         fdaMode          = cfg.fdaMode          !== undefined ? cfg.fdaMode          : false
+        plotWindowSec    = cfg.plotWindowSec    !== undefined ? cfg.plotWindowSec    : 15
         bfiMin       = cfg.bfiMin       !== undefined ? cfg.bfiMin       : 0.0
         bfiMax       = cfg.bfiMax       !== undefined ? cfg.bfiMax       : 10.0
         bviMin       = cfg.bviMin       !== undefined ? cfg.bviMin       : 0.0
@@ -85,6 +88,7 @@ Item {
             "autoScale":         autoScale,
             "autoScalePerPlot":  autoScalePerPlot,
             "fdaMode":           fdaMode,
+            "plotWindowSec":     plotWindowSec,
             "bfiMin":      bfiMin,
             "bfiMax":      bfiMax,
             "bviMin":      bviMin,
@@ -321,6 +325,28 @@ Item {
                     Switch {
                         checked: root.autoScale
                         onCheckedChanged: root.autoScale = checked
+                    }
+                }
+
+                RowLayout {
+                    spacing: 12; Layout.alignment: Qt.AlignLeft
+                    Text {
+                        text: "Time window"
+                        color: "#BDC3C7"
+                        font.pixelSize: 14
+                    }
+                    ComboBox {
+                        id: windowCombo
+                        Layout.preferredWidth: 110
+                        Layout.preferredHeight: 32
+                        model: [3, 5, 15, 30]
+                        textRole: ""
+                        displayText: currentValue + " s"
+                        currentIndex: {
+                            var idx = model.indexOf(root.plotWindowSec)
+                            return idx >= 0 ? idx : 2
+                        }
+                        onActivated: root.plotWindowSec = model[currentIndex]
                     }
                 }
 
