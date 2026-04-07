@@ -48,10 +48,14 @@
   "rawCsvDurationSec": 60,
   "autoScale": true,
   "autoScalePerPlot": true,
-  "reducedMode": false,
+  "reducedMode": true,
   "plotWindowSec": 15,
   "bfiColor": "#ffffff",
   "bviColor": "#3437db",
-  "bviLowPassEnabled": false,
-  "bviLowPassCutoffHz": 40.0
+  "bviLowPassEnabled": true,
+  "bviLowPassCutoffHz": 40.0,
+  "bfiClampLow": 0.0,
+  "bfiClampHigh": 10.0,
+  "bviClampLow": 0.0,
+  "bviClampHigh": 10.0
 }
