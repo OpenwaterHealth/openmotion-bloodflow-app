@@ -82,7 +82,6 @@ def _load_app_config() -> dict:
         "dataDirectory": None,
         "writeRawCsv": True,
         "rawCsvDurationSec": None,
-        "invertPlotAxes": True,
         "autoScale": False,
         "autoScalePerPlot": False,
         "reducedMode": False,

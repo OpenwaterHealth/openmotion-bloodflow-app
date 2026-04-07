@@ -22,7 +22,8 @@ Rectangle {
     property int  plotRows: (leftActiveCount === 8 || rightActiveCount === 8) ? 4 : 2
     property bool showBfiBvi: true
     property bool developerMode: MOTIONInterface.appConfig.developerMode ? true : false
-    property bool invertPlotAxes: MOTIONInterface.appConfig.invertPlotAxes !== undefined ? !!MOTIONInterface.appConfig.invertPlotAxes : true
+    // Mean/contrast axes invert; BFI/BVI axes do not.
+    readonly property bool invertPlotAxes: !showBfiBvi
 
     // Fixed plot bounds — configurable from Settings
     property real bfiMin: 0.0

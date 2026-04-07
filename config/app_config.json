@@ -46,7 +46,6 @@
   "dataDirectory": null,
   "writeRawCsv": false,
   "rawCsvDurationSec": 60,
-  "invertPlotAxes": true,
   "autoScale": true,
   "autoScalePerPlot": true,
   "reducedMode": false,
