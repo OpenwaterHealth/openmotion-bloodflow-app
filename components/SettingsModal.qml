@@ -18,7 +18,9 @@ Item {
     property bool autoScale:        false
     property bool autoScalePerPlot: false
     property bool fdaMode:          false
-    property int  plotWindowSec:    15
+    property int    plotWindowSec: 15
+    property color  bfiColor: "#E74C3C"
+    property color  bviColor: "#3498DB"
     property real bfiMin:      0.0
     property real bfiMax:      10.0
     property real bviMin:      0.0
@@ -37,6 +39,8 @@ Item {
         autoScalePerPlot = cfg.autoScalePerPlot !== undefined ? cfg.autoScalePerPlot : false
         fdaMode          = cfg.fdaMode          !== undefined ? cfg.fdaMode          : false
         plotWindowSec    = cfg.plotWindowSec    !== undefined ? cfg.plotWindowSec    : 15
+        bfiColor         = cfg.bfiColor         !== undefined ? cfg.bfiColor         : "#E74C3C"
+        bviColor         = cfg.bviColor         !== undefined ? cfg.bviColor         : "#3498DB"
         bfiMin       = cfg.bfiMin       !== undefined ? cfg.bfiMin       : 0.0
         bfiMax       = cfg.bfiMax       !== undefined ? cfg.bfiMax       : 10.0
         bviMin       = cfg.bviMin       !== undefined ? cfg.bviMin       : 0.0
@@ -68,6 +72,8 @@ Item {
         autoScalePerPlot = cfg.autoScalePerPlot !== undefined ? cfg.autoScalePerPlot : false
         fdaMode          = cfg.fdaMode          !== undefined ? cfg.fdaMode          : false
         plotWindowSec    = cfg.plotWindowSec    !== undefined ? cfg.plotWindowSec    : 15
+        bfiColor         = cfg.bfiColor         !== undefined ? cfg.bfiColor         : "#E74C3C"
+        bviColor         = cfg.bviColor         !== undefined ? cfg.bviColor         : "#3498DB"
         bfiMin       = cfg.bfiMin       !== undefined ? cfg.bfiMin       : 0.0
         bfiMax       = cfg.bfiMax       !== undefined ? cfg.bfiMax       : 10.0
         bviMin       = cfg.bviMin       !== undefined ? cfg.bviMin       : 0.0
@@ -89,6 +95,8 @@ Item {
             "autoScalePerPlot":  autoScalePerPlot,
             "fdaMode":           fdaMode,
             "plotWindowSec":     plotWindowSec,
+            "bfiColor":          "" + bfiColor,
+            "bviColor":          "" + bviColor,
             "bfiMin":      bfiMin,
             "bfiMax":      bfiMax,
             "bviMin":      bviMin,
@@ -100,6 +108,17 @@ Item {
         })
         settingsChanged()
         root.visible = false
+    }
+
+    Dialogs.ColorDialog {
+        id: bfiColorDialog
+        title: "Select BFI trace color"
+        onAccepted: root.bfiColor = selectedColor
+    }
+    Dialogs.ColorDialog {
+        id: bviColorDialog
+        title: "Select BVI trace color"
+        onAccepted: root.bviColor = selectedColor
     }
 
     ListModel {
@@ -325,6 +344,53 @@ Item {
                     Switch {
                         checked: root.autoScale
                         onCheckedChanged: root.autoScale = checked
+                    }
+                }
+
+                RowLayout {
+                    spacing: 12; Layout.alignment: Qt.AlignLeft
+                    Text {
+                        text: "Trace colors"
+                        color: "#BDC3C7"
+                        font.pixelSize: 14
+                    }
+                    // BFI swatch
+                    Rectangle {
+                        width: 28; height: 28; radius: 4
+                        color: root.bfiColor
+                        border.color: "#5A6B8C"; border.width: 1
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: { bfiColorDialog.selectedColor = root.bfiColor; bfiColorDialog.open() }
+                        }
+                    }
+                    Text { text: "BFI"; color: "#BDC3C7"; font.pixelSize: 13 }
+                    // BVI swatch
+                    Rectangle {
+                        width: 28; height: 28; radius: 4
+                        color: root.bviColor
+                        border.color: "#5A6B8C"; border.width: 1
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: { bviColorDialog.selectedColor = root.bviColor; bviColorDialog.open() }
+                        }
+                    }
+                    Text { text: "BVI"; color: "#BDC3C7"; font.pixelSize: 13 }
+                    Button {
+                        text: "Reset"
+                        Layout.preferredHeight: 28
+                        hoverEnabled: true
+                        contentItem: Text {
+                            text: parent.text; font.pixelSize: 12; color: "#BDC3C7"
+                            horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                        }
+                        background: Rectangle {
+                            color: parent.hovered ? "#4A90E2" : "#3A3F4B"
+                            border.color: parent.hovered ? "#FFFFFF" : "#BDC3C7"; radius: 4
+                        }
+                        onClicked: { root.bfiColor = "#E74C3C"; root.bviColor = "#3498DB" }
                     }
                 }
 

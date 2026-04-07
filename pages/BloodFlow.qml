@@ -159,6 +159,8 @@ Rectangle {
 
         showBfiBvi:  settingsModal.showBfiBvi
         windowSeconds: settingsModal.plotWindowSec
+        bfiColor: settingsModal.bfiColor
+        bviColor: settingsModal.bviColor
         autoScale:        settingsModal.autoScale
         autoScalePerPlot: settingsModal.autoScalePerPlot
         bfiMin:      settingsModal.bfiMin
@@ -178,6 +180,8 @@ Rectangle {
         id: fdaPlot
         visible: bloodFlow.fdaMode
         windowSeconds: settingsModal.plotWindowSec
+        bfiColor: settingsModal.bfiColor
+        bviColor: settingsModal.bviColor
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         anchors.left: buttonPanel.right

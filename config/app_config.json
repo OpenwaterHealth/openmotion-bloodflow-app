@@ -50,5 +50,7 @@
   "autoScale": true,
   "autoScalePerPlot": true,
   "fdaMode": false,
-  "plotWindowSec": 3
+  "plotWindowSec": 3,
+  "bfiColor": "#ffffff",
+  "bviColor": "#3437db"
 }

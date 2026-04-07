@@ -87,6 +87,8 @@ def _load_app_config() -> dict:
         "autoScalePerPlot": False,
         "fdaMode": False,
         "plotWindowSec": 15,
+        "bfiColor": "#E74C3C",
+        "bviColor": "#3498DB",
     }
     config_path = resource_path("config", "app_config.json")
     if not config_path.exists():
