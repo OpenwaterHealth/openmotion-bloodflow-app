@@ -32,7 +32,7 @@ Rectangle {
     property bool freeRun: reducedMode
     property int durationSec: reducedMode ? 43200 : 3600  // 12h in FDA mode, 1h default
 
-    onFdaModeChanged: {
+    onReducedModeChanged: {
         if (reducedMode) {
             freeRun = true
             durationSec = 43200
