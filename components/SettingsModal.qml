@@ -17,6 +17,7 @@ Item {
     property bool showBfiBvi:  true
     property bool autoScale:        false
     property bool autoScalePerPlot: false
+    property bool fdaMode:          false
     property real bfiMin:      0.0
     property real bfiMax:      10.0
     property real bviMin:      0.0
@@ -33,6 +34,7 @@ Item {
         showBfiBvi   = cfg.showBfiBvi   !== undefined ? cfg.showBfiBvi   : true
         autoScale        = cfg.autoScale        !== undefined ? cfg.autoScale        : false
         autoScalePerPlot = cfg.autoScalePerPlot !== undefined ? cfg.autoScalePerPlot : false
+        fdaMode          = cfg.fdaMode          !== undefined ? cfg.fdaMode          : false
         bfiMin       = cfg.bfiMin       !== undefined ? cfg.bfiMin       : 0.0
         bfiMax       = cfg.bfiMax       !== undefined ? cfg.bfiMax       : 10.0
         bviMin       = cfg.bviMin       !== undefined ? cfg.bviMin       : 0.0
@@ -62,6 +64,7 @@ Item {
         showBfiBvi   = cfg.showBfiBvi   !== undefined ? cfg.showBfiBvi   : true
         autoScale        = cfg.autoScale        !== undefined ? cfg.autoScale        : false
         autoScalePerPlot = cfg.autoScalePerPlot !== undefined ? cfg.autoScalePerPlot : false
+        fdaMode          = cfg.fdaMode          !== undefined ? cfg.fdaMode          : false
         bfiMin       = cfg.bfiMin       !== undefined ? cfg.bfiMin       : 0.0
         bfiMax       = cfg.bfiMax       !== undefined ? cfg.bfiMax       : 10.0
         bviMin       = cfg.bviMin       !== undefined ? cfg.bviMin       : 0.0
@@ -81,6 +84,7 @@ Item {
             "showBfiBvi":  showBfiBvi,
             "autoScale":         autoScale,
             "autoScalePerPlot":  autoScalePerPlot,
+            "fdaMode":           fdaMode,
             "bfiMin":      bfiMin,
             "bfiMax":      bfiMax,
             "bviMin":      bviMin,
@@ -432,6 +436,43 @@ Item {
                         background: Rectangle { color: "#2E2E33"; radius: 4; border.color: "#3E4E6F"; border.width: 1 }
                         onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.contrastMax = v; text = root.contrastMax.toFixed(2) }
                     }
+                }
+            }
+
+            // Separator
+            Rectangle { Layout.fillWidth: true; height: 1; color: "#3E4E6F" }
+
+            // FDA Mode
+            ColumnLayout {
+                spacing: 8
+                Layout.fillWidth: true
+
+                Text {
+                    text: "FDA Mode"
+                    color: "#BDC3C7"
+                    font.pixelSize: 16
+                    font.weight: Font.DemiBold
+                }
+
+                RowLayout {
+                    spacing: 16; Layout.alignment: Qt.AlignLeft
+                    Text {
+                        text: "Enable FDA Mode"
+                        color: root.fdaMode ? "#4A90E2" : "#BDC3C7"
+                        font.pixelSize: 14
+                        font.weight: root.fdaMode ? Font.Bold : Font.Normal
+                    }
+                    Switch {
+                        checked: root.fdaMode
+                        onCheckedChanged: root.fdaMode = checked
+                    }
+                }
+
+                Text {
+                    text: "Restart the app for FDA Mode changes to take effect."
+                    color: "#7F8C8D"
+                    font.pixelSize: 11
+                    font.italic: true
                 }
             }
 

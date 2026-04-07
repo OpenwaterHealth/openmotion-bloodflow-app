@@ -7,7 +7,7 @@
   "histoThrottle": false,
   "histoCmp": false,
   "powerOffUnusedCameras": false,
-  "commVerbose": true,
+  "commVerbose": false,
   "verboseCommandHandling": true,
   "eol_min_mean_per_camera": [
     130,
@@ -33,8 +33,8 @@
   "rightMask": 102,
   "uncorrectedOnly": true,
   "autoConfigureOnStartup": false,
-  "developerMode": false,
-  "showBfiBvi": false,
+  "developerMode": true,
+  "showBfiBvi": true,
   "bfiMin": 4.0,
   "bfiMax": 9.0,
   "bviMin": 4.0,
@@ -47,7 +47,7 @@
   "writeRawCsv": false,
   "rawCsvDurationSec": 60,
   "invertPlotAxes": true,
-  "autoScale": false,
+  "autoScale": true,
   "autoScalePerPlot": false,
   "fdaMode": true
 }

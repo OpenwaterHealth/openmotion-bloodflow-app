@@ -29,8 +29,17 @@ Rectangle {
     property string sessionId: MOTIONInterface.sessionId || ""
 
     // Duration from scan time modal
-    property bool freeRun: false
-    property int durationSec: 3600  // default 1 hour
+    property bool freeRun: fdaMode
+    property int durationSec: fdaMode ? 43200 : 3600  // 12h in FDA mode, 1h default
+
+    onFdaModeChanged: {
+        if (fdaMode) {
+            freeRun = true
+            durationSec = 43200
+            leftMask = 0x66
+            rightMask = 0x66
+        }
+    }
     property int elapsedSec: 0
 
     Timer {
