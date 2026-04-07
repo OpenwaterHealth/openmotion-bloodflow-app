@@ -25,16 +25,16 @@ class ValueAvailable():
         self.available = True
 """ """
 class BFValue(NamedTuple):
-    side:           np.uint32
-    cam_id:     np.uint32
-    frame_id:   np.uint32
+    side:      str            # 'left' or 'right'
+    cam_id:    np.uint32
+    frame_id:  np.uint32
     timestamp: np.float32
-    temp:          np.float32
-    summ:        np.uint64
-    mean:         np.float32
-    contrast:     np.float32
-    bfi:               np.float32
-    bvi:              np.float32
+    temp:      np.float32
+    summ:      np.uint64
+    mean:      np.float32
+    contrast:  np.float32
+    bfi:       np.float32
+    bvi:       np.float32
 """ """
 class CamCalib():
     def __init__(self, cmin=None, cmax=None, imin=None, imax=None):

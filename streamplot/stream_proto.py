@@ -1,434 +1,392 @@
+"""
+stream_proto.py — Raw bloodflow data ingest: CSV → PyQtGraph + SQLite.
+
+Pipeline
+--------
+  CSVProducer  (Thread)
+       │  raw Sample objects, frame-metered at `period_s`
+       ▼
+  producer.out_q
+       │
+  DBConsumer  (Thread)  ← all SQLite writes happen here, never in the Qt thread
+       │  puts (side, summ, temp) scalars onto plot_q
+       ▼
+  plot_q  (small, Qt main thread only)
+       │
+  QTimer → BFPlot.update_plot_data(summ, temp)
+
+No dark-frame correction, no BFI/BVI computation.
+All data is stored exactly as read from the CSV."
+
+Usage
+-----
+    python stream_proto.py <scan_dir> <session_id>
+
+    e.g.
+    python stream_proto.py ../scan_data ow98NSF5
+
+The scan_dir must contain files matching:
+    scan_{session_id}_{date}_{time}_left_mask{hex}.csv
+    scan_{session_id}_{date}_{time}_right_mask{hex}.csv   (optional)
+    scan_{session_id}_{date}_{time}_notes.txt             (optional)
+"""
+
 import sys
+import os
 import time
-import random
-import numpy as np
+import argparse
+import logging
 from queue import Queue, Empty
 from threading import Thread, Event
-from PySide6.QtCore import QObject, QTimer, Slot, Signal, Property
-from PySide6 import QtWidgets
+
+from pyqtgraph.Qt import QtCore, QtWidgets
 from PySide6.QtWidgets import QApplication
-from PySide6.QtWidgets import QPushButton
-from PySide6.QtQuick import QQuickView
-from PySide6.QtQml import QQmlApplicationEngine
 
-import pyqtgraph as pg
-#from pyqtgraph.Qt import QtCore
-#from PyQt6 import QtWidgets
-#from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton
-#from PyQt6.QtWidgets import QMainWindow, QPushButton
-
-import PySide6
-from PySide6 import QtCore
-from PySide6.QtCore import QObject
-from PySide6.QtCore import QTimer
-from PySide6.QtCore import Slot
-from PySide6.QtCore import Signal
-from PySide6.QtCore import Property
-
-from PySide6.QtCore import QObject
-from PySide6.QtCore import QTimer
-from PySide6.QtCore import Slot
-from PySide6.QtCore import Signal
-from PySide6.QtCore import Property
-
-from PySide6.QtWidgets import QApplication
-from PySide6.QtQuick import QQuickView
-from PySide6.QtQml import QQmlApplicationEngine
-
-
-
-import multiprocessing as mp
-import csv
-
-import uuid
-
-# Generate a random UUID (version 4)
-#random_guid = uuid.uuid4()
-# Convert the UUID object to a string format with hyphens
-#guid_string = str(random_guid)
-
-import ui.bfplot as bfplot
 from ui.bfplot import BFPlot
-from api.session_samples import Sample
-from api.session_samples import SessionSamples
+from api.session_samples import (
+    Sample, SessionSamples,
+    parse_session_csv_filename, find_session_files,
+)
+from api.bfstorage import (
+    open_db, create_session, close_session,
+    RawWriter,
+)
 
-from compute.bfcompute import CamCalib
-from compute.bfcompute import BFComputer
-from compute.bfcompute import BFValue
-from compute.bfcompute import ValueAvailable
+log = logging.getLogger(__name__)
 
-from api.bfstorage import SamplesDBsqlite
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
-indicate = True#enable console output indicating queue len
+PLOT_WINDOW  = 500   # rolling plot window (number of samples per camera)
+SENTINEL     = object()
+PLOT_Q_MAX   = 2_000   # max scalar tuples buffered for the Qt thread
 
-# Sentinel to signal thread completion
-SENTINEL = None
 
-""" """
-class ProducerBase(Thread):
-    def __init__(self, period_s, stop_event, q_max_size = 10000):
-        super().__init__()
-        self.period_s = period_s
-        self.produced_event = Event()
-        self.produced_event.clear()
+# ---------------------------------------------------------------------------
+# Producer: reads left/right CSVs, emits Samples frame-by-frame
+# ---------------------------------------------------------------------------
+
+class CSVProducer(Thread):
+    """
+    Reads one or two scan CSV files and emits Sample objects onto *out_q*,
+    sleeping *period_s* between frames (all cameras emitted before the sleep).
+
+    Attributes
+    ----------
+    out_q         : Queue[Sample | SENTINEL]
+    ncams_left    : number of cameras in left CSV (0 if no left file)
+    ncams_right   : number of cameras in right CSV (0 if no right file)
+    """
+
+    def __init__(
+        self,
+        left_csv: str | None,
+        right_csv: str | None,
+        period_s: float,
+        stop_event: Event,
+    ) -> None:
+        super().__init__(daemon=True, name="csv-producer")
+        self.period_s   = period_s
         self.stop_event = stop_event
-        self.q_max_size = q_max_size
-        self.out_q = Queue(maxsize=self.q_max_size); 
-"""Source of data stream mockup"""
-class DataProducerMockup(ProducerBase):
-    def __init__(self, count, period_s, stop_event, in_csv_path=None):
-        super().__init__(period_s, stop_event)
-        #self.csv_path = "C:/Users/ethan/Projects/ow-bloodflow-app/scan_data/scan_owTM2GXS_20260214_125021_left_mask99.csv"
-        #self.csv_path = "C:/Users/ethan/Projects/ow-bloodflow-app/scan_data/scan_owTM2GXS_20260214_124944_left_mask99.csv"
-        self.csv_path = r"C:\Users\gvigelet\CURRENT_WORK\openwater\openmotion-bloodflow-app\scan_data\scan_owZDZG9Y_20260330_124100_left_mask99.csv"
-        self.sd = SessionSamples();
-        self.count = self.sd.read_csv(self.csv_path)
-        self.id = 0
-        self.out_q_raw_store = Queue(maxsize=self.q_max_size); 
-    """Override"""
-    def run(self):
+        self.out_q: Queue = Queue(maxsize=20_000)
+
+        self._left_ss  = SessionSamples()
+        self._right_ss = SessionSamples()
+
+        self._n_left  = self._left_ss.read_csv(left_csv,   side="left")  if left_csv  else 0
+        self._n_right = self._right_ss.read_csv(right_csv, side="right") if right_csv else 0
+
+        self.ncams_left  = self._left_ss.ncams  if self._n_left  else 0
+        self.ncams_right = self._right_ss.ncams if self._n_right else 0
+
+    def run(self) -> None:
         try:
-            for _ in range(self.count):
+            ncl     = max(self.ncams_left,  1)
+            ncr     = max(self.ncams_right, 1)
+            nfl     = self._n_left  // ncl
+            nfr     = self._n_right // ncr
+            nframes = max(nfl, nfr)
+
+            for frame_idx in range(nframes):
                 if self.stop_event.is_set():
                     break
-                data = self.sd.get(self.id)
-                self.id += 1
-                self.id = self.id if self.id < self.count else 0
-                self.out_q.put(data)
-                self.out_q_raw_store.put(data)
-                self.produced_event.set()
-                if indicate: print(f"* {self.out_q.qsize()}")
+                for cam_idx in range(self.ncams_left):
+                    row_idx = frame_idx * self.ncams_left + cam_idx
+                    if row_idx < self._n_left:
+                        self.out_q.put(self._left_ss.get(row_idx))
+                for cam_idx in range(self.ncams_right):
+                    row_idx = frame_idx * self.ncams_right + cam_idx
+                    if row_idx < self._n_right:
+                        self.out_q.put(self._right_ss.get(row_idx))
                 time.sleep(self.period_s)
-                QApplication.processEvents()
-            self.out_q.put(SENTINEL)  # Signal end
-            self.out_q_raw_store.put(SENTINEL)  # Signal end
-        except Exception as e:
-            print(f"Producer error: {e}", file=sys.stderr)
-"""DataProcessor mockup"""
-class DataProcessorMockup(Thread):
-    def __init__(self, in_q, stop_event):
-        super().__init__()
-        self.in_q = in_q
-        self.out_q_1 = Queue(maxsize=10000)#!!!
-        self.out_q_mp = mp.Queue(maxsize=10000)
-        self.out_q_qml = mp.Queue(maxsize=10000)
-        self.produced_event = Event()
-        self.produced_event.clear()
-        self.stop_event = stop_event
-        self.camcalib = CamCalib()
-        self.computer = BFComputer(4)#!!!
-    """Override"""
-    def run(self):
-        try:
-            while not self.stop_event.is_set():
-                try:
-                    sample = self.in_q.get(timeout=1)
-                    if sample is SENTINEL:
-                        self.out_q_1.put(SENTINEL)
-                        self.out_q_mp.put(SENTINEL)
-                        self.out_q_qml.put(SENTINEL)
-                        break
-                    # Process data
-                    processed_sample = self.computer.compute(sample)
-                    if processed_sample.available:
-                        v = processed_sample.value
-                        processed = (v.timestamp, v.bfi, v.bvi, v.bfi, v.bvi)
-                        self.out_q_1.put(processed)
-                        self.out_q_mp.put(processed)
-                        self.out_q_qml.put(processed)
-                        self.produced_event.set()
-                        if indicate: print(f"= :{self.out_q_1.qsize()} :{self.out_q_mp.qsize()} :{self.out_q_qml.qsize()}")
-                        QApplication.processEvents()
-                    self.in_q.task_done()
-                except Empty:
-                    continue
-        except Exception as e:
-            print(f"Processor error: {e}", file=sys.stderr)
-    def process(self):
-        #read:
-        #from: cam_id,frame_id,timestamp_s, 0, ... 1023, temperature,sum,tcm,tcl,pdc
-        #to: data, camera_inds, timept, temperature
-        pass
-""" """
-class ConsumerBase(Thread):
-    def __init__(self, in_q, produced_event, stop_event):
-        super().__init__()
-        self.in_q = in_q
-        self.produced_event = produced_event
-        self.stop_event = stop_event
-"""DataStorage mockups"""
-class RawDataStorageMockup(ConsumerBase):
-    def __init__(self,uid, session_id, in_q, produced_event, stop_event):
-        super().__init__(in_q, produced_event, stop_event)
-        self.uid = uid
-        self.session_id = session_id
-        self.raw_data = []
-    """Override"""
-    def run(self):
-        self.raw_data = []
-        try:
-            while not self.stop_event.is_set():
-                try:
-                    self.produced_event.wait()
-                    sample = self.in_q.get(timeout=1)
-                    if sample is SENTINEL:
-                        break
-                    self.raw_data.append(sample)
-                    if indicate: print(">>")
-                    self.in_q.task_done()
-                except Empty:
-                    continue
-            self.store()
-        except Exception as e:
-            print(f"Raw storage error: {e}", file=sys.stderr)
-    """ """
-    def store(self):
-        #store collected raw_data
-        db = "data/raw_db.sqlite"
-        sdb = SamplesDBsqlite(db, self.uid)
-        sdb.insert(self.session_id, self.raw_data)
-        print("Stored raw session data")
-        #sdb.view_content()
-        pass
-    """ """
-    def get_record(self, id):
-        try:
-            self.export_data = []
-            pass
-        except Exception as e:
-            pass
-        pass
-    """ """
-    def export2csv(self, id):
-        with open(f"{id}_raw_data.csv", "w",  newline='') as f:
-            #get record from db
-            self.get_record(id)
-            writer = csv.writer(f)
-            # Write the header row using field names
-            writer.writerow(Sample._fields)
-            writer.writerows(self.export_data)
-        pass
-""" """
-class ProcessedDataStorageMockup(ConsumerBase):
-    def __init__(self, uid, session_id, in_q, produced_event, stop_event):
-        super().__init__(in_q, produced_event, stop_event)
-        self.uid = uid
-        self.session_id = session_id
-    """Override"""
-    def run(self):
-        try:
-            with open("data/processed_data.csv", "w", newline="") as f:
-                writer = csv.writer(f)
-                # Write the header row using field names
-                writer.writerow(BFValue._fields)
-                while not self.stop_event.is_set():
-                    try:
-                        self.produced_event.wait()
-                        data = self.in_q.get(timeout=1)
-                        if data is SENTINEL:
-                            break
-                        writer.writerow(data)
-                        if indicate: print(">")
-                        self.in_q.task_done()
-                    except Empty:
-                        continue
-        except Exception as e:
-            print(f"Processed storage error: {e}", file=sys.stderr)
-""" """
-class DataPlotter(ConsumerBase):
-    def __init__(self, layout, plot_x_size, in_q_mp, stop_event):
-        super().__init__(in_q_mp, None, stop_event)
-        self.plot_x_size = plot_x_size
-        self.count = 0
-        self.layout = layout
-        self.left_plot = BFPlot("Left", layout, self.plot_x_size)
-        self.right_plot = BFPlot("Right", layout, self.plot_x_size)
-    """ """
-    def update_plot(self):
-        try:
-            while not self.stop_event.is_set():  # Process all available items
-                #self.produced_event.wait()
-                data = self.in_q.get_nowait()
-                self.count += 1
-                if data is SENTINEL:
-                    #self.timer.stop()
-                    #self.stop_event.set()
-                    self.stop_event.set()
-                    break
-                if self.count >= 20:#!!!
-                    if self.count == 20:
-                        self.left_plot.init_plot_data(data[1], data[2])
-                        self.right_plot.init_plot_data(data[3], data[4])
-                    plot = True 
-                else: 
-                    plot = False
-                self.left_plot.update_plot_data(data[1], data[2], plot)
-                self.right_plot.update_plot_data(data[3], data[4], plot)
-                QApplication.processEvents()
-                if indicate:
-                   print("|")
-                   sys.stdout.flush()
-                # mp.Queue does not support task_done
-        except Empty:
-            return
-        except Exception as ex:
-            print(f"Plotter error: {ex}", file=sys.stderr)
-    """Override"""
-    def run(self):
-        while not self.stop_event.is_set():
-            self.update_plot()
 
-""" """
-class BFProducer(QObject):
-    bfUpdated = Signal(float, float, float, float, float)
-    """ """
-    def __init__(self):
-        super().__init__()
-        self.x = 0
-    """ """
-    @Slot()
-    def update_bf(self, x, d1, d2, d3, d4):
-        self.x += 1
-        self.bfUpdated.emit(self.x, d1, d2, d3, d4)
-""" """
-class DataPlotterQML(ConsumerBase):
-    def __init__(self, layout, plot_x_size, in_q_mp, stop_event):
-        super().__init__(in_q_mp, None, stop_event)
-        self.plot_x_size = plot_x_size
-        self.count = 0
-        self.layout = layout
-        self.x = 0
-        self.bfProducer = BFProducer()
-    """ """
-    def update_plot(self):
+            self.out_q.put(SENTINEL)
+        except Exception as exc:
+            log.exception("CSVProducer error: %s", exc)
+            self.out_q.put(SENTINEL)
+
+
+# ---------------------------------------------------------------------------
+# DB consumer: reads raw samples, writes to SQLite, feeds plot queue
+# ---------------------------------------------------------------------------
+
+class DBConsumer(Thread):
+    """
+    Reads Sample objects from *raw_q* on its own thread.
+    Submits every sample to RawWriter (background batch SQLite writes).
+    Puts lightweight ``(side, summ, temp)`` tuples onto *plot_q* for the
+    Qt timer — the Qt main thread never touches SQLite.
+    """
+
+    def __init__(
+        self,
+        raw_q: Queue,
+        plot_q: Queue,
+        db_path: str,
+        session_id: str,
+        stop_event: Event,
+    ) -> None:
+        super().__init__(daemon=True, name="db-consumer")
+        self.raw_q      = raw_q
+        self.plot_q     = plot_q
+        self.db_path    = db_path
+        self.session_id = session_id
+        self.stop_event = stop_event
+
+    def run(self) -> None:
+        raw_writer = RawWriter(self.db_path, self.session_id)
         try:
-            while not self.stop_event.is_set():  # Process all available items
-                #self.produced_event.wait()
-                data = self.in_q.get_nowait()
-                self.count += 1
-                if data is SENTINEL:
-                    #self.timer.stop()
-                    #self.stop_event.set()
-                    self.stop_event.set()
+            while not self.stop_event.is_set():
+                try:
+                    sample = self.raw_q.get(timeout=0.5)
+                except Empty:
+                    continue
+
+                if sample is SENTINEL:
+                    # Forward sentinel so Qt timer knows streaming is done
+                    self.plot_q.put(SENTINEL)
                     break
-                if self.count >= 20:#!!!
-                    #if self.count == 20:
-                    #    self.left_plot.init_plot_data(data[1], data[2])
-                    #    self.right_plot.init_plot_data(data[3], data[4])
-                    plot = True 
-                else: 
-                    plot = False
-                self.x += 1        
-                self.bfProducer.update_bf(self.x, data[1], data[2], data[3], data[4])
-                if indicate:
-                   print("|")
-                   sys.stdout.flush()
-                # mp.Queue does not support task_done
-        except Empty:
-            return
-        except Exception as ex:
-            print(f"QML plotter error: {ex}", file=sys.stderr)
-    """Override"""
-    def run(self):
-        while not self.stop_event.is_set():
-            self.update_plot()
-"""Separate process function"""
-def run_data_plot(q_mp, stop_event):
-    app = QtWidgets.QApplication(sys.argv)
+
+                # DB write (background batch, non-blocking for this thread)
+                raw_writer.submit(sample)
+
+                # Put lightweight scalars onto plot_q; drop if Qt is falling behind
+                try:
+                    self.plot_q.put_nowait((sample.side, float(sample.summ), float(sample.temp)))
+                except Exception:
+                    pass  # plot_q full — skip this sample, keep streaming
+
+        except Exception as exc:
+            log.exception("DBConsumer error: %s", exc)
+            self.plot_q.put(SENTINEL)
+        finally:
+            raw_writer.close()
+            log.info("DBConsumer: writer closed.")
+
+
+# ---------------------------------------------------------------------------
+# Qt application / main
+# ---------------------------------------------------------------------------
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        description="Ingest bloodflow CSV → PyQtGraph display + SQLite storage (no processing).",
+    )
+    p.add_argument(
+        "scan_dir",
+        help="Directory containing the scan CSV files.",
+    )
+    p.add_argument(
+        "session_id",
+        help="Session ID (alphanumeric part of filename, e.g. ow98NSF5).",
+    )
+    p.add_argument(
+        "--db", default="data/sessions.sqlite",
+        help="SQLite database path (default: data/sessions.sqlite).",
+    )
+    p.add_argument(
+        "--period", type=float, default=0.025,
+        help="Simulated inter-frame delay in seconds (default: 0.025 = 40 Hz).",
+    )
+    p.add_argument(
+        "--plot-size", type=int, default=PLOT_WINDOW,
+        help="Number of samples in the rolling plot window per camera.",
+    )
+    return p
+
+
+def main() -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s  %(name)s  %(message)s",
+    )
+
+    args = build_arg_parser().parse_args()
+
+    # ── Locate session files ────────────────────────────────────────────────
+    files = find_session_files(args.scan_dir, args.session_id)
+    if not files["left"] and not files["right"]:
+        print(
+            f"ERROR: no scan files found for session '{args.session_id}' "
+            f"in '{args.scan_dir}'",
+            file=sys.stderr,
+        )
+        return 1
+
+    # ── Read notes.txt ──────────────────────────────────────────────────────
+    notes_text = ""
+    if files["notes"]:
+        try:
+            with open(files["notes"], "r", encoding="utf-8", errors="replace") as fh:
+                notes_text = fh.read()
+        except OSError:
+            pass
+
+    # ── Build session meta from filenames ──────────────────────────────────
+    #   meta format: { "left": {"mask": N}, "right": {"mask": N} }
+    #   only the sides that are actually present are included.
+    session_meta: dict = {}
+    session_start = time.time()
+
+    for side_key in ("left", "right"):
+        path = files[side_key]
+        if not path:
+            continue
+        parsed = parse_session_csv_filename(path)
+        if parsed:
+            session_meta[side_key] = {"mask": parsed["mask"]}
+            if side_key == "left":                # use left (or right if no left) for start ts
+                session_start = parsed["datetime"].timestamp()
+        else:
+            session_meta[side_key] = {}
+
+    if not session_meta and files["right"]:
+        parsed = parse_session_csv_filename(files["right"])
+        if parsed:
+            session_start = parsed["datetime"].timestamp()
+
+    # ── Create DB session record (open connection, write, close) ───────────
+    os.makedirs(os.path.dirname(os.path.abspath(args.db)), exist_ok=True)
+    conn = open_db(args.db)
+    create_session(
+        conn,
+        session_id    = args.session_id,
+        session_start = session_start,
+        session_notes = notes_text or None,
+        session_meta  = session_meta,
+    )
+    conn.close()
+    log.info("Session '%s' created in %s  meta=%s", args.session_id, args.db, session_meta)
+
+    # ── Qt window ──────────────────────────────────────────────────────────
+    stop_event = Event()
+    app        = QtWidgets.QApplication(sys.argv)
+
     win = QtWidgets.QMainWindow()
-    win.setWindowTitle("BF BV plot proto")
-    win.resize(800, 400)
-    # Central widget and layout
-    central_widget = QtWidgets.QWidget()
-    win.setCentralWidget(central_widget)
-    layout = QtWidgets.QVBoxLayout(central_widget)
-    layout.setSpacing(0)
-    plot_x_size = 500
-    data_plotter = DataPlotter(layout, plot_x_size, q_mp, stop_event)
-    threads = [data_plotter]
-    for t in threads: 
-        t.start()
-    #
-    win.show()
-    ex = app.exec()
-    stop_event.set()
-    sys.exit(ex)
-    #
-    for t in threads: 
-        t.join()
-    pass
+    win.setWindowTitle(f"OpenMotion BF — {args.session_id}")
+    win.resize(820, 500)
 
-"""Demo"""
-if __name__ == "__main__":
-    app = QtWidgets.QApplication(sys.argv)
-    win_main = QtWidgets.QMainWindow()
-    win_main.setWindowTitle("BF BV plot PyQtgraph")
-    win_main.resize(800, 400)
-    central_widget = QtWidgets.QWidget()
-    win_main.setCentralWidget(central_widget)
-    plot_widget = QtWidgets.QWidget()
-    control_widget = QtWidgets.QWidget()
-
-    central_layout = QtWidgets.QVBoxLayout(central_widget)
-    central_layout.setSpacing(0)
+    central      = QtWidgets.QWidget()
+    outer_layout = QtWidgets.QVBoxLayout(central)
+    outer_layout.setSpacing(2)
+    win.setCentralWidget(central)
 
     plot_layout = QtWidgets.QVBoxLayout()
-    plot_layout.setSpacing(0)   
-    plot_layout.addWidget(plot_widget)
-    plot_layout.addWidget(QPushButton("__"))
+    plot_layout.setSpacing(0)
 
-    central_layout.addLayout(plot_layout)
-    central_layout.addWidget(QPushButton("_"))
+    left_plot  = BFPlot("Left  sum/temp",  plot_layout, args.plot_size) if files["left"]  else None
+    right_plot = BFPlot("Right sum/temp", plot_layout, args.plot_size) if files["right"] else None
 
-    #subject
-    uid = uuid.uuid4()
-    #Session
-    session_id = 1
-    #Data pipeline
-    plot_x_size = 250
-    count= 1000000000
-    period_s = 0.010
-    stop_event = Event()
-    #produce
-    producer = DataProducerMockup(count, period_s, stop_event)
-    #store raw
-    raw_storage = RawDataStorageMockup(uid, session_id, producer.out_q_raw_store, producer.produced_event, stop_event)
-    #process
-    processor = DataProcessorMockup(producer.out_q, stop_event)
-    #store processed
-    storage = ProcessedDataStorageMockup(uid, session_id, processor.out_q_1, processor.produced_event, stop_event)
-    #plot
-    data_plotter = DataPlotter(plot_layout, plot_x_size, processor.out_q_mp, stop_event)
-    #plot QML
-    data_plotter_qml = DataPlotterQML(plot_layout, plot_x_size, processor.out_q_qml, stop_event)
-    #threads
-    threads = [producer, raw_storage, processor, storage, data_plotter, data_plotter_qml]
-    for t in threads: 
-        print(t)
-        t.start()
-    #UI
-    win_main.show()
+    outer_layout.addLayout(plot_layout)
 
-    #QML
-    engine = QQmlApplicationEngine()
-    # Expose Python object to QML
-    engine.rootContext().setContextProperty("bfSystem", data_plotter_qml.bfProducer)
-    engine.load("ui/bfplot_qml_app.qml")
-    if not engine.rootObjects():
-        stop_event.set()
-        sys.exit(-1)
+    status_label = QtWidgets.QLabel("Loading…")
+    outer_layout.addWidget(status_label)
+
+    # ── Build pipeline threads ─────────────────────────────────────────────
+    producer = CSVProducer(
+        left_csv   = files["left"],
+        right_csv  = files["right"],
+        period_s   = args.period,
+        stop_event = stop_event,
+    )
+
+    # plot_q carries only lightweight (side, summ, temp) tuples to Qt
+    plot_q: Queue = Queue(maxsize=PLOT_Q_MAX)
+
+    db_consumer = DBConsumer(
+        raw_q      = producer.out_q,
+        plot_q     = plot_q,
+        db_path    = args.db,
+        session_id = args.session_id,
+        stop_event = stop_event,
+    )
+
+    frame_counter = [0]
+    done          = [False]
+
+    def poll_plot_q() -> None:
+        """Qt main thread: drain scalars from plot_q and update plots only."""
+        if done[0]:
+            return
+        try:
+            while True:
+                item = plot_q.get_nowait()
+
+                if item is SENTINEL:
+                    done[0] = True
+                    timer.stop()
+                    db_conn = open_db(args.db)
+                    close_session(db_conn, args.session_id, time.time())
+                    db_conn.close()
+                    status_label.setText(
+                        f"Done — {frame_counter[0]} samples stored in {args.db}"
+                    )
+                    log.info("Session '%s' complete.", args.session_id)
+                    return
+
+                side, summ, temp = item
+                if side == "left" and left_plot:
+                    left_plot.update_plot_data(summ, temp)
+                elif side == "right" and right_plot:
+                    right_plot.update_plot_data(summ, temp)
+                frame_counter[0] += 1
+
+        except Empty:
+            pass
+
+        status_label.setText(
+            f"Samples plotted: {frame_counter[0]}  |  "
+            f"Producer queue: {producer.out_q.qsize()}"
+        )
+
+    timer = QtCore.QTimer()
+    timer.timeout.connect(poll_plot_q)
+    timer.start(int(args.period * 1000))
+
+    # ── Start threads ──────────────────────────────────────────────────────
+    producer.start()
+    db_consumer.start()
+
+    win.show()
+
     try:
-        ex = app.exec()
-    except Exception as e:
-        print(f"App error: {e}", file=sys.stderr)
-        ex = 1
+        exit_code = app.exec()
+    except Exception as exc:
+        log.exception("Qt event loop error: %s", exc)
+        exit_code = 1
     finally:
         stop_event.set()
-        for q in [producer.out_q, producer.out_q_raw_store, processor.out_q_1, processor.out_q_mp, processor.out_q_qml]:
-            try:
-                q.put_nowait(SENTINEL)
-            except Exception:
-                pass
-        for t in threads:
-            t.join(timeout=2)
-    sys.exit(ex)
+        timer.stop()
+        try:
+            producer.out_q.put_nowait(SENTINEL)
+        except Exception:
+            pass
+        producer.join(timeout=5)
+        db_consumer.join(timeout=10)
+
+    return exit_code
+
+
+if __name__ == "__main__":
+    sys.exit(main())
