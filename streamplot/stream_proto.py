@@ -47,17 +47,17 @@ import uuid
 # Convert the UUID object to a string format with hyphens
 #guid_string = str(random_guid)
 
-import bfplot
-from bfplot import BFPlot
-from session_samples import Sample
-from session_samples import SessionSamples
+import ui.bfplot as bfplot
+from ui.bfplot import BFPlot
+from api.session_samples import Sample
+from api.session_samples import SessionSamples
 
-from bfcompute import CamCalib
-from bfcompute import BFComputer
-from bfcompute import BFValue
-from bfcompute import ValueAvailable
+from compute.bfcompute import CamCalib
+from compute.bfcompute import BFComputer
+from compute.bfcompute import BFValue
+from compute.bfcompute import ValueAvailable
 
-from bfstorage import SamplesDBsqlite
+from api.bfstorage import SamplesDBsqlite
 
 indicate = True#enable console output indicating queue len
 
@@ -184,7 +184,7 @@ class RawDataStorageMockup(ConsumerBase):
     """ """
     def store(self):
         #store collected raw_data
-        db = "raw_db.sqlite"
+        db = "data/raw_db.sqlite"
         sdb = SamplesDBsqlite(db, self.uid)
         sdb.insert(self.session_id, self.raw_data)
         print("Stored raw session data")
@@ -217,7 +217,7 @@ class ProcessedDataStorageMockup(ConsumerBase):
     """Override"""
     def run(self):
         try:
-            with open("processed_data.csv", "w", newline="") as f:
+            with open("data/processed_data.csv", "w", newline="") as f:
                 writer = csv.writer(f)
                 # Write the header row using field names
                 writer.writerow(BFValue._fields)
@@ -413,7 +413,7 @@ if __name__ == "__main__":
     engine = QQmlApplicationEngine()
     # Expose Python object to QML
     engine.rootContext().setContextProperty("bfSystem", data_plotter_qml.bfProducer)
-    engine.load("bfplot_qml_app.qml")
+    engine.load("ui/bfplot_qml_app.qml")
     if not engine.rootObjects():
         stop_event.set()
         sys.exit(-1)
