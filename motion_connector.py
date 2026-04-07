@@ -2366,15 +2366,27 @@ class MOTIONConnector(QObject):
 
 
 def _load_plot_corrected_scan():
-    """Load plot_corrected_scan.py from the SDK data-processing folder."""
+    """Load plot_corrected_scan.py — bundled in processing/ for deployed builds,
+    falling back to the sibling SDK repo for development."""
     import importlib.util
-    script_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "openmotion-sdk", "data-processing", "plot_corrected_scan.py",
+    candidates = [
+        # Bundled with the deployed app (PyInstaller) and dev tree alike
+        resource_path("processing", "plot_corrected_scan.py"),
+        # Dev fallback: sibling openmotion-sdk checkout
+        Path(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "openmotion-sdk", "data-processing", "plot_corrected_scan.py",
+        )),
+    ]
+    script_path = next((p for p in candidates if Path(p).is_file()), None)
+    if script_path is None:
+        searched = "\n  ".join(str(p) for p in candidates)
+        raise FileNotFoundError(
+            f"plot_corrected_scan.py not found. Looked in:\n  {searched}"
+        )
+    spec = importlib.util.spec_from_file_location(
+        "plot_corrected_scan", str(script_path)
     )
-    if not os.path.isfile(script_path):
-        raise FileNotFoundError(f"plot_corrected_scan.py not found at: {script_path}")
-    spec = importlib.util.spec_from_file_location("plot_corrected_scan", script_path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod

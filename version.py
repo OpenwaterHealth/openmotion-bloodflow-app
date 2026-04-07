@@ -16,7 +16,7 @@ import subprocess
 import os
 
 # Fallback used when: no git, no tags, or running from a frozen PyInstaller bundle
-_FALLBACK_VERSION = "0.4.6-28-g0f72d4e-dirty"
+_FALLBACK_VERSION = "1.0-pre-0-g347653b"
 
 
 def get_version() -> str:
