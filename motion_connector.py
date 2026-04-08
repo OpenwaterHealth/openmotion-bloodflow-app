@@ -1062,6 +1062,33 @@ class MOTIONConnector(QObject):
         self.appConfigChanged.emit()
         logger.debug(f"[Connector] Config saved: {sorted(configs.keys())}")
 
+    @pyqtSlot(bool)
+    def setWriteRawCsv(self, enabled: bool) -> None:
+        """Update writeRawCsv in both the runtime cache and persisted config."""
+        self._write_raw_csv = bool(enabled)
+        self._app_config["writeRawCsv"] = self._write_raw_csv
+        self._save_app_config()
+        self.appConfigChanged.emit()
+        logger.debug(f"[Connector] writeRawCsv set to {self._write_raw_csv}")
+
+    @pyqtSlot('QVariant')
+    def setRawCsvDurationSec(self, value) -> None:
+        """Update rawCsvDurationSec in both the runtime cache and persisted config.
+
+        Pass ``None`` / ``null`` / empty string to disable the limit (full scan duration).
+        """
+        if value is None or str(value).strip() in ("", "null", "undefined"):
+            self._raw_csv_duration_sec = None
+        else:
+            try:
+                self._raw_csv_duration_sec = float(value)
+            except (TypeError, ValueError):
+                self._raw_csv_duration_sec = None
+        self._app_config["rawCsvDurationSec"] = self._raw_csv_duration_sec
+        self._save_app_config()
+        self.appConfigChanged.emit()
+        logger.debug(f"[Connector] rawCsvDurationSec set to {self._raw_csv_duration_sec}")
+
     @pyqtProperty(str, notify=scanNotesChanged)  # <-- add notify
     def scanNotes(self):
         return self._scan_notes

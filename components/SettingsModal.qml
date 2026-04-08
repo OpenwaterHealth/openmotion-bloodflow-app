@@ -31,6 +31,8 @@ Item {
     property real   meanMax:     500.0
     property real   contrastMin: 0.0
     property real   contrastMax: 1.0
+    property bool   writeRawCsv:       false
+    property var    rawCsvDurationSec: 60
 
     // ── Theme tokens ────────────────────────────────────────────────────────
     readonly property color colBgPanel:    "#1E1E20"
@@ -67,6 +69,8 @@ Item {
         meanMax      = cfg.meanMax      !== undefined ? cfg.meanMax      : 500.0
         contrastMin  = cfg.contrastMin  !== undefined ? cfg.contrastMin  : 0.0
         contrastMax  = cfg.contrastMax  !== undefined ? cfg.contrastMax  : 1.0
+        writeRawCsv       = cfg.writeRawCsv       !== undefined ? cfg.writeRawCsv       : false
+        rawCsvDurationSec = cfg.rawCsvDurationSec !== undefined ? cfg.rawCsvDurationSec : null
     }
 
     Component.onCompleted: _loadFromConfig()
@@ -110,6 +114,8 @@ Item {
             "contrastMin": contrastMin,
             "contrastMax": contrastMax
         })
+        MOTIONInterface.setWriteRawCsv(writeRawCsv)
+        MOTIONInterface.setRawCsvDurationSec(rawCsvDurationSec)
         settingsChanged()
         root.visible = false
     }
@@ -590,6 +596,51 @@ Item {
                             Layout.preferredWidth: 110
                             hoverColor: "#E67E22"
                             onClicked: MOTIONInterface.softResetSensor("CONSOLE")
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    FieldRow {
+                        label: "Save raw CSV"
+                        PillSwitch {
+                            checked: root.writeRawCsv
+                            onCheckedChanged: root.writeRawCsv = checked
+                        }
+                        Text {
+                            text: root.writeRawCsv ? "On" : "Off"
+                            color: root.writeRawCsv ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    FieldRow {
+                        label: "Raw CSV duration"
+                        opacity: root.writeRawCsv ? 1.0 : 0.4
+                        TextField {
+                            id: rawCsvDurationField
+                            Layout.preferredWidth: 80
+                            Layout.preferredHeight: 32
+                            enabled: root.writeRawCsv
+                            text: root.rawCsvDurationSec !== null && root.rawCsvDurationSec !== undefined
+                                  ? root.rawCsvDurationSec.toString() : ""
+                            placeholderText: "unlimited"
+                            inputMethodHints: Qt.ImhDigitsOnly
+                            color: root.colTextPri
+                            background: Rectangle {
+                                color: root.colBgInput
+                                border.color: rawCsvDurationField.activeFocus ? root.colAccent : root.colBorderSoft
+                                radius: 4
+                            }
+                            onEditingFinished: {
+                                var v = parseInt(text, 10)
+                                root.rawCsvDurationSec = (text === "" || isNaN(v) || v <= 0) ? null : v
+                            }
+                        }
+                        Text {
+                            text: "seconds  (blank = full scan)"
+                            color: root.colTextMuted
+                            font.pixelSize: 11
                         }
                         Item { Layout.fillWidth: true }
                     }

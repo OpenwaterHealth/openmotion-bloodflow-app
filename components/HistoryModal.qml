@@ -223,6 +223,7 @@ Item {
 
                         Button {
                             text: "Visualize BFI/BVI (legacy)"
+                            visible: MOTIONInterface.appConfig.developerMode ? true : false
                             Layout.fillWidth: true; Layout.preferredHeight: 36
                             enabled: !!(selected.leftPath || selected.rightPath)
                             hoverEnabled: enabled
@@ -243,6 +244,7 @@ Item {
 
                         Button {
                             text: "Visualize Contrast/Mean (legacy)"
+                            visible: MOTIONInterface.appConfig.developerMode ? true : false
                             Layout.fillWidth: true; Layout.preferredHeight: 36
                             enabled: !!(selected.leftPath || selected.rightPath)
                             hoverEnabled: enabled
