@@ -9,7 +9,7 @@ Python Application UI for OpenMotion Bloodflow monitoring.
 | Platform | Status |
 |----------|--------|
 | Windows 10/11 | Supported (PyInstaller .exe) |
-| macOS 12+ (Apple Silicon & Intel) | Supported (.app bundle / DMG) |
+| macOS 12+ (Apple Silicon & Intel) | **In development** — builds and launches, but device communication is not yet fully working |
 | Linux | Runs from source (Python 3.12+) |
 
 ## Prerequisites
@@ -41,7 +41,7 @@ python main.py
 
 ## Building Distributable Packages
 
-### macOS (.app + DMG)
+### macOS (.app + DMG) — *in development*
 
 ```bash
 source .venv/bin/activate
@@ -49,6 +49,10 @@ source .venv/bin/activate
 ```
 
 Produces `dist/OpenWater Bloodflow.app` and a DMG installer in `dist/`.
+
+> **Note:** macOS support is still a work in progress. The app builds and launches,
+> but end-to-end device communication with the console and sensor modules is not yet
+> fully working. Use Windows for production scans.
 
 ### Windows (.exe)
 
@@ -68,7 +72,7 @@ The OpenMotion sensor modules require platform-specific USB driver setup. See th
 
 - **Windows:** WinUSB driver installation required (run `drivers/windows/install.bat` as Administrator)
 - **Linux:** udev rules required (run `sudo drivers/linux/install.sh`)
-- **macOS:** No driver needed — just `brew install libusb`
+- **macOS:** No driver needed — just `brew install libusb` *(device I/O still being stabilized)*
 
 ## Data & Log Directories
 
@@ -96,9 +100,24 @@ Edit `config/app_config.json` to customize behavior:
 | `output_path` | `null` | Base directory for logs and data (null = auto-detect) |
 | `dataDirectory` | `null` | Override for scan data output (null = `<output_path>/scan_data`) |
 | `developerMode` | `false` | Enable developer UI features |
+| `reducedMode` | `false` | Simplified clinical UI: forces middle camera config + free run, hides scan settings, shows large left/right BFI/BVI panels |
 | `leftMask` / `rightMask` | `0x66` | Camera bitmask for left/right sensor modules |
 | `writeRawCsv` | `true` | Write raw histogram CSV during capture |
 | `rawCsvDurationSec` | `null` | Limit raw CSV capture duration (null = unlimited) |
+| `showBfiBvi` | `true` | Plot BFI/BVI instead of raw mean/contrast |
+| `plotWindowSec` | `15` | Realtime plot time window (3 / 5 / 15 / 30) |
+| `autoScale` | `true` | Auto-scale realtime plot Y-axes (always per-plot) |
+| `bfiColor` / `bviColor` | `#ff0000` / `#3437db` | Trace colors for BFI / BVI |
+| `bfiClampLow` / `bfiClampHigh` | `0.0` / `10.0` | BFI display clamps — values outside show `--` |
+| `bviClampLow` / `bviClampHigh` | `0.0` / `10.0` | BVI display clamps — values outside show `--` |
+| `bviLowPassEnabled` | `false` | Enable 1-pole low-pass filter on BVI samples |
+| `bviLowPassCutoffHz` | `40.0` | Cutoff frequency for the BVI LPF |
+| `bfiMin` / `bfiMax` | `4.0` / `9.0` | Manual BFI plot bounds (when autoscale is off) |
+| `bviMin` / `bviMax` | `4.0` / `8.0` | Manual BVI plot bounds (when autoscale is off) |
+| `meanMin` / `meanMax` | `0` / `200` | Manual mean plot bounds |
+| `contrastMin` / `contrastMax` | `0.0` / `0.7` | Manual contrast plot bounds |
+
+Most of these are also editable from the in-app **Settings** panel and persisted automatically.
 
 ## Antivirus Note (Windows)
 
