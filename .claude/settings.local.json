@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(python -c \"import subprocess; print\\(subprocess.run\\([''where'', ''gh''], capture_output=True, text=True\\).stdout\\)\")"
-    ]
-  }
-}
