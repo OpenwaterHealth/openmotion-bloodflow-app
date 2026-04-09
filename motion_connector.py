@@ -152,6 +152,7 @@ class MOTIONConnector(QObject):
 
     def __init__(
         self,
+        interface: MOTIONInterface,
         app_config=None,
         output_path=None,
         config_dir="config",
@@ -164,7 +165,7 @@ class MOTIONConnector(QObject):
         # Store the full config dict — exposed to QML as appConfig property
         self._app_config = dict(cfg)
 
-        self._interface = motion_interface
+        self._interface = interface
         self._scan_workflow = self._interface.scan_workflow
 
         # Unpack operational settings from config
@@ -271,7 +272,7 @@ class MOTIONConnector(QObject):
         if self._consoleConnected:
             self.on_connected("CONSOLE", "startup")
 
-        motion_interface.console_module.telemetry.add_listener(self._on_telemetry_update)
+        self._interface.console_module.telemetry.add_listener(self._on_telemetry_update)
 
     def set_eol_thresholds(
         self,
@@ -673,7 +674,7 @@ class MOTIONConnector(QObject):
         elif desc == "CONSOLE":
             self._consoleConnected = True
             self._interface.log_console_info()
-            if motion_interface.console_module.tec_voltage(self._tec_voltage_default):
+            if self._interface.console_module.tec_voltage(self._tec_voltage_default):
                 logger.info(f"Console TEC voltage set to {self._tec_voltage_default}V")
             else:
                 logger.error(
@@ -1184,7 +1185,7 @@ class MOTIONConnector(QObject):
         self._start_runlog(subject_id=subject_id)
 
         def _extra_cols():
-            snap = motion_interface.console_module.telemetry.get_snapshot()
+            snap = self._interface.console_module.telemetry.get_snapshot()
             if snap is not None:
                 return [int(snap.tcm), int(snap.tcl), f"{float(snap.pdc):.3f}"]
             return [0, 0, "0.000"]
@@ -1527,7 +1528,7 @@ class MOTIONConnector(QObject):
     @pyqtSlot(result=QVariant)
     def tec_status(self, snap=None):
         if snap is None:
-            snap = motion_interface.console_module.telemetry.get_snapshot()
+            snap = self._interface.console_module.telemetry.get_snapshot()
         if snap is None or not snap.read_ok:
             return False
 
@@ -1562,7 +1563,7 @@ class MOTIONConnector(QObject):
     @pyqtSlot(result=QVariant)
     def pdu_mon(self, snap=None):
         if snap is None:
-            snap = motion_interface.console_module.telemetry.get_snapshot()
+            snap = self._interface.console_module.telemetry.get_snapshot()
         if snap is None or not snap.read_ok or not snap.pdu_raws:
             return {"ok": False, "error": "no data"}
 
@@ -1579,7 +1580,7 @@ class MOTIONConnector(QObject):
     @pyqtSlot()
     def readSafetyStatus(self, snap=None):
         if snap is None:
-            snap = motion_interface.console_module.telemetry.get_snapshot()
+            snap = self._interface.console_module.telemetry.get_snapshot()
         if snap is None:
             logger.warning("readSafetyStatus: no telemetry snapshot yet")
             return
@@ -2401,7 +2402,7 @@ class MOTIONConnector(QObject):
 
     @property
     def interface(self):
-        return motion_interface
+        return self._interface
 
 
 def _load_plot_corrected_scan():

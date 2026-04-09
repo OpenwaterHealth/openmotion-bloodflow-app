@@ -184,8 +184,9 @@ def main():
     sdk_logger.addHandler(file_handler)
     sdk_logger.propagate = False  # Don't propagate to root, use our handlers
 
-    # Log host system info now that handlers are in place
-    from motion_singleton import motion_interface
+    # Construct the MOTIONInterface here and inject it into the connector below
+    from omotion.Interface import MOTIONInterface
+    motion_interface = MOTIONInterface()
     motion_interface.log_system_info()
 
     qInstallMessageHandler(qt_message_handler)
@@ -213,7 +214,7 @@ def main():
 
     engine = QQmlApplicationEngine()
 
-    connector = MOTIONConnector(app_config=app_config, output_path=output_base)
+    connector = MOTIONConnector(motion_interface, app_config=app_config, output_path=output_base)
     qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MOTIONInterface", connector)
     engine.rootContext().setContextProperty("appVersion", APP_VERSION)
 
