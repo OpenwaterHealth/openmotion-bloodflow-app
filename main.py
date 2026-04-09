@@ -185,7 +185,6 @@ def main():
     sdk_logger.propagate = False  # Don't propagate to root, use our handlers
 
     # Construct the MOTIONInterface here and inject it into the connector below
-    from omotion.Interface import MOTIONInterface
     motion_interface = MOTIONInterface()
     motion_interface.log_system_info()
 
