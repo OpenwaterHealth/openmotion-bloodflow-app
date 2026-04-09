@@ -62,7 +62,8 @@ Rectangle {
                     id: startStopCircle
                     Layout.alignment: Qt.AlignHCenter
                     width: 36; height: 36; radius: 18
-                    color: panel.scanning ? "#E74C3C"
+                    color: !panel.allConnected ? "#555555"
+                         : panel.scanning ? "#E74C3C"
                          : panel.waiting  ? "#F1C40F"
                          :                  "#2ECC71"
                     Behavior on color { ColorAnimation { duration: 150 } }
