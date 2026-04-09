@@ -95,6 +95,22 @@ Rectangle {
                     font.weight: Font.Bold
                 }
 
+                Rectangle {
+                    width: betaLabel.implicitWidth + 12
+                    height: betaLabel.implicitHeight + 4
+                    radius: 4
+                    color: "#E67E22"
+                    Text {
+                        id: betaLabel
+                        anchors.centerIn: parent
+                        text: "BETA"
+                        color: "#FFFFFF"
+                        font.pixelSize: 10
+                        font.weight: Font.Bold
+                        font.letterSpacing: 1
+                    }
+                }
+
                 Item { Layout.fillWidth: true }
 
                 Text {
