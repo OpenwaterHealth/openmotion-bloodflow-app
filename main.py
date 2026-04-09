@@ -1,7 +1,6 @@
 import sys
 import os
 import asyncio
-import argparse
 import json
 import warnings
 import logging
@@ -55,8 +54,6 @@ def qt_message_handler(msg_type, context, message):
 def _load_app_config() -> dict:
     """Load application config from config/app_config.json. Returns defaults if missing or invalid."""
     defaults = {
-        "realtimePlotEnabled": False,
-        "advancedSensors": True,
         "forceLaserFail": False,
         "cameraTempAlertThresholdC": 105,
         "sensorDebugLogging": False,
@@ -69,6 +66,35 @@ def _load_app_config() -> dict:
         "verboseCommandHandling": False,  # Enable printf in MCU command handlers
         "eol_min_mean_per_camera": [0] * 8,
         "eol_min_contrast_per_camera": [0] * 8,
+        "leftMask": 0x66,   # 0b01100110 — cameras 2,3,6,7 (Middle pattern)
+        "rightMask": 0x66,
+        "uncorrectedOnly": False,
+        "autoConfigureOnStartup": True,
+        "developerMode": False,
+        "showBfiBvi": True,
+        "bfiMin": 0.0,
+        "bfiMax": 10.0,
+        "bviMin": 0.0,
+        "bviMax": 10.0,
+        "meanMin": 0.0,
+        "meanMax": 500.0,
+        "contrastMin": 0.0,
+        "contrastMax": 1.0,
+        "dataDirectory": None,
+        "writeRawCsv": True,
+        "rawCsvDurationSec": None,
+        "autoScale": False,
+        "autoScalePerPlot": False,
+        "reducedMode": False,
+        "plotWindowSec": 15,
+        "bfiColor": "#E74C3C",
+        "bviColor": "#3498DB",
+        "bviLowPassEnabled": False,
+        "bviLowPassCutoffHz": 40.0,
+        "bfiClampLow": 0.0,
+        "bfiClampHigh": 10.0,
+        "bviClampLow": 0.0,
+        "bviClampHigh": 10.0,
     }
     config_path = resource_path("config", "app_config.json")
     if not config_path.exists():
@@ -81,12 +107,11 @@ def _load_app_config() -> dict:
             **defaults,
             **{k: v for k, v in loaded.items() if k in defaults or k == "output_path"},
         }
-        logger.info(
-            "Loaded app config from %s: realtimePlotEnabled=%s, advancedSensors=%s",
-            config_path,
-            out.get("realtimePlotEnabled"),
-            out.get("advancedSensors"),
-        )
+        # Ensure mask fields are always integers (guard against float drift from JSON)
+        for key in ("leftMask", "rightMask"):
+            if key in out and out[key] is not None:
+                out[key] = int(out[key])
+        logger.info("Loaded app config from %s", config_path)
         return out
     except (json.JSONDecodeError, OSError) as e:
         logger.warning(
@@ -115,10 +140,6 @@ def main():
     os.environ["QT_QUICK_CONTROLS_MATERIAL_THEME"] = "Dark"
     os.environ["QT_LOGGING_RULES"] = "qt.qpa.fonts=false"
 
-    # --- parse flags ignore unknown (Qt) flags ---
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--advanced-sensors", action="store_true")
-    my_args, _unknown = parser.parse_known_args(sys.argv[1:])
 
     # Configure logging
     formatter = logging.Formatter(
@@ -132,7 +153,17 @@ def main():
 
     # Configure file logging
     app_config = _load_app_config()
-    output_base = app_config.get("output_path") or os.getcwd()
+    output_base = app_config.get("output_path")
+    if not output_base:
+        # Default to cwd, but fall back to ~/Documents/OpenWater Bloodflow
+        # if cwd is not writable (e.g. launched from Finder where cwd is "/")
+        candidate = os.getcwd()
+        if os.access(candidate, os.W_OK):
+            output_base = candidate
+        else:
+            output_base = os.path.join(
+                os.path.expanduser("~"), "Documents", "OpenWater Bloodflow"
+            )
     run_dir = os.path.join(output_base, "app-logs")
     os.makedirs(run_dir, exist_ok=True)
     ts = datetime.datetime.now().strftime(
@@ -152,6 +183,10 @@ def main():
     sdk_logger.addHandler(console_handler)
     sdk_logger.addHandler(file_handler)
     sdk_logger.propagate = False  # Don't propagate to root, use our handlers
+
+    # Construct the MOTIONInterface here and inject it into the connector below
+    motion_interface = MOTIONInterface()
+    motion_interface.log_system_info()
 
     qInstallMessageHandler(qt_message_handler)
 
@@ -178,37 +213,8 @@ def main():
 
     engine = QQmlApplicationEngine()
 
-    # Apply CLI overrides to already-loaded app_config
-    if my_args.advanced_sensors:
-        app_config["advancedSensors"] = True
-
-    interface = MOTIONInterface()
-    connector = MOTIONConnector(
-        interface=interface,
-        advanced_sensors=app_config.get("advancedSensors", True),
-        force_laser_fail=app_config.get("forceLaserFail", False),
-        camera_temp_alert_threshold_c=app_config.get("cameraTempAlertThresholdC", 105),
-        sensor_debug_logging=app_config.get("sensorDebugLogging", False),
-        camera_fake_data=app_config.get("cameraFakeData", False),
-        histo_throttle=app_config.get("histoThrottle", False),
-        histo_cmp=app_config.get("histoCmp", False),
-        power_off_unused_cameras=app_config.get("powerOffUnusedCameras", False),
-        comm_verbose=app_config.get("commVerbose", False),
-        verbose_command_handling=app_config.get("verboseCommandHandling", False),
-        output_path=output_base,
-    )
-    connector.set_eol_thresholds(
-        app_config.get("eol_min_mean_per_camera"),
-        app_config.get("eol_min_contrast_per_camera"),
-    )
+    connector = MOTIONConnector(motion_interface, app_config=app_config, output_path=output_base)
     qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MOTIONInterface", connector)
-    engine.rootContext().setContextProperty(
-        "AppFlags",
-        {
-            "advancedSensors": app_config.get("advancedSensors", True),
-            "realtimePlotEnabled": app_config.get("realtimePlotEnabled", False),
-        },
-    )
     engine.rootContext().setContextProperty("appVersion", APP_VERSION)
 
     # Load the QML file

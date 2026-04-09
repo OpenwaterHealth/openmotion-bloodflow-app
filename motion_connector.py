@@ -5,26 +5,20 @@ from PyQt6.QtCore import (
     pyqtSlot,
     QVariant,
     QThread,
-    QWaitCondition,
-    QMutex,
     QTimer,
 )
 from pathlib import Path
 import logging
 import base58
 import threading
-import queue
 import json
 import csv
 import os
 import datetime
 import time
 import random
-import math
 import re
 import string
-import platform
-import socket
 
 from omotion.Interface import MOTIONInterface
 
@@ -36,7 +30,8 @@ from omotion.config import (
     DEBUG_FLAG_COMM_VERBOSE,
     DEBUG_FLAG_CMD_VERBOSE,
 )
-from processing.data_processing import DataProcessor, HISTO_BINS
+from omotion.MotionProcessing import process_bin_file
+from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
 from processing.visualize_bloodflow import VisualizeBloodflow
 from utils.resource_path import resource_path
 import numpy as np
@@ -55,7 +50,6 @@ R_s = 0.020  # (R217)
 TEC_VOLTAGE_DEFAULT = -0.07  # volts (DVT1a=-0.07, EVT2=1.16)
 DATA_ACQ_INTERVAL = 1.0
 
-HISTO_BINS_SQ = HISTO_BINS * HISTO_BINS
 _BFI_CAL = VisualizeBloodflow(left_csv="", right_csv="")
 _BFI_C_MIN = _BFI_CAL.C_min
 _BFI_C_MAX = _BFI_CAL.C_max
@@ -87,7 +81,8 @@ class MOTIONConnector(QObject):
     safetyTripDuringCaptureRequested = pyqtSignal()  # Emitted when safety trips while scan running (main-thread slot shows message & schedules cancel)
     triggerStateChanged = pyqtSignal()  # Signal to notify QML of trigger state changes
     directoryChanged = pyqtSignal()  # Signal to notify QML of directory changes
-    subjectIdChanged = pyqtSignal()  # Signal to notify QML of subject ID changes
+    sessionIdChanged = pyqtSignal()  # Signal to notify QML of session ID changes
+    subjectIdChanged = pyqtSignal()  # Deprecated alias — same as sessionIdChanged
     sensorDeviceInfoReceived = pyqtSignal(str, str)  # (fw_version, device_id)
     consoleDeviceInfoReceived = pyqtSignal(str, str)  # (fw_version, device_id)
     temperatureSensorUpdated = pyqtSignal(float)  # Temperature data
@@ -114,17 +109,19 @@ class MOTIONConnector(QObject):
         str, int, float, float
     )  # side, cam_id, timestamp_s, contrast
     scanBfiSampled = pyqtSignal(
-        str, int, float, float
-    )  # side, cam_id, timestamp_s, bfi
+        str, int, int, float, float
+    )  # side, cam_id, frame_id, timestamp_s, bfi
     scanBviSampled = pyqtSignal(
-        str, int, float, float
-    )  # side, cam_id, timestamp_s, bvi
+        str, int, int, float, float
+    )  # side, cam_id, frame_id, timestamp_s, bvi
     scanBfiCorrectedSampled = pyqtSignal(
         str, int, float, float
-    )  # side, cam_id, timestamp_s, bfi
+    )  # side, cam_id, timestamp_s, bfi  (kept for backward compat)
     scanBviCorrectedSampled = pyqtSignal(
         str, int, float, float
-    )  # side, cam_id, timestamp_s, bvi
+    )  # side, cam_id, timestamp_s, bvi  (kept for backward compat)
+    scanCorrectedBatch = pyqtSignal('QVariantList')  # list of {side,camId,frameId,ts,bfi,bvi}
+    scanCameraTemperature = pyqtSignal(str, int, float)  # side, cam_id, temperature_c
 
     # post-processing signals
     postProgress = pyqtSignal(int)
@@ -135,38 +132,57 @@ class MOTIONConnector(QObject):
 
     tecStatusChanged = pyqtSignal()
     tecDacChanged = pyqtSignal()
+    appConfigChanged = pyqtSignal()
+
+    @staticmethod
+    def _default_output_base() -> str:
+        """Return a writable base directory for logs and scan data.
+
+        Uses the current working directory when it is writable (typical
+        for development runs).  When cwd is read-only — e.g. ``/`` on
+        macOS when the .app bundle is launched from Finder — falls back
+        to ``~/Documents/OpenWater Bloodflow``.
+        """
+        cwd = os.getcwd()
+        if os.access(cwd, os.W_OK):
+            return cwd
+        return os.path.join(
+            os.path.expanduser("~"), "Documents", "OpenWater Bloodflow"
+        )
 
     def __init__(
         self,
         interface: MOTIONInterface,
+        app_config=None,
+        output_path=None,
         config_dir="config",
         parent=None,
-        advanced_sensors=False,
         log_level=logging.INFO,
-        force_laser_fail=False,
-        camera_temp_alert_threshold_c=105.0,
-        sensor_debug_logging=False,
-        camera_fake_data=False,
-        histo_throttle=False,
-        histo_cmp=False,
-        output_path=None,
-        power_off_unused_cameras=False,
-        comm_verbose=False,
-        verbose_command_handling=False,
     ):
         super().__init__(parent)
+        cfg = app_config or {}
+
+        # Store the full config dict — exposed to QML as appConfig property
+        self._app_config = dict(cfg)
+
         self._interface = interface
-        self._advanced_sensors = advanced_sensors
-        self._force_laser_fail = force_laser_fail
-        self._camera_temp_alert_threshold_c = float(camera_temp_alert_threshold_c)
-        self._sensor_debug_logging = bool(sensor_debug_logging)
-        self._camera_fake_data = bool(camera_fake_data)
-        self._histo_throttle = bool(histo_throttle)
-        self._comm_verbose = bool(comm_verbose)
-        self._verbose_command_handling = bool(verbose_command_handling)
-        self._histo_cmp = bool(histo_cmp)
-        self._output_base = output_path or os.getcwd()
-        self._power_off_unused_cameras = bool(power_off_unused_cameras)
+        self._scan_workflow = self._interface.scan_workflow
+
+        # Unpack operational settings from config
+        self._force_laser_fail            = bool(cfg.get("forceLaserFail", False))
+        self._camera_temp_alert_threshold_c = float(cfg.get("cameraTempAlertThresholdC", 105.0))
+        self._sensor_debug_logging        = bool(cfg.get("sensorDebugLogging", False))
+        self._camera_fake_data            = bool(cfg.get("cameraFakeData", False))
+        self._histo_throttle              = bool(cfg.get("histoThrottle", False))
+        self._histo_cmp                   = bool(cfg.get("histoCmp", False))
+        self._comm_verbose                = bool(cfg.get("commVerbose", False))
+        self._verbose_command_handling    = bool(cfg.get("verboseCommandHandling", False))
+        self._output_base                 = output_path or cfg.get("output_path") or self._default_output_base()
+        self._power_off_unused_cameras    = bool(cfg.get("powerOffUnusedCameras", False))
+        self._write_raw_csv               = bool(cfg.get("writeRawCsv", True))
+        raw_csv                           = cfg.get("rawCsvDurationSec")
+        self._raw_csv_duration_sec        = float(raw_csv) if raw_csv is not None else None
+        self._uncorrected_only            = bool(cfg.get("uncorrectedOnly", False))
 
         # Configure logging with the provided level
         self._configure_logging(log_level)
@@ -182,19 +198,20 @@ class MOTIONConnector(QObject):
         self._leftSensorConnected = left_sensor_connected
         self._rightSensorConnected = right_sensor_connected
         self._consoleConnected = console_connected
-        self._config_thread = None
+        self._config_running = False
         self._laserOn = False
         self._safetyFailure = False
         self._running = False
         self._trigger_state = "OFF"
         self._state = DISCONNECTED
+        self._last_fan_status: dict[str, bool | None] = {"left": None, "right": None}
         self.laser_params = self._load_laser_params(config_dir)
         self._tec_voltage_default = self._load_tec_params(config_dir)
 
-        self._eol_min_mean_per_camera = (
-            None  # list of 8 or None; set via set_eol_thresholds()
-        )
-        self._eol_min_contrast_per_camera = None
+        eol_mean     = cfg.get("eol_min_mean_per_camera")
+        eol_contrast = cfg.get("eol_min_contrast_per_camera")
+        self._eol_min_mean_per_camera     = list(eol_mean)     if isinstance(eol_mean,     (list, tuple)) else None
+        self._eol_min_contrast_per_camera = list(eol_contrast) if isinstance(eol_contrast, (list, tuple)) else None
 
         self._post_thread = None
         self._post_cancel = threading.Event()
@@ -206,22 +223,13 @@ class MOTIONConnector(QObject):
         self._capture_left_path = ""
         self._capture_right_path = ""
         self._scan_notes = ""
+        self._scan_notes_path = ""  # path to current scan's notes file on disk
+        self._scan_workflow.set_realtime_calibration(
+            _BFI_C_MIN, _BFI_C_MAX, _BFI_I_MIN, _BFI_I_MAX
+        )
         self.connect_signals()
         self._viz_thread = None
         self._viz_worker = None
-        self._console_status_thread = None
-
-        self._corr_queue = queue.Queue()
-        self._corr_stop = threading.Event()
-        self._corr_thread = threading.Thread(
-            target=self._correction_worker, daemon=True
-        )
-        self._corr_thread.start()
-
-        self._tcm = 0.0
-        self._tcl = 0.0
-        self._pdc = 0.0
-        self._telemetry_lock = threading.Lock()
 
         self._tec_voltage = 0.0
         self._tec_temp = 0.0
@@ -243,13 +251,18 @@ class MOTIONConnector(QObject):
         self._runlog_csv_writer = None  # csv.writer or None
         self._runlog_csv_lock = threading.Lock()
 
-        default_dir = os.path.join(self._output_base, "scan_data")
-        os.makedirs(default_dir, exist_ok=True)
-        self._directory = default_dir
-        logger.info(f"[Connector] Default directory initialized to: {self._directory}")
+        configured_data_dir = cfg.get("dataDirectory")
+        if configured_data_dir:
+            os.makedirs(configured_data_dir, exist_ok=True)
+            self._directory = configured_data_dir
+        else:
+            default_dir = os.path.join(self._output_base, "scan_data")
+            os.makedirs(default_dir, exist_ok=True)
+            self._directory = default_dir
+        logger.info(f"[Connector] Directory initialized to: {self._directory}")
 
-        self._subject_id = self.generate_subject_id()
-        logger.info(f"[Connector] Generated subject ID: {self._subject_id}")
+        self._subject_id = self.generate_session_id()
+        logger.info(f"[Connector] Generated session ID: {self._subject_id}")
 
         # Emit synthetic connect events for devices already connected at startup
         if self._leftSensorConnected:
@@ -259,14 +272,7 @@ class MOTIONConnector(QObject):
         if self._consoleConnected:
             self.on_connected("CONSOLE", "startup")
 
-        # Start console status thread if console is already connected at startup
-        if self._consoleConnected and self._console_status_thread is None:
-            logger.info(
-                "[Connector] Console already connected at startup, starting status thread"
-            )
-            self._console_status_thread = ConsoleStatusThread(self)
-            self._console_status_thread.statusUpdate.connect(self.handleUpdateCapStatus)
-            self._console_status_thread.start()
+        self._interface.console_module.telemetry.add_listener(self._on_telemetry_update)
 
     def set_eol_thresholds(
         self,
@@ -350,13 +356,16 @@ class MOTIONConnector(QObject):
         if flags != 0 and sensor is not None and sensor.is_connected():
             logger.info(
                 "Setting debug flags 0x%x on %s sensor "
-                "(debug_logging=%s, fake_data=%s, histoThrottle=%s, histoCmp=%s)",
+                "(debug_logging=%s, fake_data=%s, histoThrottle=%s, histoCmp=%s, "
+                "commVerbose=%s, verboseCommand=%s)",
                 flags,
                 side,
                 self._sensor_debug_logging,
                 self._camera_fake_data,
                 getattr(self, "_histo_throttle", False),
                 getattr(self, "_histo_cmp", False),
+                getattr(self, "_comm_verbose", False),
+                getattr(self, "_verbose_command_handling", False),
             )
             if not sensor.set_debug_flags(flags):
                 logger.warning("Failed to set debug flags on %s sensor", side)
@@ -384,17 +393,11 @@ class MOTIONConnector(QObject):
                 refresh_cache = getattr(sensor, "refresh_id_cache", None)
                 if enable_power and disable_power and refresh_cache:
                     if enable_power(0xFF):
-                        logger.info(
-                            "Powered on all cameras on %s sensor for ID cache fill",
-                            side,
-                        )
                         time.sleep(0.5)  # settle time
                         refresh_cache()
-                        logger.info("Filled ID cache on %s sensor", side)
                         if self._power_off_unused_cameras:
                             disable_power(0xFF)
                             time.sleep(0.05)
-                            logger.info("Powered off all cameras on %s sensor", side)
                     else:
                         logger.warning(
                             "Could not power on cameras on %s sensor for ID cache fill",
@@ -405,6 +408,7 @@ class MOTIONConnector(QObject):
                     refresh_cache()  # fallback: fill cache without power cycle (may get zeros for off cameras)
         except Exception as e:
             logger.debug("Could not refresh sensor ID cache for %s: %s", side, e)
+        # self._interface.log_sensor_info(side)
         self.connectionStatusChanged.emit()
 
     def _start_runlog(self, subject_id: str = None):
@@ -498,10 +502,6 @@ class MOTIONConnector(QObject):
         run_logger.info(f"SDK Version: {sdk_ver}")
         run_logger.info(f"Console Firmware: {fw_ver}")
 
-        # Log system information, device information, laser information, and camera UIDs
-        self.log_system_information(logger)
-        self.log_device_information()
-        self.log_laser_information()
         self._read_and_log_camera_uids()
 
         # Flush the handler to ensure header is written immediately
@@ -585,140 +585,11 @@ class MOTIONConnector(QObject):
             except Exception as e:
                 logger.error(f"Failed to write run CSV sample: {e}")
 
-    def log_system_information(self, logger):
-        """Log system information including hostname, OS details, and hardware information."""
-        try:
-            hostname = socket.gethostname()
-            run_logger.info("=" * 80)
-            run_logger.info("SYSTEM INFORMATION")
-            run_logger.info("=" * 80)
-            run_logger.info(f"Hostname: {hostname}")
-            run_logger.info(f"Platform: {platform.platform()}")
-            run_logger.info(f"System: {platform.system()}")
-            run_logger.info(f"Release: {platform.release()}")
-            run_logger.info(f"Version: {platform.version()}")
-            run_logger.info(f"Architecture: {platform.machine()}")
-            run_logger.info(f"Processor: {platform.processor()}")
-
-            # Additional hardware information
-            if platform.system() == "Windows":
-                try:
-                    import ctypes
-
-                    # Get total physical memory
-                    class MEMORYSTATUSEX(ctypes.Structure):
-                        _fields_ = [
-                            ("dwLength", ctypes.c_ulong),
-                            ("dwMemoryLoad", ctypes.c_ulong),
-                            ("ullTotalPhys", ctypes.c_ulonglong),
-                            ("ullAvailPhys", ctypes.c_ulonglong),
-                            ("ullTotalPageFile", ctypes.c_ulonglong),
-                            ("ullAvailPageFile", ctypes.c_ulonglong),
-                            ("ullTotalVirtual", ctypes.c_ulonglong),
-                            ("ullAvailVirtual", ctypes.c_ulonglong),
-                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-                        ]
-
-                    memStatus = MEMORYSTATUSEX()
-                    memStatus.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
-                    ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(memStatus))
-                    total_memory_gb = memStatus.ullTotalPhys / (1024**3)
-                    run_logger.info(f"Total Physical Memory: {total_memory_gb:.2f} GB")
-                except Exception:
-                    pass
-
-            # Python version
-            run_logger.info(f"Python Version: {platform.python_version()}")
-            run_logger.info(
-                f"Python Implementation: {platform.python_implementation()}"
-            )
-
-        except Exception as e:
-            run_logger.warning(f"Failed to log system information: {e}")
-
-    def log_device_information(self):
-        """Log information about connected sensors and console to the run log."""
-        try:
-            run_logger.info("=" * 80)
-            run_logger.info("DEVICE INFORMATION")
-            run_logger.info("=" * 80)
-
-            # Console information
-            if self._consoleConnected:
-                try:
-                    fw_version = self._interface.console_module.get_version()
-                    hw_id = self._interface.console_module.get_hardware_id()
-                    device_id = base58.b58encode(bytes.fromhex(hw_id)).decode()
-                    run_logger.info(
-                        f"Console - Firmware: {fw_version}, Device ID: {device_id}"
-                    )
-                except Exception as e:
-                    run_logger.warning(f"Console - Failed to get device info: {e}")
-            else:
-                run_logger.info("Console - Not connected")
-
-            # Left sensor information
-            if self._leftSensorConnected:
-                try:
-                    sensor = self._interface.sensors.get("left")
-                    if sensor is not None:
-                        fw_version = sensor.get_version()
-                        hw_id = sensor.get_hardware_id()
-                        device_id = base58.b58encode(bytes.fromhex(hw_id)).decode()
-                        run_logger.info(
-                            f"Left Sensor - Firmware: {fw_version}, Device ID: {device_id}"
-                        )
-                    else:
-                        run_logger.warning("Left Sensor - Sensor object is None")
-                except Exception as e:
-                    run_logger.warning(f"Left Sensor - Failed to get device info: {e}")
-            else:
-                run_logger.info("Left Sensor - Not connected")
-
-            # Right sensor information
-            if self._rightSensorConnected:
-                try:
-                    sensor = self._interface.sensors.get("right")
-                    if sensor is not None:
-                        fw_version = sensor.get_version()
-                        hw_id = sensor.get_hardware_id()
-                        device_id = base58.b58encode(bytes.fromhex(hw_id)).decode()
-                        run_logger.info(
-                            f"Right Sensor - Firmware: {fw_version}, Device ID: {device_id}"
-                        )
-                    else:
-                        run_logger.warning("Right Sensor - Sensor object is None")
-                except Exception as e:
-                    run_logger.warning(f"Right Sensor - Failed to get device info: {e}")
-            else:
-                run_logger.info("Right Sensor - Not connected")
-
-        except Exception as e:
-            run_logger.error(f"Failed to log device information: {e}")
-
-    def log_laser_information(self):
-        """Log laser information to the run log."""
-        try:
-            run_logger.info("=" * 80)
-            run_logger.info("LASER INFORMATION")
-            run_logger.info("=" * 80)
-
-            # print laser parameters as read from the device
-            laser_params = self.laser_params
-            for param in laser_params:
-                run_logger.info(
-                    f"Mux Index: {param['muxIdx']}, Channel: {param['channel']}, I2C Address: {param['i2cAddr']}, Offset: {param['offset']}, Data to Send: {param['dataToSend']}"
-                )
-            run_logger.info("=" * 80)
-
-        except Exception as e:
-            run_logger.error(f"Failed to log laser information: {e}")
-
     # --- GETTERS/SETTERS FOR Qt PROPERTIES ---
-    def getSubjectId(self) -> str:
+    def getSessionId(self) -> str:
         return self._subject_id
 
-    def setSubjectId(self, value: str):
+    def setSessionId(self, value: str):
         if not value:
             return
         # normalize to "ow" + alphanumerics (uppercase)
@@ -730,7 +601,19 @@ class MOTIONConnector(QObject):
         new_val = "ow" + rest
         if new_val != self._subject_id:
             self._subject_id = new_val
-            self.subjectIdChanged.emit()
+            self.sessionIdChanged.emit()
+            self.subjectIdChanged.emit()  # keep deprecated alias working
+
+    sessionId = pyqtProperty(
+        str, fget=getSessionId, fset=setSessionId, notify=sessionIdChanged
+    )
+
+    # Deprecated alias — external code that still uses subjectId keeps working
+    def getSubjectId(self) -> str:
+        return self._subject_id
+
+    def setSubjectId(self, value: str):
+        self.setSessionId(value)
 
     subjectId = pyqtProperty(
         str, fget=getSubjectId, fset=setSubjectId, notify=subjectIdChanged
@@ -790,6 +673,7 @@ class MOTIONConnector(QObject):
             self._schedule_sensor_init("right")
         elif desc == "CONSOLE":
             self._consoleConnected = True
+            self._interface.log_console_info()
             if self._interface.console_module.tec_voltage(self._tec_voltage_default):
                 logger.info(f"Console TEC voltage set to {self._tec_voltage_default}V")
             else:
@@ -800,20 +684,6 @@ class MOTIONConnector(QObject):
                 logger.info("Console fan speed set to 50%")
             else:
                 logger.error("Failed to set console fan speed")
-            # Start console status thread when console connects
-            if self._console_status_thread is None:
-                self._console_status_thread = ConsoleStatusThread(self)
-                self._console_status_thread.statusUpdate.connect(
-                    self.handleUpdateCapStatus
-                )
-                self._console_status_thread.start()
-            else:
-                # Wake the status thread so it notices the new console connection immediately
-                try:
-                    if getattr(self, "_console_status_thread", None) is not None:
-                        self._console_status_thread._wait_condition.wakeAll()
-                except Exception:
-                    pass
 
         self.signalConnected.emit(descriptor, port)
         self.connectionStatusChanged.emit()
@@ -824,6 +694,7 @@ class MOTIONConnector(QObject):
         """Handle device disconnection."""
         if descriptor.upper() == "SENSOR_LEFT":
             self._leftSensorConnected = False
+            self._last_fan_status["left"] = None
             try:
                 sensor = (
                     self._interface.sensors.get("left")
@@ -839,6 +710,7 @@ class MOTIONConnector(QObject):
                 pass
         elif descriptor.upper() == "SENSOR_RIGHT":
             self._rightSensorConnected = False
+            self._last_fan_status["right"] = None
             try:
                 sensor = (
                     self._interface.sensors.get("right")
@@ -854,10 +726,6 @@ class MOTIONConnector(QObject):
                 pass
         elif descriptor.upper() == "CONSOLE":
             self._consoleConnected = False
-            # Stop console status thread when console disconnects
-            if self._console_status_thread:
-                self._console_status_thread.stop()
-                self._console_status_thread = None
 
         logger.info(
             f"Device disconnected: {descriptor} on port {port} and state is {self._state}"
@@ -881,25 +749,71 @@ class MOTIONConnector(QObject):
         elif self._consoleConnected and self._leftSensorConnected and self._running:
             self._state = RUNNING
         self.stateChanged.emit()  # Notify QML of state update
-        logger.info(f"Updated state: {self._state}")
+        logger.debug(f"Updated state: {self._state}")
+
+    def _on_telemetry_update(self, snap) -> None:
+        if not snap.read_ok:
+            logger.warning("Telemetry poll error: %s", snap.error)
+            return
+
+        try:
+            self.tec_status(snap)
+            run_logger.info(
+                "TEC Status – temp: %.2f set: %.2f tec_c: %.3f tec_v: %.3f good: %s",
+                self._tec_voltage, self._tec_temp,
+                snap.tec_curr_raw, snap.tec_volt_raw, snap.tec_good,
+            )
+        except Exception as exc:
+            logger.error("_on_telemetry_update TEC error: %s", exc)
+
+        try:
+            self.pdu_mon(snap)
+            if snap.pdu_volts:
+                run_logger.info(
+                    "PDU MON ADC0 vals: %s",
+                    " ".join(f"{(v / SCALE_V):.3f}" for v in snap.pdu_volts[:8]),
+                )
+                adc1_scaled = [
+                    (v / SCALE_V) if idx == 6 else (v / SCALE_I)
+                    for idx, v in enumerate(snap.pdu_volts[8:])
+                ]
+                run_logger.info(
+                    "PDU MON ADC1 vals: %s",
+                    " ".join(f"{v:.3f}" for v in adc1_scaled),
+                )
+        except Exception as exc:
+            logger.error("_on_telemetry_update PDU error: %s", exc)
+
+        try:
+            self.readSafetyStatus(snap)
+        except Exception as exc:
+            logger.error("_on_telemetry_update safety error: %s", exc)
+
+        try:
+            run_logger.info(
+                "Analog Values – TCM: %d, TCL: %d, PDC: %.3f",
+                snap.tcm, snap.tcl, snap.pdc,
+            )
+            self._write_runlog_csv_sample(snap.tcm, snap.tcl, snap.pdc, snap.timestamp)
+        except Exception as exc:
+            logger.error("_on_telemetry_update analog error: %s", exc)
 
     @pyqtSlot(str)
     def handleUpdateCapStatus(self, status_msg: str):
-        """Handle status updates from ConsoleStatusThread."""
         logger.debug(f"Console status update: {status_msg}")
 
     @pyqtSlot()
     def stopCapture(self):
         """Stop capture (Cancel button or app close). Ceases scan, disables cameras, waits for worker."""
         if self._capture_running:
-            self.captureLog.emit("Cancel requested.")
+            self.captureLog.emit("Stop requested.")
 
         self._capture_stop.set()
         try:
-            if self._interface and self._interface.console_module:
-                self._interface.console_module.stop_trigger()
-                self._trigger_state = "OFF"
-                self.triggerStateChanged.emit()
+            if self._interface:
+                self._interface.cancel_scan()
+            self._trigger_state = "OFF"
+            self.triggerStateChanged.emit()
         except Exception as e:
             logger.warning("Error stopping trigger: %s", e)
 
@@ -908,43 +822,13 @@ class MOTIONConnector(QObject):
         except Exception as e:
             logger.warning("Error stopping run log: %s", e)
 
-        try:
-            if self._interface and self._interface.sensors:
-                interface = self._interface
-                for side in ("left", "right"):
-                    sensor = interface.sensors.get(side)
-                    if sensor and sensor.is_connected():
-                        try:
-                            interface.run_on_sensors(
-                                "disable_camera", 0xFF, target=side
-                            )
-                            if hasattr(sensor, "uart") and hasattr(
-                                sensor.uart, "histo"
-                            ):
-                                sensor.uart.histo.stop_streaming()
-                        except Exception as e:
-                            logger.warning("Error disabling cameras on %s: %s", side, e)
-        except Exception as e:
-            logger.warning("Error disabling cameras: %s", e)
-
-        if self._capture_thread and self._capture_thread.is_alive():
-            self._capture_thread.join(timeout=5.0)
-            if self._capture_thread and self._capture_thread.is_alive():
-                logger.warning("Capture thread did not finish within 5s timeout")
         self._capture_thread = None
 
     @pyqtSlot()
     def shutdown(self):
-        """Shutdown connector. Stops capture, then stops status thread and monitoring."""
+        """Shutdown connector. Stops capture, stops monitoring, then disconnects all devices."""
         logger.info("Shutting down MOTIONConnector...")
         self.stopCapture()
-
-        if self._console_status_thread:
-            try:
-                self._console_status_thread.stop()
-            except Exception as e:
-                logger.warning("Error stopping console status thread: %s", e)
-            self._console_status_thread = None
 
         try:
             if self._interface:
@@ -952,6 +836,12 @@ class MOTIONConnector(QObject):
                 logger.info("USB monitoring stopped.")
         except Exception as e:
             logger.warning("Error stopping monitoring: %s", e)
+
+        try:
+            if self._interface:
+                self._interface.disconnect()
+        except Exception as e:
+            logger.warning("Error disconnecting interface: %s", e)
 
         logger.info("MOTIONConnector shutdown complete.")
 
@@ -1024,25 +914,36 @@ class MOTIONConnector(QObject):
 
     @pyqtSlot(result=list)
     def get_scan_list(self):
-        """Return sorted list of scans like 'owABCD12_YYYYMMDD_HHMMSS'."""
+        """Return sorted list of scan IDs.
+
+        Supports two filename formats:
+          New: {YYYYMMDD_HHMMSS}_{sessionId}_corrected.csv
+          Old: scan_{sessionId}_{YYYYMMDD_HHMMSS}_corrected.csv
+        """
         base_path = Path(self._directory)
         if not base_path.exists():
             return []
 
         ids = []
-        for f in base_path.glob("scan_*_notes.txt"):
+        for f in base_path.glob("*_corrected.csv"):
             if not f.is_file():
                 continue
-            stem = f.stem  # e.g., "scan_owIZGDFP_20250808_120740_notes"
-            # strip leading "scan_" and trailing "_notes"
+            stem = f.stem  # strip ".csv" → "..._corrected"
+            if not stem.endswith("_corrected"):
+                continue
+            stem = stem[:-10]  # strip "_corrected"
+
             if stem.startswith("scan_"):
+                # Old format: scan_{sessionId}_{ts}
                 stem = stem[5:]
-            if stem.endswith("_notes"):
-                stem = stem[:-6]
+
             ids.append(stem)
 
-        # sort by timestamp desc; assumes format owXXXXXX_YYYYMMDD_HHMMSS
         def ts_key(s):
+            # New format starts with YYYYMMDD (8 digits)
+            if re.match(r'^\d{8}_\d{6}', s):
+                return s[:15]       # YYYYMMDD_HHMMSS
+            # Old format: sessionId_YYYYMMDD_HHMMSS
             parts = s.split("_", 1)
             return parts[1] if len(parts) == 2 else s
 
@@ -1051,29 +952,40 @@ class MOTIONConnector(QObject):
     @pyqtSlot(str, result=QVariant)
     def get_scan_details(self, scan_id: str):
         """
-        scan_id like 'owIZGDFP_20250808_120740' (no 'scan_' prefix).
+        scan_id is either:
+          New format: 'YYYYMMDD_HHMMSS_sessionId'
+          Old format: 'sessionId_YYYYMMDD_HHMMSS'
         """
         base = Path(self._directory)
-        try:
-            subject, ts = scan_id.split("_", 1)
-        except ValueError:
-            return {}
 
-        notes_path = base / f"scan_{scan_id}_notes.txt"
-        left = next(base.glob(f"scan_{scan_id}_left_mask*.csv"), None)
-        right = next(base.glob(f"scan_{scan_id}_right_mask*.csv"), None)
+        # Detect format by checking if it starts with a date
+        if re.match(r'^\d{8}_\d{6}_', scan_id):
+            # New format: YYYYMMDD_HHMMSS_sessionId
+            parts = scan_id.split("_", 2)
+            ts = parts[0] + "_" + parts[1]
+            subject = parts[2] if len(parts) > 2 else ""
+            notes_path = base / f"{scan_id}_notes.txt"
+            left      = next(base.glob(f"{scan_id}_left_mask*.csv"), None)
+            right     = next(base.glob(f"{scan_id}_right_mask*.csv"), None)
+            corrected = next(base.glob(f"{scan_id}_corrected.csv"), None)
+        else:
+            # Old format: sessionId_YYYYMMDD_HHMMSS
+            parts = scan_id.split("_", 1)
+            subject = parts[0]
+            ts = parts[1] if len(parts) > 1 else ""
+            notes_path = base / f"scan_{scan_id}_notes.txt"
+            left      = next(base.glob(f"scan_{scan_id}_left_mask*.csv"), None)
+            right     = next(base.glob(f"scan_{scan_id}_right_mask*.csv"), None)
+            corrected = next(base.glob(f"scan_{scan_id}_corrected.csv"), None)
 
-        # Extract mask from each file separately
         left_mask = ""
         right_mask = ""
-
         if left:
-            m = re.search(r"_mask([0-9A-Fa-f]+)\.raw$", left.name)
+            m = re.search(r"_mask([0-9A-Fa-f]+)\.csv$", left.name)
             if m:
                 left_mask = m.group(1)
-
         if right:
-            m = re.search(r"_mask([0-9A-Fa-f]+)\.raw$", right.name)
+            m = re.search(r"_mask([0-9A-Fa-f]+)\.csv$", right.name)
             if m:
                 right_mask = m.group(1)
 
@@ -1084,12 +996,14 @@ class MOTIONConnector(QObject):
             pass
 
         return {
-            "subjectId": subject,
+            "sessionId": subject,
+            "subjectId": subject,   # deprecated alias kept for compatibility
             "timestamp": ts,
             "leftMask": left_mask,
             "rightMask": right_mask,
             "leftPath": str(left) if left else "",
             "rightPath": str(right) if right else "",
+            "correctedPath": str(corrected) if corrected else "",
             "notesPath": str(notes_path),
             "notes": notes,
         }
@@ -1104,8 +1018,77 @@ class MOTIONConnector(QObject):
         if path.startswith("file:///"):
             path = path[8:] if path[9] != ":" else path[8:]
         self._directory = path
-        logger.debug(f"[Connector] Default directory set to: {self._directory}")
+        self._app_config["dataDirectory"] = path
+        self._save_app_config()
+        logger.debug(f"[Connector] Directory set to: {self._directory}")
         self.directoryChanged.emit()
+        self.appConfigChanged.emit()
+
+    # ── App config — generic read/write API ──────────────────────────────────
+
+    @pyqtProperty('QVariantMap', notify=appConfigChanged)
+    def appConfig(self):
+        return self._app_config
+
+    # Config keys that must always be stored as plain integers
+    _INT_CONFIG_KEYS = {"leftMask", "rightMask"}
+
+    def _save_app_config(self):
+        """Write the in-memory config dict back to app_config.json."""
+        config_path = resource_path("config", "app_config.json")
+        # Coerce mask fields to int — QML passes JS numbers as Python float
+        out = dict(self._app_config)
+        for key in self._INT_CONFIG_KEYS:
+            if key in out and out[key] is not None:
+                out[key] = int(out[key])
+        try:
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(out, f, indent=2)
+        except OSError as e:
+            logger.warning(f"[Connector] Could not write app_config.json: {e}")
+
+    @pyqtSlot(str, 'QVariant')
+    def setConfig(self, key: str, value):
+        """Update a single config key, persist to disk, and notify QML."""
+        self._app_config[key] = value
+        self._save_app_config()
+        self.appConfigChanged.emit()
+        logger.debug(f"[Connector] Config set: {key} = {value!r}")
+
+    @pyqtSlot('QVariantMap')
+    def saveConfigs(self, configs: dict):
+        """Update multiple config keys at once, persist to disk, and notify QML."""
+        self._app_config.update(configs)
+        self._save_app_config()
+        self.appConfigChanged.emit()
+        logger.debug(f"[Connector] Config saved: {sorted(configs.keys())}")
+
+    @pyqtSlot(bool)
+    def setWriteRawCsv(self, enabled: bool) -> None:
+        """Update writeRawCsv in both the runtime cache and persisted config."""
+        self._write_raw_csv = bool(enabled)
+        self._app_config["writeRawCsv"] = self._write_raw_csv
+        self._save_app_config()
+        self.appConfigChanged.emit()
+        logger.debug(f"[Connector] writeRawCsv set to {self._write_raw_csv}")
+
+    @pyqtSlot('QVariant')
+    def setRawCsvDurationSec(self, value) -> None:
+        """Update rawCsvDurationSec in both the runtime cache and persisted config.
+
+        Pass ``None`` / ``null`` / empty string to disable the limit (full scan duration).
+        """
+        if value is None or str(value).strip() in ("", "null", "undefined"):
+            self._raw_csv_duration_sec = None
+        else:
+            try:
+                self._raw_csv_duration_sec = float(value)
+            except (TypeError, ValueError):
+                self._raw_csv_duration_sec = None
+        self._app_config["rawCsvDurationSec"] = self._raw_csv_duration_sec
+        self._save_app_config()
+        self.appConfigChanged.emit()
+        logger.debug(f"[Connector] rawCsvDurationSec set to {self._raw_csv_duration_sec}")
 
     @pyqtProperty(str, notify=scanNotesChanged)  # <-- add notify
     def scanNotes(self):
@@ -1117,10 +1100,33 @@ class MOTIONConnector(QObject):
         if value != self._scan_notes:
             self._scan_notes = value
             self.scanNotesChanged.emit()
+        # Always persist to disk when a notes file path exists, even if the
+        # in-memory value didn't change (covers the first save after capture).
+        if self._scan_notes_path:
+            try:
+                with open(self._scan_notes_path, "w", encoding="utf-8") as nf:
+                    nf.write(self._scan_notes.strip() + "\n")
+                logger.info(f"Notes saved to disk: {self._scan_notes_path}")
+            except Exception as e:
+                logger.error(f"Failed to update scan notes on disk: {e}")
 
-    def generate_subject_id(self):
+    def generate_session_id(self):
         suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
         return f"ow{suffix}"
+
+    def generate_subject_id(self):  # deprecated alias
+        return self.generate_session_id()
+
+    @pyqtSlot()
+    def newSession(self):
+        """Generate a fresh session ID and clear notes for a new scan."""
+        self._subject_id = self.generate_session_id()
+        self._scan_notes = ""
+        self._scan_notes_path = ""
+        self.sessionIdChanged.emit()
+        self.subjectIdChanged.emit()
+        self.scanNotesChanged.emit()
+        logger.info(f"New session started: {self._subject_id}")
 
     # --- CONSOLE COMMUNICATION METHODS ---
     @pyqtSlot()
@@ -1165,216 +1171,173 @@ class MOTIONConnector(QObject):
             )
             return False
 
-        # sanitize/prepare
         try:
             os.makedirs(data_dir, exist_ok=True)
         except Exception as e:
             self.captureLog.emit(f"Failed to create data dir: {e}")
             return False
 
-        # Determine which sides we will actually capture (mask != 0 and sensor connected)
-        interface = self._interface
-        sides_info = [
-            ("left", left_camera_mask, interface.sensors.get("left")),
-            ("right", right_camera_mask, interface.sensors.get("right")),
-        ]
-        active_sides = []
-        for side, mask, sensor in sides_info:
-            if mask == 0x00:
-                logger.info(f"{side} mask is 0x00 — skipping {side} capture.")
-                continue
-            if not (sensor and sensor.is_connected()):
-                logger.warning(
-                    f"{side} sensor not connected — skipping {side} capture."
-                )
-                continue
-            active_sides.append((side, mask, sensor))
-
-        if not active_sides:
-            self.captureLog.emit(
-                "No active sensors to capture (both masks 0x00 or disconnected)."
-            )
-            return False
-
-        logger.info("Capture worker thread starting…")
         self._capture_stop = threading.Event()
         self._capture_running = True
+        self._capture_start_time = time.time()
         self._capture_left_path = ""
         self._capture_right_path = ""
+        self._start_runlog(subject_id=subject_id)
 
-        def _ok_from_result(result, side: str) -> bool:
-            # Accept either {'left': True} or a bare True
-            if isinstance(result, dict):
-                return bool(result.get(side))
-            return bool(result)
+        def _extra_cols():
+            snap = self._interface.console_module.telemetry.get_snapshot()
+            if snap is not None:
+                return [int(snap.tcm), int(snap.tcl), f"{float(snap.pdc):.3f}"]
+            return [0, 0, "0.000"]
 
-        def _worker():
-            ok = False
-            err = ""
-            left_path = ""
-            right_path = ""
+        temp_alerted_by_side = {"left": set(), "right": set()}
 
+        def _on_uncorrected(sample):
+            """Fires for every non-dark frame (~40 Hz). Feeds the realtime plot."""
+            current_side = sample.side
+            alerted = temp_alerted_by_side.setdefault(current_side, set())
+            threshold = self._camera_temp_alert_threshold_c
+            if sample.temperature_c >= threshold and sample.cam_id not in alerted:
+                alerted.add(sample.cam_id)
+                msg = (
+                    f"ALERT: Camera {sample.cam_id + 1} ({current_side}) "
+                    f"temperature {sample.temperature_c:.1f}°C >= {threshold:.0f}°C threshold."
+                )
+                self.captureLog.emit(msg)
+                run_logger.warning(msg)
+                logger.warning(msg)
+
+            self.scanMeanSampled.emit(
+                current_side,
+                int(sample.cam_id),
+                float(sample.timestamp_s),
+                float(sample.mean),
+            )
+            self.scanContrastSampled.emit(
+                current_side,
+                int(sample.cam_id),
+                float(sample.timestamp_s),
+                float(sample.contrast),
+            )
+
+            self.scanBfiSampled.emit(
+                sample.side,
+                int(sample.cam_id),
+                int(sample.absolute_frame_id),
+                float(sample.timestamp_s),
+                float(sample.bfi),
+            )
+            self.scanBviSampled.emit(
+                sample.side,
+                int(sample.cam_id),
+                int(sample.absolute_frame_id),
+                float(sample.timestamp_s),
+                float(sample.bvi),
+            )
+            self.scanCameraTemperature.emit(
+                sample.side,
+                int(sample.cam_id),
+                float(sample.temperature_c),
+            )
+
+        def _on_corrected_batch(batch):
+            """Fires every ~15 s with dark-frame-corrected values for the last interval."""
+            payload = []
+            for s in batch.samples:
+                payload.append({
+                    'side': s.side,
+                    'camId': int(s.cam_id),
+                    'frameId': int(s.absolute_frame_id),
+                    'ts': float(s.timestamp_s),
+                    'bfi': float(s.bfi),
+                    'bvi': float(s.bvi),
+                })
+            self.scanCorrectedBatch.emit(payload)
+
+        def _on_complete(result):
+            if result.ok:
+                self.captureLog.emit("Capture session complete.")
+            elif result.canceled:
+                self.captureLog.emit("Scan stopped.")
+            else:
+                if result.error:
+                    self.captureLog.emit(f"Capture error: {result.error}")
+
+            # Compute scan duration and append to notes
+            elapsed = time.time() - self._capture_start_time
+            hours = int(elapsed // 3600)
+            minutes = int((elapsed % 3600) // 60)
+            seconds = int(elapsed % 60)
+            duration_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            status = "completed" if result.ok else ("stopped" if result.canceled else "error")
+            duration_line = f"\n---\nScan {status} — duration: {duration_str}"
+            self._scan_notes = (self._scan_notes.strip() + duration_line)
+            self.scanNotesChanged.emit()
+
+            # Always write the notes file so that the scan is discoverable in
+            # the history viewer regardless of whether data CSVs were produced.
             try:
-                # Start the per-run log now before any other logging
-                self._start_runlog(subject_id=subject_id)
-
-                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                logger.info("Preparing capture…")
-                self.captureLog.emit("Preparing capture…")
-
-                # Frame sync only for active sides (if using external sync)
-                if not disable_laser:
-                    logger.info("Enabling external frame sync…")
-                    self.captureLog.emit("Enabling external frame sync…")
-                    for side, _, _ in active_sides:
-                        res = interface.run_on_sensors(
-                            "enable_camera_fsin_ext", target=side
-                        )
-                        if not _ok_from_result(res, side):
-                            logger.error(
-                                f"Failed to enable external frame sync on {side}."
-                            )
-                            err = f"Failed to enable external frame sync on {side}."
-                            self.captureLog.emit(err)
-                            raise RuntimeError(err)
-                time.sleep(0.1)
-                # Enable cameras per side with that side's mask
-                logger.info("Enabling cameras…")
-                self.captureLog.emit("Enabling cameras…")
-                for side, mask, _ in active_sides:
-                    res = interface.run_on_sensors("enable_camera", mask, target=side)
-                    if not _ok_from_result(res, side):
-                        logger.error(
-                            f"Failed to enable camera on {side} (mask 0x{mask:02X})."
-                        )
-                        err = f"Failed to enable camera on {side} (mask 0x{mask:02X})."
-                        self.captureLog.emit(err)
-                        raise RuntimeError(err)
-
-                # Setup streaming per active side
-                writer_threads: dict[str, threading.Thread] = {}
-                writer_stops: dict[str, threading.Event] = {}
-
-                # If payload size depends on enabled cameras, compute here; otherwise keep constant.
-                expected_size = 32837  # TODO: adjust if payload varies with mask
-
-                logger.info("Setup streaming per active side")
-                for side, mask, sensor in active_sides:
-                    q = queue.Queue()
-                    stop_evt = threading.Event()
-                    # Start device streaming into queue
-                    sensor.uart.histo.start_streaming(q, expected_size=expected_size)
-
-                    filename = f"scan_{subject_id}_{ts}_{side}_mask{mask:02X}.csv"
-                    filepath = os.path.join(data_dir, filename)
-                    t = threading.Thread(
-                        target=self._write_stream_to_file,
-                        args=(q, stop_evt, filepath, side),
-                        daemon=True,
-                    )
-                    t.start()
-
-                    writer_threads[side] = t
-                    writer_stops[side] = stop_evt
-                    if side == "left":
-                        left_path = filepath
-                    elif side == "right":
-                        right_path = filepath
-                    self.captureLog.emit(f"[{side.upper()}] Streaming to: {filename}")
-
-                self._capture_left_path = left_path
-                self._capture_right_path = right_path
-
-                # Start trigger (once)
-                self.captureLog.emit("Starting trigger…")
-                if not interface.console_module.start_trigger():
-                    err = "Failed to start trigger."
-                    self.captureLog.emit(err)
-                    raise RuntimeError(err)
-
-                logger.info("TRIGGER STARTED")
-
-                self._trigger_state = "ON"
-                self.triggerStateChanged.emit()
-
-                # Progress loop
-                start_t = time.time()
-                last_emit = -1
-                while not self._capture_stop.is_set():
-                    elapsed = time.time() - start_t
-                    pct = int(min(100, max(0, (elapsed / max(1, duration_sec)) * 100)))
-                    if pct != last_emit:
-                        self.captureProgress.emit(pct if pct >= 1 else 1)
-                        last_emit = pct
-                    if elapsed >= duration_sec:
-                        break
-                    time.sleep(0.2)
-
-                # Stop trigger (once)
-                self.captureLog.emit("Stopping trigger…")
-                interface.console_module.stop_trigger()
-                self._trigger_state = "OFF"
-                self.triggerStateChanged.emit()
-                time.sleep(1)
-
-                # Disable cameras per active side
-                self.captureLog.emit("Disabling cameras…")
-                for side, mask, _ in active_sides:
-                    res = interface.run_on_sensors("disable_camera", mask, target=side)
-                    if not _ok_from_result(res, side):
-                        self.captureLog.emit(
-                            f"Failed to disable camera on {side} (mask 0x{mask:02X})."
-                        )
-                # Stop sensor streaming
-                self.captureLog.emit("Stop Sensors Streaming...")
-                for side, mask, sensor in active_sides:
-                    if sensor:
-                        try:
-                            sensor.uart.histo.stop_streaming()
-                        except Exception as e:
-                            self.captureLog.emit(f"stop_streaming[{side}] error: {e}")
-
-                # Stop sensor streaming & writer threads
-                for side, stop_evt in writer_stops.items():
-                    stop_evt.set()
-                for side, t in writer_threads.items():
-                    t.join(timeout=5.0)
-
-                ok = not self._capture_stop.is_set()
-                if ok:
-                    self.captureLog.emit("Capture session complete.")
-                    # Save notes file for the whole scan
-                    try:
-                        notes_filename = f"scan_{subject_id}_{ts}_notes.txt"
-                        notes_path = os.path.join(data_dir, notes_filename)
-                        with open(notes_path, "w", encoding="utf-8") as nf:
-                            nf.write(self._scan_notes.strip() + "\n")
-                        logger.info(f"Saved scan notes to {notes_path}")
-                    except Exception as e:
-                        logger.error(f"Failed to save scan notes: {e}")
-                    # Post-scan quick stats
-                    try:
-                        self._log_scan_image_stats(left_path, right_path)
-                    except Exception as e:
-                        logger.error(f"Failed to compute scan image stats: {e}")
-                else:
-                    err = "Capture canceled"
-
+                notes_filename = (
+                    f"{result.scan_timestamp}_{subject_id}_notes.txt"
+                )
+                notes_path = os.path.join(data_dir, notes_filename)
+                with open(notes_path, "w", encoding="utf-8") as nf:
+                    nf.write(self._scan_notes.strip() + "\n")
+                self._scan_notes_path = notes_path
+                logger.info(f"Saved scan notes to {notes_path}")
             except Exception as e:
-                err = str(e)
-                self.captureLog.emit(f"Capture error: {err}")
-                ok = False
-            finally:
-                self._capture_running = False
-                self._safety_cancel_scheduled = False
-                self._capture_thread = None
-                self.captureFinished.emit(ok, err, left_path, right_path)
-                self._stop_runlog()
+                logger.error(f"Failed to save scan notes: {e}")
 
-        # launch worker
-        self._capture_thread = threading.Thread(target=_worker, daemon=True)
-        self._capture_thread.start()
-        return True
+            if result.ok:
+                try:
+                    self._log_scan_image_stats(result.left_path, result.right_path)
+                except Exception as e:
+                    logger.error(f"Failed to compute scan image stats: {e}")
+
+            self._capture_left_path = result.left_path
+            self._capture_right_path = result.right_path
+            self._capture_running = False
+            self._safety_cancel_scheduled = False
+            self._capture_thread = None
+            self.captureFinished.emit(
+                bool(result.ok), result.error or "", result.left_path, result.right_path
+            )
+            self._stop_runlog()
+
+        req = ScanRequest(
+            subject_id=subject_id,
+            duration_sec=duration_sec,
+            left_camera_mask=left_camera_mask,
+            right_camera_mask=right_camera_mask,
+            data_dir=data_dir,
+            disable_laser=disable_laser,
+            write_raw_csv=self._write_raw_csv,
+            raw_csv_duration_sec=self._raw_csv_duration_sec,
+        )
+
+        def _on_trigger_state(state: str):
+            self._trigger_state = state
+            self.triggerStateChanged.emit()
+
+        started = self._interface.start_scan(
+            req,
+            extra_cols_fn=_extra_cols,
+            on_log_fn=lambda msg: self.captureLog.emit(msg),
+            on_progress_fn=lambda pct: self.captureProgress.emit(int(pct)),
+            on_trigger_state_fn=_on_trigger_state,
+            on_uncorrected_fn=_on_uncorrected,
+            on_corrected_batch_fn=None if self._uncorrected_only else _on_corrected_batch,
+            on_error_fn=lambda e: self.captureLog.emit(f"Capture error: {e}"),
+            on_side_stream_fn=lambda side, filepath: self.captureLog.emit(
+                f"[{side.upper()}] Streaming to: {os.path.basename(filepath)}"
+            ),
+            on_complete_fn=_on_complete,
+        )
+        if not started:
+            self._capture_running = False
+            self._stop_runlog()
+            self.captureLog.emit("Capture already running.")
+        return bool(started)
 
     def _log_scan_image_stats(self, left_csv: str, right_csv: str) -> None:
         left_csv = (left_csv or "").strip()
@@ -1395,8 +1358,12 @@ class MOTIONConnector(QObject):
             logger.warning("Scan stats skipped; no CSV files available.")
             return
 
-        viz = VisualizeBloodflow(left_csv, right_csv)
-        viz.compute()
+        try:
+            viz = VisualizeBloodflow(left_csv, right_csv)
+            viz.compute()
+        except Exception:
+            logger.exception("Scan stats failed during VisualizeBloodflow.compute()")
+            return
         _, _, camera_inds, contrast, mean = viz.get_results()
         if mean is None or mean.size == 0:
             logger.warning("Scan stats skipped; mean array was empty.")
@@ -1559,146 +1526,66 @@ class MOTIONConnector(QObject):
         QTimer.singleShot(5000, self.stopCapture)
 
     @pyqtSlot(result=QVariant)
-    def tec_status(self):
-        """
-        Returns a dict suitable for QML:
-        On error: { ok: False, error: "..." }
-        """
-
-        try:
-            v, i, p, t, ok = self._interface.console_module.tec_status()
-
-            R_TH = (
-                1 / ((float(v) / (V_REF / 2 * R_3)) - 1 / R_3 + 1 / R_1) - R_2
-            )  # v = OUT1, VOUT1 from ADC
-            Thermistor_Temp = np.interp(
-                R_TH, self._data_RT[:, 1][::-1], self._data_RT[:, 0][::-1]
-            )
-
-            R_SET = (
-                1 / ((float(i) / (V_REF / 2 * R_3)) - 1 / R_3 + 1 / R_1) - R_2
-            )  # i = IN2P, TEMPSET from ADC
-            SET_Temp = np.interp(
-                R_SET, self._data_RT[:, 1][::-1], self._data_RT[:, 0][::-1]
-            )
-
-            self._tec_voltage = round(
-                float(Thermistor_Temp), 2
-            )  # Measured thermistor temperature
-            self._tec_temp = round(float(SET_Temp), 2)  # Measured target setpiont
-            self._tec_monC = round(
-                (float(p) - 0.5 * V_REF) / (25 * R_s), 3
-            )  # p = V_itec
-            self._tec_monV = round((float(t) - 0.5 * V_REF) * 4, 3)  # t = V_vtec
-            self._tec_good = bool(ok)  # TMPGD pin (abs(OUT1-IN2P) < 100mV)
-
-            # Long-run health sample -> goes ONLY to run.log
-
-            run_logger.info(
-                "TEC Status -  temp: %.2f set: %.2f tec_c: %.3f tec_v: %.3f good: %s",
-                self._tec_voltage,
-                self._tec_temp,
-                float(p),
-                float(t),
-                bool(ok),
-            )
-
-            self.tecStatusChanged.emit()
-
-            return True
-
-        except Exception as e:
-            logger.error(f"Error in TEC status operation: {e}")
+    def tec_status(self, snap=None):
+        if snap is None:
+            snap = self._interface.console_module.telemetry.get_snapshot()
+        if snap is None or not snap.read_ok:
             return False
 
+        v, i, p, t, ok = (
+            snap.tec_v_raw, snap.tec_set_raw,
+            snap.tec_curr_raw, snap.tec_volt_raw, snap.tec_good,
+        )
+
+        R_TH = (
+            1 / ((float(v) / (V_REF / 2 * R_3)) - 1 / R_3 + 1 / R_1) - R_2
+        )
+        Thermistor_Temp = np.interp(
+            R_TH, self._data_RT[:, 1][::-1], self._data_RT[:, 0][::-1]
+        )
+
+        R_SET = (
+            1 / ((float(i) / (V_REF / 2 * R_3)) - 1 / R_3 + 1 / R_1) - R_2
+        )
+        SET_Temp = np.interp(
+            R_SET, self._data_RT[:, 1][::-1], self._data_RT[:, 0][::-1]
+        )
+
+        self._tec_voltage = round(float(Thermistor_Temp), 2)
+        self._tec_temp = round(float(SET_Temp), 2)
+        self._tec_monC = round((float(p) - 0.5 * V_REF) / (25 * R_s), 3)
+        self._tec_monV = round((float(t) - 0.5 * V_REF) * 4, 3)
+        self._tec_good = bool(ok)
+
+        self.tecStatusChanged.emit()
+        return True
+
     @pyqtSlot(result=QVariant)
-    def pdu_mon(self):
-        """
-        Returns a dict (QVariant) for QML:
-        On success:
-          {
+    def pdu_mon(self, snap=None):
+        if snap is None:
+            snap = self._interface.console_module.telemetry.get_snapshot()
+        if snap is None or not snap.read_ok or not snap.pdu_raws:
+            return {"ok": False, "error": "no data"}
+
+        self._pdu_raws = list(snap.pdu_raws)
+        self._pdu_vals = list(snap.pdu_volts)
+        self.pduMonChanged.emit()
+
+        return {
             "ok": True,
-            "adc0": {"raws": [...8...], "vals": [...8...]},
-            "adc1": {"raws": [...8...], "vals": [...8...]},
-          }
-        On error:
-          { "ok": False, "error": "..." }
-        """
-        try:
-            pdu = self._interface.console_module.read_pdu_mon()
-            if pdu is None:
-                logger.error("PDU MON: no data")
-                return {"ok": False, "error": "no data"}
-
-            temp1, temp2, temp3 = self._interface.console_module.get_temperatures()
-
-            # Cache for QML bindings
-            self._pdu_raws = list(pdu.raws)
-            self._pdu_vals = list(pdu.volts)
-
-            # Emit change for any bound properties
-            self.pduMonChanged.emit()
-
-            adc1_scaled = [
-                (v / SCALE_V)
-                if i == 6
-                else (v / SCALE_I)  # i is ADC1 channel index 0..7
-                for i, v in enumerate(self._pdu_vals[8:])
-            ]
-
-            run_logger.info(
-                "PDU MON ADC0 vals: %s",
-                " ".join(f"{(v / SCALE_V):.3f}" for v in self._pdu_vals[:8]),
-            )
-
-            run_logger.info(
-                "PDU MON ADC1 vals: %s", " ".join(f"{i:.3f}" for i in adc1_scaled)
-            )
-
-            run_logger.info(
-                "TEMP MON: MCU: %.2f SAFETY: %.2f TA: %.2f", temp1, temp2, temp3
-            )
-
-            # Return QML-friendly dict
-            return {
-                "ok": True,
-                "adc0": {
-                    "raws": self._pdu_raws[:8],
-                    "vals": self._pdu_vals[:8],
-                },
-                "adc1": {
-                    "raws": self._pdu_raws[8:],
-                    "vals": self._pdu_vals[8:],
-                },
-            }
-
-        except Exception as e:
-            logger.error("Error in PDU MON operation: %s", e)
-            return {"ok": False, "error": str(e)}
+            "adc0": {"raws": self._pdu_raws[:8], "vals": self._pdu_vals[:8]},
+            "adc1": {"raws": self._pdu_raws[8:], "vals": self._pdu_vals[8:]},
+        }
 
     @pyqtSlot()
-    def readSafetyStatus(self):
-        # Replace this with your actual console status check
+    def readSafetyStatus(self, snap=None):
+        if snap is None:
+            snap = self._interface.console_module.telemetry.get_snapshot()
+        if snap is None:
+            logger.warning("readSafetyStatus: no telemetry snapshot yet")
+            return
         try:
-            muxIdx = 1
-            i2cAddr = 0x41
-            offset = 0x24
-            data_len = 1  # Number of bytes to read
-
-            channels = {"SE": 6, "SO": 7}
-            statuses = {}
-
-            for label, channel in channels.items():
-                status = self.i2cReadBytes(
-                    "CONSOLE", muxIdx, channel, i2cAddr, offset, data_len
-                )
-                if status:
-                    statuses[label] = status[0]
-                else:
-                    raise Exception("readSafetyStatus error (I2C read error)")
-
-            status_text = f"SE: 0x{statuses['SE']:02X}, SO: 0x{statuses['SO']:02X}"
-            if (statuses["SE"] & 0x0F) == 0 and (statuses["SO"] & 0x0F) == 0:
+            if snap.safety_ok:
                 if self._safetyFailure:
                     self.safetyFailure = False
             else:
@@ -1708,9 +1595,8 @@ class MOTIONConnector(QObject):
                     self.laserStateChanged.emit(False)
                     if self._capture_running and not self._safety_cancel_scheduled:
                         self.safetyTripDuringCaptureRequested.emit()
-
         except Exception as e:
-            logger.error(f"readSafetyStatus status query failed: {e}")
+            logger.error(f"readSafetyStatus failed: {e}")
             self.safetyFailure = True
             if self._capture_running and not self._safety_cancel_scheduled:
                 self.safetyTripDuringCaptureRequested.emit()
@@ -2003,69 +1889,32 @@ class MOTIONConnector(QObject):
     def startConfigureCameraSensors(
         self, left_camera_mask: int, right_camera_mask: int
     ):
-        if self._config_thread:
+        if self._config_running:
             return
-
-        # Power on cameras for each side before programming FPGAs (same as at scan start)
-        if self._power_off_unused_cameras:
-            logger.info("Powering on cameras before programming FPGAs…")
-            sides_info = [
-                ("left", left_camera_mask, self.interface.sensors.get("left")),
-                ("right", right_camera_mask, self.interface.sensors.get("right")),
-            ]
-            for side, mask, sensor in sides_info:
-                if mask == 0 or not (sensor and sensor.is_connected()):
-                    continue
-                try:
-                    power_status = sensor.get_camera_power_status()
-                    if not power_status or len(power_status) != 8:
-                        logger.warning(f"{side}: could not get camera power status")
-                        continue
-                    off_mask = sum(
-                        1 << i
-                        for i in range(8)
-                        if power_status[i] and not (mask & (1 << i))
-                    )
-                    on_mask = mask & 0xFF
-                    if off_mask:
-                        if sensor.disable_camera_power(off_mask):
-                            logger.warning(
-                                f"{side}: powered off cameras not in mask (0x{off_mask:02X})"
-                            )
-                        time.sleep(0.05)
-                    if on_mask:
-                        if sensor.enable_camera_power(on_mask):
-                            logger.warning(
-                                f"{side}: powered on cameras (mask 0x{on_mask:02X})"
-                            )
-                        else:
-                            logger.warning(
-                                f"Failed to power on cameras on {side} (mask 0x{on_mask:02X})."
-                            )
-                            return
-                        time.sleep(0.5)
-                except Exception as e:
-                    logger.error(f"Error setting camera power for {side}: {e}")
-                    return
-
-        w = _ConfigureWorker(self._interface, left_camera_mask, right_camera_mask)
-        w.progress.connect(self.configProgress.emit)
-        w.log.connect(self.configLog.emit)
-        w.finished.connect(self._on_config_finished)
-        self._config_thread = w
-        w.start()
+        self._config_running = True
+        req = ConfigureRequest(
+            left_camera_mask=left_camera_mask,
+            right_camera_mask=right_camera_mask,
+            power_off_unused_cameras=bool(self._power_off_unused_cameras),
+        )
+        started = self._interface.start_configure_camera_sensors(
+            req,
+            on_progress_fn=lambda pct: self.configProgress.emit(int(pct)),
+            on_log_fn=lambda msg: self.configLog.emit(msg),
+            on_complete_fn=self._on_config_finished,
+        )
+        if not started:
+            self._config_running = False
+            self.configFinished.emit(False, "Configuration could not start")
 
     @pyqtSlot()
     def cancelConfigureCameraSensors(self):
-        if self._config_thread:
-            self._config_thread.stop()
+        if self._config_running:
+            self._interface.cancel_configure_camera_sensors()
 
-    def _on_config_finished(self, ok: bool, err: str):
-        if self._config_thread:
-            self._config_thread.quit()
-            self._config_thread.wait(2000)
-            self._config_thread = None
-        self.configFinished.emit(ok, err)
+    def _on_config_finished(self, result):
+        self._config_running = False
+        self.configFinished.emit(bool(result.ok), result.error or "")
 
     @pyqtSlot(str)
     def querySensorAccelerometer(self, target: str):
@@ -2256,9 +2105,11 @@ class MOTIONConnector(QObject):
                 logger.error(f"Invalid sensor side: {sensor_side}")
                 return False
 
-            logger.info(
-                f"Fan status for {sensor_side} sensor: {'ON' if status else 'OFF'}"
-            )
+            if status != self._last_fan_status.get(sensor_side.lower()):
+                self._last_fan_status[sensor_side.lower()] = status
+                logger.info(
+                    f"Fan status for {sensor_side} sensor: {'ON' if status else 'OFF'}"
+                )
             return status
 
         except Exception as e:
@@ -2353,6 +2204,7 @@ class MOTIONConnector(QObject):
                 fig = viz.plot(("BFI", "BVI"))
             plt.show(block=False)
         except Exception as e:
+            logger.exception("Visualization display failed")
             self.errorOccurred.emit(f"Visualization display failed:\n{e}")
         finally:
             self.visualizingChanged.emit(False)
@@ -2371,10 +2223,73 @@ class MOTIONConnector(QObject):
 
             plt.show(block=False)
         except Exception as e:
+            logger.exception("Visualization display failed")
             self.errorOccurred.emit(f"Visualization display failed:\n{e}")
         finally:
             self.visualizingChanged.emit(False)
             self.vizFinished.emit()
+
+    @pyqtSlot(str, result=bool)
+    def visualize_corrected(self, corrected_csv: str) -> bool:
+        """Plot BFI/BVI from a _corrected.csv using plot_corrected_scan from the SDK."""
+        return self._launch_correct_viz(corrected_csv, mode="bfi")
+
+    @pyqtSlot(str, result=bool)
+    def visualize_corrected_signal(self, corrected_csv: str) -> bool:
+        """Plot contrast/mean from a _corrected.csv using plot_corrected_scan from the SDK."""
+        return self._launch_correct_viz(corrected_csv, mode="signal")
+
+    def _launch_correct_viz(self, corrected_csv: str, mode: str) -> bool:
+        corrected_csv = (corrected_csv or "").strip()
+        if not corrected_csv:
+            self.errorOccurred.emit("No corrected CSV file found for this scan.")
+            return False
+        if not Path(corrected_csv).exists():
+            self.errorOccurred.emit(f"Corrected CSV not found:\n{corrected_csv}")
+            return False
+
+        logger.info(f"Visualizing corrected scan ({mode}): {corrected_csv}")
+        self.visualizingChanged.emit(True)
+
+        self._correct_viz_thread = QThread(self)
+        self._correct_viz_worker = _CorrectVizWorker(corrected_csv, mode=mode)
+        self._correct_viz_worker.moveToThread(self._correct_viz_thread)
+
+        self._correct_viz_thread.started.connect(self._correct_viz_worker.run)
+        self._correct_viz_worker.resultsReady.connect(self._onCorrectVizResults)
+        self._correct_viz_worker.error.connect(self._onCorrectVizError)
+        self._correct_viz_worker.finished.connect(self._correct_viz_thread.quit)
+        self._correct_viz_worker.finished.connect(self._correct_viz_worker.deleteLater)
+        self._correct_viz_thread.finished.connect(self._correct_viz_thread.deleteLater)
+        self._correct_viz_thread.start()
+        return True
+
+    @pyqtSlot(object)
+    def _onCorrectVizResults(self, payload: dict):
+        try:
+            import matplotlib.pyplot as plt
+            plt.close("all")
+            mod = payload["mod"]
+            kwargs = dict(
+                cells=payload["cells"],
+                row_map=payload["row_map"],
+                col_map=payload["col_map"],
+                n_rows=payload["n_rows"],
+                n_cols=payload["n_cols"],
+            )
+            mod._make_figure(payload["df"], mode=payload["mode"], **kwargs)
+            plt.show(block=False)
+        except Exception as e:
+            logger.exception("Corrected scan visualization display failed")
+            self.errorOccurred.emit(f"Visualization display failed:\n{e}")
+        finally:
+            self.visualizingChanged.emit(False)
+            self.vizFinished.emit()
+
+    @pyqtSlot(str)
+    def _onCorrectVizError(self, msg: str):
+        self.visualizingChanged.emit(False)
+        self.errorOccurred.emit(f"Corrected visualization failed:\n{msg}")
 
     @pyqtSlot(str, str, result=bool)
     def startPostProcess(self, left_raw: str, right_raw: str) -> bool:
@@ -2397,8 +2312,6 @@ class MOTIONConnector(QObject):
             right_csv = ""
 
             try:
-                proc = DataProcessor()
-
                 def _to_csv_path(p):
                     base, ext = os.path.splitext(p)
                     return base + ".csv" if base else ""
@@ -2408,7 +2321,7 @@ class MOTIONConnector(QObject):
                     self.postLog.emit(f"Processing LEFT: {os.path.basename(left_raw)}")
                     self.postProgress.emit(5)
                     left_csv = _to_csv_path(left_raw)
-                    proc.process_bin_file(left_raw, left_csv)
+                    process_bin_file(left_raw, left_csv)
                     self.postLog.emit(f"LEFT → {os.path.basename(left_csv)}")
                     self.postProgress.emit(50)
                 else:
@@ -2429,7 +2342,7 @@ class MOTIONConnector(QObject):
                     )
                     self.postProgress.emit(55)
                     right_csv = _to_csv_path(right_raw)
-                    proc.process_bin_file(right_raw, right_csv)
+                    process_bin_file(right_raw, right_csv)
                     self.postLog.emit(f"RIGHT → {os.path.basename(right_csv)}")
                     self.postProgress.emit(95)
                 else:
@@ -2478,136 +2391,6 @@ class MOTIONConnector(QObject):
         logger.info(f"Data received from {descriptor}: {message}")
         self.signalDataReceived.emit(descriptor, message)
 
-    def _write_stream_to_file(
-        self, q: queue.Queue, stop_evt: threading.Event, filename: str, side: str
-    ):
-        """
-        Parse streaming binary data and write to CSV file.
-        Uses the parser from parse_data_v2.py to convert binary packets to CSV rows.
-        """
-        try:
-            # Open CSV file for writing
-            with open(filename, "w", newline="") as f:
-                csv_writer = csv.writer(f)
-                # Write CSV header
-                csv_writer.writerow(
-                    [
-                        "cam_id",
-                        "frame_id",
-                        "timestamp_s",
-                        *range(1024),
-                        "temperature",
-                        "sum",
-                        "tcm",
-                        "tcl",
-                        "pdc",
-                    ]
-                )
-
-                # Buffer to accumulate incoming data
-                buffer_accumulator = bytearray()
-
-                # Parse and write data using the helper function
-                proc = DataProcessor()
-
-                def _extra_cols():
-                    with self._telemetry_lock:
-                        return [
-                            int(self._tcm),
-                            int(self._tcl),
-                            f"{float(self._pdc):.3f}",
-                        ]
-
-                _temp_alerted = (
-                    set()
-                )  # cam_ids that have already triggered 105°C alert this scan
-
-                def _on_row(cam_id, frame_id, ts_val, hist, row_sum, temp):
-                    try:
-                        # Alert (and log) if camera temperature reaches threshold; do not interrupt scan
-                        threshold = self._camera_temp_alert_threshold_c
-                        if temp >= threshold and cam_id not in _temp_alerted:
-                            _temp_alerted.add(cam_id)
-                            msg = f"ALERT: Camera {cam_id + 1} ({side}) temperature {temp:.1f}°C >= {threshold:.0f}°C threshold."
-                            self.captureLog.emit(msg)
-                            run_logger.warning(msg)
-                            logger.warning(msg)
-                        if row_sum > 0:
-                            mean_val = float(np.dot(hist, HISTO_BINS) / row_sum)
-                        else:
-                            mean_val = 0.0
-                        if row_sum > 0 and mean_val > 0:
-                            mean2 = float(np.dot(hist, HISTO_BINS_SQ) / row_sum)
-                            var = max(0.0, mean2 - (mean_val * mean_val))
-                            std = math.sqrt(var)
-                            contrast = std / mean_val if mean_val > 0 else 0.0
-                        else:
-                            contrast = 0.0
-
-                        module_idx = 0 if side == "left" else 1
-                        cam_pos = int(cam_id) % 8
-                        if (
-                            module_idx >= _BFI_C_MIN.shape[0]
-                            or cam_pos >= _BFI_C_MIN.shape[1]
-                        ):
-                            bfi_val = contrast * 10.0
-                        else:
-                            cmin = float(_BFI_C_MIN[module_idx, cam_pos])
-                            cmax = float(_BFI_C_MAX[module_idx, cam_pos])
-                            cden = (cmax - cmin) or 1.0
-                            bfi_val = (1.0 - ((contrast - cmin) / cden)) * 10.0
-                        if (
-                            module_idx >= _BFI_I_MIN.shape[0]
-                            or cam_pos >= _BFI_I_MIN.shape[1]
-                        ):
-                            bvi_val = mean_val * 10.0
-                        else:
-                            imin = float(_BFI_I_MIN[module_idx, cam_pos])
-                            imax = float(_BFI_I_MAX[module_idx, cam_pos])
-                            iden = (imax - imin) or 1.0
-                            bvi_val = (1.0 - ((mean_val - imin) / iden)) * 10.0
-                        timestamp = float(ts_val) if ts_val else time.time()
-                        self.scanMeanSampled.emit(
-                            side, int(cam_id), float(timestamp), mean_val
-                        )
-                        self.scanContrastSampled.emit(
-                            side, int(cam_id), float(timestamp), float(contrast)
-                        )
-                        self.scanBfiSampled.emit(
-                            side, int(cam_id), float(timestamp), float(bfi_val)
-                        )
-                        self.scanBviSampled.emit(
-                            side, int(cam_id), float(timestamp), float(bvi_val)
-                        )
-                        self._corr_queue.put(
-                            (
-                                side,
-                                int(cam_id),
-                                float(timestamp),
-                                mean_val,
-                                float(bfi_val),
-                                float(bvi_val),
-                            )
-                        )
-                    except Exception:
-                        # Don't let plotting errors break the writer thread
-                        return
-
-                rows_written = proc.parse_stream_to_csv(
-                    q,
-                    stop_evt,
-                    csv_writer,
-                    buffer_accumulator,
-                    extra_cols_fn=_extra_cols,
-                    on_row_fn=_on_row,
-                )
-
-                logger.info(f"Wrote {rows_written} rows to {filename}")
-
-        except Exception as e:
-            self.captureLog.emit(f"Writer error ({filename}): {e}")
-            logger.error(f"Writer error ({filename}): {e}", exc_info=True)
-
     def connect_signals(self):
         """Connect LIFUInterface signals to QML."""
         self._interface.signal_connect.connect(self.on_connected)
@@ -2617,44 +2400,77 @@ class MOTIONConnector(QObject):
             self._on_safety_trip_during_capture
         )
 
-    def _correction_worker(self):
-        per_camera_state = {}
-        while not self._corr_stop.is_set():
-            try:
-                side, cam_id, timestamp, mean_val, bfi_val, bvi_val = (
-                    self._corr_queue.get(timeout=0.25)
-                )
-            except queue.Empty:
-                continue
-            key = (side, cam_id)
-            state = per_camera_state.get(key)
-            if state is None:
-                state = {"count": 0, "last_bfi": None, "last_bvi": None}
-                per_camera_state[key] = state
-
-            state["count"] += 1
-            if state["count"] <= 10:
-                continue
-
-            if mean_val < 66 and state["last_bfi"] is not None:
-                bfi_corr = state["last_bfi"]
-            else:
-                bfi_corr = bfi_val
-
-            if mean_val < 66 and state["last_bvi"] is not None:
-                bvi_corr = state["last_bvi"]
-            else:
-                bvi_corr = bvi_val
-
-            state["last_bfi"] = bfi_corr
-            state["last_bvi"] = bvi_corr
-
-            self.scanBfiCorrectedSampled.emit(side, cam_id, timestamp, bfi_corr)
-            self.scanBviCorrectedSampled.emit(side, cam_id, timestamp, bvi_corr)
-
     @property
     def interface(self):
         return self._interface
+
+
+def _load_plot_corrected_scan():
+    """Load plot_corrected_scan.py — bundled in processing/ for deployed builds,
+    falling back to the sibling SDK repo for development."""
+    import importlib.util
+    candidates = [
+        # Bundled with the deployed app (PyInstaller) and dev tree alike
+        resource_path("processing", "plot_corrected_scan.py"),
+        # Dev fallback: sibling openmotion-sdk checkout
+        Path(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "openmotion-sdk", "data-processing", "plot_corrected_scan.py",
+        )),
+    ]
+    script_path = next((p for p in candidates if Path(p).is_file()), None)
+    if script_path is None:
+        searched = "\n  ".join(str(p) for p in candidates)
+        raise FileNotFoundError(
+            f"plot_corrected_scan.py not found. Looked in:\n  {searched}"
+        )
+    spec = importlib.util.spec_from_file_location(
+        "plot_corrected_scan", str(script_path)
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class _CorrectVizWorker(QObject):
+    finished = pyqtSignal()
+    error = pyqtSignal(str)
+    resultsReady = pyqtSignal(object)
+
+    def __init__(self, corrected_csv: str, mode: str = "bfi"):
+        super().__init__()
+        self.corrected_csv = corrected_csv
+        self.mode = mode
+
+    @pyqtSlot()
+    def run(self):
+        try:
+            import pandas as pd
+            mod = _load_plot_corrected_scan()
+            df = pd.read_csv(self.corrected_csv)
+            if "timestamp_s" not in df.columns:
+                raise ValueError(
+                    "'timestamp_s' column not found — is this a _corrected.csv file?"
+                )
+            active_sides = mod._requested_sides(df, "both")
+            if not active_sides:
+                raise ValueError("No camera data found in corrected CSV.")
+            cells = mod._active_cells(df, active_sides)
+            row_map, col_map, n_rows, n_cols = mod._collapse(cells)
+            self.resultsReady.emit({
+                "mod": mod,
+                "df": df,
+                "cells": cells,
+                "row_map": row_map,
+                "col_map": col_map,
+                "n_rows": n_rows,
+                "n_cols": n_cols,
+                "mode": self.mode,
+            })
+        except Exception as e:
+            self.error.emit(str(e))
+        finally:
+            self.finished.emit()
 
 
 # --- worker to run visualiztion ---
@@ -2717,234 +2533,7 @@ class _VizWorker(QObject):
             self.resultsReady.emit(payload)
             self.finished.emit()
         except Exception as e:
+            logger.exception("VisualizeBloodflow worker failed")
             self.error.emit(str(e))
 
 
-# --- worker to run config off the GUI thread ---
-class _ConfigureWorker(QThread):
-    progress = pyqtSignal(int)
-    log = pyqtSignal(str)
-    finished = pyqtSignal(bool, str)
-
-    def __init__(self, interface, left_camera_mask: int, right_camera_mask: int):
-        super().__init__()
-        self.interface = interface
-        self.left_camera_mask = left_camera_mask
-        self.right_camera_mask = right_camera_mask
-        self._stop = False
-
-    def stop(self):
-        self._stop = True
-
-    def run(self):
-        # Log masks for both modules
-        logger.info(
-            f"[Connector] configure worker "
-            f"left mask=0x{self.left_camera_mask:02X} "
-            f"right mask=0x{self.right_camera_mask:02X}"
-        )
-
-        # Build (side, position) tasks based on masks
-        left_positions = [i for i in range(8) if (self.left_camera_mask & (1 << i))]
-        right_positions = [i for i in range(8) if (self.right_camera_mask & (1 << i))]
-
-        if not left_positions and not right_positions:
-            self.finished.emit(False, "Empty camera masks (left & right)")
-            return
-
-        tasks = [("left", p) for p in left_positions] + [
-            ("right", p) for p in right_positions
-        ]
-
-        # Each task has two steps: program_fpga and camera_configure_registers
-        total = len(tasks) * 2
-        done = 0
-
-        for side, pos in tasks:
-            if self._stop:
-                self.finished.emit(False, "Canceled")
-                return
-
-            cam_mask_single = 1 << pos
-            pos1 = pos + 1  # human-friendly position
-            # 1) Program FPGA
-            msg = f"Programming {side} camera FPGA at position {pos1} (mask 0x{cam_mask_single:02X})…"
-            logger.info(msg)
-            self.log.emit(msg)
-
-            results = self.interface.run_on_sensors(
-                "program_fpga",
-                camera_position=cam_mask_single,
-                manual_process=False,
-                target=side,  # <-- Only this module
-            )
-
-            # Expect a dict like {'left': True} or {'right': True}
-            if isinstance(results, dict):
-                ok = results.get(side, False)
-                if not ok:
-                    err = f"Failed to program FPGA on {side} sensor (pos {pos1})."
-                    logger.error(err)
-                    self.log.emit(err)
-                    self.finished.emit(False, err)
-                    return
-            elif results is not True:  # In case your interface returns a bare bool
-                err = f"program_fpga unexpected: {results!r}"
-                logger.error(err)
-                self.log.emit(err)
-                self.finished.emit(False, err)
-                return
-
-            done += 1
-            self.progress.emit(int(5 + (done / total) * 15))
-
-            if self._stop:
-                self.finished.emit(False, "Canceled")
-                return
-            time.sleep(0.1)
-            # 2) Configure camera registers
-            msg = f"Configuring {side} camera sensor registers at position {pos1}…"
-            logger.info(msg)
-            self.log.emit(msg)
-
-            cfg_results = self.interface.run_on_sensors(
-                "camera_configure_registers",
-                camera_position=cam_mask_single,
-                target=side,  # <-- Only this module
-            )
-
-            # Accept dict {'left': True} or a bare True
-            cfg_ok = False
-            if isinstance(cfg_results, dict):
-                cfg_ok = bool(cfg_results.get(side))
-            else:
-                cfg_ok = bool(cfg_results)
-
-            if not cfg_ok:
-                err = f"camera_configure_registers failed on {side} at position {pos1}: {cfg_results!r}"
-                logger.error(err)
-                self.log.emit(err)
-                self.finished.emit(False, err)
-                return
-
-            done += 1
-            self.progress.emit(int(5 + (done / total) * 15))
-
-        logger.info("FPGAs programmed & registers configured")
-        self.finished.emit(True, "")
-
-
-# --- Console Status Thread ---
-class ConsoleStatusThread(QThread):
-    statusUpdate = pyqtSignal(str)
-
-    def __init__(self, connector: MOTIONConnector, parent=None):
-        super().__init__(parent)
-        self.connector = connector
-        self._running = True
-        self._mutex = QMutex()
-        self._wait_condition = QWaitCondition()
-        self.last_run = time.time()
-
-    def run(self):
-        """Run loop that calls readSafetyStatus() every 1000ms when console is connected."""
-        logger.info("Console status thread started")
-        while self._running:
-            now = time.time()
-            # run the heavy work ~1 Hz
-            # Check if console is connected before reading safety status
-            if (
-                now - self.last_run >= DATA_ACQ_INTERVAL
-                and self.connector._consoleConnected
-            ):
-                start_tick = time.time()
-                try:
-                    #
-                    # 1. TEC status poll
-                    #
-                    # This updates _tec_* fields inside connector and emits tecStatusChanged
-                    self.connector.tec_status()
-
-                    #
-                    # 2. PDU Mon poll
-                    #
-                    self.connector.pdu_mon()
-
-                    # 3. Safety / interlock state
-                    self.connector.readSafetyStatus()
-
-                    #
-                    # 4. Analog telemetry (tcm/tcl/pdc)
-                    #
-
-                    muxIdx = 1
-                    i2cAddr = 0x41
-
-                    tcm_raw = self.connector.getLsyncCount()
-                    tcl_raw = self.connector.i2cReadBytes(
-                        "CONSOLE", muxIdx, 4, i2cAddr, 0x10, 4
-                    )
-                    pdc_raw = self.connector.i2cReadBytes(
-                        "CONSOLE", muxIdx, 7, i2cAddr, 0x1C, 2
-                    )
-
-                    logger.debug(
-                        f"tcm_raw: {tcm_raw} tcl_raw: {tcl_raw} pdc_raw: {pdc_raw}"
-                    )
-
-                    if tcl_raw and pdc_raw:
-                        tcm = int(tcm_raw)
-                        tcl = int.from_bytes(tcl_raw, byteorder="little")
-                        pdc = int.from_bytes(pdc_raw, byteorder="little") * 1.9  # mA
-                        ts = time.time()
-
-                        with self.connector._telemetry_lock:
-                            if (
-                                tcl != self.connector._tcl
-                                or tcm != self.connector._tcm
-                                or pdc != self.connector._pdc
-                            ):
-                                self.connector._tcl = tcl
-                                self.connector._tcm = tcm
-                                self.connector._pdc = pdc
-
-                        run_logger.info(
-                            f"Analog Values - TCM: {tcm}, TCL: {tcl}, PDC: {pdc:.3f}"
-                        )
-                        self.connector._write_runlog_csv_sample(tcm, tcl, pdc, ts)
-                    else:
-                        logger.error("Failed to read analog telemetry values")
-
-                except Exception as e:
-                    logger.error(f"Console status query failed: {e}")
-                    self.statusUpdate.emit(f"Safety status read error: {e}")
-
-                # mark we ran this 1Hz tick (use tick start so we maintain a stable cadence)
-                self.last_run = start_tick
-
-                # log how long the tick took
-                duration = time.time() - start_tick
-                logger.debug(
-                    "ConsoleStatusThread tick duration: %.1f ms", duration * 1000.0
-                )
-
-            # compute a smarter wait: sleep until next scheduled tick (but clamp to sensible bounds)
-            now_after = time.time()
-            elapsed = now_after - self.last_run
-            remaining = DATA_ACQ_INTERVAL - elapsed
-            # minimum wait 50ms to avoid tight spin; maximum 1000ms
-            wait_ms = int(max(50, min(1000, remaining * 1000))) if remaining > 0 else 50
-
-            # sleep/wait for up to wait_ms, or until stop()/wakeAll() is called
-            self._mutex.lock()
-            try:
-                self._wait_condition.wait(self._mutex, wait_ms)
-            finally:
-                self._mutex.unlock()
-
-    def stop(self):
-        """Called from another thread to stop the thread gracefully."""
-        self._running = False
-        self._wait_condition.wakeAll()
-        self.quit()
-        self.wait()
