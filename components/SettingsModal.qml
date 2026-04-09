@@ -152,22 +152,24 @@ Item {
         property string title: ""
         default property alias contentItem: cardContent.data
         Layout.fillWidth: true
+        Layout.leftMargin: 20
+        Layout.rightMargin: 20
         color:        root.colBgCard
-        radius:       8
+        radius:       10
         border.color: root.colBorderSoft
         border.width: 1
-        implicitHeight: cardCol.implicitHeight + 28
+        implicitHeight: cardCol.implicitHeight + 36
 
         ColumnLayout {
             id: cardCol
             anchors.fill: parent
-            anchors.margins: 14
-            spacing: 12
+            anchors.margins: 18
+            spacing: 14
 
             Text {
                 text:           parent.parent.title
                 color:          root.colTextPri
-                font.pixelSize: 14
+                font.pixelSize: 15
                 font.weight:    Font.DemiBold
                 font.letterSpacing: 0.3
             }
@@ -177,7 +179,7 @@ Item {
             ColumnLayout {
                 id: cardContent
                 Layout.fillWidth: true
-                spacing: 10
+                spacing: 12
             }
         }
     }
@@ -190,7 +192,8 @@ Item {
             text:           parent.label
             color:          root.colTextSec
             font.pixelSize: 13
-            Layout.preferredWidth: 150
+            Layout.preferredWidth: 140
+            Layout.minimumWidth: 140
         }
     }
 
@@ -385,11 +388,10 @@ Item {
 
             ColumnLayout {
                 width: scroller.availableWidth
-                spacing: 14
-                anchors.margins: 20
+                spacing: 12
 
                 // Top padding
-                Item { Layout.fillWidth: true; height: 6 }
+                Item { Layout.fillWidth: true; height: 8 }
 
                 // ── Default Camera Configuration ─────────────────────────────
                 SectionCard {
@@ -572,64 +574,68 @@ Item {
                     }
 
                     GridLayout {
-                        columns: 5
-                        columnSpacing: 12
-                        rowSpacing: 8
+                        columns: 4
+                        columnSpacing: 14
+                        rowSpacing: 10
                         Layout.fillWidth: true
 
+                        // Header row
                         Item { Layout.preferredWidth: 80 }
-                        Text { text: "Min"; color: root.colTextMuted; font.pixelSize: 12; Layout.alignment: Qt.AlignHCenter; Layout.preferredWidth: 84 }
-                        Text { text: "Max"; color: root.colTextMuted; font.pixelSize: 12; Layout.alignment: Qt.AlignHCenter; Layout.preferredWidth: 84 }
+                        Text { text: "Min"; color: root.colTextMuted; font.pixelSize: 12; font.weight: Font.DemiBold; Layout.alignment: Qt.AlignHCenter; Layout.preferredWidth: 90 }
+                        Text { text: "Max"; color: root.colTextMuted; font.pixelSize: 12; font.weight: Font.DemiBold; Layout.alignment: Qt.AlignHCenter; Layout.preferredWidth: 90 }
                         Item { Layout.fillWidth: true }
-                        Item { Layout.preferredWidth: 1 }
 
                         Text { text: "BFI"; color: "#E74C3C"; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
+                            Layout.preferredWidth: 90
                             text: root.bfiMin.toFixed(1)
                             onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bfiMin = v; text = root.bfiMin.toFixed(1) }
                         }
                         StyledNumberField {
+                            Layout.preferredWidth: 90
                             text: root.bfiMax.toFixed(1)
                             onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bfiMax = v; text = root.bfiMax.toFixed(1) }
                         }
                         Item { Layout.fillWidth: true }
-                        Item { Layout.preferredWidth: 1 }
 
                         Text { text: "BVI"; color: "#3498DB"; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
+                            Layout.preferredWidth: 90
                             text: root.bviMin.toFixed(1)
                             onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bviMin = v; text = root.bviMin.toFixed(1) }
                         }
                         StyledNumberField {
+                            Layout.preferredWidth: 90
                             text: root.bviMax.toFixed(1)
                             onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bviMax = v; text = root.bviMax.toFixed(1) }
                         }
                         Item { Layout.fillWidth: true }
-                        Item { Layout.preferredWidth: 1 }
 
                         Text { text: "Mean"; color: "#2ECC71"; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
+                            Layout.preferredWidth: 90
                             text: root.meanMin.toFixed(0)
                             onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.meanMin = v; text = root.meanMin.toFixed(0) }
                         }
                         StyledNumberField {
+                            Layout.preferredWidth: 90
                             text: root.meanMax.toFixed(0)
                             onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.meanMax = v; text = root.meanMax.toFixed(0) }
                         }
                         Item { Layout.fillWidth: true }
-                        Item { Layout.preferredWidth: 1 }
 
                         Text { text: "Contrast"; color: "#9B59B6"; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
+                            Layout.preferredWidth: 90
                             text: root.contrastMin.toFixed(2)
                             onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.contrastMin = v; text = root.contrastMin.toFixed(2) }
                         }
                         StyledNumberField {
+                            Layout.preferredWidth: 90
                             text: root.contrastMax.toFixed(2)
                             onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.contrastMax = v; text = root.contrastMax.toFixed(2) }
                         }
                         Item { Layout.fillWidth: true }
-                        Item { Layout.preferredWidth: 1 }
                     }
                 }
 
@@ -643,18 +649,14 @@ Item {
                             checked: root.reducedMode
                             onCheckedChanged: root.reducedMode = checked
                         }
-                        Text {
-                            text: root.reducedMode ? "On" : "Off"
-                            color: root.reducedMode ? root.colAccent : root.colTextMuted
-                            font.pixelSize: 12
-                        }
                         Item { Layout.fillWidth: true }
                     }
                     Text {
-                        text: "Restart the app for Reduced Mode changes to take effect."
+                        text: "Simplified clinical view: forces Middle camera configuration, enables free run mode, hides scan settings, and shows large left/right BFI and BVI panels."
                         color: root.colTextMuted
                         font.pixelSize: 11
-                        font.italic: true
+                        wrapMode: Text.WordWrap
+                        Layout.fillWidth: true
                     }
                 }
 
@@ -756,7 +758,7 @@ Item {
                 }
 
                 // Bottom padding
-                Item { Layout.fillWidth: true; height: 14 }
+                Item { Layout.fillWidth: true; height: 20 }
             }
         }
 

@@ -58,5 +58,5 @@
   "bfiClampHigh": 10.0,
   "bviClampLow": 0.0,
   "bviClampHigh": 10.0,
-  "darkMode": false
+  "darkMode": true
 }
