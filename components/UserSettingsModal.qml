@@ -9,6 +9,8 @@ Item {
     visible: false
     z: 9998
 
+    AppTheme { id: theme }
+
     property string sessionId: MOTIONInterface.subjectId
 
     signal accepted()
@@ -36,21 +38,21 @@ Item {
         width: 380
         height: 200
         radius: 12
-        color: "#1E1E20"
-        border.color: "#3E4E6F"
+        color: theme.bgContainer
+        border.color: theme.borderSubtle
         border.width: 2
         anchors.centerIn: parent
 
         // X close button
         Rectangle {
             width: 28; height: 28; radius: 14
-            color: xArea.containsMouse ? "#C0392B" : "#2A2A2E"
-            border.color: "#5A6B8C"; border.width: 1
+            color: xArea.containsMouse ? "#C0392B" : theme.borderStrong
+            border.color: theme.borderHover; border.width: 1
             anchors.top: parent.top; anchors.right: parent.right
             anchors.topMargin: 10; anchors.rightMargin: 10
             z: 10
             Behavior on color { ColorAnimation { duration: 120 } }
-            Text { anchors.centerIn: parent; text: "✕"; color: "#FFFFFF"; font.pixelSize: 13 }
+            Text { anchors.centerIn: parent; text: "✕"; color: theme.textPrimary; font.pixelSize: 13 }
             MouseArea {
                 id: xArea; anchors.fill: parent; hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor; onClicked: root.close()
@@ -64,7 +66,7 @@ Item {
 
             Text {
                 text: "Session Settings"
-                color: "#FFFFFF"
+                color: theme.textPrimary
                 font.pixelSize: 20
                 font.weight: Font.Bold
                 Layout.alignment: Qt.AlignHCenter
@@ -77,7 +79,7 @@ Item {
                 Text {
                     text: "Session ID:"
                     font.pixelSize: 16
-                    color: "#BDC3C7"
+                    color: theme.textSecondary
                     Layout.alignment: Qt.AlignVCenter
                 }
 
@@ -85,11 +87,11 @@ Item {
                     id: sessionIdField
                     text: root.sessionId
                     font.pixelSize: 16
-                    color: "white"
+                    color: theme.textPrimary
                     Layout.fillWidth: true
                     background: Rectangle {
-                        color: "#2E2E33"; radius: 4
-                        border.color: "#3E4E6F"; border.width: 1
+                        color: theme.bgInput; radius: 4
+                        border.color: theme.borderSubtle; border.width: 1
                     }
                 }
             }

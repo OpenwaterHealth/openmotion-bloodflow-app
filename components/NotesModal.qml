@@ -9,6 +9,8 @@ Item {
     visible: false
     z: 9998
 
+    AppTheme { id: theme }
+
     function open() {
         notesArea.text = MOTIONInterface.scanNotes
         root.visible = true
@@ -30,21 +32,21 @@ Item {
         width: 600
         height: 450
         radius: 12
-        color: "#1E1E20"
-        border.color: "#3E4E6F"
+        color: theme.bgContainer
+        border.color: theme.borderSubtle
         border.width: 2
         anchors.centerIn: parent
 
         // X close button
         Rectangle {
             width: 28; height: 28; radius: 14
-            color: xArea.containsMouse ? "#C0392B" : "#2A2A2E"
-            border.color: "#5A6B8C"; border.width: 1
+            color: xArea.containsMouse ? "#C0392B" : theme.borderStrong
+            border.color: theme.borderHover; border.width: 1
             anchors.top: parent.top; anchors.right: parent.right
             anchors.topMargin: 10; anchors.rightMargin: 10
             z: 10
             Behavior on color { ColorAnimation { duration: 120 } }
-            Text { anchors.centerIn: parent; text: "✕"; color: "#FFFFFF"; font.pixelSize: 13 }
+            Text { anchors.centerIn: parent; text: "✕"; color: theme.textPrimary; font.pixelSize: 13 }
             MouseArea {
                 id: xArea; anchors.fill: parent; hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor; onClicked: root.close()
@@ -58,16 +60,16 @@ Item {
 
             Text {
                 text: "Session Notes"
-                color: "#FFFFFF"
+                color: theme.textPrimary
                 font.pixelSize: 20
                 font.weight: Font.Bold
                 Layout.alignment: Qt.AlignHCenter
             }
 
             Rectangle {
-                color: "#2E2E33"
+                color: theme.bgInput
                 radius: 6
-                border.color: "#3E4E6F"
+                border.color: theme.borderSubtle
                 border.width: 1
                 Layout.fillWidth: true
                 Layout.fillHeight: true
@@ -79,10 +81,10 @@ Item {
                     TextArea {
                         id: notesArea
                         font.pixelSize: 14
-                        color: "white"
+                        color: theme.textPrimary
                         wrapMode: Text.Wrap
                         placeholderText: "Enter notes for this session..."
-                        placeholderTextColor: "#7F8C8D"
+                        placeholderTextColor: theme.textTertiary
                         background: null
                     }
                 }

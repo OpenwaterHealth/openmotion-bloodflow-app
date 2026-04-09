@@ -5,10 +5,12 @@ import OpenMotion 1.0
 
 Rectangle {
     id: plotArea
-    color: "#1E1E20"
+    color: theme.bgContainer
     radius: 12
-    border.color: "#2A2A2E"
+    border.color: theme.borderStrong
     border.width: 1
+
+    AppTheme { id: theme }
 
     property int  windowSeconds: 15
     property bool running: false
@@ -438,8 +440,8 @@ Rectangle {
                 delegate: Rectangle {
                     property string seriesKey:   modelData
                     property alias  plotCanvas:  plotCanvas
-                    color:        "#141417"
-                    border.color: "#2A2A2E"
+                    color:        theme.bgPlot
+                    border.color: theme.borderStrong
                     radius: 8
                     Layout.fillWidth:  true
                     Layout.fillHeight: true
@@ -457,7 +459,7 @@ Rectangle {
                             spacing: 6
                             Text {
                                 text:           plotArea._labelFor(seriesKey)
-                                color:          "#FFFFFF"
+                                color:          theme.textPrimary
                                 font.pixelSize: 12
                             }
                             Item { Layout.fillWidth: true }
@@ -510,7 +512,7 @@ Rectangle {
                                 const showBfi = plotArea.showBfiBvi
 
                                 // Background grid
-                                ctx.strokeStyle = "#2A2A2E"
+                                ctx.strokeStyle = theme.borderStrong.toString()
                                 ctx.lineWidth   = 0.5
                                 ctx.beginPath()
                                 for (let gi = 0; gi <= 4; gi++) {
@@ -601,7 +603,7 @@ Rectangle {
                                     ? (s.bfi.length > 0 || s.bvi.length > 0)
                                     : (s.mean.length > 0 || s.contrast.length > 0)
                                 if (!hasData) {
-                                    ctx.fillStyle    = "#7F8C8D"
+                                    ctx.fillStyle    = theme.textTertiary.toString()
                                     ctx.textAlign    = "center"
                                     ctx.textBaseline = "middle"
                                     ctx.font         = "12px sans-serif"
@@ -619,7 +621,7 @@ Rectangle {
         Text {
             visible:             seriesOrder.length === 0
             text:                running ? "Waiting for camera data..." : "Press Start to begin scanning"
-            color:               "#7F8C8D"
+            color:               theme.textTertiary
             font.pixelSize:      18
             horizontalAlignment: Text.AlignHCenter
             Layout.alignment:    Qt.AlignHCenter
@@ -693,7 +695,7 @@ Rectangle {
                     const exp = (plotArea.leftActiveCount + plotArea.rightActiveCount) * 40
                     return "SDK rate:   %1 / %2 smp/s".arg(r.toFixed(0)).arg(exp)
                 }
-                color:          "#C9D1D9"
+                color:          theme.plotText
                 font.pixelSize: 11
                 font.family:    "Consolas"
             }
@@ -705,7 +707,7 @@ Rectangle {
                     return "Tick work:  %1 ms  (%2% budget)".arg(ms.toFixed(1)).arg(pct)
                 }
                 color: plotArea._profRenderMs > 60 ? "#E74C3C"
-                     : plotArea._profRenderMs > 30 ? "#F39C12" : "#C9D1D9"
+                     : plotArea._profRenderMs > 30 ? "#F39C12" : theme.plotText
                 font.pixelSize: 11
                 font.family:    "Consolas"
             }
@@ -720,21 +722,21 @@ Rectangle {
                         .arg(tot.toFixed(0))
                 }
                 color: plotArea._profCanvasMsAvg > 15 ? "#E74C3C"
-                     : plotArea._profCanvasMsAvg > 8  ? "#F39C12" : "#C9D1D9"
+                     : plotArea._profCanvasMsAvg > 8  ? "#F39C12" : theme.plotText
                 font.pixelSize: 11
                 font.family:    "Consolas"
             }
 
             Text {
                 text:           "Data pts:   %1 total".arg(plotArea._profTotalPoints)
-                color:          "#C9D1D9"
+                color:          theme.plotText
                 font.pixelSize: 11
                 font.family:    "Consolas"
             }
 
             Text {
                 text:           "Samples rx: %1".arg(plotArea._profSampleCount)
-                color:          "#C9D1D9"
+                color:          theme.plotText
                 font.pixelSize: 11
                 font.family:    "Consolas"
             }

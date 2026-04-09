@@ -5,10 +5,12 @@ import OpenMotion 1.0
 
 Rectangle {
     id: root
-    color: "#1E1E20"
+    color: theme.bgContainer
     radius: 12
-    border.color: "#2A2A2E"
+    border.color: theme.borderStrong
     border.width: 1
+
+    AppTheme { id: theme }
 
     property int  windowSeconds: 15
     property bool running: false
@@ -186,7 +188,7 @@ Rectangle {
         var xRange = root.windowSeconds
 
         // Grid
-        ctx.strokeStyle = "#2A2A2E"
+        ctx.strokeStyle = theme.borderStrong.toString()
         ctx.lineWidth   = 0.5
         ctx.beginPath()
         for (var gi = 0; gi <= 4; gi++) {
@@ -197,7 +199,7 @@ Rectangle {
         ctx.stroke()
 
         // Axes
-        ctx.strokeStyle = "#3E4E6F"
+        ctx.strokeStyle = theme.borderSubtle.toString()
         ctx.lineWidth   = 1
         ctx.beginPath()
         ctx.moveTo(padL,      padT)
@@ -245,7 +247,7 @@ Rectangle {
 
         var hasData = data.bfi.length > 0 || data.bvi.length > 0
         if (!hasData) {
-            ctx.fillStyle    = "#7F8C8D"
+            ctx.fillStyle    = theme.textTertiary.toString()
             ctx.textAlign    = "center"
             ctx.textBaseline = "middle"
             ctx.font         = "14px sans-serif"
@@ -261,8 +263,8 @@ Rectangle {
         property var    bfiB
         property var    bviB
         property alias  plotCanvas: sideCanvas
-        color:        "#141417"
-        border.color: "#2A2A2E"
+        color:        theme.bgPlot
+        border.color: theme.borderStrong
         radius: 8
         Layout.fillWidth:  true
         Layout.fillHeight: true
@@ -279,7 +281,7 @@ Rectangle {
 
                 Text {
                     text: sideRoot.sideLabel
-                    color: "#BDC3C7"
+                    color: theme.textSecondary
                     font.pixelSize: 22
                     font.weight: Font.DemiBold
                 }
@@ -295,7 +297,7 @@ Rectangle {
                 Text {
                     text: root._clampedDisplay(sideRoot.sideData.latestBfi,
                                                 root.bfiClampLow, root.bfiClampHigh, 2)
-                    color: "#FFFFFF"
+                    color: theme.textPrimary
                     font.pixelSize: 72
                     font.weight: Font.Bold
                     font.family:  "Consolas"
@@ -312,7 +314,7 @@ Rectangle {
                 Text {
                     text: root._clampedDisplay(sideRoot.sideData.latestBvi,
                                                 root.bviClampLow, root.bviClampHigh, 2)
-                    color: "#FFFFFF"
+                    color: theme.textPrimary
                     font.pixelSize: 72
                     font.weight: Font.Bold
                     font.family:  "Consolas"

@@ -7,6 +7,8 @@ Rectangle {
     height: 160
     color: "transparent"
 
+    AppTheme { id: theme }
+
     property real temperature: 0    // Starting temperature
     property string tempName: "TEMP #1"  // Temperature Name
 
@@ -52,7 +54,7 @@ Rectangle {
         text: temperature.toFixed(0) + "°C"
         anchors.centerIn: parent
         font.pixelSize: 24
-        color: "#4B4B4B"
+        color: theme.textTertiary
         font.weight: Font.Bold
     }
 
@@ -65,7 +67,7 @@ Rectangle {
             topMargin: 5
         }
         font.pixelSize: 16
-        color: "#BDC3C7"
+        color: theme.textSecondary
         font.weight: Font.Medium
     }
 }

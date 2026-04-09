@@ -9,6 +9,8 @@ Item {
     visible: false
     z: 9998
 
+    AppTheme { id: theme }
+
     // Camera selection
     signal selectionChanged(int leftMask, int rightMask)
 
@@ -103,21 +105,21 @@ Item {
         width: Math.min(parent.width - 80, 560)
         height: Math.min(parent.height - 60, 680)
         radius: 12
-        color: "#1E1E20"
-        border.color: "#3E4E6F"
+        color: theme.bgContainer
+        border.color: theme.borderSubtle
         border.width: 2
         anchors.centerIn: parent
 
         // X close button
         Rectangle {
             width: 28; height: 28; radius: 14
-            color: xArea.containsMouse ? "#C0392B" : "#2A2A2E"
-            border.color: "#5A6B8C"; border.width: 1
+            color: xArea.containsMouse ? "#C0392B" : theme.borderStrong
+            border.color: theme.borderHover; border.width: 1
             anchors.top: parent.top; anchors.right: parent.right
             anchors.topMargin: 10; anchors.rightMargin: 10
             z: 10
             Behavior on color { ColorAnimation { duration: 120 } }
-            Text { anchors.centerIn: parent; text: "✕"; color: "#FFFFFF"; font.pixelSize: 13 }
+            Text { anchors.centerIn: parent; text: "✕"; color: theme.textPrimary; font.pixelSize: 13 }
             MouseArea {
                 id: xArea; anchors.fill: parent; hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor; onClicked: root.close()
@@ -132,18 +134,18 @@ Item {
             // Title
             Text {
                 text: "Scan Settings"
-                color: "#FFFFFF"
+                color: theme.textPrimary
                 font.pixelSize: 20
                 font.weight: Font.Bold
                 Layout.alignment: Qt.AlignHCenter
             }
 
             // ── Camera Configuration ──────────────────────────────────────
-            Rectangle { Layout.fillWidth: true; height: 1; color: "#3E4E6F" }
+            Rectangle { Layout.fillWidth: true; height: 1; color: theme.borderSubtle }
 
             Text {
                 text: "Camera Configuration"
-                color: "#BDC3C7"
+                color: theme.textSecondary
                 font.pixelSize: 15
                 font.weight: Font.DemiBold
             }
@@ -173,9 +175,27 @@ Item {
                         Layout.preferredHeight: 34
                         model: sensorPatterns
                         textRole: "name"
+                        font.pixelSize: 13
                         enabled: MOTIONInterface.leftSensorConnected
                         opacity: enabled ? 1.0 : 0.4
                         onCurrentIndexChanged: applyPatternToSensor(currentIndex, "left")
+                        contentItem: Text {
+                            leftPadding: 10; text: leftSelector.displayText; font: leftSelector.font
+                            color: theme.textPrimary; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight
+                        }
+                        background: Rectangle { color: theme.bgInput; radius: 4; border.color: theme.borderSubtle; border.width: 1 }
+                        indicator: Text { x: leftSelector.width - width - 10; y: (leftSelector.height - height) / 2; text: "\u25BE"; font.pixelSize: 14; color: theme.textSecondary }
+                        delegate: ItemDelegate {
+                            width: leftSelector.width; height: 32
+                            contentItem: Text { text: model.name; font.pixelSize: 13; color: theme.textPrimary; verticalAlignment: Text.AlignVCenter; leftPadding: 8 }
+                            background: Rectangle { color: highlighted ? theme.accentBlue : "transparent" }
+                            highlighted: leftSelector.currentIndex === index
+                        }
+                        popup: Popup {
+                            y: leftSelector.height; width: leftSelector.width; implicitHeight: contentItem.implicitHeight + 2; padding: 1
+                            contentItem: ListView { clip: true; implicitHeight: contentHeight; model: leftSelector.delegateModel; ScrollIndicator.vertical: ScrollIndicator {} }
+                            background: Rectangle { color: theme.bgCard; radius: 4; border.color: theme.borderSubtle; border.width: 1 }
+                        }
                         Component.onCompleted: {
                             var defMask = MOTIONInterface.appConfig.leftMask !== undefined
                                           ? MOTIONInterface.appConfig.leftMask : 0x99
@@ -204,9 +224,27 @@ Item {
                         Layout.preferredHeight: 34
                         model: sensorPatterns
                         textRole: "name"
+                        font.pixelSize: 13
                         enabled: MOTIONInterface.rightSensorConnected
                         opacity: enabled ? 1.0 : 0.4
                         onCurrentIndexChanged: applyPatternToSensor(currentIndex, "right")
+                        contentItem: Text {
+                            leftPadding: 10; text: rightSelector.displayText; font: rightSelector.font
+                            color: theme.textPrimary; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight
+                        }
+                        background: Rectangle { color: theme.bgInput; radius: 4; border.color: theme.borderSubtle; border.width: 1 }
+                        indicator: Text { x: rightSelector.width - width - 10; y: (rightSelector.height - height) / 2; text: "\u25BE"; font.pixelSize: 14; color: theme.textSecondary }
+                        delegate: ItemDelegate {
+                            width: rightSelector.width; height: 32
+                            contentItem: Text { text: model.name; font.pixelSize: 13; color: theme.textPrimary; verticalAlignment: Text.AlignVCenter; leftPadding: 8 }
+                            background: Rectangle { color: highlighted ? theme.accentBlue : "transparent" }
+                            highlighted: rightSelector.currentIndex === index
+                        }
+                        popup: Popup {
+                            y: rightSelector.height; width: rightSelector.width; implicitHeight: contentItem.implicitHeight + 2; padding: 1
+                            contentItem: ListView { clip: true; implicitHeight: contentHeight; model: rightSelector.delegateModel; ScrollIndicator.vertical: ScrollIndicator {} }
+                            background: Rectangle { color: theme.bgCard; radius: 4; border.color: theme.borderSubtle; border.width: 1 }
+                        }
                         Component.onCompleted: {
                             var defMask = MOTIONInterface.appConfig.rightMask !== undefined
                                           ? MOTIONInterface.appConfig.rightMask : 0x99
@@ -218,11 +256,11 @@ Item {
             }
 
             // ── Scan Duration ─────────────────────────────────────────────
-            Rectangle { Layout.fillWidth: true; height: 1; color: "#3E4E6F" }
+            Rectangle { Layout.fillWidth: true; height: 1; color: theme.borderSubtle }
 
             Text {
                 text: "Scan Duration"
-                color: "#BDC3C7"
+                color: theme.textSecondary
                 font.pixelSize: 15
                 font.weight: Font.DemiBold
             }
@@ -234,7 +272,7 @@ Item {
 
                 Text {
                     text: "Timed"
-                    color: !root.freeRun ? "#4A90E2" : "#BDC3C7"
+                    color: !root.freeRun ? theme.accentBlue : theme.textSecondary
                     font.pixelSize: 14
                     font.weight: !root.freeRun ? Font.Bold : Font.Normal
                 }
@@ -243,11 +281,23 @@ Item {
                     id: modeSwitch
                     checked: root.freeRun
                     onCheckedChanged: root.freeRun = checked
+                    indicator: Rectangle {
+                        x: modeSwitch.leftPadding; y: (modeSwitch.height - height) / 2
+                        width: 44; height: 24; radius: 12
+                        color: modeSwitch.checked ? theme.accentBlue : theme.bgInput
+                        border.color: modeSwitch.checked ? theme.accentBlue : theme.borderSubtle; border.width: 1
+                        Behavior on color { ColorAnimation { duration: 120 } }
+                        Rectangle {
+                            x: modeSwitch.checked ? parent.width - width - 3 : 3
+                            y: 3; width: 18; height: 18; radius: 9; color: "#FFFFFF"
+                            Behavior on x { NumberAnimation { duration: 120 } }
+                        }
+                    }
                 }
 
                 Text {
                     text: "Free Run"
-                    color: root.freeRun ? "#4A90E2" : "#BDC3C7"
+                    color: root.freeRun ? theme.accentBlue : theme.textSecondary
                     font.pixelSize: 14
                     font.weight: root.freeRun ? Font.Bold : Font.Normal
                 }
@@ -264,53 +314,53 @@ Item {
                     text: String(root.hours)
                     inputMethodHints: Qt.ImhDigitsOnly
                     validator: IntValidator { bottom: 0; top: 99 }
-                    font.pixelSize: 22; color: "white"
+                    font.pixelSize: 22; color: theme.textPrimary
                     horizontalAlignment: Text.AlignHCenter
                     Layout.preferredWidth: 58; Layout.preferredHeight: 44
-                    background: Rectangle { color: "#2E2E33"; radius: 6; border.color: "#3E4E6F"; border.width: 1 }
+                    background: Rectangle { color: theme.bgInput; radius: 6; border.color: theme.borderSubtle; border.width: 1 }
                     onEditingFinished: {
                         var v = parseInt(text); if (isNaN(v)) v = 0
                         root.hours = Math.max(0, Math.min(99, v)); text = String(root.hours)
                     }
                 }
-                Text { text: ":"; color: "#BDC3C7"; font.pixelSize: 22 }
+                Text { text: ":"; color: theme.textSecondary; font.pixelSize: 22 }
                 TextField {
                     id: minutesField
                     text: String(root.minutes).padStart(2, '0')
                     inputMethodHints: Qt.ImhDigitsOnly
                     validator: IntValidator { bottom: 0; top: 59 }
-                    font.pixelSize: 22; color: "white"
+                    font.pixelSize: 22; color: theme.textPrimary
                     horizontalAlignment: Text.AlignHCenter
                     Layout.preferredWidth: 58; Layout.preferredHeight: 44
-                    background: Rectangle { color: "#2E2E33"; radius: 6; border.color: "#3E4E6F"; border.width: 1 }
+                    background: Rectangle { color: theme.bgInput; radius: 6; border.color: theme.borderSubtle; border.width: 1 }
                     onEditingFinished: {
                         var v = parseInt(text); if (isNaN(v)) v = 0
                         root.minutes = Math.max(0, Math.min(59, v)); text = String(root.minutes).padStart(2, '0')
                     }
                 }
-                Text { text: ":"; color: "#BDC3C7"; font.pixelSize: 22 }
+                Text { text: ":"; color: theme.textSecondary; font.pixelSize: 22 }
                 TextField {
                     id: secondsField
                     text: String(root.seconds).padStart(2, '0')
                     inputMethodHints: Qt.ImhDigitsOnly
                     validator: IntValidator { bottom: 0; top: 59 }
-                    font.pixelSize: 22; color: "white"
+                    font.pixelSize: 22; color: theme.textPrimary
                     horizontalAlignment: Text.AlignHCenter
                     Layout.preferredWidth: 58; Layout.preferredHeight: 44
-                    background: Rectangle { color: "#2E2E33"; radius: 6; border.color: "#3E4E6F"; border.width: 1 }
+                    background: Rectangle { color: theme.bgInput; radius: 6; border.color: theme.borderSubtle; border.width: 1 }
                     onEditingFinished: {
                         var v = parseInt(text); if (isNaN(v)) v = 0
                         root.seconds = Math.max(0, Math.min(59, v)); text = String(root.seconds).padStart(2, '0')
                     }
                 }
-                Text { text: "H : M : S"; color: "#7F8C8D"; font.pixelSize: 11; Layout.alignment: Qt.AlignBottom }
+                Text { text: "H : M : S"; color: theme.textTertiary; font.pixelSize: 11; Layout.alignment: Qt.AlignBottom }
             }
 
             // Free run hint
             Text {
                 visible: root.freeRun
                 text: "Scan will run indefinitely until stopped."
-                color: "#7F8C8D"
+                color: theme.textTertiary
                 font.pixelSize: 13
                 Layout.alignment: Qt.AlignHCenter
             }

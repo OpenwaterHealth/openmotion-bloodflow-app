@@ -10,6 +10,8 @@ Item {
     visible: false
     z: 9998
 
+    AppTheme { id: theme }
+
     property var scans: []
     property var selected: ({})
     property bool visualizing: false
@@ -71,21 +73,21 @@ Item {
         width: Math.min(parent.width - 80, 900)
         height: Math.min(parent.height - 80, 600)
         radius: 12
-        color: "#1E1E20"
-        border.color: "#3E4E6F"
+        color: theme.bgContainer
+        border.color: theme.borderSubtle
         border.width: 2
         anchors.centerIn: parent
 
         // X close button
         Rectangle {
             width: 28; height: 28; radius: 14
-            color: xArea.containsMouse ? "#C0392B" : "#2A2A2E"
-            border.color: "#5A6B8C"; border.width: 1
+            color: xArea.containsMouse ? "#C0392B" : theme.borderStrong
+            border.color: theme.borderHover; border.width: 1
             anchors.top: parent.top; anchors.right: parent.right
             anchors.topMargin: 10; anchors.rightMargin: 10
             z: 10
             Behavior on color { ColorAnimation { duration: 120 } }
-            Text { anchors.centerIn: parent; text: "✕"; color: "#FFFFFF"; font.pixelSize: 13 }
+            Text { anchors.centerIn: parent; text: "✕"; color: theme.textPrimary; font.pixelSize: 13 }
             MouseArea {
                 id: xArea; anchors.fill: parent; hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor; onClicked: root.close()
@@ -106,7 +108,7 @@ Item {
                     text: "Scan History"
                     font.pixelSize: 20
                     font.weight: Font.Bold
-                    color: "white"
+                    color: theme.textPrimary
                 }
                 Item { Layout.fillWidth: true }
 
@@ -116,12 +118,12 @@ Item {
                     Layout.preferredHeight: 32
                     hoverEnabled: true
                     contentItem: Text {
-                        text: parent.text; font.pixelSize: 13; color: "#BDC3C7"
+                        text: parent.text; font.pixelSize: 13; color: theme.textSecondary
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? "#4A90E2" : "#3A3F4B"
-                        border.color: parent.hovered ? "#FFFFFF" : "#BDC3C7"; radius: 4
+                        color: parent.hovered ? theme.accentBlue : theme.bgInput
+                        border.color: parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
                     }
                     onClicked: Qt.openUrlExternally("file:///" + MOTIONInterface.directory)
                 }
@@ -132,12 +134,12 @@ Item {
                     Layout.preferredHeight: 32
                     hoverEnabled: true
                     contentItem: Text {
-                        text: parent.text; font.pixelSize: 13; color: "#BDC3C7"
+                        text: parent.text; font.pixelSize: 13; color: theme.textSecondary
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? "#4A90E2" : "#3A3F4B"
-                        border.color: parent.hovered ? "#FFFFFF" : "#BDC3C7"; radius: 4
+                        color: parent.hovered ? theme.accentBlue : theme.bgInput
+                        border.color: parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
                     }
                     onClicked: refreshScans()
                 }
@@ -146,20 +148,74 @@ Item {
             // Data directory
             RowLayout {
                 Layout.fillWidth: true; spacing: 8
-                Text { text: "Data Directory:"; color: "#BDC3C7"; font.pixelSize: 13 }
-                Text { text: MOTIONInterface.directory; color: "white"; font.pixelSize: 13; elide: Text.ElideRight; Layout.fillWidth: true }
+                Text { text: "Data Directory:"; color: theme.textSecondary; font.pixelSize: 13 }
+                Text { text: MOTIONInterface.directory; color: theme.textPrimary; font.pixelSize: 13; elide: Text.ElideRight; Layout.fillWidth: true }
             }
 
             // Scan selector
             RowLayout {
                 Layout.fillWidth: true; spacing: 12
-                Text { text: "Scan:"; color: "#BDC3C7"; font.pixelSize: 14 }
+                Text { text: "Scan:"; color: theme.textSecondary; font.pixelSize: 14 }
                 ComboBox {
                     id: scanPicker
                     Layout.fillWidth: true
                     Layout.preferredHeight: 36
                     model: scans
-                    delegate: ItemDelegate { width: scanPicker.width; text: modelData }
+                    font.pixelSize: 13
+                    contentItem: Text {
+                        leftPadding: 10
+                        text: scanPicker.displayText
+                        font: scanPicker.font
+                        color: theme.textPrimary
+                        verticalAlignment: Text.AlignVCenter
+                        elide: Text.ElideRight
+                    }
+                    background: Rectangle {
+                        color: theme.bgInput
+                        radius: 4
+                        border.color: scanPicker.activeFocus ? theme.accentBlue : theme.borderSubtle
+                        border.width: 1
+                    }
+                    indicator: Text {
+                        x: scanPicker.width - width - 10
+                        y: (scanPicker.height - height) / 2
+                        text: "\u25BE"
+                        font.pixelSize: 14
+                        color: theme.textSecondary
+                    }
+                    delegate: ItemDelegate {
+                        width: scanPicker.width
+                        height: 32
+                        contentItem: Text {
+                            text: modelData
+                            font.pixelSize: 13
+                            color: theme.textPrimary
+                            verticalAlignment: Text.AlignVCenter
+                            leftPadding: 8
+                        }
+                        background: Rectangle {
+                            color: highlighted ? theme.accentBlue : "transparent"
+                        }
+                        highlighted: scanPicker.currentIndex === index
+                    }
+                    popup: Popup {
+                        y: scanPicker.height
+                        width: scanPicker.width
+                        implicitHeight: contentItem.implicitHeight + 2
+                        padding: 1
+                        contentItem: ListView {
+                            clip: true
+                            implicitHeight: contentHeight
+                            model: scanPicker.delegateModel
+                            ScrollIndicator.vertical: ScrollIndicator {}
+                        }
+                        background: Rectangle {
+                            color: theme.bgCard
+                            radius: 4
+                            border.color: theme.borderSubtle
+                            border.width: 1
+                        }
+                    }
                     onCurrentIndexChanged: {
                         if (currentIndex >= 0 && currentIndex < scans.length) {
                             try { selected = MOTIONInterface.get_scan_details(scans[currentIndex]) || {} }
@@ -173,8 +229,8 @@ Item {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                radius: 8; color: "#232329"
-                border.color: "#3E4E6F"; border.width: 1
+                radius: 8; color: theme.bgCardAlt
+                border.color: theme.borderSubtle; border.width: 1
 
                 RowLayout {
                     anchors.fill: parent; anchors.margins: 12; spacing: 12
@@ -186,30 +242,30 @@ Item {
 
                         GridLayout {
                             columns: 4; columnSpacing: 16; rowSpacing: 6; Layout.fillWidth: true
-                            Text { text: "Session ID:"; color: "#BDC3C7"; font.pixelSize: 13 }
-                            Text { text: selected.sessionId || "-"; color: "white"; font.pixelSize: 13 }
-                            Text { text: "Date:"; color: "#BDC3C7"; font.pixelSize: 13 }
-                            Text { text: selected.timestamp ? friendlyDate(selected.timestamp) : "-"; color: "white"; font.pixelSize: 13 }
+                            Text { text: "Session ID:"; color: theme.textSecondary; font.pixelSize: 13 }
+                            Text { text: selected.sessionId || "-"; color: theme.textPrimary; font.pixelSize: 13 }
+                            Text { text: "Date:"; color: theme.textSecondary; font.pixelSize: 13 }
+                            Text { text: selected.timestamp ? friendlyDate(selected.timestamp) : "-"; color: theme.textPrimary; font.pixelSize: 13 }
 
-                            Text { text: "Left File:"; color: "#BDC3C7"; font.pixelSize: 13 }
-                            Text { text: basename(selected.leftPath) || "(none)"; color: "white"; font.pixelSize: 12; elide: Text.ElideRight; Layout.fillWidth: true }
-                            Text { text: "Mask:"; color: "#BDC3C7"; font.pixelSize: 13 }
-                            Text { text: formatMasks(selected.leftMask, selected.rightMask); color: "white"; font.pixelSize: 13 }
+                            Text { text: "Left File:"; color: theme.textSecondary; font.pixelSize: 13 }
+                            Text { text: basename(selected.leftPath) || "(none)"; color: theme.textPrimary; font.pixelSize: 12; elide: Text.ElideRight; Layout.fillWidth: true }
+                            Text { text: "Mask:"; color: theme.textSecondary; font.pixelSize: 13 }
+                            Text { text: formatMasks(selected.leftMask, selected.rightMask); color: theme.textPrimary; font.pixelSize: 13 }
 
-                            Text { text: "Right File:"; color: "#BDC3C7"; font.pixelSize: 13 }
-                            Text { text: basename(selected.rightPath) || "(none)"; color: "white"; font.pixelSize: 12; elide: Text.ElideRight; Layout.fillWidth: true }
+                            Text { text: "Right File:"; color: theme.textSecondary; font.pixelSize: 13 }
+                            Text { text: basename(selected.rightPath) || "(none)"; color: theme.textPrimary; font.pixelSize: 12; elide: Text.ElideRight; Layout.fillWidth: true }
                             Text { text: ""; } Text { text: ""; }
                         }
 
-                        Text { text: "Notes:"; color: "#BDC3C7"; font.pixelSize: 13 }
+                        Text { text: "Notes:"; color: theme.textSecondary; font.pixelSize: 13 }
                         Rectangle {
                             Layout.fillWidth: true; Layout.fillHeight: true
-                            radius: 4; color: "#2E2E33"; border.color: "#3E4E6F"; border.width: 1
+                            radius: 4; color: theme.bgInput; border.color: theme.borderSubtle; border.width: 1
                             ScrollView {
                                 anchors.fill: parent
                                 TextArea {
                                     readOnly: true; wrapMode: Text.Wrap
-                                    text: selected.notes || ""; color: "white"; font.pixelSize: 13; background: null
+                                    text: selected.notes || ""; color: theme.textPrimary; font.pixelSize: 13; background: null
                                 }
                             }
                         }
@@ -219,7 +275,7 @@ Item {
                     ColumnLayout {
                         Layout.preferredWidth: 200; Layout.fillHeight: true; spacing: 10
 
-                        Text { text: "Actions"; color: "white"; font.pixelSize: 15 }
+                        Text { text: "Actions"; color: theme.textPrimary; font.pixelSize: 15 }
 
                         Button {
                             text: "Visualize BFI/BVI (legacy)"
@@ -229,12 +285,12 @@ Item {
                             hoverEnabled: enabled
                             contentItem: Text {
                                 text: parent.text; font.pixelSize: 13
-                                color: parent.enabled ? "#BDC3C7" : "#7F8C8D"
+                                color: parent.enabled ? theme.textSecondary : theme.textTertiary
                                 horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                             }
                             background: Rectangle {
-                                color: !parent.enabled ? "#3A3F4B" : parent.hovered ? "#4A90E2" : "#3A3F4B"
-                                border.color: !parent.enabled ? "#7F8C8D" : parent.hovered ? "#FFFFFF" : "#BDC3C7"; radius: 4
+                                color: !parent.enabled ? theme.bgInput : parent.hovered ? theme.accentBlue : theme.bgInput
+                                border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
                             }
                             onClicked: {
                                 root.visualizing = true
@@ -250,12 +306,12 @@ Item {
                             hoverEnabled: enabled
                             contentItem: Text {
                                 text: parent.text; font.pixelSize: 13
-                                color: parent.enabled ? "#BDC3C7" : "#7F8C8D"
+                                color: parent.enabled ? theme.textSecondary : theme.textTertiary
                                 horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                             }
                             background: Rectangle {
-                                color: !parent.enabled ? "#3A3F4B" : parent.hovered ? "#4A90E2" : "#3A3F4B"
-                                border.color: !parent.enabled ? "#7F8C8D" : parent.hovered ? "#FFFFFF" : "#BDC3C7"; radius: 4
+                                color: !parent.enabled ? theme.bgInput : parent.hovered ? theme.accentBlue : theme.bgInput
+                                border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
                             }
                             onClicked: {
                                 root.visualizing = true
@@ -270,12 +326,12 @@ Item {
                             hoverEnabled: enabled
                             contentItem: Text {
                                 text: parent.text; font.pixelSize: 13
-                                color: parent.enabled ? "#BDC3C7" : "#7F8C8D"
+                                color: parent.enabled ? theme.textSecondary : theme.textTertiary
                                 horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                             }
                             background: Rectangle {
-                                color: !parent.enabled ? "#3A3F4B" : parent.hovered ? "#4A90E2" : "#3A3F4B"
-                                border.color: !parent.enabled ? "#7F8C8D" : parent.hovered ? "#FFFFFF" : "#BDC3C7"; radius: 4
+                                color: !parent.enabled ? theme.bgInput : parent.hovered ? theme.accentBlue : theme.bgInput
+                                border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
                             }
                             onClicked: {
                                 root.visualizing = true
@@ -290,12 +346,12 @@ Item {
                             hoverEnabled: enabled
                             contentItem: Text {
                                 text: parent.text; font.pixelSize: 13
-                                color: parent.enabled ? "#BDC3C7" : "#7F8C8D"
+                                color: parent.enabled ? theme.textSecondary : theme.textTertiary
                                 horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                             }
                             background: Rectangle {
-                                color: !parent.enabled ? "#3A3F4B" : parent.hovered ? "#4A90E2" : "#3A3F4B"
-                                border.color: !parent.enabled ? "#7F8C8D" : parent.hovered ? "#FFFFFF" : "#BDC3C7"; radius: 4
+                                color: !parent.enabled ? theme.bgInput : parent.hovered ? theme.accentBlue : theme.bgInput
+                                border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
                             }
                             onClicked: {
                                 root.visualizing = true
@@ -318,7 +374,7 @@ Item {
             Column {
                 anchors.centerIn: parent; spacing: 12
                 BusyIndicator { running: root.visualizing; width: 48; height: 48 }
-                Text { text: "Processing..."; color: "white"; font.pixelSize: 14 }
+                Text { text: "Processing..."; color: theme.textPrimary; font.pixelSize: 14 }
             }
         }
     }

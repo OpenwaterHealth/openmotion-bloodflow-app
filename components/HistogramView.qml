@@ -7,6 +7,8 @@ Item {
     width: 1024
     height: 300
 
+    AppTheme { id: theme }
+
     property var histogramData: []
     property int maxValue: 1
     property bool showAxes: true
@@ -20,8 +22,8 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        color: "#1E1E20"
-        border.color: "#3E4E6F"
+        color: theme.bgContainer
+        border.color: theme.borderSubtle
         radius: 6
 
         ColumnLayout {
@@ -74,7 +76,7 @@ Item {
                         const drawWidth = width - 2 * padding
 
                         // Axes
-                        ctx.strokeStyle = "#BDC3C7"
+                        ctx.strokeStyle = theme.textSecondary
                         ctx.lineWidth = 1
                         ctx.beginPath()
                         ctx.moveTo(padding, padding)
@@ -88,7 +90,7 @@ Item {
 
                             const barWidth = drawWidth / totalBins
 
-                            ctx.fillStyle = "#4A90E2"
+                            ctx.fillStyle = theme.accentBlue
                             for (let i = 0; i < totalBins; i++) {
                                 let value = histogramData[i]
                                 let barHeight = (value / maxValue) * drawHeight
@@ -104,7 +106,7 @@ Item {
                         ctx.rotate(-Math.PI / 2)
                         ctx.textAlign = "center"    
                         ctx.font = "12px sans-serif"                    
-                        ctx.fillStyle = "#BDC3C7"
+                        ctx.fillStyle = theme.textSecondary
                         ctx.fillText("Pixel Count", 0, 0)
                         ctx.restore()
 
@@ -113,7 +115,7 @@ Item {
                         ctx.textAlign = "center"
                         ctx.textBaseline = "bottom"
                         ctx.font = "12px sans-serif"      
-                        ctx.fillStyle = "#BDC3C7"
+                        ctx.fillStyle = theme.textSecondary
                         ctx.fillText("Intensity (0–1023)", width / 2, height - 2)
                         ctx.restore()
                     }

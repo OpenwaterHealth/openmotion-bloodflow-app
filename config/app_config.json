@@ -45,11 +45,11 @@
   "contrastMax": 0.7,
   "dataDirectory": null,
   "writeRawCsv": false,
-  "rawCsvDurationSec": 60,
+  "rawCsvDurationSec": 60.0,
   "autoScale": true,
   "autoScalePerPlot": true,
   "reducedMode": true,
-  "plotWindowSec": 15,
+  "plotWindowSec": 3,
   "bfiColor": "#ffffff",
   "bviColor": "#3437db",
   "bviLowPassEnabled": true,
@@ -57,5 +57,6 @@
   "bfiClampLow": 0.0,
   "bfiClampHigh": 10.0,
   "bviClampLow": 0.0,
-  "bviClampHigh": 10.0
+  "bviClampHigh": 10.0,
+  "darkMode": true
 }

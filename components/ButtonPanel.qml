@@ -5,10 +5,13 @@ import OpenMotion 1.0
 
 Rectangle {
     id: panel
+
+    AppTheme { id: theme }
+
     width: 80
-    color: "#1A1A1C"
+    color: theme.bgPanel
     radius: 12
-    border.color: "#2A2A2E"
+    border.color: theme.borderStrong
     border.width: 1
 
     property bool scanning: false
@@ -24,9 +27,9 @@ Rectangle {
         if (MOTIONInterface.safetyFailure) return "#F1C40F"  // yellow - safety fault
         if (!MOTIONInterface.consoleConnected ||
             (!MOTIONInterface.leftSensorConnected && !MOTIONInterface.rightSensorConnected))
-            return "#7F8C8D"  // grey - disconnected
-        if (scanning) return "#3498DB"  // blue - scanning
-        return "#2ECC71"  // green - all good
+            return theme.statusGrey  // grey - disconnected
+        if (scanning) return theme.statusBlue  // blue - scanning
+        return theme.statusGreen  // green - all good
     }
 
     signal startStopClicked()
@@ -62,7 +65,8 @@ Rectangle {
                     id: startStopCircle
                     Layout.alignment: Qt.AlignHCenter
                     width: 36; height: 36; radius: 18
-                    color: panel.scanning ? "#E74C3C"
+                    color: !panel.allConnected ? theme.textDisabled
+                         : panel.scanning ? "#E74C3C"
                          : panel.waiting  ? "#F1C40F"
                          :                  "#2ECC71"
                     Behavior on color { ColorAnimation { duration: 150 } }
@@ -94,7 +98,7 @@ Rectangle {
                 Text {
                     text: panel.scanning ? "Stop" : "Start"
                     font.pixelSize: 10
-                    color: (panel.camerasReady && panel.allConnected) ? "#BDC3C7" : "#555555"
+                    color: (panel.camerasReady && panel.allConnected) ? theme.textSecondary : theme.textDisabled
                     horizontalAlignment: Text.AlignHCenter
                     Layout.alignment: Qt.AlignHCenter
                 }
@@ -104,8 +108,8 @@ Rectangle {
             Rectangle {
                 anchors.fill: parent
                 radius: 10
-                color: ssArea.containsMouse ? "#2E2E33" : "transparent"
-                border.color: ssArea.containsMouse ? "#5A6B8C" : "transparent"
+                color: ssArea.containsMouse ? theme.bgHover : "transparent"
+                border.color: ssArea.containsMouse ? theme.borderHover : "transparent"
                 border.width: 1
                 z: -1
                 Behavior on color { ColorAnimation { duration: 150 } }
@@ -133,7 +137,7 @@ Rectangle {
             visible: !panel.reducedMode
             Layout.preferredWidth: 52; Layout.preferredHeight: 1
             Layout.topMargin: 4; Layout.bottomMargin: 4
-            Layout.alignment: Qt.AlignHCenter; color: "#3E4E6F"
+            Layout.alignment: Qt.AlignHCenter; color: theme.borderSubtle
         }
 
         // Notes
@@ -175,7 +179,7 @@ Rectangle {
 
                 Text {
                     text: "Connection"
-                    color: "#7F8C8D"
+                    color: theme.textTertiary
                     font.pixelSize: 10
                     horizontalAlignment: Text.AlignHCenter
                     Layout.alignment: Qt.AlignHCenter
@@ -183,7 +187,7 @@ Rectangle {
             }
         }
 
-        Rectangle { Layout.preferredWidth: 52; Layout.preferredHeight: 1; Layout.topMargin: 4; Layout.bottomMargin: 4; Layout.alignment: Qt.AlignHCenter; color: "#3E4E6F" }
+        Rectangle { Layout.preferredWidth: 52; Layout.preferredHeight: 1; Layout.topMargin: 4; Layout.bottomMargin: 4; Layout.alignment: Qt.AlignHCenter; color: theme.borderSubtle }
 
         // History
         PanelButton {
@@ -192,7 +196,7 @@ Rectangle {
             onClicked: panel.historyClicked()
         }
 
-        Rectangle { Layout.preferredWidth: 52; Layout.preferredHeight: 1; Layout.topMargin: 4; Layout.bottomMargin: 4; Layout.alignment: Qt.AlignHCenter; color: "#3E4E6F" }
+        Rectangle { Layout.preferredWidth: 52; Layout.preferredHeight: 1; Layout.topMargin: 4; Layout.bottomMargin: 4; Layout.alignment: Qt.AlignHCenter; color: theme.borderSubtle }
 
         // Settings
         PanelButton {
@@ -219,9 +223,9 @@ Rectangle {
             anchors.fill: parent
             radius: 10
             color: btnMouseArea.containsMouse
-                ? (btnItem.highlighted ? Qt.lighter(btnItem.highlightColor, 1.2) : "#2E2E33")
+                ? (btnItem.highlighted ? Qt.lighter(btnItem.highlightColor, 1.2) : theme.bgHover)
                 : (btnItem.highlighted ? btnItem.highlightColor : "transparent")
-            border.color: btnMouseArea.containsMouse ? "#5A6B8C" : "transparent"
+            border.color: btnMouseArea.containsMouse ? theme.borderHover : "transparent"
             border.width: 1
 
             Behavior on color { ColorAnimation { duration: 150 } }
@@ -235,7 +239,7 @@ Rectangle {
                 text: btnItem.iconText
                 font.family: iconFont.name
                 font.pixelSize: 26
-                color: btnItem.enabled ? (btnItem.highlighted ? "white" : "#BDC3C7") : "#555555"
+                color: btnItem.enabled ? (btnItem.highlighted ? "white" : theme.textSecondary) : theme.textDisabled
                 horizontalAlignment: Text.AlignHCenter
                 Layout.alignment: Qt.AlignHCenter
             }
@@ -243,7 +247,7 @@ Rectangle {
             Text {
                 text: btnItem.label
                 font.pixelSize: 10
-                color: btnItem.enabled ? (btnItem.highlighted ? "white" : "#7F8C8D") : "#555555"
+                color: btnItem.enabled ? (btnItem.highlighted ? "white" : theme.textTertiary) : theme.textDisabled
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
                 Layout.preferredWidth: 64

@@ -14,9 +14,11 @@ ApplicationWindow {
     flags: Qt.FramelessWindowHint | Qt.Window | Qt.CustomizeWindowHint | Qt.WindowTitleHint
     color: "transparent"
 
+    AppTheme { id: theme }
+
     Rectangle {
         anchors.fill: parent
-        color: "#1C1C1E"
+        color: theme.bgBase
         radius: 20
         border.color: "transparent"
 
@@ -67,7 +69,7 @@ ApplicationWindow {
             anchors.margins: 3
             onPaint: {
                 var ctx = getContext("2d")
-                ctx.strokeStyle = "#5A6B8C"
+                ctx.strokeStyle = theme.borderHover
                 ctx.lineWidth = 1
                 var s = width
                 for (var i = 0; i < 3; i++) {

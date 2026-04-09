@@ -13,11 +13,13 @@ Rectangle {
     property string sensorSide: "left"  // "left" or "right"
     property var connector
 
+    AppTheme { id: theme }
+
     width: 200
     height: 260
     radius: 10
-    color: "#1E1E20"
-    border.color: sensorConnected ? "#3E4E6F" : "#6E3E3F"
+    color: theme.bgContainer
+    border.color: sensorConnected ? theme.borderSubtle : "#6E3E3F"
     border.width: 2
     opacity: sensorConnected ? 1.0 : 0.4
     enabled: sensorConnected
@@ -33,7 +35,7 @@ Rectangle {
         Text {
             text: root.title
             font.pixelSize: 16
-            color: root.sensorConnected ? "#BDC3C7" : "#8B8B8D"
+            color: root.sensorConnected ? theme.textSecondary : "#8B8B8D"
             horizontalAlignment: Text.AlignHCenter
             Layout.alignment: Qt.AlignHCenter
         }
@@ -46,14 +48,14 @@ Rectangle {
 
             // Row 1
             Rectangle { width: circleSize; height: circleSize; radius: circleSize/2
-                color: sensorActive[7] && root.sensorConnected ? "#4A90E2" : "#666666"; border.color: "black"; border.width: 1
+                color: sensorActive[7] && root.sensorConnected ? theme.accentBlue : "#666666"; border.color: "black"; border.width: 1
                 MouseArea { id: sensor1HoverArea; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
                 Controls.ToolTip.visible: sensor1HoverArea.containsMouse
                 Controls.ToolTip.text: "Sensor ID: 1"
             }
             Item {}
             Rectangle { width: circleSize; height: circleSize; radius: circleSize/2
-                color: sensorActive[0] && root.sensorConnected ? "#4A90E2" : "#666666"; border.color: "black"; border.width: 1
+                color: sensorActive[0] && root.sensorConnected ? theme.accentBlue : "#666666"; border.color: "black"; border.width: 1
                 MouseArea { id: sensor2HoverArea; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
                 Controls.ToolTip.visible: sensor2HoverArea.containsMouse
                 Controls.ToolTip.text: "Sensor ID: 8"
@@ -61,14 +63,14 @@ Rectangle {
 
             // Row 2
             Rectangle { width: circleSize; height: circleSize; radius: circleSize/2
-                color: sensorActive[6] && root.sensorConnected ? "#4A90E2" : "#666666"; border.color: "black"; border.width: 1
+                color: sensorActive[6] && root.sensorConnected ? theme.accentBlue : "#666666"; border.color: "black"; border.width: 1
                 MouseArea { id: sensor3HoverArea; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
                 Controls.ToolTip.visible: sensor3HoverArea.containsMouse
                 Controls.ToolTip.text: "Sensor ID: 2"
             }
             Item {}
             Rectangle { width: circleSize; height: circleSize; radius: circleSize/2
-                color: sensorActive[1] && root.sensorConnected ? "#4A90E2" : "#666666"; border.color: "black"; border.width: 1
+                color: sensorActive[1] && root.sensorConnected ? theme.accentBlue : "#666666"; border.color: "black"; border.width: 1
                 MouseArea { id: sensor4HoverArea; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
                 Controls.ToolTip.visible: sensor4HoverArea.containsMouse
                 Controls.ToolTip.text: "Sensor ID: 7"
@@ -76,14 +78,14 @@ Rectangle {
 
             // Row 3
             Rectangle { width: circleSize; height: circleSize; radius: circleSize/2
-                color: sensorActive[5] && root.sensorConnected ? "#4A90E2" : "#666666"; border.color: "black"; border.width: 1
+                color: sensorActive[5] && root.sensorConnected ? theme.accentBlue : "#666666"; border.color: "black"; border.width: 1
                 MouseArea { id: sensor5HoverArea; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
                 Controls.ToolTip.visible: sensor5HoverArea.containsMouse
                 Controls.ToolTip.text: "Sensor ID: 3"
             }
             Item {}
             Rectangle { width: circleSize; height: circleSize; radius: circleSize/2
-                color: sensorActive[2] && root.sensorConnected ? "#4A90E2" : "#666666"; border.color: "black"; border.width: 1
+                color: sensorActive[2] && root.sensorConnected ? theme.accentBlue : "#666666"; border.color: "black"; border.width: 1
                 MouseArea { id: sensor6HoverArea; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
                 Controls.ToolTip.visible: sensor6HoverArea.containsMouse
                 Controls.ToolTip.text: "Sensor ID: 6"
@@ -91,14 +93,14 @@ Rectangle {
 
             // Row 4
             Rectangle { width: circleSize; height: circleSize; radius: circleSize/2
-                color: sensorActive[4] && root.sensorConnected ? "#4A90E2" : "#666666"; border.color: "black"; border.width: 1
+                color: sensorActive[4] && root.sensorConnected ? theme.accentBlue : "#666666"; border.color: "black"; border.width: 1
                 MouseArea { id: sensor7HoverArea; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
                 Controls.ToolTip.visible: sensor7HoverArea.containsMouse
                 Controls.ToolTip.text: "Sensor ID: 4"
             }
             Item {}
             Rectangle { width: circleSize; height: circleSize; radius: circleSize/2
-                color: sensorActive[3] && root.sensorConnected ? "#4A90E2" : "#666666"; border.color: "black"; border.width: 1
+                color: sensorActive[3] && root.sensorConnected ? theme.accentBlue : "#666666"; border.color: "black"; border.width: 1
                 MouseArea { id: sensor8HoverArea; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
                 Controls.ToolTip.visible: sensor8HoverArea.containsMouse
                 Controls.ToolTip.text: "Sensor ID: 5"

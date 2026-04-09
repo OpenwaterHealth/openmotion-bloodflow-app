@@ -8,6 +8,8 @@ Item {
     visible: false
     z: 9998
 
+    AppTheme { id: theme }
+
     property bool freeRun: false
     property int hours: 1
     property int minutes: 0
@@ -35,21 +37,21 @@ Item {
         width: 400
         height: 280
         radius: 12
-        color: "#1E1E20"
-        border.color: "#3E4E6F"
+        color: theme.bgContainer
+        border.color: theme.borderSubtle
         border.width: 2
         anchors.centerIn: parent
 
         // X close button
         Rectangle {
             width: 28; height: 28; radius: 14
-            color: xArea.containsMouse ? "#C0392B" : "#2A2A2E"
-            border.color: "#5A6B8C"; border.width: 1
+            color: xArea.containsMouse ? "#C0392B" : theme.borderStrong
+            border.color: theme.borderHover; border.width: 1
             anchors.top: parent.top; anchors.right: parent.right
             anchors.topMargin: 10; anchors.rightMargin: 10
             z: 10
             Behavior on color { ColorAnimation { duration: 120 } }
-            Text { anchors.centerIn: parent; text: "✕"; color: "#FFFFFF"; font.pixelSize: 13 }
+            Text { anchors.centerIn: parent; text: "✕"; color: theme.textPrimary; font.pixelSize: 13 }
             MouseArea {
                 id: xArea; anchors.fill: parent; hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor; onClicked: root.close()
@@ -63,7 +65,7 @@ Item {
 
             Text {
                 text: "Scan Duration"
-                color: "#FFFFFF"
+                color: theme.textPrimary
                 font.pixelSize: 20
                 font.weight: Font.Bold
                 Layout.alignment: Qt.AlignHCenter
@@ -76,7 +78,7 @@ Item {
 
                 Text {
                     text: "Timed"
-                    color: !root.freeRun ? "#4A90E2" : "#BDC3C7"
+                    color: !root.freeRun ? theme.accentBlue : theme.textSecondary
                     font.pixelSize: 16
                     font.weight: !root.freeRun ? Font.Bold : Font.Normal
                 }
@@ -89,7 +91,7 @@ Item {
 
                 Text {
                     text: "Free Run"
-                    color: root.freeRun ? "#4A90E2" : "#BDC3C7"
+                    color: root.freeRun ? theme.accentBlue : theme.textSecondary
                     font.pixelSize: 16
                     font.weight: root.freeRun ? Font.Bold : Font.Normal
                 }
@@ -108,13 +110,13 @@ Item {
                     inputMethodHints: Qt.ImhDigitsOnly
                     validator: IntValidator { bottom: 0; top: 99 }
                     font.pixelSize: 24
-                    color: "white"
+                    color: theme.textPrimary
                     horizontalAlignment: Text.AlignHCenter
                     Layout.preferredWidth: 60
                     Layout.preferredHeight: 48
                     background: Rectangle {
-                        color: "#2E2E33"; radius: 6
-                        border.color: "#3E4E6F"; border.width: 1
+                        color: theme.bgInput; radius: 6
+                        border.color: theme.borderSubtle; border.width: 1
                     }
                     onEditingFinished: {
                         var v = parseInt(text)
@@ -124,7 +126,7 @@ Item {
                     }
                 }
 
-                Text { text: ":"; color: "#BDC3C7"; font.pixelSize: 24 }
+                Text { text: ":"; color: theme.textSecondary; font.pixelSize: 24 }
 
                 TextField {
                     id: minutesField
@@ -132,13 +134,13 @@ Item {
                     inputMethodHints: Qt.ImhDigitsOnly
                     validator: IntValidator { bottom: 0; top: 59 }
                     font.pixelSize: 24
-                    color: "white"
+                    color: theme.textPrimary
                     horizontalAlignment: Text.AlignHCenter
                     Layout.preferredWidth: 60
                     Layout.preferredHeight: 48
                     background: Rectangle {
-                        color: "#2E2E33"; radius: 6
-                        border.color: "#3E4E6F"; border.width: 1
+                        color: theme.bgInput; radius: 6
+                        border.color: theme.borderSubtle; border.width: 1
                     }
                     onEditingFinished: {
                         var v = parseInt(text)
@@ -148,7 +150,7 @@ Item {
                     }
                 }
 
-                Text { text: ":"; color: "#BDC3C7"; font.pixelSize: 24 }
+                Text { text: ":"; color: theme.textSecondary; font.pixelSize: 24 }
 
                 TextField {
                     id: secondsField
@@ -156,13 +158,13 @@ Item {
                     inputMethodHints: Qt.ImhDigitsOnly
                     validator: IntValidator { bottom: 0; top: 59 }
                     font.pixelSize: 24
-                    color: "white"
+                    color: theme.textPrimary
                     horizontalAlignment: Text.AlignHCenter
                     Layout.preferredWidth: 60
                     Layout.preferredHeight: 48
                     background: Rectangle {
-                        color: "#2E2E33"; radius: 6
-                        border.color: "#3E4E6F"; border.width: 1
+                        color: theme.bgInput; radius: 6
+                        border.color: theme.borderSubtle; border.width: 1
                     }
                     onEditingFinished: {
                         var v = parseInt(text)
@@ -174,7 +176,7 @@ Item {
 
                 Text {
                     text: "H : M : S"
-                    color: "#7F8C8D"
+                    color: theme.textTertiary
                     font.pixelSize: 11
                     Layout.alignment: Qt.AlignBottom
                 }
@@ -184,7 +186,7 @@ Item {
             Text {
                 visible: root.freeRun
                 text: "Scan will run indefinitely until stopped."
-                color: "#7F8C8D"
+                color: theme.textTertiary
                 font.pixelSize: 14
                 Layout.alignment: Qt.AlignHCenter
             }

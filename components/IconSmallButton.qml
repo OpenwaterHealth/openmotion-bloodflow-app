@@ -11,13 +11,15 @@ Item {
     property string iconGlyph: "\ue900"       // Unicode glyph for the icon
     property string buttonText: "Action"      // Tooltip text
 
+    AppTheme { id: theme }
+
     // Colors
-    property color iconColor: "#BDC3C7"
-    property color hoverColor: "#FFFFFF"
-    property color backgroundColor: "#2C2C2E"
-    property color hoverBackgroundColor: "#3E4E6F"
+    property color iconColor: theme.textSecondary
+    property color hoverColor: theme.textPrimary
+    property color backgroundColor: theme.bgInput
+    property color hoverBackgroundColor: theme.borderSubtle
     property color borderColor: "transparent"
-    property color hoverBorderColor: "#BDC3C7"
+    property color hoverBorderColor: theme.textSecondary
 
     // Signals
     signal clicked()
@@ -54,7 +56,7 @@ Item {
         width: Math.max(80, buttonText.length * 8)
         height: 28
         radius: 4
-        color: "#1C1C1E"
+        color: theme.bgBase
         border.color: "transparent"
         z: 10
 
@@ -68,7 +70,7 @@ Item {
             text: buttonText
             anchors.centerIn: parent
             font.pixelSize: 12
-            color: "white"
+            color: theme.textPrimary
         }
     }
 
