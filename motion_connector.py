@@ -20,7 +20,7 @@ import random
 import re
 import string
 
-from motion_singleton import motion_interface
+from omotion.Interface import MOTIONInterface
 
 from omotion.config import (
     DEBUG_FLAG_USB_PRINTF,
@@ -191,7 +191,7 @@ class MOTIONConnector(QObject):
 
         # Check if console and sensor are connected
         console_connected, left_sensor_connected, right_sensor_connected = (
-            motion_interface.is_device_connected()
+            self._interface.is_device_connected()
         )
 
         self._leftSensorConnected = left_sensor_connected
@@ -487,7 +487,7 @@ class MOTIONConnector(QObject):
 
         # Console firmware version (from console module) :contentReference[oaicite:5]{index=5}
         try:
-            fw_ver = motion_interface.console_module.get_version()
+            fw_ver = self._interface.console_module.get_version()
         except Exception as e:
             fw_ver = f"ERROR({e})"
 
@@ -679,7 +679,7 @@ class MOTIONConnector(QObject):
                 logger.error(
                     f"Failed to set console TEC voltage to {self._tec_voltage_default}V"
                 )
-            if motion_interface.console_module.set_fan_speed(fan_speed=100):
+            if self._interface.console_module.set_fan_speed(fan_speed=100):
                 logger.info("Console fan speed set to 50%")
             else:
                 logger.error("Failed to set console fan speed")
@@ -1132,9 +1132,9 @@ class MOTIONConnector(QObject):
     def queryConsoleInfo(self):
         """Fetch and emit device information."""
         try:
-            fw_version = motion_interface.console_module.get_version()
+            fw_version = self._interface.console_module.get_version()
             logger.info(f"Version: {fw_version}")
-            hw_id = motion_interface.console_module.get_hardware_id()
+            hw_id = self._interface.console_module.get_hardware_id()
             device_id = base58.b58encode(bytes.fromhex(hw_id)).decode()
             self.consoleDeviceInfoReceived.emit(fw_version, device_id)
             logger.info(
@@ -1502,6 +1502,18 @@ class MOTIONConnector(QObject):
             logger.warning(f"Failed to write EOL test CSV: {e}")
             run_logger.warning(f"Failed to write EOL test CSV: {e}")
 
+        # Emit a single end-of-scan EOL verdict to the Qt capture log window.
+        overall_eol_pass = bool(eol_rows) and all(
+            row.get("mean_test") == "PASS" and row.get("contrast_test") == "PASS"
+            for row in eol_rows
+        )
+        eol_result = "PASS" if overall_eol_pass else "FAIL"
+        status_emoji = "✅" if overall_eol_pass else "❌"
+        eol_msg = f"{status_emoji} EOL criteria result: {eol_result}"
+        self.captureLog.emit(eol_msg)
+        logger.info(eol_msg)
+        run_logger.info(eol_msg)
+
     def _on_safety_trip_during_capture(self):
         """Called on main thread when safety tripped while scan was running: show message and cancel scan in 5 s."""
         if not self._capture_running or self._safety_cancel_scheduled:
@@ -1606,7 +1618,7 @@ class MOTIONConnector(QObject):
 
             if target == "CONSOLE":
                 fpga_data, fpga_data_len = (
-                    motion_interface.console_module.read_i2c_packet(
+                    self._interface.console_module.read_i2c_packet(
                         mux_index=mux_idx,
                         channel=channel,
                         device_addr=i2c_addr,
@@ -1637,7 +1649,7 @@ class MOTIONConnector(QObject):
             if state not in valid_states:
                 logger.error(f"Invalid RGB state value: {state}")
                 return
-            if motion_interface.console_module.set_rgb_led(state) == state:
+            if self._interface.console_module.set_rgb_led(state) == state:
                 logger.info(f"RGB state set to: {state}")
             else:
                 logger.error(f"Failed to set RGB state to: {state}")
@@ -1648,7 +1660,7 @@ class MOTIONConnector(QObject):
     def queryRGBState(self):
         """Fetch and emit RGB state."""
         try:
-            state = motion_interface.console_module.get_rgb_led()
+            state = self._interface.console_module.get_rgb_led()
             state_text = {0: "Off", 1: "IND1", 2: "IND2", 3: "IND3"}.get(
                 state, "Unknown"
             )
@@ -1660,7 +1672,7 @@ class MOTIONConnector(QObject):
 
     @pyqtSlot(result=QVariant)
     def queryTriggerConfig(self):
-        trigger_setting = motion_interface.console_module.get_trigger_json()
+        trigger_setting = self._interface.console_module.get_trigger_json()
         if trigger_setting:
             if isinstance(trigger_setting, str):
                 updateTrigger = json.loads(trigger_setting)
@@ -1681,7 +1693,7 @@ class MOTIONConnector(QObject):
         try:
             json_trigger_data = json.loads(triggerjson)
 
-            trigger_setting = motion_interface.console_module.set_trigger_json(
+            trigger_setting = self._interface.console_module.set_trigger_json(
                 data=json_trigger_data
             )
             if trigger_setting:
@@ -1705,7 +1717,7 @@ class MOTIONConnector(QObject):
 
     @pyqtSlot(result=bool)
     def startTrigger(self):
-        success = motion_interface.console_module.start_trigger()
+        success = self._interface.console_module.start_trigger()
         if success:
             self._trigger_state = "ON"
             self.triggerStateChanged.emit()
@@ -1714,7 +1726,7 @@ class MOTIONConnector(QObject):
 
     @pyqtSlot()
     def stopTrigger(self):
-        motion_interface.console_module.stop_trigger()
+        self._interface.console_module.stop_trigger()
         self._trigger_state = "OFF"
         self.triggerStateChanged.emit()
         self._stop_runlog()
@@ -1724,7 +1736,7 @@ class MOTIONConnector(QObject):
     def getFsyncCount(self):
         """Get the Fsync count from the console."""
         try:
-            fsync_count = motion_interface.console_module.get_fsync_pulsecount()
+            fsync_count = self._interface.console_module.get_fsync_pulsecount()
             logger.info(f"Fsync Count: {fsync_count}")
             return fsync_count
         except Exception as e:
@@ -1735,7 +1747,7 @@ class MOTIONConnector(QObject):
     def getLsyncCount(self):
         """Get the Fsync count from the console."""
         try:
-            lsync_count = motion_interface.console_module.get_lsync_pulsecount()
+            lsync_count = self._interface.console_module.get_lsync_pulsecount()
             logger.debug(f"Lsync Count: {lsync_count}")
             return lsync_count
         except Exception as e:
@@ -1795,10 +1807,10 @@ class MOTIONConnector(QObject):
 
             # Get all sensors (left and right)
             sensors = []
-            if self._leftSensorConnected and "left" in motion_interface.sensors:
-                sensors.append(("left", motion_interface.sensors["left"]))
-            if self._rightSensorConnected and "right" in motion_interface.sensors:
-                sensors.append(("right", motion_interface.sensors["right"]))
+            if self._leftSensorConnected and "left" in self._interface.sensors:
+                sensors.append(("left", self._interface.sensors["left"]))
+            if self._rightSensorConnected and "right" in self._interface.sensors:
+                sensors.append(("right", self._interface.sensors["right"]))
 
             if not sensors:
                 logger.warning("No sensors connected, cannot read camera UIDs")
@@ -1920,7 +1932,7 @@ class MOTIONConnector(QObject):
                 logger.error(f"{sensor_tag.capitalize()} sensor not connected")
                 return
 
-            sensor = motion_interface.sensors[sensor_tag]
+            sensor = self._interface.sensors[sensor_tag]
             if sensor is None:
                 logger.error(f"{sensor_tag.capitalize()} sensor object is None")
                 return
@@ -1940,7 +1952,7 @@ class MOTIONConnector(QObject):
                 logger.error(f"Invalid target for sensor info query: {target}")
                 return
 
-            gyro = motion_interface.sensors[sensor_tag].imu_get_gyroscope()
+            gyro = self._interface.sensors[sensor_tag].imu_get_gyroscope()
             logger.info(f"Gyro  (raw): X={gyro[0]}, Y={gyro[1]}, Z={gyro[2]}")
             self.gyroscopeSensorUpdated.emit(gyro[0], gyro[1], gyro[2])
         except Exception as e:
@@ -1951,13 +1963,13 @@ class MOTIONConnector(QObject):
         """reset hardware Sensor device."""
         try:
             if target == "CONSOLE":
-                if motion_interface.console_module.soft_reset():
+                if self._interface.console_module.soft_reset():
                     logger.info("Software Reset Sent")
                 else:
                     logger.error("Failed to send Software Reset")
             elif target == "SENSOR_LEFT" or target == "SENSOR_RIGHT":
                 sensor_tag = "left" if target == "SENSOR_LEFT" else "right"
-                if motion_interface.sensors[sensor_tag].soft_reset():
+                if self._interface.sensors[sensor_tag].soft_reset():
                     logger.info("Software Reset Sent")
                 else:
                     logger.error("Failed to send Software Reset")
@@ -1981,7 +1993,7 @@ class MOTIONConnector(QObject):
                 logger.error(f"{sensor_tag.capitalize()} sensor not connected")
                 return
 
-            sensor = motion_interface.sensors[sensor_tag]
+            sensor = self._interface.sensors[sensor_tag]
             if sensor is None:
                 logger.error(f"{sensor_tag.capitalize()} sensor object is None")
                 return
@@ -2009,7 +2021,7 @@ class MOTIONConnector(QObject):
                 logger.error(f"{sensor_tag.capitalize()} sensor not connected")
                 return
 
-            sensor = motion_interface.sensors[sensor_tag]
+            sensor = self._interface.sensors[sensor_tag]
             if sensor is None:
                 logger.error(f"{sensor_tag.capitalize()} sensor object is None")
                 return
@@ -2380,9 +2392,9 @@ class MOTIONConnector(QObject):
 
     def connect_signals(self):
         """Connect LIFUInterface signals to QML."""
-        motion_interface.signal_connect.connect(self.on_connected)
-        motion_interface.signal_disconnect.connect(self.on_disconnected)
-        motion_interface.signal_data_received.connect(self.on_data_received)
+        self._interface.signal_connect.connect(self.on_connected)
+        self._interface.signal_disconnect.connect(self.on_disconnected)
+        self._interface.signal_data_received.connect(self.on_data_received)
         self.safetyTripDuringCaptureRequested.connect(
             self._on_safety_trip_during_capture
         )
