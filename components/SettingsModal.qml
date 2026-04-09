@@ -755,6 +755,48 @@ Item {
                         Text { text: MOTIONInterface.get_sdk_version(); color: root.colTextPri; font.pixelSize: 13; font.family: "Consolas" }
                         Item { Layout.fillWidth: true }
                     }
+                    FieldRow {
+                        label: "Updates"
+                        ActionButton {
+                            id: updateCheckBtn
+                            text: "Check for Updates"
+                            Layout.preferredWidth: 150
+                            onClicked: {
+                                updateCheckBtn.text = "Checking..."
+                                updateCheckBtn.enabled = false
+                                MOTIONInterface.checkForUpdates()
+                            }
+                        }
+                        Text {
+                            id: updateStatusText
+                            text: ""
+                            color: root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    Connections {
+                        target: MOTIONInterface
+                        function onUpdateAvailable(version, url) {
+                            updateCheckBtn.text = "Check for Updates"
+                            updateCheckBtn.enabled = true
+                            updateStatusText.text = "v" + version + " available!"
+                            updateStatusText.color = root.colAccent
+                        }
+                        function onUpdateNotAvailable() {
+                            updateCheckBtn.text = "Check for Updates"
+                            updateCheckBtn.enabled = true
+                            updateStatusText.text = "Up to date"
+                            updateStatusText.color = theme.statusGreen
+                        }
+                        function onUpdateCheckFailed(msg) {
+                            updateCheckBtn.text = "Check for Updates"
+                            updateCheckBtn.enabled = true
+                            updateStatusText.text = "Check failed"
+                            updateStatusText.color = theme.accentRed
+                        }
+                    }
                 }
 
                 // Bottom padding

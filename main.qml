@@ -40,9 +40,17 @@ ApplicationWindow {
             durationSec: bloodFlowPage.durationSec
         }
 
+        // Update available banner (slides in below header)
+        UpdateBanner {
+            id: updateBanner
+            anchors.top: headerMenu.bottom
+            anchors.left: parent.left
+            anchors.right: parent.right
+        }
+
         Item {
             anchors.fill: parent
-            anchors.topMargin: 65
+            anchors.topMargin: 65 + (updateBanner.visible ? updateBanner.height : 0)
             anchors.rightMargin: 8
             anchors.bottomMargin: 8
             anchors.leftMargin: 8

@@ -134,6 +134,11 @@ class MOTIONConnector(QObject):
     tecDacChanged = pyqtSignal()
     appConfigChanged = pyqtSignal()
 
+    # App update signals
+    updateAvailable = pyqtSignal(str, str)   # (latest_version, download_url)
+    updateNotAvailable = pyqtSignal()
+    updateCheckFailed = pyqtSignal(str)      # error message
+
     @staticmethod
     def _default_output_base() -> str:
         """Return a writable base directory for logs and scan data.
@@ -2403,6 +2408,91 @@ class MOTIONConnector(QObject):
     @property
     def interface(self):
         return self._interface
+
+    # ── App update checking ─────────────────────────────────────────────
+
+    _GITHUB_REPO = "OpenwaterHealth/openmotion-bloodflow-app"
+
+    @pyqtSlot()
+    def checkForUpdates(self):
+        """Check GitHub releases for a newer version (runs in a background thread)."""
+        t = threading.Thread(target=self._check_for_updates_worker, daemon=True)
+        t.start()
+
+    def _check_for_updates_worker(self):
+        import urllib.request
+        from version import get_version
+
+        api_url = f"https://api.github.com/repos/{self._GITHUB_REPO}/releases/latest"
+        try:
+            req = urllib.request.Request(api_url, headers={"Accept": "application/vnd.github+json"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+
+            remote_tag = data.get("tag_name", "").lstrip("v")
+            if not remote_tag:
+                self.updateCheckFailed.emit("Could not determine latest release tag.")
+                return
+
+            # Find the .zip asset download URL
+            download_url = data.get("html_url", "")
+            for asset in data.get("assets", []):
+                if asset["name"].endswith(".zip"):
+                    download_url = asset["browser_download_url"]
+                    break
+
+            local_version = get_version()
+            # Strip local metadata for comparison (e.g. "+3.gabc1234.dirty")
+            local_base = local_version.split("+")[0]
+
+            if self._version_newer(remote_tag, local_base):
+                logger.info(f"Update available: {remote_tag} (current: {local_base})")
+                self.updateAvailable.emit(remote_tag, download_url)
+            else:
+                logger.info(f"App is up to date ({local_base} >= {remote_tag})")
+                self.updateNotAvailable.emit()
+
+        except Exception as e:
+            logger.warning(f"Update check failed: {e}")
+            self.updateCheckFailed.emit(str(e))
+
+    @staticmethod
+    def _version_newer(remote: str, local: str) -> bool:
+        """Return True if remote version is strictly newer than local.
+
+        Handles versions like '0.4.3', 'pre-0.4.3', '1.0-pre3'.
+        Strips 'pre-' prefix for numeric comparison; pre-releases are
+        considered older than the same base version.
+        """
+        def parse(v):
+            # Strip pre- prefix, track it
+            is_pre = v.startswith("pre-")
+            base = v[4:] if is_pre else v
+            # Also handle "1.0-pre3" format
+            if "-pre" in base:
+                base = base.split("-pre")[0]
+                is_pre = True
+            try:
+                parts = [int(x) for x in base.split(".")]
+            except ValueError:
+                parts = [0]
+            return parts, is_pre
+
+        r_parts, r_pre = parse(remote)
+        l_parts, l_pre = parse(local)
+
+        if r_parts != l_parts:
+            return r_parts > l_parts
+        # Same base version: non-pre > pre
+        if l_pre and not r_pre:
+            return True
+        return False
+
+    @pyqtSlot(str)
+    def openDownloadUrl(self, url: str):
+        """Open the download URL in the system browser."""
+        import webbrowser
+        webbrowser.open(url)
 
 
 def _load_plot_corrected_scan():
