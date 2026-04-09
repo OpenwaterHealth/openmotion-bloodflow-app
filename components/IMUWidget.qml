@@ -6,6 +6,8 @@ Rectangle {
     height: 160
     color: "transparent"
 
+    AppTheme { id: theme }
+
     // === Properties for IMU data ===
     property string imuLabel: "IMU Data"
     property string mode: "Accel"     // or "Gyro"
@@ -69,7 +71,7 @@ Rectangle {
             topMargin: 5
         }
         font.pixelSize: 16
-        color: "#BDC3C7"
+        color: theme.textSecondary
         font.weight: Font.Medium
     }
 }

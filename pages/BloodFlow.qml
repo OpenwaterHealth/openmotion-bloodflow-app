@@ -10,8 +10,10 @@ Rectangle {
     id: bloodFlow
     width: parent.width
     height: parent.height
-    color: "#1C1C1E"
+    color: theme.bgBase
     radius: 0
+
+    AppTheme { id: theme }
 
     property bool scanning: false
     property bool camerasReady: true  // starts true, goes false when camera selection changes

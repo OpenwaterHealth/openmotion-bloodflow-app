@@ -10,6 +10,8 @@ Item {
     visible: false
     z: 9998
 
+    AppTheme { id: theme }
+
     // ── Settings values — initialised from live config on creation ──────────
     property int    defaultLeftMaskIndex:  4
     property int    defaultRightMaskIndex: 4
@@ -34,16 +36,16 @@ Item {
     property bool   writeRawCsv:       false
     property var    rawCsvDurationSec: 60
 
-    // ── Theme tokens ────────────────────────────────────────────────────────
-    readonly property color colBgPanel:    "#1E1E20"
-    readonly property color colBgCard:     "#26262A"
-    readonly property color colBgInput:    "#2E2E33"
-    readonly property color colBorder:     "#3E4E6F"
-    readonly property color colBorderSoft: "#33384A"
-    readonly property color colAccent:     "#4A90E2"
-    readonly property color colTextPri:    "#E6E6E6"
-    readonly property color colTextSec:    "#9CA3AF"
-    readonly property color colTextMuted:  "#6B7280"
+    // ── Theme tokens (aliased from AppTheme) ──────────────────────────────
+    readonly property color colBgPanel:    theme.bgContainer
+    readonly property color colBgCard:     theme.bgCard
+    readonly property color colBgInput:    theme.bgInput
+    readonly property color colBorder:     theme.borderStrong
+    readonly property color colBorderSoft: theme.borderSoft
+    readonly property color colAccent:     theme.accentBlue
+    readonly property color colTextPri:    theme.textPrimary
+    readonly property color colTextSec:    theme.textSecondary
+    readonly property color colTextMuted:  theme.textTertiary
 
     signal settingsChanged()
 
@@ -71,6 +73,7 @@ Item {
         contrastMax  = cfg.contrastMax  !== undefined ? cfg.contrastMax  : 1.0
         writeRawCsv       = cfg.writeRawCsv       !== undefined ? cfg.writeRawCsv       : false
         rawCsvDurationSec = cfg.rawCsvDurationSec !== undefined ? cfg.rawCsvDurationSec : null
+        if (darkModeSwitch) darkModeSwitch.checked = cfg.darkMode !== false
     }
 
     Component.onCompleted: _loadFromConfig()
@@ -191,6 +194,66 @@ Item {
         }
     }
 
+    component StyledCombo: ComboBox {
+        Layout.preferredWidth: 180
+        Layout.preferredHeight: 32
+        font.pixelSize: 13
+        contentItem: Text {
+            leftPadding: 10
+            text:  parent.displayText
+            font:  parent.font
+            color: root.colTextPri
+            verticalAlignment: Text.AlignVCenter
+            elide: Text.ElideRight
+        }
+        background: Rectangle {
+            color: root.colBgInput
+            radius: 4
+            border.color: parent.activeFocus ? root.colAccent : root.colBorderSoft
+            border.width: 1
+        }
+        indicator: Text {
+            x:    parent.width - width - 10
+            y:    (parent.height - height) / 2
+            text: "\u25BE"
+            font.pixelSize: 14
+            color: root.colTextSec
+        }
+        popup: Popup {
+            y: parent.height
+            width: parent.width
+            implicitHeight: contentItem.implicitHeight + 2
+            padding: 1
+            contentItem: ListView {
+                clip: true
+                implicitHeight: contentHeight
+                model: parent.parent.delegateModel
+                ScrollIndicator.vertical: ScrollIndicator {}
+            }
+            background: Rectangle {
+                color: root.colBgCard
+                radius: 4
+                border.color: root.colBorderSoft
+                border.width: 1
+            }
+        }
+        delegate: ItemDelegate {
+            width: parent ? parent.width : 0
+            height: 30
+            contentItem: Text {
+                text: modelData !== undefined ? modelData : (model.name !== undefined ? model.name : "")
+                font.pixelSize: 13
+                color: root.colTextPri
+                verticalAlignment: Text.AlignVCenter
+                leftPadding: 8
+            }
+            background: Rectangle {
+                color: highlighted ? root.colAccent : "transparent"
+            }
+            highlighted: parent && parent.parent ? parent.parent.currentIndex === index : false
+        }
+    }
+
     component StyledNumberField: TextField {
         Layout.preferredWidth: 84
         Layout.preferredHeight: 30
@@ -207,8 +270,24 @@ Item {
     }
 
     component PillSwitch: Switch {
-        // Slimmer, neutral switch
+        id: pillCtrl
         scale: 0.9
+        indicator: Rectangle {
+            x:      pillCtrl.leftPadding
+            y:      (pillCtrl.height - height) / 2
+            width:  44; height: 24; radius: 12
+            color:  pillCtrl.checked ? root.colAccent : root.colBgInput
+            border.color: pillCtrl.checked ? root.colAccent : root.colBorderSoft
+            border.width: 1
+            Behavior on color { ColorAnimation { duration: 120 } }
+
+            Rectangle {
+                x:      pillCtrl.checked ? parent.width - width - 3 : 3
+                y:      3; width: 18; height: 18; radius: 9
+                color:  "#FFFFFF"
+                Behavior on x { NumberAnimation { duration: 120 } }
+            }
+        }
     }
 
     component ActionButton: Button {
@@ -218,14 +297,14 @@ Item {
         contentItem: Text {
             text:                parent.text
             font.pixelSize:      12
-            color:               parent.hovered ? "#FFFFFF" : root.colTextPri
+            color:               parent.hovered ? "#FFFFFF" : root.colTextSec
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment:   Text.AlignVCenter
         }
         background: Rectangle {
-            color:        parent.hovered ? parent.hoverColor : "#3A3F4B"
+            color:        parent.hovered ? parent.hoverColor : root.colBgInput
             radius:       4
-            border.color: parent.hovered ? "#FFFFFF" : root.colBorderSoft
+            border.color: parent.hovered ? root.colAccent : root.colBorderSoft
             border.width: 1
         }
     }
@@ -270,7 +349,7 @@ Item {
 
             Rectangle {
                 width: 30; height: 30; radius: 15
-                color: xArea.containsMouse ? "#C0392B" : "#2A2A2E"
+                color: xArea.containsMouse ? "#C0392B" : root.colBorder
                 border.color: root.colBorderSoft; border.width: 1
                 anchors.right: parent.right
                 anchors.rightMargin: 14
@@ -318,9 +397,7 @@ Item {
 
                     FieldRow {
                         label: "Left Sensor"
-                        ComboBox {
-                            Layout.preferredWidth: 180
-                            Layout.preferredHeight: 32
+                        StyledCombo {
                             model: cameraPatterns
                             textRole: "name"
                             currentIndex: root.defaultLeftMaskIndex
@@ -330,9 +407,7 @@ Item {
                     }
                     FieldRow {
                         label: "Right Sensor"
-                        ComboBox {
-                            Layout.preferredWidth: 180
-                            Layout.preferredHeight: 32
+                        StyledCombo {
                             model: cameraPatterns
                             textRole: "name"
                             currentIndex: root.defaultRightMaskIndex
@@ -405,10 +480,9 @@ Item {
 
                     FieldRow {
                         label: "Time window"
-                        ComboBox {
+                        StyledCombo {
                             id: windowCombo
                             Layout.preferredWidth: 110
-                            Layout.preferredHeight: 32
                             model: [3, 5, 15, 30]
                             displayText: currentValue + " s"
                             currentIndex: {
@@ -581,6 +655,25 @@ Item {
                         color: root.colTextMuted
                         font.pixelSize: 11
                         font.italic: true
+                    }
+                }
+
+                // ── Appearance ───────────────────────────────────────────────
+                SectionCard {
+                    title: "Appearance"
+                    ColumnLayout {
+                        width: parent.width
+                        spacing: 0
+                        FieldRow {
+                            label: "Dark Mode"
+                            PillSwitch {
+                                id: darkModeSwitch
+                                checked: MOTIONInterface.appConfig.darkMode !== false
+                                onToggled: {
+                                    MOTIONInterface.setConfig("darkMode", checked)
+                                }
+                            }
+                        }
                     }
                 }
 

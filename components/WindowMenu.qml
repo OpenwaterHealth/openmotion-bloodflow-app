@@ -4,9 +4,10 @@ import QtQuick.Layouts 6.0
 
 Rectangle {
     id: windowMenu
+    AppTheme { id: theme }
     width: parent.width
     height: 60
-    color: "#1E1E20" // Header background color
+    color: theme.bgContainer // Header background color
     radius: 20
 
     // Properties to configure the logo
@@ -54,12 +55,56 @@ Rectangle {
             color: "transparent" // No background color
             radius: 6
 
+            // Dark-mode: show the original white logo directly
             Image {
-                source: windowMenu.logoSource // Use the configurable logo source
+                source: windowMenu.logoSource
                 anchors.fill: parent
                 fillMode: Image.PreserveAspectFit
                 smooth: true
-                visible: windowMenu.logoSource !== "" // Show only if a logo is provided
+                visible: theme.dark && windowMenu.logoSource !== ""
+            }
+            // Light-mode: paint a dark logo using the white image as an
+            // opacity mask over a solid-colour Canvas.  No shaders needed.
+            Item {
+                anchors.fill: parent
+                visible: !theme.dark && windowMenu.logoSource !== ""
+
+                Canvas {
+                    id: logoDarkCanvas
+                    anchors.fill: parent
+                    // Re-render whenever the theme changes or the image loads
+                    property color tint: theme.textPrimary
+                    onTintChanged: requestPaint()
+
+                    Image {
+                        id: logoSrc
+                        source: windowMenu.logoSource
+                        visible: false          // hidden; only used as a pixel source
+                        onStatusChanged: if (status === Image.Ready) logoDarkCanvas.requestPaint()
+                    }
+
+                    onPaint: {
+                        var ctx = getContext("2d")
+                        ctx.reset()
+                        if (logoSrc.status !== Image.Ready) return
+
+                        // Scale image to fit, centered, preserving aspect ratio
+                        var sx = width  / logoSrc.sourceSize.width
+                        var sy = height / logoSrc.sourceSize.height
+                        var s  = Math.min(sx, sy)
+                        var dw = logoSrc.sourceSize.width  * s
+                        var dh = logoSrc.sourceSize.height * s
+                        var dx = (width  - dw) / 2
+                        var dy = (height - dh) / 2
+
+                        // Draw the original image (for its alpha)
+                        ctx.drawImage(logoSrc, dx, dy, dw, dh)
+                        // Composite: replace colour but keep alpha
+                        ctx.globalCompositeOperation = "source-atop"
+                        ctx.fillStyle = tint.toString()
+                        ctx.fillRect(0, 0, width, height)
+                    }
+                }
             }
         }
 
@@ -67,9 +112,9 @@ Rectangle {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 34
-            color: "#252528"
+            color: theme.bgElevated
             radius: 8
-            border.color: "#3E4E6F"
+            border.color: theme.borderSubtle
             border.width: 1
 
             RowLayout {
@@ -78,10 +123,10 @@ Rectangle {
                 anchors.rightMargin: 14
                 spacing: 10
 
-                Text { text: "Session:"; color: "#7F8C8D"; font.pixelSize: 13 }
+                Text { text: "Session:"; color: theme.textTertiary; font.pixelSize: 13 }
                 Text {
                     text: windowMenu.sessionId || "—"
-                    color: "#4A90E2"
+                    color: theme.textLink
                     font.pixelSize: 13
                     font.weight: Font.DemiBold
                 }
@@ -90,7 +135,7 @@ Rectangle {
 
                 Text {
                     text: "OpenMotion BloodFlow"
-                    color: "#FFFFFF"
+                    color: theme.textPrimary
                     font.pixelSize: 14
                     font.weight: Font.Bold
                 }
@@ -128,7 +173,7 @@ Rectangle {
                             ? windowMenu.formatSec(windowMenu.elapsedSec) + " / " + windowMenu.formatSec(windowMenu.durationSec)
                             : windowMenu.formatSec(windowMenu.durationSec)
                     }
-                    color: windowMenu.scanning ? "#2ECC71" : "#7F8C8D"
+                    color: windowMenu.scanning ? theme.statusGreen : theme.textTertiary
                     font.pixelSize: 13
                     font.family: "Courier New"
                 }

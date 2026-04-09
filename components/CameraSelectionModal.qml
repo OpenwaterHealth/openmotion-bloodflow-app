@@ -9,6 +9,8 @@ Item {
     visible: false
     z: 9998
 
+    AppTheme { id: theme }
+
     signal selectionChanged(int leftMask, int rightMask)
 
     property var leftSensorActive: [false, false, false, false, false, false, false, false]
@@ -85,21 +87,21 @@ Item {
         width: 520
         height: 500
         radius: 12
-        color: "#1E1E20"
-        border.color: "#3E4E6F"
+        color: theme.bgContainer
+        border.color: theme.borderSubtle
         border.width: 2
         anchors.centerIn: parent
 
         // X close button
         Rectangle {
             width: 28; height: 28; radius: 14
-            color: xArea.containsMouse ? "#C0392B" : "#2A2A2E"
-            border.color: "#5A6B8C"; border.width: 1
+            color: xArea.containsMouse ? "#C0392B" : theme.borderStrong
+            border.color: theme.borderHover; border.width: 1
             anchors.top: parent.top; anchors.right: parent.right
             anchors.topMargin: 10; anchors.rightMargin: 10
             z: 10
             Behavior on color { ColorAnimation { duration: 120 } }
-            Text { anchors.centerIn: parent; text: "✕"; color: "#FFFFFF"; font.pixelSize: 13 }
+            Text { anchors.centerIn: parent; text: "✕"; color: theme.textPrimary; font.pixelSize: 13 }
             MouseArea {
                 id: xArea; anchors.fill: parent; hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor; onClicked: root.close()
@@ -113,7 +115,7 @@ Item {
 
             Text {
                 text: "Camera Selection"
-                color: "#FFFFFF"
+                color: theme.textPrimary
                 font.pixelSize: 20
                 font.weight: Font.Bold
                 Layout.alignment: Qt.AlignHCenter
@@ -143,10 +145,45 @@ Item {
                         Layout.preferredHeight: 36
                         model: sensorPatterns
                         textRole: "name"
+                        font.pixelSize: 13
                         enabled: MOTIONInterface.leftSensorConnected
                         opacity: enabled ? 1.0 : 0.4
                         onCurrentIndexChanged: applyPatternToSensor(currentIndex, "left")
-
+                        contentItem: Text {
+                            leftPadding: 10; text: leftSelector.displayText
+                            font: leftSelector.font; color: theme.textPrimary
+                            verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight
+                        }
+                        background: Rectangle {
+                            color: theme.bgInput; radius: 4
+                            border.color: leftSelector.activeFocus ? theme.accentBlue : theme.borderSubtle; border.width: 1
+                        }
+                        indicator: Text {
+                            x: leftSelector.width - width - 10; y: (leftSelector.height - height) / 2
+                            text: "\u25BE"; font.pixelSize: 14; color: theme.textSecondary
+                        }
+                        delegate: ItemDelegate {
+                            width: leftSelector.width; height: 32
+                            contentItem: Text {
+                                text: model.name; font.pixelSize: 13; color: theme.textPrimary
+                                verticalAlignment: Text.AlignVCenter; leftPadding: 8
+                            }
+                            background: Rectangle { color: highlighted ? theme.accentBlue : "transparent" }
+                            highlighted: leftSelector.currentIndex === index
+                        }
+                        popup: Popup {
+                            y: leftSelector.height; width: leftSelector.width
+                            implicitHeight: contentItem.implicitHeight + 2; padding: 1
+                            contentItem: ListView {
+                                clip: true; implicitHeight: contentHeight
+                                model: leftSelector.delegateModel
+                                ScrollIndicator.vertical: ScrollIndicator {}
+                            }
+                            background: Rectangle {
+                                color: theme.bgCard; radius: 4
+                                border.color: theme.borderSubtle; border.width: 1
+                            }
+                        }
                         Component.onCompleted: currentIndex = 4
                     }
                 }
@@ -169,10 +206,45 @@ Item {
                         Layout.preferredHeight: 36
                         model: sensorPatterns
                         textRole: "name"
+                        font.pixelSize: 13
                         enabled: MOTIONInterface.rightSensorConnected
                         opacity: enabled ? 1.0 : 0.4
                         onCurrentIndexChanged: applyPatternToSensor(currentIndex, "right")
-
+                        contentItem: Text {
+                            leftPadding: 10; text: rightSelector.displayText
+                            font: rightSelector.font; color: theme.textPrimary
+                            verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight
+                        }
+                        background: Rectangle {
+                            color: theme.bgInput; radius: 4
+                            border.color: rightSelector.activeFocus ? theme.accentBlue : theme.borderSubtle; border.width: 1
+                        }
+                        indicator: Text {
+                            x: rightSelector.width - width - 10; y: (rightSelector.height - height) / 2
+                            text: "\u25BE"; font.pixelSize: 14; color: theme.textSecondary
+                        }
+                        delegate: ItemDelegate {
+                            width: rightSelector.width; height: 32
+                            contentItem: Text {
+                                text: model.name; font.pixelSize: 13; color: theme.textPrimary
+                                verticalAlignment: Text.AlignVCenter; leftPadding: 8
+                            }
+                            background: Rectangle { color: highlighted ? theme.accentBlue : "transparent" }
+                            highlighted: rightSelector.currentIndex === index
+                        }
+                        popup: Popup {
+                            y: rightSelector.height; width: rightSelector.width
+                            implicitHeight: contentItem.implicitHeight + 2; padding: 1
+                            contentItem: ListView {
+                                clip: true; implicitHeight: contentHeight
+                                model: rightSelector.delegateModel
+                                ScrollIndicator.vertical: ScrollIndicator {}
+                            }
+                            background: Rectangle {
+                                color: theme.bgCard; radius: 4
+                                border.color: theme.borderSubtle; border.width: 1
+                            }
+                        }
                         Component.onCompleted: currentIndex = 0
                     }
                 }

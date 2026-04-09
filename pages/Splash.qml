@@ -1,14 +1,17 @@
 import QtQuick 6.0
 import QtQuick.Controls 6.0
 import QtQuick.Layouts 6.0
+import "../components"
 
 Rectangle {
     id: splash
     width: parent.width
     height: parent.height
-    color: "#29292B" // Background color for Page 1
+    color: theme.bgElevated
     radius: 20
     opacity: 0.95 // Slight transparency for the content area
+
+    AppTheme { id: theme }
 
     ColumnLayout {
         anchors.fill: parent
@@ -20,7 +23,7 @@ Rectangle {
             text: "Splash"
             font.pixelSize: 20
             font.weight: Font.Bold
-            color: "white"
+            color: theme.textPrimary
             horizontalAlignment: Text.AlignHCenter
             Layout.alignment: Qt.AlignHCenter
         }
@@ -29,15 +32,15 @@ Rectangle {
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            color: "#1E1E20"
+            color: theme.bgContainer
             radius: 10
-            border.color: "#3E4E6F"
+            border.color: theme.borderSubtle
             border.width: 2
 
             Text {
                 text: "Settings"
                 font.pixelSize: 16
-                color: "#BDC3C7"
+                color: theme.textSecondary
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
                 anchors.centerIn: parent

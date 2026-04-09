@@ -8,6 +8,8 @@ Item {
     visible: false
     z: 9999
 
+    AppTheme { id: theme }
+
     // API
     signal cancelRequested()
     property alias message: titleLabel.text
@@ -41,8 +43,8 @@ Item {
         width: 920
         height: 640
         radius: 10
-        color: "#1E1E20"
-        border.color: "#3E4E6F"
+        color: theme.bgContainer
+        border.color: theme.borderSubtle
         border.width: 2
         anchors.centerIn: parent
         focus: true
@@ -61,7 +63,7 @@ Item {
                 Text {
                     id: titleLabel
                     text: "Scanning…"
-                    color: "#FFFFFF"
+                    color: theme.textPrimary
                     font.pixelSize: 20
                     Layout.alignment: Qt.AlignVCenter
                 }
@@ -71,7 +73,7 @@ Item {
             Text {
                 id: stageLine
                 text: stageText.length ? stageText : "Preparing…"
-                color: "#C9D1D9"
+                color: theme.plotText
                 font.pixelSize: 14
                 wrapMode: Text.NoWrap
                 elide: Text.ElideRight
@@ -96,7 +98,7 @@ Item {
                     model: 3
                     delegate: Rectangle {
                         width: 6; height: 6; radius: 3
-                        color: "#4A90E2"
+                        color: theme.accentBlue
                         opacity: 0.3
 
                         SequentialAnimation on opacity {
@@ -115,7 +117,7 @@ Item {
             Frame {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                background: Rectangle { color: "#141417"; radius: 6; border.color: "#2B2B35" }
+                background: Rectangle { color: theme.bgPlot; radius: 6; border.color: theme.borderSoft }
                 ScrollView {
                     anchors.fill: parent
                     TextArea {
@@ -123,7 +125,7 @@ Item {
                         readOnly: true
                         wrapMode: TextEdit.NoWrap
                         text: ""
-                        color: "#C9D1D9"
+                        color: theme.plotText
                         font.family: "Consolas"
                         font.pixelSize: 12
                         background: null
@@ -134,7 +136,7 @@ Item {
             // Close hint
             Text {
                 text: "Click outside to close"
-                color: "#555560"
+                color: theme.textDisabled
                 font.pixelSize: 11
                 horizontalAlignment: Text.AlignHCenter
                 Layout.alignment: Qt.AlignHCenter

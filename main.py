@@ -95,6 +95,7 @@ def _load_app_config() -> dict:
         "bfiClampHigh": 10.0,
         "bviClampLow": 0.0,
         "bviClampHigh": 10.0,
+        "darkMode": True,
     }
     config_path = resource_path("config", "app_config.json")
     if not config_path.exists():

@@ -7,10 +7,12 @@ Item {
     width: 40
     height: 40
 
+    AppTheme { id: theme }
+
     // IconWindowButton properties
     property string buttonIcon: "\ue900"         // Icon Unicode
-    property color iconColor: "#BDC3C7"         // Default icon color
-    property color hoverBackground: "#3C3C3C"   // Background color on hover
+    property color iconColor: theme.textSecondary         // Default icon color
+    property color hoverBackground: theme.bgHover   // Background color on hover
     property color hoverIconColor: "white"      // Icon color on hover
     property color backgroundColor: "transparent" // Default background color
     property color activeBackground: "#374774"      // Background color when clicked
