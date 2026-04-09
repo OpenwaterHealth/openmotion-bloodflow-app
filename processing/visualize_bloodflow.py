@@ -122,32 +122,53 @@ class VisualizeBloodflow:
 
         self._sides = sides
 
-        # raise an error if the number of points acquired in either histogram is less than the dark_interval
-        if histos.shape[1] < self.dark_interval:
-            raise ValueError(
-                "The number of points acquired in either histogram is less than the dark_interval"
-            )
-
         # baseline adjust & noise floor
         histos = histos.astype(float, copy=False)
         histos[:, :, 0] -= 6
         histos[histos < self.noisy_bin_min] = 0
 
-        # crop data so that final frame is dark
-        ntimepts = int(
-            self.dark_interval * np.floor(histos.shape[1] / self.dark_interval) + 1
-        )
-        histos = histos[:, :ntimepts, :]
+        short_scan = histos.shape[1] < self.dark_interval
+        dark_corrected = True
 
-        # get dark histograms (every dark_interval frames)
-        inds_dark = np.arange(0, ntimepts, self.dark_interval)
+        if short_scan:
+            ntimepts = histos.shape[1]
+            if ntimepts < 3:
+                raise ValueError(
+                    f"Scan too short ({ntimepts} frames): need at least 3 frames "
+                    "(dark, illuminated…, dark)."
+                )
+            frame_totals = histos.sum(axis=(0, 2))  # (ntimepts,) – summed over cams & bins
+            illum_median = float(np.median(frame_totals[1:-1]))
+            if illum_median > 0 and frame_totals[-1] > 0.3 * illum_median:
+                import warnings
+                warnings.warn(
+                    f"Short scan ({ntimepts} frames): final frame does not appear to be a "
+                    f"dark frame (last-frame counts {frame_totals[-1]:.0f} vs illuminated "
+                    f"median {illum_median:.0f}). Showing uncorrected data.",
+                    stacklevel=2,
+                )
+                print(
+                    f"WARNING: Short scan ({ntimepts} frames): final frame does not appear "
+                    f"to be a dark frame ({frame_totals[-1]:.0f} vs median {illum_median:.0f}). "
+                    "Showing uncorrected data."
+                )
+                dark_corrected = False
+            inds_dark = np.array([0, ntimepts - 1])
+        else:
+            # crop data so that final frame is dark
+            ntimepts = int(
+                self.dark_interval * np.floor(histos.shape[1] / self.dark_interval) + 1
+            )
+            histos = histos[:, :ntimepts, :]
+            inds_dark = np.arange(0, ntimepts, self.dark_interval)
+
         ndark = len(inds_dark)
         histos_dark = np.zeros((len(camera_inds), ndark, 1024), dtype=float)
         for i in range(ndark):
             histos_dark[:, i, :] = histos[:, int(inds_dark[i]), :]
 
         # replace the 0th dark histogram with the first "good" dark histogram frame
-        first_good_dark_frame_index = 9
+        first_good_dark_frame_index = min(9, ntimepts - 2)
         histos_dark[:, 0, :] = histos[:, first_good_dark_frame_index, :]
 
         # dark stats
@@ -175,6 +196,10 @@ class VisualizeBloodflow:
         u1_dark[:, -1] = temp1[:, -1]
         var_dark[:, -1] = tempv[:, -1]
 
+        if not dark_corrected:
+            u1_dark[:] = 0
+            var_dark[:] = 0
+
         # laser stats
         u1 = self._moments(bins, histos, 1)
         u2 = self._moments(bins, histos, 2)
@@ -201,8 +226,9 @@ class VisualizeBloodflow:
             )
 
         # remove first and last (dark) frames
-        mean = mean[:, 1:-1]
-        contrast = contrast[:, 1:-1]
+        if dark_corrected:
+            mean = mean[:, 1:-1]
+            contrast = contrast[:, 1:-1]
 
         # compute BFI/BVI
         BFI = np.zeros(contrast.shape, dtype=float)
@@ -494,24 +520,40 @@ class VisualizeBloodflow:
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         FRAME_ID_MAX = 256
 
-        x = np.array(pd.read_csv(csv_path))
-        ind1 = np.where(x[:, 1] == 1)[0][0]  # 1st line in csv with good data
-        x = x[ind1:, :]
-        camera = x[:, 0]
-        timept = x[:, 1]
-        temperature = x[:, 1026]
+        df = pd.read_csv(csv_path)
+
+        # New format: cam_id, frame_id, timestamp_s, 0..1023, temperature, sum, ...
+        # Old format: camera, frame_id, 0..1023, temperature, ...
+        if "timestamp_s" in df.columns:
+            camera      = df["cam_id"].values.astype(float)
+            timept_raw  = df["frame_id"].values.astype(float)
+            temperature = df["temperature"].values.astype(float)
+            histo_cols  = [str(i) for i in range(1024)]
+            histos      = df[histo_cols].values.astype(float)
+        else:
+            x           = df.values
+            camera      = x[:, 0]
+            timept_raw  = x[:, 1]
+            temperature = x[:, 1026]
+            histos      = x[:, 2:1026]
+
+        # Find first frame_id == 1
+        ind1 = np.where(timept_raw == 1)[0][0]
+        camera      = camera[ind1:]
+        timept_raw  = timept_raw[ind1:]
+        temperature = temperature[ind1:]
+        histos      = histos[ind1:]
 
         camera_inds = np.unique(camera)
-        ncameras = len(camera_inds)
-        rollovers = np.insert(np.cumsum((np.diff(timept) < 0)), 0, 0)
-
-        timept = rollovers * FRAME_ID_MAX + timept
-        ntimepts = int(np.amax(timept))
+        ncameras    = len(camera_inds)
+        rollovers   = np.insert(np.cumsum((np.diff(timept_raw) < 0)), 0, 0)
+        timept      = rollovers * FRAME_ID_MAX + timept_raw
+        ntimepts    = int(np.amax(timept))
 
         data = np.zeros((ncameras, ntimepts, 1024), dtype=float)
         for i in range(len(camera)):
             idx = np.where(camera_inds == camera[i])[0][0]
-            data[idx, int(timept[i]) - 1, :] = x[i, 2:1026]
+            data[idx, int(timept[i]) - 1, :] = histos[i]
 
         return data, camera_inds, timept, temperature
 

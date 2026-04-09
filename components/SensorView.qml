@@ -9,6 +9,7 @@ Rectangle {
     property int circleSize: 20
     property var sensorActive: [false, false, false, false, false, false, false, false]
     property bool fanOn: false
+    property bool showFanControl: true
     property string sensorSide: "left"  // "left" or "right"
     property var connector
 
@@ -118,6 +119,7 @@ Rectangle {
     // Fan Control CheckBox - positioned in top right corner
     CheckBox {
         id: fanButton
+        visible: root.showFanControl
         anchors.top: parent.top
         anchors.right: parent.right
         anchors.topMargin: 12
