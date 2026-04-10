@@ -198,13 +198,14 @@ Item {
     }
 
     component StyledCombo: ComboBox {
+        id: styledComboCtrl
         Layout.preferredWidth: 180
         Layout.preferredHeight: 32
         font.pixelSize: 13
         contentItem: Text {
             leftPadding: 10
-            text:  parent.displayText
-            font:  parent.font
+            text:  styledComboCtrl.displayText
+            font:  styledComboCtrl.font
             color: root.colTextPri
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight
@@ -212,25 +213,25 @@ Item {
         background: Rectangle {
             color: root.colBgInput
             radius: 4
-            border.color: parent.activeFocus ? root.colAccent : root.colBorderSoft
+            border.color: styledComboCtrl.activeFocus ? root.colAccent : root.colBorderSoft
             border.width: 1
         }
         indicator: Text {
-            x:    parent.width - width - 10
-            y:    (parent.height - height) / 2
+            x:    styledComboCtrl.width - width - 10
+            y:    (styledComboCtrl.height - height) / 2
             text: "\u25BE"
             font.pixelSize: 14
             color: root.colTextSec
         }
         popup: Popup {
-            y: parent.height
-            width: parent.width
+            y: styledComboCtrl.height
+            width: styledComboCtrl.width
             implicitHeight: contentItem.implicitHeight + 2
             padding: 1
             contentItem: ListView {
                 clip: true
                 implicitHeight: contentHeight
-                model: parent.parent.delegateModel
+                model: styledComboCtrl.delegateModel
                 ScrollIndicator.vertical: ScrollIndicator {}
             }
             background: Rectangle {
@@ -241,7 +242,7 @@ Item {
             }
         }
         delegate: ItemDelegate {
-            width: parent ? parent.width : 0
+            width: styledComboCtrl.width
             height: 30
             contentItem: Text {
                 text: modelData !== undefined ? modelData : (model.name !== undefined ? model.name : "")
@@ -253,7 +254,7 @@ Item {
             background: Rectangle {
                 color: highlighted ? root.colAccent : "transparent"
             }
-            highlighted: parent && parent.parent ? parent.parent.currentIndex === index : false
+            highlighted: styledComboCtrl.currentIndex === index
         }
     }
 
