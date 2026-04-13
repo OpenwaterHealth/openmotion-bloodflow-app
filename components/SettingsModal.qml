@@ -463,7 +463,7 @@ Item {
                     FieldRow {
                         label: "Display mode"
                         Text {
-                            text: "Mean / σ"
+                            text: "Mean / C"
                             color: !root.showBfiBvi ? root.colAccent : root.colTextSec
                             font.pixelSize: 13
                             font.weight: !root.showBfiBvi ? Font.DemiBold : Font.Normal
