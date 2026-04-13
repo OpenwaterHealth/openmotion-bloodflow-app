@@ -341,6 +341,7 @@ Item {
 
                         Button {
                             text: "Visualize Contrast/Mean"
+                            visible: MOTIONInterface.appConfig.reducedMode !== true
                             Layout.fillWidth: true; Layout.preferredHeight: 36
                             enabled: !!(selected.correctedPath)
                             hoverEnabled: enabled
