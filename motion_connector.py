@@ -1318,6 +1318,7 @@ class MOTIONConnector(QObject):
             disable_laser=disable_laser,
             write_raw_csv=self._write_raw_csv,
             raw_csv_duration_sec=self._raw_csv_duration_sec,
+            reduced_mode=self._app_config.get("reducedMode", False),
         )
 
         def _on_trigger_state(state: str):
@@ -2275,14 +2276,17 @@ class MOTIONConnector(QObject):
             import matplotlib.pyplot as plt
             plt.close("all")
             mod = payload["mod"]
-            kwargs = dict(
-                cells=payload["cells"],
-                row_map=payload["row_map"],
-                col_map=payload["col_map"],
-                n_rows=payload["n_rows"],
-                n_cols=payload["n_cols"],
-            )
-            mod._make_figure(payload["df"], mode=payload["mode"], **kwargs)
+            if payload.get("reduced", False):
+                mod._make_reduced_figure(payload["df"], payload["active_sides"])
+            else:
+                kwargs = dict(
+                    cells=payload["cells"],
+                    row_map=payload["row_map"],
+                    col_map=payload["col_map"],
+                    n_rows=payload["n_rows"],
+                    n_cols=payload["n_cols"],
+                )
+                mod._make_figure(payload["df"], mode=payload["mode"], **kwargs)
             plt.show(block=False)
         except Exception as e:
             logger.exception("Corrected scan visualization display failed")
@@ -2545,18 +2549,35 @@ class _CorrectVizWorker(QObject):
             active_sides = mod._requested_sides(df, "both")
             if not active_sides:
                 raise ValueError("No camera data found in corrected CSV.")
-            cells = mod._active_cells(df, active_sides)
-            row_map, col_map, n_rows, n_cols = mod._collapse(cells)
-            self.resultsReady.emit({
-                "mod": mod,
-                "df": df,
-                "cells": cells,
-                "row_map": row_map,
-                "col_map": col_map,
-                "n_rows": n_rows,
-                "n_cols": n_cols,
-                "mode": self.mode,
-            })
+
+            reduced = mod._is_reduced_mode(df)
+            if reduced:
+                if self.mode == "signal":
+                    raise ValueError(
+                        "Contrast/Mean visualization is not available for "
+                        "reduced mode scans."
+                    )
+                self.resultsReady.emit({
+                    "mod": mod,
+                    "df": df,
+                    "reduced": True,
+                    "active_sides": active_sides,
+                    "mode": self.mode,
+                })
+            else:
+                cells = mod._active_cells(df, active_sides)
+                row_map, col_map, n_rows, n_cols = mod._collapse(cells)
+                self.resultsReady.emit({
+                    "mod": mod,
+                    "df": df,
+                    "reduced": False,
+                    "cells": cells,
+                    "row_map": row_map,
+                    "col_map": col_map,
+                    "n_rows": n_rows,
+                    "n_cols": n_cols,
+                    "mode": self.mode,
+                })
         except Exception as e:
             self.error.emit(str(e))
         finally:

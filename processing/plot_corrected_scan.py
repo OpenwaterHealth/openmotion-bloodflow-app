@@ -2,8 +2,11 @@
 """
 Plot BFI and BVI from a _corrected.csv file produced by the OpenMOTION SDK.
 
-Both sensor sides are shown in one figure.  The subplot grid mirrors the
-physical camera layout described in docs/CameraArrangement.md:
+Supports two CSV formats:
+
+**Normal mode** — per-camera columns (bfi_l1..bfi_l8, bfi_r1..bfi_r8, etc.).
+The subplot grid mirrors the physical camera layout described in
+docs/CameraArrangement.md:
 
     Col 0  Col 1  |  Col 2  Col 3
     ─────────────────────────────
@@ -15,11 +18,15 @@ physical camera layout described in docs/CameraArrangement.md:
 Inactive cameras are omitted entirely.  Empty rows and columns that result
 from cameras being inactive are collapsed so no whitespace is wasted.
 
+**Reduced mode** — averaged per-side columns (bfi_left, bfi_right,
+bvi_left, bvi_right).  Each side is shown in a single subplot.
+
 Each subplot shows:
     Left  y-axis  — BFI (solid black, lw=2)
     Right y-axis  — BVI (solid red,   lw=1)
 
-Optional secondary figure (--show-signal) adds mean, std, and contrast.
+Optional secondary figure (--show-signal) adds mean, std, and contrast
+(normal mode only — reduced mode CSVs do not contain these columns).
 
 Usage
 -----
@@ -56,6 +63,19 @@ CAMERA_GRID_POS = {
 SENSOR_COL_OFFSET = {"left": 0, "right": 2}
 
 SIDES = ("left", "right")
+
+# Reduced-mode column names (per-side averaged)
+REDUCED_BFI = {"left": "bfi_left", "right": "bfi_right"}
+REDUCED_BVI = {"left": "bvi_left", "right": "bvi_right"}
+
+
+# ---------------------------------------------------------------------------
+# Format detection
+# ---------------------------------------------------------------------------
+
+def _is_reduced_mode(df: pd.DataFrame) -> bool:
+    """Return True if the CSV uses reduced-mode (per-side averaged) columns."""
+    return "bfi_left" in df.columns or "bfi_right" in df.columns
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +124,11 @@ def _collapse(cells: list[tuple]) -> tuple[dict, dict, int, int]:
 
 def _requested_sides(df: pd.DataFrame, requested: str) -> list[str]:
     candidates = SIDES if requested == "both" else (requested,)
+    if _is_reduced_mode(df):
+        return [
+            s for s in candidates
+            if REDUCED_BFI[s] in df.columns and df[REDUCED_BFI[s]].notna().any()
+        ]
     return [
         s for s in candidates
         if any(
@@ -133,6 +158,60 @@ def parse_args() -> argparse.Namespace:
         help="Save figures as PNG files next to the CSV instead of displaying",
     )
     return p.parse_args()
+
+
+# ---------------------------------------------------------------------------
+# Reduced-mode figure builder
+# ---------------------------------------------------------------------------
+
+def _make_reduced_figure(
+    df: pd.DataFrame,
+    active_sides: list[str],
+) -> plt.Figure:
+    """
+    Build a figure for reduced-mode CSVs.  One subplot per active side,
+    showing averaged BFI (left y-axis) and BVI (right y-axis).
+    """
+    ts = df["timestamp_s"].to_numpy()
+    n_cols = len(active_sides)
+
+    fig, axes = plt.subplots(
+        nrows=1, ncols=n_cols,
+        figsize=(7 * n_cols, 5),
+        squeeze=False,
+    )
+
+    for i, side in enumerate(active_sides):
+        ax = axes[0, i]
+        label = side.capitalize()
+        ax.set_title(f"{label} — Averaged BFI / BVI", fontsize=14)
+
+        bfi_col = REDUCED_BFI[side]
+        bvi_col = REDUCED_BVI[side]
+
+        bfi_vals = df[bfi_col].to_numpy(dtype=float) if bfi_col in df.columns else None
+        bvi_vals = df[bvi_col].to_numpy(dtype=float) if bvi_col in df.columns else None
+
+        if bfi_vals is not None:
+            ln1, = ax.plot(ts, bfi_vals, "k", lw=2, label="BFI")
+            ax.set_ylabel("BFI")
+        if bvi_vals is not None:
+            ax2 = ax.twinx()
+            ln2, = ax2.plot(ts, bvi_vals, "r", lw=1, label="BVI")
+            ax2.tick_params(axis="y", colors="red")
+
+        lines, labels = [], []
+        if bfi_vals is not None:
+            lines.append(ln1); labels.append("BFI")
+        if bvi_vals is not None:
+            lines.append(ln2); labels.append("BVI")
+        if lines:
+            ax.legend(lines, labels)
+
+        ax.set_xlabel("Time (s)")
+
+    fig.tight_layout()
+    return fig
 
 
 # ---------------------------------------------------------------------------
@@ -236,33 +315,52 @@ def main() -> None:
         print(f"ERROR: no data found for requested side(s): {args.sides}", file=sys.stderr)
         sys.exit(1)
 
-    for side in active_sides:
-        cams = [c for c in range(1, 9) if df[_bfi(side, c)].notna().any()
-                if _bfi(side, c) in df.columns]
-        print(f"  {side.capitalize()} side: cameras {cams}")
+    reduced = _is_reduced_mode(df)
 
-    cells = _active_cells(df, active_sides)
-    row_map, col_map, n_rows, n_cols = _collapse(cells)
-    print(f"  Grid: {n_rows} row(s) × {n_cols} col(s)")
+    if reduced:
+        print("  Reduced-mode CSV detected (per-side averaged data)")
+        for side in active_sides:
+            print(f"  {side.capitalize()} side: averaged")
 
-    kwargs = dict(
-        cells=cells, row_map=row_map, col_map=col_map,
-        n_rows=n_rows, n_cols=n_cols,
-    )
+        fig_bfi = _make_reduced_figure(df, active_sides)
 
-    fig_bfi = _make_figure(df, mode="bfi", **kwargs)
-
-    if args.save:
-        out = os.path.splitext(args.csv)[0] + "_bfi.png"
-        fig_bfi.savefig(out, dpi=150, bbox_inches="tight")
-        print(f"  Saved: {out}")
-
-    if args.show_signal:
-        fig_sig = _make_figure(df, mode="signal", **kwargs)
         if args.save:
-            out = os.path.splitext(args.csv)[0] + "_signal.png"
-            fig_sig.savefig(out, dpi=150, bbox_inches="tight")
+            out = os.path.splitext(args.csv)[0] + "_bfi.png"
+            fig_bfi.savefig(out, dpi=150, bbox_inches="tight")
             print(f"  Saved: {out}")
+
+        if args.show_signal:
+            print("  Note: --show-signal ignored for reduced-mode CSVs "
+                  "(no contrast/mean columns)", file=sys.stderr)
+
+    else:
+        for side in active_sides:
+            cams = [c for c in range(1, 9) if _bfi(side, c) in df.columns
+                    and df[_bfi(side, c)].notna().any()]
+            print(f"  {side.capitalize()} side: cameras {cams}")
+
+        cells = _active_cells(df, active_sides)
+        row_map, col_map, n_rows, n_cols = _collapse(cells)
+        print(f"  Grid: {n_rows} row(s) × {n_cols} col(s)")
+
+        kwargs = dict(
+            cells=cells, row_map=row_map, col_map=col_map,
+            n_rows=n_rows, n_cols=n_cols,
+        )
+
+        fig_bfi = _make_figure(df, mode="bfi", **kwargs)
+
+        if args.save:
+            out = os.path.splitext(args.csv)[0] + "_bfi.png"
+            fig_bfi.savefig(out, dpi=150, bbox_inches="tight")
+            print(f"  Saved: {out}")
+
+        if args.show_signal:
+            fig_sig = _make_figure(df, mode="signal", **kwargs)
+            if args.save:
+                out = os.path.splitext(args.csv)[0] + "_signal.png"
+                fig_sig.savefig(out, dpi=150, bbox_inches="tight")
+                print(f"  Saved: {out}")
 
     if not args.save:
         plt.show()
