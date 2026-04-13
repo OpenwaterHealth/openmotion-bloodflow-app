@@ -54,10 +54,10 @@ Item {
         var cfg = MOTIONInterface.appConfig
         defaultLeftMaskIndex  = maskToIndex(cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99)
         defaultRightMaskIndex = maskToIndex(cfg.rightMask !== undefined ? cfg.rightMask : 0x99)
-        showBfiBvi         = cfg.showBfiBvi         !== undefined ? cfg.showBfiBvi         : true
+        reducedMode        = cfg.reducedMode        !== undefined ? cfg.reducedMode        : false
+        showBfiBvi         = reducedMode ? true : (cfg.showBfiBvi !== undefined ? cfg.showBfiBvi : true)
         autoScale          = cfg.autoScale          !== undefined ? cfg.autoScale          : false
         autoScalePerPlot   = autoScale
-        reducedMode        = cfg.reducedMode        !== undefined ? cfg.reducedMode        : false
         plotWindowSec      = cfg.plotWindowSec      !== undefined ? cfg.plotWindowSec      : 15
         bfiColor           = cfg.bfiColor           !== undefined ? cfg.bfiColor           : "#E74C3C"
         bviColor           = cfg.bviColor           !== undefined ? cfg.bviColor           : "#3498DB"
@@ -462,6 +462,7 @@ Item {
                     title: "Realtime Plot Display"
 
                     FieldRow {
+                        visible: !root.reducedMode
                         label: "Display mode"
                         Text {
                             text: "Mean / C"
