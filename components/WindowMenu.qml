@@ -166,8 +166,8 @@ Rectangle {
                                     ? windowMenu.formatSec(windowMenu.elapsedSec) : ""
                             }
                             return windowMenu.scanning
-                                ? "Free Run  " + windowMenu.formatSec(windowMenu.elapsedSec)
-                                : "Free Run"
+                                ? "Continuous  " + windowMenu.formatSec(windowMenu.elapsedSec)
+                                : "Continuous"
                         }
                         return windowMenu.scanning
                             ? windowMenu.formatSec(windowMenu.elapsedSec) + " / " + windowMenu.formatSec(windowMenu.durationSec)

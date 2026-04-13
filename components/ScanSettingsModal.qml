@@ -296,7 +296,7 @@ Item {
                 }
 
                 Text {
-                    text: "Free Run"
+                    text: "Continuous"
                     color: root.freeRun ? theme.accentBlue : theme.textSecondary
                     font.pixelSize: 14
                     font.weight: root.freeRun ? Font.Bold : Font.Normal
