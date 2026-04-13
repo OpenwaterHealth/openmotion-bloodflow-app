@@ -19,19 +19,10 @@ Rectangle {
     property bool camerasReady: false  // true when camera flash is complete
     property bool reducedMode: false       // FDA mode hides scan-settings button
 
-    // Status color logic
+    // Connection state — drives start button icon and enablement
     property bool allConnected: MOTIONInterface.consoleConnected &&
         (MOTIONInterface.leftSensorConnected || MOTIONInterface.rightSensorConnected) &&
         !MOTIONInterface.safetyFailure
-    property color statusColor: {
-        if (MOTIONInterface.safetyFailure) return "#F1C40F"  // yellow - safety fault
-        if (!MOTIONInterface.consoleConnected ||
-            (!MOTIONInterface.leftSensorConnected && !MOTIONInterface.rightSensorConnected))
-            return theme.statusGrey  // grey - disconnected
-        if (scanning) return theme.statusBlue  // blue - scanning
-        return theme.statusGreen  // green - all good
-    }
-
     signal startStopClicked()
     signal scanSettingsClicked()
     signal notesClicked()
@@ -71,11 +62,21 @@ Rectangle {
                          :                  "#2ECC71"
                     Behavior on color { ColorAnimation { duration: 150 } }
 
-                    // Play triangle (start / waiting)
+                    // Disconnect icon (shown when not connected)
+                    Text {
+                        anchors.centerIn: parent
+                        text: "\ue9ce"
+                        font.family: iconFont.name
+                        font.pixelSize: 20
+                        color: "#FFFFFF"
+                        visible: !panel.allConnected && !panel.scanning
+                    }
+
+                    // Play triangle (shown when connected and not scanning)
                     Canvas {
                         anchors.centerIn: parent
                         width: 16; height: 16
-                        visible: !panel.scanning
+                        visible: panel.allConnected && !panel.scanning
                         onPaint: {
                             var ctx = getContext("2d")
                             ctx.clearRect(0, 0, width, height)
@@ -96,7 +97,7 @@ Rectangle {
                 }
 
                 Text {
-                    text: panel.scanning ? "Stop" : "Start"
+                    text: !panel.allConnected ? "Disconnected" : panel.scanning ? "Stop" : "Start"
                     font.pixelSize: 10
                     color: (panel.camerasReady && panel.allConnected) ? theme.textSecondary : theme.textDisabled
                     horizontalAlignment: Text.AlignHCenter
@@ -157,37 +158,6 @@ Rectangle {
 
         // ── spacer pushes bottom controls down ──
         Item { Layout.fillHeight: true }
-
-        // Connection status indicator
-        Item {
-            Layout.preferredWidth: 68
-            Layout.preferredHeight: 68
-            Layout.alignment: Qt.AlignHCenter
-
-            ColumnLayout {
-                anchors.centerIn: parent
-                spacing: 4
-
-                Rectangle {
-                    width: 20; height: 20; radius: 10
-                    color: panel.statusColor
-                    border.color: Qt.darker(panel.statusColor, 1.3)
-                    border.width: 1
-                    Layout.alignment: Qt.AlignHCenter
-
-                }
-
-                Text {
-                    text: "Connection"
-                    color: theme.textTertiary
-                    font.pixelSize: 10
-                    horizontalAlignment: Text.AlignHCenter
-                    Layout.alignment: Qt.AlignHCenter
-                }
-            }
-        }
-
-        Rectangle { Layout.preferredWidth: 52; Layout.preferredHeight: 1; Layout.topMargin: 4; Layout.bottomMargin: 4; Layout.alignment: Qt.AlignHCenter; color: theme.borderSubtle }
 
         // History
         PanelButton {
