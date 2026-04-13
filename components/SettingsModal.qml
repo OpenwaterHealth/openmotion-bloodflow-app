@@ -396,6 +396,7 @@ Item {
 
                 // ── Default Camera Configuration ─────────────────────────────
                 SectionCard {
+                    visible: !root.reducedMode
                     title: "Default Camera Configuration"
 
                     FieldRow {
