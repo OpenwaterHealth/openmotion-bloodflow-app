@@ -12,6 +12,7 @@ Test sequence:
 import time
 
 import pyautogui
+import pygetwindow as gw
 import pytest
 
 from conftest import (
@@ -26,7 +27,35 @@ from conftest import (
 )
 
 SIDEBAR_HISTORY = (0.020, 0.830)
-VIZ_WAIT = 120  # seconds to leave each plot open
+VIZ_WAIT = 60  # seconds to leave each plot open
+
+
+def _close_plot_window() -> bool:
+    """Close the plot window opened by the app.
+
+    Iterates all top-level windows and closes the first one whose title
+    does not match the main app keywords, avoiding closing the main app.
+    """
+    from conftest import APP_KEYWORDS
+    for w in gw.getAllWindows():
+        if not w.title.strip():
+            continue
+        if any(k in w.title.lower() for k in APP_KEYWORDS):
+            continue
+        try:
+            if w.isMinimized:
+                w.restore()
+                time.sleep(1)
+            w.activate()
+            time.sleep(0.5)
+            log.info(f"  Closing plot window: '{w.title}'")
+            pyautogui.hotkey("alt", "f4")
+            time.sleep(SLEEP)
+            return True
+        except Exception as e:
+            log.warning(f"  Could not close '{w.title}': {e}")
+    log.warning("  No plot window found to close")
+    return False
 
 
 def _selected_scan_text() -> str:
@@ -60,9 +89,7 @@ class TestHistory:
         wait_with_log(VIZ_WAIT, "BFI/BVI plot open")
 
     def test_04_close_bfi_plot(self, app):
-        ensure_visible()
-        pyautogui.hotkey("alt", "f4")
-        time.sleep(SLEEP)
+        _close_plot_window()
 
     def test_05_visualize_contrast_mean(self, app):
         ensure_visible()
@@ -70,9 +97,7 @@ class TestHistory:
         wait_with_log(VIZ_WAIT, "Contrast/Mean plot open")
 
     def test_06_close_contrast_plot(self, app):
-        ensure_visible()
-        pyautogui.hotkey("alt", "f4")
-        time.sleep(SLEEP)
+        _close_plot_window()
 
     def test_07_close_history(self, app):
         require_focus()
