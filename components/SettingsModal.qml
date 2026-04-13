@@ -530,6 +530,7 @@ Item {
                     }
 
                     FieldRow {
+                        visible: MOTIONInterface.appConfig.developerMode ? true : false
                         label: "Trace colors"
                         Rectangle {
                             width: 26; height: 26; radius: 4
