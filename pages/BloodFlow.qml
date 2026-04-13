@@ -196,6 +196,11 @@ Rectangle {
         bfiClampHigh: MOTIONInterface.appConfig.bfiClampHigh !== undefined ? MOTIONInterface.appConfig.bfiClampHigh : 10.0
         bviClampLow:  MOTIONInterface.appConfig.bviClampLow  !== undefined ? MOTIONInterface.appConfig.bviClampLow  : 0.0
         bviClampHigh: MOTIONInterface.appConfig.bviClampHigh !== undefined ? MOTIONInterface.appConfig.bviClampHigh : 10.0
+        autoScale: settingsModal.autoScale
+        bfiMin: settingsModal.bfiMin
+        bfiMax: settingsModal.bfiMax
+        bviMin: settingsModal.bviMin
+        bviMax: settingsModal.bviMax
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         anchors.left: buttonPanel.right

@@ -20,6 +20,15 @@ Rectangle {
     property bool  bviLowPassEnabled: false
     property real  bviLowPassCutoffHz: 40.0
 
+    // Plot bounds — manual or auto-scaled
+    property bool autoScale: false
+    property real bfiMin: 0.0
+    property real bfiMax: 10.0
+    property real bviMin: 0.0
+    property real bviMax: 10.0
+    readonly property var _fixedBfiBounds: ({ minVal: bfiMin, maxVal: bfiMax, range: (bfiMax - bfiMin) || 1.0 })
+    readonly property var _fixedBviBounds: ({ minVal: bviMin, maxVal: bviMax, range: (bviMax - bviMin) || 1.0 })
+
     // Display clamps — values outside [low, high] are shown as "--"
     property real bfiClampLow:  0.0
     property real bfiClampHigh: 10.0
@@ -44,11 +53,11 @@ Rectangle {
     property var rightData: ({ bfi: [], bvi: [], pendingBfi: ({}), pendingBvi: ({}),
                                 latestBfi: NaN, latestBvi: NaN, bviLpState: NaN })
 
-    // Auto-scaled bounds (recomputed once per second)
-    property var leftBfiBounds:  ({ minVal: 0.0, maxVal: 10.0, range: 10.0 })
-    property var leftBviBounds:  ({ minVal: 0.0, maxVal: 10.0, range: 10.0 })
-    property var rightBfiBounds: ({ minVal: 0.0, maxVal: 10.0, range: 10.0 })
-    property var rightBviBounds: ({ minVal: 0.0, maxVal: 10.0, range: 10.0 })
+    // Plot bounds — initialized from fixed bounds, auto-scaled when enabled
+    property var leftBfiBounds:  _fixedBfiBounds
+    property var leftBviBounds:  _fixedBviBounds
+    property var rightBfiBounds: _fixedBfiBounds
+    property var rightBviBounds: _fixedBviBounds
 
     function reset() {
         leftData  = { bfi: [], bvi: [], pendingBfi: ({}), pendingBvi: ({}),
@@ -147,11 +156,18 @@ Rectangle {
             tickCount++
             if (tickCount >= 10) {
                 tickCount = 0
-                var b
-                b = root._computeBounds(root.leftData.bfi);  if (b) root.leftBfiBounds  = b
-                b = root._computeBounds(root.leftData.bvi);  if (b) root.leftBviBounds  = b
-                b = root._computeBounds(root.rightData.bfi); if (b) root.rightBfiBounds = b
-                b = root._computeBounds(root.rightData.bvi); if (b) root.rightBviBounds = b
+                if (root.autoScale) {
+                    var b
+                    b = root._computeBounds(root.leftData.bfi);  if (b) root.leftBfiBounds  = b
+                    b = root._computeBounds(root.leftData.bvi);  if (b) root.leftBviBounds  = b
+                    b = root._computeBounds(root.rightData.bfi); if (b) root.rightBfiBounds = b
+                    b = root._computeBounds(root.rightData.bvi); if (b) root.rightBviBounds = b
+                } else {
+                    root.leftBfiBounds  = root._fixedBfiBounds
+                    root.leftBviBounds  = root._fixedBviBounds
+                    root.rightBfiBounds = root._fixedBfiBounds
+                    root.rightBviBounds = root._fixedBviBounds
+                }
             }
             // Force a property change so the readout texts refresh
             leftData  = leftData
