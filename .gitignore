@@ -90,8 +90,13 @@ OpenWaterApp*.zip
 
 .claude/
 tests/scan_data/*
-tests/scan_data/*
 tests/run-logs/*
-tests/scan_data/*
 tests/test_logs/*
 tests/app_logs/*
+
+# New UI test scripts — HIL test artifacts
+tests/New_UI_TestScripts/test_logs/
+tests/New_UI_TestScripts/run-logs/
+tests/New_UI_TestScripts/scan_data/
+tests/New_UI_TestScripts/app-logs/
+tests/New_UI_TestScripts/debug_uia.py

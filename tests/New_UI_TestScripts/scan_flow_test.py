@@ -69,18 +69,25 @@ class UI:
     SIDEBAR_START = (0.019, 0.115)
 
 SCAN_DURATION_MIN = 2                           # minutes configured in Scan Settings
-WAIT_AFTER_SCAN   = SCAN_DURATION_MIN * 60 + 180 # scan + 3-min buffer = 780 s
+WAIT_AFTER_SCAN   = SCAN_DURATION_MIN * 60 + 180 # scan + 3-min buffer = 300 s (when scan=2 min)
 VIZ_WAIT          = 120                          # seconds to leave each plot open
 
 LOG_DIR     = Path("test_logs")
 REPORT_FILE = LOG_DIR / "scan_flow_report.json"
 LOG_DIR.mkdir(exist_ok=True)
 
+try:
+    # Prevent UnicodeEncodeError on Windows cp1252 consoles.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        logging.FileHandler(LOG_DIR / "scan_flow_test.log"),
+        logging.FileHandler(LOG_DIR / "scan_flow_test.log", encoding="utf-8"),
         logging.StreamHandler(sys.stdout),
     ],
 )
