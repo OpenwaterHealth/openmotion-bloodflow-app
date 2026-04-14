@@ -945,14 +945,14 @@ class MOTIONConnector(QObject):
     def get_scan_details(self, scan_id: str):
         """
         scan_id is either:
-          New format: 'YYYYMMDD_HHMMSS_sessionId'
-          Old format: 'sessionId_YYYYMMDD_HHMMSS'
+          New format: 'YYYYMMDD_HHMMSS_userLabel'
+          Old format: 'userLabel_YYYYMMDD_HHMMSS'
         """
         base = Path(self._directory)
 
         # Detect format by checking if it starts with a date
         if re.match(r'^\d{8}_\d{6}_', scan_id):
-            # New format: YYYYMMDD_HHMMSS_sessionId
+            # New format: YYYYMMDD_HHMMSS_userLabel
             parts = scan_id.split("_", 2)
             ts = parts[0] + "_" + parts[1]
             subject = parts[2] if len(parts) > 2 else ""
@@ -961,7 +961,7 @@ class MOTIONConnector(QObject):
             right     = next(base.glob(f"{scan_id}_right_mask*.csv"), None)
             corrected = next(base.glob(f"{scan_id}_corrected.csv"), None)
         else:
-            # Old format: sessionId_YYYYMMDD_HHMMSS
+            # Old format: userLabel_YYYYMMDD_HHMMSS
             parts = scan_id.split("_", 1)
             subject = parts[0]
             ts = parts[1] if len(parts) > 1 else ""
@@ -1102,7 +1102,7 @@ class MOTIONConnector(QObject):
             except Exception as e:
                 logger.error(f"Failed to update scan notes on disk: {e}")
 
-    def generate_user_label(self):
+    def generate_user_label(self) -> str:
         suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
         return f"ow{suffix}"
 
@@ -1156,7 +1156,7 @@ class MOTIONConnector(QObject):
             return False
 
         self._capture_stop = threading.Event()
-        # New scan → clear notes buffer (formerly done by newSession)
+        # Each new scan starts with a fresh notes buffer
         self._scan_notes = ""
         self._scan_notes_path = ""
         self.scanNotesChanged.emit()
