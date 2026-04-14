@@ -129,6 +129,7 @@ Rectangle {
         // Scan Settings (camera + duration)
         PanelButton {
             visible: !panel.reducedMode
+            enabled: !panel.scanning
             iconText: "\ueabf"  // setting-3 icon
             label: "Scan\nSettings"
             onClicked: panel.scanSettingsClicked()
