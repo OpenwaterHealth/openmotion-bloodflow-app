@@ -168,10 +168,8 @@ Item {
                     id: userLabelField
                     Layout.fillWidth: true
                     Layout.preferredHeight: 30
-                    text: MOTIONInterface.userLabel
                     font.pixelSize: 14
                     color: theme.textPrimary
-                    selectByMouse: true
                     background: Rectangle {
                         color: theme.bgInput; radius: 4
                         border.color: userLabelField.activeFocus ? theme.accentBlue : theme.borderSubtle
