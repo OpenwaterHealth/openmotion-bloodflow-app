@@ -12,37 +12,32 @@
 
 ## Scope note
 
-The repo contains two near-identical copies of the app code:
+The repo's canonical code lives at the **root**: `components/`, `pages/`, `motion_connector.py`, `main.qml`. This is what runs in dev (`python main.py`) and what's tracked in git.
 
-- Root: `components/`, `pages/`, `motion_connector.py`, `main.qml`
-- Packaged: `src/openmotion_bloodflow/components/`, `src/openmotion_bloodflow/pages/`, `src/openmotion_bloodflow/motion_connector.py`, `src/openmotion_bloodflow/main.qml`
-
-**Every edit in this plan must be applied to both copies.** The root copy is what runs in dev (`python main.py`); the `src/` copy is used for briefcase packaging. Keep them identical. Grep both paths before committing each task.
+There is an unrelated `src/openmotion_bloodflow/` subtree on disk that is **entirely untracked** by git (briefcase/packaging scaffold). Do NOT edit it, do NOT `git add` it. All edits in this plan apply to the root copy only.
 
 ## File Map
 
 **Modified:**
-- `motion_connector.py` (both copies): rename state, consolidate properties, move notes-reset into scan-start, delete `newSession()`.
-- `components/ScanSettingsModal.qml` (both copies): add User Label field.
-- `pages/BloodFlow.qml` (both copies): remove `newSession()` call; rebind `ScanRunner.subjectId` to `userLabel`.
-- `components/WindowMenu.qml` (both copies): no functional change, but verify it reads `userLabel` (currently reads `windowMenu.sessionId` prop; we'll keep the prop name but bind from `MOTIONInterface.userLabel`).
-- `main.qml` (both copies): bind `headerMenu.sessionId` from `bloodFlowPage.sessionId` which now tracks `userLabel` (no change to main.qml itself — the prop on BloodFlow.qml is updated).
+- `motion_connector.py`: rename state, consolidate properties, move notes-reset into scan-start, delete `newSession()`.
+- `components/ScanSettingsModal.qml`: add User Label field.
+- `pages/BloodFlow.qml`: remove `newSession()` call; rebind `ScanRunner.subjectId` to `userLabel`.
+- `main.qml` / `components/WindowMenu.qml`: no functional change. Header binding continues to use `sessionId:` prop name on both `WindowMenu` and `BloodFlow`; only the source on `BloodFlow.qml` changes to read `MOTIONInterface.userLabel`.
 
 **Deleted:**
-- `components/SessionModal.qml` (both copies)
-- `components/UserSettingsModal.qml` (both copies)
+- `components/SessionModal.qml`
+- `components/UserSettingsModal.qml`
 
 ---
 
 ## Task 1: Connector — rename internal state and consolidate to `userLabel`
 
 **Files:**
-- Modify: `motion_connector.py` (root copy)
-- Modify: `src/openmotion_bloodflow/motion_connector.py`
+- Modify: `motion_connector.py`
 
 - [ ] **Step 1: Rename the instance attribute and the generator method**
 
-In both copies of `motion_connector.py`:
+In `motion_connector.py`:
 
 At line ~269 (the `__init__` block), change:
 ```python
@@ -179,14 +174,13 @@ Insert this just before the existing `self._capture_running = True` line.
 
 - [ ] **Step 6: Grep for any remaining references**
 
-Run these in the project root:
+Run in the project root:
 
 ```bash
-grep -nE "_subject_id|subjectId|sessionIdChanged|subjectIdChanged|generate_session_id|generate_subject_id|newSession|sessionId(?!\w)" motion_connector.py
-grep -nE "_subject_id|subjectId|sessionIdChanged|subjectIdChanged|generate_session_id|generate_subject_id|newSession|sessionId(?!\w)" src/openmotion_bloodflow/motion_connector.py
+grep -nE "_subject_id|\bsubjectId\b|sessionIdChanged|subjectIdChanged|generate_session_id|generate_subject_id|newSession" motion_connector.py
 ```
 
-Expected: zero hits in either file. (`subject_id` as a local-variable and function-parameter name in `startCapture` and `_start_runlog` stays — those are SDK-facing parameter names; only the connector's own member state is renamed. Grep with `\b_subject_id\b` will catch member refs; `subjectId` as a bare identifier catches QML-facing property refs. If any hit remains, re-read the task and fix.)
+Expected: zero hits. (`subject_id` as a local-variable and function-parameter name in `startCapture` and `_start_runlog` stays — that's the SDK's parameter name; only the connector's own member state is renamed. If any hit remains, re-read the task and fix.)
 
 - [ ] **Step 7: Smoke test — app launches, header shows label, scans work**
 
@@ -200,7 +194,7 @@ Expected: app launches without QML errors. Header shows `Session: owXXXXXX`. (We
 - [ ] **Step 8: Commit**
 
 ```bash
-git add motion_connector.py src/openmotion_bloodflow/motion_connector.py
+git add motion_connector.py
 git commit -m "refactor(connector): consolidate sessionId/subjectId into userLabel"
 ```
 
@@ -210,11 +204,10 @@ git commit -m "refactor(connector): consolidate sessionId/subjectId into userLab
 
 **Files:**
 - Modify: `components/ScanSettingsModal.qml`
-- Modify: `src/openmotion_bloodflow/components/ScanSettingsModal.qml`
 
 - [ ] **Step 1: Add a "Session" section at the top of the ColumnLayout**
 
-In both copies of `ScanSettingsModal.qml`, locate the `ColumnLayout` inside the dialog `Rectangle` (around line 129 in root copy). Immediately after the "Scan Settings" title Text (line ~135–141) and before the Camera Configuration section (the divider Rectangle at line ~144), insert:
+In `components/ScanSettingsModal.qml`, locate the `ColumnLayout` inside the dialog `Rectangle` (around line 129). Immediately after the "Scan Settings" title Text (line ~135–141) and before the Camera Configuration section (the divider Rectangle at line ~144), insert:
 
 ```qml
             // ── Session ──────────────────────────────────────────────────
@@ -284,7 +277,7 @@ Run `python main.py`. Click the Scan Settings button (left panel). Expected: the
 - [ ] **Step 4: Commit**
 
 ```bash
-git add components/ScanSettingsModal.qml src/openmotion_bloodflow/components/ScanSettingsModal.qml
+git add components/ScanSettingsModal.qml
 git commit -m "feat(scan-settings): add editable User Label field"
 ```
 
@@ -294,11 +287,10 @@ git commit -m "feat(scan-settings): add editable User Label field"
 
 **Files:**
 - Modify: `pages/BloodFlow.qml`
-- Modify: `src/openmotion_bloodflow/pages/BloodFlow.qml`
 
 - [ ] **Step 1: Change the `sessionId` property on BloodFlow.qml to read `userLabel`**
 
-In both copies of `pages/BloodFlow.qml`, at line ~31:
+In `pages/BloodFlow.qml`, at line ~31:
 
 Change:
 ```qml
@@ -348,14 +340,13 @@ Run `python main.py`. Open Scan Settings. Edit User Label to e.g. `owtest`. Clos
 
 ```bash
 grep -rnE "MOTIONInterface\.(sessionId|subjectId)|\.newSession\(" pages/ components/ main.qml
-grep -rnE "MOTIONInterface\.(sessionId|subjectId)|\.newSession\(" src/openmotion_bloodflow/pages/ src/openmotion_bloodflow/components/ src/openmotion_bloodflow/main.qml
 ```
 Expected: zero hits.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add pages/BloodFlow.qml src/openmotion_bloodflow/pages/BloodFlow.qml
+git add pages/BloodFlow.qml
 git commit -m "feat(bloodflow): bind header + ScanRunner to userLabel, drop newSession at scan-start"
 ```
 
@@ -366,8 +357,6 @@ git commit -m "feat(bloodflow): bind header + ScanRunner to userLabel, drop newS
 **Files:**
 - Delete: `components/SessionModal.qml`
 - Delete: `components/UserSettingsModal.qml`
-- Delete: `src/openmotion_bloodflow/components/SessionModal.qml`
-- Delete: `src/openmotion_bloodflow/components/UserSettingsModal.qml`
 
 - [ ] **Step 1: Verify no references anywhere in repo**
 
@@ -376,13 +365,10 @@ grep -rnE "SessionModal|UserSettingsModal" --include="*.qml" --include="*.py" --
 ```
 Expected: zero hits (design phase already verified this; re-check to catch anything added since).
 
-- [ ] **Step 2: Delete the four files**
+- [ ] **Step 2: Delete the two files**
 
 ```bash
-rm components/SessionModal.qml
-rm components/UserSettingsModal.qml
-rm src/openmotion_bloodflow/components/SessionModal.qml
-rm src/openmotion_bloodflow/components/UserSettingsModal.qml
+git rm components/SessionModal.qml components/UserSettingsModal.qml
 ```
 
 - [ ] **Step 3: Smoke test — app still launches and runs a scan**
@@ -429,8 +415,8 @@ Open the History modal. Verify each historical scan shows both its timestamp and
 - [ ] **Step 4: Final grep for leftover names**
 
 ```bash
-grep -rnE "_subject_id|subjectId|sessionIdChanged|subjectIdChanged|generate_session_id|generate_subject_id|newSession" motion_connector.py src/openmotion_bloodflow/motion_connector.py
-grep -rnE "MOTIONInterface\.(sessionId|subjectId)|\.newSession\(|SessionModal|UserSettingsModal" pages/ components/ main.qml src/openmotion_bloodflow/
+grep -nE "_subject_id|\bsubjectId\b|sessionIdChanged|subjectIdChanged|generate_session_id|generate_subject_id|newSession" motion_connector.py
+grep -rnE "MOTIONInterface\.(sessionId|subjectId)|\.newSession\(|SessionModal|UserSettingsModal" pages/ components/ main.qml
 ```
 Expected: zero hits.
 
