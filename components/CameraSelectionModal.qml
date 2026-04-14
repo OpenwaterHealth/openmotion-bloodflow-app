@@ -169,7 +169,7 @@ Item {
                                 verticalAlignment: Text.AlignVCenter; leftPadding: 8
                             }
                             background: Rectangle { color: highlighted ? theme.accentBlue : "transparent" }
-                            highlighted: leftSelector.currentIndex === index
+                            highlighted: leftSelector.highlightedIndex === index
                         }
                         popup: Popup {
                             y: leftSelector.height; width: leftSelector.width
@@ -230,7 +230,7 @@ Item {
                                 verticalAlignment: Text.AlignVCenter; leftPadding: 8
                             }
                             background: Rectangle { color: highlighted ? theme.accentBlue : "transparent" }
-                            highlighted: rightSelector.currentIndex === index
+                            highlighted: rightSelector.highlightedIndex === index
                         }
                         popup: Popup {
                             y: rightSelector.height; width: rightSelector.width

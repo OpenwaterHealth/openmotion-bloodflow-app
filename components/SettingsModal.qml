@@ -254,7 +254,7 @@ Item {
             background: Rectangle {
                 color: highlighted ? root.colAccent : "transparent"
             }
-            highlighted: styledComboCtrl.currentIndex === index
+            highlighted: styledComboCtrl.highlightedIndex === index
         }
     }
 

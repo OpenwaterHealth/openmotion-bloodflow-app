@@ -189,7 +189,7 @@ Item {
                             width: leftSelector.width; height: 32
                             contentItem: Text { text: model.name; font.pixelSize: 13; color: theme.textPrimary; verticalAlignment: Text.AlignVCenter; leftPadding: 8 }
                             background: Rectangle { color: highlighted ? theme.accentBlue : "transparent" }
-                            highlighted: leftSelector.currentIndex === index
+                            highlighted: leftSelector.highlightedIndex === index
                         }
                         popup: Popup {
                             y: leftSelector.height; width: leftSelector.width; implicitHeight: contentItem.implicitHeight + 2; padding: 1
@@ -238,7 +238,7 @@ Item {
                             width: rightSelector.width; height: 32
                             contentItem: Text { text: model.name; font.pixelSize: 13; color: theme.textPrimary; verticalAlignment: Text.AlignVCenter; leftPadding: 8 }
                             background: Rectangle { color: highlighted ? theme.accentBlue : "transparent" }
-                            highlighted: rightSelector.currentIndex === index
+                            highlighted: rightSelector.highlightedIndex === index
                         }
                         popup: Popup {
                             y: rightSelector.height; width: rightSelector.width; implicitHeight: contentItem.implicitHeight + 2; padding: 1

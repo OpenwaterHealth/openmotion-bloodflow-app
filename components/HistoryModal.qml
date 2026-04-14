@@ -196,7 +196,7 @@ Item {
                         background: Rectangle {
                             color: highlighted ? theme.accentBlue : "transparent"
                         }
-                        highlighted: scanPicker.currentIndex === index
+                        highlighted: scanPicker.highlightedIndex === index
                     }
                     popup: Popup {
                         y: scanPicker.height
