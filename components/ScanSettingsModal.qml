@@ -77,7 +77,10 @@ Item {
         }
     }
 
-    function open() { root.visible = true }
+    function open() {
+        userLabelField.text = MOTIONInterface.userLabel
+        root.visible = true
+    }
     function close() {
         selectionChanged(maskFromArray(leftSensorActive), maskFromArray(rightSensorActive))
         root.visible = false
@@ -138,6 +141,49 @@ Item {
                 font.pixelSize: 20
                 font.weight: Font.Bold
                 Layout.alignment: Qt.AlignHCenter
+            }
+
+            // ── Session ──────────────────────────────────────────────────
+            Rectangle { Layout.fillWidth: true; height: 1; color: theme.borderSubtle }
+
+            Text {
+                text: "Session"
+                color: theme.textSecondary
+                font.pixelSize: 15
+                font.weight: Font.DemiBold
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+
+                Text {
+                    text: "User Label:"
+                    color: theme.textSecondary
+                    font.pixelSize: 14
+                    Layout.alignment: Qt.AlignVCenter
+                }
+
+                TextField {
+                    id: userLabelField
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 30
+                    text: MOTIONInterface.userLabel
+                    font.pixelSize: 14
+                    color: theme.textPrimary
+                    selectByMouse: true
+                    background: Rectangle {
+                        color: theme.bgInput; radius: 4
+                        border.color: userLabelField.activeFocus ? theme.accentBlue : theme.borderSubtle
+                        border.width: 1
+                    }
+                    onEditingFinished: {
+                        if (text !== MOTIONInterface.userLabel) {
+                            MOTIONInterface.userLabel = text
+                            text = MOTIONInterface.userLabel  // reflect normalization
+                        }
+                    }
+                }
             }
 
             // ── Camera Configuration ──────────────────────────────────────
