@@ -126,6 +126,14 @@ Rectangle {
             }
         }
 
+        // Divider between Start and Scan Settings (or between Start and Notes
+        // in reduced mode where Scan Settings is hidden).
+        Rectangle {
+            Layout.preferredWidth: 52; Layout.preferredHeight: 1
+            Layout.topMargin: 4; Layout.bottomMargin: 4
+            Layout.alignment: Qt.AlignHCenter; color: theme.borderSubtle
+        }
+
         // Scan Settings (camera + duration)
         PanelButton {
             visible: !panel.reducedMode
@@ -135,6 +143,8 @@ Rectangle {
             onClicked: panel.scanSettingsClicked()
         }
 
+        // Divider between Scan Settings and Notes — only in normal mode so
+        // reduced mode doesn't get two consecutive dividers.
         Rectangle {
             visible: !panel.reducedMode
             Layout.preferredWidth: 52; Layout.preferredHeight: 1
@@ -162,6 +172,7 @@ Rectangle {
 
         // History
         PanelButton {
+            enabled: !panel.scanning
             iconText: "\ue96b"  // book icon
             label: "History"
             onClicked: panel.historyClicked()
@@ -171,6 +182,7 @@ Rectangle {
 
         // Settings
         PanelButton {
+            enabled: !panel.scanning
             iconText: "\ueabe"  // setting-2 icon
             label: "Settings"
             onClicked: panel.settingsClicked()
