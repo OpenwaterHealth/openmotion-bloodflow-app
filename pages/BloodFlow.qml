@@ -27,7 +27,6 @@ Rectangle {
     property int leftMask: 0x99   // default "Outer"
     property int rightMask: 0x00
 
-    // User label (exposed for header bar — bound name kept as `sessionId` for now to avoid touching main.qml/WindowMenu props)
     property string sessionId: MOTIONInterface.userLabel || ""
 
     // Duration from scan time modal
