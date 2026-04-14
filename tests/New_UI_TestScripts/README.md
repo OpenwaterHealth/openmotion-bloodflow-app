@@ -10,6 +10,7 @@ Automated GUI tests for the OpenWater Bloodflow desktop application using **pyte
 | `test_scan_flow.py` | 15 | End-to-end: configure scan settings, type notes, start 2-min scan, wait, visualize BFI/BVI and Contrast/Mean |
 | `test_history.py` | 7 | Open History modal, verify scan listing, visualize plots, close |
 | `test_notes.py` | 20 | Typing, persistence, multi-line, clipboard ops (cut/paste/undo), long text, rapid open/close |
+| `test_reducedmode.py` | 23 | Enable Reduced Mode via Settings, type note, run 2-min manual scan, stop, verify History plots, disable Reduced Mode |
 
 ## Quick Start
 
@@ -80,6 +81,7 @@ New_UI_TestScripts/
   test_scan_flow.py     # End-to-end scan flow tests
   test_history.py       # History modal tests
   test_notes.py         # Session Notes tests
+  test_reducedmode.py   # Reduced Mode: enable, manual scan, History, disable
 ```
 
 ### Key Design Decisions
