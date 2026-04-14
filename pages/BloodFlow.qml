@@ -43,10 +43,16 @@ Rectangle {
     }
     property int elapsedSec: 0
 
+    // The elapsed-time ticker runs exactly while the MCU trigger is firing.
+    // Using a declarative `running:` binding means the timer auto-stops the
+    // instant triggerState flips to "OFF" (top of the SDK teardown, right
+    // after stop_trigger) rather than when captureFinished arrives 2-4s later
+    // after all the camera-disable / USB-drain / writer-join work is done.
     Timer {
         id: scanTimer
         interval: 1000
         repeat: true
+        running: bloodFlow.scanning && MOTIONInterface.triggerState === "ON"
         onTriggered: bloodFlow.elapsedSec += 1
     }
 
@@ -269,7 +275,9 @@ Rectangle {
             scanDialog.stageText = txt
             if (scanRunner._stage === "capture") {
                 bloodFlow.elapsedSec = 0
-                scanTimer.start()
+                // scanTimer is started declaratively by its `running:` binding
+                // (bloodFlow.scanning && triggerState === "ON") — no imperative
+                // start() needed here.
             }
         }
         onProgressUpdate: function(pct) {
@@ -280,7 +288,8 @@ Rectangle {
             console.log(line)
         }
         onScanFinished: function(ok, err, left, right) {
-            scanTimer.stop()
+            // scanTimer stops automatically via its `running:` binding once
+            // bloodFlow.scanning flips false or triggerState goes "OFF".
             bloodFlow.scanning = false
 
             if (err === "Canceled") {
