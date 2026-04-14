@@ -1,21 +1,17 @@
 """
 Scan Flow — end-to-end test: configure scan, run, visualize results.
 
-Test sequence:
-  1. Open Scan Settings, set 2-min duration, close
-  2. Open Notes, type session note, close
-  3. Start scan, wait for completion
-  4. Dismiss auto-opened Notes
-  5. Open History, visualize BFI/BVI and Contrast/Mean plots, close
 """
 
 import time
 from datetime import datetime
 
 import pyautogui
+import pygetwindow as gw
 import pytest
 
 from conftest import (
+    APP_KEYWORDS,
     SLEEP,
     click_by_name,
     click_sidebar,
@@ -24,6 +20,33 @@ from conftest import (
     require_focus,
     wait_with_log,
 )
+
+
+def _close_plot_window() -> bool:
+    """Close the plot window opened by the app.
+
+    Iterates all top-level windows and closes the first one whose title
+    does not match the main app keywords, avoiding closing the main app.
+    """
+    for w in gw.getAllWindows():
+        if not w.title.strip():
+            continue
+        if any(k in w.title.lower() for k in APP_KEYWORDS):
+            continue
+        try:
+            if w.isMinimized:
+                w.restore()
+                time.sleep(1)
+            w.activate()
+            time.sleep(0.5)
+            log.info(f"  Closing plot window: '{w.title}'")
+            pyautogui.hotkey("alt", "f4")
+            time.sleep(SLEEP)
+            return True
+        except Exception as e:
+            log.warning(f"  Could not close '{w.title}': {e}")
+    log.warning("  No plot window found to close")
+    return False
 
 # ─────────────────────────────────────────────
 # Sidebar coordinates (MouseArea-based — not exposed via UIA)
@@ -115,8 +138,7 @@ class TestScanFlow:
         wait_with_log(VIZ_WAIT, "BFI/BVI plot open")
 
     def test_12_close_bfi_plot(self, app):
-        pyautogui.hotkey("alt", "f4")
-        time.sleep(SLEEP)
+        _close_plot_window()
 
     def test_13_visualize_contrast_mean(self, app):
         ensure_visible()
@@ -124,8 +146,7 @@ class TestScanFlow:
         wait_with_log(VIZ_WAIT, "Contrast/Mean plot open")
 
     def test_14_close_contrast_plot(self, app):
-        pyautogui.hotkey("alt", "f4")
-        time.sleep(SLEEP)
+        _close_plot_window()
 
     def test_15_close_history(self, app):
         require_focus()

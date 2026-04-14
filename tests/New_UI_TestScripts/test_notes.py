@@ -1,8 +1,6 @@
 """
 Session Notes — exhaustive TextArea interaction tests.
 
-Tests: open/close, typing, persistence, multi-line, clipboard ops
-(cut/paste/undo), long text, rapid cycling, and sidebar toggle.
 """
 
 import time
