@@ -81,8 +81,7 @@ class MOTIONConnector(QObject):
     safetyTripDuringCaptureRequested = pyqtSignal()  # Emitted when safety trips while scan running (main-thread slot shows message & schedules cancel)
     triggerStateChanged = pyqtSignal()  # Signal to notify QML of trigger state changes
     directoryChanged = pyqtSignal()  # Signal to notify QML of directory changes
-    sessionIdChanged = pyqtSignal()  # Signal to notify QML of session ID changes
-    subjectIdChanged = pyqtSignal()  # Deprecated alias — same as sessionIdChanged
+    userLabelChanged = pyqtSignal()  # Signal to notify QML of user label changes
     sensorDeviceInfoReceived = pyqtSignal(str, str)  # (fw_version, device_id)
     consoleDeviceInfoReceived = pyqtSignal(str, str)  # (fw_version, device_id)
     temperatureSensorUpdated = pyqtSignal(float)  # Temperature data
@@ -266,8 +265,8 @@ class MOTIONConnector(QObject):
             self._directory = default_dir
         logger.info(f"[Connector] Directory initialized to: {self._directory}")
 
-        self._subject_id = self.generate_session_id()
-        logger.info(f"[Connector] Generated session ID: {self._subject_id}")
+        self._user_label = self.generate_user_label()
+        logger.info(f"[Connector] Generated user label: {self._user_label}")
 
         # Emit synthetic connect events for devices already connected at startup
         if self._leftSensorConnected:
@@ -432,7 +431,7 @@ class MOTIONConnector(QObject):
 
         # Timestamped filename for this specific trigger session
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        base_subject = subject_id or self._subject_id or "unknown"
+        base_subject = subject_id or self._user_label or "unknown"
         safe_subject = re.sub(r"[^A-Za-z0-9_-]", "", base_subject)
         self._runlog_path = os.path.join(run_dir, f"run-{safe_subject}_{ts}.log")
         self._runlog_csv_path = os.path.join(run_dir, f"run-{safe_subject}_{ts}.csv")
@@ -591,10 +590,10 @@ class MOTIONConnector(QObject):
                 logger.error(f"Failed to write run CSV sample: {e}")
 
     # --- GETTERS/SETTERS FOR Qt PROPERTIES ---
-    def getSessionId(self) -> str:
-        return self._subject_id
+    def getUserLabel(self) -> str:
+        return self._user_label
 
-    def setSessionId(self, value: str):
+    def setUserLabel(self, value: str):
         if not value:
             return
         # normalize to "ow" + alphanumerics (uppercase)
@@ -604,24 +603,12 @@ class MOTIONConnector(QObject):
             rest = value
         rest = "".join(ch for ch in rest.upper() if ch.isalnum())
         new_val = "ow" + rest
-        if new_val != self._subject_id:
-            self._subject_id = new_val
-            self.sessionIdChanged.emit()
-            self.subjectIdChanged.emit()  # keep deprecated alias working
+        if new_val != self._user_label:
+            self._user_label = new_val
+            self.userLabelChanged.emit()
 
-    sessionId = pyqtProperty(
-        str, fget=getSessionId, fset=setSessionId, notify=sessionIdChanged
-    )
-
-    # Deprecated alias — external code that still uses subjectId keeps working
-    def getSubjectId(self) -> str:
-        return self._subject_id
-
-    def setSubjectId(self, value: str):
-        self.setSessionId(value)
-
-    subjectId = pyqtProperty(
-        str, fget=getSubjectId, fset=setSubjectId, notify=subjectIdChanged
+    userLabel = pyqtProperty(
+        str, fget=getUserLabel, fset=setUserLabel, notify=userLabelChanged
     )
 
     @pyqtProperty(bool, notify=connectionStatusChanged)
@@ -1001,8 +988,8 @@ class MOTIONConnector(QObject):
             pass
 
         return {
-            "sessionId": subject,
-            "subjectId": subject,   # deprecated alias kept for compatibility
+            "userLabel": subject,
+            "sessionId": f"{ts}_{subject}",
             "timestamp": ts,
             "leftMask": left_mask,
             "rightMask": right_mask,
@@ -1115,23 +1102,9 @@ class MOTIONConnector(QObject):
             except Exception as e:
                 logger.error(f"Failed to update scan notes on disk: {e}")
 
-    def generate_session_id(self):
+    def generate_user_label(self):
         suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
         return f"ow{suffix}"
-
-    def generate_subject_id(self):  # deprecated alias
-        return self.generate_session_id()
-
-    @pyqtSlot()
-    def newSession(self):
-        """Generate a fresh session ID and clear notes for a new scan."""
-        self._subject_id = self.generate_session_id()
-        self._scan_notes = ""
-        self._scan_notes_path = ""
-        self.sessionIdChanged.emit()
-        self.subjectIdChanged.emit()
-        self.scanNotesChanged.emit()
-        logger.info(f"New session started: {self._subject_id}")
 
     # --- CONSOLE COMMUNICATION METHODS ---
     @pyqtSlot()
@@ -1183,6 +1156,10 @@ class MOTIONConnector(QObject):
             return False
 
         self._capture_stop = threading.Event()
+        # New scan → clear notes buffer (formerly done by newSession)
+        self._scan_notes = ""
+        self._scan_notes_path = ""
+        self.scanNotesChanged.emit()
         self._capture_running = True
         self._capture_start_time = time.time()
         self._capture_left_path = ""
