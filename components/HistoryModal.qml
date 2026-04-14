@@ -242,8 +242,8 @@ Item {
 
                         GridLayout {
                             columns: 4; columnSpacing: 16; rowSpacing: 6; Layout.fillWidth: true
-                            Text { text: "Session ID:"; color: theme.textSecondary; font.pixelSize: 13 }
-                            Text { text: selected.sessionId || "-"; color: theme.textPrimary; font.pixelSize: 13 }
+                            Text { text: "User Label:"; color: theme.textSecondary; font.pixelSize: 13 }
+                            Text { text: selected.userLabel || "-"; color: theme.textPrimary; font.pixelSize: 13 }
                             Text { text: "Date:"; color: theme.textSecondary; font.pixelSize: 13 }
                             Text { text: selected.timestamp ? friendlyDate(selected.timestamp) : "-"; color: theme.textPrimary; font.pixelSize: 13 }
 

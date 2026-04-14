@@ -27,8 +27,8 @@ Rectangle {
     property int leftMask: 0x99   // default "Outer"
     property int rightMask: 0x00
 
-    // Session ID (exposed for header bar)
-    property string sessionId: MOTIONInterface.sessionId || ""
+    // User label (exposed for header bar — bound name kept as `sessionId` for now to avoid touching main.qml/WindowMenu props)
+    property string sessionId: MOTIONInterface.userLabel || ""
 
     // Duration from scan time modal
     property bool freeRun: reducedMode
@@ -120,7 +120,6 @@ Rectangle {
                 else                   embeddedPlot.stopScan()
                 notesModal.open()
             } else {
-                MOTIONInterface.newSession()
                 bloodFlow.scanning = true
                 scanDialog.message = "Scanning..."
                 scanDialog.stageText = "Preparing..."
@@ -251,7 +250,7 @@ Rectangle {
         leftMask: bloodFlow.leftMask
         rightMask: bloodFlow.rightMask
         durationSec: bloodFlow.durationSec
-        subjectId: MOTIONInterface.sessionId
+        subjectId: MOTIONInterface.userLabel
         dataDir: MOTIONInterface.directory
         disableLaser: false
         laserOn: true
