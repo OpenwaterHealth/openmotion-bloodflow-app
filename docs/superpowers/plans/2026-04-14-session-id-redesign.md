@@ -287,6 +287,7 @@ git commit -m "feat(scan-settings): add editable User Label field"
 
 **Files:**
 - Modify: `pages/BloodFlow.qml`
+- Modify: `components/HistoryModal.qml`
 
 - [ ] **Step 1: Change the `sessionId` property on BloodFlow.qml to read `userLabel`**
 
@@ -331,6 +332,23 @@ to:
 ```
 
 (`ScanRunner` passes this as `subject_id` into `startCapture`, which becomes the label component of the composite sessionId inside the connector. Per-scan timestamp is captured separately inside `startCapture`.)
+
+- [ ] **Step 3b: Update HistoryModal detail panel to use `userLabel`**
+
+Task 1 changed `get_scan_details` so the `sessionId` key is now the composite `{timestamp}_{userLabel}` and a new `userLabel` key holds just the short label. The detail panel in `components/HistoryModal.qml` line ~245–246 shows a "Session ID:" row alongside a separate "Date:" row; with the new semantics that row would display the composite string which duplicates the date.
+
+In `components/HistoryModal.qml` at line ~245:
+
+Change:
+```qml
+                            Text { text: "Session ID:"; color: theme.textSecondary; font.pixelSize: 13 }
+                            Text { text: selected.sessionId || "-"; color: theme.textPrimary; font.pixelSize: 13 }
+```
+to:
+```qml
+                            Text { text: "User Label:"; color: theme.textSecondary; font.pixelSize: 13 }
+                            Text { text: selected.userLabel || "-"; color: theme.textPrimary; font.pixelSize: 13 }
+```
 
 - [ ] **Step 4: Smoke test — header updates live on label edit**
 
