@@ -1,12 +1,6 @@
 """
 Scan Settings — modal interaction tests.
 
-Features tested:
-  - Left/Right sensor dropdowns (all 9 options each)
-  - Sensor dot visual
-  - Scan Duration toggle (Timed <-> Free Run)
-  - Hours / Minutes / Seconds inputs
-  - Close via X button and Escape key
 """
 
 import time

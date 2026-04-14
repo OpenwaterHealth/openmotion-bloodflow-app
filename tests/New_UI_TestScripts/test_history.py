@@ -1,12 +1,7 @@
 """
 History — modal and visualization tests.
 
-Test sequence:
-  1. Open History modal via sidebar
-  2. Confirm latest scan is listed in ComboBox
-  3. Visualize BFI/BVI plot, wait, close
-  4. Visualize Contrast/Mean plot, wait, close
-  5. Close History modal
+
 """
 
 import time

@@ -25,13 +25,13 @@ from pywinauto import Desktop as UiaDesktop
 # pyautogui defaults
 # ─────────────────────────────────────────────
 pyautogui.FAILSAFE = True
-pyautogui.PAUSE = 0.3
+pyautogui.PAUSE = 0.5
 
 # ─────────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────────
 APP_KEYWORDS = ["openmotion", "bloodflow", "openwater"]
-SLEEP = 3  # seconds to wait after most UI actions
+SLEEP = 2  # seconds to wait after most UI actions
 
 LOG_DIR = Path(__file__).parent / "test_logs"
 LOG_DIR.mkdir(exist_ok=True)
