@@ -105,9 +105,9 @@ Item {
     }
 
     Rectangle {
-        width: Math.min(parent.width - 80, 560)
-        height: Math.min(parent.height - 60, 680)
-        radius: 12
+        width: Math.min(parent.width - 80, 520)
+        height: Math.min(parent.height - 60, 640)
+        radius: 14
         color: theme.bgContainer
         border.color: theme.borderSubtle
         border.width: 2
@@ -132,7 +132,7 @@ Item {
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: 20
-            spacing: 14
+            spacing: 10
 
             // Title
             Text {
@@ -196,13 +196,12 @@ Item {
 
             RowLayout {
                 Layout.fillWidth: true
-                Layout.fillHeight: true
-                spacing: 24
+                spacing: 20
                 Layout.alignment: Qt.AlignHCenter
 
                 // Left Sensor
                 ColumnLayout {
-                    spacing: 8
+                    spacing: 6
                     Layout.alignment: Qt.AlignHCenter
 
                     SensorView {
@@ -215,8 +214,9 @@ Item {
 
                     ComboBox {
                         id: leftSelector
-                        Layout.preferredWidth: 190
-                        Layout.preferredHeight: 34
+                        Layout.preferredWidth: 150
+                        Layout.preferredHeight: 32
+                        Layout.alignment: Qt.AlignHCenter
                         model: sensorPatterns
                         textRole: "name"
                         font.pixelSize: 13
@@ -251,7 +251,7 @@ Item {
 
                 // Right Sensor
                 ColumnLayout {
-                    spacing: 8
+                    spacing: 6
                     Layout.alignment: Qt.AlignHCenter
 
                     SensorView {
@@ -264,8 +264,9 @@ Item {
 
                     ComboBox {
                         id: rightSelector
-                        Layout.preferredWidth: 190
-                        Layout.preferredHeight: 34
+                        Layout.preferredWidth: 150
+                        Layout.preferredHeight: 32
+                        Layout.alignment: Qt.AlignHCenter
                         model: sensorPatterns
                         textRole: "name"
                         font.pixelSize: 13
@@ -358,9 +359,9 @@ Item {
                     text: String(root.hours)
                     inputMethodHints: Qt.ImhDigitsOnly
                     validator: IntValidator { bottom: 0; top: 99 }
-                    font.pixelSize: 22; color: theme.textPrimary
+                    font.pixelSize: 20; color: theme.textPrimary
                     horizontalAlignment: Text.AlignHCenter
-                    Layout.preferredWidth: 58; Layout.preferredHeight: 44
+                    Layout.preferredWidth: 54; Layout.preferredHeight: 40
                     background: Rectangle { color: theme.bgInput; radius: 6; border.color: theme.borderSubtle; border.width: 1 }
                     onEditingFinished: {
                         var v = parseInt(text); if (isNaN(v)) v = 0
@@ -373,9 +374,9 @@ Item {
                     text: String(root.minutes).padStart(2, '0')
                     inputMethodHints: Qt.ImhDigitsOnly
                     validator: IntValidator { bottom: 0; top: 59 }
-                    font.pixelSize: 22; color: theme.textPrimary
+                    font.pixelSize: 20; color: theme.textPrimary
                     horizontalAlignment: Text.AlignHCenter
-                    Layout.preferredWidth: 58; Layout.preferredHeight: 44
+                    Layout.preferredWidth: 54; Layout.preferredHeight: 40
                     background: Rectangle { color: theme.bgInput; radius: 6; border.color: theme.borderSubtle; border.width: 1 }
                     onEditingFinished: {
                         var v = parseInt(text); if (isNaN(v)) v = 0
@@ -388,9 +389,9 @@ Item {
                     text: String(root.seconds).padStart(2, '0')
                     inputMethodHints: Qt.ImhDigitsOnly
                     validator: IntValidator { bottom: 0; top: 59 }
-                    font.pixelSize: 22; color: theme.textPrimary
+                    font.pixelSize: 20; color: theme.textPrimary
                     horizontalAlignment: Text.AlignHCenter
-                    Layout.preferredWidth: 58; Layout.preferredHeight: 44
+                    Layout.preferredWidth: 54; Layout.preferredHeight: 40
                     background: Rectangle { color: theme.bgInput; radius: 6; border.color: theme.borderSubtle; border.width: 1 }
                     onEditingFinished: {
                         var v = parseInt(text); if (isNaN(v)) v = 0
