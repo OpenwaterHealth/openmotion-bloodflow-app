@@ -29,6 +29,7 @@ Rectangle {
     signal historyClicked()
     signal logClicked()
     signal settingsClicked()
+    signal checkClicked()
 
     FontLoader {
         id: iconFont
@@ -157,6 +158,14 @@ Rectangle {
             iconText: "\uea7f"  // notes/document icon
             label: "Notes"
             onClicked: panel.notesClicked()
+        }
+
+        // Check (contact quality quick-check)
+        PanelButton {
+            enabled: !panel.scanning
+            iconText: "\ueaa3"  // pulse icon
+            label: "Check"
+            onClicked: panel.checkClicked()
         }
 
         // Log viewer (developer mode only)

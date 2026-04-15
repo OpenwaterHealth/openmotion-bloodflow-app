@@ -147,6 +147,7 @@ Rectangle {
             }
         }
         onNotesClicked:    { var o = notesModal.visible;    closeAllModals(); if (!o) notesModal.open() }
+        onCheckClicked:    { MOTIONInterface.runContactQualityCheck() }
         onHistoryClicked:  { var o = historyModal.visible;  closeAllModals(); if (!o) historyModal.open() }
         onLogClicked:      { var o = scanDialog.visible;    closeAllModals(); if (!o) scanDialog.open() }
         onSettingsClicked: { var o = settingsModal.visible; closeAllModals(); if (!o) settingsModal.open() }
