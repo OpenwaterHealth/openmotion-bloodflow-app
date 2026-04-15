@@ -153,8 +153,10 @@ class MOTIONConnector(QObject):
 
     @staticmethod
     def _camera_label(side: str, cam_id: int) -> str:
+        # Displayed labels are 1-indexed (L1..L8 / R1..R8); the raw cam_id
+        # on ContactQualityWarning stays 0-indexed.
         prefix = "L" if side == "left" else "R"
-        return f"{prefix}{int(cam_id)}"
+        return f"{prefix}{int(cam_id) + 1}"
 
     @staticmethod
     def _warning_text(type_key: str) -> str:
