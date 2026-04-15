@@ -12,6 +12,9 @@ Rectangle {
     // Current active button index
     property int activeButtonIndex: 0
 
+    // Whether the Check button is enabled (parent page disables during scans)
+    property bool checkEnabled: true
+
     // Signal to handle button clicks
     signal buttonClicked(int index)
 
@@ -47,6 +50,20 @@ Rectangle {
             iconColor: sidebarMenu.activeButtonIndex === 1 ? "#2C3E50" : "#BDC3C7"
             onClicked: {
                 sidebarMenu.handleButtonClick(1); // Call the global function
+            }
+        }
+
+        // Check Button (contact quality check)
+        IconButton {
+            buttonIcon: "\ueaa3"
+            buttonText: "Check"
+            Layout.alignment: Qt.AlignHCenter
+            enabled: sidebarMenu.checkEnabled
+            opacity: enabled ? 1.0 : 0.4
+            backgroundColor: sidebarMenu.activeButtonIndex === 2 ? "white" : "transparent"
+            iconColor: sidebarMenu.activeButtonIndex === 2 ? "#2C3E50" : "#BDC3C7"
+            onClicked: {
+                sidebarMenu.handleButtonClick(2); // Call the global function
             }
         }
 
