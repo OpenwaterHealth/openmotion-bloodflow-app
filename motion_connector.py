@@ -842,6 +842,32 @@ class MOTIONConnector(QObject):
             )
             return
 
+        # Push the same trigger/laser config the normal play-button scan uses
+        # (see pages/BloodFlow.qml triggerConfig + pages/scan/SetTriggerLaserTask.qml).
+        # On a fresh console boot, LaserPulseSkipInterval defaults to 0, which
+        # leaves the laser on during frames the SDK pipeline labels "dark" — so
+        # raw_dark_mean would reflect illuminated values. Do this synchronously
+        # so failures surface to the modal as an error instead of a bad scan.
+        trigger_payload = {
+            "TriggerStatus": 2,
+            "TriggerFrequencyHz": 40,
+            "TriggerPulseWidthUsec": 500,
+            "LaserPulseDelayUsec": 100,
+            "LaserPulseWidthUsec": 500,
+            "LaserPulseSkipInterval": 600,
+            "LaserPulseSkipDelayUsec": 1800,
+            "EnableSyncOut": True,
+            "EnableTaTrigger": True,
+        }
+        try:
+            self._interface.console_module.set_trigger_json(data=trigger_payload)
+        except Exception as exc:
+            logger.exception("contact-quality: failed to push trigger config: %s", exc)
+            self.contactQualityCheckFinished.emit(
+                False, f"Failed to set trigger config: {exc}", []
+            )
+            return
+
         self.contactQualityCheckStarted.emit(4)
 
         def _worker():
