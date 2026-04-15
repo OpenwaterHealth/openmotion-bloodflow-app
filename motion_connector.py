@@ -139,7 +139,9 @@ class MOTIONConnector(QObject):
     updateCheckFailed = pyqtSignal(str)      # error message
 
     # Contact-quality signals
-    contactQualityCheckStarted = pyqtSignal()
+    # Emits the expected duration of the quick-check in seconds so the modal
+    # can show an honest elapsed-time estimate.
+    contactQualityCheckStarted = pyqtSignal(int)
     # (ok, error_string, warnings). ``error_string`` is empty when the check
     # completed normally; non-empty when the SDK reports a failure condition
     # (scan didn't start, no USB data received, etc.) — the QML modal uses
@@ -829,7 +831,8 @@ class MOTIONConnector(QObject):
         except Exception:
             pass
 
-        self.contactQualityCheckStarted.emit()
+        # SDK enforces a 3 s scan floor; allow ~1 s for camera enable + teardown.
+        self.contactQualityCheckStarted.emit(4)
 
         def _worker():
             try:

@@ -371,8 +371,8 @@ Rectangle {
         function onSafetyFailureStateChanged() {}
 
         // Contact-quality quick-check lifecycle
-        function onContactQualityCheckStarted() {
-            contactQualityModal.reset(false)
+        function onContactQualityCheckStarted(seconds) {
+            contactQualityModal.reset(false, seconds)
         }
         function onContactQualityCheckFinished(ok, error, warnings) {
             if (!ok) {

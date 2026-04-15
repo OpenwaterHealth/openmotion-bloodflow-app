@@ -12,7 +12,10 @@ import OpenMotion 1.0
  *
  *  API:
  *      open() / close()
- *      reset(forLiveScan)        -> enter "checking" state
+ *      reset(forLiveScan, durationEstimate)
+ *                                -> enter "checking" state; durationEstimate
+ *                                   (seconds, optional) drives the elapsed
+ *                                   counter shown under the spinner
  *      showOk()                  -> enter "ok" state
  *      showError(msg)            -> enter "error" state with message
  *      addWarning(cameraLabel, typeText, value)
@@ -39,6 +42,12 @@ Item {
     property bool liveScan: false
     property string errorText: ""
 
+    // Elapsed-time tracking for the "checking" state. ``durationEstimate``
+    // is purely cosmetic (shown as "~Ns"); the real completion signal comes
+    // from contactQualityCheckFinished.
+    property int durationEstimate: 0
+    property int elapsedMs: 0
+
     // Each entry: { camera: "L4", typeText: "Poor sensor contact", value: 72.5 }
     property var entries: []
 
@@ -48,22 +57,28 @@ Item {
 
     // ── public API ───────────────────────────────────────────────────────
     function open()  { root.visible = true; panel.forceActiveFocus() }
-    function close() { root.visible = false }
+    function close() { root.visible = false; elapsedTimer.stop() }
 
-    function reset(forLiveScan) {
+    function reset(forLiveScan, durationEstimateArg) {
         liveScan = !!forLiveScan
         entries = []
         errorText = ""
         state_ = "checking"
+        durationEstimate = (durationEstimateArg !== undefined && durationEstimateArg !== null)
+                           ? Math.max(0, durationEstimateArg | 0) : 0
+        elapsedMs = 0
+        elapsedTimer.restart()
         if (!visible) open()
     }
 
     function showOk() {
+        elapsedTimer.stop()
         state_ = "ok"
         if (!visible) open()
     }
 
     function showError(msg) {
+        elapsedTimer.stop()
         errorText = msg || "Hardware error"
         state_ = "error"
         if (!visible) open()
@@ -78,8 +93,22 @@ Item {
         var copy = entries.slice()
         copy.push({ camera: cameraLabel, typeText: typeText, value: value })
         entries = copy
+        elapsedTimer.stop()
         state_ = "warnings"
         if (!visible) open()
+    }
+
+    // Ticks every 500 ms while in "checking" state to update the elapsed
+    // label. Stopped on every exit path (close / showOk / showError /
+    // addWarning) so it never leaks past the check.
+    Timer {
+        id: elapsedTimer
+        interval: 500
+        repeat: true
+        onTriggered: {
+            if (root.state_ !== "checking") { stop(); return }
+            root.elapsedMs += interval
+        }
     }
 
     // ── dimmed backdrop (blocks clicks to page below) ────────────────────
@@ -129,6 +158,21 @@ Item {
                 visible: root.state_ === "checking"
                 running: visible
                 Layout.alignment: Qt.AlignHCenter
+            }
+
+            // Elapsed / expected-duration counter under the spinner. Only
+            // shown while actively checking; hidden in ok/warnings/error.
+            Text {
+                visible: root.state_ === "checking"
+                Layout.alignment: Qt.AlignHCenter
+                color: theme.textSecondary
+                font.pixelSize: 13
+                text: {
+                    var secs = Math.floor(root.elapsedMs / 1000)
+                    if (root.durationEstimate > 0)
+                        return "Checking contact quality… (" + secs + "s / ~" + root.durationEstimate + "s)"
+                    return "Checking contact quality… (" + secs + "s)"
+                }
             }
 
             // OK message
