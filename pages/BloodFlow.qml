@@ -244,6 +244,13 @@ Rectangle {
         id: settingsModal
     }
 
+    ContactQualityModal {
+        id: contactQualityModal
+        anchors.fill: parent
+        onStopScanRequested: MOTIONInterface.stopCapture()
+        onContinueRequested: { /* no-op: leave scan running */ }
+    }
+
     ScanProgressDialog {
         id: scanDialog
     }
@@ -361,6 +368,28 @@ Rectangle {
 
         function onLaserStateChanged() {}
         function onSafetyFailureStateChanged() {}
+
+        // Contact-quality quick-check lifecycle
+        function onContactQualityCheckStarted() {
+            contactQualityModal.reset(false)
+        }
+        function onContactQualityCheckFinished(ok, warnings) {
+            if (!ok) { contactQualityModal.showError("Quick check failed"); return }
+            if (warnings.length === 0) { contactQualityModal.showOk(); return }
+            for (var i = 0; i < warnings.length; ++i) {
+                var w = warnings[i]
+                contactQualityModal.addWarning(w.camera, w.typeText, w.value)
+            }
+        }
+        // Live-scan warnings (ContactQualityMonitor via SciencePipeline)
+        function onContactQualityWarning(camera, typeKey, typeText, value) {
+            if (contactQualityModal.state_ === "checking" || !contactQualityModal.visible) {
+                contactQualityModal.reset(true)
+            } else {
+                contactQualityModal.liveScan = true
+            }
+            contactQualityModal.addWarning(camera, typeText, value)
+        }
     }
 
     Component.onCompleted: {
