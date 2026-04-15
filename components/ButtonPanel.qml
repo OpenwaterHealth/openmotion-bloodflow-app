@@ -162,7 +162,7 @@ Rectangle {
 
         // Check (contact quality quick-check)
         PanelButton {
-            enabled: !panel.scanning
+            enabled: !panel.scanning && panel.camerasReady
             iconText: "\ueaa3"  // pulse icon
             label: "Check"
             onClicked: panel.checkClicked()

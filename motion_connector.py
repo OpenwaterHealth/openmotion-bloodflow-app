@@ -831,19 +831,16 @@ class MOTIONConnector(QObject):
         except Exception:
             pass
 
-        # Guard against a concurrent configure (play-button path or another
-        # quick-check). The SDK now configures cameras as part of quick-check,
-        # so two configures would otherwise collide.
+        # Defensive guard — the Check button is gated on camerasReady in QML,
+        # so a concurrent configure shouldn't happen from this path, but the
+        # check is cheap and harmless.
         if getattr(self, "_config_running", False):
             self.contactQualityCheckFinished.emit(
                 False, "Camera configuration already in progress", []
             )
             return
 
-        # Estimate covers configure (~10 s worst case) + 3 s scan + teardown.
-        # Actual duration varies with hardware state; the modal's elapsed
-        # counter reflects real time.
-        self.contactQualityCheckStarted.emit(15)
+        self.contactQualityCheckStarted.emit(4)
 
         def _worker():
             try:
