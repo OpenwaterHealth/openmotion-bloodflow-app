@@ -140,7 +140,11 @@ class MOTIONConnector(QObject):
 
     # Contact-quality signals
     contactQualityCheckStarted = pyqtSignal()
-    contactQualityCheckFinished = pyqtSignal(bool, 'QVariantList')
+    # (ok, error_string, warnings). ``error_string`` is empty when the check
+    # completed normally; non-empty when the SDK reports a failure condition
+    # (scan didn't start, no USB data received, etc.) — the QML modal uses
+    # it as the text for the error state.
+    contactQualityCheckFinished = pyqtSignal(bool, str, 'QVariantList')
     # Live-scan warning: (camera_label, type_key, type_text, value)
     contactQualityWarning = pyqtSignal(str, str, str, float)
     contactQualityScanInProgress = pyqtSignal(bool)
@@ -815,10 +819,12 @@ class MOTIONConnector(QObject):
 
     @pyqtSlot()
     def runContactQualityCheck(self):
-        """Run a 1-second contact-quality quick check in a background thread."""
+        """Run a short contact-quality quick check in a background thread."""
         try:
             if getattr(self._scan_workflow, "running", False):
-                self.contactQualityCheckFinished.emit(False, [])
+                self.contactQualityCheckFinished.emit(
+                    False, "Scan already running", []
+                )
                 return
         except Exception:
             pass
@@ -827,10 +833,10 @@ class MOTIONConnector(QObject):
 
         def _worker():
             try:
-                result = self._interface.run_contact_quality_check(duration_s=1.0)
+                result = self._interface.run_contact_quality_check()
             except Exception as exc:
                 logger.exception("contact-quality check failed: %s", exc)
-                self.contactQualityCheckFinished.emit(False, [])
+                self.contactQualityCheckFinished.emit(False, str(exc), [])
                 return
 
             payload = []
@@ -841,7 +847,11 @@ class MOTIONConnector(QObject):
                     "typeText": self._warning_text(w.warning_type.value),
                     "value": float(w.value),
                 })
-            self.contactQualityCheckFinished.emit(bool(getattr(result, "ok", False)), payload)
+            self.contactQualityCheckFinished.emit(
+                bool(getattr(result, "ok", False)),
+                str(getattr(result, "error", "") or ""),
+                payload,
+            )
 
         threading.Thread(target=_worker, daemon=True, name="ContactQualityCheck").start()
 

@@ -374,8 +374,12 @@ Rectangle {
         function onContactQualityCheckStarted() {
             contactQualityModal.reset(false)
         }
-        function onContactQualityCheckFinished(ok, warnings) {
-            if (!ok) { contactQualityModal.showError("Quick check failed"); return }
+        function onContactQualityCheckFinished(ok, error, warnings) {
+            if (!ok) {
+                var msg = (error && error.length > 0) ? error : "Quick check failed"
+                contactQualityModal.showError(msg)
+                return
+            }
             if (warnings.length === 0) { contactQualityModal.showOk(); return }
             for (var i = 0; i < warnings.length; ++i) {
                 var w = warnings[i]
