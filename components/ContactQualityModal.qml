@@ -47,7 +47,7 @@ Item {
     signal dismissed()
 
     // ── public API ───────────────────────────────────────────────────────
-    function open()  { root.visible = true }
+    function open()  { root.visible = true; panel.forceActiveFocus() }
     function close() { root.visible = false }
 
     function reset(forLiveScan) {
@@ -239,9 +239,12 @@ Item {
             }
         }
 
-        // ESC closes (unless we're mid-check).
+        // ESC closes (unless we're mid-check, or awaiting Stop/Continue
+        // decision during a live scan).
         Keys.onReleased: function(event) {
-            if (event.key === Qt.Key_Escape && root.state_ !== "checking") {
+            if (event.key === Qt.Key_Escape
+                    && root.state_ !== "checking"
+                    && !(root.liveScan && root.state_ === "warnings")) {
                 root.close()
                 root.dismissed()
                 event.accepted = true
