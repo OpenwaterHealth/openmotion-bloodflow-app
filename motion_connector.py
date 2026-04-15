@@ -831,8 +831,19 @@ class MOTIONConnector(QObject):
         except Exception:
             pass
 
-        # SDK enforces a 3 s scan floor; allow ~1 s for camera enable + teardown.
-        self.contactQualityCheckStarted.emit(4)
+        # Guard against a concurrent configure (play-button path or another
+        # quick-check). The SDK now configures cameras as part of quick-check,
+        # so two configures would otherwise collide.
+        if getattr(self, "_config_running", False):
+            self.contactQualityCheckFinished.emit(
+                False, "Camera configuration already in progress", []
+            )
+            return
+
+        # Estimate covers configure (~10 s worst case) + 3 s scan + teardown.
+        # Actual duration varies with hardware state; the modal's elapsed
+        # counter reflects real time.
+        self.contactQualityCheckStarted.emit(15)
 
         def _worker():
             try:
