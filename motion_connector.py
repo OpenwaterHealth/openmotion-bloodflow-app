@@ -138,6 +138,25 @@ class MOTIONConnector(QObject):
     updateNotAvailable = pyqtSignal()
     updateCheckFailed = pyqtSignal(str)      # error message
 
+    # Contact-quality signals
+    contactQualityCheckStarted = pyqtSignal()
+    contactQualityCheckFinished = pyqtSignal(bool, 'QVariantList')
+    # Live-scan warning: (camera_label, type_key, type_text, value)
+    contactQualityWarning = pyqtSignal(str, str, str, float)
+    contactQualityScanInProgress = pyqtSignal(bool)
+
+    @staticmethod
+    def _camera_label(side: str, cam_id: int) -> str:
+        prefix = "L" if side == "left" else "R"
+        return f"{prefix}{int(cam_id)}"
+
+    @staticmethod
+    def _warning_text(type_key: str) -> str:
+        return {
+            "ambient_light": "Ambient light detected",
+            "poor_contact": "Poor sensor contact",
+        }.get(type_key, type_key)
+
     @staticmethod
     def _default_output_base() -> str:
         """Return a writable base directory for logs and scan data.
@@ -795,6 +814,38 @@ class MOTIONConnector(QObject):
         logger.debug(f"Console status update: {status_msg}")
 
     @pyqtSlot()
+    def runContactQualityCheck(self):
+        """Run a 1-second contact-quality quick check in a background thread."""
+        try:
+            if getattr(self._scan_workflow, "running", False):
+                self.contactQualityCheckFinished.emit(False, [])
+                return
+        except Exception:
+            pass
+
+        self.contactQualityCheckStarted.emit()
+
+        def _worker():
+            try:
+                result = self._interface.run_contact_quality_check(duration_s=1.0)
+            except Exception as exc:
+                logger.exception("contact-quality check failed: %s", exc)
+                self.contactQualityCheckFinished.emit(False, [])
+                return
+
+            payload = []
+            for w in getattr(result, "warnings", []) or []:
+                payload.append({
+                    "camera": self._camera_label(getattr(w, "side", "left"), w.camera_id),
+                    "typeKey": w.warning_type.value,
+                    "typeText": self._warning_text(w.warning_type.value),
+                    "value": float(w.value),
+                })
+            self.contactQualityCheckFinished.emit(bool(getattr(result, "ok", False)), payload)
+
+        threading.Thread(target=_worker, daemon=True, name="ContactQualityCheck").start()
+
+    @pyqtSlot()
     def stopCapture(self):
         """Stop capture (Cancel button or app close). Ceases scan, disables cameras, waits for worker."""
         if self._capture_running:
@@ -1302,6 +1353,16 @@ class MOTIONConnector(QObject):
             self._trigger_state = state
             self.triggerStateChanged.emit()
 
+        def _on_cq_warning(w):
+            try:
+                label = self._camera_label(getattr(w, "side", "left"), w.camera_id)
+                type_key = w.warning_type.value
+                self.contactQualityWarning.emit(
+                    label, type_key, self._warning_text(type_key), float(w.value)
+                )
+            except Exception as exc:
+                logger.warning("contact-quality callback error: %s", exc)
+
         started = self._interface.start_scan(
             req,
             extra_cols_fn=_extra_cols,
@@ -1315,6 +1376,7 @@ class MOTIONConnector(QObject):
                 f"[{side.upper()}] Streaming to: {os.path.basename(filepath)}"
             ),
             on_complete_fn=_on_complete,
+            contact_quality_callback=_on_cq_warning,
         )
         if not started:
             self._capture_running = False
