@@ -160,10 +160,16 @@ Rectangle {
             onClicked: panel.notesClicked()
         }
 
+        Rectangle {
+            Layout.preferredWidth: 52; Layout.preferredHeight: 1
+            Layout.topMargin: 4; Layout.bottomMargin: 4
+            Layout.alignment: Qt.AlignHCenter; color: theme.borderSubtle
+        }
+
         // Check (contact quality quick-check)
         PanelButton {
             enabled: !panel.scanning && panel.camerasReady
-            iconText: "\ueaa3"  // pulse icon
+            iconText: "\uea31"  // graph-3 icon
             label: "Check"
             onClicked: panel.checkClicked()
         }
