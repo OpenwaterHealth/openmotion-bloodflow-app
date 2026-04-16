@@ -18,6 +18,7 @@ Rectangle {
     property bool scanning: false
     property bool camerasReady: true  // starts true, goes false when camera selection changes
     property bool configuring: false  // true during camera flash
+    property bool _pendingContactCheck: false
 
     // FDA mode (read from app config). Forces Middle camera pattern + free run,
     // hides scan-settings button, and swaps in the FDA plot view.
@@ -147,7 +148,14 @@ Rectangle {
             }
         }
         onNotesClicked:    { var o = notesModal.visible;    closeAllModals(); if (!o) notesModal.open() }
-        onCheckClicked:    { MOTIONInterface.runContactQualityCheck() }
+        onCheckClicked:    {
+            contactQualityModal.reset(false, 0)
+            bloodFlow._pendingContactCheck = true
+            bloodFlow.configuring = true
+            var cqLeft  = MOTIONInterface.leftSensorConnected  ? 0xFF : 0x00
+            var cqRight = MOTIONInterface.rightSensorConnected ? 0xFF : 0x00
+            MOTIONInterface.startConfigureCameraSensors(cqLeft, cqRight)
+        }
         onHistoryClicked:  { var o = historyModal.visible;  closeAllModals(); if (!o) historyModal.open() }
         onLogClicked:      { var o = scanDialog.visible;    closeAllModals(); if (!o) scanDialog.open() }
         onSettingsClicked: { var o = settingsModal.visible; closeAllModals(); if (!o) settingsModal.open() }
@@ -360,6 +368,15 @@ Rectangle {
         function onConfigFinished(ok, err) {
             bloodFlow.configuring = false
             bloodFlow.camerasReady = true  // always unblock; allConnected is the real gate
+            if (bloodFlow._pendingContactCheck) {
+                bloodFlow._pendingContactCheck = false
+                if (ok) {
+                    MOTIONInterface.runContactQualityCheck()
+                } else {
+                    contactQualityModal.showError("Camera configuration failed: " + err)
+                }
+                return
+            }
             if (ok) {
                 console.log("Camera configuration complete")
             } else {
