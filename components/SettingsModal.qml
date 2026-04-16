@@ -61,8 +61,8 @@ Item {
         plotWindowSec      = cfg.plotWindowSec      !== undefined ? cfg.plotWindowSec      : 15
         bfiColor           = cfg.bfiColor           !== undefined ? cfg.bfiColor           : "#E74C3C"
         bviColor           = cfg.bviColor           !== undefined ? cfg.bviColor           : "#3498DB"
-        bviLowPassEnabled  = cfg.bviLowPassEnabled  !== undefined ? cfg.bviLowPassEnabled  : false
-        bviLowPassCutoffHz = cfg.bviLowPassCutoffHz !== undefined ? cfg.bviLowPassCutoffHz : 40.0
+        bviLowPassEnabled  = reducedMode ? true : (cfg.bviLowPassEnabled  !== undefined ? cfg.bviLowPassEnabled  : false)
+        bviLowPassCutoffHz = reducedMode ? 20.0 : (cfg.bviLowPassCutoffHz !== undefined ? cfg.bviLowPassCutoffHz : 20.0)
         bfiMin       = cfg.bfiMin       !== undefined ? cfg.bfiMin       : 0.0
         bfiMax       = cfg.bfiMax       !== undefined ? cfg.bfiMax       : 10.0
         bviMin       = cfg.bviMin       !== undefined ? cfg.bviMin       : 0.0
@@ -517,6 +517,7 @@ Item {
                     }
 
                     FieldRow {
+                        visible: !root.reducedMode
                         label: "BVI low-pass filter"
                         PillSwitch {
                             checked: root.bviLowPassEnabled
@@ -645,6 +646,7 @@ Item {
 
                 // ── Reduced Mode ─────────────────────────────────────────────
                 SectionCard {
+                    visible: !root.reducedMode
                     title: "Reduced Mode"
 
                     FieldRow {
