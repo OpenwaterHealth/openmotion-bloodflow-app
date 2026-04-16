@@ -1,6 +1,7 @@
 import QtQuick 6.0
 import QtQuick.Controls 6.0
 import QtQuick.Layouts 6.0
+import QtQuick.Controls as Controls
 import OpenMotion 1.0
 
 /*  ContactQualityModal — four-state notification for contact-quality checks.
@@ -53,6 +54,7 @@ Item {
 
     signal stopScanRequested()
     signal continueRequested()
+    signal retestRequested()
     signal dismissed()
 
     // ── public API ───────────────────────────────────────────────────────
@@ -98,6 +100,38 @@ Item {
         if (!visible) open()
     }
 
+    // Build per-camera quality status from entries.
+    // Returns "good" (no warnings), "bad" (has warning), or "inactive".
+    function cameraStatus(side, camIndex1) {
+        var prefix = (side === "left") ? "L" : "R"
+        var label = prefix + camIndex1
+        if (root.state_ === "checking") return "checking"
+        if (root.state_ === "error") return "inactive"
+        for (var i = 0; i < entries.length; ++i) {
+            if (entries[i].camera === label) return "bad"
+        }
+        return "good"
+    }
+
+    function cameraTooltip(side, camIndex1) {
+        var prefix = (side === "left") ? "L" : "R"
+        var label = prefix + camIndex1
+        var lines = [label]
+        for (var i = 0; i < entries.length; ++i) {
+            if (entries[i].camera === label)
+                lines.push(entries[i].typeText + " (" + entries[i].value.toFixed(1) + " DN)")
+        }
+        return lines.join("\n")
+    }
+
+    function cameraColor(side, camIndex1) {
+        var st = cameraStatus(side, camIndex1)
+        if (st === "good")     return "#A3E4A1"  // pale green
+        if (st === "bad")      return "#E67E22"  // strong orange
+        if (st === "checking") return "#666666"
+        return "#666666"
+    }
+
     // Ticks every 500 ms while in "checking" state to update the elapsed
     // label. Stopped on every exit path (close / showOk / showError /
     // addWarning) so it never leaks past the check.
@@ -122,7 +156,7 @@ Item {
     Rectangle {
         id: panel
         width: 520
-        height: 420
+        height: 480
         radius: 10
         color: theme.bgContainer
         border.width: 2
@@ -141,6 +175,8 @@ Item {
             // Title
             Text {
                 Layout.fillWidth: true
+                Layout.alignment: Qt.AlignHCenter
+                horizontalAlignment: Text.AlignHCenter
                 font.pixelSize: 20
                 font.bold: true
                 color: theme.textPrimary
@@ -179,67 +215,184 @@ Item {
             Text {
                 visible: root.state_ === "ok"
                 Layout.fillWidth: true
+                horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
                 color: theme.textSecondary
                 font.pixelSize: 14
                 text: "All cameras are reporting acceptable ambient light and contact levels."
             }
 
+            // Warnings subtitle
+            Text {
+                visible: root.state_ === "warnings"
+                Layout.fillWidth: true
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+                color: theme.textSecondary
+                font.pixelSize: 14
+                text: "Hover over orange cameras for details."
+            }
+
             // Error message
             Text {
                 visible: root.state_ === "error"
                 Layout.fillWidth: true
+                horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
                 color: theme.accentRed
                 font.pixelSize: 14
                 text: root.errorText
             }
 
-            // Warning list
-            ListView {
-                visible: root.state_ === "warnings"
+            // ── Sensor diagrams ──────────────────────────────────────
+            RowLayout {
+                visible: root.state_ === "ok" || root.state_ === "warnings"
                 Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                model: root.entries
-                spacing: 6
-                delegate: Rectangle {
-                    width: ListView.view ? ListView.view.width : 0
-                    height: 36
+                Layout.alignment: Qt.AlignHCenter
+                spacing: 20
+
+                // Left sensor
+                Rectangle {
+                    visible: MOTIONInterface.leftSensorConnected
+                    width: 180; height: 210; radius: 22
                     color: theme.bgCard
-                    radius: 4
-                    border.color: theme.borderSoft
-                    border.width: 1
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.margins: 8
-                        spacing: 12
+                    border.color: theme.borderSubtle; border.width: 2
+
+                    ColumnLayout {
+                        anchors.fill: parent; anchors.margins: 8; spacing: 6
+
                         Text {
-                            text: modelData.camera
-                            color: theme.textPrimary
-                            font.bold: true
-                            font.pixelSize: 14
-                            Layout.preferredWidth: 50
+                            text: "Left Sensor"
+                            font.pixelSize: 14; color: theme.textSecondary
+                            horizontalAlignment: Text.AlignHCenter
+                            Layout.alignment: Qt.AlignHCenter
                         }
-                        Text {
-                            text: modelData.typeText
-                            color: theme.textPrimary
-                            font.pixelSize: 14
-                            Layout.fillWidth: true
+
+                        GridLayout {
+                            columns: 3; columnSpacing: 16; rowSpacing: 8
+                            Layout.alignment: Qt.AlignHCenter
+                            property int cs: 18
+
+                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
+                                color: cameraColor("left", 1); border.color: "black"; border.width: 1
+                                MouseArea { id: lh1; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
+                                Controls.ToolTip.visible: lh1.containsMouse; Controls.ToolTip.text: cameraTooltip("left", 1) }
+                            Item {}
+                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
+                                color: cameraColor("left", 8); border.color: "black"; border.width: 1
+                                MouseArea { id: lh2; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
+                                Controls.ToolTip.visible: lh2.containsMouse; Controls.ToolTip.text: cameraTooltip("left", 8) }
+
+                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
+                                color: cameraColor("left", 2); border.color: "black"; border.width: 1
+                                MouseArea { id: lh3; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
+                                Controls.ToolTip.visible: lh3.containsMouse; Controls.ToolTip.text: cameraTooltip("left", 2) }
+                            Item {}
+                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
+                                color: cameraColor("left", 7); border.color: "black"; border.width: 1
+                                MouseArea { id: lh4; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
+                                Controls.ToolTip.visible: lh4.containsMouse; Controls.ToolTip.text: cameraTooltip("left", 7) }
+
+                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
+                                color: cameraColor("left", 3); border.color: "black"; border.width: 1
+                                MouseArea { id: lh5; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
+                                Controls.ToolTip.visible: lh5.containsMouse; Controls.ToolTip.text: cameraTooltip("left", 3) }
+                            Item {}
+                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
+                                color: cameraColor("left", 6); border.color: "black"; border.width: 1
+                                MouseArea { id: lh6; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
+                                Controls.ToolTip.visible: lh6.containsMouse; Controls.ToolTip.text: cameraTooltip("left", 6) }
+
+                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
+                                color: cameraColor("left", 4); border.color: "black"; border.width: 1
+                                MouseArea { id: lh7; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
+                                Controls.ToolTip.visible: lh7.containsMouse; Controls.ToolTip.text: cameraTooltip("left", 4) }
+                            Item {}
+                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
+                                color: cameraColor("left", 5); border.color: "black"; border.width: 1
+                                MouseArea { id: lh8; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
+                                Controls.ToolTip.visible: lh8.containsMouse; Controls.ToolTip.text: cameraTooltip("left", 5) }
+
+                            Item {}
+                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
+                                color: "#FFD700"; border.color: "black"; border.width: 1 }
+                            Item {}
                         }
+                    }
+                }
+
+                // Right sensor
+                Rectangle {
+                    visible: MOTIONInterface.rightSensorConnected
+                    width: 180; height: 210; radius: 22
+                    color: theme.bgCard
+                    border.color: theme.borderSubtle; border.width: 2
+
+                    ColumnLayout {
+                        anchors.fill: parent; anchors.margins: 8; spacing: 6
+
                         Text {
-                            text: modelData.value.toFixed(1) + " DN"
-                            color: theme.textSecondary
-                            font.pixelSize: 12
+                            text: "Right Sensor"
+                            font.pixelSize: 14; color: theme.textSecondary
+                            horizontalAlignment: Text.AlignHCenter
+                            Layout.alignment: Qt.AlignHCenter
+                        }
+
+                        GridLayout {
+                            columns: 3; columnSpacing: 16; rowSpacing: 8
+                            Layout.alignment: Qt.AlignHCenter
+                            property int cs: 18
+
+                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
+                                color: cameraColor("right", 1); border.color: "black"; border.width: 1
+                                MouseArea { id: rh1; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
+                                Controls.ToolTip.visible: rh1.containsMouse; Controls.ToolTip.text: cameraTooltip("right", 1) }
+                            Item {}
+                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
+                                color: cameraColor("right", 8); border.color: "black"; border.width: 1
+                                MouseArea { id: rh2; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
+                                Controls.ToolTip.visible: rh2.containsMouse; Controls.ToolTip.text: cameraTooltip("right", 8) }
+
+                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
+                                color: cameraColor("right", 2); border.color: "black"; border.width: 1
+                                MouseArea { id: rh3; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
+                                Controls.ToolTip.visible: rh3.containsMouse; Controls.ToolTip.text: cameraTooltip("right", 2) }
+                            Item {}
+                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
+                                color: cameraColor("right", 7); border.color: "black"; border.width: 1
+                                MouseArea { id: rh4; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
+                                Controls.ToolTip.visible: rh4.containsMouse; Controls.ToolTip.text: cameraTooltip("right", 7) }
+
+                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
+                                color: cameraColor("right", 3); border.color: "black"; border.width: 1
+                                MouseArea { id: rh5; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
+                                Controls.ToolTip.visible: rh5.containsMouse; Controls.ToolTip.text: cameraTooltip("right", 3) }
+                            Item {}
+                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
+                                color: cameraColor("right", 6); border.color: "black"; border.width: 1
+                                MouseArea { id: rh6; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
+                                Controls.ToolTip.visible: rh6.containsMouse; Controls.ToolTip.text: cameraTooltip("right", 6) }
+
+                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
+                                color: cameraColor("right", 4); border.color: "black"; border.width: 1
+                                MouseArea { id: rh7; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
+                                Controls.ToolTip.visible: rh7.containsMouse; Controls.ToolTip.text: cameraTooltip("right", 4) }
+                            Item {}
+                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
+                                color: cameraColor("right", 5); border.color: "black"; border.width: 1
+                                MouseArea { id: rh8; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
+                                Controls.ToolTip.visible: rh8.containsMouse; Controls.ToolTip.text: cameraTooltip("right", 5) }
+
+                            Item {}
+                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
+                                color: "#FFD700"; border.color: "black"; border.width: 1 }
+                            Item {}
                         }
                     }
                 }
             }
 
-            // Spacer so the footer sticks to the bottom when state has no
-            // fillHeight content (checking / ok / error).
             Item {
-                visible: root.state_ !== "warnings"
                 Layout.fillHeight: true
                 Layout.fillWidth: true
             }
@@ -247,7 +400,7 @@ Item {
             // Footer buttons
             RowLayout {
                 Layout.fillWidth: true
-                Layout.alignment: Qt.AlignRight
+                Layout.alignment: Qt.AlignHCenter
                 spacing: 12
                 visible: root.state_ !== "checking"
 
@@ -255,30 +408,68 @@ Item {
                 Button {
                     visible: root.liveScan && root.state_ === "warnings"
                     text: "Stop scan"
-                    onClicked: {
-                        root.stopScanRequested()
-                        root.close()
-                        root.dismissed()
+                    hoverEnabled: true
+                    Layout.preferredHeight: 45
+                    contentItem: Text {
+                        text: parent.text; font.pixelSize: 12
+                        color: parent.hovered ? "#FFFFFF" : theme.textSecondary
+                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
+                    background: Rectangle {
+                        color: parent.hovered ? theme.accentRed : theme.bgInput
+                        radius: 4; border.color: parent.hovered ? theme.accentRed : theme.borderSoft; border.width: 1
+                    }
+                    onClicked: { root.stopScanRequested(); root.close(); root.dismissed() }
                 }
                 Button {
                     visible: root.liveScan && root.state_ === "warnings"
                     text: "Continue"
-                    onClicked: {
-                        root.continueRequested()
-                        root.close()
-                        root.dismissed()
+                    hoverEnabled: true
+                    Layout.preferredHeight: 45
+                    contentItem: Text {
+                        text: parent.text; font.pixelSize: 12
+                        color: parent.hovered ? "#FFFFFF" : theme.textSecondary
+                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
+                    background: Rectangle {
+                        color: parent.hovered ? theme.accentBlue : theme.bgInput
+                        radius: 4; border.color: parent.hovered ? theme.accentBlue : theme.borderSoft; border.width: 1
+                    }
+                    onClicked: { root.continueRequested(); root.close(); root.dismissed() }
                 }
 
                 // Quick-check / OK / error footer
                 Button {
                     visible: !(root.liveScan && root.state_ === "warnings")
                     text: "Dismiss"
-                    onClicked: {
-                        root.close()
-                        root.dismissed()
+                    hoverEnabled: true
+                    Layout.preferredHeight: 45
+                    contentItem: Text {
+                        text: parent.text; font.pixelSize: 12
+                        color: parent.hovered ? "#FFFFFF" : theme.textSecondary
+                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
+                    background: Rectangle {
+                        color: parent.hovered ? theme.accentBlue : theme.bgInput
+                        radius: 4; border.color: parent.hovered ? theme.accentBlue : theme.borderSoft; border.width: 1
+                    }
+                    onClicked: { root.close(); root.dismissed() }
+                }
+                Button {
+                    visible: !(root.liveScan && root.state_ === "warnings")
+                    text: "Retest"
+                    hoverEnabled: true
+                    Layout.preferredHeight: 45
+                    contentItem: Text {
+                        text: parent.text; font.pixelSize: 12
+                        color: parent.hovered ? "#FFFFFF" : theme.textSecondary
+                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle {
+                        color: parent.hovered ? theme.accentBlue : theme.bgInput
+                        radius: 4; border.color: parent.hovered ? theme.accentBlue : theme.borderSoft; border.width: 1
+                    }
+                    onClicked: { root.close(); root.retestRequested() }
                 }
             }
         }

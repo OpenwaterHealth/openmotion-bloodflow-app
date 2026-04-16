@@ -258,6 +258,14 @@ Rectangle {
         anchors.fill: parent
         onStopScanRequested: MOTIONInterface.stopCapture()
         onContinueRequested: { /* no-op: leave scan running */ }
+        onRetestRequested: {
+            contactQualityModal.reset(false, 0)
+            bloodFlow._pendingContactCheck = true
+            bloodFlow.configuring = true
+            var cqLeft  = MOTIONInterface.leftSensorConnected  ? 0xFF : 0x00
+            var cqRight = MOTIONInterface.rightSensorConnected ? 0xFF : 0x00
+            MOTIONInterface.startConfigureCameraSensors(cqLeft, cqRight)
+        }
     }
 
     ScanProgressDialog {
