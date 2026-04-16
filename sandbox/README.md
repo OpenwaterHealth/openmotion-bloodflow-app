@@ -82,11 +82,26 @@ If it's a prototype, an algorithm experiment, a new sensor integration, or a har
 
 When in doubt, start in a sandbox. You can always extract to a new repo later if it grows into something that justifies its own lifecycle.
 
+## Starting a New Experiment
+
+Copy the template folder and rename it:
+
+```bash
+cd sandbox
+cp -r _template my-experiment-name
+```
+
+Then open `my-experiment-name/README.md` and fill in the fields. The template has the required structure with placeholder text — just replace the bracketed sections.
+
+The canonical version of the experiment template lives in the [.github org repo](https://github.com/OpenwaterHealth/.github/blob/main/templates/sandbox-experiment-README.md). The `_template/` folder in this directory is a local copy for convenience.
+
 ## Directory Layout
 
 ```
 sandbox/
 ├── README.md                    # This file
+├── _template/                   # Experiment README template (copy, don't edit)
+│   └── README.md                # Pre-filled with required fields
 ├── [experiment-name]/           # One folder per experiment
 │   ├── README.md                # Status, owner, description (required)
 │   ├── [code, data, configs]    # Whatever the experiment needs
