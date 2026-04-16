@@ -149,7 +149,7 @@ Item {
                     if (root.state_ === "checking") return "Checking contact quality…"
                     if (root.state_ === "ok")       return "Good signal quality"
                     if (root.state_ === "error")    return "Contact check failed"
-                    return "Contact quality warnings"
+                    return "Contact Quality Notification"
                 }
             }
 
