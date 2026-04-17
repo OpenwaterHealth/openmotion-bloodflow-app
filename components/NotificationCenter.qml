@@ -126,6 +126,15 @@ Item {
                 // Enter animation runs on completion.
                 Component.onCompleted: enterAnim.start()
 
+                // Auto-dismiss timer. Disabled when durationMs == 0 (sticky).
+                Timer {
+                    id: autoDismiss
+                    interval: model.durationMs
+                    repeat: false
+                    running: model.durationMs > 0
+                    onTriggered: wrapper.dismissAnimated()
+                }
+
                 ParallelAnimation {
                     id: enterAnim
                     NumberAnimation { target: wrapper; property: "x";       to: 0; duration: 180; easing.type: Easing.OutCubic }
@@ -154,6 +163,18 @@ Item {
                     color: theme.bgElevated
                     border.color: theme.borderSubtle
                     border.width: 1
+
+                    // Hovering anywhere on the toast pauses the auto-dismiss timer.
+                    HoverHandler {
+                        id: toastHover
+                        onHoveredChanged: {
+                            if (hovered) {
+                                autoDismiss.stop()
+                            } else if (model.durationMs > 0) {
+                                autoDismiss.restart()
+                            }
+                        }
+                    }
 
                     // Left accent stripe
                     Rectangle {
