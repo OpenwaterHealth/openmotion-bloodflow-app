@@ -103,77 +103,114 @@ Item {
         anchors.rightMargin: 24
         anchors.bottomMargin: 24
 
+        add: Transition {
+            // The wrapper's internal enter animation handles fade/slide; we only
+            // animate the y-position here so existing toasts shift up smoothly.
+            NumberAnimation { properties: "y"; duration: 180; easing.type: Easing.OutCubic }
+        }
+        move: Transition {
+            NumberAnimation { properties: "y"; duration: 180; easing.type: Easing.OutCubic }
+        }
+        // (No `populate` transition — we don't want the entire stack to animate
+        // on initial load; only newly-added toasts should slide in.)
+
         Repeater {
             model: model_
-            delegate: Rectangle {
-                id: toast
+            delegate: Item {
+                id: wrapper
                 width: 340
-                implicitHeight: contentRow.implicitHeight + 24  // 12px padding top+bottom
-                height: implicitHeight
-                radius: 10
-                color: theme.bgElevated
-                border.color: theme.borderSubtle
-                border.width: 1
+                height: toast.height
+                opacity: 0
+                x: 60      // start offscreen-right (relative to its slot in the Column)
 
-                // Left accent stripe
-                Rectangle {
-                    width: 3
-                    height: parent.height - 8
-                    radius: 1.5
-                    color: root._accentColor(model.type)
-                    anchors.left: parent.left
-                    anchors.leftMargin: 4
-                    anchors.verticalCenter: parent.verticalCenter
+                // Enter animation runs on completion.
+                Component.onCompleted: enterAnim.start()
+
+                ParallelAnimation {
+                    id: enterAnim
+                    NumberAnimation { target: wrapper; property: "x";       to: 0; duration: 180; easing.type: Easing.OutCubic }
+                    NumberAnimation { target: wrapper; property: "opacity"; to: 1; duration: 180; easing.type: Easing.OutCubic }
                 }
 
-                RowLayout {
-                    id: contentRow
-                    anchors.fill: parent
-                    anchors.leftMargin: 16     // leave room for stripe (4 + 3 + ~9)
-                    anchors.rightMargin: 12
-                    anchors.topMargin: 12
-                    anchors.bottomMargin: 12
-                    spacing: 12
+                // Exit: triggered by `dismissAnimated()` (called by timer or close click).
+                // When the parallel animation finishes, remove the model entry so the
+                // Column's `move` transition can collapse the empty slot.
+                function dismissAnimated() { exitAnim.start() }
 
-                    // Type icon
-                    Text {
-                        text: root._glyph(model.type)
-                        font.family: iconFont.name
-                        font.pixelSize: 24
+                ParallelAnimation {
+                    id: exitAnim
+                    NumberAnimation { target: wrapper; property: "x";       to: 60; duration: 160; easing.type: Easing.InCubic }
+                    NumberAnimation { target: wrapper; property: "opacity"; to: 0;  duration: 160; easing.type: Easing.InCubic }
+                    onStopped: root.dismiss(model.id)
+                }
+
+                Rectangle {
+                    id: toast
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    implicitHeight: contentRow.implicitHeight + 24
+                    height: implicitHeight
+                    radius: 10
+                    color: theme.bgElevated
+                    border.color: theme.borderSubtle
+                    border.width: 1
+
+                    // Left accent stripe
+                    Rectangle {
+                        width: 3
+                        height: parent.height - 8
+                        radius: 1.5
                         color: root._accentColor(model.type)
-                        Layout.alignment: Qt.AlignTop
+                        anchors.left: parent.left
+                        anchors.leftMargin: 4
+                        anchors.verticalCenter: parent.verticalCenter
                     }
 
-                    // Message
-                    Text {
-                        text: model.text
-                        color: theme.textPrimary
-                        font.pixelSize: 13
-                        wrapMode: Text.Wrap
-                        Layout.fillWidth: true
-                        Layout.alignment: Qt.AlignVCenter
-                    }
+                    RowLayout {
+                        id: contentRow
+                        anchors.fill: parent
+                        anchors.leftMargin: 16
+                        anchors.rightMargin: 12
+                        anchors.topMargin: 12
+                        anchors.bottomMargin: 12
+                        spacing: 12
 
-                    // Close button (only when dismissible)
-                    Item {
-                        Layout.alignment: Qt.AlignTop
-                        width: 20
-                        height: 20
-                        visible: model.dismissible
                         Text {
-                            id: closeGlyph
-                            anchors.centerIn: parent
-                            text: "\ue9b4"   // cross
+                            text: root._glyph(model.type)
                             font.family: iconFont.name
-                            font.pixelSize: 14
-                            color: closeArea.containsMouse ? theme.textPrimary : theme.textTertiary
+                            font.pixelSize: 24
+                            color: root._accentColor(model.type)
+                            Layout.alignment: Qt.AlignTop
                         }
-                        MouseArea {
-                            id: closeArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.dismiss(model.id)
+
+                        Text {
+                            text: model.text
+                            color: theme.textPrimary
+                            font.pixelSize: 13
+                            wrapMode: Text.Wrap
+                            Layout.fillWidth: true
+                            Layout.alignment: Qt.AlignVCenter
+                        }
+
+                        Item {
+                            Layout.alignment: Qt.AlignTop
+                            width: 20
+                            height: 20
+                            visible: model.dismissible
+                            Text {
+                                anchors.centerIn: parent
+                                text: "\ue9b4"
+                                font.family: iconFont.name
+                                font.pixelSize: 14
+                                color: closeArea.containsMouse ? theme.textPrimary : theme.textTertiary
+                            }
+                            MouseArea {
+                                id: closeArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: wrapper.dismissAnimated()
+                            }
                         }
                     }
                 }
