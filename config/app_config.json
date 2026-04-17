@@ -60,5 +60,16 @@
   "bviClampHigh": 10.0,
   "darkMode": true,
   "cq_dark_threshold_per_camera": [3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0],
-  "cq_light_threshold_per_camera": [15.0, 15.0, 15.0, 15.0, 15.0, 15.0, 15.0, 15.0]
+  "cq_light_threshold_per_camera": [15.0, 15.0, 15.0, 15.0, 15.0, 15.0, 15.0, 15.0],
+  "cq_check_duration_sec": 1.0,
+  "triggerConfig": {
+    "TriggerFrequencyHz": 40,
+    "TriggerPulseWidthUsec": 500,
+    "LaserPulseDelayUsec": 100,
+    "LaserPulseWidthUsec": 500,
+    "LaserPulseSkipInterval": 600,
+    "LaserPulseSkipDelayUsec": 1800,
+    "EnableSyncOut": true,
+    "EnableTaTrigger": true
+  }
 }

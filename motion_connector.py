@@ -165,6 +165,29 @@ class MOTIONConnector(QObject):
             "poor_contact": "Poor sensor contact",
         }.get(type_key, type_key)
 
+    def _ensure_idle(self) -> str | None:
+        """Gate for pipeline-starting slots (capture / configure / check).
+
+        Returns ``None`` when no pipeline is running and a new one may
+        start.  Returns a short, user-facing error message otherwise so
+        the caller can surface it on the same finished signal consumers
+        already listen to.
+
+        Guard order matters: capture is the long-running one, so we check
+        it first; configure is next since it also holds the sensor lock;
+        the SDK-level ``scan_workflow.running`` mirror comes last as a
+        belt-and-suspenders check for races where the app-side flag is
+        momentarily out of sync.
+        """
+        if self._capture_running or self._capture_thread is not None:
+            return "Scan already running"
+        if self._config_running:
+            return "Camera configuration already in progress"
+        workflow = self._scan_workflow
+        if workflow is not None and getattr(workflow, "running", False):
+            return "Scan already running"
+        return None
+
     @staticmethod
     def _default_output_base() -> str:
         """Return a writable base directory for logs and scan data.
@@ -824,37 +847,29 @@ class MOTIONConnector(QObject):
     @pyqtSlot()
     def runContactQualityCheck(self):
         """Run a short contact-quality quick check in a background thread."""
-        try:
-            if getattr(self._scan_workflow, "running", False):
-                self.contactQualityCheckFinished.emit(
-                    False, "Scan already running", []
-                )
-                return
-        except Exception:
-            pass
-
-        # Defensive guard — the Check button is gated on camerasReady in QML,
-        # so a concurrent configure shouldn't happen from this path, but the
-        # check is cheap and harmless.
-        if getattr(self, "_config_running", False):
-            self.contactQualityCheckFinished.emit(
-                False, "Camera configuration already in progress", []
-            )
+        err = self._ensure_idle()
+        if err is not None:
+            self.contactQualityCheckFinished.emit(False, err, [])
             return
 
-        # Trigger/laser config is pushed by ContactQualityRunner's
-        # SetTriggerLaserTask step before this method is invoked, so we no
-        # longer configure the console here.
+        # Trigger/laser config is pushed by ScanRunner's SetTriggerLaserTask
+        # step before this method is invoked, so we no longer configure the
+        # console here.
 
         cfg = self._app_config or {}
         dark_thresholds = cfg.get("cq_dark_threshold_per_camera")
         light_thresholds = cfg.get("cq_light_threshold_per_camera")
+        duration_s = float(cfg.get("cq_check_duration_sec", 1.0))
 
-        self.contactQualityCheckStarted.emit(4)
+        # Rough UI estimate: SDK acquisition window + ~3 s of pipeline
+        # overhead (camera enable, warmup-discard, finalize). This drives
+        # the "~Ns" hint under the spinner; exact timing is informational.
+        self.contactQualityCheckStarted.emit(int(round(duration_s + 3)))
 
         def _worker():
             try:
                 result = self._interface.run_contact_quality_check(
+                    duration_s=duration_s,
                     dark_thresholds=dark_thresholds,
                     light_thresholds=light_thresholds,
                 )
@@ -1224,8 +1239,9 @@ class MOTIONConnector(QObject):
             f"dir={data_dir}, disable_laser={disable_laser})"
         )
 
-        if self._capture_running or self._capture_thread is not None:
-            self.captureLog.emit("Capture already running.")
+        err = self._ensure_idle()
+        if err is not None:
+            self.captureLog.emit(err)
             return False
 
         if self._safetyFailure:
@@ -1970,7 +1986,9 @@ class MOTIONConnector(QObject):
     def startConfigureCameraSensors(
         self, left_camera_mask: int, right_camera_mask: int
     ):
-        if self._config_running:
+        err = self._ensure_idle()
+        if err is not None:
+            self.configFinished.emit(False, err)
             return
         self._config_running = True
         req = ConfigureRequest(

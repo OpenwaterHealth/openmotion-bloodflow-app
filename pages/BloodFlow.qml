@@ -264,18 +264,11 @@ Rectangle {
     }
 
     // Shared trigger/laser config used by both the capture and check
-    // pipelines. TODO(m1): move into MOTIONInterface.appConfig.
+    // pipelines. Sourced from app_config.json -> appConfig.triggerConfig.
     readonly property var defaultTriggerConfig:
-        (typeof appTriggerConfig !== "undefined") ? appTriggerConfig : ({
-            "TriggerFrequencyHz": 40,
-            "TriggerPulseWidthUsec": 500,
-            "LaserPulseDelayUsec": 100,
-            "LaserPulseWidthUsec": 500,
-            "LaserPulseSkipInterval": 600,
-            "LaserPulseSkipDelayUsec": 1800,
-            "EnableSyncOut": true,
-            "EnableTaTrigger": true
-        })
+        MOTIONInterface.appConfig.triggerConfig !== undefined
+            ? MOTIONInterface.appConfig.triggerConfig
+            : ({})
 
     // ===== SCAN RUNNER (capture mode) =====
     ScanRunner {
@@ -350,13 +343,15 @@ Rectangle {
         triggerConfig: bloodFlow.defaultTriggerConfig
 
         onStageUpdate: function(txt) { console.log("ContactQuality: " + txt) }
-        onMessageOut: function(line) { console.log(line) }
+        onMessageOut: function(line) { console.log("ContactQuality: " + line) }
         onScanFinished: function(ok, err, left, right) {
-            if (!ok && err !== "") {
-                contactQualityModal.showError(err)
+            // Flash/trigger stage failures surface here; the final "check"
+            // stage forwards its own result via contactQualityCheckFinished
+            // (consumed by the modal's Connections block), so skip here to
+            // avoid double-reporting.
+            if (!ok && qualityCheckRunner._stage !== "check") {
+                contactQualityModal.showError(err || "Check pipeline failed")
             }
-            // Success / warnings path is handled by the modal's Connections
-            // block listening to contactQualityCheckFinished directly.
         }
     }
 
