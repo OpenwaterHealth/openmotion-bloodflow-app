@@ -89,6 +89,10 @@ class MOTIONConnector(QObject):
     gyroscopeSensorUpdated = pyqtSignal(float, float, float)  # (x, y, z)
     rgbStateReceived = pyqtSignal(int, str)  # (state, state_text)
     errorOccurred = pyqtSignal(str)
+    notificationRequested = pyqtSignal('QVariant')  # toast notification payload dict
+    notificationDismissByIdRequested = pyqtSignal(int)   # dismiss the toast with this id
+    notificationDismissByTagRequested = pyqtSignal(str)  # dismiss the toast with this tag
+    notificationDismissAllRequested = pyqtSignal()       # dismiss every active toast
     vizFinished = pyqtSignal()
     visualizingChanged = pyqtSignal(bool)
 
@@ -223,6 +227,7 @@ class MOTIONConnector(QObject):
         self._capture_thread = None
         self._capture_stop = threading.Event()
         self._capture_running = False
+        self._notification_id_counter = 0  # monotonic id assigned to each notify() call
         self._safety_cancel_scheduled = False  # True after scheduling cancel-due-to-safety; cleared when capture ends
         self._capture_left_path = ""
         self._capture_right_path = ""
@@ -1101,6 +1106,66 @@ class MOTIONConnector(QObject):
                 logger.info(f"Notes saved to disk: {self._scan_notes_path}")
             except Exception as e:
                 logger.error(f"Failed to update scan notes on disk: {e}")
+
+    @pyqtSlot(str, result=int)
+    @pyqtSlot(str, str, result=int)
+    @pyqtSlot(str, str, int, result=int)
+    @pyqtSlot(str, str, int, bool, result=int)
+    @pyqtSlot(str, str, int, bool, str, result=int)
+    def notify(self, text: str, type_: str = "info", duration_ms: int = 4000,
+               dismissible: bool = True, tag: str = "") -> int:
+        """Fire a toast notification. Reachable from QML as MOTIONInterface.notify(...)
+        and from any Python code holding the connector instance.
+
+        Args:
+            text: message shown in the toast
+            type_: one of "info", "success", "warning", "error"
+            duration_ms: auto-dismiss after N ms; 0 = sticky until user dismisses
+            dismissible: whether to show the ✕ close button
+            tag: optional stable identifier. If non-empty, calling notify with the
+                same tag again replaces the existing toast (no duplicate stacking),
+                and dismissNotification(tag) can later target it.
+
+        Returns:
+            The integer id assigned to this notification. Pass to
+            dismissNotification(id) to dismiss it later.
+        """
+        if type_ not in ("info", "success", "warning", "error"):
+            logger.warning(f"notify: unknown type '{type_}', falling back to 'info'")
+            type_ = "info"
+        self._notification_id_counter += 1
+        nid = self._notification_id_counter
+        self.notificationRequested.emit({
+            "id": nid,
+            "tag": str(tag),
+            "text": text,
+            "type": type_,
+            "durationMs": int(duration_ms),
+            "dismissible": bool(dismissible),
+        })
+        return nid
+
+    @pyqtSlot(int)
+    @pyqtSlot(str)
+    def dismissNotification(self, value):
+        """Dismiss a single notification by id (int) or tag (str). Animated.
+
+        Safe to call with an id/tag that no longer exists — it's a no-op.
+        """
+        if isinstance(value, bool):
+            # bool is a subclass of int in Python; reject explicitly to avoid
+            # surprising callers who pass True/False expecting different semantics.
+            logger.warning("dismissNotification: bool is not a valid id/tag")
+            return
+        if isinstance(value, int):
+            self.notificationDismissByIdRequested.emit(value)
+        else:
+            self.notificationDismissByTagRequested.emit(str(value))
+
+    @pyqtSlot()
+    def dismissAllNotifications(self):
+        """Dismiss every active toast. Animated."""
+        self.notificationDismissAllRequested.emit()
 
     def generate_user_label(self) -> str:
         suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
