@@ -121,7 +121,14 @@ Item {
                 width: 340
                 height: toast.height
                 opacity: 0
-                x: 60      // start offscreen-right (relative to its slot in the Column)
+
+                // Slide is driven by a Translate transform rather than the wrapper's
+                // own `x` property, because Column's positioner can interrupt
+                // animations bound to a child's `x`/`y` (e.g. when the 5-toast cap
+                // removes an item mid-animation, leaving the slide stranded at 60).
+                // Transforms are pure visual offsets — the positioner never touches
+                // them — so the slide always completes cleanly.
+                transform: Translate { id: slide; x: 60 }
 
                 // Enter animation runs on completion.
                 Component.onCompleted: enterAnim.start()
@@ -137,7 +144,7 @@ Item {
 
                 ParallelAnimation {
                     id: enterAnim
-                    NumberAnimation { target: wrapper; property: "x";       to: 0; duration: 180; easing.type: Easing.OutCubic }
+                    NumberAnimation { target: slide;   property: "x";       to: 0; duration: 180; easing.type: Easing.OutCubic }
                     NumberAnimation { target: wrapper; property: "opacity"; to: 1; duration: 180; easing.type: Easing.OutCubic }
                 }
 
@@ -148,7 +155,7 @@ Item {
 
                 ParallelAnimation {
                     id: exitAnim
-                    NumberAnimation { target: wrapper; property: "x";       to: 60; duration: 160; easing.type: Easing.InCubic }
+                    NumberAnimation { target: slide;   property: "x";       to: 60; duration: 160; easing.type: Easing.InCubic }
                     NumberAnimation { target: wrapper; property: "opacity"; to: 0;  duration: 160; easing.type: Easing.InCubic }
                     onStopped: root.dismiss(model.id)
                 }
