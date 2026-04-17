@@ -149,7 +149,7 @@ Rectangle {
         onNotesClicked:    { var o = notesModal.visible;    closeAllModals(); if (!o) notesModal.open() }
         onCheckClicked:    {
             contactQualityModal.reset(false, 0)
-            contactQualityRunner.start()
+            qualityCheckRunner.start()
         }
         onHistoryClicked:  { var o = historyModal.visible;  closeAllModals(); if (!o) historyModal.open() }
         onLogClicked:      { var o = scanDialog.visible;    closeAllModals(); if (!o) scanDialog.open() }
@@ -255,7 +255,7 @@ Rectangle {
         onContinueRequested: { /* no-op: leave scan running */ }
         onRetestRequested: {
             contactQualityModal.reset(false, 0)
-            contactQualityRunner.start()
+            qualityCheckRunner.start()
         }
     }
 
@@ -263,19 +263,10 @@ Rectangle {
         id: scanDialog
     }
 
-    // ===== SCAN RUNNER =====
-    ScanRunner {
-        id: scanRunner
-        connector: MOTIONInterface
-        leftMask: bloodFlow.leftMask
-        rightMask: bloodFlow.rightMask
-        durationSec: bloodFlow.durationSec
-        subjectId: MOTIONInterface.userLabel
-        dataDir: MOTIONInterface.directory
-        disableLaser: false
-        laserOn: true
-        laserPower: 50
-        triggerConfig: (typeof appTriggerConfig !== "undefined") ? appTriggerConfig : ({
+    // Shared trigger/laser config used by both the capture and check
+    // pipelines. TODO(m1): move into MOTIONInterface.appConfig.
+    readonly property var defaultTriggerConfig:
+        (typeof appTriggerConfig !== "undefined") ? appTriggerConfig : ({
             "TriggerFrequencyHz": 40,
             "TriggerPulseWidthUsec": 500,
             "LaserPulseDelayUsec": 100,
@@ -285,6 +276,20 @@ Rectangle {
             "EnableSyncOut": true,
             "EnableTaTrigger": true
         })
+
+    // ===== SCAN RUNNER (capture mode) =====
+    ScanRunner {
+        id: scanRunner
+        mode: "capture"
+        connector: MOTIONInterface
+        leftMask: bloodFlow.leftMask
+        rightMask: bloodFlow.rightMask
+        durationSec: bloodFlow.durationSec
+        subjectId: MOTIONInterface.userLabel
+        dataDir: MOTIONInterface.directory
+        disableLaser: false
+        laserOn: true
+        triggerConfig: bloodFlow.defaultTriggerConfig
 
         onStageUpdate: function(txt) {
             scanDialog.stageText = txt
@@ -330,22 +335,23 @@ Rectangle {
         }
     }
 
-    // ===== CONTACT-QUALITY RUNNER =====
-    // Same flash + trigger/laser plumbing as ScanRunner; final step is the
-    // contact-quality check instead of capture.  Always flashes 0xFF masks
-    // so every physically-present camera participates (absent cameras are
-    // skipped by the configure workflow).
-    ContactQualityRunner {
-        id: contactQualityRunner
+    // ===== SCAN RUNNER (check mode) =====
+    // Shares flash + trigger/laser plumbing with scanRunner; final stage is
+    // the contact-quality check instead of capture. Always flashes 0xFF so
+    // every physically-present camera participates — absent cameras are
+    // skipped by the configure workflow.
+    ScanRunner {
+        id: qualityCheckRunner
+        mode: "check"
         connector: MOTIONInterface
         leftMask: MOTIONInterface.leftSensorConnected  ? 0xFF : 0x00
         rightMask: MOTIONInterface.rightSensorConnected ? 0xFF : 0x00
         laserOn: true
-        triggerConfig: scanRunner.triggerConfig
+        triggerConfig: bloodFlow.defaultTriggerConfig
 
         onStageUpdate: function(txt) { console.log("ContactQuality: " + txt) }
         onMessageOut: function(line) { console.log(line) }
-        onRunFinished: function(ok, err) {
+        onScanFinished: function(ok, err, left, right) {
             if (!ok && err !== "") {
                 contactQualityModal.showError(err)
             }

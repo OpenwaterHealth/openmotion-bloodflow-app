@@ -58,5 +58,7 @@
   "bfiClampHigh": 10.0,
   "bviClampLow": 0.0,
   "bviClampHigh": 10.0,
-  "darkMode": true
+  "darkMode": true,
+  "cq_dark_threshold_per_camera": [3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0],
+  "cq_light_threshold_per_camera": [15.0, 15.0, 15.0, 15.0, 15.0, 15.0, 15.0, 15.0]
 }

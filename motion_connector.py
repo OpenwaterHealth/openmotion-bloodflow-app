@@ -846,11 +846,18 @@ class MOTIONConnector(QObject):
         # SetTriggerLaserTask step before this method is invoked, so we no
         # longer configure the console here.
 
+        cfg = self._app_config or {}
+        dark_thresholds = cfg.get("cq_dark_threshold_per_camera")
+        light_thresholds = cfg.get("cq_light_threshold_per_camera")
+
         self.contactQualityCheckStarted.emit(4)
 
         def _worker():
             try:
-                result = self._interface.run_contact_quality_check()
+                result = self._interface.run_contact_quality_check(
+                    dark_thresholds=dark_thresholds,
+                    light_thresholds=light_thresholds,
+                )
             except Exception as exc:
                 logger.exception("contact-quality check failed: %s", exc)
                 self.contactQualityCheckFinished.emit(False, str(exc), [])
@@ -1404,6 +1411,8 @@ class MOTIONConnector(QObject):
             ),
             on_complete_fn=_on_complete,
             contact_quality_callback=_on_cq_warning,
+            cq_dark_thresholds=(self._app_config or {}).get("cq_dark_threshold_per_camera"),
+            cq_light_thresholds=(self._app_config or {}).get("cq_light_threshold_per_camera"),
         )
         if not started:
             self._capture_running = False

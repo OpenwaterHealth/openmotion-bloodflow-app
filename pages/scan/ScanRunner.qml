@@ -1,4 +1,15 @@
 // qml/scan/ScanRunner.qml
+//
+// Drives the shared scan pipeline:
+//   FlashSensorsTask -> SetTriggerLaserTask -> <final task>
+//
+// ``mode`` selects the final task:
+//   * "capture" — CaptureDataTask  (normal user scan)
+//   * "check"   — ContactQualityCheckTask  (contact-quality quick check)
+//
+// Properties irrelevant to a given mode are ignored (e.g. ``durationSec``
+// / ``dataDir`` for "check"; ``leftPath``/``rightPath`` in ``scanFinished``
+// are empty strings in "check" mode).
 import QtQuick 6.5
 import "."
 
@@ -6,6 +17,8 @@ QtObject {
     id: runner
     property var connector
 
+    // "capture" | "check"
+    property string mode: "capture"
 
     property int leftMask: 0x5A
     property int rightMask: 0x5A
@@ -15,7 +28,6 @@ QtObject {
     property string dataDir: ""
     property bool disableLaser: false
     property bool laserOn: true
-    property int laserPower: 50
     property var triggerConfig: ({})
 
     signal stageUpdate(string stage)
@@ -29,70 +41,93 @@ QtObject {
     function _finish(ok, err, l, r) {
         if (_done) return
         _done = true
+        // Stop any active watchdog so a late trigger doesn't emit spurious
+        // "timed out" messages after completion / cancellation.
+        flashWatchdog.stop()
+        setTriggerWatchdog.stop()
+        checkWatchdog.stop()
         scanFinished(ok, err || "", l || "", r || "")
         _stage = "idle"
     }
 
-    // --- Flash ---
+    // --- Watchdogs (declarative; stopped in `_finish`) ----------------------
+
+    property Timer flashWatchdog: Timer {
+        interval: 250000   // ~4 min — flash step observed at ~50s
+        repeat: false
+        onTriggered: {
+            runner.messageOut("Flash step timed out.")
+            runner._finish(false, "Flash step timed out", "", "")
+        }
+    }
+
+    property Timer setTriggerWatchdog: Timer {
+        interval: 5000     // trigger + laser are quick sync calls
+        repeat: false
+        onTriggered: {
+            runner.messageOut("SetTrigger/Laser step timed out.")
+            runner._finish(false, "SetTrigger/Laser step timed out", "", "")
+        }
+    }
+
+    property Timer checkWatchdog: Timer {
+        interval: 30000    // contact-quality check is 1-4s; generous slack
+        repeat: false
+        onTriggered: {
+            runner.messageOut("Contact-quality check timed out.")
+            runner._finish(false, "Contact-quality check timed out", "", "")
+        }
+    }
+
+    // --- Flash --------------------------------------------------------------
+
     property FlashSensorsTask flashTask: FlashSensorsTask {
         connector: runner.connector
         leftCameraMask: runner.leftMask
         rightCameraMask: runner.rightMask
 
-        property var _wd: null
-
         onStarted: {
             runner._stage = "flash"
-            stageUpdate("Configuring sensors/FPGA…")
-            // watchdog ~200s (your log showed ~50s)
-            if (_wd) try { _wd.stop() } catch(e) {}
-            _wd = Qt.createQmlObject('import QtQuick 6.5; Timer { interval: 250000; repeat: false }', flashTask, "flashWD")
-            _wd.triggered.connect(function() {
-                messageOut("Flash step timed out.")
-                runner._finish(false, "Flash step timed out", "", "")
-            })
-            _wd.start()
+            runner.stageUpdate("Configuring sensors/FPGA…")
+            runner.flashWatchdog.restart()
         }
-        onProgress: function(pct) { progressUpdate(pct) }
-        onLog: function(line) { messageOut(line) }
+        onProgress: function(pct) { runner.progressUpdate(pct) }
+        onLog: function(line) { runner.messageOut(line) }
         onFinished: function(ok, err) {
-            if (_wd) { try { _wd.stop() } catch(e) {} _wd = null }
+            runner.flashWatchdog.stop()
             if (!ok) { runner._finish(false, err, "", ""); return }
-            setTask.run()
+            runner.setTriggerLaserTask.run()
         }
     }
 
-    // --- Set trigger/laser ---
-    property SetTriggerLaserTask setTask: SetTriggerLaserTask {
+    // --- Set trigger/laser --------------------------------------------------
+
+    property SetTriggerLaserTask setTriggerLaserTask: SetTriggerLaserTask {
         connector: runner.connector
         laserOn: runner.laserOn
         triggerConfig: runner.triggerConfig
 
-        property var _wd: null
-
         onStarted: {
             runner._stage = "set"
-            stageUpdate("Setting trigger & laser…")
-            // watchdog 5s (quick sync calls)
-            if (_wd) try { _wd.stop() } catch(e) {}
-            _wd = Qt.createQmlObject('import QtQuick 6.5; Timer { interval: 5000; repeat: false }', setTask, "setWD")
-            _wd.triggered.connect(function() {
-                messageOut("SetTrigger/Laser step timed out.")
-                runner._finish(false, "SetTrigger/Laser step timed out", "", "")
-            })
-            _wd.start()
+            runner.stageUpdate("Setting trigger & laser…")
+            runner.setTriggerWatchdog.restart()
         }
-        onProgress: function(pct) { progressUpdate(pct) }
-        onLog: function(line) { messageOut(line) }
+        onProgress: function(pct) { runner.progressUpdate(pct) }
+        onLog: function(line) { runner.messageOut(line) }
         onFinished: function(ok, err) {
-            if (_wd) { try { _wd.stop() } catch(e) {} _wd = null }
+            runner.setTriggerWatchdog.stop()
             if (!ok) { runner._finish(false, err, "", ""); return }
-            capTask.run()
+            if (runner.mode === "check") {
+                runner.checkTask.run()
+            } else {
+                runner.captureTask.run()
+            }
         }
     }
 
-    // --- Capture ---
-    property CaptureDataTask capTask: CaptureDataTask {
+    // --- Capture (mode: "capture") -----------------------------------------
+
+    property CaptureDataTask captureTask: CaptureDataTask {
         connector: runner.connector
         leftCameraMask: runner.leftMask
         rightCameraMask: runner.rightMask
@@ -100,23 +135,41 @@ QtObject {
         subjectId: runner.subjectId
         dataDir: runner.dataDir
         disableLaser: runner.disableLaser
+
         onStarted: {
             runner._stage = "capture"
-            stageUpdate("Capturing…")
+            runner.stageUpdate("Capturing…")
         }
-        onProgress: function(pct) { progressUpdate(pct) }
-        onLog: function(line) { messageOut(line) }
+        onProgress: function(pct) { runner.progressUpdate(pct) }
+        onLog: function(line) { runner.messageOut(line) }
         onFinished: function(ok, err) {
             if (!ok) { runner._finish(false, err, "", ""); return }
-            // Capture OK → Post-process
             runner._stage = "post"
-                stageUpdate("Scan complete")
-                runner._finish(true, "")
-
+            runner.stageUpdate("Scan complete")
+            runner._finish(true, "", "", "")
         }
     }
 
-    // controls
+    // --- Contact-quality check (mode: "check") -----------------------------
+
+    property ContactQualityCheckTask checkTask: ContactQualityCheckTask {
+        connector: runner.connector
+
+        onStarted: {
+            runner._stage = "check"
+            runner.stageUpdate("Running contact-quality check…")
+            runner.checkWatchdog.restart()
+        }
+        onProgress: function(pct) { runner.progressUpdate(pct) }
+        onLog: function(line) { runner.messageOut(line) }
+        onFinished: function(ok, err) {
+            runner.checkWatchdog.stop()
+            runner._finish(ok, err, "", "")
+        }
+    }
+
+    // --- Controls -----------------------------------------------------------
+
     function start() {
         if (runner._stage !== "idle") {
             messageOut("Scan already running, ignoring start()")
@@ -125,7 +178,7 @@ QtObject {
         _done = false
         progressUpdate(1)
         stageUpdate("Preparing…")
-        messageOut("ScanRunner: start()")
+        messageOut("ScanRunner: start(mode=" + runner.mode + ")")
         flashTask.run()
     }
 
@@ -136,6 +189,10 @@ QtObject {
                 try { connector.cancelConfigureCameraSensors() } catch(e) {}
             break
         case "capture":
+        case "check":
+            // Both capture and the contact-quality check run through
+            // ``start_scan`` at the SDK layer, so stopCapture applies to
+            // either. Falls through to stopTrigger if unavailable.
             if (connector && connector.stopCapture)
                 try { connector.stopCapture() } catch(e) {}
             else if (connector && connector.stopTrigger)
