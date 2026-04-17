@@ -89,6 +89,7 @@ class MOTIONConnector(QObject):
     gyroscopeSensorUpdated = pyqtSignal(float, float, float)  # (x, y, z)
     rgbStateReceived = pyqtSignal(int, str)  # (state, state_text)
     errorOccurred = pyqtSignal(str)
+    notificationRequested = pyqtSignal('QVariant')  # toast notification payload dict
     vizFinished = pyqtSignal()
     visualizingChanged = pyqtSignal(bool)
 
@@ -1101,6 +1102,30 @@ class MOTIONConnector(QObject):
                 logger.info(f"Notes saved to disk: {self._scan_notes_path}")
             except Exception as e:
                 logger.error(f"Failed to update scan notes on disk: {e}")
+
+    @pyqtSlot(str)
+    @pyqtSlot(str, str)
+    @pyqtSlot(str, str, int)
+    @pyqtSlot(str, str, int, bool)
+    def notify(self, text: str, type_: str = "info", duration_ms: int = 4000, dismissible: bool = True):
+        """Fire a toast notification. Reachable from QML as MOTIONInterface.notify(...)
+        and from any Python code holding the connector instance.
+
+        Args:
+            text: message shown in the toast
+            type_: one of "info", "success", "warning", "error"
+            duration_ms: auto-dismiss after N ms; 0 = sticky until user dismisses
+            dismissible: whether to show the ✕ close button
+        """
+        if type_ not in ("info", "success", "warning", "error"):
+            logger.warning(f"notify: unknown type '{type_}', falling back to 'info'")
+            type_ = "info"
+        self.notificationRequested.emit({
+            "text": text,
+            "type": type_,
+            "durationMs": int(duration_ms),
+            "dismissible": bool(dismissible),
+        })
 
     def generate_user_label(self) -> str:
         suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
