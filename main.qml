@@ -48,6 +48,13 @@ ApplicationWindow {
             anchors.right: parent.right
         }
 
+        // Toast notification overlay — fills the window, positions toasts in its own bottom-right corner
+        NotificationCenter {
+            id: notificationCenter
+            anchors.fill: parent
+            z: 99999
+        }
+
         Item {
             anchors.fill: parent
             anchors.topMargin: 65 + (updateBanner.visible ? updateBanner.height : 0)
@@ -110,5 +117,24 @@ ApplicationWindow {
 
     Connections {
         target: MOTIONInterface
+    }
+
+    // TEMP-NOTIF-DEBUG: remove in Task 6.
+    // Press Ctrl+Shift+1..4 to fire one of each type.
+    Shortcut {
+        sequence: "Ctrl+Shift+1"
+        onActivated: MOTIONInterface.notify("Info: this is an informational message.", "info", 4000, true)
+    }
+    Shortcut {
+        sequence: "Ctrl+Shift+2"
+        onActivated: MOTIONInterface.notify("Note saved.", "success", 4000, true)
+    }
+    Shortcut {
+        sequence: "Ctrl+Shift+3"
+        onActivated: MOTIONInterface.notify("Calibration drift exceeds threshold.", "warning", 4000, true)
+    }
+    Shortcut {
+        sequence: "Ctrl+Shift+4"
+        onActivated: MOTIONInterface.notify("Lost connection to console.", "error", 0, true)
     }
 }
