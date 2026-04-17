@@ -118,23 +118,4 @@ ApplicationWindow {
     Connections {
         target: MOTIONInterface
     }
-
-    // TEMP-NOTIF-DEBUG: remove in Task 6.
-    // Press Ctrl+Shift+1..4 to fire one of each type.
-    Shortcut {
-        sequence: "Ctrl+Shift+1"
-        onActivated: MOTIONInterface.notify("Info: this is an informational message.", "info", 4000, true)
-    }
-    Shortcut {
-        sequence: "Ctrl+Shift+2"
-        onActivated: MOTIONInterface.notify("Note saved.", "success", 4000, true)
-    }
-    Shortcut {
-        sequence: "Ctrl+Shift+3"
-        onActivated: MOTIONInterface.notify("Calibration drift exceeds threshold.", "warning", 4000, true)
-    }
-    Shortcut {
-        sequence: "Ctrl+Shift+4"
-        onActivated: MOTIONInterface.notify("Lost connection to console.", "error", 0, true)
-    }
 }

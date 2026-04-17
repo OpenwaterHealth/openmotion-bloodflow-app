@@ -18,6 +18,7 @@ Item {
     }
     function close() {
         MOTIONInterface.scanNotes = notesArea.text
+        MOTIONInterface.notify("Note saved.", "success", 4000, true)
         root.visible = false
     }
 
