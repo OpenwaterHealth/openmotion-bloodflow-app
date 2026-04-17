@@ -1813,6 +1813,37 @@ class MOTIONConnector(QObject):
             logger.error(f"Unexpected error while setting trigger: {e}")
             return False
 
+    @pyqtSlot(bool, result=bool)
+    def applyDefaultTrigger(self, laser_on: bool) -> bool:
+        """Apply the default trigger/laser config from ``app_config.triggerConfig``.
+
+        Merges ``{"TriggerStatus": 2 if laser_on else 1}`` over the config
+        dict and pushes the combined payload via ``set_trigger_json``.
+
+        Constructing the payload in Python (rather than in QML) avoids a
+        subtle issue where ``for...in`` iteration over a nested
+        ``QVariantMap`` proxy can drop keys, silently turning the request
+        into a bare ``{"TriggerStatus": 2}`` — which leaves the firmware's
+        laser-skip schedule unset and "dark" frames end up captured with
+        the laser still on.
+        """
+        cfg = (self._app_config or {}).get("triggerConfig") or {}
+        payload: dict = dict(cfg)
+        payload["TriggerStatus"] = 2 if laser_on else 1
+        try:
+            logger.info(f"applyDefaultTrigger payload: {payload}")
+            trigger_setting = self._interface.console_module.set_trigger_json(
+                data=payload
+            )
+            if trigger_setting:
+                logger.info(f"Trigger Setting: {trigger_setting}")
+                return True
+            logger.error("applyDefaultTrigger: set_trigger_json returned falsy")
+            return False
+        except Exception as e:
+            logger.error(f"applyDefaultTrigger error: {e}")
+            return False
+
     @pyqtSlot(result=bool)
     def startTrigger(self):
         success = self._interface.console_module.start_trigger()

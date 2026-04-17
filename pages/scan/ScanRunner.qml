@@ -28,7 +28,6 @@ QtObject {
     property string dataDir: ""
     property bool disableLaser: false
     property bool laserOn: true
-    property var triggerConfig: ({})
 
     signal stageUpdate(string stage)
     signal progressUpdate(int pct)
@@ -105,7 +104,6 @@ QtObject {
     property SetTriggerLaserTask setTriggerLaserTask: SetTriggerLaserTask {
         connector: runner.connector
         laserOn: runner.laserOn
-        triggerConfig: runner.triggerConfig
 
         onStarted: {
             runner._stage = "set"

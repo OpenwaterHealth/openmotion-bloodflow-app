@@ -1,11 +1,16 @@
 // qml/scan/SetTriggerLaserTask.qml
+//
+// Step 2 of the scan pipeline: push the default trigger config to the
+// console and apply the laser-power I2C config.  The trigger payload is
+// sourced from ``app_config.json -> triggerConfig`` by the Python
+// ``applyDefaultTrigger`` slot — keeping payload construction on the
+// Python side avoids nested-QVariantMap iteration pitfalls in QML.
 import QtQuick 6.5
 
 QtObject {
     id: task
     property var connector
     property bool laserOn: true
-    property var triggerConfig: ({})     // extra fields merged into payload
     property bool applyLaserPowerFromConfig: true  // toggle for testing
 
     signal started()
@@ -18,28 +23,24 @@ QtObject {
         progress(20)
         log("Setting trigger & laser…")
 
-        if (!connector || !connector.setTrigger || !connector.setLaserPowerFromConfig) {
-            finished(false, "Connector missing setTrigger/setLaserPowerFromConfig")
+        if (!connector || !connector.applyDefaultTrigger
+                || !connector.setLaserPowerFromConfig) {
+            finished(false, "Connector missing applyDefaultTrigger/setLaserPowerFromConfig")
             return
         }
 
-        // Build payload for backend: 2=ON, 1=OFF
-        var payload = { "TriggerStatus": laserOn ? 2 : 1 }
-        for (var k in triggerConfig) payload[k] = triggerConfig[k]
-
         // Set trigger
         try {
-            var res = connector.setTrigger(JSON.stringify(payload))
-            var ok = (typeof res === "boolean") ? res : true
-            if (!ok) {
-                log("setTrigger returned false")
-                finished(false, "setTrigger returned false")
+            var res = connector.applyDefaultTrigger(laserOn)
+            if (!res) {
+                log("applyDefaultTrigger returned false")
+                finished(false, "applyDefaultTrigger returned false")
                 return
             }
             log("Trigger set.")
         } catch (e) {
-            log("setTrigger exception: " + e)
-            finished(false, "setTrigger exception: " + e)
+            log("applyDefaultTrigger exception: " + e)
+            finished(false, "applyDefaultTrigger exception: " + e)
             return
         }
 

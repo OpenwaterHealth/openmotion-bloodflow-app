@@ -263,12 +263,9 @@ Rectangle {
         id: scanDialog
     }
 
-    // Shared trigger/laser config used by both the capture and check
-    // pipelines. Sourced from app_config.json -> appConfig.triggerConfig.
-    readonly property var defaultTriggerConfig:
-        MOTIONInterface.appConfig.triggerConfig !== undefined
-            ? MOTIONInterface.appConfig.triggerConfig
-            : ({})
+    // Trigger/laser config is sourced by the Python connector directly
+    // from appConfig.triggerConfig via applyDefaultTrigger — no QML-side
+    // plumbing needed (avoids nested-QVariantMap iteration pitfalls).
 
     // ===== SCAN RUNNER (capture mode) =====
     ScanRunner {
@@ -282,7 +279,6 @@ Rectangle {
         dataDir: MOTIONInterface.directory
         disableLaser: false
         laserOn: true
-        triggerConfig: bloodFlow.defaultTriggerConfig
 
         onStageUpdate: function(txt) {
             scanDialog.stageText = txt
@@ -340,7 +336,6 @@ Rectangle {
         leftMask: MOTIONInterface.leftSensorConnected  ? 0xFF : 0x00
         rightMask: MOTIONInterface.rightSensorConnected ? 0xFF : 0x00
         laserOn: true
-        triggerConfig: bloodFlow.defaultTriggerConfig
 
         onStageUpdate: function(txt) { console.log("ContactQuality: " + txt) }
         onMessageOut: function(line) { console.log("ContactQuality: " + line) }
