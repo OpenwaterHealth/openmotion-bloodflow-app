@@ -43,9 +43,33 @@ A plain object/dict — no QML type or Python class needed:
     text: string,
     type: "info" | "success" | "warning" | "error",   // default "info"
     durationMs: int,                                   // default 4000; 0 = sticky
-    dismissible: bool                                  // default true
+    dismissible: bool,                                 // default true
+    tag: string                                        // default ""; see "Tags" below
 }
 ```
+
+### Tags & program-only-dismissible notifications
+
+A notification is **program-only-dismissible** when `dismissible=false`
+(hides the ✕ from the user) and `durationMs=0` (no auto-dismiss). The
+only way it can leave the screen is via a programmatic dismiss call.
+
+To support that flow, three additions:
+
+- **Tags.** When `notify` is called with a non-empty `tag` and an active
+  toast already has the same tag, the existing one is removed first
+  (instant) so the new one slides in at the bottom. This prevents
+  duplicate "Connecting..." style toasts from stacking.
+- **`notify()` returns the assigned id.** Callers who want to dismiss
+  later by id (rather than by tag) can store the return value.
+- **Dismiss APIs.**
+  - `MOTIONInterface.dismissNotification(id_or_tag)` — polymorphic.
+    Pass an `int` to dismiss by id, a `str` to dismiss by tag.
+  - `MOTIONInterface.dismissAllNotifications()` — clears every active
+    toast.
+
+All programmatic dismiss paths use the same slide-out animation as the
+user-clicked ✕ for visual consistency.
 
 ### NotificationCenter (QML)
 
@@ -69,16 +93,23 @@ events on the empty area — only the toast rectangles are interactive.
 Added to `motion_connector.py`:
 
 ```python
-notificationRequested = pyqtSignal('QVariant')
+notificationRequested            = pyqtSignal('QVariant')
+notificationDismissByIdRequested = pyqtSignal(int)
+notificationDismissByTagRequested= pyqtSignal(str)
+notificationDismissAllRequested  = pyqtSignal()
 
-@pyqtSlot(str, str, int, bool)
-def notify(self, text, type_="info", duration_ms=4000, dismissible=True):
-    self.notificationRequested.emit({
-        "text": text,
-        "type": type_,
-        "durationMs": duration_ms,
-        "dismissible": dismissible,
-    })
+def notify(self, text, type_="info", duration_ms=4000,
+           dismissible=True, tag="") -> int:
+    """Returns the assigned id."""
+    ...
+
+def dismissNotification(self, value):
+    """Dismiss by id (int) or tag (str), animated."""
+    ...
+
+def dismissAllNotifications(self):
+    """Animated dismiss-everything."""
+    ...
 ```
 
 Any Python caller writes:
@@ -86,6 +117,13 @@ Any Python caller writes:
 ```python
 self.notify("Scan complete.", "success")
 self.notify("Lost connection to console.", "error", 0, True)
+
+# Program-only-dismissible status notification with replace-by-tag:
+self.notify("Connecting to console...", "info", 0, False, "console-status")
+# ...later, replaces the same tag:
+self.notify("Console connected.", "success", 4000, True, "console-status")
+# ...or dismiss it imperatively:
+self.dismissNotification("console-status")
 ```
 
 QML callers write:
@@ -195,3 +233,10 @@ function close() {
 
 None. Glyph choices, animation timings, and stack direction are all settled
 and easy to tune post-implementation if desired.
+
+## Revision history
+
+- **2026-04-17 (initial):** Original spec.
+- **2026-04-17 (amendment):** Added tags, `notify()` return value,
+  `dismissNotification(id_or_tag)`, and `dismissAllNotifications()` to
+  support program-only-dismissible notifications.
