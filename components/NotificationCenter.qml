@@ -59,28 +59,94 @@ Item {
 
     // Append a notification. `request` is a JS object with at least a `text`
     // field; other fields fall back to defaults defined here.
+    //
+    // If `request.tag` is a non-empty string and an existing notification has
+    // the same tag, the existing one is removed first (instant) so the new
+    // one slides in at the bottom — preventing duplicate "Connecting..." style
+    // toasts from stacking.
+    //
+    // If `request.id` is provided (the Python `notify` slot supplies one so
+    // it can return the assigned id to its caller), it's used; otherwise an
+    // id is generated locally so QML-only callers still get uniqueness.
     function notify(request) {
+        var tag = request.tag || ""
+        if (tag !== "") {
+            for (var i = 0; i < model_.count; ++i) {
+                if (model_.get(i).tag === tag) {
+                    model_.remove(i)
+                    break
+                }
+            }
+        }
+        var nid = (request.id !== undefined) ? request.id : (root._nextId++)
         var entry = {
-            id: root._nextId++,
+            id: nid,
+            tag: tag,
             text: request.text || "",
             type: request.type || "info",
             durationMs: (request.durationMs !== undefined) ? request.durationMs : 4000,
             dismissible: (request.dismissible !== undefined) ? request.dismissible : true
         }
         model_.append(entry)
+        // Cap-eviction is intentionally NOT animated — when the user fires
+        // many toasts quickly, the oldest just disappears. Animating it would
+        // visually compete with the new toast sliding in at the bottom.
         while (model_.count > root.maxVisible) {
             model_.remove(0)
         }
+        return nid
     }
 
-    // Remove a notification by id. Used by the toast delegate when its timer
-    // fires or the user clicks ✕.
-    function dismiss(id) {
+    // Internal: direct model removal, no animation. Called by the wrapper's
+    // exit-animation `onStopped` to finalize a dismiss after the slide-out
+    // completes. Public callers should use `dismiss()` instead.
+    function _removeById(id) {
         for (var i = 0; i < model_.count; ++i) {
             if (model_.get(i).id === id) {
                 model_.remove(i)
                 return
             }
+        }
+    }
+
+    // Public: dismiss a notification by id, animated. Safe with unknown ids.
+    function dismiss(id) {
+        for (var i = 0; i < model_.count; ++i) {
+            if (model_.get(i).id === id) {
+                _animateAtIndex(i)
+                return
+            }
+        }
+    }
+
+    // Public: dismiss every notification with the given tag, animated.
+    function dismissByTag(tag) {
+        if (!tag) return
+        // Iterate from the end so we can dismiss multiple matches (rare —
+        // tags are typically unique by convention, but the loop is cheap).
+        for (var i = model_.count - 1; i >= 0; --i) {
+            if (model_.get(i).tag === tag) {
+                _animateAtIndex(i)
+            }
+        }
+    }
+
+    // Public: dismiss every active notification, animated.
+    function dismissAll() {
+        for (var i = model_.count - 1; i >= 0; --i) {
+            _animateAtIndex(i)
+        }
+    }
+
+    // Internal helper. Looks up the wrapper Item at `index` and triggers its
+    // exit animation. Falls back to direct model removal if the delegate
+    // hasn't been instantiated yet (shouldn't happen in practice).
+    function _animateAtIndex(index) {
+        var w = repeater_.itemAt(index)
+        if (w && w.dismissAnimated) {
+            w.dismissAnimated()
+        } else if (index >= 0 && index < model_.count) {
+            model_.remove(index)
         }
     }
 
@@ -90,6 +156,15 @@ Item {
         target: MOTIONInterface
         function onNotificationRequested(payload) {
             root.notify(payload)
+        }
+        function onNotificationDismissByIdRequested(id) {
+            root.dismiss(id)
+        }
+        function onNotificationDismissByTagRequested(tag) {
+            root.dismissByTag(tag)
+        }
+        function onNotificationDismissAllRequested() {
+            root.dismissAll()
         }
     }
 
@@ -115,6 +190,7 @@ Item {
         // on initial load; only newly-added toasts should slide in.)
 
         Repeater {
+            id: repeater_
             model: model_
             delegate: Item {
                 id: wrapper
@@ -148,16 +224,22 @@ Item {
                     NumberAnimation { target: wrapper; property: "opacity"; to: 1; duration: 180; easing.type: Easing.OutCubic }
                 }
 
-                // Exit: triggered by `dismissAnimated()` (called by timer or close click).
-                // When the parallel animation finishes, remove the model entry so the
-                // Column's `move` transition can collapse the empty slot.
-                function dismissAnimated() { exitAnim.start() }
+                // Exit: triggered by `dismissAnimated()` (called by timer, the
+                // close click, or a programmatic dismiss). When the parallel
+                // animation finishes, remove the model entry directly so the
+                // Column's `move` transition can collapse the empty slot. We
+                // call `_removeById` (not `dismiss`) here to avoid re-entering
+                // the animated path — the animation already played.
+                function dismissAnimated() {
+                    if (exitAnim.running) return  // already dismissing
+                    exitAnim.start()
+                }
 
                 ParallelAnimation {
                     id: exitAnim
                     NumberAnimation { target: slide;   property: "x";       to: 60; duration: 160; easing.type: Easing.InCubic }
                     NumberAnimation { target: wrapper; property: "opacity"; to: 0;  duration: 160; easing.type: Easing.InCubic }
-                    onStopped: root.dismiss(model.id)
+                    onStopped: root._removeById(model.id)
                 }
 
                 Rectangle {
