@@ -26,6 +26,7 @@ Rectangle {
     signal startStopClicked()
     signal scanSettingsClicked()
     signal notesClicked()
+    signal checkClicked()
     signal historyClicked()
     signal logClicked()
     signal settingsClicked()
@@ -157,6 +158,20 @@ Rectangle {
             iconText: "\uea7f"  // notes/document icon
             label: "Notes"
             onClicked: panel.notesClicked()
+        }
+
+        Rectangle {
+            Layout.preferredWidth: 52; Layout.preferredHeight: 1
+            Layout.topMargin: 4; Layout.bottomMargin: 4
+            Layout.alignment: Qt.AlignHCenter; color: theme.borderSubtle
+        }
+
+        // Check (contact quality quick-check)
+        PanelButton {
+            enabled: !panel.scanning && panel.camerasReady
+            iconText: "\uea31"  // graph-3 icon
+            label: "Check"
+            onClicked: panel.checkClicked()
         }
 
         // Log viewer (developer mode only)
