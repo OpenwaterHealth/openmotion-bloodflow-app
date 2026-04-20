@@ -92,8 +92,8 @@ class _ContactQualityState:
         cam_id: int,
         bg_sub_mean: float,
         threshold_dn: float,
-    ) -> bool:
-        """Return True when an ambient-light warning should be emitted."""
+    ) -> str:
+        """Return one of: 'activated', 'cleared', or 'none'."""
         key = self._key(side, cam_id)
         above = bg_sub_mean > threshold_dn
         latched = self._ambient_latched.get(key, False)
@@ -101,17 +101,18 @@ class _ContactQualityState:
             self._ambient_clear_streak[key] = 0
             if not latched:
                 self._ambient_latched[key] = True
-                return True
-            return False
+                return "activated"
+            return "none"
 
         if latched:
             streak = self._ambient_clear_streak.get(key, 0) + 1
             if streak >= _CQ_AMBIENT_CLEAR_FRAMES:
                 self._ambient_latched[key] = False
                 self._ambient_clear_streak[key] = 0
+                return "cleared"
             else:
                 self._ambient_clear_streak[key] = streak
-        return False
+        return "none"
 
     def process_rolling(
         self,
@@ -120,20 +121,21 @@ class _ContactQualityState:
         cam_id: int,
         bg_sub_mean: float,
         threshold_dn: float,
-    ) -> bool:
-        """Return True when a poor-contact warning should be emitted."""
+    ) -> str:
+        """Return one of: 'activated', 'cleared', or 'none'."""
         key = self._key(side, cam_id)
         below = bg_sub_mean < threshold_dn
         latched = self._contact_latched.get(key, False)
         if below:
             if not latched:
                 self._contact_latched[key] = True
-                return True
-            return False
+                return "activated"
+            return "none"
 
         if latched:
             self._contact_latched[key] = False
-        return False
+            return "cleared"
+        return "none"
 
 
 class MOTIONConnector(QObject):
@@ -214,6 +216,8 @@ class MOTIONConnector(QObject):
     contactQualityCheckStarted = pyqtSignal(int)
     contactQualityCheckFinished = pyqtSignal(bool, str, 'QVariantList')
     contactQualityWarning = pyqtSignal(str, str, str, float)
+    # (camera, typeKey, typeText, value, active)
+    contactQualityIssueStateChanged = pyqtSignal(str, str, str, float, bool)
     contactQualityScanInProgress = pyqtSignal(bool)
 
     @staticmethod
@@ -926,22 +930,24 @@ class MOTIONConnector(QObject):
             threshold = self._threshold_for(
                 dark_thresholds, cam_id, _CQ_DEFAULT_DARK_THRESHOLD_DN
             )
-            emit_warning = state.process_dark(
+            transition = state.process_dark(
                 side=side,
                 cam_id=cam_id,
                 bg_sub_mean=dark_mean,
                 threshold_dn=threshold,
             )
-            if self._cq_quick_running or emit_warning:
+            if self._cq_quick_running or transition != "none":
                 logger.info(
                     "CQ compare DARK %s: dark_mean=%.2f DN (bg-sub), threshold=%.2f DN -> %s",
                     self._camera_label(side, cam_id),
                     dark_mean,
                     threshold,
-                    "WARN" if emit_warning else "OK",
+                    "WARN" if transition == "activated" else ("CLEAR" if transition == "cleared" else "OK"),
                 )
-            if emit_warning:
-                warning_sink(side, cam_id, "ambient_light", dark_mean)
+            if transition == "activated":
+                warning_sink(side, cam_id, "ambient_light", dark_mean, True)
+            elif transition == "cleared":
+                warning_sink(side, cam_id, "ambient_light", dark_mean, False)
 
         def _on_rolling_avg(sample):
             side = str(getattr(sample, "side", ""))
@@ -950,22 +956,24 @@ class MOTIONConnector(QObject):
             threshold = self._threshold_for(
                 light_thresholds, cam_id, _CQ_DEFAULT_LIGHT_THRESHOLD_DN
             )
-            emit_warning = state.process_rolling(
+            transition = state.process_rolling(
                 side=side,
                 cam_id=cam_id,
                 bg_sub_mean=avg_light_mean,
                 threshold_dn=threshold,
             )
-            if self._cq_quick_running or emit_warning:
+            if self._cq_quick_running or transition != "none":
                 logger.info(
                     "CQ compare LIGHT_AVG %s: avg_light_mean=%.2f DN (bg-sub), threshold=%.2f DN -> %s",
                     self._camera_label(side, cam_id),
                     avg_light_mean,
                     threshold,
-                    "WARN" if emit_warning else "OK",
+                    "WARN" if transition == "activated" else ("CLEAR" if transition == "cleared" else "OK"),
                 )
-            if emit_warning:
-                warning_sink(side, cam_id, "poor_contact", avg_light_mean)
+            if transition == "activated":
+                warning_sink(side, cam_id, "poor_contact", avg_light_mean, True)
+            elif transition == "cleared":
+                warning_sink(side, cam_id, "poor_contact", avg_light_mean, False)
 
         return _on_dark_frame, _on_rolling_avg
 
@@ -1765,13 +1773,25 @@ class MOTIONConnector(QObject):
         dark_thresholds = (self._app_config or {}).get("cq_dark_threshold_per_camera")
         light_thresholds = (self._app_config or {}).get("cq_light_threshold_per_camera")
 
-        def _on_cq_warning(side: str, cam_id: int, type_key: str, value: float):
+        def _on_cq_warning(
+            side: str, cam_id: int, type_key: str, value: float, active: bool
+        ):
+            label = self._camera_label(side, cam_id)
+            type_text = self._warning_text(type_key)
             try:
-                self.contactQualityWarning.emit(
-                    self._camera_label(side, cam_id),
+                if active:
+                    self.contactQualityWarning.emit(
+                        label,
+                        type_key,
+                        type_text,
+                        float(value),
+                    )
+                self.contactQualityIssueStateChanged.emit(
+                    label,
                     type_key,
-                    self._warning_text(type_key),
+                    type_text,
                     float(value),
+                    bool(active),
                 )
             except Exception as exc:
                 logger.warning("contact-quality callback error: %s", exc)

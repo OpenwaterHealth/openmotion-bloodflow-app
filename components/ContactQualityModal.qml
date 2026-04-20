@@ -19,9 +19,12 @@ import OpenMotion 1.0
  *                                   counter shown under the spinner
  *      showOk()                  -> enter "ok" state
  *      showError(msg)            -> enter "error" state with message
- *      addWarning(cameraLabel, typeText, value)
+ *      addWarning(cameraLabel, typeKey, typeText, value)
  *                                -> append a dedup'd warning row,
  *                                   auto-transitioning to "warnings" state
+ *      clearWarning(cameraLabel, typeKey)
+ *                                -> clear one active warning; if none remain
+ *                                   during live scan, modal becomes dismissable
  *
  *  Signals:
  *      stopScanRequested()  — user clicked "Stop scan" (live-scan footer)
@@ -41,6 +44,13 @@ Item {
     property string state_: "checking"
     // Whether the modal was opened during a live scan (controls footer).
     property bool liveScan: false
+    // Live-scan modal is only dismissable when no CQ issues remain active.
+    property bool liveScanDismissable: false
+    // Require an all-clear holdoff before enabling Continue.
+    property int clearHoldoffMs: 2000
+    // Active camera masks for current scan selection (used in live-scan mode).
+    property int leftMask: 0xFF
+    property int rightMask: 0xFF
     property string errorText: ""
 
     // Elapsed-time tracking for the "checking" state. ``durationEstimate``
@@ -49,7 +59,7 @@ Item {
     property int durationEstimate: 0
     property int elapsedMs: 0
 
-    // Each entry: { camera: "L4", typeText: "Poor sensor contact", value: 72.5 }
+    // Each entry: { camera, typeKey, typeText, value }
     property var entries: []
 
     signal stopScanRequested()
@@ -63,6 +73,8 @@ Item {
 
     function reset(forLiveScan, durationEstimateArg) {
         liveScan = !!forLiveScan
+        liveScanDismissable = !liveScan
+        clearHoldoffTimer.stop()
         entries = []
         errorText = ""
         state_ = "checking"
@@ -86,23 +98,67 @@ Item {
         if (!visible) open()
     }
 
-    // Append a warning row. Duplicates (same camera+type) are ignored.
-    function addWarning(cameraLabel, typeText, value) {
+    // Upsert a warning row. Key = camera + typeKey.
+    function addWarning(cameraLabel, typeKey, typeText, value) {
         for (var i = 0; i < entries.length; ++i) {
-            if (entries[i].camera === cameraLabel && entries[i].typeText === typeText)
+            if (entries[i].camera === cameraLabel && entries[i].typeKey === typeKey) {
+                var upd = entries.slice()
+                upd[i] = {
+                    camera: cameraLabel,
+                    typeKey: typeKey,
+                    typeText: typeText,
+                    value: value
+                }
+                entries = upd
+                elapsedTimer.stop()
+                state_ = "warnings"
+                liveScanDismissable = false
+                clearHoldoffTimer.stop()
+                if (!visible) open()
                 return
+            }
         }
         var copy = entries.slice()
-        copy.push({ camera: cameraLabel, typeText: typeText, value: value })
+        copy.push({
+            camera: cameraLabel,
+            typeKey: typeKey,
+            typeText: typeText,
+            value: value
+        })
         entries = copy
         elapsedTimer.stop()
         state_ = "warnings"
+        liveScanDismissable = false
+        clearHoldoffTimer.stop()
         if (!visible) open()
+    }
+
+    function clearWarning(cameraLabel, typeKey) {
+        var copy = []
+        var removed = false
+        for (var i = 0; i < entries.length; ++i) {
+            var e = entries[i]
+            if (e.camera === cameraLabel && e.typeKey === typeKey) {
+                removed = true
+                continue
+            }
+            copy.push(e)
+        }
+        if (!removed)
+            return
+        entries = copy
+        if (liveScan && state_ === "warnings" && entries.length === 0) {
+            liveScanDismissable = false
+            clearHoldoffTimer.restart()
+            if (!visible) open()
+        }
     }
 
     // Build per-camera quality status from entries.
     // Returns "good" (no warnings), "bad" (has warning), or "inactive".
     function cameraStatus(side, camIndex1) {
+        if (root.liveScan && !cameraEnabled(side, camIndex1))
+            return "inactive"
         var prefix = (side === "left") ? "L" : "R"
         var label = prefix + camIndex1
         if (root.state_ === "checking") return "checking"
@@ -117,6 +173,10 @@ Item {
         var prefix = (side === "left") ? "L" : "R"
         var label = prefix + camIndex1
         var lines = [label]
+        if (root.liveScan && !cameraEnabled(side, camIndex1)) {
+            lines.push("Inactive for current scan mask")
+            return lines.join("\n")
+        }
         for (var i = 0; i < entries.length; ++i) {
             if (entries[i].camera === label)
                 lines.push(entries[i].typeText + " (" + entries[i].value.toFixed(1) + " DN)")
@@ -132,6 +192,13 @@ Item {
         return "#666666"
     }
 
+    function cameraEnabled(side, camIndex1) {
+        // Camera 1 maps to bit 7 ... camera 8 maps to bit 0.
+        var bit = 8 - camIndex1
+        var mask = (side === "left") ? root.leftMask : root.rightMask
+        return ((mask >> bit) & 1) === 1
+    }
+
     // Ticks every 500 ms while in "checking" state to update the elapsed
     // label. Stopped on every exit path (close / showOk / showError /
     // addWarning) so it never leaks past the check.
@@ -142,6 +209,19 @@ Item {
         onTriggered: {
             if (root.state_ !== "checking") { stop(); return }
             root.elapsedMs += interval
+        }
+    }
+
+    // Continue becomes available only after contact quality stays clear
+    // for clearHoldoffMs continuously during a live warning state.
+    Timer {
+        id: clearHoldoffTimer
+        interval: root.clearHoldoffMs
+        repeat: false
+        onTriggered: {
+            if (root.liveScan && root.state_ === "warnings" && root.entries.length === 0) {
+                root.liveScanDismissable = true
+            }
         }
     }
 
@@ -230,7 +310,9 @@ Item {
                 wrapMode: Text.WordWrap
                 color: theme.textSecondary
                 font.pixelSize: 14
-                text: "Hover over orange cameras for details."
+                text: (root.entries.length > 0)
+                      ? "Hover over orange cameras for details."
+                      : "All contact quality issues are currently inactive. You may dismiss."
             }
 
             // Error message
@@ -423,17 +505,23 @@ Item {
                 }
                 Button {
                     visible: root.liveScan && root.state_ === "warnings"
+                    enabled: root.liveScanDismissable
                     text: "Continue"
-                    hoverEnabled: true
+                    hoverEnabled: enabled
                     Layout.preferredHeight: 45
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 12
-                        color: parent.hovered ? "#FFFFFF" : theme.textSecondary
+                        color: !parent.enabled ? theme.textDisabled
+                              : (parent.hovered ? "#FFFFFF" : theme.textSecondary)
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? theme.accentBlue : theme.bgInput
-                        radius: 4; border.color: parent.hovered ? theme.accentBlue : theme.borderSoft; border.width: 1
+                        color: !parent.enabled ? theme.bgCard
+                              : (parent.hovered ? theme.accentBlue : theme.bgInput)
+                        radius: 4
+                        border.color: !parent.enabled ? theme.borderSubtle
+                                    : (parent.hovered ? theme.accentBlue : theme.borderSoft)
+                        border.width: 1
                     }
                     onClicked: { root.continueRequested(); root.close(); root.dismissed() }
                 }
@@ -479,7 +567,7 @@ Item {
         Keys.onReleased: function(event) {
             if (event.key === Qt.Key_Escape
                     && root.state_ !== "checking"
-                    && !(root.liveScan && root.state_ === "warnings")) {
+                    && !(root.liveScan && root.state_ === "warnings" && !root.liveScanDismissable)) {
                 root.close()
                 root.dismissed()
                 event.accepted = true
