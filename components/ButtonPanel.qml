@@ -168,6 +168,7 @@ Rectangle {
 
         // Check (contact quality quick-check)
         PanelButton {
+            visible: !panel.reducedMode
             enabled: !panel.scanning && panel.camerasReady
             iconText: "\uea31"  // graph-3 icon
             label: "Check"
