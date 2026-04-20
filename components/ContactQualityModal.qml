@@ -173,13 +173,16 @@ Item {
         var prefix = (side === "left") ? "L" : "R"
         var label = prefix + camIndex1
         var lines = [label]
+        var showDn = !!(MOTIONInterface.appConfig && MOTIONInterface.appConfig.developerMode)
         if (root.liveScan && !cameraEnabled(side, camIndex1)) {
             lines.push("Inactive for current scan mask")
             return lines.join("\n")
         }
         for (var i = 0; i < entries.length; ++i) {
             if (entries[i].camera === label)
-                lines.push(entries[i].typeText + " (" + entries[i].value.toFixed(1) + " DN)")
+                lines.push(showDn
+                           ? (entries[i].typeText + " (" + entries[i].value.toFixed(1) + " DN)")
+                           : entries[i].typeText)
         }
         return lines.join("\n")
     }
@@ -240,10 +243,10 @@ Item {
         radius: 10
         color: theme.bgContainer
         border.width: 2
-        border.color: root.state_ === "ok"       ? theme.accentGreen
-                    : root.state_ === "warnings" ? theme.accentOrange
-                    : root.state_ === "error"    ? theme.accentRed
-                    :                              theme.borderSubtle
+        border.color: root.state_ === "ok" ? theme.accentGreen
+                    : (root.state_ === "warnings"
+                       ? ((root.liveScan && root.liveScanDismissable) ? theme.accentGreen : theme.accentOrange)
+                       : (root.state_ === "error" ? theme.accentRed : theme.borderSubtle))
         anchors.centerIn: parent
         focus: true
 
