@@ -276,7 +276,13 @@ Rectangle {
                    ? (MOTIONInterface.rightSensorConnected ? 0xFF : 0x00)
                    : bloodFlow.rightMask
         onStopScanRequested: {
-            MOTIONInterface.stopCapture()
+            if (bloodFlow.scanning) {
+                // Route through ScanRunner so the normal "Canceled" flow
+                // runs and Notes opens consistently.
+                scanRunner.cancel()
+            } else {
+                MOTIONInterface.stopCapture()
+            }
             reducedStartPending = false
         }
         onContinueRequested: {
