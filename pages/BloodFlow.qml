@@ -22,6 +22,8 @@ Rectangle {
     // FDA mode (read from app config). Forces Middle camera pattern + free run,
     // hides scan-settings button, and swaps in the FDA plot view.
     property bool reducedMode: MOTIONInterface.appConfig.reducedMode === true
+    // In reduced mode, Start first runs a contact-quality preflight check.
+    property bool reducedStartPending: false
 
     // Camera masks (updated by camera selection modal)
     property int leftMask: 0x99   // default "Outer"
@@ -102,6 +104,17 @@ Rectangle {
         MOTIONInterface.startConfigureCameraSensors(leftMask, rightMask);
     }
 
+    function beginScanNow() {
+        bloodFlow.scanning = true
+        reducedStartPending = false
+        scanDialog.message = "Scanning..."
+        scanDialog.stageText = "Preparing..."
+        scanDialog.progress = 1
+        if (bloodFlow.reducedMode) reducedPlot.startScan()
+        else                        embeddedPlot.startScan(bloodFlow.leftMask, bloodFlow.rightMask)
+        scanRunner.start()
+    }
+
     // ButtonPanel — sits above modal backdrops so it's always clickable
     ButtonPanel {
         id: buttonPanel
@@ -125,13 +138,14 @@ Rectangle {
                 else                   embeddedPlot.stopScan()
                 notesModal.open()
             } else {
-                bloodFlow.scanning = true
-                scanDialog.message = "Scanning..."
-                scanDialog.stageText = "Preparing..."
-                scanDialog.progress = 1
-                if (bloodFlow.reducedMode) reducedPlot.startScan()
-                else                   embeddedPlot.startScan(bloodFlow.leftMask, bloodFlow.rightMask)
-                scanRunner.start()
+                if (bloodFlow.reducedMode) {
+                    reducedStartPending = true
+                    contactQualityModal.preScanMode = true
+                    contactQualityModal.reset(true, 0)
+                    qualityCheckRunner.start()
+                } else {
+                    beginScanNow()
+                }
             }
         }
 
@@ -251,13 +265,35 @@ Rectangle {
     ContactQualityModal {
         id: contactQualityModal
         anchors.fill: parent
-        leftMask: bloodFlow.leftMask
-        rightMask: bloodFlow.rightMask
-        onStopScanRequested: MOTIONInterface.stopCapture()
-        onContinueRequested: { /* no-op: leave scan running */ }
+        // Pre-scan check always evaluates all physically-present cameras,
+        // regardless of the active scan mask.
+        leftMask: bloodFlow.reducedStartPending
+                  ? (MOTIONInterface.leftSensorConnected ? 0xFF : 0x00)
+                  : bloodFlow.leftMask
+        rightMask: bloodFlow.reducedStartPending
+                   ? (MOTIONInterface.rightSensorConnected ? 0xFF : 0x00)
+                   : bloodFlow.rightMask
+        onStopScanRequested: {
+            MOTIONInterface.stopCapture()
+            reducedStartPending = false
+        }
+        onContinueRequested: {
+            if (bloodFlow.reducedStartPending) {
+                contactQualityModal.close()
+                beginScanNow()
+            }
+            // Otherwise (live-scan warning modal), Continue just dismisses.
+        }
         onRetestRequested: {
-            contactQualityModal.reset(false, 0)
+            contactQualityModal.preScanMode = bloodFlow.reducedStartPending
+            contactQualityModal.reset(bloodFlow.reducedStartPending, 0)
             qualityCheckRunner.start()
+        }
+        onDismissed: {
+            if (!bloodFlow.scanning)
+                reducedStartPending = false
+            if (!bloodFlow.reducedStartPending)
+                contactQualityModal.preScanMode = false
         }
     }
 
@@ -419,19 +455,32 @@ Rectangle {
 
         // Contact-quality quick-check lifecycle
         function onContactQualityCheckStarted(seconds) {
-            contactQualityModal.reset(false, seconds)
+            contactQualityModal.preScanMode = bloodFlow.reducedStartPending
+            contactQualityModal.reset(bloodFlow.reducedStartPending, seconds)
         }
         function onContactQualityCheckFinished(ok, error, warnings) {
+            if (bloodFlow.reducedStartPending) {
+                // Reduced-mode preflight: always land in live-style footer so
+                // user can explicitly Continue into the main scan.
+                contactQualityModal.liveScan = true
+            }
             if (!ok) {
                 var msg = (error && error.length > 0) ? error : "Quick check failed"
                 contactQualityModal.showError(msg)
                 return
             }
-            if (warnings.length === 0) { contactQualityModal.showOk(); return }
+            if (warnings.length === 0) {
+                contactQualityModal.showOk()
+                if (bloodFlow.reducedStartPending)
+                    contactQualityModal.liveScanDismissable = true
+                return
+            }
             for (var i = 0; i < warnings.length; ++i) {
                 var w = warnings[i]
                 contactQualityModal.addWarning(w.camera, w.typeKey, w.typeText, w.value)
             }
+            if (bloodFlow.reducedStartPending)
+                contactQualityModal.liveScanDismissable = true
         }
         // Live-scan warnings (ContactQualityMonitor via SciencePipeline)
         function onContactQualityWarning(camera, typeKey, typeText, value) {

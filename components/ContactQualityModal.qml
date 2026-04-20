@@ -44,6 +44,8 @@ Item {
     property string state_: "checking"
     // Whether the modal was opened during a live scan (controls footer).
     property bool liveScan: false
+    // True when this modal is being used as a reduced-mode pre-scan gate.
+    property bool preScanMode: false
     // Live-scan modal is only dismissable when no CQ issues remain active.
     property bool liveScanDismissable: false
     // Require an all-clear holdoff before enabling Continue.
@@ -489,9 +491,59 @@ Item {
                 spacing: 12
                 visible: root.state_ !== "checking"
 
+                // Reduced-mode pre-scan footer
+                Button {
+                    visible: root.preScanMode
+                    text: "Dismiss"
+                    hoverEnabled: true
+                    Layout.preferredHeight: 45
+                    contentItem: Text {
+                        text: parent.text; font.pixelSize: 12
+                        color: parent.hovered ? "#FFFFFF" : theme.textSecondary
+                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle {
+                        color: parent.hovered ? theme.accentBlue : theme.bgInput
+                        radius: 4; border.color: parent.hovered ? theme.accentBlue : theme.borderSoft; border.width: 1
+                    }
+                    onClicked: { root.close(); root.dismissed() }
+                }
+                Button {
+                    visible: root.preScanMode
+                    text: "Retest"
+                    hoverEnabled: true
+                    Layout.preferredHeight: 45
+                    contentItem: Text {
+                        text: parent.text; font.pixelSize: 12
+                        color: parent.hovered ? "#FFFFFF" : theme.textSecondary
+                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle {
+                        color: parent.hovered ? theme.accentBlue : theme.bgInput
+                        radius: 4; border.color: parent.hovered ? theme.accentBlue : theme.borderSoft; border.width: 1
+                    }
+                    onClicked: { root.close(); root.retestRequested() }
+                }
+                Button {
+                    visible: root.preScanMode
+                    text: "Start Scan"
+                    hoverEnabled: true
+                    Layout.preferredHeight: 45
+                    contentItem: Text {
+                        text: parent.text; font.pixelSize: 12
+                        color: parent.hovered ? "#FFFFFF" : theme.textSecondary
+                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle {
+                        color: parent.hovered ? theme.accentGreen : theme.bgInput
+                        radius: 4; border.color: parent.hovered ? theme.accentGreen : theme.borderSoft; border.width: 1
+                    }
+                    onClicked: { root.continueRequested(); root.close(); root.dismissed() }
+                }
+
                 // Live-scan footer (warnings state only)
                 Button {
-                    visible: root.liveScan && root.state_ === "warnings"
+                    visible: !root.preScanMode && root.liveScan && root.state_ === "warnings"
                     text: "Stop scan"
                     hoverEnabled: true
                     Layout.preferredHeight: 45
@@ -507,7 +559,7 @@ Item {
                     onClicked: { root.stopScanRequested(); root.close(); root.dismissed() }
                 }
                 Button {
-                    visible: root.liveScan && root.state_ === "warnings"
+                    visible: !root.preScanMode && root.liveScan && (root.state_ === "warnings" || root.state_ === "ok")
                     enabled: root.liveScanDismissable
                     text: "Continue"
                     hoverEnabled: enabled
@@ -531,7 +583,7 @@ Item {
 
                 // Quick-check / OK / error footer
                 Button {
-                    visible: !(root.liveScan && root.state_ === "warnings")
+                    visible: !root.preScanMode && !(root.liveScan && root.state_ === "warnings")
                     text: "Dismiss"
                     hoverEnabled: true
                     Layout.preferredHeight: 45
@@ -547,7 +599,7 @@ Item {
                     onClicked: { root.close(); root.dismissed() }
                 }
                 Button {
-                    visible: !(root.liveScan && root.state_ === "warnings")
+                    visible: !root.preScanMode && !(root.liveScan && root.state_ === "warnings")
                     text: "Retest"
                     hoverEnabled: true
                     Layout.preferredHeight: 45
@@ -570,7 +622,7 @@ Item {
         Keys.onReleased: function(event) {
             if (event.key === Qt.Key_Escape
                     && root.state_ !== "checking"
-                    && !(root.liveScan && root.state_ === "warnings" && !root.liveScanDismissable)) {
+                    && !(root.liveScan && root.state_ === "warnings" && !root.liveScanDismissable && !root.preScanMode)) {
                 root.close()
                 root.dismissed()
                 event.accepted = true
