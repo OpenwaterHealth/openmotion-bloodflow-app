@@ -24,6 +24,9 @@ Rectangle {
     property bool reducedMode: MOTIONInterface.appConfig.reducedMode === true
     // In reduced mode, Start first runs a contact-quality preflight check.
     property bool reducedStartPending: false
+    // Prevent late CQ callbacks from re-opening the modal while a stop/cancel
+    // is in flight.
+    property bool suppressLiveCqModal: false
 
     // Camera masks (updated by camera selection modal)
     property int leftMask: 0x99   // default "Outer"
@@ -106,6 +109,7 @@ Rectangle {
 
     function beginScanNow() {
         bloodFlow.scanning = true
+        bloodFlow.suppressLiveCqModal = false
         reducedStartPending = false
         scanDialog.message = "Scanning..."
         scanDialog.stageText = "Preparing..."
@@ -274,6 +278,8 @@ Rectangle {
                    ? (MOTIONInterface.rightSensorConnected ? 0xFF : 0x00)
                    : bloodFlow.rightMask
         onStopScanRequested: {
+            bloodFlow.suppressLiveCqModal = true
+            contactQualityModal.close()
             if (bloodFlow.scanning) {
                 // Route through ScanRunner so the normal "Canceled" flow
                 // runs and Notes opens consistently.
@@ -351,6 +357,7 @@ Rectangle {
             // scanTimer stops automatically via its `running:` binding once
             // bloodFlow.scanning flips false or triggerState goes "OFF".
             bloodFlow.scanning = false
+            bloodFlow.suppressLiveCqModal = false
 
             if (err === "Canceled") {
                 scanDialog.close()
@@ -399,7 +406,9 @@ Rectangle {
             "EnableTaTrigger": true
         })
 
-        onStageUpdate: function(txt) { console.log("ContactQuality: " + txt) }
+        onStageUpdate: function(txt) {
+            console.log("ContactQuality: " + txt)
+        }
         onMessageOut: function(line) { console.log("ContactQuality: " + line) }
         onScanFinished: function(ok, err, left, right) {
             // Flash/trigger stage failures surface here; the final "check"
@@ -490,6 +499,8 @@ Rectangle {
         }
         // Live-scan warnings (ContactQualityMonitor via SciencePipeline)
         function onContactQualityWarning(camera, typeKey, typeText, value) {
+            if (bloodFlow.suppressLiveCqModal || !bloodFlow.scanning)
+                return
             if (contactQualityModal.state_ === "checking" || !contactQualityModal.visible) {
                 contactQualityModal.reset(true)
             } else {
@@ -499,6 +510,8 @@ Rectangle {
         }
 
         function onContactQualityIssueStateChanged(camera, typeKey, typeText, value, active) {
+            if (bloodFlow.suppressLiveCqModal || !bloodFlow.scanning)
+                return
             if (!active)
                 contactQualityModal.clearWarning(camera, typeKey)
         }

@@ -296,6 +296,16 @@ Item {
                 }
             }
 
+            Text {
+                visible: root.state_ === "checking"
+                Layout.fillWidth: true
+                horizontalAlignment: Text.AlignHCenter
+                color: theme.textSecondary
+                font.pixelSize: 13
+                wrapMode: Text.WordWrap
+                text: "Please wait up to 2 minutes for the sensor modules to configure"
+            }
+
             // OK message
             Text {
                 visible: root.state_ === "ok"

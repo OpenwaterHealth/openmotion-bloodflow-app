@@ -58,8 +58,8 @@ Rectangle {
                     Layout.alignment: Qt.AlignHCenter
                     width: 36; height: 36; radius: 18
                     color: !panel.allConnected ? theme.textDisabled
-                         : panel.scanning ? "#E74C3C"
                          : panel.waiting  ? "#F1C40F"
+                         : panel.scanning ? "#E74C3C"
                          :                  "#2ECC71"
                     Behavior on color { ColorAnimation { duration: 150 } }
 
