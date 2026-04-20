@@ -226,7 +226,9 @@ Rectangle {
         id: scanSettingsModal
         onSelectionChanged: function(newLeftMask, newRightMask) {
             bloodFlow.freeRun = scanSettingsModal.freeRun
-            bloodFlow.durationSec = scanSettingsModal.freeRun ? 43200 : scanSettingsModal.durationSec
+            var dur = scanSettingsModal.freeRun ? 43200 : scanSettingsModal.durationSec
+            if (dur <= 0) dur = 3600
+            bloodFlow.durationSec = dur
             bloodFlow.leftMask = newLeftMask
             bloodFlow.rightMask = newRightMask
         }

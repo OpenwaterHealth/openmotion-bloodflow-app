@@ -82,8 +82,18 @@ Item {
         root.visible = true
     }
     function close() {
+        commitDurationFields()
         selectionChanged(maskFromArray(leftSensorActive), maskFromArray(rightSensorActive))
         root.visible = false
+    }
+
+    function commitDurationFields() {
+        var h = parseInt(hoursField.text);   if (isNaN(h)) h = 0
+        var m = parseInt(minutesField.text); if (isNaN(m)) m = 0
+        var s = parseInt(secondsField.text); if (isNaN(s)) s = 0
+        root.hours   = Math.max(0, Math.min(99, h))
+        root.minutes = Math.max(0, Math.min(59, m))
+        root.seconds = Math.max(0, Math.min(59, s))
     }
 
     function setInitialSelection(leftArr, rightArr) {
