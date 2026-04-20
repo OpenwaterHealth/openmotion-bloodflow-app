@@ -1204,6 +1204,10 @@ class MOTIONConnector(QObject):
             f"dir={data_dir}, disable_laser={disable_laser})"
         )
 
+        if duration_sec <= 0:
+            logger.warning("duration_sec was %s, clamping to 3600", duration_sec)
+            duration_sec = 3600
+
         if self._capture_running or self._capture_thread is not None:
             self.captureLog.emit("Capture already running.")
             return False
