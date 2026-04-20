@@ -147,6 +147,10 @@ Rectangle {
             }
         }
         onNotesClicked:    { var o = notesModal.visible;    closeAllModals(); if (!o) notesModal.open() }
+        onCheckClicked:    {
+            contactQualityModal.reset(false, 0)
+            qualityCheckRunner.start()
+        }
         onHistoryClicked:  { var o = historyModal.visible;  closeAllModals(); if (!o) historyModal.open() }
         onLogClicked:      { var o = scanDialog.visible;    closeAllModals(); if (!o) scanDialog.open() }
         onSettingsClicked: { var o = settingsModal.visible; closeAllModals(); if (!o) settingsModal.open() }
@@ -244,13 +248,25 @@ Rectangle {
         id: settingsModal
     }
 
+    ContactQualityModal {
+        id: contactQualityModal
+        anchors.fill: parent
+        onStopScanRequested: MOTIONInterface.stopCapture()
+        onContinueRequested: { /* no-op: leave scan running */ }
+        onRetestRequested: {
+            contactQualityModal.reset(false, 0)
+            qualityCheckRunner.start()
+        }
+    }
+
     ScanProgressDialog {
         id: scanDialog
     }
 
-    // ===== SCAN RUNNER =====
+    // ===== SCAN RUNNER (capture mode) =====
     ScanRunner {
         id: scanRunner
+        mode: "capture"
         connector: MOTIONInterface
         leftMask: bloodFlow.leftMask
         rightMask: bloodFlow.rightMask
@@ -315,6 +331,43 @@ Rectangle {
         }
     }
 
+    // ===== SCAN RUNNER (check mode) =====
+    // Shares flash + trigger/laser plumbing with scanRunner; final stage is
+    // the contact-quality check instead of capture. Always flashes 0xFF so
+    // every physically-present camera participates — absent cameras are
+    // skipped by the configure workflow.
+    ScanRunner {
+        id: qualityCheckRunner
+        mode: "check"
+        connector: MOTIONInterface
+        leftMask: MOTIONInterface.leftSensorConnected  ? 0xFF : 0x00
+        rightMask: MOTIONInterface.rightSensorConnected ? 0xFF : 0x00
+        laserOn: true
+        laserPower: 50
+        triggerConfig: (typeof appTriggerConfig !== "undefined") ? appTriggerConfig : ({
+            "TriggerFrequencyHz": 40,
+            "TriggerPulseWidthUsec": 500,
+            "LaserPulseDelayUsec": 100,
+            "LaserPulseWidthUsec": 500,
+            "LaserPulseSkipInterval": 600,
+            "LaserPulseSkipDelayUsec": 1800,
+            "EnableSyncOut": true,
+            "EnableTaTrigger": true
+        })
+
+        onStageUpdate: function(txt) { console.log("ContactQuality: " + txt) }
+        onMessageOut: function(line) { console.log("ContactQuality: " + line) }
+        onScanFinished: function(ok, err, left, right) {
+            // Flash/trigger stage failures surface here; the final "check"
+            // stage forwards its own result via contactQualityCheckFinished
+            // (consumed by the modal's Connections block), so skip here to
+            // avoid double-reporting.
+            if (!ok && qualityCheckRunner._stage !== "check") {
+                contactQualityModal.showError(err || "Check pipeline failed")
+            }
+        }
+    }
+
     // ===== CONNECTIONS =====
     Connections {
         target: MOTIONInterface
@@ -361,6 +414,32 @@ Rectangle {
 
         function onLaserStateChanged() {}
         function onSafetyFailureStateChanged() {}
+
+        // Contact-quality quick-check lifecycle
+        function onContactQualityCheckStarted(seconds) {
+            contactQualityModal.reset(false, seconds)
+        }
+        function onContactQualityCheckFinished(ok, error, warnings) {
+            if (!ok) {
+                var msg = (error && error.length > 0) ? error : "Quick check failed"
+                contactQualityModal.showError(msg)
+                return
+            }
+            if (warnings.length === 0) { contactQualityModal.showOk(); return }
+            for (var i = 0; i < warnings.length; ++i) {
+                var w = warnings[i]
+                contactQualityModal.addWarning(w.camera, w.typeText, w.value)
+            }
+        }
+        // Live-scan warnings (ContactQualityMonitor via SciencePipeline)
+        function onContactQualityWarning(camera, typeKey, typeText, value) {
+            if (contactQualityModal.state_ === "checking" || !contactQualityModal.visible) {
+                contactQualityModal.reset(true)
+            } else {
+                contactQualityModal.liveScan = true
+            }
+            contactQualityModal.addWarning(camera, typeText, value)
+        }
     }
 
     Component.onCompleted: {
