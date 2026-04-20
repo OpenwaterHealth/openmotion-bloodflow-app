@@ -251,6 +251,8 @@ Rectangle {
     ContactQualityModal {
         id: contactQualityModal
         anchors.fill: parent
+        leftMask: bloodFlow.leftMask
+        rightMask: bloodFlow.rightMask
         onStopScanRequested: MOTIONInterface.stopCapture()
         onContinueRequested: { /* no-op: leave scan running */ }
         onRetestRequested: {
@@ -428,7 +430,7 @@ Rectangle {
             if (warnings.length === 0) { contactQualityModal.showOk(); return }
             for (var i = 0; i < warnings.length; ++i) {
                 var w = warnings[i]
-                contactQualityModal.addWarning(w.camera, w.typeText, w.value)
+                contactQualityModal.addWarning(w.camera, w.typeKey, w.typeText, w.value)
             }
         }
         // Live-scan warnings (ContactQualityMonitor via SciencePipeline)
@@ -438,7 +440,12 @@ Rectangle {
             } else {
                 contactQualityModal.liveScan = true
             }
-            contactQualityModal.addWarning(camera, typeText, value)
+            contactQualityModal.addWarning(camera, typeKey, typeText, value)
+        }
+
+        function onContactQualityIssueStateChanged(camera, typeKey, typeText, value, active) {
+            if (!active)
+                contactQualityModal.clearWarning(camera, typeKey)
         }
     }
 
