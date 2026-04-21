@@ -726,6 +726,12 @@ class MOTIONConnector(QObject):
                 pass
         elif descriptor.upper() == "CONSOLE":
             self._consoleConnected = False
+            # If console disconnects during an active capture, cancel it to prevent blank screen
+            if self._capture_running:
+                logger.warning(
+                    "Console disconnected during active capture - cancelling scan to prevent UI freeze"
+                )
+                self.stopCapture()
 
         logger.info(
             f"Device disconnected: {descriptor} on port {port} and state is {self._state}"
