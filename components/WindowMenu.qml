@@ -141,6 +141,7 @@ Rectangle {
                 }
 
                 Rectangle {
+                    visible: !windowMenu.reducedMode
                     width: betaLabel.implicitWidth + 12
                     height: betaLabel.implicitHeight + 4
                     radius: 4

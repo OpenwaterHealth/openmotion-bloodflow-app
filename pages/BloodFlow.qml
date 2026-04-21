@@ -496,8 +496,6 @@ Rectangle {
                 var w = warnings[i]
                 contactQualityModal.addWarning(w.camera, w.typeKey, w.typeText, w.value)
             }
-            if (bloodFlow.reducedStartPending)
-                contactQualityModal.liveScanDismissable = true
         }
         // Live-scan warnings (ContactQualityMonitor via SciencePipeline)
         function onContactQualityWarning(camera, typeKey, typeText, value) {
