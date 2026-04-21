@@ -708,6 +708,13 @@ class MOTIONConnector(QObject):
                     sensor.clear_id_cache()
             except Exception:
                 pass
+            # If sensor disconnects during an active capture, cancel it to prevent blank screen
+            if self._capture_running:
+                logger.warning(
+                    "Left sensor disconnected during active capture - cancelling scan to prevent UI freeze"
+                )
+                self.captureLog.emit("Left sensor disconnected - stopping scan.")
+                self.stopCapture()
         elif descriptor.upper() == "SENSOR_RIGHT":
             self._rightSensorConnected = False
             self._last_fan_status["right"] = None
@@ -724,6 +731,13 @@ class MOTIONConnector(QObject):
                     sensor.clear_id_cache()
             except Exception:
                 pass
+            # If sensor disconnects during an active capture, cancel it to prevent blank screen
+            if self._capture_running:
+                logger.warning(
+                    "Right sensor disconnected during active capture - cancelling scan to prevent UI freeze"
+                )
+                self.captureLog.emit("Right sensor disconnected - stopping scan.")
+                self.stopCapture()
         elif descriptor.upper() == "CONSOLE":
             self._consoleConnected = False
             # If console disconnects during an active capture, cancel it to prevent blank screen
@@ -731,6 +745,7 @@ class MOTIONConnector(QObject):
                 logger.warning(
                     "Console disconnected during active capture - cancelling scan to prevent UI freeze"
                 )
+                self.captureLog.emit("Console disconnected - stopping scan.")
                 self.stopCapture()
 
         logger.info(
