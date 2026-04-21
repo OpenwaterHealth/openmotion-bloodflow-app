@@ -139,7 +139,7 @@ Item {
         ListElement { name: "None";      maskHex: "0x00" }
         ListElement { name: "Near";      maskHex: "0x5A" }
         ListElement { name: "Middle";    maskHex: "0x66" }
-        ListElement { name: "Far";       maskHex: "0x55" }
+        ListElement { name: "Far";       maskHex: "0xC3" }
         ListElement { name: "Outer";     maskHex: "0x99" }
         ListElement { name: "Left";      maskHex: "0x0F" }
         ListElement { name: "Right";     maskHex: "0xF0" }

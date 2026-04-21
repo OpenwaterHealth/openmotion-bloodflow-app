@@ -21,7 +21,7 @@ Item {
         ListElement { name: "None"; maskHex: "0x00" }
         ListElement { name: "Near"; maskHex: "0x5A" }
         ListElement { name: "Middle"; maskHex: "0x66" }
-        ListElement { name: "Far"; maskHex: "0x55" }
+        ListElement { name: "Far"; maskHex: "0xC3" }
         ListElement { name: "Outer"; maskHex: "0x99" }
         ListElement { name: "Left"; maskHex: "0x0F" }
         ListElement { name: "Right"; maskHex: "0xF0" }
@@ -45,7 +45,7 @@ Item {
             case 0: pattern = [false,false,false,false,false,false,false,false]; break;
             case 1: pattern = [false,true,false,true,true,false,true,false]; break;
             case 2: pattern = [false,true,true,false,false,true,true,false]; break;
-            case 3: pattern = [true,false,true,false,false,true,false,true]; break;
+            case 3: pattern = [true,true,false,false,false,false,true,true]; break;
             case 4: pattern = [true,false,false,true,true,false,false,true]; break;
             case 5: pattern = [false,false,false,false,true,true,true,true]; break;
             case 6: pattern = [true,true,true,true,false,false,false,false]; break;
