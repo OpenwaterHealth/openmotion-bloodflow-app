@@ -161,6 +161,7 @@ Rectangle {
         }
 
         Rectangle {
+            visible: !panel.reducedMode
             Layout.preferredWidth: 52; Layout.preferredHeight: 1
             Layout.topMargin: 4; Layout.bottomMargin: 4
             Layout.alignment: Qt.AlignHCenter; color: theme.borderSubtle
