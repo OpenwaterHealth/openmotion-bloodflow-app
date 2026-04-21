@@ -79,7 +79,12 @@ def pytest_runtest_setup(item):
 # App discovery
 # ─────────────────────────────────────────────
 def _find_exe() -> str:
-    """Locate OpenWaterApp.exe without hardcoding a username or install path."""
+    """Locate the latest OpenWaterApp.exe, including pre-release builds.
+
+    Collects all matches across every search pattern and returns the most
+    recently modified file, so a newer pre-release build is always preferred
+    over an older stable install.
+    """
     env = os.environ.get("OPENWATER_EXE", "")
     if env and os.path.exists(env):
         return env
@@ -89,10 +94,13 @@ def _find_exe() -> str:
         r"C:\Program Files\**\OpenWaterApp.exe",
         r"C:\Program Files (x86)\**\OpenWaterApp.exe",
     ]
+    all_matches = []
     for pattern in patterns:
-        matches = _glob.glob(pattern, recursive=True)
-        if matches:
-            return matches[0]
+        all_matches.extend(_glob.glob(pattern, recursive=True))
+    if all_matches:
+        latest = max(all_matches, key=os.path.getmtime)
+        log.info(f"  Found {len(all_matches)} OpenWaterApp.exe candidate(s) — using latest: {latest}")
+        return latest
     local = os.path.join(os.path.dirname(os.path.abspath(__file__)), "OpenWaterApp.exe")
     if os.path.exists(local):
         return local
@@ -119,12 +127,7 @@ def ensure_visible():
 
 
 def uia_window(retries: int = 3):
-    """Return a pywinauto WindowSpecification for the app.
 
-    Uses the exact window title to avoid ambiguity errors when other
-    windows (File Explorer, browser tabs, etc.) contain similar keywords.
-    Retries to handle transient UIA failures during QML animations.
-    """
     for attempt in range(retries):
         ensure_visible()
         desktop = UiaDesktop(backend="uia")
@@ -297,7 +300,7 @@ def app():
     if exe and os.path.exists(exe):
         log.info(f"Launching: {exe}")
         subprocess.Popen([exe])
-        time.sleep(SLEEP * 2)
+        time.sleep(SLEEP * 5)  # give it time to launch and settle
         ensure_visible()
         return True
 
