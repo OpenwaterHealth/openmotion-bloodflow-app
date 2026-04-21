@@ -6,11 +6,11 @@ Automated GUI tests for the OpenWater Bloodflow desktop application using **pyte
 
 | File | Tests | What it covers |
 |------|-------|----------------|
-| `test_scan_settings.py` | 28 | Sensor dropdowns (all 9 options x2), duration toggle, H/M/S inputs, close via X and Escape |
+| `test_scan_settings.py` | 14 | Session/User label fields, sensor dropdowns (all 9 options x2), duration toggle, H/M/S inputs, close via X and Escape |
 | `test_scan_flow.py` | 15 | End-to-end: configure scan settings, type notes, start 2-min scan, wait, visualize BFI/BVI and Contrast/Mean |
 | `test_history.py` | 7 | Open History modal, verify scan listing, visualize plots, close |
 | `test_notes.py` | 20 | Typing, persistence, multi-line, clipboard ops (cut/paste/undo), long text, rapid open/close |
-| `test_reducedmode.py` | 23 | Enable Reduced Mode via Settings, type note, run 2-min manual scan, stop, verify History plots, disable Reduced Mode |
+| `test_reducedmode.py` | 36 | Enable Reduced Mode via Settings gear (keyboard tests 01–18) + identical workflow driven by mouse clicks (tests 19–36). Scan Settings and Contrast/Mean visualization are NOT available in Reduced Mode and are not tested here. |
 
 ## Quick Start
 
@@ -81,7 +81,14 @@ New_UI_TestScripts/
   test_scan_flow.py     # End-to-end scan flow tests
   test_history.py       # History modal tests
   test_notes.py         # Session Notes tests
-  test_reducedmode.py   # Reduced Mode: enable, manual scan, History, disable
+  test_reducedmode.py   # Reduced Mode: enable (Settings gear), manual scan, History, disable
+                        #   - TestReducedMode (01–18): keyboard-driven
+                        #   - TestReducedModeMouse (19–36): mouse-driven
+                        #   - Scan Settings hidden in Reduced Mode; Notes moves
+                        #     to the former Scan Settings sidebar position
+                        #   - Contrast/Mean visualization not available in
+                        #     Reduced Mode — only BFI/BVI is tested
+                        #   - Sensor dropdowns NOT tested here (test_scan_settings.py)
 ```
 
 ### Key Design Decisions
@@ -93,6 +100,10 @@ New_UI_TestScripts/
 **UIA readback verification**: After UI interactions (e.g., selecting a ComboBox option), tests read back the actual value via Windows UI Automation and assert it matches the expected value — ensuring the interaction actually landed.
 
 **Sidebar clicks are coordinate-based**: The QML sidebar uses `MouseArea` elements which are not exposed via UIA. These buttons are clicked using relative window coordinates. All other elements (modal buttons, dropdowns) are found by name via UIA.
+
+**ComboBox index fallback**: This QML app does not expose accessible names for its ComboBoxes (no "Left Sensor" / "Right Sensor" UIA labels). `_focus_combobox_by_label()` tries UIA name lookup and label-proximity search first; if both fail it falls back to clicking `ComboBox[0]` for Left and `ComboBox[1]` for Right.
+
+**Session/User header values**: The Scan Settings modal exposes only the raw session identifier (e.g. `owEW8TEU`) via UIA — no "Session" or "User" label elements exist in the tree. `_get_modal_header_values()` reads all descendants, filters out sensor option strings and short numeric duration values, and returns what remains.
 
 ## App Discovery
 

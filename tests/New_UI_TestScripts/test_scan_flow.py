@@ -51,9 +51,10 @@ def _close_plot_window() -> bool:
 # ─────────────────────────────────────────────
 # Sidebar coordinates (MouseArea-based — not exposed via UIA)
 # ─────────────────────────────────────────────
-SIDEBAR_SCAN = (0.019, 0.210)
-SIDEBAR_NOTES = (0.019, 0.315)
-SIDEBAR_START = (0.019, 0.115)
+SIDEBAR_SCAN    = (0.019, 0.210)
+SIDEBAR_NOTES   = (0.019, 0.315)
+SIDEBAR_START   = (0.019, 0.115)
+SIDEBAR_HISTORY = (0.020, 0.820)   # History icon — MouseArea, not UIA-accessible
 
 SCAN_DURATION_MIN = 2
 WAIT_AFTER_SCAN = SCAN_DURATION_MIN * 60 + 180  # scan + 3-min buffer
@@ -127,7 +128,9 @@ class TestScanFlow:
         time.sleep(SLEEP)
 
     def test_09_open_history(self, app):
-        click_by_name("History")
+        # History is a QML MouseArea sidebar button — use coordinate click,
+        # not click_by_name (which searches the UIA tree and finds nothing).
+        click_sidebar(*SIDEBAR_HISTORY, "History")
 
     def test_10_latest_scan_selected(self, app):
         """History.open() sets scanPicker index 0 (latest scan) automatically."""
