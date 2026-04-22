@@ -29,8 +29,12 @@ warnings.simplefilter("ignore", DeprecationWarning)
 
 # Wire up the things that get logged out of QT app to the proper logs
 def qt_message_handler(msg_type, context, message):
-    """Custom Qt message handler to forward QML console.log() messages to the run log."""
-    # Map Qt message types to logging levels
+    """Forward QML messages to the SDK log at the matching severity.
+
+    `console.log()` in QML is `QtDebugMsg` and is filtered out by default.
+    Use `console.warn()` / `console.error()` from QML for things that
+    should always reach the run log.
+    """
     log_level_map = {
         QtMsgType.QtDebugMsg: logging.DEBUG,
         QtMsgType.QtInfoMsg: logging.INFO,
@@ -38,15 +42,9 @@ def qt_message_handler(msg_type, context, message):
         QtMsgType.QtCriticalMsg: logging.ERROR,
         QtMsgType.QtFatalMsg: logging.CRITICAL,
     }
-
-    # Get the logging level (default to INFO for console.log)
     log_level = log_level_map.get(msg_type, logging.INFO)
-
-    qml_message = f"QML: {message}"
-
-    logger = logging.getLogger("openmotion.bloodflow-app.qml-console")
-    logger.setLevel(logging.INFO)  # or INFO depending on what you want to see
-    logger.info(qml_message)
+    qml_logger = logging.getLogger("openmotion.bloodflow-app.qml-console")
+    qml_logger.log(log_level, "QML: %s", message)
 
 
 def _load_app_config() -> dict:

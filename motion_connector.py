@@ -2142,30 +2142,28 @@ class MOTIONConnector(QObject):
         Returns:
             bool: True if fan is ON, False if fan is OFF
         """
-        try:
-            if sensor_side.lower() == "left":
-                if not self._leftSensorConnected:
-                    logger.error("Left sensor not connected")
-                    return False
-                status = self._interface.left.get_fan_control_status()
-            elif sensor_side.lower() == "right":
-                if not self._rightSensorConnected:
-                    logger.error("Right sensor not connected")
-                    return False
-                status = self._interface.right.get_fan_control_status()
-            else:
-                logger.error(f"Invalid sensor side: {sensor_side}")
-                return False
+        side = sensor_side.lower()
+        if side not in ("left", "right"):
+            logger.error(f"Invalid sensor side: {sensor_side}")
+            return False
 
-            if status != self._last_fan_status.get(sensor_side.lower()):
-                self._last_fan_status[sensor_side.lower()] = status
+        sensor = self._interface.left if side == "left" else self._interface.right
+        if not sensor.is_connected():
+            # Polled while disconnected/disconnecting — silent, expected.
+            return False
+
+        try:
+            status = sensor.get_fan_control_status()
+            if status != self._last_fan_status.get(side):
+                self._last_fan_status[side] = status
                 logger.info(
                     f"Fan status for {sensor_side} sensor: {'ON' if status else 'OFF'}"
                 )
             return status
-
         except Exception as e:
-            logger.error(f"Error getting fan control status: {e}")
+            # Disconnect raced with the in-flight call. Log at DEBUG;
+            # the SDK's state machine already logs the disconnect at INFO.
+            logger.debug(f"Fan status read on {side} failed during disconnect: {e}")
             return False
 
     # --- BLOODFLOW VISUALIZATION / POST-PROCESSING METHODS ---
