@@ -713,10 +713,14 @@ class MOTIONConnector(QObject):
             )
             self.signalDisconnected.emit(name, "")
         # CONNECTING / DISCONNECTING are intermediate; UI doesn't need to
-        # fire a connect/disconnect signal for those.
-
-        self.connectionStatusChanged.emit()
-        self.update_state()
+        # fire a connect/disconnect signal for those, and emitting
+        # connectionStatusChanged on every intermediate transition would
+        # cause QML observers to re-poll device state 4× per disconnect
+        # cycle (once for each of CONNECTED→DISCONNECTING→DISCONNECTED→
+        # CONNECTING→CONNECTED).
+        if is_now_connected or is_now_lost:
+            self.connectionStatusChanged.emit()
+            self.update_state()
 
     def update_state(self):
         """Update system state based on connection and configuration."""
