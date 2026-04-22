@@ -20,7 +20,7 @@ import random
 import re
 import string
 
-from omotion.Interface import MOTIONInterface
+from omotion import MotionInterface
 
 from omotion.config import (
     DEBUG_FLAG_USB_PRINTF,
@@ -160,7 +160,7 @@ class MOTIONConnector(QObject):
 
     def __init__(
         self,
-        interface: MOTIONInterface,
+        interface: MotionInterface,
         app_config=None,
         output_path=None,
         config_dir="config",
