@@ -24,6 +24,7 @@ from conftest import (
     click_sidebar,
     ensure_visible,
     get_app_window,
+    get_clipboard,
     log,
     require_focus,
     uia_window,
@@ -123,6 +124,23 @@ def _close_plot_window_mouse() -> bool:
     return False
 
 
+def _move_window_on_screen():
+    """Move the app window onto the primary screen if it is off-screen."""
+    try:
+        w = get_app_window()
+        screen_w, screen_h = pyautogui.size()
+        if w.left < 0 or w.top < 0 or w.left > screen_w or w.top > screen_h:
+            log.warning(
+                f"  Window is off-screen at ({w.left}, {w.top}) — "
+                f"moving to primary display"
+            )
+            w.moveTo(50, 50)
+            time.sleep(1)
+            log.info(f"  Window moved to ({w.left}, {w.top})")
+    except Exception as e:
+        log.warning(f"  _move_window_on_screen failed: {e}")
+
+
 def _scroll_modal_to_bottom():
     """Scroll the Settings modal content down to reveal the Reduced Mode section.
 
@@ -143,6 +161,7 @@ def _scroll_modal_to_bottom():
 
 def _click_coord(rx: float, ry: float, label: str = ""):
     """Move mouse to a relative coordinate within the app window and click."""
+    _move_window_on_screen()
     ensure_visible()
     w = get_app_window()
     x = int(w.left + rx * w.width)
@@ -179,6 +198,7 @@ class TestReducedMode:
     # ── Settings: enable Reduced Mode ─────────────────────────────────────
 
     def test_01_open_settings(self, app):
+        _move_window_on_screen()
         ensure_visible()
         click_sidebar(*SIDEBAR_SETTINGS, "Settings gear icon")
 
@@ -196,13 +216,14 @@ class TestReducedMode:
         pyautogui.press("escape")
         time.sleep(SLEEP)
 
-    # ── Notes: type session note ───────────────────────────────────────────
+    # ── Notes: full feature test in Reduced Mode ─────────────────────────
 
     def test_05_open_notes(self, app):
         """Notes is now at the former Scan Settings position in the reduced sidebar."""
         click_sidebar(*SIDEBAR_NOTES_REDUCED, "Notes (reduced mode position)")
 
     def test_06_type_note(self, app):
+        """Type a unique note and save it."""
         require_focus()
         TestReducedMode.session_note = f"ReducedScan_{datetime.now():%Y%m%d_%H%M%S}"
         log.info(f"  Typing note: '{TestReducedMode.session_note}'")
@@ -214,99 +235,144 @@ class TestReducedMode:
         pyautogui.press("escape")
         time.sleep(SLEEP)
 
+    def test_08_persist_after_reopen(self, app):
+        """Verify the note persists after closing and reopening."""
+        click_sidebar(*SIDEBAR_NOTES_REDUCED, "Notes (reopen)")
+        require_focus()
+        pyautogui.hotkey("ctrl", "a")
+        time.sleep(0.2)
+        pyautogui.hotkey("ctrl", "c")
+        time.sleep(0.3)
+        clip = get_clipboard()
+        assert TestReducedMode.session_note in clip, (
+            f"Note not persisted: expected '{TestReducedMode.session_note}' "
+            f"in clipboard, got: '{clip[:60]}'"
+        )
+        log.info(f"  Note persisted: '{clip[:60]}'")
+
+    def test_09_append_text(self, app):
+        """Append text to existing note."""
+        require_focus()
+        pyautogui.hotkey("ctrl", "end")
+        time.sleep(0.2)
+        pyautogui.typewrite(" -- appended", interval=0.04)
+        time.sleep(SLEEP)
+
+    def test_10_clear_and_multiline(self, app):
+        """Clear textarea and type multi-line note."""
+        require_focus()
+        pyautogui.hotkey("ctrl", "a")
+        time.sleep(0.2)
+        pyautogui.press("delete")
+        time.sleep(0.3)
+        for line in ["Line one", "Line two", "Line three"]:
+            pyautogui.typewrite(line, interval=0.04)
+            pyautogui.press("enter")
+        time.sleep(SLEEP)
+
+    def test_11_multiline_persists(self, app):
+        """Close and reopen — verify multi-line note persists."""
+        require_focus()
+        pyautogui.press("escape")
+        time.sleep(SLEEP)
+        click_sidebar(*SIDEBAR_NOTES_REDUCED, "Notes (reopen)")
+        require_focus()
+        pyautogui.hotkey("ctrl", "a")
+        time.sleep(0.2)
+        pyautogui.hotkey("ctrl", "c")
+        time.sleep(0.3)
+        clip = get_clipboard()
+        assert "Line one" in clip and "Line three" in clip, (
+            f"Multi-line text not preserved: '{clip[:80]}'"
+        )
+        log.info("  Multi-line note persisted OK")
+
+    def test_12_cut_paste(self, app):
+        """Ctrl+X cuts text, Ctrl+V pastes it back."""
+        require_focus()
+        pyautogui.hotkey("ctrl", "a")
+        time.sleep(0.2)
+        pyautogui.hotkey("ctrl", "x")
+        time.sleep(0.3)
+        clip = get_clipboard()
+        assert len(clip) > 0, "Ctrl+X did not put text in clipboard"
+        pyautogui.hotkey("ctrl", "v")
+        time.sleep(SLEEP)
+        log.info("  Cut/paste OK")
+
+    def test_13_close_notes_for_scan(self, app):
+        """Clear and close notes before starting scan."""
+        require_focus()
+        pyautogui.hotkey("ctrl", "a")
+        time.sleep(0.2)
+        pyautogui.press("delete")
+        time.sleep(0.2)
+        # Re-type the session note for the scan
+        TestReducedMode.session_note = f"ReducedScan_{datetime.now():%Y%m%d_%H%M%S}"
+        pyautogui.typewrite(TestReducedMode.session_note, interval=0.04)
+        time.sleep(SLEEP)
+        require_focus()
+        pyautogui.press("escape")
+        time.sleep(SLEEP)
+
     # ── Scan: start, wait, stop ────────────────────────────────────────────
 
-    def test_08_start_scan(self, app):
+    def test_14_start_scan(self, app):
         click_sidebar(*SIDEBAR_START, "Start scan")
 
-    def test_09_wait_2_minutes(self, app):
+    def test_15_wait_2_minutes(self, app):
         wait_with_log(SCAN_WAIT, "2-minute manual scan running")
 
-    def test_10_stop_scan(self, app):
+    def test_16_stop_scan(self, app):
         click_sidebar(*SIDEBAR_START, "Stop scan")
         log.info(f"  Waiting {STOP_BUFFER}s for scan data to save...")
         time.sleep(STOP_BUFFER)
 
     # ── History: verify scan, visualize BFI/BVI only (no Contrast/Mean in Reduced Mode)
 
-    def test_11_open_history(self, app):
+    def test_17_open_history(self, app):
         click_sidebar(*SIDEBAR_HISTORY, "History")
 
-    def test_12_latest_scan_selected(self, app):
+    def test_18_latest_scan_selected(self, app):
         scan_text = _selected_scan_text()
         assert len(scan_text) > 0, (
             "History ComboBox is empty — no scans found."
         )
         log.info(f"  Latest scan in ComboBox: '{scan_text}'")
 
-    def test_13_visualize_bfi_bvi(self, app):
+    def test_19_visualize_bfi_bvi(self, app):
         click_by_name("Visualize BFI/BVI")
         wait_with_log(VIZ_WAIT, "BFI/BVI plot open")
 
-    def test_14_close_bfi_plot(self, app):
+    def test_20_close_bfi_plot(self, app):
         _close_plot_window()
 
-    def test_15_close_history(self, app):
+    def test_21_close_history(self, app):
         require_focus()
         pyautogui.press("escape")
         time.sleep(SLEEP)
 
-    # ── Settings: disable Reduced Mode ────────────────────────────────────
-
-    def test_16_reopen_settings(self, app):
-        click_sidebar(*SIDEBAR_SETTINGS, "Settings gear icon (reopen)")
-
-    def test_17_disable_reduced_mode(self, app):
-        """Tab into the Settings modal to the Reduced Mode Enable toggle and turn OFF."""
-        _tab_to_reduced_mode_toggle(tab_into_modal=True)
-        log.info("  Reduced Mode disabled")
-
-    def test_18_close_settings(self, app):
-        require_focus()
-        pyautogui.press("escape")
-        time.sleep(SLEEP)
 
 
 # ─────────────────────────────────────────────
-# Mouse-based test class — same workflow as TestReducedMode
-# but every feature interaction uses mouse movement + click
+# Mouse-based test class — continues with Reduced Mode already ON
+# from TestReducedMode above
 # ─────────────────────────────────────────────
 @pytest.mark.incremental
 class TestReducedModeMouse:
-    """Same end-to-end Reduced Mode workflow as TestReducedMode,
-    with every feature interaction driven by mouse movement and clicks.
+    """Reduced Mode mouse workflow — Reduced Mode is already enabled by TestReducedMode.
 
     Scan Settings is NOT tested here — it is hidden while Reduced Mode is active.
     """
 
-    # ── Settings: enable Reduced Mode ─────────────────────────────────────
-
-    def test_19_open_settings(self, app):
-        ensure_visible()
-        click_sidebar(*SIDEBAR_SETTINGS, "Settings gear icon")
-
-    def test_20_camera_config_visible(self, app):
-        """Default Camera Configuration section is visible at the top."""
-        pass  # visual confirmation only
-
-    def test_21_enable_reduced_mode_mouse(self, app):
-        """Scroll to Reduced Mode section and click the Enable toggle ON via mouse."""
-        _scroll_modal_to_bottom()
-        _click_coord(*REDUCED_MODE_TOGGLE, "Reduced Mode Enable toggle ON")
-        log.info("  Reduced Mode enabled (mouse)")
-
-    def test_22_close_settings(self, app):
-        require_focus()
-        pyautogui.press("escape")
-        time.sleep(SLEEP)
-
     # ── Notes: type session note ───────────────────────────────────────────
 
-    def test_23_open_notes(self, app):
+    def test_22_open_notes(self, app):
         """Notes is now at the former Scan Settings position in the reduced sidebar."""
+        _move_window_on_screen()
         click_sidebar(*SIDEBAR_NOTES_REDUCED, "Notes (reduced mode position)")
 
-    def test_24_type_note(self, app):
+    def test_23_type_note(self, app):
         require_focus()
         TestReducedModeMouse.session_note = (
             f"ReducedScanMouse_{datetime.now():%Y%m%d_%H%M%S}"
@@ -315,61 +381,45 @@ class TestReducedModeMouse:
         pyautogui.typewrite(TestReducedModeMouse.session_note, interval=0.04)
         time.sleep(SLEEP)
 
-    def test_25_close_notes(self, app):
+    def test_24_close_notes(self, app):
         require_focus()
         pyautogui.press("escape")
         time.sleep(SLEEP)
 
     # ── Scan: start, wait, stop ────────────────────────────────────────────
 
-    def test_26_start_scan(self, app):
+    def test_25_start_scan(self, app):
         click_sidebar(*SIDEBAR_START, "Start scan")
 
-    def test_27_wait_scan(self, app):
+    def test_26_wait_scan(self, app):
         wait_with_log(SCAN_WAIT, "manual scan running")
 
-    def test_28_stop_scan(self, app):
+    def test_27_stop_scan(self, app):
         click_sidebar(*SIDEBAR_START, "Stop scan")
         log.info(f"  Waiting {STOP_BUFFER}s for scan data to save...")
         time.sleep(STOP_BUFFER)
 
-    # ── History: verify scan, visualize BFI/BVI only (no Contrast/Mean in Reduced Mode)
+    # ── History: verify scan, visualize BFI/BVI only
 
-    def test_29_open_history(self, app):
+    def test_28_open_history(self, app):
         click_sidebar(*SIDEBAR_HISTORY, "History")
 
-    def test_30_latest_scan_selected(self, app):
+    def test_29_latest_scan_selected(self, app):
         scan_text = _selected_scan_text()
         assert len(scan_text) > 0, (
             "History ComboBox is empty — no scans found."
         )
         log.info(f"  Latest scan in ComboBox: '{scan_text}'")
 
-    def test_31_visualize_bfi_bvi(self, app):
+    def test_30_visualize_bfi_bvi(self, app):
         click_by_name("Visualize BFI/BVI")
         wait_with_log(VIZ_WAIT, "BFI/BVI plot open")
 
-    def test_32_close_bfi_plot_mouse(self, app):
+    def test_31_close_bfi_plot_mouse(self, app):
         """Move mouse to plot window center then close."""
         _close_plot_window_mouse()
 
-    def test_33_close_history(self, app):
-        require_focus()
-        pyautogui.press("escape")
-        time.sleep(SLEEP)
-
-    # ── Settings: disable Reduced Mode ────────────────────────────────────
-
-    def test_34_reopen_settings(self, app):
-        click_sidebar(*SIDEBAR_SETTINGS, "Settings gear icon (reopen)")
-
-    def test_35_disable_reduced_mode_mouse(self, app):
-        """Scroll to Reduced Mode section and click the Enable toggle OFF via mouse."""
-        _scroll_modal_to_bottom()
-        _click_coord(*REDUCED_MODE_TOGGLE, "Reduced Mode Enable toggle OFF")
-        log.info("  Reduced Mode disabled (mouse)")
-
-    def test_36_close_settings(self, app):
+    def test_32_close_history(self, app):
         require_focus()
         pyautogui.press("escape")
         time.sleep(SLEEP)
