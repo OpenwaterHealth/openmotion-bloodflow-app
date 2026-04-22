@@ -273,13 +273,15 @@ class MOTIONConnector(QObject):
         self._user_label = self.generate_user_label()
         logger.info(f"[Connector] Generated user label: {self._user_label}")
 
-        # Emit synthetic connect events for devices already connected at startup
-        if self._leftSensorConnected:
-            self.on_connected("SENSOR_LEFT", "startup")
-        if self._rightSensorConnected:
-            self.on_connected("SENSOR_RIGHT", "startup")
-        if self._consoleConnected:
-            self.on_connected("CONSOLE", "startup")
+        # Note: synthetic startup connect events for already-attached
+        # devices are no longer needed. The new SDK lifecycle is:
+        #   1. main.py constructs MotionInterface
+        #   2. main.py constructs MOTIONConnector (this); we subscribe
+        #      to handle.signal_state_changed in connect_signals()
+        #   3. main.py calls motion_interface.start(), which discovers
+        #      devices and drives state-machine transitions, firing the
+        #      signals we already subscribed to.
+        # So every real connection arrives via _on_handle_state_changed.
 
         self._interface.console.telemetry.add_listener(self._on_telemetry_update)
 
@@ -1679,7 +1681,7 @@ class MOTIONConnector(QObject):
             # f"i2c_addr=0x{int(i2c_addr):02X}, offset=0x{int(offset):02X}, read_len={int(data_len)}"
             # )
 
-            if target == "CONSOLE":
+            if target == "console":
                 fpga_data, fpga_data_len = (
                     self._interface.console.read_i2c_packet(
                         mux_index=mux_idx,
@@ -1693,11 +1695,9 @@ class MOTIONConnector(QObject):
                     logger.error("readI2CBytes failed (I2C read error)")
                     return []
                 else:
-                    # logger.info(f"Read I2C Success")
-                    # logger.info(f"Raw bytes: {fpga_data.hex(' ')}")  # Print as hex bytes separated by spaces
                     return list(fpga_data[:fpga_data_len])
 
-            elif target == "SENSOR_LEFT" or target == "SENSOR_RIGHT":
+            elif target in ("left", "right"):
                 logger.error("I2C Read Not Implemented")
                 return []
         except Exception as e:
@@ -1981,24 +1981,22 @@ class MOTIONConnector(QObject):
 
     @pyqtSlot(str)
     def querySensorAccelerometer(self, target: str):
-        """Fetch and emit Accelerometer data."""
+        """Fetch and emit Accelerometer data. ``target`` is "left" or "right"."""
         try:
-            if target == "SENSOR_LEFT" or target == "SENSOR_RIGHT":
-                sensor_tag = "left" if target == "SENSOR_LEFT" else "right"
-            else:
+            if target not in ("left", "right"):
                 logger.error(f"Invalid target for sensor info query: {target}")
                 return
 
             # Check if sensor is connected
-            if (sensor_tag == "left" and not self._leftSensorConnected) or (
-                sensor_tag == "right" and not self._rightSensorConnected
+            if (target == "left" and not self._leftSensorConnected) or (
+                target == "right" and not self._rightSensorConnected
             ):
-                logger.error(f"{sensor_tag.capitalize()} sensor not connected")
+                logger.error(f"{target.capitalize()} sensor not connected")
                 return
 
-            sensor = getattr(self._interface, sensor_tag)
+            sensor = getattr(self._interface, target)
             if sensor is None:
-                logger.error(f"{sensor_tag.capitalize()} sensor object is None")
+                logger.error(f"{target.capitalize()} sensor object is None")
                 return
             accel = sensor.imu_get_accelerometer()
             logger.info(f"Accel (raw): X={accel[0]}, Y={accel[1]}, Z={accel[2]}")
@@ -2008,15 +2006,13 @@ class MOTIONConnector(QObject):
 
     @pyqtSlot()
     def querySensorGyroscope(self, target: str):
-        """Fetch and emit Gyroscope data."""
+        """Fetch and emit Gyroscope data. ``target`` is "left" or "right"."""
         try:
-            if target == "SENSOR_LEFT" or target == "SENSOR_RIGHT":
-                sensor_tag = "left" if target == "SENSOR_LEFT" else "right"
-            else:
+            if target not in ("left", "right"):
                 logger.error(f"Invalid target for sensor info query: {target}")
                 return
 
-            gyro = getattr(self._interface, sensor_tag).imu_get_gyroscope()
+            gyro = getattr(self._interface, target).imu_get_gyroscope()
             logger.info(f"Gyro  (raw): X={gyro[0]}, Y={gyro[1]}, Z={gyro[2]}")
             self.gyroscopeSensorUpdated.emit(gyro[0], gyro[1], gyro[2])
         except Exception as e:
@@ -2024,16 +2020,15 @@ class MOTIONConnector(QObject):
 
     @pyqtSlot(str)
     def softResetSensor(self, target: str):
-        """reset hardware Sensor device."""
+        """Reset a device. ``target`` is "console", "left", or "right"."""
         try:
-            if target == "CONSOLE":
+            if target == "console":
                 if self._interface.console.soft_reset():
                     logger.info("Software Reset Sent")
                 else:
                     logger.error("Failed to send Software Reset")
-            elif target == "SENSOR_LEFT" or target == "SENSOR_RIGHT":
-                sensor_tag = "left" if target == "SENSOR_LEFT" else "right"
-                if getattr(self._interface, sensor_tag).soft_reset():
+            elif target in ("left", "right"):
+                if getattr(self._interface, target).soft_reset():
                     logger.info("Software Reset Sent")
                 else:
                     logger.error("Failed to send Software Reset")
@@ -2042,24 +2037,21 @@ class MOTIONConnector(QObject):
 
     @pyqtSlot(str)
     def querySensorTemperature(self, target: str):
-        """Fetch and emit Temperature data."""
+        """Fetch and emit Temperature data. ``target`` is "left" or "right"."""
         try:
-            if target == "SENSOR_LEFT" or target == "SENSOR_RIGHT":
-                sensor_tag = "left" if target == "SENSOR_LEFT" else "right"
-            else:
+            if target not in ("left", "right"):
                 logger.error(f"Invalid target for sensor info query: {target}")
                 return
 
-            # Check if sensor is connected
-            if (sensor_tag == "left" and not self._leftSensorConnected) or (
-                sensor_tag == "right" and not self._rightSensorConnected
+            if (target == "left" and not self._leftSensorConnected) or (
+                target == "right" and not self._rightSensorConnected
             ):
-                logger.error(f"{sensor_tag.capitalize()} sensor not connected")
+                logger.error(f"{target.capitalize()} sensor not connected")
                 return
 
-            sensor = getattr(self._interface, sensor_tag)
+            sensor = getattr(self._interface, target)
             if sensor is None:
-                logger.error(f"{sensor_tag.capitalize()} sensor object is None")
+                logger.error(f"{target.capitalize()} sensor object is None")
                 return
 
             imu_temp = sensor.imu_get_temperature()
@@ -2070,24 +2062,21 @@ class MOTIONConnector(QObject):
 
     @pyqtSlot(str)
     def querySensorInfo(self, target: str):
-        """Fetch and emit device information."""
+        """Fetch and emit device information. ``target`` is "left" or "right"."""
         try:
-            if target == "SENSOR_LEFT" or target == "SENSOR_RIGHT":
-                sensor_tag = "left" if target == "SENSOR_LEFT" else "right"
-            else:
+            if target not in ("left", "right"):
                 logger.error(f"Invalid target for sensor info query: {target}")
                 return
 
-            # Check if sensor is connected
-            if (sensor_tag == "left" and not self._leftSensorConnected) or (
-                sensor_tag == "right" and not self._rightSensorConnected
+            if (target == "left" and not self._leftSensorConnected) or (
+                target == "right" and not self._rightSensorConnected
             ):
-                logger.error(f"{sensor_tag.capitalize()} sensor not connected")
+                logger.error(f"{target.capitalize()} sensor not connected")
                 return
 
-            sensor = getattr(self._interface, sensor_tag)
+            sensor = getattr(self._interface, target)
             if sensor is None:
-                logger.error(f"{sensor_tag.capitalize()} sensor object is None")
+                logger.error(f"{target.capitalize()} sensor object is None")
                 return
 
             fw_version = sensor.get_version()

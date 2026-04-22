@@ -712,7 +712,7 @@ Item {
                             text: "Soft Reset"
                             Layout.preferredWidth: 110
                             hoverColor: "#E67E22"
-                            onClicked: MOTIONInterface.softResetSensor("CONSOLE")
+                            onClicked: MOTIONInterface.softResetSensor("console")
                         }
                         Item { Layout.fillWidth: true }
                     }

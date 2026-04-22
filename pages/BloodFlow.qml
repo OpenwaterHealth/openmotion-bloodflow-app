@@ -430,8 +430,9 @@ Rectangle {
 
         function onSignalConnected(descriptor, port) {
             console.log(descriptor + " connected on " + port)
-            // Auto-flash default cameras when sensors connect
-            if ((descriptor || "").toUpperCase().indexOf("SENSOR") >= 0) {
+            // Auto-flash default cameras when sensors connect.
+            // Descriptor is the handle name from the SDK ("console" / "left" / "right").
+            if (descriptor === "left" || descriptor === "right") {
                 Qt.callLater(function() {
                     if (!bloodFlow.scanning && !bloodFlow.configuring) {
                         var cfg      = MOTIONInterface.appConfig;
