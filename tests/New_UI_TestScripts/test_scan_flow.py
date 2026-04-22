@@ -58,7 +58,7 @@ SIDEBAR_HISTORY = (0.020, 0.820)   # History icon — MouseArea, not UIA-accessi
 
 SCAN_DURATION_MIN = 2
 WAIT_AFTER_SCAN = SCAN_DURATION_MIN * 60 + 180  # scan + 3-min buffer
-VIZ_WAIT = 120  # seconds to leave each plot open
+VIZ_WAIT = 30  # seconds to leave each plot open
 
 
 @pytest.mark.incremental
