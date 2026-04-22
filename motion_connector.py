@@ -1408,6 +1408,15 @@ class MOTIONConnector(QObject):
         if not started:
             self._capture_running = False
             self._stop_runlog()
+            # Log at WARNING so this is visible in the run log file —
+            # captureLog signal goes through QML console.log which is
+            # filtered out by default.
+            logger.warning(
+                "startCapture aborted: SDK refused to spawn a new scan "
+                "(see ScanWorkflow.start_scan log for the underlying "
+                "reason — usually a previous worker thread that didn't "
+                "exit cleanly)."
+            )
             self.captureLog.emit("Capture already running.")
         return bool(started)
 
