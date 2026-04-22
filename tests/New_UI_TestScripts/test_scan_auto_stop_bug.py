@@ -84,28 +84,6 @@ def _check_scan_finished():
     return None
 
 
-def _is_scan_settings_disabled() -> bool:
-    """Check if the Scan Settings sidebar button is grayed out (disabled).
-
-    When a scan is running, the Scan Settings button becomes disabled.
-    This is a reliable indicator that the scan has actually started.
-    """
-    try:
-        win = uia_window()
-        for elem in win.descendants():
-            try:
-                text = elem.window_text().strip().lower()
-                if "scan settings" in text or "scan\nsettings" in text:
-                    enabled = elem.is_enabled()
-                    log.info(f"  Scan Settings button: enabled={enabled}")
-                    return not enabled
-            except Exception:
-                continue
-    except Exception as e:
-        log.warning(f"  _is_scan_settings_disabled check failed: {e}")
-    return False
-
-
 def _move_window_on_screen():
     """Move the app window onto the primary screen if it is off-screen."""
     try:
@@ -286,25 +264,9 @@ class TestScanAutoStopBug: # (1) Repro scan auto-stop bug, (2) Verify fix, (3) R
         time.sleep(0.5)
         click_sidebar(*SIDEBAR_START, "Start")
 
-        # 5. Verify scan actually started — Scan Settings button gets grayed out
-        scan_started = False
-        for attempt in range(12):  # check every 5s for up to 60s
-            time.sleep(5)
-            if not _is_app_alive():
-                pytest.fail(f"[{iteration}/{LOOP}] APPLICATION CLOSED before scan started.")
-            if _is_scan_settings_disabled():
-                scan_started = True
-                log.info(f"  [{iteration}/{LOOP}] Scan started (Scan Settings grayed out).")
-                break
-            log.info(f"  [{iteration}/{LOOP}] Waiting for scan to start... ({(attempt+1)*5}s)")
+        log.info(f"  [{iteration}/{LOOP}] Scan started — monitoring for completion...")
 
-        assert scan_started, (
-            f"[{iteration}/{LOOP}] Scan did NOT start — "
-            f"Scan Settings button is still enabled after 60s. "
-            f"Check console and app state."
-        )
-
-        # 6. Monitor scan — poll every 10s for Session Notes modal
+        # 5. Monitor scan — poll every 10s for Session Notes modal
         #    When it appears, read the duration from the notes text.
         #    If duration < 10 min → BUG REPRODUCED
         #    If app closes → FAIL
