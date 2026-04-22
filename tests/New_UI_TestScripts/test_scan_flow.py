@@ -16,8 +16,10 @@ from conftest import (
     click_by_name,
     click_sidebar,
     ensure_visible,
+    get_app_window,
     log,
     require_focus,
+    uia_window,
     wait_with_log,
 )
 
@@ -71,6 +73,8 @@ class TestScanFlow:
     def test_02_set_duration(self, app):
         """Set scan duration to 2 minutes via Tab navigation."""
         require_focus()
+        pyautogui.press("tab")           # -> User Label
+        time.sleep(0.3)
         pyautogui.press("tab")           # -> Left ComboBox
         time.sleep(0.3)
         pyautogui.press("tab")           # -> Right ComboBox
