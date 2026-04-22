@@ -1227,6 +1227,11 @@ class MOTIONConnector(QObject):
         self.scanNotesChanged.emit()
         self._capture_running = True
         self._capture_start_time = time.time()
+        # Per-scan monotonic zero for plot timestamps. sample.timestamp_s comes
+        # from each sensor's firmware clock, which resets on sensor reboot — so
+        # after a mid-scan unplug/replug, the two sides' clocks diverge and the
+        # QML plot's shared `latestTimestamp` prunes the lagging side to empty.
+        plot_t0 = time.monotonic()
         self._capture_left_path = ""
         self._capture_right_path = ""
         self._start_runlog(subject_id=subject_id)
@@ -1254,16 +1259,18 @@ class MOTIONConnector(QObject):
                 run_logger.warning(msg)
                 logger.warning(msg)
 
+            plot_ts = time.monotonic() - plot_t0
+
             self.scanMeanSampled.emit(
                 current_side,
                 int(sample.cam_id),
-                float(sample.timestamp_s),
+                plot_ts,
                 float(sample.mean),
             )
             self.scanContrastSampled.emit(
                 current_side,
                 int(sample.cam_id),
-                float(sample.timestamp_s),
+                plot_ts,
                 float(sample.contrast),
             )
 
@@ -1271,14 +1278,14 @@ class MOTIONConnector(QObject):
                 sample.side,
                 int(sample.cam_id),
                 int(sample.absolute_frame_id),
-                float(sample.timestamp_s),
+                plot_ts,
                 float(sample.bfi),
             )
             self.scanBviSampled.emit(
                 sample.side,
                 int(sample.cam_id),
                 int(sample.absolute_frame_id),
-                float(sample.timestamp_s),
+                plot_ts,
                 float(sample.bvi),
             )
             self.scanCameraTemperature.emit(
@@ -1289,13 +1296,14 @@ class MOTIONConnector(QObject):
 
         def _on_corrected_batch(batch):
             """Fires every ~15 s with dark-frame-corrected values for the last interval."""
+            plot_ts = time.monotonic() - plot_t0
             payload = []
             for s in batch.samples:
                 payload.append({
                     'side': s.side,
                     'camId': int(s.cam_id),
                     'frameId': int(s.absolute_frame_id),
-                    'ts': float(s.timestamp_s),
+                    'ts': plot_ts,
                     'bfi': float(s.bfi),
                     'bvi': float(s.bvi),
                 })
