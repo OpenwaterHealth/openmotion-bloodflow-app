@@ -1244,6 +1244,13 @@ class MOTIONConnector(QObject):
 
         temp_alerted_by_side = {"left": set(), "right": set()}
 
+        # Cumulative trigger-ON time — the duration that appears in scan notes
+        # must match the UI countdown (gated on triggerState == "ON"), not the
+        # wall-clock span of startCapture→_on_complete which includes pre-scan
+        # flash + post-scan USB drain/writer-join (~3s tail).
+        trigger_cumulative_s: float = 0.0
+        trigger_on_mono: float | None = None
+
         def _on_uncorrected(sample):
             """Fires for every non-dark frame (~40 Hz). Feeds the realtime plot."""
             current_side = sample.side
@@ -1318,8 +1325,15 @@ class MOTIONConnector(QObject):
                 if result.error:
                     self.captureLog.emit(f"Capture error: {result.error}")
 
-            # Compute scan duration and append to notes
-            elapsed = time.time() - self._capture_start_time
+            # Compute scan duration and append to notes. Use trigger ON-time
+            # so the number matches the UI countdown. Fall back to wall-clock
+            # only if the scan failed before the trigger ever fired.
+            if trigger_cumulative_s > 0.0 or trigger_on_mono is not None:
+                elapsed = trigger_cumulative_s
+                if trigger_on_mono is not None:
+                    elapsed += time.monotonic() - trigger_on_mono
+            else:
+                elapsed = time.time() - self._capture_start_time
             hours = int(elapsed // 3600)
             minutes = int((elapsed % 3600) // 60)
             seconds = int(elapsed % 60)
@@ -1372,6 +1386,13 @@ class MOTIONConnector(QObject):
         )
 
         def _on_trigger_state(state: str):
+            nonlocal trigger_cumulative_s, trigger_on_mono
+            now = time.monotonic()
+            if state == "ON" and trigger_on_mono is None:
+                trigger_on_mono = now
+            elif state == "OFF" and trigger_on_mono is not None:
+                trigger_cumulative_s += now - trigger_on_mono
+                trigger_on_mono = None
             self._trigger_state = state
             self.triggerStateChanged.emit()
 
