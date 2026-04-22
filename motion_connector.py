@@ -1227,6 +1227,8 @@ class MOTIONConnector(QObject):
         self.scanNotesChanged.emit()
         self._capture_running = True
         self._capture_start_time = time.time()
+        self._trigger_on_time = None
+        self._trigger_off_time = None
         self._capture_left_path = ""
         self._capture_right_path = ""
         self._start_runlog(subject_id=subject_id)
@@ -1311,7 +1313,13 @@ class MOTIONConnector(QObject):
                     self.captureLog.emit(f"Capture error: {result.error}")
 
             # Compute scan duration and append to notes
-            elapsed = time.time() - self._capture_start_time
+            # Use trigger ON/OFF times to match the UI timer, which reflects actual
+            # data acquisition time (not including SDK teardown which adds 2-4s)
+            if self._trigger_on_time is not None and self._trigger_off_time is not None:
+                elapsed = self._trigger_off_time - self._trigger_on_time
+            else:
+                # Fallback to overall capture time if trigger times weren't tracked
+                elapsed = time.time() - self._capture_start_time
             hours = int(elapsed // 3600)
             minutes = int((elapsed % 3600) // 60)
             seconds = int(elapsed % 60)
@@ -1366,6 +1374,11 @@ class MOTIONConnector(QObject):
         def _on_trigger_state(state: str):
             self._trigger_state = state
             self.triggerStateChanged.emit()
+            # Track trigger ON/OFF times to calculate actual scan duration
+            if state == "ON" and self._trigger_on_time is None:
+                self._trigger_on_time = time.time()
+            elif state == "OFF" and self._trigger_off_time is None:
+                self._trigger_off_time = time.time()
 
         started = self._interface.start_scan(
             req,
