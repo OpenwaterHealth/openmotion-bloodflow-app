@@ -1,5 +1,6 @@
 from PyQt6.QtCore import (
     QObject,
+    QRecursiveMutex,
     pyqtSignal,
     pyqtProperty,
     pyqtSlot,
@@ -33,7 +34,15 @@ from omotion.config import (
 from omotion.MotionProcessing import process_bin_file
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
 from processing.visualize_bloodflow import VisualizeBloodflow
+
+from motion_config import (
+    FpgaModel,
+    apply_laser_power_from_config,
+    load_laser_params,
+    load_tec_params,
+)
 from utils.resource_path import resource_path
+
 import numpy as np
 import pandas as pd
 
@@ -213,8 +222,12 @@ class MOTIONConnector(QObject):
         self._trigger_state = "OFF"
         self._state = DISCONNECTED
         self._last_fan_status: dict[str, bool | None] = {"left": None, "right": None}
-        self.laser_params = self._load_laser_params(config_dir)
-        self._tec_voltage_default = self._load_tec_params(config_dir)
+
+        self.laser_params = load_laser_params(config_dir)
+        self._tec_voltage_default = load_tec_params(config_dir)
+        # Load FPGA model (preferred JSON, with legacy JS fallback)
+        self._fpga = FpgaModel()
+        self._console_mutex = QRecursiveMutex()
 
         eol_mean     = cfg.get("eol_min_mean_per_camera")
         eol_contrast = cfg.get("eol_min_contrast_per_camera")
@@ -843,71 +856,34 @@ class MOTIONConnector(QObject):
         logger.info("MOTIONConnector shutdown complete.")
 
     # --- SCAN MANAGEMENT METHODS ---
-    @pyqtSlot(result=list)
-    def _load_laser_params(self, config_dir):
-        filename = (
-            "laser_params_fault.json" if self._force_laser_fail else "laser_params.json"
-        )
-        config_path = (
-            resource_path("config", filename)
-            if config_dir == "config"
-            else Path(config_dir) / filename
-        )
-        if not config_path.exists():
-            logger.error(f"[Connector] Laser parameter file not found: {config_path}")
-            return []
+    def _get_fpga_scale(self, label: str, name: str):
+        """Delegate to FpgaModel (kept for backward compatibility)."""
+        return self._fpga.get_scale(label, name)
 
-        try:
-            with open(config_path, "r") as f:
-                params = json.load(f)
-            logger.info(
-                f"[Connector] Loaded {len(params)} laser parameter sets from {config_path}"
-            )
-            return params
-        except FileNotFoundError:
-            logger.error(f"[Connector] Laser parameter file not found: {config_path}")
-            return []
-        except json.JSONDecodeError as e:
-            logger.error(f"[Connector] Invalid JSON in {config_path}: {e}")
-            return []
+    def _get_fpga_entry_by_friendly_name(self, friendlyName: str):
+            """Delegate to FpgaModel (kept for backward compatibility)."""
+            return self._fpga.get_entry_by_friendly_name(friendlyName)
 
-    def _load_tec_params(self, config_dir):
-        """Load TEC parameters from tec_params.json and return the voltage value."""
-        config_path = (
-            resource_path("config", "tec_params.json")
-            if config_dir == "config"
-            else Path(config_dir) / "tec_params.json"
-        )
+    @pyqtProperty("QVariant", constant=True)
+    def fpgaAddressModel(self):
+        """Expose the loaded FPGA model to QML as a QVariant (list of dicts)."""
+        return self._fpga.model
 
-        if not config_path.exists():
-            logger.warning(
-                f"[Connector] TEC parameter file not found: {config_path}, using default value {TEC_VOLTAGE_DEFAULT}V"
-            )
-            return TEC_VOLTAGE_DEFAULT
+    @pyqtSlot(str, str, result=float)
+    def getScale(self, label: str, name: str) -> float:
+        """Return effective scale for given label/name, honoring runtime overrides."""
+        val = self._fpga.get_scale(label, name)
+        return float(val) if val is not None else 1.0
 
-        try:
-            with open(config_path, "r") as f:
-                params = json.load(f)
-            voltage = params.get("TEC_VOLTAGE_DEFAULT", TEC_VOLTAGE_DEFAULT)
-            logger.info(
-                f"[Connector] Loaded TEC voltage from {config_path}: {voltage}V"
-            )
-            return voltage
-        except FileNotFoundError:
-            logger.warning(
-                f"[Connector] TEC parameter file not found: {config_path}, using default value {TEC_VOLTAGE_DEFAULT}V"
-            )
-            return TEC_VOLTAGE_DEFAULT
-        except json.JSONDecodeError as e:
-            logger.error(
-                f"[Connector] Invalid JSON in {config_path}: {e}, using default value {TEC_VOLTAGE_DEFAULT}V"
-            )
-            return TEC_VOLTAGE_DEFAULT
-        except Exception as e:
-            logger.error(
-                f"[Connector] Error loading TEC parameters: {e}, using default value {TEC_VOLTAGE_DEFAULT}V"
-            )
-            return TEC_VOLTAGE_DEFAULT
+    @pyqtSlot(str, str, float)
+    def setScaleOverride(self, label: str, name: str, scale: float) -> None:
+        """Set or clear a runtime scale override used by `getScale`.
+
+        Pass `scale <= 0` to remove the override.
+        """
+        self._fpga.set_scale_override(label, name, scale)
+    
+
 
     @pyqtSlot(result=list)
     def get_scan_list(self):
@@ -1813,34 +1789,9 @@ class MOTIONConnector(QObject):
             return False
 
     def set_laser_power_from_config(self, interface):
-        logger.info("[Connector] Setting laser power from config...")
-        for idx, laser_param in enumerate(self.laser_params, start=1):
-            muxIdx = laser_param["muxIdx"]
-            channel = laser_param["channel"]
-            i2cAddr = laser_param["i2cAddr"]
-            offset = laser_param["offset"]
-            dataToSend = bytearray(laser_param["dataToSend"])
-
-            logger.debug(
-                f"[Connector] ({idx}/{len(self.laser_params)}) "
-                f"Writing I2C: muxIdx={muxIdx}, channel={channel}, "
-                f"i2cAddr=0x{i2cAddr:02X}, offset=0x{offset:02X}, "
-                f"data={list(dataToSend)}"
-            )
-
-            if not interface.console_module.write_i2c_packet(
-                mux_index=muxIdx,
-                channel=channel,
-                device_addr=i2cAddr,
-                reg_addr=offset,
-                data=dataToSend,
-            ):
-                logger.error(
-                    f"Failed to set laser power (muxIdx={muxIdx}, channel={channel})"
-                )
-                return False
-        logger.info("Laser power set successfully.")
-        return True
+        return apply_laser_power_from_config(            
+            interface, self.laser_params, self._fpga, self._console_mutex
+        )
 
     # --- SENSOR COMMUNICATION METHODS ---
     def _read_and_log_camera_uids(self):
