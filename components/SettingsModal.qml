@@ -656,7 +656,7 @@ Item {
                         Item { Layout.fillWidth: true }
                     }
                     Text {
-                        text: "Simplified clinical view: forces Middle camera configuration, enables free run mode, hides scan settings, and shows large left/right BFI and BVI panels."
+                        text: "Simplified clinical view: forces Far camera configuration, enables free run mode, hides scan settings, and shows large left/right BFI and BVI panels."
                         color: root.colTextMuted
                         font.pixelSize: 11
                         wrapMode: Text.WordWrap

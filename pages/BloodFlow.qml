@@ -19,7 +19,7 @@ Rectangle {
     property bool camerasReady: true  // starts true, goes false when camera selection changes
     property bool configuring: false  // true during camera flash
 
-    // FDA mode (read from app config). Forces Middle camera pattern + free run,
+    // FDA mode (read from app config). Forces Far camera pattern + free run,
     // hides scan-settings button, and swaps in the FDA plot view.
     property bool reducedMode: MOTIONInterface.appConfig.reducedMode === true
 
@@ -37,8 +37,8 @@ Rectangle {
         if (reducedMode) {
             freeRun = true
             durationSec = 43200
-            leftMask = 0x66
-            rightMask = 0x66
+            leftMask = 0xC3
+            rightMask = 0xC3
         }
     }
     property int elapsedSec: 0
@@ -69,8 +69,8 @@ Rectangle {
     // Apply default cameras from config
     function applyDefaultCameras() {
         var cfg      = MOTIONInterface.appConfig;
-        var defLeft  = reducedMode ? 0x66 : (cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99);
-        var defRight = reducedMode ? 0x66 : (cfg.rightMask !== undefined ? cfg.rightMask : 0x99);
+        var defLeft  = reducedMode ? 0xC3 : (cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99);
+        var defRight = reducedMode ? 0xC3 : (cfg.rightMask !== undefined ? cfg.rightMask : 0x99);
         if (MOTIONInterface.leftSensorConnected)  leftMask  = defLeft;
         if (MOTIONInterface.rightSensorConnected) rightMask = defRight;
         if (cfg.autoConfigureOnStartup !== false &&
@@ -328,8 +328,8 @@ Rectangle {
                 Qt.callLater(function() {
                     if (!bloodFlow.scanning && !bloodFlow.configuring) {
                         var cfg      = MOTIONInterface.appConfig;
-                        var defLeft  = bloodFlow.reducedMode ? 0x66 : (cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99);
-                        var defRight = bloodFlow.reducedMode ? 0x66 : (cfg.rightMask !== undefined ? cfg.rightMask : 0x99);
+                        var defLeft  = bloodFlow.reducedMode ? 0xC3 : (cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99);
+                        var defRight = bloodFlow.reducedMode ? 0xC3 : (cfg.rightMask !== undefined ? cfg.rightMask : 0x99);
                         if (MOTIONInterface.leftSensorConnected)  bloodFlow.leftMask  = defLeft;
                         if (MOTIONInterface.rightSensorConnected) bloodFlow.rightMask = defRight;
                         if (cfg.autoConfigureOnStartup !== false)
@@ -369,8 +369,8 @@ Rectangle {
         if (reducedMode) {
             freeRun = true
             durationSec = 43200
-            leftMask = 0x66
-            rightMask = 0x66
+            leftMask = 0xC3
+            rightMask = 0xC3
         }
         applyDefaultCameras()
     }
