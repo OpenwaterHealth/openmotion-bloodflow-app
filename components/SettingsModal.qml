@@ -517,6 +517,7 @@ Item {
                     }
 
                     FieldRow {
+                        visible: !root.reducedMode
                         label: "BVI low-pass filter"
                         PillSwitch {
                             checked: root.bviLowPassEnabled
@@ -646,6 +647,7 @@ Item {
                 // ── Reduced Mode ─────────────────────────────────────────────
                 SectionCard {
                     title: "Reduced Mode"
+                    visible: !root.reducedMode
 
                     FieldRow {
                         label: "Enable"

@@ -26,6 +26,7 @@ Rectangle {
     signal startStopClicked()
     signal scanSettingsClicked()
     signal notesClicked()
+    signal checkClicked()
     signal historyClicked()
     signal logClicked()
     signal settingsClicked()
@@ -57,8 +58,8 @@ Rectangle {
                     Layout.alignment: Qt.AlignHCenter
                     width: 36; height: 36; radius: 18
                     color: !panel.allConnected ? theme.textDisabled
-                         : panel.scanning ? "#E74C3C"
                          : panel.waiting  ? "#F1C40F"
+                         : panel.scanning ? "#E74C3C"
                          :                  "#2ECC71"
                     Behavior on color { ColorAnimation { duration: 150 } }
 
@@ -157,6 +158,22 @@ Rectangle {
             iconText: "\uea7f"  // notes/document icon
             label: "Notes"
             onClicked: panel.notesClicked()
+        }
+
+        Rectangle {
+            visible: !panel.reducedMode
+            Layout.preferredWidth: 52; Layout.preferredHeight: 1
+            Layout.topMargin: 4; Layout.bottomMargin: 4
+            Layout.alignment: Qt.AlignHCenter; color: theme.borderSubtle
+        }
+
+        // Check (contact quality quick-check)
+        PanelButton {
+            visible: !panel.reducedMode
+            enabled: !panel.scanning && panel.camerasReady
+            iconText: "\uea31"  // graph-3 icon
+            label: "Check"
+            onClicked: panel.checkClicked()
         }
 
         // Log viewer (developer mode only)
