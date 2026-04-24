@@ -53,11 +53,17 @@ Rectangle {
     property var rightData: ({ bfi: [], bvi: [], pendingBfi: ({}), pendingBvi: ({}),
                                 latestBfi: NaN, latestBvi: NaN, bviLpState: NaN })
 
-    // Plot bounds — initialized from fixed bounds, auto-scaled when enabled
-    property var leftBfiBounds:  _fixedBfiBounds
-    property var leftBviBounds:  _fixedBviBounds
-    property var rightBfiBounds: _fixedBfiBounds
-    property var rightBviBounds: _fixedBviBounds
+    // Mutable auto-scale bounds — only updated by the timer when autoScale is on
+    property var _autoLeftBfiBounds:  _fixedBfiBounds
+    property var _autoLeftBviBounds:  _fixedBviBounds
+    property var _autoRightBfiBounds: _fixedBfiBounds
+    property var _autoRightBviBounds: _fixedBviBounds
+
+    // Effective bounds — reactive when not auto-scaling, timer-driven when auto-scaling
+    readonly property var leftBfiBounds:  autoScale ? _autoLeftBfiBounds  : _fixedBfiBounds
+    readonly property var leftBviBounds:  autoScale ? _autoLeftBviBounds  : _fixedBviBounds
+    readonly property var rightBfiBounds: autoScale ? _autoRightBfiBounds : _fixedBfiBounds
+    readonly property var rightBviBounds: autoScale ? _autoRightBviBounds : _fixedBviBounds
 
     function reset() {
         leftData  = { bfi: [], bvi: [], pendingBfi: ({}), pendingBvi: ({}),
@@ -161,15 +167,10 @@ Rectangle {
                 tickCount = 0
                 if (root.autoScale) {
                     var b
-                    b = root._computeBounds(root.leftData.bfi);  if (b) root.leftBfiBounds  = b
-                    b = root._computeBounds(root.leftData.bvi);  if (b) root.leftBviBounds  = b
-                    b = root._computeBounds(root.rightData.bfi); if (b) root.rightBfiBounds = b
-                    b = root._computeBounds(root.rightData.bvi); if (b) root.rightBviBounds = b
-                } else {
-                    root.leftBfiBounds  = root._fixedBfiBounds
-                    root.leftBviBounds  = root._fixedBviBounds
-                    root.rightBfiBounds = root._fixedBfiBounds
-                    root.rightBviBounds = root._fixedBviBounds
+                    b = root._computeBounds(root.leftData.bfi);  if (b) root._autoLeftBfiBounds  = b
+                    b = root._computeBounds(root.leftData.bvi);  if (b) root._autoLeftBviBounds  = b
+                    b = root._computeBounds(root.rightData.bfi); if (b) root._autoRightBfiBounds = b
+                    b = root._computeBounds(root.rightData.bvi); if (b) root._autoRightBviBounds = b
                 }
             }
             // Force a property change so the readout texts refresh

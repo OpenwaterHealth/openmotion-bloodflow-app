@@ -95,6 +95,8 @@ Item {
         root.visible = true
     }
     function close() {
+        // Commit any in-progress text field edit before saving
+        panel.forceActiveFocus()
         MOTIONInterface.directory = dataPathField.text
         MOTIONInterface.saveConfigs({
             "leftMask":           maskFromIndex(defaultLeftMaskIndex),
