@@ -1,6 +1,7 @@
 {
   "forceLaserFail": false,
   "cameraTempAlertThresholdC": 90,
+  "cameraDropoutThresholdSec": 2.0,
   "sensorDebugLogging": false,
   "cameraFakeData": false,
   "output_path": null,

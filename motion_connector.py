@@ -300,6 +300,7 @@ class MOTIONConnector(QObject):
         # Unpack operational settings from config
         self._force_laser_fail            = bool(cfg.get("forceLaserFail", False))
         self._camera_temp_alert_threshold_c = float(cfg.get("cameraTempAlertThresholdC", 105.0))
+        self._camera_dropout_threshold_sec  = float(cfg.get("cameraDropoutThresholdSec", 2.0))
         self._sensor_debug_logging        = bool(cfg.get("sensorDebugLogging", False))
         self._camera_fake_data            = bool(cfg.get("cameraFakeData", False))
         self._histo_throttle              = bool(cfg.get("histoThrottle", False))
