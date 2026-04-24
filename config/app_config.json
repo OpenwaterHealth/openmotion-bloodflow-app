@@ -1,14 +1,14 @@
 {
   "forceLaserFail": false,
   "cameraTempAlertThresholdC": 90,
-  "sensorDebugLogging": true,
+  "sensorDebugLogging": false,
   "cameraFakeData": false,
   "output_path": null,
   "histoThrottle": false,
-  "histoCmp": false,
+  "histoCmp": true,
   "powerOffUnusedCameras": false,
   "commVerbose": false,
-  "verboseCommandHandling": true,
+  "verboseCommandHandling": false,
   "eol_min_mean_per_camera": [
     130,
     230,
