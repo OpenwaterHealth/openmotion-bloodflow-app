@@ -49,6 +49,8 @@
   "autoScale": false,
   "autoScalePerPlot": false,
   "reducedMode": true,
+  "reducedModeLeftMask": 195,
+  "reducedModeRightMask": 195,
   "plotWindowSec": 5,
   "bfiColor": "#ffffff",
   "bviColor": "#3437db",
@@ -60,3 +62,4 @@
   "bviClampHigh": 10.0,
   "darkMode": true
 }
+
