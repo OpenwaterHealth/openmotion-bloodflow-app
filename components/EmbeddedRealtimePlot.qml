@@ -186,7 +186,8 @@ Rectangle {
             latestBfi: NaN, latestBvi: NaN,
             latestMean: NaN, latestContrast: NaN,
             latestTemp: NaN,
-            bviLpState: NaN
+            bviLpState: NaN,
+            droppedOut: false
         }
     }
 
@@ -226,6 +227,13 @@ Rectangle {
     function stopScan() {
         running = false
         Qt.callLater(_applyPreviewLayout)
+    }
+
+    function markDroppedOut(side, camId) {
+        const key = _seriesKey(side, camId)
+        _ensureEntry(key)
+        _store[key].droppedOut = true
+        _store = _store  // trigger property change so canvases repaint
     }
 
     // ── Sample ingestion ──────────────────────────────────────────────────────
@@ -602,12 +610,43 @@ Rectangle {
                                 const hasData = showBfi
                                     ? (s.bfi.length > 0 || s.bvi.length > 0)
                                     : (s.mean.length > 0 || s.contrast.length > 0)
-                                if (!hasData) {
+                                if (!hasData && !s.droppedOut) {
                                     ctx.fillStyle    = theme.textTertiary.toString()
                                     ctx.textAlign    = "center"
                                     ctx.textBaseline = "middle"
                                     ctx.font         = "12px sans-serif"
                                     ctx.fillText("Waiting for data...", padL + w / 2, padT + h / 2)
+                                }
+
+                                // Dropout annotation — dashed trailing line + amber label
+                                if (s.droppedOut) {
+                                    const activeSeries = showBfi ? s.bfi : s.mean
+                                    if (activeSeries.length > 0) {
+                                        const lastPt  = activeSeries[activeSeries.length - 1]
+                                        const bounds  = showBfi ? bfiB : meanB
+                                        const invR    = bounds.range > 0 ? 1.0 / bounds.range : 1.0
+                                        const invert  = plotArea.invertPlotAxes
+                                        const lastY   = invert
+                                            ? padT + ((lastPt.v - bounds.minVal) * invR) * h
+                                            : padT + h - ((lastPt.v - bounds.minVal) * invR) * h
+                                        const lastX   = padL + ((lastPt.t - xMin) / xRange) * w
+
+                                        ctx.save()
+                                        ctx.strokeStyle = "#888888"
+                                        ctx.lineWidth   = 1.5
+                                        ctx.setLineDash([6, 4])
+                                        ctx.beginPath()
+                                        ctx.moveTo(Math.max(padL, lastX), lastY)
+                                        ctx.lineTo(padL + w, lastY)
+                                        ctx.stroke()
+                                        ctx.restore()
+                                    }
+
+                                    ctx.fillStyle    = "#FFA500"
+                                    ctx.font         = "bold 10px sans-serif"
+                                    ctx.textAlign    = "left"
+                                    ctx.textBaseline = "top"
+                                    ctx.fillText("⚠ DROPOUT", padL + 4, padT + 4)
                                 }
 
                                 plotArea._recordPaintTime(Date.now() - paintT0)
@@ -773,6 +812,9 @@ Rectangle {
         }
         function onScanCameraTemperature(side, camId, tempC) {
             plotArea.handleTempSample(side, camId, tempC)
+        }
+        function onCameraDropoutDetected(side, camId) {
+            plotArea.markDroppedOut(side, camId)
         }
     }
 }
