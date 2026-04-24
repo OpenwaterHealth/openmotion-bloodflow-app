@@ -204,6 +204,7 @@ class MOTIONConnector(QObject):
     )  # side, cam_id, timestamp_s, bvi  (kept for backward compat)
     scanCorrectedBatch = pyqtSignal('QVariantList')  # list of {side,camId,frameId,ts,bfi,bvi}
     scanCameraTemperature = pyqtSignal(str, int, float)  # side, cam_id, temperature_c
+    cameraDropoutDetected = pyqtSignal(str, int)         # side ("left"/"right"), cam_id (0-7)
 
     # post-processing signals
     postProgress = pyqtSignal(int)
@@ -301,6 +302,17 @@ class MOTIONConnector(QObject):
         self._force_laser_fail            = bool(cfg.get("forceLaserFail", False))
         self._camera_temp_alert_threshold_c = float(cfg.get("cameraTempAlertThresholdC", 105.0))
         self._camera_dropout_threshold_sec  = float(cfg.get("cameraDropoutThresholdSec", 2.0))
+
+        # Camera dropout watchdog state — reset at start of each scan
+        self._camera_last_seen: dict[tuple[str, int], float] = {}
+        self._camera_last_temp: dict[tuple[str, int], float] = {}
+        self._camera_dropped:   set[tuple[str, int]]         = set()
+
+        # 1 Hz watchdog timer — started/stopped around scan lifecycle
+        self._dropout_timer = QTimer(self)
+        self._dropout_timer.setInterval(1000)
+        self._dropout_timer.timeout.connect(self._on_dropout_check)
+
         self._sensor_debug_logging        = bool(cfg.get("sensorDebugLogging", False))
         self._camera_fake_data            = bool(cfg.get("cameraFakeData", False))
         self._histo_throttle              = bool(cfg.get("histoThrottle", False))
@@ -1174,11 +1186,41 @@ class MOTIONConnector(QObject):
             self.contactQualityCheckFinished.emit(False, "Failed to start scan", [])
 
     @pyqtSlot()
+    def _on_dropout_check(self):
+        """1 Hz watchdog: emit cameraDropoutDetected for any camera silent > threshold."""
+        if not self._capture_running:
+            return
+        now = time.monotonic()
+        threshold = self._camera_dropout_threshold_sec
+        for key, last_t in list(self._camera_last_seen.items()):
+            if key in self._camera_dropped:
+                continue
+            if now - last_t > threshold:
+                side, cam_id = key
+                temp = self._camera_last_temp.get(key, float("nan"))
+                msg = (
+                    f"Camera {side.upper()} {cam_id + 1} dropout detected "
+                    f"(no data for >{threshold:.0f} s). Last temperature: {temp:.1f}°C"
+                )
+                logger.warning(msg)
+                run_logger.warning("[DROPOUT] side=%s cam=%d temp=%.1f°C threshold=%.0fs",
+                                   side, cam_id, temp, threshold)
+                self.notify(
+                    f"⚠ Camera {side.upper()} {cam_id + 1} stopped posting — possible overheat ({temp:.1f}°C)",
+                    type_="warning",
+                    duration_ms=30000,
+                    tag=f"dropout_{side}_{cam_id}",
+                )
+                self._camera_dropped.add(key)
+                self.cameraDropoutDetected.emit(side, cam_id)
+
+    @pyqtSlot()
     def stopCapture(self):
         """Stop capture (Cancel button or app close). Ceases scan, disables cameras, waits for worker."""
         if self._capture_running:
             self.captureLog.emit("Stop requested.")
 
+        self._dropout_timer.stop()
         self._capture_stop.set()
         try:
             if self._interface:
@@ -1588,6 +1630,11 @@ class MOTIONConnector(QObject):
 
         temp_alerted_by_side = {"left": set(), "right": set()}
 
+        self._camera_last_seen = {}
+        self._camera_last_temp = {}
+        self._camera_dropped   = set()
+        self._dropout_timer.start()
+
         # Cumulative trigger-ON time — the duration that appears in scan notes
         # must match the UI countdown (gated on triggerState == "ON"), not the
         # wall-clock span of startCapture→_on_complete which includes pre-scan
@@ -1598,6 +1645,9 @@ class MOTIONConnector(QObject):
         def _on_uncorrected(sample):
             """Fires for every non-dark frame (~40 Hz). Feeds the realtime plot."""
             current_side = sample.side
+            _key = (sample.side, int(sample.cam_id))
+            self._camera_last_seen[_key] = time.monotonic()
+            self._camera_last_temp[_key] = float(sample.temperature_c)
             alerted = temp_alerted_by_side.setdefault(current_side, set())
             threshold = self._camera_temp_alert_threshold_c
             if sample.temperature_c >= threshold and sample.cam_id not in alerted:
