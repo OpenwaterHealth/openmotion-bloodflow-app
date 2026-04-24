@@ -53,11 +53,17 @@ Rectangle {
     property var rightData: ({ bfi: [], bvi: [], pendingBfi: ({}), pendingBvi: ({}),
                                 latestBfi: NaN, latestBvi: NaN, bviLpState: NaN })
 
-    // Plot bounds — initialized from fixed bounds, auto-scaled when enabled
-    property var leftBfiBounds:  _fixedBfiBounds
-    property var leftBviBounds:  _fixedBviBounds
-    property var rightBfiBounds: _fixedBfiBounds
-    property var rightBviBounds: _fixedBviBounds
+    // Mutable auto-scale bounds — only updated by the timer when autoScale is on
+    property var _autoLeftBfiBounds:  _fixedBfiBounds
+    property var _autoLeftBviBounds:  _fixedBviBounds
+    property var _autoRightBfiBounds: _fixedBfiBounds
+    property var _autoRightBviBounds: _fixedBviBounds
+
+    // Effective bounds — reactive when not auto-scaling, timer-driven when auto-scaling
+    readonly property var leftBfiBounds:  autoScale ? _autoLeftBfiBounds  : _fixedBfiBounds
+    readonly property var leftBviBounds:  autoScale ? _autoLeftBviBounds  : _fixedBviBounds
+    readonly property var rightBfiBounds: autoScale ? _autoRightBfiBounds : _fixedBfiBounds
+    readonly property var rightBviBounds: autoScale ? _autoRightBviBounds : _fixedBviBounds
 
     function reset() {
         leftData  = { bfi: [], bvi: [], pendingBfi: ({}), pendingBvi: ({}),
@@ -67,8 +73,11 @@ Rectangle {
         latestTimestamp = 0
     }
 
-    function startScan() { reset(); running = true }
-    function stopScan()  { running = false }
+    // Tracks which sides have had a camera dropout this scan ("" = none, else = HH:MM:SS time string)
+    property var droppedSides: ({ left: "", right: "" })
+
+    function startScan() { reset(); droppedSides = ({ left: "", right: "" }); running = true }
+    function stopScan()  { running = false; droppedSides = ({ left: "", right: "" }) }
 
     function _flushEntry(data, field, fid) {
         var pending = (field === "bfi") ? data.pendingBfi : data.pendingBvi
@@ -158,15 +167,10 @@ Rectangle {
                 tickCount = 0
                 if (root.autoScale) {
                     var b
-                    b = root._computeBounds(root.leftData.bfi);  if (b) root.leftBfiBounds  = b
-                    b = root._computeBounds(root.leftData.bvi);  if (b) root.leftBviBounds  = b
-                    b = root._computeBounds(root.rightData.bfi); if (b) root.rightBfiBounds = b
-                    b = root._computeBounds(root.rightData.bvi); if (b) root.rightBviBounds = b
-                } else {
-                    root.leftBfiBounds  = root._fixedBfiBounds
-                    root.leftBviBounds  = root._fixedBviBounds
-                    root.rightBfiBounds = root._fixedBfiBounds
-                    root.rightBviBounds = root._fixedBviBounds
+                    b = root._computeBounds(root.leftData.bfi);  if (b) root._autoLeftBfiBounds  = b
+                    b = root._computeBounds(root.leftData.bvi);  if (b) root._autoLeftBviBounds  = b
+                    b = root._computeBounds(root.rightData.bfi); if (b) root._autoRightBfiBounds = b
+                    b = root._computeBounds(root.rightData.bvi); if (b) root._autoRightBviBounds = b
                 }
             }
             // Force a property change so the readout texts refresh
@@ -188,6 +192,11 @@ Rectangle {
         function onScanCorrectedBatch(samples) {
             // FDA mode does not in-place correct the averaged history; values are
             // close enough for the realtime display.
+        }
+        function onCameraDropoutDetected(side, camId, timeStr) {
+            var d = root.droppedSides
+            d[side] = timeStr || "??"
+            root.droppedSides = d
         }
     }
 
@@ -278,6 +287,7 @@ Rectangle {
         property var    sideData
         property var    bfiB
         property var    bviB
+        property string dropoutTime: ""
         property alias  plotCanvas: sideCanvas
         color:        theme.bgPlot
         border.color: theme.borderStrong
@@ -343,10 +353,21 @@ Rectangle {
                 id: sideCanvas
                 Layout.fillWidth:  true
                 Layout.fillHeight: true
-                onPaint: root._paintCanvas(getContext("2d"), width, height,
-                                            sideRoot.sideData,
-                                            sideRoot.bfiB,
-                                            sideRoot.bviB)
+                onPaint: {
+                    var ctx = getContext("2d")
+                    root._paintCanvas(ctx, width, height,
+                                      sideRoot.sideData,
+                                      sideRoot.bfiB,
+                                      sideRoot.bviB)
+                    if (sideRoot.dropoutTime !== "") {
+                        ctx.fillStyle    = "#FFD700"
+                        ctx.font         = "bold 13px sans-serif"
+                        ctx.textAlign    = "center"
+                        ctx.textBaseline = "middle"
+                        ctx.fillText("CONNECTION LOST",          width / 2, height / 2 - 10)
+                        ctx.fillText("AT " + sideRoot.dropoutTime, width / 2, height / 2 + 10)
+                    }
+                }
             }
         }
     }
@@ -358,18 +379,20 @@ Rectangle {
 
         SidePanel {
             id: leftPanel
-            sideLabel: "LEFT"
-            sideData:  root.leftData
-            bfiB:      root.leftBfiBounds
-            bviB:      root.leftBviBounds
+            sideLabel:   "LEFT"
+            sideData:    root.leftData
+            bfiB:        root.leftBfiBounds
+            bviB:        root.leftBviBounds
+            dropoutTime: root.droppedSides.left
         }
 
         SidePanel {
             id: rightPanel
-            sideLabel: "RIGHT"
-            sideData:  root.rightData
-            bfiB:      root.rightBfiBounds
-            bviB:      root.rightBviBounds
+            sideLabel:   "RIGHT"
+            sideData:    root.rightData
+            bfiB:        root.rightBfiBounds
+            bviB:        root.rightBviBounds
+            dropoutTime: root.droppedSides.right
         }
     }
 

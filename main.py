@@ -86,6 +86,8 @@ def _load_app_config() -> dict:
         "autoScale": False,
         "autoScalePerPlot": False,
         "reducedMode": False,
+        "reducedModeLeftMask": 0xC3,
+        "reducedModeRightMask": 0xC3,
         "plotWindowSec": 15,
         "bfiColor": "#E74C3C",
         "bviColor": "#3498DB",
@@ -109,7 +111,7 @@ def _load_app_config() -> dict:
             **{k: v for k, v in loaded.items() if k in defaults or k == "output_path"},
         }
         # Ensure mask fields are always integers (guard against float drift from JSON)
-        for key in ("leftMask", "rightMask"):
+        for key in ("leftMask", "rightMask", "reducedModeLeftMask", "reducedModeRightMask"):
             if key in out and out[key] is not None:
                 out[key] = int(out[key])
         logger.info("Loaded app config from %s", config_path)
