@@ -204,6 +204,7 @@ class MOTIONConnector(QObject):
     )  # side, cam_id, timestamp_s, bvi  (kept for backward compat)
     scanCorrectedBatch = pyqtSignal('QVariantList')  # list of {side,camId,frameId,ts,bfi,bvi}
     scanCameraTemperature = pyqtSignal(str, int, float)  # side, cam_id, temperature_c
+    cameraDropoutDetected = pyqtSignal(str, int, str)    # side ("left"/"right"), cam_id (0-7), elapsed HH:MM:SS
 
     # post-processing signals
     postProgress = pyqtSignal(int)
@@ -300,6 +301,22 @@ class MOTIONConnector(QObject):
         # Unpack operational settings from config
         self._force_laser_fail            = bool(cfg.get("forceLaserFail", False))
         self._camera_temp_alert_threshold_c = float(cfg.get("cameraTempAlertThresholdC", 105.0))
+        self._camera_dropout_threshold_sec  = float(cfg.get("cameraDropoutThresholdSec", 2.0))
+
+        # Camera dropout watchdog state — reset at start of each scan
+        self._camera_last_seen: dict[tuple[str, int], float] = {}
+        self._camera_last_temp: dict[tuple[str, int], float] = {}
+        self._camera_dropped:   set[tuple[str, int]]         = set()
+
+        # 1 Hz watchdog timer — started/stopped around scan lifecycle
+        self._dropout_timer = QTimer(self)
+        self._dropout_timer.setInterval(1000)
+        self._dropout_timer.timeout.connect(self._on_dropout_check)
+
+        # Trigger-ON elapsed time — mirrored from startCapture locals so _on_dropout_check can read them
+        self._trigger_cumulative_s: float = 0.0
+        self._trigger_on_mono: float | None = None
+
         self._sensor_debug_logging        = bool(cfg.get("sensorDebugLogging", False))
         self._camera_fake_data            = bool(cfg.get("cameraFakeData", False))
         self._histo_throttle              = bool(cfg.get("histoThrottle", False))
@@ -1173,11 +1190,54 @@ class MOTIONConnector(QObject):
             self.contactQualityCheckFinished.emit(False, "Failed to start scan", [])
 
     @pyqtSlot()
+    def _on_dropout_check(self):
+        """1 Hz watchdog: emit cameraDropoutDetected for any camera silent > threshold."""
+        if not self._capture_running:
+            return
+        now = time.monotonic()
+        threshold = self._camera_dropout_threshold_sec
+        for key, last_t in list(self._camera_last_seen.items()):
+            if key in self._camera_dropped:
+                continue
+            if now - last_t > threshold:
+                side, cam_id = key
+                temp = self._camera_last_temp.get(key, float("nan"))
+                elapsed_str = self._scan_elapsed_str()
+                msg = (
+                    f"[{elapsed_str}] Camera {side.upper()} {cam_id + 1} dropout detected "
+                    f"(no data for >{threshold:.0f} s). Last temperature: {temp:.1f}°C"
+                )
+                logger.warning(msg)
+                run_logger.warning("[DROPOUT] side=%s cam=%d temp=%.1f°C threshold=%.0fs at %s",
+                                   side, cam_id, temp, threshold, elapsed_str)
+                self.notify(
+                    f"Camera {side.upper()} {cam_id + 1} connection lost at {elapsed_str}"
+                    f" — last temp {temp:.1f}°C",
+                    type_="warning",
+                    duration_ms=30000,
+                    tag=f"dropout_{side}_{cam_id}",
+                )
+                self._camera_dropped.add(key)
+                self.cameraDropoutDetected.emit(side, cam_id, elapsed_str)
+
+    def _scan_elapsed_str(self) -> str:
+        """Return current scan elapsed trigger-ON time as HH:MM:SS."""
+        elapsed = self._trigger_cumulative_s
+        if self._trigger_on_mono is not None:
+            elapsed += time.monotonic() - self._trigger_on_mono
+        total_s = int(elapsed)
+        h = total_s // 3600
+        m = (total_s % 3600) // 60
+        s = total_s % 60
+        return f"{h:02d}:{m:02d}:{s:02d}"
+
+    @pyqtSlot()
     def stopCapture(self):
         """Stop capture (Cancel button or app close). Ceases scan, disables cameras, waits for worker."""
         if self._capture_running:
             self.captureLog.emit("Stop requested.")
 
+        self._dropout_timer.stop()
         self._capture_stop.set()
         try:
             if self._interface:
@@ -1587,27 +1647,44 @@ class MOTIONConnector(QObject):
 
         temp_alerted_by_side = {"left": set(), "right": set()}
 
+        self._camera_last_seen = {}
+        self._camera_last_temp = {}
+        self._camera_dropped   = set()
+        self._dropout_timer.start()
+
         # Cumulative trigger-ON time — the duration that appears in scan notes
         # must match the UI countdown (gated on triggerState == "ON"), not the
         # wall-clock span of startCapture→_on_complete which includes pre-scan
         # flash + post-scan USB drain/writer-join (~3s tail).
         trigger_cumulative_s: float = 0.0
         trigger_on_mono: float | None = None
+        self._trigger_cumulative_s = 0.0
+        self._trigger_on_mono = None
 
         def _on_uncorrected(sample):
             """Fires for every non-dark frame (~40 Hz). Feeds the realtime plot."""
             current_side = sample.side
+            _key = (sample.side, int(sample.cam_id))
+            self._camera_last_seen[_key] = time.monotonic()
+            self._camera_last_temp[_key] = float(sample.temperature_c)
             alerted = temp_alerted_by_side.setdefault(current_side, set())
             threshold = self._camera_temp_alert_threshold_c
             if sample.temperature_c >= threshold and sample.cam_id not in alerted:
                 alerted.add(sample.cam_id)
+                elapsed_str = self._scan_elapsed_str()
                 msg = (
-                    f"ALERT: Camera {sample.cam_id + 1} ({current_side}) "
+                    f"[{elapsed_str}] ALERT: Camera {sample.cam_id + 1} ({current_side}) "
                     f"temperature {sample.temperature_c:.1f}°C >= {threshold:.0f}°C threshold."
                 )
-                self.captureLog.emit(msg)
                 run_logger.warning(msg)
                 logger.warning(msg)
+                self.notify(
+                    f"Camera {sample.cam_id + 1} ({current_side.upper()}) reached {sample.temperature_c:.1f}°C"
+                    f" at {elapsed_str} (threshold: {threshold:.0f}°C)",
+                    type_="warning",
+                    duration_ms=30000,
+                    tag=f"temp_alert_{current_side}_{sample.cam_id}",
+                )
 
             plot_ts = time.monotonic() - plot_t0
 
@@ -1743,6 +1820,9 @@ class MOTIONConnector(QObject):
             elif state == "OFF" and trigger_on_mono is not None:
                 trigger_cumulative_s += now - trigger_on_mono
                 trigger_on_mono = None
+            # Mirror to instance vars so _on_dropout_check and _scan_elapsed_str can read them
+            self._trigger_cumulative_s = trigger_cumulative_s
+            self._trigger_on_mono = trigger_on_mono
             self._trigger_state = state
             self.triggerStateChanged.emit()
 
