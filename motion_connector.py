@@ -81,8 +81,7 @@ class MOTIONConnector(QObject):
     safetyTripDuringCaptureRequested = pyqtSignal()  # Emitted when safety trips while scan running (main-thread slot shows message & schedules cancel)
     triggerStateChanged = pyqtSignal()  # Signal to notify QML of trigger state changes
     directoryChanged = pyqtSignal()  # Signal to notify QML of directory changes
-    sessionIdChanged = pyqtSignal()  # Signal to notify QML of session ID changes
-    subjectIdChanged = pyqtSignal()  # Deprecated alias — same as sessionIdChanged
+    userLabelChanged = pyqtSignal()  # Signal to notify QML of user label changes
     sensorDeviceInfoReceived = pyqtSignal(str, str)  # (fw_version, device_id)
     consoleDeviceInfoReceived = pyqtSignal(str, str)  # (fw_version, device_id)
     temperatureSensorUpdated = pyqtSignal(float)  # Temperature data
@@ -90,6 +89,10 @@ class MOTIONConnector(QObject):
     gyroscopeSensorUpdated = pyqtSignal(float, float, float)  # (x, y, z)
     rgbStateReceived = pyqtSignal(int, str)  # (state, state_text)
     errorOccurred = pyqtSignal(str)
+    notificationRequested = pyqtSignal('QVariant')  # toast notification payload dict
+    notificationDismissByIdRequested = pyqtSignal(int)   # dismiss the toast with this id
+    notificationDismissByTagRequested = pyqtSignal(str)  # dismiss the toast with this tag
+    notificationDismissAllRequested = pyqtSignal()       # dismiss every active toast
     vizFinished = pyqtSignal()
     visualizingChanged = pyqtSignal(bool)
 
@@ -133,6 +136,11 @@ class MOTIONConnector(QObject):
     tecStatusChanged = pyqtSignal()
     tecDacChanged = pyqtSignal()
     appConfigChanged = pyqtSignal()
+
+    # App update signals
+    updateAvailable = pyqtSignal(str, str)   # (latest_version, download_url)
+    updateNotAvailable = pyqtSignal()
+    updateCheckFailed = pyqtSignal(str)      # error message
 
     @staticmethod
     def _default_output_base() -> str:
@@ -219,6 +227,7 @@ class MOTIONConnector(QObject):
         self._capture_thread = None
         self._capture_stop = threading.Event()
         self._capture_running = False
+        self._notification_id_counter = 0  # monotonic id assigned to each notify() call
         self._safety_cancel_scheduled = False  # True after scheduling cancel-due-to-safety; cleared when capture ends
         self._capture_left_path = ""
         self._capture_right_path = ""
@@ -261,8 +270,8 @@ class MOTIONConnector(QObject):
             self._directory = default_dir
         logger.info(f"[Connector] Directory initialized to: {self._directory}")
 
-        self._subject_id = self.generate_session_id()
-        logger.info(f"[Connector] Generated session ID: {self._subject_id}")
+        self._user_label = self.generate_user_label()
+        logger.info(f"[Connector] Generated user label: {self._user_label}")
 
         # Emit synthetic connect events for devices already connected at startup
         if self._leftSensorConnected:
@@ -427,7 +436,7 @@ class MOTIONConnector(QObject):
 
         # Timestamped filename for this specific trigger session
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        base_subject = subject_id or self._subject_id or "unknown"
+        base_subject = subject_id or self._user_label or "unknown"
         safe_subject = re.sub(r"[^A-Za-z0-9_-]", "", base_subject)
         self._runlog_path = os.path.join(run_dir, f"run-{safe_subject}_{ts}.log")
         self._runlog_csv_path = os.path.join(run_dir, f"run-{safe_subject}_{ts}.csv")
@@ -586,10 +595,10 @@ class MOTIONConnector(QObject):
                 logger.error(f"Failed to write run CSV sample: {e}")
 
     # --- GETTERS/SETTERS FOR Qt PROPERTIES ---
-    def getSessionId(self) -> str:
-        return self._subject_id
+    def getUserLabel(self) -> str:
+        return self._user_label
 
-    def setSessionId(self, value: str):
+    def setUserLabel(self, value: str):
         if not value:
             return
         # normalize to "ow" + alphanumerics (uppercase)
@@ -599,24 +608,12 @@ class MOTIONConnector(QObject):
             rest = value
         rest = "".join(ch for ch in rest.upper() if ch.isalnum())
         new_val = "ow" + rest
-        if new_val != self._subject_id:
-            self._subject_id = new_val
-            self.sessionIdChanged.emit()
-            self.subjectIdChanged.emit()  # keep deprecated alias working
+        if new_val != self._user_label:
+            self._user_label = new_val
+            self.userLabelChanged.emit()
 
-    sessionId = pyqtProperty(
-        str, fget=getSessionId, fset=setSessionId, notify=sessionIdChanged
-    )
-
-    # Deprecated alias — external code that still uses subjectId keeps working
-    def getSubjectId(self) -> str:
-        return self._subject_id
-
-    def setSubjectId(self, value: str):
-        self.setSessionId(value)
-
-    subjectId = pyqtProperty(
-        str, fget=getSubjectId, fset=setSubjectId, notify=subjectIdChanged
+    userLabel = pyqtProperty(
+        str, fget=getUserLabel, fset=setUserLabel, notify=userLabelChanged
     )
 
     @pyqtProperty(bool, notify=connectionStatusChanged)
@@ -953,14 +950,14 @@ class MOTIONConnector(QObject):
     def get_scan_details(self, scan_id: str):
         """
         scan_id is either:
-          New format: 'YYYYMMDD_HHMMSS_sessionId'
-          Old format: 'sessionId_YYYYMMDD_HHMMSS'
+          New format: 'YYYYMMDD_HHMMSS_userLabel'
+          Old format: 'userLabel_YYYYMMDD_HHMMSS'
         """
         base = Path(self._directory)
 
         # Detect format by checking if it starts with a date
         if re.match(r'^\d{8}_\d{6}_', scan_id):
-            # New format: YYYYMMDD_HHMMSS_sessionId
+            # New format: YYYYMMDD_HHMMSS_userLabel
             parts = scan_id.split("_", 2)
             ts = parts[0] + "_" + parts[1]
             subject = parts[2] if len(parts) > 2 else ""
@@ -969,7 +966,7 @@ class MOTIONConnector(QObject):
             right     = next(base.glob(f"{scan_id}_right_mask*.csv"), None)
             corrected = next(base.glob(f"{scan_id}_corrected.csv"), None)
         else:
-            # Old format: sessionId_YYYYMMDD_HHMMSS
+            # Old format: userLabel_YYYYMMDD_HHMMSS
             parts = scan_id.split("_", 1)
             subject = parts[0]
             ts = parts[1] if len(parts) > 1 else ""
@@ -996,8 +993,8 @@ class MOTIONConnector(QObject):
             pass
 
         return {
-            "sessionId": subject,
-            "subjectId": subject,   # deprecated alias kept for compatibility
+            "userLabel": subject,
+            "sessionId": f"{ts}_{subject}",
             "timestamp": ts,
             "leftMask": left_mask,
             "rightMask": right_mask,
@@ -1110,23 +1107,69 @@ class MOTIONConnector(QObject):
             except Exception as e:
                 logger.error(f"Failed to update scan notes on disk: {e}")
 
-    def generate_session_id(self):
-        suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
-        return f"ow{suffix}"
+    @pyqtSlot(str, result=int)
+    @pyqtSlot(str, str, result=int)
+    @pyqtSlot(str, str, int, result=int)
+    @pyqtSlot(str, str, int, bool, result=int)
+    @pyqtSlot(str, str, int, bool, str, result=int)
+    def notify(self, text: str, type_: str = "info", duration_ms: int = 4000,
+               dismissible: bool = True, tag: str = "") -> int:
+        """Fire a toast notification. Reachable from QML as MOTIONInterface.notify(...)
+        and from any Python code holding the connector instance.
 
-    def generate_subject_id(self):  # deprecated alias
-        return self.generate_session_id()
+        Args:
+            text: message shown in the toast
+            type_: one of "info", "success", "warning", "error"
+            duration_ms: auto-dismiss after N ms; 0 = sticky until user dismisses
+            dismissible: whether to show the ✕ close button
+            tag: optional stable identifier. If non-empty, calling notify with the
+                same tag again replaces the existing toast (no duplicate stacking),
+                and dismissNotification(tag) can later target it.
+
+        Returns:
+            The integer id assigned to this notification. Pass to
+            dismissNotification(id) to dismiss it later.
+        """
+        if type_ not in ("info", "success", "warning", "error"):
+            logger.warning(f"notify: unknown type '{type_}', falling back to 'info'")
+            type_ = "info"
+        self._notification_id_counter += 1
+        nid = self._notification_id_counter
+        self.notificationRequested.emit({
+            "id": nid,
+            "tag": str(tag),
+            "text": text,
+            "type": type_,
+            "durationMs": int(duration_ms),
+            "dismissible": bool(dismissible),
+        })
+        return nid
+
+    @pyqtSlot(int)
+    @pyqtSlot(str)
+    def dismissNotification(self, value):
+        """Dismiss a single notification by id (int) or tag (str). Animated.
+
+        Safe to call with an id/tag that no longer exists — it's a no-op.
+        """
+        if isinstance(value, bool):
+            # bool is a subclass of int in Python; reject explicitly to avoid
+            # surprising callers who pass True/False expecting different semantics.
+            logger.warning("dismissNotification: bool is not a valid id/tag")
+            return
+        if isinstance(value, int):
+            self.notificationDismissByIdRequested.emit(value)
+        else:
+            self.notificationDismissByTagRequested.emit(str(value))
 
     @pyqtSlot()
-    def newSession(self):
-        """Generate a fresh session ID and clear notes for a new scan."""
-        self._subject_id = self.generate_session_id()
-        self._scan_notes = ""
-        self._scan_notes_path = ""
-        self.sessionIdChanged.emit()
-        self.subjectIdChanged.emit()
-        self.scanNotesChanged.emit()
-        logger.info(f"New session started: {self._subject_id}")
+    def dismissAllNotifications(self):
+        """Dismiss every active toast. Animated."""
+        self.notificationDismissAllRequested.emit()
+
+    def generate_user_label(self) -> str:
+        suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+        return f"ow{suffix}"
 
     # --- CONSOLE COMMUNICATION METHODS ---
     @pyqtSlot()
@@ -1161,6 +1204,10 @@ class MOTIONConnector(QObject):
             f"dir={data_dir}, disable_laser={disable_laser})"
         )
 
+        if duration_sec <= 0:
+            logger.warning("duration_sec was %s, clamping to 3600", duration_sec)
+            duration_sec = 3600
+
         if self._capture_running or self._capture_thread is not None:
             self.captureLog.emit("Capture already running.")
             return False
@@ -1178,8 +1225,17 @@ class MOTIONConnector(QObject):
             return False
 
         self._capture_stop = threading.Event()
+        # Each new scan starts with a fresh notes buffer
+        self._scan_notes = ""
+        self._scan_notes_path = ""
+        self.scanNotesChanged.emit()
         self._capture_running = True
         self._capture_start_time = time.time()
+        # Per-scan monotonic zero for plot timestamps. sample.timestamp_s comes
+        # from each sensor's firmware clock, which resets on sensor reboot — so
+        # after a mid-scan unplug/replug, the two sides' clocks diverge and the
+        # QML plot's shared `latestTimestamp` prunes the lagging side to empty.
+        plot_t0 = time.monotonic()
         self._capture_left_path = ""
         self._capture_right_path = ""
         self._start_runlog(subject_id=subject_id)
@@ -1191,6 +1247,13 @@ class MOTIONConnector(QObject):
             return [0, 0, "0.000"]
 
         temp_alerted_by_side = {"left": set(), "right": set()}
+
+        # Cumulative trigger-ON time — the duration that appears in scan notes
+        # must match the UI countdown (gated on triggerState == "ON"), not the
+        # wall-clock span of startCapture→_on_complete which includes pre-scan
+        # flash + post-scan USB drain/writer-join (~3s tail).
+        trigger_cumulative_s: float = 0.0
+        trigger_on_mono: float | None = None
 
         def _on_uncorrected(sample):
             """Fires for every non-dark frame (~40 Hz). Feeds the realtime plot."""
@@ -1207,16 +1270,18 @@ class MOTIONConnector(QObject):
                 run_logger.warning(msg)
                 logger.warning(msg)
 
+            plot_ts = time.monotonic() - plot_t0
+
             self.scanMeanSampled.emit(
                 current_side,
                 int(sample.cam_id),
-                float(sample.timestamp_s),
+                plot_ts,
                 float(sample.mean),
             )
             self.scanContrastSampled.emit(
                 current_side,
                 int(sample.cam_id),
-                float(sample.timestamp_s),
+                plot_ts,
                 float(sample.contrast),
             )
 
@@ -1224,14 +1289,14 @@ class MOTIONConnector(QObject):
                 sample.side,
                 int(sample.cam_id),
                 int(sample.absolute_frame_id),
-                float(sample.timestamp_s),
+                plot_ts,
                 float(sample.bfi),
             )
             self.scanBviSampled.emit(
                 sample.side,
                 int(sample.cam_id),
                 int(sample.absolute_frame_id),
-                float(sample.timestamp_s),
+                plot_ts,
                 float(sample.bvi),
             )
             self.scanCameraTemperature.emit(
@@ -1242,13 +1307,14 @@ class MOTIONConnector(QObject):
 
         def _on_corrected_batch(batch):
             """Fires every ~15 s with dark-frame-corrected values for the last interval."""
+            plot_ts = time.monotonic() - plot_t0
             payload = []
             for s in batch.samples:
                 payload.append({
                     'side': s.side,
                     'camId': int(s.cam_id),
                     'frameId': int(s.absolute_frame_id),
-                    'ts': float(s.timestamp_s),
+                    'ts': plot_ts,
                     'bfi': float(s.bfi),
                     'bvi': float(s.bvi),
                 })
@@ -1263,8 +1329,15 @@ class MOTIONConnector(QObject):
                 if result.error:
                     self.captureLog.emit(f"Capture error: {result.error}")
 
-            # Compute scan duration and append to notes
-            elapsed = time.time() - self._capture_start_time
+            # Compute scan duration and append to notes. Use trigger ON-time
+            # so the number matches the UI countdown. Fall back to wall-clock
+            # only if the scan failed before the trigger ever fired.
+            if trigger_cumulative_s > 0.0 or trigger_on_mono is not None:
+                elapsed = trigger_cumulative_s
+                if trigger_on_mono is not None:
+                    elapsed += time.monotonic() - trigger_on_mono
+            else:
+                elapsed = time.time() - self._capture_start_time
             hours = int(elapsed // 3600)
             minutes = int((elapsed % 3600) // 60)
             seconds = int(elapsed % 60)
@@ -1313,9 +1386,17 @@ class MOTIONConnector(QObject):
             disable_laser=disable_laser,
             write_raw_csv=self._write_raw_csv,
             raw_csv_duration_sec=self._raw_csv_duration_sec,
+            reduced_mode=self._app_config.get("reducedMode", False),
         )
 
         def _on_trigger_state(state: str):
+            nonlocal trigger_cumulative_s, trigger_on_mono
+            now = time.monotonic()
+            if state == "ON" and trigger_on_mono is None:
+                trigger_on_mono = now
+            elif state == "OFF" and trigger_on_mono is not None:
+                trigger_cumulative_s += now - trigger_on_mono
+                trigger_on_mono = None
             self._trigger_state = state
             self.triggerStateChanged.emit()
 
@@ -2270,14 +2351,17 @@ class MOTIONConnector(QObject):
             import matplotlib.pyplot as plt
             plt.close("all")
             mod = payload["mod"]
-            kwargs = dict(
-                cells=payload["cells"],
-                row_map=payload["row_map"],
-                col_map=payload["col_map"],
-                n_rows=payload["n_rows"],
-                n_cols=payload["n_cols"],
-            )
-            mod._make_figure(payload["df"], mode=payload["mode"], **kwargs)
+            if payload.get("reduced", False):
+                mod._make_reduced_figure(payload["df"], payload["active_sides"])
+            else:
+                kwargs = dict(
+                    cells=payload["cells"],
+                    row_map=payload["row_map"],
+                    col_map=payload["col_map"],
+                    n_rows=payload["n_rows"],
+                    n_cols=payload["n_cols"],
+                )
+                mod._make_figure(payload["df"], mode=payload["mode"], **kwargs)
             plt.show(block=False)
         except Exception as e:
             logger.exception("Corrected scan visualization display failed")
@@ -2404,6 +2488,91 @@ class MOTIONConnector(QObject):
     def interface(self):
         return self._interface
 
+    # ── App update checking ─────────────────────────────────────────────
+
+    _GITHUB_REPO = "OpenwaterHealth/openmotion-bloodflow-app"
+
+    @pyqtSlot()
+    def checkForUpdates(self):
+        """Check GitHub releases for a newer version (runs in a background thread)."""
+        t = threading.Thread(target=self._check_for_updates_worker, daemon=True)
+        t.start()
+
+    def _check_for_updates_worker(self):
+        import urllib.request
+        from version import get_version
+
+        api_url = f"https://api.github.com/repos/{self._GITHUB_REPO}/releases/latest"
+        try:
+            req = urllib.request.Request(api_url, headers={"Accept": "application/vnd.github+json"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+
+            remote_tag = data.get("tag_name", "").lstrip("v")
+            if not remote_tag:
+                self.updateCheckFailed.emit("Could not determine latest release tag.")
+                return
+
+            # Find the .zip asset download URL
+            download_url = data.get("html_url", "")
+            for asset in data.get("assets", []):
+                if asset["name"].endswith(".zip"):
+                    download_url = asset["browser_download_url"]
+                    break
+
+            local_version = get_version()
+            # Strip local metadata for comparison (e.g. "+3.gabc1234.dirty")
+            local_base = local_version.split("+")[0]
+
+            if self._version_newer(remote_tag, local_base):
+                logger.info(f"Update available: {remote_tag} (current: {local_base})")
+                self.updateAvailable.emit(remote_tag, download_url)
+            else:
+                logger.info(f"App is up to date ({local_base} >= {remote_tag})")
+                self.updateNotAvailable.emit()
+
+        except Exception as e:
+            logger.warning(f"Update check failed: {e}")
+            self.updateCheckFailed.emit(str(e))
+
+    @staticmethod
+    def _version_newer(remote: str, local: str) -> bool:
+        """Return True if remote version is strictly newer than local.
+
+        Handles versions like '0.4.3', 'pre-0.4.3', '1.0-pre3'.
+        Strips 'pre-' prefix for numeric comparison; pre-releases are
+        considered older than the same base version.
+        """
+        def parse(v):
+            # Strip pre- prefix, track it
+            is_pre = v.startswith("pre-")
+            base = v[4:] if is_pre else v
+            # Also handle "1.0-pre3" format
+            if "-pre" in base:
+                base = base.split("-pre")[0]
+                is_pre = True
+            try:
+                parts = [int(x) for x in base.split(".")]
+            except ValueError:
+                parts = [0]
+            return parts, is_pre
+
+        r_parts, r_pre = parse(remote)
+        l_parts, l_pre = parse(local)
+
+        if r_parts != l_parts:
+            return r_parts > l_parts
+        # Same base version: non-pre > pre
+        if l_pre and not r_pre:
+            return True
+        return False
+
+    @pyqtSlot(str)
+    def openDownloadUrl(self, url: str):
+        """Open the download URL in the system browser."""
+        import webbrowser
+        webbrowser.open(url)
+
 
 def _load_plot_corrected_scan():
     """Load plot_corrected_scan.py — bundled in processing/ for deployed builds,
@@ -2455,18 +2624,35 @@ class _CorrectVizWorker(QObject):
             active_sides = mod._requested_sides(df, "both")
             if not active_sides:
                 raise ValueError("No camera data found in corrected CSV.")
-            cells = mod._active_cells(df, active_sides)
-            row_map, col_map, n_rows, n_cols = mod._collapse(cells)
-            self.resultsReady.emit({
-                "mod": mod,
-                "df": df,
-                "cells": cells,
-                "row_map": row_map,
-                "col_map": col_map,
-                "n_rows": n_rows,
-                "n_cols": n_cols,
-                "mode": self.mode,
-            })
+
+            reduced = mod._is_reduced_mode(df)
+            if reduced:
+                if self.mode == "signal":
+                    raise ValueError(
+                        "Contrast/Mean visualization is not available for "
+                        "reduced mode scans."
+                    )
+                self.resultsReady.emit({
+                    "mod": mod,
+                    "df": df,
+                    "reduced": True,
+                    "active_sides": active_sides,
+                    "mode": self.mode,
+                })
+            else:
+                cells = mod._active_cells(df, active_sides)
+                row_map, col_map, n_rows, n_cols = mod._collapse(cells)
+                self.resultsReady.emit({
+                    "mod": mod,
+                    "df": df,
+                    "reduced": False,
+                    "cells": cells,
+                    "row_map": row_map,
+                    "col_map": col_map,
+                    "n_rows": n_rows,
+                    "n_cols": n_cols,
+                    "mode": self.mode,
+                })
         except Exception as e:
             self.error.emit(str(e))
         finally:

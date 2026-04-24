@@ -19,7 +19,7 @@ Rectangle {
     property bool camerasReady: true  // starts true, goes false when camera selection changes
     property bool configuring: false  // true during camera flash
 
-    // FDA mode (read from app config). Forces Middle camera pattern + free run,
+    // FDA mode (read from app config). Forces Far camera pattern + free run,
     // hides scan-settings button, and swaps in the FDA plot view.
     property bool reducedMode: MOTIONInterface.appConfig.reducedMode === true
 
@@ -27,8 +27,7 @@ Rectangle {
     property int leftMask: 0x99   // default "Outer"
     property int rightMask: 0x00
 
-    // Session ID (exposed for header bar)
-    property string sessionId: MOTIONInterface.sessionId || ""
+    property string sessionId: MOTIONInterface.userLabel || ""
 
     // Duration from scan time modal
     property bool freeRun: reducedMode
@@ -38,16 +37,22 @@ Rectangle {
         if (reducedMode) {
             freeRun = true
             durationSec = 43200
-            leftMask = 0x66
-            rightMask = 0x66
+            leftMask = 0xC3
+            rightMask = 0xC3
         }
     }
     property int elapsedSec: 0
 
+    // The elapsed-time ticker runs exactly while the MCU trigger is firing.
+    // Using a declarative `running:` binding means the timer auto-stops the
+    // instant triggerState flips to "OFF" (top of the SDK teardown, right
+    // after stop_trigger) rather than when captureFinished arrives 2-4s later
+    // after all the camera-disable / USB-drain / writer-join work is done.
     Timer {
         id: scanTimer
         interval: 1000
         repeat: true
+        running: bloodFlow.scanning && MOTIONInterface.triggerState === "ON"
         onTriggered: bloodFlow.elapsedSec += 1
     }
 
@@ -64,8 +69,8 @@ Rectangle {
     // Apply default cameras from config
     function applyDefaultCameras() {
         var cfg      = MOTIONInterface.appConfig;
-        var defLeft  = reducedMode ? 0x66 : (cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99);
-        var defRight = reducedMode ? 0x66 : (cfg.rightMask !== undefined ? cfg.rightMask : 0x99);
+        var defLeft  = reducedMode ? 0xC3 : (cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99);
+        var defRight = reducedMode ? 0xC3 : (cfg.rightMask !== undefined ? cfg.rightMask : 0x99);
         if (MOTIONInterface.leftSensorConnected)  leftMask  = defLeft;
         if (MOTIONInterface.rightSensorConnected) rightMask = defRight;
         if (cfg.autoConfigureOnStartup !== false &&
@@ -120,7 +125,6 @@ Rectangle {
                 else                   embeddedPlot.stopScan()
                 notesModal.open()
             } else {
-                MOTIONInterface.newSession()
                 bloodFlow.scanning = true
                 scanDialog.message = "Scanning..."
                 scanDialog.stageText = "Preparing..."
@@ -196,6 +200,11 @@ Rectangle {
         bfiClampHigh: MOTIONInterface.appConfig.bfiClampHigh !== undefined ? MOTIONInterface.appConfig.bfiClampHigh : 10.0
         bviClampLow:  MOTIONInterface.appConfig.bviClampLow  !== undefined ? MOTIONInterface.appConfig.bviClampLow  : 0.0
         bviClampHigh: MOTIONInterface.appConfig.bviClampHigh !== undefined ? MOTIONInterface.appConfig.bviClampHigh : 10.0
+        autoScale: settingsModal.autoScale
+        bfiMin: settingsModal.bfiMin
+        bfiMax: settingsModal.bfiMax
+        bviMin: settingsModal.bviMin
+        bviMax: settingsModal.bviMax
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         anchors.left: buttonPanel.right
@@ -217,7 +226,9 @@ Rectangle {
         id: scanSettingsModal
         onSelectionChanged: function(newLeftMask, newRightMask) {
             bloodFlow.freeRun = scanSettingsModal.freeRun
-            bloodFlow.durationSec = scanSettingsModal.freeRun ? 43200 : scanSettingsModal.durationSec
+            var dur = scanSettingsModal.freeRun ? 43200 : scanSettingsModal.durationSec
+            if (dur <= 0) dur = 3600
+            bloodFlow.durationSec = dur
             bloodFlow.leftMask = newLeftMask
             bloodFlow.rightMask = newRightMask
         }
@@ -246,7 +257,7 @@ Rectangle {
         leftMask: bloodFlow.leftMask
         rightMask: bloodFlow.rightMask
         durationSec: bloodFlow.durationSec
-        subjectId: MOTIONInterface.sessionId
+        subjectId: MOTIONInterface.userLabel
         dataDir: MOTIONInterface.directory
         disableLaser: false
         laserOn: true
@@ -266,7 +277,9 @@ Rectangle {
             scanDialog.stageText = txt
             if (scanRunner._stage === "capture") {
                 bloodFlow.elapsedSec = 0
-                scanTimer.start()
+                // scanTimer is started declaratively by its `running:` binding
+                // (bloodFlow.scanning && triggerState === "ON") — no imperative
+                // start() needed here.
             }
         }
         onProgressUpdate: function(pct) {
@@ -277,7 +290,8 @@ Rectangle {
             console.log(line)
         }
         onScanFinished: function(ok, err, left, right) {
-            scanTimer.stop()
+            // scanTimer stops automatically via its `running:` binding once
+            // bloodFlow.scanning flips false or triggerState goes "OFF".
             bloodFlow.scanning = false
 
             if (err === "Canceled") {
@@ -314,8 +328,8 @@ Rectangle {
                 Qt.callLater(function() {
                     if (!bloodFlow.scanning && !bloodFlow.configuring) {
                         var cfg      = MOTIONInterface.appConfig;
-                        var defLeft  = bloodFlow.reducedMode ? 0x66 : (cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99);
-                        var defRight = bloodFlow.reducedMode ? 0x66 : (cfg.rightMask !== undefined ? cfg.rightMask : 0x99);
+                        var defLeft  = bloodFlow.reducedMode ? 0xC3 : (cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99);
+                        var defRight = bloodFlow.reducedMode ? 0xC3 : (cfg.rightMask !== undefined ? cfg.rightMask : 0x99);
                         if (MOTIONInterface.leftSensorConnected)  bloodFlow.leftMask  = defLeft;
                         if (MOTIONInterface.rightSensorConnected) bloodFlow.rightMask = defRight;
                         if (cfg.autoConfigureOnStartup !== false)
@@ -355,8 +369,8 @@ Rectangle {
         if (reducedMode) {
             freeRun = true
             durationSec = 43200
-            leftMask = 0x66
-            rightMask = 0x66
+            leftMask = 0xC3
+            rightMask = 0xC3
         }
         applyDefaultCameras()
     }

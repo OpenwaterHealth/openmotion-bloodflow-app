@@ -100,7 +100,7 @@ Edit `config/app_config.json` to customize behavior:
 | `output_path` | `null` | Base directory for logs and data (null = auto-detect) |
 | `dataDirectory` | `null` | Override for scan data output (null = `<output_path>/scan_data`) |
 | `developerMode` | `false` | Enable developer UI features |
-| `reducedMode` | `false` | Simplified clinical UI: forces middle camera config + free run, hides scan settings, shows large left/right BFI/BVI panels |
+| `reducedMode` | `false` | Simplified clinical UI: forces far camera config + free run, hides scan settings, shows large left/right BFI/BVI panels |
 | `leftMask` / `rightMask` | `0x66` | Camera bitmask for left/right sensor modules |
 | `writeRawCsv` | `true` | Write raw histogram CSV during capture |
 | `rawCsvDurationSec` | `null` | Limit raw CSV capture duration (null = unlimited) |

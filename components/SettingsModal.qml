@@ -54,10 +54,10 @@ Item {
         var cfg = MOTIONInterface.appConfig
         defaultLeftMaskIndex  = maskToIndex(cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99)
         defaultRightMaskIndex = maskToIndex(cfg.rightMask !== undefined ? cfg.rightMask : 0x99)
-        showBfiBvi         = cfg.showBfiBvi         !== undefined ? cfg.showBfiBvi         : true
+        reducedMode        = cfg.reducedMode        !== undefined ? cfg.reducedMode        : false
+        showBfiBvi         = reducedMode ? true : (cfg.showBfiBvi !== undefined ? cfg.showBfiBvi : true)
         autoScale          = cfg.autoScale          !== undefined ? cfg.autoScale          : false
         autoScalePerPlot   = autoScale
-        reducedMode        = cfg.reducedMode        !== undefined ? cfg.reducedMode        : false
         plotWindowSec      = cfg.plotWindowSec      !== undefined ? cfg.plotWindowSec      : 15
         bfiColor           = cfg.bfiColor           !== undefined ? cfg.bfiColor           : "#E74C3C"
         bviColor           = cfg.bviColor           !== undefined ? cfg.bviColor           : "#3498DB"
@@ -139,7 +139,7 @@ Item {
         ListElement { name: "None";      maskHex: "0x00" }
         ListElement { name: "Near";      maskHex: "0x5A" }
         ListElement { name: "Middle";    maskHex: "0x66" }
-        ListElement { name: "Far";       maskHex: "0x55" }
+        ListElement { name: "Far";       maskHex: "0xC3" }
         ListElement { name: "Outer";     maskHex: "0x99" }
         ListElement { name: "Left";      maskHex: "0x0F" }
         ListElement { name: "Right";     maskHex: "0xF0" }
@@ -198,13 +198,14 @@ Item {
     }
 
     component StyledCombo: ComboBox {
+        id: styledComboCtrl
         Layout.preferredWidth: 180
         Layout.preferredHeight: 32
         font.pixelSize: 13
         contentItem: Text {
             leftPadding: 10
-            text:  parent.displayText
-            font:  parent.font
+            text:  styledComboCtrl.displayText
+            font:  styledComboCtrl.font
             color: root.colTextPri
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight
@@ -212,25 +213,25 @@ Item {
         background: Rectangle {
             color: root.colBgInput
             radius: 4
-            border.color: parent.activeFocus ? root.colAccent : root.colBorderSoft
+            border.color: styledComboCtrl.activeFocus ? root.colAccent : root.colBorderSoft
             border.width: 1
         }
         indicator: Text {
-            x:    parent.width - width - 10
-            y:    (parent.height - height) / 2
+            x:    styledComboCtrl.width - width - 10
+            y:    (styledComboCtrl.height - height) / 2
             text: "\u25BE"
             font.pixelSize: 14
             color: root.colTextSec
         }
         popup: Popup {
-            y: parent.height
-            width: parent.width
+            y: styledComboCtrl.height
+            width: styledComboCtrl.width
             implicitHeight: contentItem.implicitHeight + 2
             padding: 1
             contentItem: ListView {
                 clip: true
                 implicitHeight: contentHeight
-                model: parent.parent.delegateModel
+                model: styledComboCtrl.delegateModel
                 ScrollIndicator.vertical: ScrollIndicator {}
             }
             background: Rectangle {
@@ -241,7 +242,7 @@ Item {
             }
         }
         delegate: ItemDelegate {
-            width: parent ? parent.width : 0
+            width: styledComboCtrl.width
             height: 30
             contentItem: Text {
                 text: modelData !== undefined ? modelData : (model.name !== undefined ? model.name : "")
@@ -253,7 +254,7 @@ Item {
             background: Rectangle {
                 color: highlighted ? root.colAccent : "transparent"
             }
-            highlighted: parent && parent.parent ? parent.parent.currentIndex === index : false
+            highlighted: styledComboCtrl.highlightedIndex === index
         }
     }
 
@@ -395,6 +396,7 @@ Item {
 
                 // ── Default Camera Configuration ─────────────────────────────
                 SectionCard {
+                    visible: !root.reducedMode
                     title: "Default Camera Configuration"
 
                     FieldRow {
@@ -460,9 +462,10 @@ Item {
                     title: "Realtime Plot Display"
 
                     FieldRow {
+                        visible: !root.reducedMode
                         label: "Display mode"
                         Text {
-                            text: "Mean / σ"
+                            text: "Mean / C"
                             color: !root.showBfiBvi ? root.colAccent : root.colTextSec
                             font.pixelSize: 13
                             font.weight: !root.showBfiBvi ? Font.DemiBold : Font.Normal
@@ -528,6 +531,7 @@ Item {
                     }
 
                     FieldRow {
+                        visible: MOTIONInterface.appConfig.developerMode ? true : false
                         label: "Trace colors"
                         Rectangle {
                             width: 26; height: 26; radius: 4
@@ -652,7 +656,7 @@ Item {
                         Item { Layout.fillWidth: true }
                     }
                     Text {
-                        text: "Simplified clinical view: forces Middle camera configuration, enables free run mode, hides scan settings, and shows large left/right BFI and BVI panels."
+                        text: "Simplified clinical view: forces Far camera configuration, enables free run mode, hides scan settings, and shows large left/right BFI and BVI panels."
                         color: root.colTextMuted
                         font.pixelSize: 11
                         wrapMode: Text.WordWrap
@@ -754,6 +758,48 @@ Item {
                         label: "SDK"
                         Text { text: MOTIONInterface.get_sdk_version(); color: root.colTextPri; font.pixelSize: 13; font.family: "Consolas" }
                         Item { Layout.fillWidth: true }
+                    }
+                    FieldRow {
+                        label: "Updates"
+                        ActionButton {
+                            id: updateCheckBtn
+                            text: "Check for Updates"
+                            Layout.preferredWidth: 150
+                            onClicked: {
+                                updateCheckBtn.text = "Checking..."
+                                updateCheckBtn.enabled = false
+                                MOTIONInterface.checkForUpdates()
+                            }
+                        }
+                        Text {
+                            id: updateStatusText
+                            text: ""
+                            color: root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    Connections {
+                        target: MOTIONInterface
+                        function onUpdateAvailable(version, url) {
+                            updateCheckBtn.text = "Check for Updates"
+                            updateCheckBtn.enabled = true
+                            updateStatusText.text = "v" + version + " available!"
+                            updateStatusText.color = root.colAccent
+                        }
+                        function onUpdateNotAvailable() {
+                            updateCheckBtn.text = "Check for Updates"
+                            updateCheckBtn.enabled = true
+                            updateStatusText.text = "Up to date"
+                            updateStatusText.color = theme.statusGreen
+                        }
+                        function onUpdateCheckFailed(msg) {
+                            updateCheckBtn.text = "Check for Updates"
+                            updateCheckBtn.enabled = true
+                            updateStatusText.text = "Check failed"
+                            updateStatusText.color = theme.accentRed
+                        }
                     }
                 }
 

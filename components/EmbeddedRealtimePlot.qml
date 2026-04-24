@@ -480,7 +480,7 @@ Rectangle {
                             Text {
                                 text:  plotArea.showBfiBvi
                                        ? "BVI: "  + ((plotArea.displayValues[seriesKey] || {}).bvi      || "--")
-                                       : "σ: "    + ((plotArea.displayValues[seriesKey] || {}).contrast || "--")
+                                       : "C: "    + ((plotArea.displayValues[seriesKey] || {}).contrast || "--")
                                 color: plotArea.showBfiBvi ? plotArea.bviColor : plotArea.contrastColor
                                 font.pixelSize: 12
                             }

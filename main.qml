@@ -40,9 +40,24 @@ ApplicationWindow {
             durationSec: bloodFlowPage.durationSec
         }
 
+        // Update available banner (slides in below header)
+        UpdateBanner {
+            id: updateBanner
+            anchors.top: headerMenu.bottom
+            anchors.left: parent.left
+            anchors.right: parent.right
+        }
+
+        // Toast notification overlay — fills the window, positions toasts in its own bottom-right corner
+        NotificationCenter {
+            id: notificationCenter
+            anchors.fill: parent
+            z: 99999
+        }
+
         Item {
             anchors.fill: parent
-            anchors.topMargin: 65
+            anchors.topMargin: 65 + (updateBanner.visible ? updateBanner.height : 0)
             anchors.rightMargin: 8
             anchors.bottomMargin: 8
             anchors.leftMargin: 8

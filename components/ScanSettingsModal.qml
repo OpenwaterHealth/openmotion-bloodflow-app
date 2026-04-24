@@ -29,7 +29,7 @@ Item {
         ListElement { name: "None";      maskHex: "0x00" }
         ListElement { name: "Near";      maskHex: "0x5A" }
         ListElement { name: "Middle";    maskHex: "0x66" }
-        ListElement { name: "Far";       maskHex: "0x55" }
+        ListElement { name: "Far";       maskHex: "0xC3" }
         ListElement { name: "Outer";     maskHex: "0x99" }
         ListElement { name: "Left";      maskHex: "0x0F" }
         ListElement { name: "Right";     maskHex: "0xF0" }
@@ -60,7 +60,7 @@ Item {
             case 0: pattern = [false,false,false,false,false,false,false,false]; break
             case 1: pattern = [false,true,false,true,true,false,true,false]; break
             case 2: pattern = [false,true,true,false,false,true,true,false]; break
-            case 3: pattern = [true,false,true,false,false,true,false,true]; break
+            case 3: pattern = [true,true,false,false,false,false,true,true]; break
             case 4: pattern = [true,false,false,true,true,false,false,true]; break
             case 5: pattern = [false,false,false,false,true,true,true,true]; break
             case 6: pattern = [true,true,true,true,false,false,false,false]; break
@@ -77,10 +77,23 @@ Item {
         }
     }
 
-    function open() { root.visible = true }
+    function open() {
+        userLabelField.text = MOTIONInterface.userLabel
+        root.visible = true
+    }
     function close() {
+        commitDurationFields()
         selectionChanged(maskFromArray(leftSensorActive), maskFromArray(rightSensorActive))
         root.visible = false
+    }
+
+    function commitDurationFields() {
+        var h = parseInt(hoursField.text);   if (isNaN(h)) h = 0
+        var m = parseInt(minutesField.text); if (isNaN(m)) m = 0
+        var s = parseInt(secondsField.text); if (isNaN(s)) s = 0
+        root.hours   = Math.max(0, Math.min(99, h))
+        root.minutes = Math.max(0, Math.min(59, m))
+        root.seconds = Math.max(0, Math.min(59, s))
     }
 
     function setInitialSelection(leftArr, rightArr) {
@@ -102,9 +115,9 @@ Item {
     }
 
     Rectangle {
-        width: Math.min(parent.width - 80, 560)
-        height: Math.min(parent.height - 60, 680)
-        radius: 12
+        width: Math.min(parent.width - 80, 520)
+        height: Math.min(parent.height - 60, 640)
+        radius: 14
         color: theme.bgContainer
         border.color: theme.borderSubtle
         border.width: 2
@@ -129,7 +142,7 @@ Item {
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: 20
-            spacing: 14
+            spacing: 10
 
             // Title
             Text {
@@ -138,6 +151,47 @@ Item {
                 font.pixelSize: 20
                 font.weight: Font.Bold
                 Layout.alignment: Qt.AlignHCenter
+            }
+
+            // ── Session ──────────────────────────────────────────────────
+            Rectangle { Layout.fillWidth: true; height: 1; color: theme.borderSubtle }
+
+            Text {
+                text: "Session"
+                color: theme.textSecondary
+                font.pixelSize: 15
+                font.weight: Font.DemiBold
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+
+                Text {
+                    text: "User Label:"
+                    color: theme.textSecondary
+                    font.pixelSize: 14
+                    Layout.alignment: Qt.AlignVCenter
+                }
+
+                TextField {
+                    id: userLabelField
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 30
+                    font.pixelSize: 14
+                    color: theme.textPrimary
+                    background: Rectangle {
+                        color: theme.bgInput; radius: 4
+                        border.color: userLabelField.activeFocus ? theme.accentBlue : theme.borderSubtle
+                        border.width: 1
+                    }
+                    onEditingFinished: {
+                        if (text !== MOTIONInterface.userLabel) {
+                            MOTIONInterface.userLabel = text
+                            text = MOTIONInterface.userLabel  // reflect normalization
+                        }
+                    }
+                }
             }
 
             // ── Camera Configuration ──────────────────────────────────────
@@ -152,13 +206,12 @@ Item {
 
             RowLayout {
                 Layout.fillWidth: true
-                Layout.fillHeight: true
-                spacing: 24
+                spacing: 20
                 Layout.alignment: Qt.AlignHCenter
 
                 // Left Sensor
                 ColumnLayout {
-                    spacing: 8
+                    spacing: 6
                     Layout.alignment: Qt.AlignHCenter
 
                     SensorView {
@@ -171,8 +224,9 @@ Item {
 
                     ComboBox {
                         id: leftSelector
-                        Layout.preferredWidth: 190
-                        Layout.preferredHeight: 34
+                        Layout.preferredWidth: 150
+                        Layout.preferredHeight: 32
+                        Layout.alignment: Qt.AlignHCenter
                         model: sensorPatterns
                         textRole: "name"
                         font.pixelSize: 13
@@ -189,7 +243,7 @@ Item {
                             width: leftSelector.width; height: 32
                             contentItem: Text { text: model.name; font.pixelSize: 13; color: theme.textPrimary; verticalAlignment: Text.AlignVCenter; leftPadding: 8 }
                             background: Rectangle { color: highlighted ? theme.accentBlue : "transparent" }
-                            highlighted: leftSelector.currentIndex === index
+                            highlighted: leftSelector.highlightedIndex === index
                         }
                         popup: Popup {
                             y: leftSelector.height; width: leftSelector.width; implicitHeight: contentItem.implicitHeight + 2; padding: 1
@@ -207,7 +261,7 @@ Item {
 
                 // Right Sensor
                 ColumnLayout {
-                    spacing: 8
+                    spacing: 6
                     Layout.alignment: Qt.AlignHCenter
 
                     SensorView {
@@ -220,8 +274,9 @@ Item {
 
                     ComboBox {
                         id: rightSelector
-                        Layout.preferredWidth: 190
-                        Layout.preferredHeight: 34
+                        Layout.preferredWidth: 150
+                        Layout.preferredHeight: 32
+                        Layout.alignment: Qt.AlignHCenter
                         model: sensorPatterns
                         textRole: "name"
                         font.pixelSize: 13
@@ -238,7 +293,7 @@ Item {
                             width: rightSelector.width; height: 32
                             contentItem: Text { text: model.name; font.pixelSize: 13; color: theme.textPrimary; verticalAlignment: Text.AlignVCenter; leftPadding: 8 }
                             background: Rectangle { color: highlighted ? theme.accentBlue : "transparent" }
-                            highlighted: rightSelector.currentIndex === index
+                            highlighted: rightSelector.highlightedIndex === index
                         }
                         popup: Popup {
                             y: rightSelector.height; width: rightSelector.width; implicitHeight: contentItem.implicitHeight + 2; padding: 1
@@ -296,7 +351,7 @@ Item {
                 }
 
                 Text {
-                    text: "Free Run"
+                    text: "Continuous"
                     color: root.freeRun ? theme.accentBlue : theme.textSecondary
                     font.pixelSize: 14
                     font.weight: root.freeRun ? Font.Bold : Font.Normal
@@ -314,9 +369,9 @@ Item {
                     text: String(root.hours)
                     inputMethodHints: Qt.ImhDigitsOnly
                     validator: IntValidator { bottom: 0; top: 99 }
-                    font.pixelSize: 22; color: theme.textPrimary
+                    font.pixelSize: 20; color: theme.textPrimary
                     horizontalAlignment: Text.AlignHCenter
-                    Layout.preferredWidth: 58; Layout.preferredHeight: 44
+                    Layout.preferredWidth: 54; Layout.preferredHeight: 40
                     background: Rectangle { color: theme.bgInput; radius: 6; border.color: theme.borderSubtle; border.width: 1 }
                     onEditingFinished: {
                         var v = parseInt(text); if (isNaN(v)) v = 0
@@ -329,9 +384,9 @@ Item {
                     text: String(root.minutes).padStart(2, '0')
                     inputMethodHints: Qt.ImhDigitsOnly
                     validator: IntValidator { bottom: 0; top: 59 }
-                    font.pixelSize: 22; color: theme.textPrimary
+                    font.pixelSize: 20; color: theme.textPrimary
                     horizontalAlignment: Text.AlignHCenter
-                    Layout.preferredWidth: 58; Layout.preferredHeight: 44
+                    Layout.preferredWidth: 54; Layout.preferredHeight: 40
                     background: Rectangle { color: theme.bgInput; radius: 6; border.color: theme.borderSubtle; border.width: 1 }
                     onEditingFinished: {
                         var v = parseInt(text); if (isNaN(v)) v = 0
@@ -344,9 +399,9 @@ Item {
                     text: String(root.seconds).padStart(2, '0')
                     inputMethodHints: Qt.ImhDigitsOnly
                     validator: IntValidator { bottom: 0; top: 59 }
-                    font.pixelSize: 22; color: theme.textPrimary
+                    font.pixelSize: 20; color: theme.textPrimary
                     horizontalAlignment: Text.AlignHCenter
-                    Layout.preferredWidth: 58; Layout.preferredHeight: 44
+                    Layout.preferredWidth: 54; Layout.preferredHeight: 40
                     background: Rectangle { color: theme.bgInput; radius: 6; border.color: theme.borderSubtle; border.width: 1 }
                     onEditingFinished: {
                         var v = parseInt(text); if (isNaN(v)) v = 0

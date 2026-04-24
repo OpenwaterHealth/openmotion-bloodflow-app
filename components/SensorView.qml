@@ -6,7 +6,7 @@ import QtQuick.Controls as Controls
 Rectangle {
     id: root
     property string title: "Sensor"
-    property int circleSize: 20
+    property int circleSize: 15
     property var sensorActive: [false, false, false, false, false, false, false, false]
     property bool fanOn: false
     property bool showFanControl: true
@@ -15,9 +15,9 @@ Rectangle {
 
     AppTheme { id: theme }
 
-    width: 200
-    height: 260
-    radius: 10
+    width: 150
+    height: 195
+    radius: 18
     color: theme.bgContainer
     border.color: sensorConnected ? theme.borderSubtle : "#6E3E3F"
     border.width: 2
@@ -29,12 +29,12 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 10
-        spacing: 10
+        anchors.margins: 8
+        spacing: 6
 
         Text {
             text: root.title
-            font.pixelSize: 16
+            font.pixelSize: 14
             color: root.sensorConnected ? theme.textSecondary : "#8B8B8D"
             horizontalAlignment: Text.AlignHCenter
             Layout.alignment: Qt.AlignHCenter
@@ -42,8 +42,8 @@ Rectangle {
 
         GridLayout {
             columns: 3
-            columnSpacing: 20
-            rowSpacing: 10
+            columnSpacing: 16
+            rowSpacing: 8
             Layout.alignment: Qt.AlignHCenter
 
             // Row 1
@@ -131,11 +131,11 @@ Rectangle {
         
         indicator: Image {
             source: "../assets/images/icons8-fan-30.png"
-            width: 30
-            height: 30
+            width: 22
+            height: 22
             opacity: parent.checked ? 1.0 : 0.5
             anchors.left: parent.left
-            anchors.leftMargin: 10
+            anchors.leftMargin: 8
         }
         
         onToggled: {
