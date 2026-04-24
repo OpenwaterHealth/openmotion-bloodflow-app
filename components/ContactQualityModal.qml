@@ -64,6 +64,8 @@ Item {
     // Each entry: { camera, typeKey, typeText, value }
     property var entries: []
 
+    readonly property bool developerMode: !!(MOTIONInterface.appConfig && MOTIONInterface.appConfig.developerMode)
+
     signal stopScanRequested()
     signal continueRequested()
     signal retestRequested()
@@ -499,7 +501,7 @@ Item {
                 Layout.fillWidth: true
                 Layout.alignment: Qt.AlignHCenter
                 spacing: 12
-                visible: root.state_ !== "checking"
+                visible: root.state_ !== "checking" || root.developerMode
 
                 // Reduced-mode pre-scan footer
                 Button {
@@ -624,15 +626,36 @@ Item {
                     }
                     onClicked: { root.close(); root.retestRequested() }
                 }
+
+                // Developer-mode escape hatch: bypass all contact-quality gates
+                Button {
+                    visible: root.developerMode
+                    text: "Force Dismiss"
+                    hoverEnabled: true
+                    Layout.preferredHeight: 45
+                    contentItem: Text {
+                        text: parent.text; font.pixelSize: 12
+                        color: parent.hovered ? "#FFFFFF" : "#E8A020"
+                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle {
+                        color: parent.hovered ? "#B8740F" : theme.bgInput
+                        radius: 4
+                        border.color: parent.hovered ? "#E8A020" : "#E8A020"
+                        border.width: 1
+                    }
+                    onClicked: { root.close(); root.dismissed() }
+                }
             }
         }
 
         // ESC closes (unless we're mid-check, or awaiting Stop/Continue
-        // decision during a live scan).
+        // decision during a live scan). Developer mode bypasses all gates.
         Keys.onReleased: function(event) {
             if (event.key === Qt.Key_Escape
-                    && root.state_ !== "checking"
-                    && !(root.liveScan && root.state_ === "warnings" && !root.liveScanDismissable && !root.preScanMode)) {
+                    && (root.developerMode
+                        || (root.state_ !== "checking"
+                            && !(root.liveScan && root.state_ === "warnings" && !root.liveScanDismissable && !root.preScanMode)))) {
                 root.close()
                 root.dismissed()
                 event.accepted = true
