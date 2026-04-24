@@ -67,11 +67,11 @@ Rectangle {
         latestTimestamp = 0
     }
 
-    // Tracks which sides have had a camera dropout this scan
-    property var droppedSides: ({ left: false, right: false })
+    // Tracks which sides have had a camera dropout this scan ("" = none, else = HH:MM:SS time string)
+    property var droppedSides: ({ left: "", right: "" })
 
-    function startScan() { reset(); droppedSides = ({ left: false, right: false }); running = true }
-    function stopScan()  { running = false; droppedSides = ({ left: false, right: false }) }
+    function startScan() { reset(); droppedSides = ({ left: "", right: "" }); running = true }
+    function stopScan()  { running = false; droppedSides = ({ left: "", right: "" }) }
 
     function _flushEntry(data, field, fid) {
         var pending = (field === "bfi") ? data.pendingBfi : data.pendingBvi
@@ -192,9 +192,9 @@ Rectangle {
             // FDA mode does not in-place correct the averaged history; values are
             // close enough for the realtime display.
         }
-        function onCameraDropoutDetected(side, camId) {
+        function onCameraDropoutDetected(side, camId, timeStr) {
             var d = root.droppedSides
-            d[side] = true
+            d[side] = timeStr || "??"
             root.droppedSides = d
         }
     }
@@ -286,7 +286,7 @@ Rectangle {
         property var    sideData
         property var    bfiB
         property var    bviB
-        property bool   droppedOut: false
+        property string dropoutTime: ""
         property alias  plotCanvas: sideCanvas
         color:        theme.bgPlot
         border.color: theme.borderStrong
@@ -358,12 +358,13 @@ Rectangle {
                                       sideRoot.sideData,
                                       sideRoot.bfiB,
                                       sideRoot.bviB)
-                    if (sideRoot.droppedOut) {
-                        ctx.fillStyle    = "#FFA500"
-                        ctx.font         = "bold 11px sans-serif"
-                        ctx.textAlign    = "left"
-                        ctx.textBaseline = "top"
-                        ctx.fillText("⚠ CAMERA DROPOUT", 54, 16)
+                    if (sideRoot.dropoutTime !== "") {
+                        ctx.fillStyle    = "#FFD700"
+                        ctx.font         = "bold 13px sans-serif"
+                        ctx.textAlign    = "center"
+                        ctx.textBaseline = "middle"
+                        ctx.fillText("CONNECTION LOST",          width / 2, height / 2 - 10)
+                        ctx.fillText("AT " + sideRoot.dropoutTime, width / 2, height / 2 + 10)
                     }
                 }
             }
@@ -377,20 +378,20 @@ Rectangle {
 
         SidePanel {
             id: leftPanel
-            sideLabel:  "LEFT"
-            sideData:   root.leftData
-            bfiB:       root.leftBfiBounds
-            bviB:       root.leftBviBounds
-            droppedOut: root.droppedSides.left
+            sideLabel:   "LEFT"
+            sideData:    root.leftData
+            bfiB:        root.leftBfiBounds
+            bviB:        root.leftBviBounds
+            dropoutTime: root.droppedSides.left
         }
 
         SidePanel {
             id: rightPanel
-            sideLabel:  "RIGHT"
-            sideData:   root.rightData
-            bfiB:       root.rightBfiBounds
-            bviB:       root.rightBviBounds
-            droppedOut: root.droppedSides.right
+            sideLabel:   "RIGHT"
+            sideData:    root.rightData
+            bfiB:        root.rightBfiBounds
+            bviB:        root.rightBviBounds
+            dropoutTime: root.droppedSides.right
         }
     }
 
