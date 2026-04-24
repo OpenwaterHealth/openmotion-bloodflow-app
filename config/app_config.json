@@ -35,9 +35,9 @@
   "autoConfigureOnStartup": false,
   "developerMode": false,
   "showBfiBvi": true,
-  "bfiMin": 2.0,
+  "bfiMin": 1.0,
   "bfiMax": 9.0,
-  "bviMin": 2.0,
+  "bviMin": 1.0,
   "bviMax": 9.0,
   "meanMin": 0.0,
   "meanMax": 200.0,
@@ -62,4 +62,3 @@
   "bviClampHigh": 10.0,
   "darkMode": true
 }
-

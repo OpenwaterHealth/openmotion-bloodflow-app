@@ -288,24 +288,25 @@ Item {
             Text {
                 visible: root.state_ === "checking"
                 Layout.alignment: Qt.AlignHCenter
+                horizontalAlignment: Text.AlignHCenter
                 color: theme.textSecondary
                 font.pixelSize: 13
                 text: {
                     var secs = Math.floor(root.elapsedMs / 1000)
                     if (root.durationEstimate > 0)
                         return "Checking contact quality… (" + secs + "s / ~" + root.durationEstimate + "s)"
-                    return "Checking contact quality… (" + secs + "s)"
+                    return "Configuring sensor modules. Please wait up to 2 minutes (" + secs + " / 120sec)"
                 }
             }
 
             Text {
-                visible: root.state_ === "checking"
-                Layout.fillWidth: true
+                visible: root.state_ === "checking" && root.durationEstimate === 0
+                Layout.alignment: Qt.AlignHCenter
                 horizontalAlignment: Text.AlignHCenter
                 color: theme.textSecondary
-                font.pixelSize: 13
-                wrapMode: Text.WordWrap
-                text: "Please wait up to 2 minutes for the sensor modules to configure"
+                font.pixelSize: 12
+                font.italic: true
+                text: "This initialization is performed once per session at startup."
             }
 
             // OK message
