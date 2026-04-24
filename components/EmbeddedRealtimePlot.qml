@@ -187,7 +187,8 @@ Rectangle {
             latestMean: NaN, latestContrast: NaN,
             latestTemp: NaN,
             bviLpState: NaN,
-            droppedOut: false
+            droppedOut: false,
+            dropoutTime: ""
         }
     }
 
@@ -229,10 +230,11 @@ Rectangle {
         Qt.callLater(_applyPreviewLayout)
     }
 
-    function markDroppedOut(side, camId) {
+    function markDroppedOut(side, camId, timeStr) {
         const key = _seriesKey(side, camId)
         _ensureEntry(key)
-        _store[key].droppedOut = true
+        _store[key].droppedOut  = true
+        _store[key].dropoutTime = timeStr || ""
         _store = _store  // trigger property change so canvases repaint
     }
 
@@ -618,7 +620,7 @@ Rectangle {
                                     ctx.fillText("Waiting for data...", padL + w / 2, padT + h / 2)
                                 }
 
-                                // Dropout annotation — dashed trailing line + amber label
+                                // Dropout annotation — dashed trailing line + centered label
                                 if (s.droppedOut) {
                                     const activeSeries = showBfi ? s.bfi : s.mean
                                     if (activeSeries.length > 0) {
@@ -642,11 +644,14 @@ Rectangle {
                                         ctx.restore()
                                     }
 
-                                    ctx.fillStyle    = "#FFA500"
+                                    const cx = padL + w / 2
+                                    const cy = padT + h / 2
+                                    ctx.fillStyle    = "#FFD700"
                                     ctx.font         = "bold 10px sans-serif"
-                                    ctx.textAlign    = "left"
-                                    ctx.textBaseline = "top"
-                                    ctx.fillText("⚠ DROPOUT", padL + 4, padT + 4)
+                                    ctx.textAlign    = "center"
+                                    ctx.textBaseline = "middle"
+                                    ctx.fillText("CONNECTION LOST",                    cx, cy - 7)
+                                    ctx.fillText("AT " + (s.dropoutTime || "--:--:--"), cx, cy + 7)
                                 }
 
                                 plotArea._recordPaintTime(Date.now() - paintT0)
@@ -813,8 +818,8 @@ Rectangle {
         function onScanCameraTemperature(side, camId, tempC) {
             plotArea.handleTempSample(side, camId, tempC)
         }
-        function onCameraDropoutDetected(side, camId) {
-            plotArea.markDroppedOut(side, camId)
+        function onCameraDropoutDetected(side, camId, timeStr) {
+            plotArea.markDroppedOut(side, camId, timeStr)
         }
     }
 }
