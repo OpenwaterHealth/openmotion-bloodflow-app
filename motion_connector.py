@@ -65,6 +65,22 @@ _BFI_C_MAX = _BFI_CAL.C_max
 _BFI_I_MIN = _BFI_CAL.I_min
 _BFI_I_MAX = _BFI_CAL.I_max
 
+
+def _convert_calibration_to_2d(cal_array):
+    """Convert 8-element calibration array to 2x8 numpy array (duplicated for left/right modules).
+
+    Args:
+        cal_array: List or array of 8 values (one per camera position)
+
+    Returns:
+        numpy array of shape (2, 8) with identical rows for left and right modules
+    """
+    if len(cal_array) != 8:
+        logger.warning(f"Expected 8 calibration values, got {len(cal_array)}. Using defaults.")
+        return None
+    # Duplicate the 8-element array for both left (module 0) and right (module 1) modules
+    return np.array([cal_array, cal_array], dtype=float)
+
 # Global loggers - will be configured by _configure_logging method
 logger = logging.getLogger("openmotion.bloodflow-app.connector")
 run_logger = logging.getLogger("bloodflow-app.runlog")
@@ -377,9 +393,22 @@ class MOTIONConnector(QObject):
         self._capture_right_path = ""
         self._scan_notes = ""
         self._scan_notes_path = ""  # path to current scan's notes file on disk
-        self._scan_workflow.set_realtime_calibration(
-            _BFI_C_MIN, _BFI_C_MAX, _BFI_I_MIN, _BFI_I_MAX
-        )
+
+        # Load calibration from console, fall back to defaults if not available
+        cal_c_min, cal_c_max, cal_i_min, cal_i_max = self._load_calibration_from_console()
+        if cal_c_min is not None:
+            # Use console calibration
+            self._scan_workflow.set_realtime_calibration(
+                cal_c_min, cal_c_max, cal_i_min, cal_i_max
+            )
+            logger.info("[Connector] Applied calibration from console to scan workflow")
+        else:
+            # Use default calibration
+            self._scan_workflow.set_realtime_calibration(
+                _BFI_C_MIN, _BFI_C_MAX, _BFI_I_MIN, _BFI_I_MAX
+            )
+            logger.info("[Connector] Applied default calibration to scan workflow")
+
         self.connect_signals()
         self._viz_thread = None
         self._viz_worker = None
@@ -1304,6 +1333,86 @@ class MOTIONConnector(QObject):
         self._fpga.set_scale_override(label, name, scale)
     
 
+
+    def _load_calibration_from_console(self):
+        """Load BFI/BVI calibration parameters from console JSON.
+
+        Expected JSON format from console:
+        {
+            "I_MIN": [44,55,44,55,44,55,44,55],
+            "I_MAX": [2,2,2,2,2,2,2,2],
+            "C_MIN": [44,55,44,55,44,55,44,55],
+            "C_MAX": [2,2,2,2,2,2,2,2]
+        }
+
+        Returns:
+            tuple: (c_min, c_max, i_min, i_max) as 2x8 numpy arrays, or (None, None, None, None) if unavailable
+        """
+        try:
+            # Check if console is connected
+            if not self._consoleConnected:
+                logger.info("[Connector] Console not connected, using default calibration")
+                return None, None, None, None
+
+            # Try to get calibration JSON from console
+            # Note: This assumes the console firmware has a get_calibration_json() method
+            # If not available, this will gracefully fall back to defaults
+            if hasattr(self._interface.console_module, 'get_calibration_json'):
+                cal_json = self._interface.console_module.get_calibration_json()
+
+                if not cal_json:
+                    logger.info("[Connector] No calibration JSON returned from console, using defaults")
+                    return None, None, None, None
+
+                # Parse JSON if it's a string
+                if isinstance(cal_json, str):
+                    cal_data = json.loads(cal_json)
+                else:
+                    cal_data = cal_json
+
+                # Extract calibration arrays
+                i_min_array = cal_data.get("I_MIN")
+                i_max_array = cal_data.get("I_MAX")
+                c_min_array = cal_data.get("C_MIN")
+                c_max_array = cal_data.get("C_MAX")
+
+                # Validate all arrays are present and have 8 elements
+                if not all([i_min_array, i_max_array, c_min_array, c_max_array]):
+                    logger.warning("[Connector] Calibration JSON missing required fields, using defaults")
+                    return None, None, None, None
+
+                # Convert to 2D arrays (duplicate for left/right modules)
+                c_min = _convert_calibration_to_2d(c_min_array)
+                c_max = _convert_calibration_to_2d(c_max_array)
+                i_min = _convert_calibration_to_2d(i_min_array)
+                i_max = _convert_calibration_to_2d(i_max_array)
+
+                if any(x is None for x in [c_min, c_max, i_min, i_max]):
+                    logger.warning("[Connector] Failed to convert calibration arrays, using defaults")
+                    return None, None, None, None
+
+                logger.info(
+                    f"[Connector] Loaded calibration from console:\n"
+                    f"  I_MIN: {i_min_array}\n"
+                    f"  I_MAX: {i_max_array}\n"
+                    f"  C_MIN: {c_min_array}\n"
+                    f"  C_MAX: {c_max_array}"
+                )
+                return c_min, c_max, i_min, i_max
+
+            else:
+                logger.info("[Connector] Console module does not support get_calibration_json(), using defaults")
+                return None, None, None, None
+
+        except json.JSONDecodeError as e:
+            logger.error(f"[Connector] Failed to parse calibration JSON: {e}, using defaults")
+            return None, None, None, None
+        except AttributeError as e:
+            logger.error(f"[Connector] Console interface error: {e}, using defaults")
+            return None, None, None, None
+        except Exception as e:
+            logger.error(f"[Connector] Unexpected error loading calibration: {e}, using defaults")
+            return None, None, None, None
 
     @pyqtSlot(result=list)
     def get_scan_list(self):
