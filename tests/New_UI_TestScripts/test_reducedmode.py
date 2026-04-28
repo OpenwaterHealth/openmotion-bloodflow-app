@@ -124,6 +124,59 @@ def _close_plot_window_mouse() -> bool:
     return False
 
 
+def _wait_for_signal_quality_and_start_scan(timeout: int = 180) -> bool:
+    """In Reduced Mode, after clicking Start the app auto-runs signal quality check.
+
+    Wait up to `timeout` seconds for the 'Good signal quality' modal,
+    then click 'Start Scan' to begin the actual scan.
+
+    Returns True if 'Start Scan' was clicked, False otherwise.
+    """
+    log.info(f"  Waiting up to {timeout}s for signal quality dialog...")
+    elapsed = 0
+    poll_interval = 5
+    while elapsed < timeout:
+        time.sleep(poll_interval)
+        elapsed += poll_interval
+
+        try:
+            win = uia_window()
+            quality_modal_found = False
+            for elem in win.descendants():
+                try:
+                    text = elem.window_text().strip().lower()
+                    if "good signal quality" in text or "signal quality" in text:
+                        quality_modal_found = True
+                        break
+                except Exception:
+                    continue
+
+            if quality_modal_found:
+                log.info(f"  Signal quality modal appeared at {elapsed}s — clicking 'Start Scan'")
+                for elem in win.descendants():
+                    try:
+                        if elem.window_text().strip() == "Start Scan":
+                            rect = elem.rectangle()
+                            cx = (rect.left + rect.right) // 2
+                            cy = (rect.top + rect.bottom) // 2
+                            log.info(f"  Clicking 'Start Scan' button at ({cx}, {cy})")
+                            pyautogui.click(cx, cy)
+                            time.sleep(SLEEP)
+                            return True
+                    except Exception:
+                        continue
+                log.warning("  'Good signal quality' modal found but 'Start Scan' button not located")
+                return False
+        except Exception as e:
+            log.warning(f"  signal quality check failed: {e}")
+
+        if elapsed % 30 == 0:
+            log.info(f"  Still waiting for signal quality dialog... {elapsed}/{timeout}s")
+
+    log.warning(f"  Signal quality dialog did not appear within {timeout}s")
+    return False
+
+
 def _move_window_on_screen():
     """Move the app window onto the primary screen if it is off-screen."""
     try:
@@ -318,7 +371,10 @@ class TestReducedMode:
     # ── Scan: start, wait, stop ────────────────────────────────────────────
 
     def test_14_start_scan(self, app):
+        """Click Start — the app auto-runs signal quality check, then click 'Start Scan'."""
         click_sidebar(*SIDEBAR_START, "Start scan")
+        # In Reduced Mode, the 'Good signal quality' dialog auto-appears
+        _wait_for_signal_quality_and_start_scan()
 
     def test_15_wait_2_minutes(self, app):
         wait_with_log(SCAN_WAIT, "2-minute manual scan running")
@@ -389,7 +445,10 @@ class TestReducedModeMouse:
     # ── Scan: start, wait, stop ────────────────────────────────────────────
 
     def test_25_start_scan(self, app):
+        """Click Start — the app auto-runs signal quality check, then click 'Start Scan'."""
         click_sidebar(*SIDEBAR_START, "Start scan")
+        # In Reduced Mode, the 'Good signal quality' dialog auto-appears
+        _wait_for_signal_quality_and_start_scan()
 
     def test_26_wait_scan(self, app):
         wait_with_log(SCAN_WAIT, "manual scan running")

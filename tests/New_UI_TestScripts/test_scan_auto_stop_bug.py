@@ -25,6 +25,9 @@ LOOP = 5  # number of times to run the scan test
 
 SIDEBAR_SCAN  = (0.019, 0.210)
 SIDEBAR_START = (0.019, 0.115)
+SIDEBAR_CHECK = (0.019, 0.420)   # Check button — between Notes and History
+
+CHECK_WAIT_SEC = 120  # 2 minutes for Check to complete
 
 SENSOR_OPTIONS = [
     "None", "Near", "Middle", "Far", "Outer",
@@ -82,6 +85,48 @@ def _check_scan_finished():
     except Exception as e:
         log.warning(f"  _check_scan_finished failed: {e}")
     return None
+
+
+def _dismiss_signal_quality_modal() -> bool:
+    """If the 'Good signal quality' modal appears, click Dismiss.
+
+    Returns True if a Dismiss was clicked, False if the modal wasn't found.
+    """
+    try:
+        win = uia_window()
+        # Check if "Good signal quality" or signal quality modal is visible
+        signal_modal_found = False
+        for elem in win.descendants():
+            try:
+                text = elem.window_text().strip().lower()
+                if "good signal quality" in text or "signal quality" in text:
+                    signal_modal_found = True
+                    break
+            except Exception:
+                continue
+
+        if not signal_modal_found:
+            return False
+
+        log.info("  Signal quality modal detected — looking for Dismiss button")
+        # Find and click the Dismiss button
+        for elem in win.descendants():
+            try:
+                text = elem.window_text().strip()
+                if text == "Dismiss":
+                    rect = elem.rectangle()
+                    cx = (rect.left + rect.right) // 2
+                    cy = (rect.top + rect.bottom) // 2
+                    log.info(f"  Clicking Dismiss button at ({cx}, {cy})")
+                    pyautogui.click(cx, cy)
+                    time.sleep(SLEEP)
+                    return True
+            except Exception:
+                continue
+        log.warning("  'Good signal quality' detected but Dismiss button not found")
+    except Exception as e:
+        log.warning(f"  _dismiss_signal_quality_modal failed: {e}")
+    return False
 
 
 def _move_window_on_screen():
@@ -258,12 +303,36 @@ class TestScanAutoStopBug: # (1) Repro scan auto-stop bug, (2) Verify fix, (3) R
         # 3. Set duration to 10 min
         _click_minutes_field_and_type("10")
 
-        # 4. Close settings and start scan immediately
+        # 4. Close settings
         require_focus()
         pyautogui.press("escape")
         time.sleep(0.5)
-        click_sidebar(*SIDEBAR_START, "Start")
 
+        # 5. Run Check and wait for it to complete (2 min)
+        log.info(f"  [{iteration}/{LOOP}] Clicking Check and waiting {CHECK_WAIT_SEC}s...")
+        click_sidebar(*SIDEBAR_CHECK, "Check")
+        check_elapsed = 0
+        while check_elapsed < CHECK_WAIT_SEC:
+            time.sleep(10)
+            check_elapsed += 10
+            if not _is_app_alive():
+                pytest.fail(
+                    f"[{iteration}/{LOOP}] APPLICATION CLOSED during Check "
+                    f"after {check_elapsed}s."
+                )
+            # If 'Good signal quality' modal appears early, dismiss and continue
+            if _dismiss_signal_quality_modal():
+                log.info(f"  [{iteration}/{LOOP}] Signal quality modal dismissed at {check_elapsed}s.")
+                break
+            if check_elapsed % 30 == 0:
+                log.info(f"  [{iteration}/{LOOP}] Check running... {check_elapsed}/{CHECK_WAIT_SEC}s")
+        log.info(f"  [{iteration}/{LOOP}] Check completed.")
+
+        # Final dismiss check in case the modal appeared exactly when the loop exited
+        _dismiss_signal_quality_modal()
+
+        # 6. Start scan
+        click_sidebar(*SIDEBAR_START, "Start")
         log.info(f"  [{iteration}/{LOOP}] Scan started — monitoring for completion...")
 
         # 5. Monitor scan — poll every 10s for Session Notes modal
