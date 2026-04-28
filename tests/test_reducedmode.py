@@ -47,10 +47,15 @@ from conftest import (
 SIDEBAR_NOTES_REDUCED = (0.019, 0.210)   # Notes position when Scan Settings is hidden
 SIDEBAR_START         = (0.019, 0.115)   # Start / Stop toggle button
 SIDEBAR_HISTORY       = (0.020, 0.820)   # History icon
+SIDEBAR_SETTINGS      = (0.019, 0.920)   # gear icon — bottommost sidebar button
 
-SCAN_WAIT   = 200   # seconds to run the scan (3 minutes 20 seconds)
-STOP_BUFFER = 15    # seconds to wait after stopping for data to save
-VIZ_WAIT    = 60    # seconds to leave each plot open
+# Time window dropdown values shown in the Settings modal (seconds)
+TIME_WINDOW_OPTIONS = [3, 5, 15, 30]
+
+SCAN_WAIT       = 200   # seconds to run the scan (3 minutes 20 seconds)
+SHORT_SCAN_WAIT = 120   # 2 minutes for Settings-driven scans
+STOP_BUFFER     = 15    # seconds to wait after stopping for data to save
+VIZ_WAIT        = 60    # seconds to leave each plot open
 
 
 # ─────────────────────────────────────────────
@@ -237,6 +242,169 @@ def _selected_scan_text() -> str:
     except Exception:
         pass
     return ""
+
+
+def _select_time_window(seconds: int):
+    """Open the 'Time window' dropdown in Settings modal and select the given value.
+
+    Method: find the ComboBox whose label is 'Time window' (or first
+    ComboBox in the modal), click it, then click the option matching `<n> s`.
+    """
+    require_focus()
+    log.info(f"  Selecting Time window = {seconds}s")
+
+    win = uia_window()
+    target_cb = None
+
+    # Method 1: find ComboBox by label proximity ("Time window")
+    try:
+        text_elems = win.descendants(title="Time window")
+        if text_elems:
+            label_cy = (
+                text_elems[0].rectangle().top
+                + text_elems[0].rectangle().bottom
+            ) // 2
+            cbs = win.descendants(control_type="ComboBox")
+            if cbs:
+                target_cb = min(
+                    cbs,
+                    key=lambda c: abs(
+                        (c.rectangle().top + c.rectangle().bottom) // 2 - label_cy
+                    ),
+                )
+    except Exception as e:
+        log.warning(f"  Time window label lookup failed: {e}")
+
+    # Method 2: first ComboBox in modal
+    if target_cb is None:
+        try:
+            cbs = win.descendants(control_type="ComboBox")
+            if cbs:
+                target_cb = cbs[0]
+        except Exception as e:
+            log.warning(f"  ComboBox fallback failed: {e}")
+
+    if target_cb is None:
+        raise RuntimeError("Could not locate Time window ComboBox")
+
+    # Click the ComboBox to open dropdown
+    rect = target_cb.rectangle()
+    cx = (rect.left + rect.right) // 2
+    cy = (rect.top + rect.bottom) // 2
+    pyautogui.click(cx, cy)
+    time.sleep(0.5)
+
+    # Use keyboard to select the right value (Home + arrow Down N times)
+    idx = TIME_WINDOW_OPTIONS.index(seconds)
+    pyautogui.press("home")
+    time.sleep(0.2)
+    for _ in range(idx):
+        pyautogui.press("down")
+        time.sleep(0.15)
+    pyautogui.press("return")
+    time.sleep(SLEEP)
+
+
+def _scroll_settings_to_top():
+    """Scroll the Settings modal to the top so Time Window / Auto-scale are visible."""
+    ensure_visible()
+    w = get_app_window()
+    cx = w.left + w.width // 2
+    cy = w.top + w.height // 2
+    pyautogui.moveTo(cx, cy, duration=0.2)
+    for _ in range(8):
+        pyautogui.scroll(50)   # positive = scroll up
+        time.sleep(0.2)
+    time.sleep(0.5)
+
+
+def _toggle_auto_scale_on():
+    """Toggle the 'Auto-scale Y-axes' switch ON in the Settings modal.
+
+    QML Switch elements aren't exposed as CheckBox/Button via UIA. Strategy:
+      1. Scroll modal to top (Auto-scale section is in upper part)
+      2. Find the 'Auto-scale' text label via UIA — try multiple variants
+      3. If found, click to the right of the label (where the toggle sits)
+      4. Fallback: use Tab navigation from the Time Window combobox
+    """
+    require_focus()
+    log.info("  Toggling Auto-scale Y-axes ON")
+    _scroll_settings_to_top()
+
+    win = uia_window()
+    label_elem = None
+    all_texts = []
+
+    # Method 1: search for the label text in multiple variants
+    try:
+        for elem in win.descendants():
+            try:
+                t = elem.window_text().strip()
+                if t:
+                    all_texts.append(t)
+                tl = t.lower()
+                if ("auto-scale" in tl
+                        or "autoscale" in tl
+                        or "auto scale" in tl
+                        or "y-axes" in tl
+                        or "y-axis" in tl):
+                    label_elem = elem
+                    log.info(f"  Found auto-scale label: '{t}'")
+                    break
+            except Exception:
+                continue
+    except Exception as e:
+        log.warning(f"  Auto-scale label search failed: {e}")
+
+    if label_elem is not None:
+        rect = label_elem.rectangle()
+        label_cy = (rect.top + rect.bottom) // 2
+        # Click to the right of the label where the toggle sits
+        w = get_app_window()
+        toggle_x = int(w.left + 0.43 * w.width)
+        log.info(f"  Clicking Auto-scale toggle at ({toggle_x}, {label_cy})")
+        pyautogui.click(toggle_x, label_cy)
+        time.sleep(SLEEP)
+        return
+
+    # Method 2: Tab navigation fallback — click Time Window combobox first,
+    # then Tab to the Auto-scale toggle and press Space.
+    log.warning(f"  Auto-scale label not found in UIA. Visible texts: {all_texts[:40]}")
+    log.info("  Trying Tab navigation fallback...")
+    try:
+        cbs = win.descendants(control_type="ComboBox")
+        if cbs:
+            rect = cbs[0].rectangle()
+            cx = (rect.left + rect.right) // 2
+            cy = (rect.top + rect.bottom) // 2
+            pyautogui.click(cx, cy)
+            time.sleep(0.3)
+            # Tab once to leave combobox, again to reach toggle
+            pyautogui.press("tab")
+            time.sleep(0.2)
+            pyautogui.press("space")
+            time.sleep(SLEEP)
+            log.info("  Tab+Space fallback used to toggle Auto-scale")
+            return
+    except Exception as e:
+        log.warning(f"  Tab fallback failed: {e}")
+
+    raise RuntimeError("Could not locate Auto-scale Y-axes toggle")
+
+
+def _run_scan(label: str, duration_sec: int):
+    """Helper: click Start, handle signal-quality dialog, wait, click Stop."""
+    log.info(f"  [{label}] Starting scan for {duration_sec}s")
+    click_sidebar(*SIDEBAR_START, "Start scan")
+    _wait_for_signal_quality_and_start_scan()
+    wait_with_log(duration_sec, f"[{label}] scan running")
+    click_sidebar(*SIDEBAR_START, "Stop scan")
+    log.info(f"  [{label}] Waiting {STOP_BUFFER}s for scan data to save...")
+    time.sleep(STOP_BUFFER)
+    # Dismiss any post-scan modal
+    require_focus()
+    pyautogui.press("escape")
+    time.sleep(SLEEP)
 
 
 # ─────────────────────────────────────────────
@@ -464,6 +632,59 @@ class TestReducedModeMouse:
         require_focus()
         pyautogui.press("escape")
         time.sleep(SLEEP)
+
+
+# ─────────────────────────────────────────────
+# Settings feature — Time Window dropdown + Auto-scale toggle
+# ─────────────────────────────────────────────
+@pytest.mark.incremental
+class TestReducedModeSettings:
+    """Settings feature in Reduced Mode — Time Window + Auto-scale Y-axes.
+
+    For each Time Window value (3, 5, 15, 30 seconds): open Settings,
+    select the value, close settings, run a 2-minute scan.
+    Then toggle Auto-scale Y-axes ON and run a final 2-minute scan.
+    """
+
+    @pytest.mark.parametrize("seconds", TIME_WINDOW_OPTIONS,
+                             ids=[f"{s}s" for s in TIME_WINDOW_OPTIONS])
+    def test_33_time_window_scan(self, app, seconds):
+        """Select Time Window value, close Settings, run a 2-minute scan."""
+        _move_window_on_screen()
+        ensure_visible()
+
+        # Open Settings
+        click_sidebar(*SIDEBAR_SETTINGS, "Settings gear icon")
+
+        # Select Time Window value
+        _select_time_window(seconds)
+
+        # Close Settings
+        require_focus()
+        pyautogui.press("escape")
+        time.sleep(SLEEP)
+
+        # Run 2-minute scan
+        _run_scan(f"TimeWindow={seconds}s", SHORT_SCAN_WAIT)
+
+    def test_34_open_settings_for_autoscale(self, app):
+        """Open Settings to enable Auto-scale Y-axes."""
+        _move_window_on_screen()
+        ensure_visible()
+        click_sidebar(*SIDEBAR_SETTINGS, "Settings gear icon")
+
+    def test_35_toggle_autoscale_on(self, app):
+        """Toggle Auto-scale Y-axes ON."""
+        _toggle_auto_scale_on()
+
+    def test_36_close_settings(self, app):
+        require_focus()
+        pyautogui.press("escape")
+        time.sleep(SLEEP)
+
+    def test_37_autoscale_scan(self, app):
+        """Run a 2-minute scan with Auto-scale enabled."""
+        _run_scan("AutoScale=ON", SHORT_SCAN_WAIT)
 
 
 # ─────────────────────────────────────────────────────────────────────────
