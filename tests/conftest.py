@@ -51,10 +51,27 @@ log = logging.getLogger("hil_tests")
 # When a test in a class marked @pytest.mark.incremental fails,
 # all subsequent tests in that class are marked as xfail.
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--from-source",
+        action="store_true",
+        default=False,
+        help=(
+            "Launch the OpenWater app from source via 'python main.py' instead "
+            "of discovering an installed OpenWaterApp.exe. Equivalent to setting "
+            "$OPENWATER_FROM_SOURCE=1; the env var is honoured either way."
+        ),
+    )
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers", "incremental: mark test class as incremental (stop on first failure)"
     )
+    # Mirror --from-source onto $OPENWATER_FROM_SOURCE so the existing
+    # _from_source_mode() helper picks it up without further plumbing.
+    if config.getoption("--from-source"):
+        os.environ["OPENWATER_FROM_SOURCE"] = "1"
 
 
 _class_failures = {}
@@ -78,6 +95,20 @@ def pytest_runtest_setup(item):
 # ─────────────────────────────────────────────
 # App discovery
 # ─────────────────────────────────────────────
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _from_source_mode() -> bool:
+    """True when ``OPENWATER_FROM_SOURCE`` is set, i.e. launch via ``python main.py``."""
+    return os.environ.get("OPENWATER_FROM_SOURCE", "").lower() in ("1", "true", "yes")
+
+
+def _find_main_py() -> str:
+    """Return path to main.py at the project root, or '' if missing."""
+    p = PROJECT_ROOT / "main.py"
+    return str(p) if p.exists() else ""
+
+
 def _find_exe() -> str:
     """Locate the latest OpenWaterApp.exe, including pre-release builds.
 
@@ -283,19 +314,44 @@ def get_clipboard() -> str:
 # ─────────────────────────────────────────────
 @pytest.fixture(scope="session")
 def app():
-    """Launch or connect to the OpenWater app. Session-scoped — runs once."""
+    """Launch or connect to the OpenWater app. Session-scoped — runs once.
+
+    Set ``OPENWATER_FROM_SOURCE=1`` to run the in-tree dev branch via
+    ``python main.py`` instead of discovering an installed ``OpenWaterApp.exe``.
+    """
+    from_source = _from_source_mode()
+
     # Check if already running
-    for proc in psutil.process_iter(["name"]):
+    for proc in psutil.process_iter(["name", "cmdline"]):
         try:
-            if "openwater" in proc.info["name"].lower():
-                log.info("App already running.")
-                time.sleep(SLEEP)
-                ensure_visible()
-                return True
+            name = (proc.info.get("name") or "").lower()
+            if from_source:
+                cmdline = " ".join(proc.info.get("cmdline") or []).lower()
+                if "python" in name and "main.py" in cmdline and "openmotion-bloodflow-app" in cmdline:
+                    log.info("App (from source) already running.")
+                    time.sleep(SLEEP)
+                    ensure_visible()
+                    return True
+            else:
+                if "openwater" in name:
+                    log.info("App already running.")
+                    time.sleep(SLEEP)
+                    ensure_visible()
+                    return True
         except Exception:
             pass
 
     # Try to launch
+    if from_source:
+        main_py = _find_main_py()
+        if main_py:
+            log.info(f"Launching from source: {sys.executable} {main_py}")
+            subprocess.Popen([sys.executable, main_py], cwd=str(PROJECT_ROOT))
+            time.sleep(SLEEP * 8)  # python+QML startup is slower than packaged exe
+            ensure_visible()
+            return True
+        pytest.skip(f"main.py not found at {PROJECT_ROOT}")
+
     exe = _find_exe()
     if exe and os.path.exists(exe):
         log.info(f"Launching: {exe}")
@@ -304,4 +360,7 @@ def app():
         ensure_visible()
         return True
 
-    pytest.skip("OpenWaterApp.exe not found -- set OPENWATER_EXE env var")
+    pytest.skip(
+        "OpenWaterApp.exe not found -- set OPENWATER_EXE, or set "
+        "OPENWATER_FROM_SOURCE=1 to launch via python main.py"
+    )
