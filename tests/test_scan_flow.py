@@ -7,11 +7,9 @@ import time
 from datetime import datetime
 
 import pyautogui
-import pygetwindow as gw
 import pytest
 
 from conftest import (
-    APP_KEYWORDS,
     SLEEP,
     click_by_name,
     click_sidebar,
@@ -22,33 +20,7 @@ from conftest import (
     uia_window,
     wait_with_log,
 )
-
-
-def _close_plot_window() -> bool:
-    """Close the plot window opened by the app.
-
-    Iterates all top-level windows and closes the first one whose title
-    does not match the main app keywords, avoiding closing the main app.
-    """
-    for w in gw.getAllWindows():
-        if not w.title.strip():
-            continue
-        if any(k in w.title.lower() for k in APP_KEYWORDS):
-            continue
-        try:
-            if w.isMinimized:
-                w.restore()
-                time.sleep(1)
-            w.activate()
-            time.sleep(0.5)
-            log.info(f"  Closing plot window: '{w.title}'")
-            pyautogui.hotkey("alt", "f4")
-            time.sleep(SLEEP)
-            return True
-        except Exception as e:
-            log.warning(f"  Could not close '{w.title}': {e}")
-    log.warning("  No plot window found to close")
-    return False
+from utils import close_plot_window, dismiss_signal_quality_modal
 
 # ─────────────────────────────────────────────
 # Sidebar coordinates (MouseArea-based — not exposed via UIA)
@@ -65,39 +37,6 @@ VIZ_WAIT = 30  # seconds to leave each plot open
 CHECK_WAIT_SEC = 120  # 2 minutes for Check to complete
 
 
-def _dismiss_signal_quality_modal() -> bool:
-    """If the 'Good signal quality' modal appears, click Dismiss."""
-    try:
-        win = uia_window()
-        signal_modal_found = False
-        for elem in win.descendants():
-            try:
-                text = elem.window_text().strip().lower()
-                if "good signal quality" in text or "signal quality" in text:
-                    signal_modal_found = True
-                    break
-            except Exception:
-                continue
-        if not signal_modal_found:
-            return False
-        log.info("  Signal quality modal detected — looking for Dismiss button")
-        for elem in win.descendants():
-            try:
-                if elem.window_text().strip() == "Dismiss":
-                    rect = elem.rectangle()
-                    cx = (rect.left + rect.right) // 2
-                    cy = (rect.top + rect.bottom) // 2
-                    log.info(f"  Clicking Dismiss button at ({cx}, {cy})")
-                    pyautogui.click(cx, cy)
-                    time.sleep(SLEEP)
-                    return True
-            except Exception:
-                continue
-    except Exception as e:
-        log.warning(f"  _dismiss_signal_quality_modal failed: {e}")
-    return False
-
-
 def _run_check_step(label: str = ""):
     """Click Check, wait up to 2 min, dismiss 'Good signal quality' modal if shown."""
     log.info(f"  Clicking Check and waiting up to {CHECK_WAIT_SEC}s... {label}")
@@ -106,12 +45,12 @@ def _run_check_step(label: str = ""):
     while elapsed < CHECK_WAIT_SEC:
         time.sleep(10)
         elapsed += 10
-        if _dismiss_signal_quality_modal():
+        if dismiss_signal_quality_modal():
             log.info(f"  Signal quality modal dismissed at {elapsed}s.")
             return
         if elapsed % 30 == 0:
             log.info(f"  Check running... {elapsed}/{CHECK_WAIT_SEC}s")
-    _dismiss_signal_quality_modal()
+    dismiss_signal_quality_modal()
     log.info("  Check completed.")
 
 
@@ -201,7 +140,7 @@ class TestScanFlow:
         wait_with_log(VIZ_WAIT, "BFI/BVI plot open")
 
     def test_13_close_bfi_plot(self, app):
-        _close_plot_window()
+        close_plot_window()
 
     def test_14_visualize_contrast_mean(self, app):
         ensure_visible()
@@ -209,7 +148,7 @@ class TestScanFlow:
         wait_with_log(VIZ_WAIT, "Contrast/Mean plot open")
 
     def test_15_close_contrast_plot(self, app):
-        _close_plot_window()
+        close_plot_window()
 
     def test_16_close_history(self, app):
         require_focus()

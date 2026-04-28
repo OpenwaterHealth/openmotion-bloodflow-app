@@ -9,30 +9,14 @@ from datetime import datetime
 import pyautogui
 import pytest
 
-from conftest import SLEEP, click_sidebar, ensure_visible, get_app_window, get_clipboard, log, require_focus
+from conftest import SLEEP, click_sidebar, ensure_visible, get_clipboard, log, require_focus
+from utils import move_window_on_screen
 
 SIDEBAR_NOTES = (0.019, 0.315)
 
 
-def _move_window_on_screen():
-    """Move the app window onto the primary screen if it is off-screen."""
-    try:
-        w = get_app_window()
-        screen_w, screen_h = pyautogui.size()
-        if w.left < 0 or w.top < 0 or w.left > screen_w or w.top > screen_h:
-            log.warning(
-                f"  Window is off-screen at ({w.left}, {w.top}) — "
-                f"moving to primary display"
-            )
-            w.moveTo(50, 50)
-            time.sleep(1)
-            log.info(f"  Window moved to ({w.left}, {w.top})")
-    except Exception as e:
-        log.warning(f"  _move_window_on_screen failed: {e}")
-
-
 def _open_notes():
-    _move_window_on_screen()
+    move_window_on_screen()
     click_sidebar(*SIDEBAR_NOTES, "Notes sidebar button")
 
 

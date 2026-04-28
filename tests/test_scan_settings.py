@@ -28,6 +28,7 @@ from conftest import (
     require_focus,
     uia_window,
 )
+from utils import SENSOR_OPTIONS, focus_combobox_by_label
 
 # ─────────────────────────────────────────────
 # Sidebar + modal coordinates
@@ -35,97 +36,10 @@ from conftest import (
 SIDEBAR_SCAN = (0.019, 0.210)
 SCAN_MODAL_CLOSE = (0.360, 0.119)
 
-SENSOR_OPTIONS = [
-    "None", "Near", "Middle", "Far", "Outer",
-    "Left", "Right", "Third Row", "All",
-]
-
 
 # ─────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────
-def _focus_combobox_by_label(label: str) -> bool:
-    """Find and click a ComboBox by its associated label name (or by index).
-
-    Method 1 — UIA name match: ComboBox whose UIA title equals the label.
-    Method 2 — Label proximity: find a Text element with that label then click
-               the nearest ComboBox by vertical row.
-    Method 3 — Index fallback: this QML app does not expose accessible names
-               for its ComboBoxes, so fall back to clicking the Nth ComboBox
-               ('Left Sensor' → index 0, 'Right Sensor' → index 1).
-    """
-    try:
-        win = uia_window()
-
-        # Method 1: ComboBox has the label as its accessible name
-        for ct in ["ComboBox", "Custom"]:
-            try:
-                elem = win.child_window(title=label, control_type=ct)
-                if elem.exists(timeout=2):
-                    rect = elem.rectangle()
-                    cx = (rect.left + rect.right) // 2
-                    cy = (rect.top + rect.bottom) // 2
-                    pyautogui.moveTo(cx, cy, duration=0.3)
-                    pyautogui.click(cx, cy)
-                    time.sleep(0.3)
-                    log.info(f"     UIA name lookup '{label}': PASSED")
-                    return True
-            except Exception:
-                continue
-
-        # Method 2: find the Text label, then click the nearest ComboBox row
-        try:
-            text_elems = win.descendants(title=label, control_type="Text")
-            if not text_elems:
-                text_elems = [e for e in win.descendants(title=label)]
-            if text_elems:
-                label_cy = (
-                    text_elems[0].rectangle().top
-                    + text_elems[0].rectangle().bottom
-                ) // 2
-                cbs = win.descendants(control_type="ComboBox")
-                if cbs:
-                    closest = min(
-                        cbs,
-                        key=lambda c: abs(
-                            (c.rectangle().top + c.rectangle().bottom) // 2
-                            - label_cy
-                        ),
-                    )
-                    rect = closest.rectangle()
-                    cx = (rect.left + rect.right) // 2
-                    cy = (rect.top + rect.bottom) // 2
-                    pyautogui.moveTo(cx, cy, duration=0.3)
-                    pyautogui.click(cx, cy)
-                    time.sleep(0.3)
-                    log.info(f"     Label proximity lookup '{label}': PASSED")
-                    return True
-        except Exception as e:
-            log.warning(f"     Label proximity lookup '{label}' failed: {e}")
-
-        # Method 3: index-based fallback — Left=0, Right=1
-        log.warning(
-            f"     UIA name/proximity lookup '{label}': FAILED — "
-            f"using index-based fallback"
-        )
-        cb_index = 0 if "Left" in label else 1
-        cbs = win.descendants(control_type="ComboBox")
-        if len(cbs) > cb_index:
-            rect = cbs[cb_index].rectangle()
-            cx = (rect.left + rect.right) // 2
-            cy = (rect.top + rect.bottom) // 2
-            pyautogui.moveTo(cx, cy, duration=0.3)
-            pyautogui.click(cx, cy)
-            time.sleep(0.3)
-            log.info(
-                f"     ComboBox[{cb_index}] index fallback for '{label}': PASSED"
-            )
-            return True
-
-    except Exception as e:
-        log.warning(f"     _focus_combobox_by_label('{label}') failed: {e}")
-
-    return False
 
 
 def _get_modal_header_values() -> list:
@@ -177,7 +91,7 @@ def _select_sensor_option(option_name: str, side: str, combobox_index: int):
     idx = SENSOR_OPTIONS.index(option_name)
     log.info(f"  {label}: selecting '{option_name}' (index {idx})")
 
-    _focus_combobox_by_label(label)
+    focus_combobox_by_label(label)
 
     pyautogui.hotkey("alt", "down")   # open popup
     time.sleep(0.5)
@@ -269,7 +183,7 @@ class TestScanSettings:
         _select_sensor_option("Middle", "Left", combobox_index=0)
 
     def test_08_toggle_free_run(self, app):
-        _focus_combobox_by_label("Left Sensor")
+        focus_combobox_by_label("Left Sensor")
         require_focus()
         pyautogui.press("tab")   # Left CB -> Right CB
         time.sleep(0.2)

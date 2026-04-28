@@ -3,19 +3,30 @@
 import time
 
 import pyautogui
-import pygetwindow as gw
 import pytest
 
+import shelly
 from conftest import (
-    APP_KEYWORDS,
     SLEEP,
     click_sidebar,
     ensure_visible,
-    get_app_window,
     log,
     read_combobox_values,
     require_focus,
     uia_window,
+)
+from utils import (
+    RE_CONNECTED,
+    RE_DISCONNECTED,
+    SENSOR_OPTIONS,
+    click_element_center,
+    click_panel_button,
+    dismiss_signal_quality_modal,
+    find_app_log,
+    is_app_alive,
+    log_size,
+    move_window_on_screen,
+    wait_for_pattern,
 )
 
 # ─────────────────────────────────────────────
@@ -23,16 +34,34 @@ from conftest import (
 # ─────────────────────────────────────────────
 LOOP = 5  # number of times to run the scan test
 
-SIDEBAR_SCAN  = (0.019, 0.210)
+# Bug repro: power-cycle the console between the first POWER_CYCLE_LOOPS
+# iterations only. Skipping the cycle before iterations 4 and 5 reproduces
+# the failure described in bloodflow-app issue #47, where the 5th scan
+# cannot start because the console has been left running across 3 scans.
+POWER_CYCLE_LOOPS = 3
+
+# Shelly hold-off when power-cycling the console. ≥3s gives USB enumeration
+# time to clean up and the host OS time to drop the device (per shelly.py
+# guidance for hardware reconnect tests).
+SHELLY_OFF_TIME_SEC = 5.0
+
+# How long to wait for the SDK to log a connection-state transition after
+# a power event. The outlet only controls power — it cannot tell us whether
+# the app reconnected over USB, so we tail the app log.
+DISCONNECT_TIMEOUT = 30
+CONNECT_TIMEOUT    = 60
+
 SIDEBAR_START = (0.019, 0.115)
 SIDEBAR_CHECK = (0.019, 0.420)   # Check button — between Notes and History
 
-CHECK_WAIT_SEC = 120  # 2 minutes for Check to complete
+# Scan Settings is opened via UIA label lookup (click_panel_button) rather
+# than fixed coords. Coordinate-based clicks were landing too high/left of
+# the button at this test's typical window size, and the ratio depends on
+# the actual app window dimensions which vary by machine. Coordinates are
+# kept here as a fallback for click_panel_button.
+SIDEBAR_SCAN_FALLBACK = (0.025, 0.225)
 
-SENSOR_OPTIONS = [
-    "None", "Near", "Middle", "Far", "Outer",
-    "Left", "Right", "Third Row", "All",
-]
+CHECK_WAIT_SEC = 120  # 2 minutes for Check to complete
 
 SCAN_DURATION_MIN = 10
 SCAN_DURATION_SEC = SCAN_DURATION_MIN * 60
@@ -41,14 +70,6 @@ SCAN_DURATION_SEC = SCAN_DURATION_MIN * 60
 # ─────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────
-def _is_app_alive() -> bool:
-    """Check if the app window still exists."""
-    for w in gw.getAllWindows():
-        if any(k in w.title.lower() for k in APP_KEYWORDS):
-            return True
-    return False
-
-
 def _check_scan_finished():
     """Check if the scan has finished by looking for the Session Notes modal.
 
@@ -87,85 +108,6 @@ def _check_scan_finished():
     return None
 
 
-def _dismiss_signal_quality_modal() -> bool:
-    """If the 'Good signal quality' modal appears, click Dismiss.
-
-    Returns True if a Dismiss was clicked, False if the modal wasn't found.
-    """
-    try:
-        win = uia_window()
-        # Check if "Good signal quality" or signal quality modal is visible
-        signal_modal_found = False
-        for elem in win.descendants():
-            try:
-                text = elem.window_text().strip().lower()
-                if "good signal quality" in text or "signal quality" in text:
-                    signal_modal_found = True
-                    break
-            except Exception:
-                continue
-
-        if not signal_modal_found:
-            return False
-
-        log.info("  Signal quality modal detected — looking for Dismiss button")
-        # Find and click the Dismiss button
-        for elem in win.descendants():
-            try:
-                text = elem.window_text().strip()
-                if text == "Dismiss":
-                    rect = elem.rectangle()
-                    cx = (rect.left + rect.right) // 2
-                    cy = (rect.top + rect.bottom) // 2
-                    log.info(f"  Clicking Dismiss button at ({cx}, {cy})")
-                    pyautogui.click(cx, cy)
-                    time.sleep(SLEEP)
-                    return True
-            except Exception:
-                continue
-        log.warning("  'Good signal quality' detected but Dismiss button not found")
-    except Exception as e:
-        log.warning(f"  _dismiss_signal_quality_modal failed: {e}")
-    return False
-
-
-def _move_window_on_screen():
-    """Move the app window onto the primary screen if it is off-screen."""
-    try:
-        w = get_app_window()
-        screen_w, screen_h = pyautogui.size()
-        if w.left < 0 or w.top < 0 or w.left > screen_w or w.top > screen_h:
-            log.warning(
-                f"  Window is off-screen at ({w.left}, {w.top}) — "
-                f"moving to primary display"
-            )
-            w.moveTo(50, 50)
-            time.sleep(1)
-            log.info(f"  Window moved to ({w.left}, {w.top})")
-    except Exception as e:
-        log.warning(f"  _move_window_on_screen failed: {e}")
-
-
-def _click_element_center(elem, label: str = ""):
-    """Click the center of a UIA element using the mouse."""
-    rect = elem.rectangle()
-    cx = (rect.left + rect.right) // 2
-    cy = (rect.top + rect.bottom) // 2
-    screen_w, screen_h = pyautogui.size()
-    if cx < 0 or cy < 0 or cx > screen_w or cy > screen_h:
-        log.warning(
-            f"     '{label}' is off-screen at ({cx}, {cy}), "
-            f"screen={screen_w}x{screen_h} — moving window on-screen"
-        )
-        _move_window_on_screen()
-        rect = elem.rectangle()
-        cx = (rect.left + rect.right) // 2
-        cy = (rect.top + rect.bottom) // 2
-        log.info(f"     after reposition: '{label}' at ({cx}, {cy})")
-    log.info(f"     click '{label}' at ({cx}, {cy})")
-    pyautogui.click(cx, cy)
-
-
 def _click_combobox(combobox_index: int):
     """Click a ComboBox by its index in the UIA tree (0=Left, 1=Right)."""
     ensure_visible()
@@ -175,7 +117,7 @@ def _click_combobox(combobox_index: int):
     assert len(cbs) > combobox_index, (
         f"Expected at least {combobox_index + 1} ComboBox(es), found {len(cbs)}"
     )
-    _click_element_center(cbs[combobox_index], f"ComboBox[{combobox_index}]")
+    click_element_center(cbs[combobox_index], f"ComboBox[{combobox_index}]")
 
 
 def _select_all_by_mouse(combobox_index: int, side: str):
@@ -228,20 +170,20 @@ def _click_minutes_field_and_type(minutes: str):
                     continue
 
             if len(duration_fields) >= 3:
-                _click_element_center(duration_fields[1], "Minutes field")
+                click_element_center(duration_fields[1], "Minutes field")
                 time.sleep(0.1)
                 pyautogui.hotkey("ctrl", "a")
                 time.sleep(0.1)
                 pyautogui.typewrite(minutes, interval=0.05)
                 clicked = True
 
-                _click_element_center(duration_fields[0], "Hours field")
+                click_element_center(duration_fields[0], "Hours field")
                 time.sleep(0.1)
                 pyautogui.hotkey("ctrl", "a")
                 time.sleep(0.1)
                 pyautogui.typewrite("0", interval=0.05)
 
-                _click_element_center(duration_fields[2], "Seconds field")
+                click_element_center(duration_fields[2], "Seconds field")
                 time.sleep(0.1)
                 pyautogui.hotkey("ctrl", "a")
                 time.sleep(0.1)
@@ -255,7 +197,7 @@ def _click_minutes_field_and_type(minutes: str):
         log.warning("  Could not find duration fields via UIA — using Tab fallback")
         cbs = win.descendants(control_type="ComboBox")
         if len(cbs) >= 2:
-            _click_element_center(cbs[1], "Right ComboBox (anchor)")
+            click_element_center(cbs[1], "Right ComboBox (anchor)")
             time.sleep(0.1)
         pyautogui.press("tab")       # -> Switch
         time.sleep(0.1)
@@ -278,6 +220,30 @@ def _click_minutes_field_and_type(minutes: str):
 
 
 # ─────────────────────────────────────────────
+# Fixtures
+# ─────────────────────────────────────────────
+@pytest.fixture(scope="class")
+def outlet():
+    """Provide the Shelly outlet that powers the console.
+
+    The whole point of this test is to drive the device through controlled
+    power cycles, so a missing/unreachable outlet is a hard skip rather than
+    silently degrading to a manual procedure.
+    """
+    try:
+        out = shelly.default_outlet()
+        out.is_on()  # one round-trip to confirm reachability
+    except Exception as e:
+        pytest.skip(f"Shelly outlet not reachable: {e}")
+    yield out
+    # Always leave the outlet on after the test so the device is usable.
+    try:
+        out.on()
+    except Exception:
+        pass
+
+
+# ─────────────────────────────────────────────
 # Tests
 # ─────────────────────────────────────────────
 @pytest.mark.incremental
@@ -286,15 +252,16 @@ class TestScanAutoStopBug: # (1) Repro scan auto-stop bug, (2) Verify fix, (3) R
 
     @pytest.mark.parametrize("iteration", range(1, LOOP + 1),
                              ids=[f"loop-{i}" for i in range(1, LOOP + 1)])
-    def test_scan_auto_stop(self, app, iteration):
+    def test_scan_auto_stop(self, app, outlet, iteration):
         """Full scan cycle — configure, start, monitor for early stop."""
         log.info(f"{'='*60}")
         log.info(f"  ITERATION {iteration}/{LOOP}")
         log.info(f"{'='*60}")
 
-        # 1. Open scan settings
-        _move_window_on_screen()
-        click_sidebar(*SIDEBAR_SCAN, "Scan Settings")
+        # 1. Open scan settings — use UIA label lookup with a coord fallback,
+        #    so the click lands on the actual button at any window size.
+        move_window_on_screen()
+        click_panel_button("Scan\nSettings", fallback=SIDEBAR_SCAN_FALLBACK)
 
         # 2. Set both sensors to ALL
         _select_all_by_mouse(combobox_index=0, side="Left")
@@ -310,18 +277,18 @@ class TestScanAutoStopBug: # (1) Repro scan auto-stop bug, (2) Verify fix, (3) R
 
         # 5. Run Check and wait for it to complete (2 min)
         log.info(f"  [{iteration}/{LOOP}] Clicking Check and waiting {CHECK_WAIT_SEC}s...")
-        click_sidebar(*SIDEBAR_CHECK, "Check")
+        click_panel_button("Check", fallback=SIDEBAR_CHECK)
         check_elapsed = 0
         while check_elapsed < CHECK_WAIT_SEC:
             time.sleep(10)
             check_elapsed += 10
-            if not _is_app_alive():
+            if not is_app_alive():
                 pytest.fail(
                     f"[{iteration}/{LOOP}] APPLICATION CLOSED during Check "
                     f"after {check_elapsed}s."
                 )
             # If 'Good signal quality' modal appears early, dismiss and continue
-            if _dismiss_signal_quality_modal():
+            if dismiss_signal_quality_modal():
                 log.info(f"  [{iteration}/{LOOP}] Signal quality modal dismissed at {check_elapsed}s.")
                 break
             if check_elapsed % 30 == 0:
@@ -329,10 +296,10 @@ class TestScanAutoStopBug: # (1) Repro scan auto-stop bug, (2) Verify fix, (3) R
         log.info(f"  [{iteration}/{LOOP}] Check completed.")
 
         # Final dismiss check in case the modal appeared exactly when the loop exited
-        _dismiss_signal_quality_modal()
+        dismiss_signal_quality_modal()
 
         # 6. Start scan
-        click_sidebar(*SIDEBAR_START, "Start")
+        click_panel_button("Start", fallback=SIDEBAR_START)
         log.info(f"  [{iteration}/{LOOP}] Scan started — monitoring for completion...")
 
         # 5. Monitor scan — poll every 10s for Session Notes modal
@@ -347,7 +314,7 @@ class TestScanAutoStopBug: # (1) Repro scan auto-stop bug, (2) Verify fix, (3) R
             time.sleep(poll_interval)
             elapsed += poll_interval
 
-            if not _is_app_alive():
+            if not is_app_alive():
                 pytest.fail(
                     f"[{iteration}/{LOOP}] APPLICATION CLOSED after {elapsed}s."
                 )
@@ -390,7 +357,46 @@ class TestScanAutoStopBug: # (1) Repro scan auto-stop bug, (2) Verify fix, (3) R
 
         log.info(f"  [{iteration}/{LOOP}] PASSED — scan ran full duration.")
 
-        # 8. Wait 60s between loops for console power cycle
+        # 8. Between loops: power-cycle the console for the first
+        #    POWER_CYCLE_LOOPS iterations, then leave it running. The bug
+        #    reproduces when the console is not restarted before iterations
+        #    4 and 5 (issue #47).
         if iteration < LOOP:
-            log.info(f"  [{iteration}/{LOOP}] Waiting 60s for console power cycle...")
-            time.sleep(60)
+            if iteration < POWER_CYCLE_LOOPS:
+                log_path = find_app_log()
+                assert log_path, "could not locate bloodflow app-log"
+                offset = log_size(log_path)
+
+                log.info(
+                    f"  [{iteration}/{LOOP}] Power-cycling console via Shelly "
+                    f"(off {SHELLY_OFF_TIME_SEC:.1f}s)..."
+                )
+                outlet.power_cycle(off_time=SHELLY_OFF_TIME_SEC)
+
+                # Pair the power action with an app-side observation: the
+                # outlet only controls power, it cannot tell us whether the
+                # app reconnected over USB.
+                disc = wait_for_pattern(
+                    RE_DISCONNECTED, log_path, offset, DISCONNECT_TIMEOUT
+                )
+                assert disc, (
+                    f"[{iteration}/{LOOP}] no DISCONNECTED line within "
+                    f"{DISCONNECT_TIMEOUT}s of power-cycle"
+                )
+                log.info(f"  [{iteration}/{LOOP}] disconnect: {disc}")
+
+                offset_after_disc = log_size(log_path)
+                conn = wait_for_pattern(
+                    RE_CONNECTED, log_path, offset_after_disc, CONNECT_TIMEOUT
+                )
+                assert conn, (
+                    f"[{iteration}/{LOOP}] app did not reconnect within "
+                    f"{CONNECT_TIMEOUT}s after power-cycle"
+                )
+                log.info(f"  [{iteration}/{LOOP}] reconnect: {conn}")
+            else:
+                log.info(
+                    f"  [{iteration}/{LOOP}] Skipping power-cycle "
+                    f"(repro: leaving console running across scans)"
+                )
+                time.sleep(SLEEP)

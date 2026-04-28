@@ -30,6 +30,7 @@ from conftest import (
     uia_window,
     wait_with_log,
 )
+from utils import close_plot_window, move_window_on_screen, selected_scan_text
 
 # ─────────────────────────────────────────────
 # Sidebar coordinates
@@ -73,29 +74,6 @@ def _tab_to_reduced_mode_toggle(tab_into_modal: bool = True):
         time.sleep(0.1)
     pyautogui.press("space")
     time.sleep(SLEEP)
-
-
-def _close_plot_window() -> bool:
-    """Close the plot window opened by the app using keyboard (alt+f4)."""
-    for w in gw.getAllWindows():
-        if not w.title.strip():
-            continue
-        if any(k in w.title.lower() for k in APP_KEYWORDS):
-            continue
-        try:
-            if w.isMinimized:
-                w.restore()
-                time.sleep(1)
-            w.activate()
-            time.sleep(0.5)
-            log.info(f"  Closing plot window: '{w.title}'")
-            pyautogui.hotkey("alt", "f4")
-            time.sleep(SLEEP)
-            return True
-        except Exception as e:
-            log.warning(f"  Could not close '{w.title}': {e}")
-    log.warning("  No plot window found to close")
-    return False
 
 
 def _close_plot_window_mouse() -> bool:
@@ -177,23 +155,6 @@ def _wait_for_signal_quality_and_start_scan(timeout: int = 180) -> bool:
     return False
 
 
-def _move_window_on_screen():
-    """Move the app window onto the primary screen if it is off-screen."""
-    try:
-        w = get_app_window()
-        screen_w, screen_h = pyautogui.size()
-        if w.left < 0 or w.top < 0 or w.left > screen_w or w.top > screen_h:
-            log.warning(
-                f"  Window is off-screen at ({w.left}, {w.top}) — "
-                f"moving to primary display"
-            )
-            w.moveTo(50, 50)
-            time.sleep(1)
-            log.info(f"  Window moved to ({w.left}, {w.top})")
-    except Exception as e:
-        log.warning(f"  _move_window_on_screen failed: {e}")
-
-
 def _scroll_modal_to_bottom():
     """Scroll the Settings modal content down to reveal the Reduced Mode section.
 
@@ -214,7 +175,7 @@ def _scroll_modal_to_bottom():
 
 def _click_coord(rx: float, ry: float, label: str = ""):
     """Move mouse to a relative coordinate within the app window and click."""
-    _move_window_on_screen()
+    move_window_on_screen()
     ensure_visible()
     w = get_app_window()
     x = int(w.left + rx * w.width)
@@ -223,18 +184,6 @@ def _click_coord(rx: float, ry: float, label: str = ""):
     pyautogui.moveTo(x, y, duration=0.3)
     pyautogui.click(x, y)
     time.sleep(SLEEP)
-
-
-def _selected_scan_text() -> str:
-    """Read the current text of the scan-picker ComboBox in History."""
-    try:
-        win = uia_window()
-        cb = win.child_window(control_type="ComboBox")
-        if cb.exists(timeout=2):
-            return cb.window_text().strip()
-    except Exception:
-        pass
-    return ""
 
 
 # ─────────────────────────────────────────────
@@ -251,7 +200,7 @@ class TestReducedMode:
     # ── Settings: enable Reduced Mode ─────────────────────────────────────
 
     def test_01_open_settings(self, app):
-        _move_window_on_screen()
+        move_window_on_screen()
         ensure_visible()
         click_sidebar(*SIDEBAR_SETTINGS, "Settings gear icon")
 
@@ -390,7 +339,7 @@ class TestReducedMode:
         click_sidebar(*SIDEBAR_HISTORY, "History")
 
     def test_18_latest_scan_selected(self, app):
-        scan_text = _selected_scan_text()
+        scan_text = selected_scan_text()
         assert len(scan_text) > 0, (
             "History ComboBox is empty — no scans found."
         )
@@ -401,7 +350,7 @@ class TestReducedMode:
         wait_with_log(VIZ_WAIT, "BFI/BVI plot open")
 
     def test_20_close_bfi_plot(self, app):
-        _close_plot_window()
+        close_plot_window()
 
     def test_21_close_history(self, app):
         require_focus()
@@ -425,7 +374,7 @@ class TestReducedModeMouse:
 
     def test_22_open_notes(self, app):
         """Notes is now at the former Scan Settings position in the reduced sidebar."""
-        _move_window_on_screen()
+        move_window_on_screen()
         click_sidebar(*SIDEBAR_NOTES_REDUCED, "Notes (reduced mode position)")
 
     def test_23_type_note(self, app):
@@ -464,7 +413,7 @@ class TestReducedModeMouse:
         click_sidebar(*SIDEBAR_HISTORY, "History")
 
     def test_29_latest_scan_selected(self, app):
-        scan_text = _selected_scan_text()
+        scan_text = selected_scan_text()
         assert len(scan_text) > 0, (
             "History ComboBox is empty — no scans found."
         )
