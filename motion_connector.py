@@ -6,6 +6,7 @@ from PyQt6.QtCore import (
     QVariant,
     QThread,
     QTimer,
+    QRecursiveMutex,
 )
 from pathlib import Path
 import logging
@@ -33,6 +34,7 @@ from omotion.config import (
 from omotion.MotionProcessing import process_bin_file
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
 from processing.visualize_bloodflow import VisualizeBloodflow
+from motion_config import FpgaModel, apply_laser_power_from_config
 from utils.resource_path import resource_path
 import numpy as np
 import pandas as pd
@@ -215,6 +217,8 @@ class MOTIONConnector(QObject):
         self._last_fan_status: dict[str, bool | None] = {"left": None, "right": None}
         self.laser_params = self._load_laser_params(config_dir)
         self._tec_voltage_default = self._load_tec_params(config_dir)
+        self._fpga = FpgaModel()
+        self._console_mutex = QRecursiveMutex()
 
         eol_mean     = cfg.get("eol_min_mean_per_camera")
         eol_contrast = cfg.get("eol_min_contrast_per_camera")
@@ -1840,34 +1844,9 @@ class MOTIONConnector(QObject):
             return False
 
     def set_laser_power_from_config(self, interface):
-        logger.info("[Connector] Setting laser power from config...")
-        for idx, laser_param in enumerate(self.laser_params, start=1):
-            muxIdx = laser_param["muxIdx"]
-            channel = laser_param["channel"]
-            i2cAddr = laser_param["i2cAddr"]
-            offset = laser_param["offset"]
-            dataToSend = bytearray(laser_param["dataToSend"])
-
-            logger.debug(
-                f"[Connector] ({idx}/{len(self.laser_params)}) "
-                f"Writing I2C: muxIdx={muxIdx}, channel={channel}, "
-                f"i2cAddr=0x{i2cAddr:02X}, offset=0x{offset:02X}, "
-                f"data={list(dataToSend)}"
-            )
-
-            if not interface.console.write_i2c_packet(
-                mux_index=muxIdx,
-                channel=channel,
-                device_addr=i2cAddr,
-                reg_addr=offset,
-                data=dataToSend,
-            ):
-                logger.error(
-                    f"Failed to set laser power (muxIdx={muxIdx}, channel={channel})"
-                )
-                return False
-        logger.info("Laser power set successfully.")
-        return True
+        return apply_laser_power_from_config(
+            interface, self.laser_params, self._fpga, self._console_mutex
+        )
 
     # --- SENSOR COMMUNICATION METHODS ---
     def _read_and_log_camera_uids(self):

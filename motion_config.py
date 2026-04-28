@@ -293,7 +293,7 @@ def apply_laser_power_from_config(
 ) -> bool:
     """Write laser configuration to the console via I2C.
 
-    Reads user overrides from `interface.console_module.read_config()` and
+    Reads user overrides from `interface.console.read_config()` and
     applies the `laser_params` list, honoring overrides and DRIVE CL values.
     The `console_mutex` is locked for the duration of the I2C writes.
     """
@@ -301,7 +301,7 @@ def apply_laser_power_from_config(
 
     user_cfg: dict = {}
     try:
-        cfg_obj = interface.console_module.read_config()
+        cfg_obj = interface.console.read_config()
         if cfg_obj is not None:
             user_cfg = cfg_obj.json_data or {}
             print(user_cfg)
@@ -386,7 +386,7 @@ def apply_laser_power_from_config(
                 f"data={[f'0x{b:02X}' for b in dataToSend]}"
             )
 
-            if not interface.console_module.write_i2c_packet(
+            if not interface.console.write_i2c_packet(
                 mux_index=muxIdx,
                 channel=channel,
                 device_addr=i2cAddr,
@@ -419,7 +419,7 @@ def apply_laser_power_from_config(
                 f"[Connector] Writing user-config {label} DRIVE CL: "
                 f"raw={raw}, gain={gain_f} → {[f'0x{b:02X}' for b in data]}"
             )
-            return interface.console_module.write_i2c_packet(
+            return interface.console.write_i2c_packet(
                 mux_index=1, channel=ch, device_addr=0x41, reg_addr=0x10, data=data
             )
 
