@@ -2176,7 +2176,14 @@ class MOTIONConnector(QObject):
                     self.safetyFailure = True
                     self._fire_safety_notification(fault_detail)
                     self.stopTrigger()
-                    self.laserStateChanged.emit(False)
+                    # laserStateChanged is the notify signal for the
+                    # zero-arg laserOn pyqtProperty — set the underlying
+                    # state and emit() without args so QML re-reads the
+                    # property. Previous form passed `False` and PyQt
+                    # raised "signal has 0 arguments but 1 provided",
+                    # which surfaced via the dev-mode safety toast.
+                    self._laserOn = False
+                    self.laserStateChanged.emit()
                     if self._capture_running and not self._safety_cancel_scheduled:
                         self.safetyTripDuringCaptureRequested.emit()
         except Exception as e:
