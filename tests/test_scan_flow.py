@@ -22,6 +22,8 @@ from conftest import (
 )
 from utils import close_plot_window, dismiss_signal_quality_modal
 
+pytestmark = pytest.mark.release
+
 # ─────────────────────────────────────────────
 # Sidebar coordinates (MouseArea-based — not exposed via UIA)
 # ─────────────────────────────────────────────

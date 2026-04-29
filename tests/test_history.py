@@ -20,6 +20,8 @@ from conftest import (
 )
 from utils import close_plot_window, selected_scan_text
 
+pytestmark = pytest.mark.dev
+
 SIDEBAR_HISTORY = (0.020, 0.830)
 VIZ_WAIT = 60  # seconds to leave each plot open
 

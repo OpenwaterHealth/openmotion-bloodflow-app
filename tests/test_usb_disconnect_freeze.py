@@ -57,6 +57,8 @@ from utils import (
     wait_for_pattern,
 )
 
+pytestmark = pytest.mark.release
+
 # ─────────────────────────────────────────────
 # Configuration
 # ─────────────────────────────────────────────

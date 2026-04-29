@@ -12,6 +12,8 @@ import pytest
 from conftest import SLEEP, click_sidebar, ensure_visible, get_clipboard, log, require_focus
 from utils import move_window_on_screen
 
+pytestmark = pytest.mark.dev
+
 SIDEBAR_NOTES = (0.019, 0.315)
 
 

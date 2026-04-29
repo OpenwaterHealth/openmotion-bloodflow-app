@@ -42,6 +42,8 @@ from utils import (
     wait_for_pattern,
 )
 
+pytestmark = pytest.mark.dev
+
 
 # Sidebar coordinates — copied from test_scan_flow.py (shared layout).
 SIDEBAR_START = (0.019, 0.115)

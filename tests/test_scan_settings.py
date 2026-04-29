@@ -30,6 +30,8 @@ from conftest import (
 )
 from utils import SENSOR_OPTIONS, focus_combobox_by_label
 
+pytestmark = pytest.mark.dev
+
 # ─────────────────────────────────────────────
 # Sidebar + modal coordinates
 # ─────────────────────────────────────────────

@@ -32,6 +32,8 @@ from conftest import (
 )
 from utils import close_plot_window, move_window_on_screen, selected_scan_text
 
+pytestmark = pytest.mark.release
+
 # ─────────────────────────────────────────────
 # Sidebar coordinates
 # ─────────────────────────────────────────────
