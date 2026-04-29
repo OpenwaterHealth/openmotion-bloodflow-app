@@ -5,8 +5,9 @@ on:
   push:
     branches: [main, next]
     tags:
-      - "[0-9]+.[0-9]+.[0-9]+"            # production releases (cut from main)
-      - "[0-9]+.[0-9]+.[0-9]+-dev.[0-9]+" # dev pre-releases (cut from next)
+      - "[0-9]+.[0-9]+.[0-9]+"             # production release (cut from main)       — SDK from PyPI
+      - "[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+"   # release candidate (cut from next)        — SDK from PyPI
+      - "[0-9]+.[0-9]+.[0-9]+-dev.[0-9]+"  # dev pre-release   (cut from next)        — SDK from @next source
 permissions:
   contents: write
 
@@ -39,12 +40,19 @@ jobs:
           # SDK selection:
           #   * X.Y.Z-dev.N tag → source-install from openmotion-sdk@next so
           #     the dev pre-release ships against the matching dev SDK.
-          #   * Anything else (production tag, branch push, manual dispatch)
-          #     → fetch the latest published openmotion-sdk wheel, with a
-          #     source-install of main as the fallback.
+          #   * X.Y.Z      tag → install latest openmotion-sdk from PyPI.
+          #     Production releases ship against the fully-released SDK.
+          #   * X.Y.Z-rc.N tag → install latest openmotion-sdk from PyPI.
+          #     RCs are a hardening pass on a fully-released SDK, so PyPI too.
+          #   * Anything else (branch push, manual dispatch) → fetch the
+          #     latest published openmotion-sdk wheel from GitHub Releases,
+          #     with a source-install of main as the fallback.
           if [[ "$GITHUB_REF" == refs/tags/*-dev.* ]]; then
             echo "Dev tag detected ($GITHUB_REF) — installing SDK from next branch"
             pip install "git+https://github.com/OpenwaterHealth/openmotion-sdk.git@next"
+          elif [[ "$GITHUB_REF" =~ ^refs/tags/[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+            echo "Production/RC tag detected ($GITHUB_REF) — installing latest openmotion-sdk from PyPI"
+            pip install --upgrade openmotion-sdk
           else
             WHL_URL=$(python -c "
             import json, urllib.request, sys
@@ -105,8 +113,9 @@ jobs:
           echo "ARTIFACT_NAME=OpenMotion-Bloodflow-${TAG}" >> "$GITHUB_OUTPUT"
           echo "ARTIFACT_ZIP=OpenMotion-Bloodflow-${TAG}.zip" >> "$GITHUB_OUTPUT"
 
-          # pre-release flag — X.Y.Z-dev.N tags are dev pre-releases.
-          if [[ "$TAG" == *-dev.* ]]; then
+          # pre-release flag — X.Y.Z-dev.N (dev) and X.Y.Z-rc.N (release
+          # candidate) tags both mark prerelease in the GitHub release UI.
+          if [[ "$TAG" == *-dev.* ]] || [[ "$TAG" == *-rc.* ]]; then
             echo "PRERELEASE=true" >> "$GITHUB_OUTPUT"
           else
             echo "PRERELEASE=false" >> "$GITHUB_OUTPUT"
