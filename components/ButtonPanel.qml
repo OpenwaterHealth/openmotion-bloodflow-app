@@ -19,10 +19,12 @@ Rectangle {
     property bool camerasReady: false  // true when camera flash is complete
     property bool reducedMode: false       // FDA mode hides scan-settings button
 
-    // Connection state — drives start button icon and enablement
+    // Connection state — drives start button icon and enablement.
+    // A laser-safety trip is surfaced via a persistent NotificationCenter
+    // toast (see motion_connector.safetyFailure setter), not by faking
+    // a disconnect here.
     property bool allConnected: MOTIONInterface.consoleConnected &&
-        (MOTIONInterface.leftSensorConnected || MOTIONInterface.rightSensorConnected) &&
-        !MOTIONInterface.safetyFailure
+        (MOTIONInterface.leftSensorConnected || MOTIONInterface.rightSensorConnected)
     signal startStopClicked()
     signal scanSettingsClicked()
     signal notesClicked()

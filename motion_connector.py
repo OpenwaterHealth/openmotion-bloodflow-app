@@ -352,7 +352,7 @@ class MOTIONConnector(QObject):
         self._state = DISCONNECTED
         self._last_fan_status: dict[str, bool | None] = {"left": None, "right": None}
 
-        self.laser_params = load_laser_params(config_dir)
+        self.laser_params = load_laser_params(config_dir, force_fault=self._force_laser_fail)
         self._tec_voltage_default = load_tec_params(config_dir)
         # Load FPGA model (preferred JSON, with legacy JS fallback)
         self._fpga = FpgaModel()
@@ -790,6 +790,35 @@ class MOTIONConnector(QObject):
         if self._safetyFailure != value:
             self._safetyFailure = value
             self.safetyFailureStateChanged.emit()
+            # Clear the persistent laser-safety toast on recovery. The
+            # toast is *fired* by ``_fire_safety_notification`` in the
+            # call site (readSafetyStatus) where the decoded fault
+            # detail is available — we only handle dismissal here so
+            # we don't double-fire without context.
+            if not value:
+                self.dismissNotification("laser_safety")
+
+    def _fire_safety_notification(self, fault_detail: str = ""):
+        """Fire the persistent laser-safety toast.
+
+        ``fault_detail`` is appended to the toast text only when
+        ``appConfig.developerMode`` is enabled, so end users see a
+        friendly message and developers see which fault bits tripped.
+        Tagged ``laser_safety`` so re-fires replace rather than stack.
+        """
+        msg = (
+            "Laser safety warning detected. Please restart your "
+            "console. If this error persists, please contact support."
+        )
+        if fault_detail and self._app_config.get("developerMode", False):
+            msg += f"\n[dev] {fault_detail}"
+        self.notify(
+            msg,
+            type_="error",
+            duration_ms=0,
+            dismissible=False,
+            tag="laser_safety",
+        )
 
     @pyqtProperty(int, notify=stateChanged)
     def state(self):
@@ -2131,7 +2160,21 @@ class MOTIONConnector(QObject):
                     self.safetyFailure = False
             else:
                 if not self._safetyFailure:
+                    # Decode which safety bits tripped so the developer-
+                    # mode toast (and the log) can name them. The SDK
+                    # owns the bit→label mapping in ConsoleTelemetry.
+                    from omotion.ConsoleTelemetry import _decode_safety_faults
+                    se_faults = _decode_safety_faults(snap.safety_se)
+                    so_faults = _decode_safety_faults(snap.safety_so)
+                    fault_detail = (
+                        f"safety_se=0x{snap.safety_se:02X} "
+                        f"({', '.join(se_faults) or 'no faults'}); "
+                        f"safety_so=0x{snap.safety_so:02X} "
+                        f"({', '.join(so_faults) or 'no faults'})"
+                    )
+                    logger.error(f"Laser safety failure: {fault_detail}")
                     self.safetyFailure = True
+                    self._fire_safety_notification(fault_detail)
                     self.stopTrigger()
                     self.laserStateChanged.emit(False)
                     if self._capture_running and not self._safety_cancel_scheduled:
@@ -2139,6 +2182,7 @@ class MOTIONConnector(QObject):
         except Exception as e:
             logger.error(f"readSafetyStatus failed: {e}")
             self.safetyFailure = True
+            self._fire_safety_notification(f"telemetry exception: {e}")
             if self._capture_running and not self._safety_cancel_scheduled:
                 self.safetyTripDuringCaptureRequested.emit()
 

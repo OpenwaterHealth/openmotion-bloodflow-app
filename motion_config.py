@@ -210,16 +210,22 @@ class FpgaModel:
             return None
 
 
-def load_laser_params(config_dir: str) -> list:
+def load_laser_params(config_dir: str, force_fault: bool = False) -> list:
     """Load `laser_params.json` from the given config directory.
 
     Mirrors the previous `_load_laser_params` behavior on MOTIONConnector.
     Returns a list of parameter dicts, or an empty list on any error.
+
+    When ``force_fault`` is True, loads ``laser_params_fault.json`` instead
+    — parameter set engineered to trip the laser-safety interlock, used to
+    exercise the safety path without disconnecting actual hardware. Driven
+    by the ``forceLaserFail`` key in ``app_config.json``.
     """
+    filename = "laser_params_fault.json" if force_fault else "laser_params.json"
     config_path = (
-        resource_path("config", "laser_params.json")
+        resource_path("config", filename)
         if config_dir == "config"
-        else Path(config_dir) / "laser_params.json"
+        else Path(config_dir) / filename
     )
     if not config_path.exists():
         logger.error(f"[Connector] Laser parameter file not found: {config_path}")
