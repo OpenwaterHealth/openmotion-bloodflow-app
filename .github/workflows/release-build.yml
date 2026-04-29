@@ -5,8 +5,8 @@ on:
   push:
     branches: [main, next]
     tags:
-      - "[0-9]+.[0-9]+.[0-9]+"
-      - "pre-[0-9]+.[0-9]+.[0-9]+"
+      - "[0-9]+.[0-9]+.[0-9]+"            # production releases (cut from main)
+      - "[0-9]+.[0-9]+.[0-9]+-dev.[0-9]+" # dev pre-releases (cut from next)
 permissions:
   contents: write
 
@@ -36,26 +36,36 @@ jobs:
           conda activate omotion
           python -m pip install --upgrade pip
 
-          # Fetch latest openmotion-sdk wheel from GitHub Releases
-          WHL_URL=$(python -c "
-          import json, urllib.request, sys
-          url = 'https://api.github.com/repos/OpenwaterHealth/openmotion-sdk/releases/latest'
-          try:
-              data = json.load(urllib.request.urlopen(url))
-              for a in data.get('assets', []):
-                  if a['name'].endswith('.whl'):
-                      print(a['browser_download_url']); sys.exit(0)
-          except Exception:
-              pass
-          sys.exit(1)
-          ")
-
-          if [ -n "$WHL_URL" ]; then
-            echo "Installing pylib wheel: $WHL_URL"
-            pip install "$WHL_URL"
+          # SDK selection:
+          #   * X.Y.Z-dev.N tag → source-install from openmotion-sdk@next so
+          #     the dev pre-release ships against the matching dev SDK.
+          #   * Anything else (production tag, branch push, manual dispatch)
+          #     → fetch the latest published openmotion-sdk wheel, with a
+          #     source-install of main as the fallback.
+          if [[ "$GITHUB_REF" == refs/tags/*-dev.* ]]; then
+            echo "Dev tag detected ($GITHUB_REF) — installing SDK from next branch"
+            pip install "git+https://github.com/OpenwaterHealth/openmotion-sdk.git@next"
           else
-            echo "No wheel found – falling back to source install"
-            pip install git+https://github.com/OpenwaterHealth/openmotion-sdk.git
+            WHL_URL=$(python -c "
+            import json, urllib.request, sys
+            url = 'https://api.github.com/repos/OpenwaterHealth/openmotion-sdk/releases/latest'
+            try:
+                data = json.load(urllib.request.urlopen(url))
+                for a in data.get('assets', []):
+                    if a['name'].endswith('.whl'):
+                        print(a['browser_download_url']); sys.exit(0)
+            except Exception:
+                pass
+            sys.exit(1)
+            ")
+
+            if [ -n "$WHL_URL" ]; then
+              echo "Installing pylib wheel: $WHL_URL"
+              pip install "$WHL_URL"
+            else
+              echo "No wheel found – falling back to source install"
+              pip install git+https://github.com/OpenwaterHealth/openmotion-sdk.git
+            fi
           fi
 
           pip install -r requirements.txt
@@ -66,7 +76,7 @@ jobs:
         run: |
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             TAG="${GITHUB_REF#refs/tags/}"
-            # Strip leading 'v' only; keep 'pre-' for pre-release versions
+            # Strip leading 'v' only; '-dev.N' suffixes stay (semver pre-release).
             VER="${TAG#v}"
           else
             VER=$(git describe --tags --dirty --always --long 2>/dev/null || echo "dev-${GITHUB_SHA::8}")
@@ -95,8 +105,8 @@ jobs:
           echo "ARTIFACT_NAME=OpenMotion-Bloodflow-${TAG}" >> "$GITHUB_OUTPUT"
           echo "ARTIFACT_ZIP=OpenMotion-Bloodflow-${TAG}.zip" >> "$GITHUB_OUTPUT"
 
-          # pre-release flag
-          if [[ "$TAG" == pre-* ]]; then
+          # pre-release flag — X.Y.Z-dev.N tags are dev pre-releases.
+          if [[ "$TAG" == *-dev.* ]]; then
             echo "PRERELEASE=true" >> "$GITHUB_OUTPUT"
           else
             echo "PRERELEASE=false" >> "$GITHUB_OUTPUT"
