@@ -29,6 +29,28 @@
     0.25,
     0.25
   ],
+  "cq_check_duration_sec": 1.0,
+  "cq_rolling_avg_window": 10,
+  "cq_dark_threshold_per_camera": [
+    3.0,
+    3.0,
+    3.0,
+    3.0,
+    3.0,
+    3.0,
+    3.0,
+    3.0
+  ],
+  "cq_light_threshold_per_camera": [
+    15.0,
+    15.0,
+    15.0,
+    15.0,
+    15.0,
+    15.0,
+    15.0,
+    15.0
+  ],
   "leftMask": 102,
   "rightMask": 102,
   "uncorrectedOnly": true,
