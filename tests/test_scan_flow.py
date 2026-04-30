@@ -1,6 +1,35 @@
 """
-Scan Flow — end-to-end test: configure scan, run, visualize results.
+test_scan_flow.py — end-to-end scan flow happy path.
 
+Marker: ``release`` (~10 min wall-clock; only runs on release-pattern
+tag pushes).
+
+What it covers
+--------------
+The full from-cold-start scan workflow as a single sequential
+incremental class:
+
+  1. Open Scan Settings, set duration to 2 min via Tab navigation.
+  2. Open the Notes modal and type a session note.
+  3. Run the contact-quality Check (waits up to 2 min, dismisses the
+     "Good signal quality" modal).
+  4. Click Start, wait for the scan to complete (~5 min budget).
+  5. Dismiss the auto-opened Session Notes modal.
+  6. Open History, verify the latest scan is selected, visualize
+     BFI/BVI then Contrast/Mean, close everything.
+
+Preconditions
+-------------
+- Console + at least one sensor connected over USB.
+- ``OPENWATER_EXE`` set or ``OPENWATER_FROM_SOURCE=1``.
+- App is launched (handled by the session ``app`` fixture).
+
+Why this is in the release tier
+-------------------------------
+Real laser firing for 2 minutes plus FPGA configuration plus
+visualization windows. Roughly 10 min of wall-clock per run; not
+appropriate for the dev-tier HIL chain that fires on every push to
+``next``.
 """
 
 import time
