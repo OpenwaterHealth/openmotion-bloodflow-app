@@ -364,3 +364,23 @@ def app():
         "OpenWaterApp.exe not found -- set OPENWATER_EXE, or set "
         "OPENWATER_FROM_SOURCE=1 to launch via python main.py"
     )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _calibrate_panel_buttons_once(app):
+    """Run UIA-based panel button calibration once after the app
+    launches. Sets a per-session cache that ``click_panel(label)`` and
+    ``click_panel_button(label, fallback=...)`` both consult, so panel
+    button click coordinates are correct regardless of the runner's
+    DPI scale or window size.
+
+    Autouse so every test session gets calibration without each test
+    needing to request the fixture explicitly. If the app fixture
+    skipped (no exe / no main.py), we skip silently here too.
+    """
+    try:
+        from utils import calibrate_panel_buttons
+        calibrate_panel_buttons()
+    except Exception as e:
+        log.warning(f"  panel button calibration failed at session start: {e}")
+    yield

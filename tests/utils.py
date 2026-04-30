@@ -80,16 +80,31 @@ _PANEL_CONTENT_MARG  = 6    # ColumnLayout anchors.margins: 6 inside ButtonPanel
 _PANEL_BUTTON_HALF   = 34   # half of 68 px button
 _PANEL_SLOT_PX       = 85   # vertical spacing between button centers
 
-# Slot index for each top-of-panel button (counted from Start = 0). The
-# History and Settings buttons sit below a fillHeight spacer at the
-# bottom of the panel and need a different computation; they're not in
-# this map.
+# Slot index for each top-of-panel button (counted from Start = 0).
 PANEL_BUTTON_SLOTS = {
     "Start":         0,
     "Scan\nSettings": 1,
     "Notes":          2,
     "Check":          3,
 }
+
+# History and Settings sit at the bottom of the panel below a
+# Layout.fillHeight spacer, so they're anchored from the bottom rather
+# than slotted from the top. Slot index 0 = bottom-most (Settings).
+PANEL_BUTTON_BOTTOM_SLOTS = {
+    "Settings": 0,
+    "History":  1,
+}
+_PANEL_INNER_BOTTOM = 8     # ButtonPanel anchors.margins: 8 inside BloodFlow (bottom)
+_PANEL_OUTER_BOTTOM = 8     # main.qml outer Item bottomMargin: 8
+
+# Module-level cache of calibrated button centers. Populated lazily on
+# first click_panel() / get_panel_button_pos() call. Reset via
+# recalibrate_panel_buttons() if the window is resized or moved.
+_panel_button_cache: dict[str, tuple[int, int]] | None = None
+_PANEL_BUTTON_LABELS = (
+    "Start", "Scan\nSettings", "Notes", "Check", "History", "Settings",
+)
 
 
 # ─────────────────────────────────────────────
@@ -366,9 +381,14 @@ def selected_scan_text() -> str:
 
 
 def panel_button_screen_pos(label: str) -> tuple[int, int] | None:
-    """Compute absolute screen (x, y) for a top-of-panel sidebar button.
+    """Compute absolute screen (x, y) for a sidebar panel button.
 
-    Pixel-based, derived from the QML layout. Tri-state banner handling:
+    Pixel-based, derived from the QML layout. Used as a fallback when
+    UIA discovery fails. Returns ``None`` if the label isn't in either
+    the top-anchored or bottom-anchored slot map.
+
+    Top-anchored buttons (Start, Scan Settings, Notes, Check) measure
+    from the page top, with tri-state banner handling:
 
       - banner detected as **visible**  → shift y by ``BANNER_OFFSET_PX``
         (36 px) so we hit the button center exactly.
@@ -379,91 +399,214 @@ def panel_button_screen_pos(label: str) -> tuple[int, int] | None:
         is 68 px tall, banner shift is 36 px, so the two possible button
         positions overlap by 68 − 36 = 32 px). The click hits either way.
 
-    Returns ``None`` if the label isn't in the top-of-panel slot map
-    (e.g. ``"History"``, which sits below a flex spacer).
+    Bottom-anchored buttons (History, Settings) measure from the page
+    bottom; they don't shift with the banner because main.qml only
+    grows the page-Item's topMargin when the banner appears, leaving
+    the bottom anchored to parent.bottom.
     """
-    if label not in PANEL_BUTTON_SLOTS:
-        return None
-    slot = PANEL_BUTTON_SLOTS[label]
     w = get_app_window()
-
-    state = _detect_banner_state()
-    if state is True:
-        header_px = _PANEL_HEADER_PX + BANNER_OFFSET_PX
-        y_fudge = 0
-    elif state is False:
-        header_px = _PANEL_HEADER_PX
-        y_fudge = 0
-    else:  # uncertain
-        header_px = _PANEL_HEADER_PX
-        y_fudge = BANNER_OFFSET_PX // 2
-
     x = w.left + _PANEL_OUTER_LEFT + _PANEL_INNER_LEFT + _PANEL_CONTENT_MARG + _PANEL_BUTTON_HALF
-    y = (w.top + header_px + _PANEL_INNER_TOP + _PANEL_CONTENT_MARG
-         + _PANEL_BUTTON_HALF + slot * _PANEL_SLOT_PX + y_fudge)
-    return x, y
+
+    if label in PANEL_BUTTON_SLOTS:
+        slot = PANEL_BUTTON_SLOTS[label]
+        state = _detect_banner_state()
+        if state is True:
+            header_px = _PANEL_HEADER_PX + BANNER_OFFSET_PX
+            y_fudge = 0
+        elif state is False:
+            header_px = _PANEL_HEADER_PX
+            y_fudge = 0
+        else:  # uncertain
+            header_px = _PANEL_HEADER_PX
+            y_fudge = BANNER_OFFSET_PX // 2
+        y = (w.top + header_px + _PANEL_INNER_TOP + _PANEL_CONTENT_MARG
+             + _PANEL_BUTTON_HALF + slot * _PANEL_SLOT_PX + y_fudge)
+        return x, y
+
+    if label in PANEL_BUTTON_BOTTOM_SLOTS:
+        slot = PANEL_BUTTON_BOTTOM_SLOTS[label]
+        # Slot 0 = Settings (lowest), slot 1 = History (one button above).
+        y = (w.bottom - _PANEL_OUTER_BOTTOM - _PANEL_INNER_BOTTOM
+             - _PANEL_CONTENT_MARG - _PANEL_BUTTON_HALF
+             - slot * _PANEL_SLOT_PX)
+        return x, y
+
+    return None
+
+
+# ─────────────────────────────────────────────
+# Per-machine panel button calibration
+# ─────────────────────────────────────────────
+def _calibrate_panel_buttons() -> dict[str, tuple[int, int]]:
+    """Find each panel button's screen center for the current machine.
+
+    Walks the UIA tree once and matches every visible Text element
+    against the panel-button label set. UIA returns absolute screen
+    pixels (DPI-aware), so this works correctly regardless of the
+    runner's DPI scale or window size — fixing the per-machine
+    coordinate-drift problem the static SIDEBAR_* constants have.
+
+    Anything UIA can't find falls back to ``panel_button_screen_pos``
+    (the QML pixel layout), which assumes a default-sized window but
+    at least gets us in the right zip code.
+
+    Returns a dict mapping each known label to (cx, cy). Missing
+    labels mean both UIA and the QML fallback failed for that button.
+    """
+    move_window_on_screen()
+    rects: dict[str, tuple[int, int]] = {}
+
+    # All variants we'll accept for each label. PyQt's Qt-accessibility
+    # bridge sometimes flattens the QML "Scan\nSettings" text into a
+    # single line with newline preserved, sometimes into "Scan Settings"
+    # or just "Scan". Try them all; first match wins per label.
+    variants: dict[str, set[str]] = {}
+    for lbl in _PANEL_BUTTON_LABELS:
+        variants[lbl] = {
+            lbl,
+            lbl.replace("\n", " "),
+            lbl.replace("\n", ""),
+            lbl.split("\n")[0],
+        }
+    # Start is special: its visible label depends on connection state
+    # ("Start" / "Stop" / "Disconnected"). Add the alternates.
+    variants["Start"].update({"Stop", "Disconnected"})
+
+    try:
+        win = uia_window()
+    except Exception as e:
+        log.warning(f"  calibrate: uia_window failed: {e}")
+        win = None
+
+    seen_centers: set[tuple[int, int]] = set()
+    if win is not None:
+        try:
+            for elem in win.descendants():
+                if len(rects) == len(_PANEL_BUTTON_LABELS):
+                    break
+                try:
+                    txt = (elem.window_text() or "").strip()
+                except Exception:
+                    continue
+                if not txt:
+                    continue
+                for lbl in _PANEL_BUTTON_LABELS:
+                    if lbl in rects:
+                        continue
+                    if txt not in variants[lbl]:
+                        continue
+                    try:
+                        rect = elem.rectangle()
+                    except Exception:
+                        continue
+                    if rect.right <= rect.left or rect.bottom <= rect.top:
+                        continue
+                    cx = (rect.left + rect.right) // 2
+                    cy = (rect.top + rect.bottom) // 2
+                    if (cx, cy) in seen_centers:
+                        continue
+                    seen_centers.add((cx, cy))
+                    rects[lbl] = (cx, cy)
+                    log.info(
+                        f"  calibrated panel '{lbl!r}' → ({cx}, {cy}) "
+                        f"via UIA text='{txt}'"
+                    )
+                    break
+        except Exception as e:
+            log.warning(f"  calibrate: descendants walk failed: {e}")
+
+    # Fall back to the QML pixel layout for any label UIA didn't find.
+    for lbl in _PANEL_BUTTON_LABELS:
+        if lbl in rects:
+            continue
+        pos = panel_button_screen_pos(lbl)
+        if pos is not None:
+            rects[lbl] = pos
+            log.info(
+                f"  calibrated panel '{lbl!r}' → {pos} via QML pixel "
+                f"layout (UIA fallback)"
+            )
+        else:
+            log.warning(
+                f"  calibrated panel '{lbl!r}' → NOT FOUND "
+                f"(UIA missed and no QML slot)"
+            )
+
+    return rects
+
+
+def calibrate_panel_buttons() -> dict[str, tuple[int, int]]:
+    """Public: populate the cache and return the per-machine button map."""
+    global _panel_button_cache
+    _panel_button_cache = _calibrate_panel_buttons()
+    return _panel_button_cache
+
+
+def recalibrate_panel_buttons() -> dict[str, tuple[int, int]]:
+    """Public: wipe the cache and re-discover. Use after window moves
+    or any state change that might invalidate cached rects."""
+    global _panel_button_cache
+    _panel_button_cache = None
+    return calibrate_panel_buttons()
+
+
+def get_panel_button_pos(label: str) -> tuple[int, int]:
+    """Return cached center for ``label``, calibrating on first use."""
+    global _panel_button_cache
+    if _panel_button_cache is None:
+        _panel_button_cache = _calibrate_panel_buttons()
+    if label in _panel_button_cache:
+        return _panel_button_cache[label]
+    # One retry — maybe the window state changed since first calibration.
+    log.warning(
+        f"  get_panel_button_pos('{label!r}') miss; recalibrating once"
+    )
+    _panel_button_cache = _calibrate_panel_buttons()
+    if label in _panel_button_cache:
+        return _panel_button_cache[label]
+    raise RuntimeError(
+        f"Panel button '{label!r}' not found after recalibration. "
+        f"Available: {list(_panel_button_cache.keys())}"
+    )
+
+
+def click_panel(label: str) -> None:
+    """Click a sidebar panel button by its label.
+
+    Uses per-machine calibrated coordinates (UIA-discovered with QML
+    pixel-layout fallback), so it works correctly regardless of DPI
+    scaling or window size. Replaces ``click_sidebar(*SIDEBAR_X, ...)``
+    pattern at panel-button click sites.
+
+    Labels: ``"Start"``, ``"Scan\\nSettings"``, ``"Notes"``, ``"Check"``,
+    ``"History"``, ``"Settings"``.
+    """
+    ensure_visible()
+    cx, cy = get_panel_button_pos(label)
+    log.info(f"  click panel '{label!r}' → ({cx}, {cy})")
+    pyautogui.moveTo(cx, cy, duration=0.3)
+    pyautogui.click(cx, cy)
+    time.sleep(SLEEP)
 
 
 def click_panel_button(label: str, fallback: tuple[float, float] | None = None) -> bool:
     """Click a ButtonPanel sidebar button by its visible label text.
 
-    The buttons in ``components/ButtonPanel.qml`` are MouseArea-driven and
-    don't expose accessible names directly, but each button renders its
-    label as a ``Text`` element (e.g. ``"Scan\\nSettings"``, ``"Notes"``,
-    ``"Check"``). The label is centered within the 68×68 button via
-    ``ColumnLayout { anchors.centerIn: parent }``, so clicking the label's
-    center lands inside the ``MouseArea`` that fills the same 68×68 item.
+    Thin wrapper around :func:`click_panel`, retained for backward
+    compatibility with existing callers that pass a ``fallback`` ratio
+    pair. The fallback is now only used if calibration fails entirely
+    — the calibrated path (UIA + QML pixel layout) handles the common
+    case correctly across machines.
 
-    Searches:
-      1. UIA ``descendants(title=label)`` — exact match including newlines.
-      2. Same with ``\\n`` → space, in case UIA normalises whitespace.
-      3. First-line of label (``"Scan"`` for ``"Scan\\nSettings"``).
-
-    If all three fail and ``fallback`` is supplied, click those relative
-    window coords as a last resort. Returns True if any click was issued.
+    Returns True if a click was issued.
     """
-    ensure_visible()
-    win = uia_window()
-    for variant in (label, label.replace("\n", " "), label.split("\n")[0]):
-        try:
-            matches = win.descendants(title=variant)
-        except Exception:
-            matches = []
-        if matches:
-            elem = matches[0]
-            rect = elem.rectangle()
-            cx = (rect.left + rect.right) // 2
-            cy = (rect.top + rect.bottom) // 2
-            log.info(
-                f"  click_panel_button('{label}'): UIA match on '{variant}' "
-                f"→ ({cx}, {cy})"
-            )
-            pyautogui.moveTo(cx, cy, duration=0.3)
-            pyautogui.click(cx, cy)
-            time.sleep(SLEEP)
-            return True
-
-    # UIA didn't find the label (Qt accessibility doesn't expose plain
-    # Text inside MouseArea-driven buttons). Use the QML pixel layout
-    # instead — window-size independent and banner-aware.
-    pos = panel_button_screen_pos(label)
-    if pos is not None:
-        x, y = pos
-        state = _detect_banner_state()
-        if state is True:
-            banner_note = " (banner detected → +36 px)"
-        elif state is False:
-            banner_note = " (no banner)"
-        else:
-            banner_note = " (banner state uncertain → +18 px overlap fudge)"
-        log.info(
-            f"  click_panel_button('{label}'): QML pixel layout → ({x}, {y})"
-            f"{banner_note}"
-        )
-        pyautogui.moveTo(x, y, duration=0.3)
-        pyautogui.click(x, y)
-        time.sleep(SLEEP)
+    try:
+        click_panel(label)
         return True
+    except RuntimeError as e:
+        log.warning(
+            f"  click_panel_button('{label}'): calibration miss ({e})"
+        )
 
     if fallback is not None:
         rx, ry = fallback
@@ -479,15 +622,15 @@ def click_panel_button(label: str, fallback: tuple[float, float] | None = None) 
             )
             y += banner_offset
         log.warning(
-            f"  click_panel_button('{label}'): UIA lookup failed, falling "
-            f"back to coords ({rx:.3f}, {ry:.3f}) → ({x}, {y})"
+            f"  click_panel_button('{label}'): falling back to relative "
+            f"coords ({rx:.3f}, {ry:.3f}) → ({x}, {y})"
         )
         pyautogui.moveTo(x, y, duration=0.3)
         pyautogui.click(x, y)
         time.sleep(SLEEP)
         return True
 
-    log.warning(f"  click_panel_button('{label}'): no UIA match and no fallback")
+    log.warning(f"  click_panel_button('{label}'): no calibration match and no fallback")
     return False
 
 

@@ -30,13 +30,13 @@ import pyautogui
 import shelly
 from conftest import (
     SLEEP,
-    click_sidebar,
     log,
     require_focus,
 )
 from utils import (
     RE_CONNECTED,
     RE_DISCONNECTED,
+    click_panel,
     find_app_log,
     log_size,
     wait_for_pattern,
@@ -45,8 +45,6 @@ from utils import (
 pytestmark = pytest.mark.dev
 
 
-# Sidebar coordinates — copied from test_scan_flow.py (shared layout).
-SIDEBAR_START = (0.019, 0.115)
 
 # Timeouts (seconds).
 CONNECT_TIMEOUT    = 30   # USB enumeration + ping/version handshake
@@ -135,7 +133,7 @@ class TestConnectionRedesign:
         require_focus()
 
         log.info("Starting scan")
-        click_sidebar(*SIDEBAR_START, "Start")
+        click_panel("Start")
         time.sleep(SCAN_RUNUP_SEC)
 
         log_path = find_app_log()
@@ -152,12 +150,12 @@ class TestConnectionRedesign:
         log.info("Letting app idle, then starting a second scan")
         time.sleep(SETTLE_AFTER_SCAN)
         require_focus()
-        click_sidebar(*SIDEBAR_START, "Start")
+        click_panel("Start")
         time.sleep(SCAN_RUNUP_SEC)
 
         # Stop the second scan so we leave a clean state for the next test.
         require_focus()
-        click_sidebar(*SIDEBAR_START, "Stop")
+        click_panel("Start")
         time.sleep(SLEEP)
 
     def test_04_rapid_toggle(self, outlet, app):

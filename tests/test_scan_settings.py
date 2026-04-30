@@ -20,7 +20,6 @@ import pytest
 
 from conftest import (
     SLEEP,
-    click_sidebar,
     ensure_visible,
     get_app_window,
     log,
@@ -28,14 +27,12 @@ from conftest import (
     require_focus,
     uia_window,
 )
-from utils import SENSOR_OPTIONS, focus_combobox_by_label
+from utils import SENSOR_OPTIONS, click_panel, focus_combobox_by_label
 
 pytestmark = pytest.mark.dev
 
-# ─────────────────────────────────────────────
-# Sidebar + modal coordinates
-# ─────────────────────────────────────────────
-SIDEBAR_SCAN = (0.019, 0.210)
+# Modal close button (top-right X) — still coord-based since it's
+# inside the modal, not the calibrated sidebar panel.
 SCAN_MODAL_CLOSE = (0.360, 0.119)
 
 
@@ -133,7 +130,7 @@ class TestScanSettings:
 
     def test_01_open(self, app):
         ensure_visible()
-        click_sidebar(*SIDEBAR_SCAN, "Scan Settings icon")
+        click_panel("Scan\nSettings")
 
     def test_02_sensor_dots_visible(self, app):
         """Sensor dot pattern visible in Camera Configuration."""
@@ -230,7 +227,7 @@ class TestScanSettings:
         _click_coord(*SCAN_MODAL_CLOSE, "X close button")
 
     def test_14_close_via_escape(self, app):
-        click_sidebar(*SIDEBAR_SCAN, "Reopen Scan Settings")
+        click_panel("Scan\nSettings")  # reopen
         require_focus()
         pyautogui.press("escape")
         time.sleep(SLEEP)

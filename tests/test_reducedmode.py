@@ -21,7 +21,6 @@ from conftest import (
     APP_KEYWORDS,
     SLEEP,
     click_by_name,
-    click_sidebar,
     ensure_visible,
     get_app_window,
     get_clipboard,
@@ -30,17 +29,14 @@ from conftest import (
     uia_window,
     wait_with_log,
 )
-from utils import close_plot_window, move_window_on_screen, selected_scan_text
+from utils import (
+    click_panel,
+    close_plot_window,
+    move_window_on_screen,
+    selected_scan_text,
+)
 
 pytestmark = pytest.mark.release
-
-# ─────────────────────────────────────────────
-# Sidebar coordinates
-# ─────────────────────────────────────────────
-SIDEBAR_SETTINGS      = (0.019, 0.920)   # gear icon — bottommost sidebar button
-SIDEBAR_NOTES_REDUCED = (0.019, 0.210)   # Notes position when Scan Settings is hidden
-SIDEBAR_START         = (0.019, 0.115)   # Start / Stop toggle button
-SIDEBAR_HISTORY       = (0.020, 0.820)   # History icon
 
 # Relative coordinate of the Reduced Mode Enable toggle within the app window.
 # Measured from screenshot — adjust if the toggle position shifts.
@@ -204,7 +200,7 @@ class TestReducedMode:
     def test_01_open_settings(self, app):
         move_window_on_screen()
         ensure_visible()
-        click_sidebar(*SIDEBAR_SETTINGS, "Settings gear icon")
+        click_panel("Settings")
 
     def test_02_camera_config_visible(self, app):
         """Default Camera Configuration section is visible at the top."""
@@ -224,7 +220,7 @@ class TestReducedMode:
 
     def test_05_open_notes(self, app):
         """Notes is now at the former Scan Settings position in the reduced sidebar."""
-        click_sidebar(*SIDEBAR_NOTES_REDUCED, "Notes (reduced mode position)")
+        click_panel("Notes")
 
     def test_06_type_note(self, app):
         """Type a unique note and save it."""
@@ -241,7 +237,7 @@ class TestReducedMode:
 
     def test_08_persist_after_reopen(self, app):
         """Verify the note persists after closing and reopening."""
-        click_sidebar(*SIDEBAR_NOTES_REDUCED, "Notes (reopen)")
+        click_panel("Notes")
         require_focus()
         pyautogui.hotkey("ctrl", "a")
         time.sleep(0.2)
@@ -279,7 +275,7 @@ class TestReducedMode:
         require_focus()
         pyautogui.press("escape")
         time.sleep(SLEEP)
-        click_sidebar(*SIDEBAR_NOTES_REDUCED, "Notes (reopen)")
+        click_panel("Notes")
         require_focus()
         pyautogui.hotkey("ctrl", "a")
         time.sleep(0.2)
@@ -323,7 +319,7 @@ class TestReducedMode:
 
     def test_14_start_scan(self, app):
         """Click Start — the app auto-runs signal quality check, then click 'Start Scan'."""
-        click_sidebar(*SIDEBAR_START, "Start scan")
+        click_panel("Start")
         # In Reduced Mode, the 'Good signal quality' dialog auto-appears
         _wait_for_signal_quality_and_start_scan()
 
@@ -331,14 +327,14 @@ class TestReducedMode:
         wait_with_log(SCAN_WAIT, "2-minute manual scan running")
 
     def test_16_stop_scan(self, app):
-        click_sidebar(*SIDEBAR_START, "Stop scan")
+        click_panel("Start")
         log.info(f"  Waiting {STOP_BUFFER}s for scan data to save...")
         time.sleep(STOP_BUFFER)
 
     # ── History: verify scan, visualize BFI/BVI only (no Contrast/Mean in Reduced Mode)
 
     def test_17_open_history(self, app):
-        click_sidebar(*SIDEBAR_HISTORY, "History")
+        click_panel("History")
 
     def test_18_latest_scan_selected(self, app):
         scan_text = selected_scan_text()
@@ -377,7 +373,7 @@ class TestReducedModeMouse:
     def test_22_open_notes(self, app):
         """Notes is now at the former Scan Settings position in the reduced sidebar."""
         move_window_on_screen()
-        click_sidebar(*SIDEBAR_NOTES_REDUCED, "Notes (reduced mode position)")
+        click_panel("Notes")
 
     def test_23_type_note(self, app):
         require_focus()
@@ -397,7 +393,7 @@ class TestReducedModeMouse:
 
     def test_25_start_scan(self, app):
         """Click Start — the app auto-runs signal quality check, then click 'Start Scan'."""
-        click_sidebar(*SIDEBAR_START, "Start scan")
+        click_panel("Start")
         # In Reduced Mode, the 'Good signal quality' dialog auto-appears
         _wait_for_signal_quality_and_start_scan()
 
@@ -405,14 +401,14 @@ class TestReducedModeMouse:
         wait_with_log(SCAN_WAIT, "manual scan running")
 
     def test_27_stop_scan(self, app):
-        click_sidebar(*SIDEBAR_START, "Stop scan")
+        click_panel("Start")
         log.info(f"  Waiting {STOP_BUFFER}s for scan data to save...")
         time.sleep(STOP_BUFFER)
 
     # ── History: verify scan, visualize BFI/BVI only
 
     def test_28_open_history(self, app):
-        click_sidebar(*SIDEBAR_HISTORY, "History")
+        click_panel("History")
 
     def test_29_latest_scan_selected(self, app):
         scan_text = selected_scan_text()

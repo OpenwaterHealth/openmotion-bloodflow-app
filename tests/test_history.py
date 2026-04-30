@@ -12,17 +12,15 @@ import pytest
 from conftest import (
     SLEEP,
     click_by_name,
-    click_sidebar,
     ensure_visible,
     log,
     require_focus,
     wait_with_log,
 )
-from utils import close_plot_window, selected_scan_text
+from utils import click_panel, close_plot_window, selected_scan_text
 
 pytestmark = pytest.mark.dev
 
-SIDEBAR_HISTORY = (0.020, 0.830)
 VIZ_WAIT = 60  # seconds to leave each plot open
 
 
@@ -31,7 +29,7 @@ class TestHistory:
     """History modal — scan listing and visualization."""
 
     def test_01_open(self, app):
-        click_sidebar(*SIDEBAR_HISTORY, "History sidebar button")
+        click_panel("History")
 
     def test_02_latest_scan_listed(self, app):
         scan_text = selected_scan_text()

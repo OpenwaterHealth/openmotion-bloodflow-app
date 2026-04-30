@@ -9,17 +9,15 @@ from datetime import datetime
 import pyautogui
 import pytest
 
-from conftest import SLEEP, click_sidebar, ensure_visible, get_clipboard, log, require_focus
-from utils import move_window_on_screen
+from conftest import SLEEP, ensure_visible, get_clipboard, log, require_focus
+from utils import click_panel, move_window_on_screen
 
 pytestmark = pytest.mark.dev
-
-SIDEBAR_NOTES = (0.019, 0.315)
 
 
 def _open_notes():
     move_window_on_screen()
-    click_sidebar(*SIDEBAR_NOTES, "Notes sidebar button")
+    click_panel("Notes")
 
 
 def _close_notes():
@@ -164,7 +162,7 @@ class TestNotes:
         _clear_textarea()
         _close_notes()
         _open_notes()
-        click_sidebar(*SIDEBAR_NOTES, "Notes sidebar (toggle close)")
+        click_panel("Notes")  # toggle close
         _open_notes()  # reopen for remaining tests
 
     def test_19_large_note(self, app):
