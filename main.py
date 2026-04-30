@@ -5,6 +5,23 @@ import warnings
 import logging
 import datetime
 
+
+# PyInstaller --windowed/--noconsole builds set sys.stdout and sys.stderr
+# to None because there's no console attached. Any code that does
+# `sys.stdout.write(...)` (including logging.StreamHandler) raises
+# AttributeError: 'NoneType' object has no attribute 'write' on the
+# first call. The SDK's shutdown path logs from a finally-block, so a
+# crash there propagates as a CRITICAL "Unhandled Python exception" and
+# terminates the bloodflow process mid-test.
+#
+# Fix: redirect None streams to a safe sink BEFORE any logging is set up.
+# This must happen before any other import that might attach a logger.
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8", buffering=1)
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8", buffering=1)
+
+
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtQml import QQmlApplicationEngine, qmlRegisterSingletonInstance

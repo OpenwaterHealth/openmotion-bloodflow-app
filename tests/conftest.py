@@ -384,3 +384,43 @@ def _calibrate_panel_buttons_once(app):
     except Exception as e:
         log.warning(f"  panel button calibration failed at session start: {e}")
     yield
+
+
+# Track the *first* test that finds the app gone, so subsequent tests
+# fail with a pinpointed message instead of a generic
+# "App window not found" cascade.
+_app_dead_after: str | None = None
+
+
+@pytest.fixture(autouse=True)
+def _check_app_alive(request, app):
+    """Function-scoped guard that runs before every test.
+
+    Detects the case where the bloodflow app has crashed between
+    tests (e.g. an SDK-side unhandled exception during a previous
+    test's teardown), and fails the current test with a clear,
+    pointing message rather than letting the cascade of "App window
+    not found" errors bury the actual culprit.
+
+    Once the app is dead, every subsequent test fails with the same
+    message naming the test that *first* detected the death — this
+    is almost always either the test that triggered the crash, or
+    the test immediately after it.
+    """
+    global _app_dead_after
+    if _app_dead_after is not None:
+        pytest.fail(
+            f"Bloodflow app died — first noticed by '{_app_dead_after}'. "
+            f"Subsequent tests cannot run. Inspect the bloodflow app log "
+            f"(app-logs/ow-bloodflowapp-*.log) around that test for an "
+            f"unhandled Python exception."
+        )
+
+    if not ensure_visible():
+        _app_dead_after = request.node.nodeid
+        pytest.fail(
+            f"Bloodflow app window is gone — likely crashed during the "
+            f"previous test. See app-logs/ow-bloodflowapp-*.log for "
+            f"diagnostics. (First detected at '{_app_dead_after}'.)"
+        )
+    yield
