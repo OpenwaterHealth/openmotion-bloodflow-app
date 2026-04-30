@@ -54,18 +54,12 @@ jobs:
             echo "Production/RC tag detected ($GITHUB_REF) — installing latest openmotion-sdk from PyPI"
             pip install --upgrade openmotion-sdk
           else
-            WHL_URL=$(python -c "
-            import json, urllib.request, sys
-            url = 'https://api.github.com/repos/OpenwaterHealth/openmotion-sdk/releases/latest'
-            try:
-                data = json.load(urllib.request.urlopen(url))
-                for a in data.get('assets', []):
-                    if a['name'].endswith('.whl'):
-                        print(a['browser_download_url']); sys.exit(0)
-            except Exception:
-                pass
-            sys.exit(1)
-            ")
+            # Fetch the latest openmotion-sdk wheel from GitHub Releases.
+            # Kept as a one-liner so the YAML indent (12 spaces inside the
+            # else block) doesn't get treated as Python module-level
+            # whitespace — multiline `python -c` here would fail with
+            # IndentationError: unexpected indent.
+            WHL_URL=$(python -c "import json,urllib.request as ur,sys; d=json.load(ur.urlopen('https://api.github.com/repos/OpenwaterHealth/openmotion-sdk/releases/latest')); w=[a['browser_download_url'] for a in d.get('assets',[]) if a['name'].endswith('.whl')]; print(w[0] if w else '')" 2>/dev/null || true)
 
             if [ -n "$WHL_URL" ]; then
               echo "Installing pylib wheel: $WHL_URL"
