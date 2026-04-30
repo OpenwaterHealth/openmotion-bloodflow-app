@@ -40,15 +40,20 @@ jobs:
           # SDK selection:
           #   * X.Y.Z-dev.N tag → source-install from openmotion-sdk@next so
           #     the dev pre-release ships against the matching dev SDK.
+          #   * refs/heads/next push → same, source-install from
+          #     openmotion-sdk@next. The bloodflow next branch tracks SDK
+          #     API drift before any release, so it must always pair with
+          #     SDK next; PyPI's latest stable can be API-behind.
           #   * X.Y.Z      tag → install latest openmotion-sdk from PyPI.
           #     Production releases ship against the fully-released SDK.
           #   * X.Y.Z-rc.N tag → install latest openmotion-sdk from PyPI.
           #     RCs are a hardening pass on a fully-released SDK, so PyPI too.
-          #   * Anything else (branch push, manual dispatch) → fetch the
-          #     latest published openmotion-sdk wheel from GitHub Releases,
-          #     with a source-install of main as the fallback.
-          if [[ "$GITHUB_REF" == refs/tags/*-dev.* ]]; then
-            echo "Dev tag detected ($GITHUB_REF) — installing SDK from next branch"
+          #   * Anything else (refs/heads/main push, manual dispatch) →
+          #     fetch the latest published openmotion-sdk wheel from
+          #     GitHub Releases, with a source-install of main as the
+          #     fallback.
+          if [[ "$GITHUB_REF" == refs/tags/*-dev.* ]] || [[ "$GITHUB_REF" == refs/heads/next ]]; then
+            echo "Dev/next-branch ($GITHUB_REF) — installing SDK from openmotion-sdk@next"
             pip install "git+https://github.com/OpenwaterHealth/openmotion-sdk.git@next"
           elif [[ "$GITHUB_REF" =~ ^refs/tags/[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
             echo "Production/RC tag detected ($GITHUB_REF) — installing latest openmotion-sdk from PyPI"

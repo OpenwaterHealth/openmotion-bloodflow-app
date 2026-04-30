@@ -12,16 +12,22 @@ Each form determines which branch it must be cut from, what SDK source
 the build uses, and whether the GitHub Release is flagged as
 pre-release.
 
-| Tag format         | Cut from | SDK source                                                | GitHub pre-release |
-|--------------------|----------|-----------------------------------------------------------|--------------------|
-| `X.Y.Z`            | `main`   | PyPI (`pip install --upgrade openmotion-sdk`)             | No                 |
-| `X.Y.Z-rc.N`       | `next`   | PyPI (`pip install --upgrade openmotion-sdk`)             | Yes                |
-| `X.Y.Z-dev.N`      | `next`   | source (`git+...openmotion-sdk.git@next`)                 | Yes                |
+| Tag form / branch    | Cut from | SDK source                                                | GitHub pre-release |
+|----------------------|----------|-----------------------------------------------------------|--------------------|
+| `X.Y.Z`              | `main`   | PyPI (`pip install --upgrade openmotion-sdk`)             | No                 |
+| `X.Y.Z-rc.N`         | `next`   | PyPI (`pip install --upgrade openmotion-sdk`)             | Yes                |
+| `X.Y.Z-dev.N`        | `next`   | source (`git+...openmotion-sdk.git@next`)                 | Yes                |
+| `refs/heads/next`    | `next`   | source (`git+...openmotion-sdk.git@next`)                 | n/a (no release)   |
 
-Branch pushes (no tag) and manual `workflow_dispatch` runs build against
-the latest SDK wheel from GitHub Releases (with a source-install of
-`main` as fallback). They are useful for verification builds; they do
-**not** create a GitHub Release.
+`next`-branch pushes also pull SDK from `@next` source — the bloodflow
+`next` branch tracks SDK API drift before any release, so it must
+always pair with SDK `next`; PyPI's latest stable can be API-behind
+(it lags the most recent connection-redesign / contact-quality merges).
+
+`refs/heads/main` pushes and manual `workflow_dispatch` runs build
+against the latest SDK wheel from GitHub Releases (with a
+source-install of `main` as fallback). They are useful for
+verification builds; they do **not** create a GitHub Release.
 
 ## Release progression
 
