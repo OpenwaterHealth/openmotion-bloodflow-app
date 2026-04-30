@@ -392,6 +392,49 @@ def _calibrate_panel_buttons_once(app):
 _app_dead_after: str | None = None
 
 
+def _dismiss_modals_if_any(max_presses: int = 3) -> int:
+    """Press Escape repeatedly to dismiss any modal currently on top.
+
+    Returns the number of presses sent. Idempotent — pressing Escape
+    when no modal is open is harmless. Used by the autouse class
+    cleanup fixture to keep stale Session-Notes modals from a prior
+    test class from being the topmost UIA target when a later class
+    looks for its own modal contents.
+    """
+    if not ensure_visible():
+        return 0
+    for i in range(max_presses):
+        try:
+            import pyautogui as _pg
+            _pg.press("escape")
+        except Exception:
+            return i
+        time.sleep(0.3)
+    time.sleep(SLEEP)
+    return max_presses
+
+
+@pytest.fixture(scope="class", autouse=True)
+def _dismiss_leftover_modals_per_class(app):
+    """Dismiss any leftover modal at the start of every test class.
+
+    Background: test_connection_redesign.test_03_power_cycle_during_scan
+    starts a scan, then yanks power. The SDK auto-stops the scan and
+    the Session Notes modal opens automatically, but the test never
+    dismisses it. The modal stays on top through subsequent test
+    classes, and UIA only exposes the *topmost* modal's contents —
+    so test_scan_settings, test_notes, etc. all start with their
+    target modal hidden behind the stale Session Notes overlay.
+
+    Class-scoped autouse + 3 Escape presses is idempotent and cheap;
+    pressing Escape with no modal open is harmless.
+    """
+    n = _dismiss_modals_if_any(max_presses=3)
+    if n:
+        log.info(f"  pre-class modal cleanup: sent {n} Escape press(es)")
+    yield
+
+
 @pytest.fixture(autouse=True)
 def _check_app_alive(request, app):
     """Function-scoped guard that runs before every test.

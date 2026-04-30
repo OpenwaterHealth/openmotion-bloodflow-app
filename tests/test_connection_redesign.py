@@ -147,6 +147,15 @@ class TestConnectionRedesign:
         offset_after_disc = log_size(log_path)
         _wait_connected(log_path, offset_after_disc)
 
+        # Dismiss the Session Notes modal that auto-opens when the
+        # power-cycle aborted scan ends. Without this, the modal
+        # stays on top through every subsequent test class and UIA
+        # only exposes its contents — masking the modals later tests
+        # are trying to interact with.
+        require_focus()
+        pyautogui.press("escape")
+        time.sleep(SLEEP)
+
         log.info("Letting app idle, then starting a second scan")
         time.sleep(SETTLE_AFTER_SCAN)
         require_focus()
@@ -156,6 +165,11 @@ class TestConnectionRedesign:
         # Stop the second scan so we leave a clean state for the next test.
         require_focus()
         click_panel("Start")
+        time.sleep(SLEEP)
+        # And dismiss the Session Notes modal from the second scan
+        # for the same reason as above.
+        require_focus()
+        pyautogui.press("escape")
         time.sleep(SLEEP)
 
     def test_04_rapid_toggle(self, outlet, app):
