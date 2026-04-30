@@ -118,7 +118,11 @@ class TestConnectionRedesign:
     def test_02_power_cycle_while_idle(self, outlet, app):
         """Idle app + power cycle → reconnects."""
         log_path = find_app_log()
-        assert log_path
+        assert log_path, (
+            "could not locate the bloodflow app log under any of the "
+            "search roots in utils.find_app_log — verify the app is "
+            "actually launched and writing to app-logs/."
+        )
         offset = log_size(log_path)
 
         log.info("Power-cycling outlet (off 5s, on)")
@@ -137,7 +141,11 @@ class TestConnectionRedesign:
         time.sleep(SCAN_RUNUP_SEC)
 
         log_path = find_app_log()
-        assert log_path
+        assert log_path, (
+            "could not locate the bloodflow app log under any of the "
+            "search roots in utils.find_app_log — verify the app is "
+            "actually launched and writing to app-logs/."
+        )
         offset = log_size(log_path)
 
         log.info("Power-cycling DURING scan (off 5s, on)")
@@ -187,7 +195,11 @@ class TestConnectionRedesign:
         log.info("Settling, then forcing one verification cycle")
         time.sleep(5)
         log_path = find_app_log()
-        assert log_path
+        assert log_path, (
+            "could not locate the bloodflow app log under any of the "
+            "search roots in utils.find_app_log — verify the app is "
+            "actually launched and writing to app-logs/."
+        )
         offset = log_size(log_path)
         outlet.power_cycle(off_time=5.0)
 
