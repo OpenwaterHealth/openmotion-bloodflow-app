@@ -136,36 +136,46 @@ class TestScanSettings:
         """Sensor dot pattern visible in Camera Configuration."""
         pass  # visual confirmation — no assertion needed
 
-    def test_03_session_label(self, app):
-        """Session value is visible and non-empty at the top of the modal.
+    def test_03_user_label(self, app):
+        """The 'User Label:' field (formerly 'Session') is rendered in
+        the modal header. Verifies the label text is reachable via UIA.
 
-        Tab into the modal first so QML exposes all UIA elements, then read
-        the header values by filtering out sensor options and duration inputs.
+        Tab into the modal first so QML exposes all UIA elements, then
+        look for the literal label string. A second pass on subsequent
+        tests still reads the field's *value* via _get_modal_header_values
+        once UIA cooperates.
         """
         require_focus()
         pyautogui.press("tab")   # enter modal — focus first interactive element
         time.sleep(0.5)
-        values = _get_modal_header_values()
-        assert len(values) > 0, (
-            f"Session value not found in modal. Raw UIA texts: {values}"
+        win = uia_window()
+        found = False
+        for elem in win.descendants():
+            try:
+                txt = (elem.window_text() or "").strip()
+            except Exception:
+                continue
+            if txt in ("User Label:", "User Label"):
+                found = True
+                break
+        assert found, (
+            "'User Label' text not found in scan-settings modal. The "
+            "label was renamed from 'Session' to 'User Label' in "
+            "ScanSettingsModal.qml; UIA should expose the Text element."
         )
-        log.info(f"  Session value: '{values[0]}'")
+        log.info("  'User Label' label rendered in modal")
 
-    def test_04_user_label(self, app):
-        """User/Session header is visible and non-empty at the top of the modal.
-
-        The QML app exposes only one combined header value via UIA (the session
-        identifier serves as the user-session context). The test verifies that
-        the header area is accessible — if a second distinct value is present,
-        it is logged as the User field.
-        """
+    def test_04_user_label_value_present(self, app):
+        """The user-label field is non-empty (auto-generated 'owXXXXXX'
+        unless the user has typed something else)."""
         values = _get_modal_header_values()
-        # Accept either a dedicated User value (index 1) or the shared Session
-        # identifier (index 0) — both confirm the header is visible.
-        user_value = values[1] if len(values) > 1 else (values[0] if values else "")
-        log.info(f"  User/Session header value: '{user_value}'")
+        # Accept any non-filtered modal text as proof the value field
+        # rendered. The auto-generated label format is 'ow' + 6 chars.
+        user_value = values[0] if values else ""
+        log.info(f"  User Label value (best-guess from UIA): '{user_value}'")
         assert len(user_value) > 0, (
-            "No header values found in modal — Session/User fields not accessible via UIA"
+            "No header values found in modal — User Label field is "
+            "either empty or not accessible via UIA."
         )
 
     @pytest.mark.parametrize("option", SENSOR_OPTIONS, ids=SENSOR_OPTIONS)

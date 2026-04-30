@@ -44,9 +44,30 @@ def _type_note(text: str):
     time.sleep(SLEEP)
 
 
+def _clear_clipboard() -> None:
+    """Empty the system clipboard via PowerShell.
+
+    Self-hosted runners often have a polluted clipboard (e.g. a
+    `gh auth login` setup command from session bringup), and reading
+    that contents back as if it were a copied note made tests
+    flake. Always clear before copy → read.
+    """
+    try:
+        import subprocess
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command", "Set-Clipboard -Value ''"],
+            check=False, timeout=5,
+        )
+    except Exception as e:
+        log.warning(f"  _clear_clipboard failed: {e}")
+
+
 def _copy_all_and_read() -> str:
-    """Select all, copy, return clipboard text."""
+    """Select all, copy, return clipboard text. Clears the clipboard
+    first so a polluted host clipboard can't masquerade as the note's
+    contents when Ctrl+C silently fails."""
     require_focus()
+    _clear_clipboard()
     pyautogui.hotkey("ctrl", "a")
     time.sleep(0.2)
     pyautogui.hotkey("ctrl", "c")
