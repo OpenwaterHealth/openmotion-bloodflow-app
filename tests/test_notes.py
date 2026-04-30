@@ -65,14 +65,31 @@ def _clear_clipboard() -> None:
 def _copy_all_and_read() -> str:
     """Select all, copy, return clipboard text. Clears the clipboard
     first so a polluted host clipboard can't masquerade as the note's
-    contents when Ctrl+C silently fails."""
+    contents when Ctrl+C silently fails.
+
+    Retries the copy if the clipboard reads back empty — focus on the
+    Notes textarea sometimes hasn't settled when Ctrl+A is sent on the
+    self-hosted runner, which then selects nothing and copies nothing.
+    """
     require_focus()
-    _clear_clipboard()
-    pyautogui.hotkey("ctrl", "a")
-    time.sleep(0.2)
-    pyautogui.hotkey("ctrl", "c")
-    time.sleep(0.3)
-    return get_clipboard()
+    for attempt in (1, 2, 3):
+        _clear_clipboard()
+        time.sleep(0.1)
+        pyautogui.hotkey("ctrl", "a")
+        time.sleep(0.3)
+        pyautogui.hotkey("ctrl", "c")
+        time.sleep(0.5)
+        clip = get_clipboard()
+        if clip:
+            if attempt > 1:
+                log.info(f"  _copy_all_and_read succeeded on attempt {attempt}")
+            return clip
+        log.warning(
+            f"  _copy_all_and_read attempt {attempt}/3 returned empty "
+            f"clipboard — retrying"
+        )
+        time.sleep(0.5)
+    return ""
 
 
 @pytest.mark.incremental
