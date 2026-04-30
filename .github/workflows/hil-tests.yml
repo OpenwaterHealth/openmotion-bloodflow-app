@@ -41,7 +41,13 @@ jobs:
     timeout-minutes: 240
     defaults:
       run:
-        shell: pwsh
+        # Windows PowerShell 5.1 with -ExecutionPolicy Bypass — the
+        # self-hosted runner has the OS default Restricted policy, which
+        # rejects unsigned .ps1 files. Bypass is scoped to this single
+        # invocation, so it doesn't persist on the runner.
+        # `pwsh` (PowerShell 7+) isn't installed on the runner, so we
+        # can't use the cleaner `shell: pwsh` here.
+        shell: powershell -ExecutionPolicy Bypass -File {0}
 
     env:
       # SHELLY_IP_ADDRESS is provided by the self-hosted runner's session
