@@ -112,6 +112,12 @@ Rectangle {
         bloodFlow.scanning = true
         bloodFlow.suppressLiveCqModal = false
         reducedStartPending = false
+        // Drop any stale CQ warning entries from a previous scan/check.
+        // The connector creates a fresh _ContactQualityState per scan, so
+        // it never re-emits "cleared" for a camera that wasn't latched in
+        // the new scan — without this reset, the modal would keep showing
+        // an orange dot from the prior scan.
+        contactQualityModal.entries = []
         scanDialog.message = "Scanning..."
         scanDialog.stageText = "Preparing..."
         scanDialog.progress = 1
