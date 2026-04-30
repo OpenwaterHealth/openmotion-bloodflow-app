@@ -1,128 +1,74 @@
 [
   {
-    "muxIdx": 1,
-    "channel": 4,
-    "i2cAddr": 65,
-    "offset": 0,
+    "friendlyName": "TA_PULSE_WIDTH",
     "dataToSend": [27, 6, 0]
   },
   {
-    "muxIdx": 1,
-    "channel": 4,
-    "i2cAddr": 65,
-    "offset": 6,
+    "friendlyName": "TA_CURRENT_DRV",
     "dataToSend": [23, 122]
   },
   {
-    "muxIdx": 1,
-    "channel": 5,
-    "i2cAddr": 65,
-    "offset": 2,
+    "friendlyName": "SEED_DDS_GAIN",
     "dataToSend": [0, 0]
   },
   {
-    "muxIdx": 1,
-    "channel": 5,
-    "i2cAddr": 65,
-    "offset": 6,
-    "dataToSend": [96, 3]
-  },
-  {
-    "muxIdx": 1,
-    "channel": 5,
-    "i2cAddr": 65,
-    "offset": 4,
+    "friendlyName": "SEED_CW_GAIN",
     "dataToSend": [14, 8]
   },
   {
-    "muxIdx": 1,
-    "channel": 5,
-    "i2cAddr": 65,
-    "offset": 8,
+    "friendlyName": "SEED_DDS_CL",
+    "dataToSend": [96, 3]
+  },
+  {
+    "friendlyName": "SEED_CW_CL",
     "dataToSend": [165, 9]
   },
   {
-    "muxIdx": 1,
-    "channel": 6,
-    "i2cAddr": 65,
-    "offset": 0,
+    "friendlyName": "EE_PULSE_WIDTH_LL",
     "dataToSend": [0, 0, 0, 0]
   },
   {
-    "muxIdx": 1,
-    "channel": 6,
-    "i2cAddr": 65,
-    "offset": 4,
+    "friendlyName": "EE_PULSE_WIDTH_UL",
     "dataToSend": [0, 0, 0, 0]
   },
   {
-    "muxIdx": 1,
-    "channel": 6,
-    "i2cAddr": 65,
-    "offset": 8,
+    "friendlyName": "EE_RATE_LL",
     "dataToSend": [169, 18, 1, 0]
   },
   {
-    "muxIdx": 1,
-    "channel": 6,
-    "i2cAddr": 65,
-    "offset": 16,
+    "friendlyName": "EE_DRIVE_CL",
     "dataToSend": [136, 19]
   },
   {
-    "muxIdx": 1,
-    "channel": 6,
-    "i2cAddr": 65,
-    "offset": 20,
+    "friendlyName": "EE_CW_CURRENT",
     "dataToSend": [138, 3]
   },
   {
-    "muxIdx": 1,
-    "channel": 6,
-    "i2cAddr": 65,
-    "offset": 18,
+    "friendlyName": "EE_PWM_CURRENT",
     "dataToSend": [138, 3]
   },
   {
-    "muxIdx": 1,
-    "channel": 7,
-    "i2cAddr": 65,
-    "offset": 0,
+    "friendlyName": "OPT_PULSE_WIDTH_LL",
     "dataToSend": [0, 0, 0, 0]
   },
   {
-    "muxIdx": 1,
-    "channel": 7,
-    "i2cAddr": 65,
-    "offset": 4,
+    "friendlyName": "OPT_PULSE_WIDTH_UL",
     "dataToSend": [53, 12, 0, 0]
   },
   {
-    "muxIdx": 1,
-    "channel": 7,
-    "i2cAddr": 65,
-    "offset": 8,
+    "friendlyName": "OPT_RATE_LL",
     "dataToSend": [169, 18, 1, 0]
   },
   {
-    "muxIdx": 1,
-    "channel": 7,
-    "i2cAddr": 65,
-    "offset": 16,
+    "friendlyName": "OPT_DRIVE_CL",
     "dataToSend": [231, 27]
   },
   {
-    "muxIdx": 1,
-    "channel": 7,
-    "i2cAddr": 65,
-    "offset": 20,
+    "friendlyName": "OPT_PWM_CURRENT",
     "dataToSend": [138, 3]
   },
   {
-    "muxIdx": 1,
-    "channel": 7,
-    "i2cAddr": 65,
-    "offset": 18,
+    "friendlyName": "OPT_CW_CURRENT",
     "dataToSend": [138, 3]
   }
 ]

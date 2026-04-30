@@ -95,6 +95,8 @@ Item {
         root.visible = true
     }
     function close() {
+        // Commit any in-progress text field edit before saving
+        panel.forceActiveFocus()
         MOTIONInterface.directory = dataPathField.text
         MOTIONInterface.saveConfigs({
             "leftMask":           maskFromIndex(defaultLeftMaskIndex),
@@ -394,6 +396,20 @@ Item {
                 // Top padding
                 Item { Layout.fillWidth: true; height: 8 }
 
+                // ── Sensor Placement Instructions ────────────────────────────
+                SectionCard {
+                    title: "Sensor Placement Instructions"
+
+                    Text {
+                        text: "Place the Sensor Modules symmetrically about the midline on the patient's forehead while ensuring the sensors come into direct contact with the skin. Ensure they rest above the brow line and there are no obstructions or debris between the sensor modules and the skin."
+                        color: root.colTextSec
+                        font.pixelSize: 13
+                        wrapMode: Text.WordWrap
+                        Layout.fillWidth: true
+                        lineHeight: 1.4
+                    }
+                }
+
                 // ── Default Camera Configuration ─────────────────────────────
                 SectionCard {
                     visible: !root.reducedMode
@@ -517,6 +533,7 @@ Item {
                     }
 
                     FieldRow {
+                        visible: !root.reducedMode
                         label: "BVI low-pass filter"
                         PillSwitch {
                             checked: root.bviLowPassEnabled
@@ -646,6 +663,7 @@ Item {
                 // ── Reduced Mode ─────────────────────────────────────────────
                 SectionCard {
                     title: "Reduced Mode"
+                    visible: !root.reducedMode
 
                     FieldRow {
                         label: "Enable"

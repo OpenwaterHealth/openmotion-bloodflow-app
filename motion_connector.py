@@ -1,5 +1,6 @@
 from PyQt6.QtCore import (
     QObject,
+    QRecursiveMutex,
     pyqtSignal,
     pyqtProperty,
     pyqtSlot,
@@ -33,7 +34,15 @@ from omotion.config import (
 from omotion.MotionProcessing import process_bin_file
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
 from processing.visualize_bloodflow import VisualizeBloodflow
+
+from motion_config import (
+    FpgaModel,
+    apply_laser_power_from_config,
+    load_laser_params,
+    load_tec_params,
+)
 from utils.resource_path import resource_path
+
 import numpy as np
 import pandas as pd
 
@@ -66,6 +75,76 @@ SENSOR_CONNECTED = 1
 CONSOLE_CONNECTED = 2
 READY = 3
 RUNNING = 4
+
+_CQ_DEFAULT_DARK_THRESHOLD_DN = 3.0
+_CQ_DEFAULT_LIGHT_THRESHOLD_DN = 15.0
+_CQ_AMBIENT_CLEAR_FRAMES = 6
+_CQ_DEFAULT_ROLLING_WINDOW = 10
+
+
+class _ContactQualityState:
+    """Per-camera latch state for dark and rolling-average callbacks."""
+
+    def __init__(self):
+        self._ambient_latched: dict[tuple[str, int], bool] = {}
+        self._ambient_clear_streak: dict[tuple[str, int], int] = {}
+        self._contact_latched: dict[tuple[str, int], bool] = {}
+
+    @staticmethod
+    def _key(side: str, cam_id: int) -> tuple[str, int]:
+        return (str(side or ""), int(cam_id))
+
+    def process_dark(
+        self,
+        *,
+        side: str,
+        cam_id: int,
+        bg_sub_mean: float,
+        threshold_dn: float,
+    ) -> str:
+        """Return one of: 'activated', 'cleared', or 'none'."""
+        key = self._key(side, cam_id)
+        above = bg_sub_mean > threshold_dn
+        latched = self._ambient_latched.get(key, False)
+        if above:
+            self._ambient_clear_streak[key] = 0
+            if not latched:
+                self._ambient_latched[key] = True
+                return "activated"
+            return "none"
+
+        if latched:
+            streak = self._ambient_clear_streak.get(key, 0) + 1
+            if streak >= _CQ_AMBIENT_CLEAR_FRAMES:
+                self._ambient_latched[key] = False
+                self._ambient_clear_streak[key] = 0
+                return "cleared"
+            else:
+                self._ambient_clear_streak[key] = streak
+        return "none"
+
+    def process_rolling(
+        self,
+        *,
+        side: str,
+        cam_id: int,
+        bg_sub_mean: float,
+        threshold_dn: float,
+    ) -> str:
+        """Return one of: 'activated', 'cleared', or 'none'."""
+        key = self._key(side, cam_id)
+        below = bg_sub_mean < threshold_dn
+        latched = self._contact_latched.get(key, False)
+        if below:
+            if not latched:
+                self._contact_latched[key] = True
+                return "activated"
+            return "none"
+
+        if latched:
+            self._contact_latched[key] = False
+            return "cleared"
+        return "none"
 
 
 class MOTIONConnector(QObject):
@@ -125,6 +204,7 @@ class MOTIONConnector(QObject):
     )  # side, cam_id, timestamp_s, bvi  (kept for backward compat)
     scanCorrectedBatch = pyqtSignal('QVariantList')  # list of {side,camId,frameId,ts,bfi,bvi}
     scanCameraTemperature = pyqtSignal(str, int, float)  # side, cam_id, temperature_c
+    cameraDropoutDetected = pyqtSignal(str, int, str)    # side ("left"/"right"), cam_id (0-7), elapsed HH:MM:SS
 
     # post-processing signals
     postProgress = pyqtSignal(int)
@@ -141,6 +221,48 @@ class MOTIONConnector(QObject):
     updateAvailable = pyqtSignal(str, str)   # (latest_version, download_url)
     updateNotAvailable = pyqtSignal()
     updateCheckFailed = pyqtSignal(str)      # error message
+
+    # Contact-quality signals
+    contactQualityCheckStarted = pyqtSignal(int)
+    contactQualityCheckFinished = pyqtSignal(bool, str, 'QVariantList')
+    contactQualityWarning = pyqtSignal(str, str, str, float)
+    # (camera, typeKey, typeText, value, active)
+    contactQualityIssueStateChanged = pyqtSignal(str, str, str, float, bool)
+    contactQualityScanInProgress = pyqtSignal(bool)
+
+    @staticmethod
+    def _camera_label(side: str, cam_id: int) -> str:
+        prefix = "L" if side == "left" else "R"
+        return f"{prefix}{int(cam_id) + 1}"
+
+    @staticmethod
+    def _warning_text(type_key: str) -> str:
+        return {
+            "ambient_light": "Ambient light detected",
+            "poor_contact": "Poor sensor contact",
+        }.get(type_key, type_key)
+
+    @staticmethod
+    def _threshold_for(thresholds, cam_id: int, default_value: float) -> float:
+        if isinstance(thresholds, (list, tuple)) and 0 <= int(cam_id) < len(thresholds):
+            try:
+                return float(thresholds[int(cam_id)])
+            except Exception:
+                return float(default_value)
+        return float(default_value)
+
+    def _ensure_idle(self) -> str | None:
+        """Gate for pipeline-starting slots (capture / configure / check)."""
+        if self._cq_quick_running:
+            return "Contact-quality check already in progress"
+        if self._capture_running or self._capture_thread is not None:
+            return "Scan already running"
+        if self._config_running:
+            return "Camera configuration already in progress"
+        workflow = self._scan_workflow
+        if workflow is not None and getattr(workflow, "running", False):
+            return "Scan already running"
+        return None
 
     @staticmethod
     def _default_output_base() -> str:
@@ -179,6 +301,22 @@ class MOTIONConnector(QObject):
         # Unpack operational settings from config
         self._force_laser_fail            = bool(cfg.get("forceLaserFail", False))
         self._camera_temp_alert_threshold_c = float(cfg.get("cameraTempAlertThresholdC", 105.0))
+        self._camera_dropout_threshold_sec  = float(cfg.get("cameraDropoutThresholdSec", 2.0))
+
+        # Camera dropout watchdog state — reset at start of each scan
+        self._camera_last_seen: dict[tuple[str, int], float] = {}
+        self._camera_last_temp: dict[tuple[str, int], float] = {}
+        self._camera_dropped:   set[tuple[str, int]]         = set()
+
+        # 1 Hz watchdog timer — started/stopped around scan lifecycle
+        self._dropout_timer = QTimer(self)
+        self._dropout_timer.setInterval(1000)
+        self._dropout_timer.timeout.connect(self._on_dropout_check)
+
+        # Trigger-ON elapsed time — mirrored from startCapture locals so _on_dropout_check can read them
+        self._trigger_cumulative_s: float = 0.0
+        self._trigger_on_mono: float | None = None
+
         self._sensor_debug_logging        = bool(cfg.get("sensorDebugLogging", False))
         self._camera_fake_data            = bool(cfg.get("cameraFakeData", False))
         self._histo_throttle              = bool(cfg.get("histoThrottle", False))
@@ -213,8 +351,12 @@ class MOTIONConnector(QObject):
         self._trigger_state = "OFF"
         self._state = DISCONNECTED
         self._last_fan_status: dict[str, bool | None] = {"left": None, "right": None}
-        self.laser_params = self._load_laser_params(config_dir)
-        self._tec_voltage_default = self._load_tec_params(config_dir)
+
+        self.laser_params = load_laser_params(config_dir)
+        self._tec_voltage_default = load_tec_params(config_dir)
+        # Load FPGA model (preferred JSON, with legacy JS fallback)
+        self._fpga = FpgaModel()
+        self._console_mutex = QRecursiveMutex()
 
         eol_mean     = cfg.get("eol_min_mean_per_camera")
         eol_contrast = cfg.get("eol_min_contrast_per_camera")
@@ -229,6 +371,8 @@ class MOTIONConnector(QObject):
         self._capture_running = False
         self._notification_id_counter = 0  # monotonic id assigned to each notify() call
         self._safety_cancel_scheduled = False  # True after scheduling cancel-due-to-safety; cleared when capture ends
+        self._cq_quick_running = False
+        self._cq_state = _ContactQualityState()
         self._capture_left_path = ""
         self._capture_right_path = ""
         self._scan_notes = ""
@@ -799,12 +943,301 @@ class MOTIONConnector(QObject):
     def handleUpdateCapStatus(self, status_msg: str):
         logger.debug(f"Console status update: {status_msg}")
 
+    def _make_contact_quality_callbacks(
+        self,
+        *,
+        dark_thresholds,
+        light_thresholds,
+        warning_sink,
+    ) -> tuple[callable, callable]:
+        """Build dark/rolling callback pair for CQ warning evaluation."""
+        state = _ContactQualityState()
+
+        def _on_dark_frame(sample):
+            side = str(getattr(sample, "side", ""))
+            cam_id = int(getattr(sample, "cam_id", -1))
+            dark_mean = float(getattr(sample, "mean", 0.0))
+            threshold = self._threshold_for(
+                dark_thresholds, cam_id, _CQ_DEFAULT_DARK_THRESHOLD_DN
+            )
+            transition = state.process_dark(
+                side=side,
+                cam_id=cam_id,
+                bg_sub_mean=dark_mean,
+                threshold_dn=threshold,
+            )
+            if self._cq_quick_running or transition != "none":
+                logger.info(
+                    "CQ compare DARK %s: dark_mean=%.2f DN (bg-sub), threshold=%.2f DN -> %s",
+                    self._camera_label(side, cam_id),
+                    dark_mean,
+                    threshold,
+                    "WARN" if transition == "activated" else ("CLEAR" if transition == "cleared" else "OK"),
+                )
+            if transition == "activated":
+                warning_sink(side, cam_id, "ambient_light", dark_mean, True)
+            elif transition == "cleared":
+                warning_sink(side, cam_id, "ambient_light", dark_mean, False)
+
+        def _on_rolling_avg(sample):
+            side = str(getattr(sample, "side", ""))
+            cam_id = int(getattr(sample, "cam_id", -1))
+            avg_light_mean = float(getattr(sample, "mean", 0.0))
+            threshold = self._threshold_for(
+                light_thresholds, cam_id, _CQ_DEFAULT_LIGHT_THRESHOLD_DN
+            )
+            transition = state.process_rolling(
+                side=side,
+                cam_id=cam_id,
+                bg_sub_mean=avg_light_mean,
+                threshold_dn=threshold,
+            )
+            if self._cq_quick_running or transition != "none":
+                logger.info(
+                    "CQ compare LIGHT_AVG %s: avg_light_mean=%.2f DN (bg-sub), threshold=%.2f DN -> %s",
+                    self._camera_label(side, cam_id),
+                    avg_light_mean,
+                    threshold,
+                    "WARN" if transition == "activated" else ("CLEAR" if transition == "cleared" else "OK"),
+                )
+            if transition == "activated":
+                warning_sink(side, cam_id, "poor_contact", avg_light_mean, True)
+            elif transition == "cleared":
+                warning_sink(side, cam_id, "poor_contact", avg_light_mean, False)
+
+        return _on_dark_frame, _on_rolling_avg
+
+    @pyqtSlot()
+    def runContactQualityCheck(self):
+        """Run the quick contact-quality check via start_scan callbacks."""
+        err = self._ensure_idle()
+        if err is not None:
+            self.contactQualityCheckFinished.emit(False, err, [])
+            return
+
+        cfg = self._app_config or {}
+        duration_s = float(cfg.get("cq_check_duration_sec", 1.0))
+        dark_thresholds = cfg.get("cq_dark_threshold_per_camera")
+        light_thresholds = cfg.get("cq_light_threshold_per_camera")
+        rolling_window = int(cfg.get("cq_rolling_avg_window", _CQ_DEFAULT_ROLLING_WINDOW))
+
+        if not (self._leftSensorConnected or self._rightSensorConnected):
+            self.contactQualityCheckFinished.emit(False, "No sensors connected", [])
+            return
+
+        data_dir = self.directory or self._output_base
+        try:
+            os.makedirs(data_dir, exist_ok=True)
+        except Exception as exc:
+            self.contactQualityCheckFinished.emit(False, f"Failed to create data dir: {exc}", [])
+            return
+
+        self._cq_quick_running = True
+        self.contactQualityScanInProgress.emit(True)
+        self.contactQualityCheckStarted.emit(int(round(duration_s + 3)))
+
+        stats_lock = threading.Lock()
+        dark_sum: dict[tuple[str, int], float] = {}
+        dark_count: dict[tuple[str, int], int] = {}
+        light_avg_latest: dict[tuple[str, int], float] = {}
+
+        def _on_dark_frame_fn(sample):
+            side = str(getattr(sample, "side", ""))
+            cam_id = int(getattr(sample, "cam_id", -1))
+            dark_mean = float(getattr(sample, "mean", 0.0))
+            key = (side, cam_id)
+            with stats_lock:
+                dark_sum[key] = dark_sum.get(key, 0.0) + dark_mean
+                dark_count[key] = dark_count.get(key, 0) + 1
+
+        def _on_rolling_avg_fn(sample):
+            side = str(getattr(sample, "side", ""))
+            cam_id = int(getattr(sample, "cam_id", -1))
+            avg_light_mean = float(getattr(sample, "mean", 0.0))
+            with stats_lock:
+                light_avg_latest[(side, cam_id)] = avg_light_mean
+
+        req = ScanRequest(
+            subject_id=f"{self._user_label}_cq",
+            duration_sec=max(1, int(round(duration_s))),
+            left_camera_mask=0xFF if self._leftSensorConnected else 0x00,
+            right_camera_mask=0xFF if self._rightSensorConnected else 0x00,
+            data_dir=data_dir,
+            disable_laser=False,
+            write_raw_csv=False,
+            raw_csv_duration_sec=0.0,
+            reduced_mode=False,
+            rolling_avg_enabled=True,
+            rolling_avg_window=max(1, rolling_window),
+        )
+
+        def _on_complete(result):
+            with stats_lock:
+                dark_sum_snapshot = dict(dark_sum)
+                dark_count_snapshot = dict(dark_count)
+                light_avg_snapshot = dict(light_avg_latest)
+
+            warnings_by_key: dict[tuple[str, str], dict] = {}
+            table_rows: list[dict] = []
+            all_keys = sorted(
+                set(dark_sum_snapshot.keys()) | set(light_avg_snapshot.keys()),
+                key=lambda item: (item[0], item[1]),
+            )
+
+            for side, cam_id in all_keys:
+                camera = self._camera_label(side, cam_id)
+                dark_mean = None
+                dark_threshold = self._threshold_for(
+                    dark_thresholds, cam_id, _CQ_DEFAULT_DARK_THRESHOLD_DN
+                )
+                dark_warn = False
+
+                if dark_count_snapshot.get((side, cam_id), 0) > 0:
+                    dark_mean = (
+                        dark_sum_snapshot[(side, cam_id)]
+                        / float(dark_count_snapshot[(side, cam_id)])
+                    )
+                    dark_warn = dark_mean > dark_threshold
+                    if dark_warn:
+                        warnings_by_key[(camera, "ambient_light")] = {
+                            "camera": camera,
+                            "typeKey": "ambient_light",
+                            "typeText": self._warning_text("ambient_light"),
+                            "value": float(dark_mean),
+                        }
+
+                avg_light_mean = None
+                light_threshold = self._threshold_for(
+                    light_thresholds, cam_id, _CQ_DEFAULT_LIGHT_THRESHOLD_DN
+                )
+                light_warn = False
+                if (side, cam_id) in light_avg_snapshot:
+                    avg_light_mean = float(light_avg_snapshot[(side, cam_id)])
+                    light_warn = avg_light_mean < light_threshold
+                    if light_warn:
+                        warnings_by_key[(camera, "poor_contact")] = {
+                            "camera": camera,
+                            "typeKey": "poor_contact",
+                            "typeText": self._warning_text("poor_contact"),
+                            "value": float(avg_light_mean),
+                        }
+
+                warn_tags = []
+                if dark_warn:
+                    warn_tags.append("ambient_light")
+                if light_warn:
+                    warn_tags.append("poor_contact")
+                table_rows.append({
+                    "camera": camera,
+                    "dark_mean": dark_mean,
+                    "dark_threshold": dark_threshold,
+                    "dark_status": "WARN" if dark_warn else "OK",
+                    "light_mean": avg_light_mean,
+                    "light_threshold": light_threshold,
+                    "light_status": "WARN" if light_warn else "OK",
+                    "warnings": ",".join(warn_tags) if warn_tags else "-",
+                })
+
+            logger.info("CQ Final Compare (bg-sub DN):")
+            logger.info(
+                "| Camera | DarkMean | DarkThr | Dark | LightAvg | LightThr | Light | Warnings |"
+            )
+            logger.info(
+                "|--------|----------|---------|------|----------|----------|-------|----------|"
+            )
+            for row in table_rows:
+                dark_mean_txt = (
+                    f"{row['dark_mean']:.2f}" if row["dark_mean"] is not None else "n/a"
+                )
+                light_mean_txt = (
+                    f"{row['light_mean']:.2f}" if row["light_mean"] is not None else "n/a"
+                )
+                logger.info(
+                    "| %-6s | %8s | %7.2f | %-4s | %8s | %8.2f | %-5s | %-8s |",
+                    row["camera"],
+                    dark_mean_txt,
+                    row["dark_threshold"],
+                    row["dark_status"],
+                    light_mean_txt,
+                    row["light_threshold"],
+                    row["light_status"],
+                    row["warnings"],
+                )
+
+            warning_list = list(warnings_by_key.values())
+            ok = bool(getattr(result, "ok", False))
+            canceled = bool(getattr(result, "canceled", False))
+            err_msg = str(getattr(result, "error", "") or "")
+            if canceled and not err_msg:
+                err_msg = "Canceled"
+            if not ok and not err_msg:
+                err_msg = "Quick check failed"
+            self._cq_quick_running = False
+            self.contactQualityScanInProgress.emit(False)
+            self.contactQualityCheckFinished.emit(ok, err_msg, warning_list)
+
+        started = self._interface.start_scan(
+            req,
+            on_dark_frame_fn=_on_dark_frame_fn,
+            on_rolling_avg_fn=_on_rolling_avg_fn,
+            on_complete_fn=_on_complete,
+            on_error_fn=lambda e: logger.error("contact-quality check error: %s", e),
+            on_log_fn=lambda msg: logger.info("CQ quick-check: %s", msg),
+        )
+        if not started:
+            self._cq_quick_running = False
+            self.contactQualityScanInProgress.emit(False)
+            self.contactQualityCheckFinished.emit(False, "Failed to start scan", [])
+
+    @pyqtSlot()
+    def _on_dropout_check(self):
+        """1 Hz watchdog: emit cameraDropoutDetected for any camera silent > threshold."""
+        if not self._capture_running:
+            return
+        now = time.monotonic()
+        threshold = self._camera_dropout_threshold_sec
+        for key, last_t in list(self._camera_last_seen.items()):
+            if key in self._camera_dropped:
+                continue
+            if now - last_t > threshold:
+                side, cam_id = key
+                temp = self._camera_last_temp.get(key, float("nan"))
+                elapsed_str = self._scan_elapsed_str()
+                msg = (
+                    f"[{elapsed_str}] Camera {side.upper()} {cam_id + 1} dropout detected "
+                    f"(no data for >{threshold:.0f} s). Last temperature: {temp:.1f}°C"
+                )
+                logger.warning(msg)
+                run_logger.warning("[DROPOUT] side=%s cam=%d temp=%.1f°C threshold=%.0fs at %s",
+                                   side, cam_id, temp, threshold, elapsed_str)
+                self.notify(
+                    f"Camera {side.upper()} {cam_id + 1} connection lost at {elapsed_str}"
+                    f" — last temp {temp:.1f}°C",
+                    type_="warning",
+                    duration_ms=30000,
+                    tag=f"dropout_{side}_{cam_id}",
+                )
+                self._camera_dropped.add(key)
+                self.cameraDropoutDetected.emit(side, cam_id, elapsed_str)
+
+    def _scan_elapsed_str(self) -> str:
+        """Return current scan elapsed trigger-ON time as HH:MM:SS."""
+        elapsed = self._trigger_cumulative_s
+        if self._trigger_on_mono is not None:
+            elapsed += time.monotonic() - self._trigger_on_mono
+        total_s = int(elapsed)
+        h = total_s // 3600
+        m = (total_s % 3600) // 60
+        s = total_s % 60
+        return f"{h:02d}:{m:02d}:{s:02d}"
+
     @pyqtSlot()
     def stopCapture(self):
         """Stop capture (Cancel button or app close). Ceases scan, disables cameras, waits for worker."""
         if self._capture_running:
             self.captureLog.emit("Stop requested.")
 
+        self._dropout_timer.stop()
         self._capture_stop.set()
         try:
             if self._interface:
@@ -843,71 +1276,34 @@ class MOTIONConnector(QObject):
         logger.info("MOTIONConnector shutdown complete.")
 
     # --- SCAN MANAGEMENT METHODS ---
-    @pyqtSlot(result=list)
-    def _load_laser_params(self, config_dir):
-        filename = (
-            "laser_params_fault.json" if self._force_laser_fail else "laser_params.json"
-        )
-        config_path = (
-            resource_path("config", filename)
-            if config_dir == "config"
-            else Path(config_dir) / filename
-        )
-        if not config_path.exists():
-            logger.error(f"[Connector] Laser parameter file not found: {config_path}")
-            return []
+    def _get_fpga_scale(self, label: str, name: str):
+        """Delegate to FpgaModel (kept for backward compatibility)."""
+        return self._fpga.get_scale(label, name)
 
-        try:
-            with open(config_path, "r") as f:
-                params = json.load(f)
-            logger.info(
-                f"[Connector] Loaded {len(params)} laser parameter sets from {config_path}"
-            )
-            return params
-        except FileNotFoundError:
-            logger.error(f"[Connector] Laser parameter file not found: {config_path}")
-            return []
-        except json.JSONDecodeError as e:
-            logger.error(f"[Connector] Invalid JSON in {config_path}: {e}")
-            return []
+    def _get_fpga_entry_by_friendly_name(self, friendlyName: str):
+            """Delegate to FpgaModel (kept for backward compatibility)."""
+            return self._fpga.get_entry_by_friendly_name(friendlyName)
 
-    def _load_tec_params(self, config_dir):
-        """Load TEC parameters from tec_params.json and return the voltage value."""
-        config_path = (
-            resource_path("config", "tec_params.json")
-            if config_dir == "config"
-            else Path(config_dir) / "tec_params.json"
-        )
+    @pyqtProperty("QVariant", constant=True)
+    def fpgaAddressModel(self):
+        """Expose the loaded FPGA model to QML as a QVariant (list of dicts)."""
+        return self._fpga.model
 
-        if not config_path.exists():
-            logger.warning(
-                f"[Connector] TEC parameter file not found: {config_path}, using default value {TEC_VOLTAGE_DEFAULT}V"
-            )
-            return TEC_VOLTAGE_DEFAULT
+    @pyqtSlot(str, str, result=float)
+    def getScale(self, label: str, name: str) -> float:
+        """Return effective scale for given label/name, honoring runtime overrides."""
+        val = self._fpga.get_scale(label, name)
+        return float(val) if val is not None else 1.0
 
-        try:
-            with open(config_path, "r") as f:
-                params = json.load(f)
-            voltage = params.get("TEC_VOLTAGE_DEFAULT", TEC_VOLTAGE_DEFAULT)
-            logger.info(
-                f"[Connector] Loaded TEC voltage from {config_path}: {voltage}V"
-            )
-            return voltage
-        except FileNotFoundError:
-            logger.warning(
-                f"[Connector] TEC parameter file not found: {config_path}, using default value {TEC_VOLTAGE_DEFAULT}V"
-            )
-            return TEC_VOLTAGE_DEFAULT
-        except json.JSONDecodeError as e:
-            logger.error(
-                f"[Connector] Invalid JSON in {config_path}: {e}, using default value {TEC_VOLTAGE_DEFAULT}V"
-            )
-            return TEC_VOLTAGE_DEFAULT
-        except Exception as e:
-            logger.error(
-                f"[Connector] Error loading TEC parameters: {e}, using default value {TEC_VOLTAGE_DEFAULT}V"
-            )
-            return TEC_VOLTAGE_DEFAULT
+    @pyqtSlot(str, str, float)
+    def setScaleOverride(self, label: str, name: str, scale: float) -> None:
+        """Set or clear a runtime scale override used by `getScale`.
+
+        Pass `scale <= 0` to remove the override.
+        """
+        self._fpga.set_scale_override(label, name, scale)
+    
+
 
     @pyqtSlot(result=list)
     def get_scan_list(self):
@@ -1210,6 +1606,9 @@ class MOTIONConnector(QObject):
 
         if self._capture_running or self._capture_thread is not None:
             self.captureLog.emit("Capture already running.")
+        err = self._ensure_idle()
+        if err is not None:
+            self.captureLog.emit(err)
             return False
 
         if self._safetyFailure:
@@ -1248,27 +1647,44 @@ class MOTIONConnector(QObject):
 
         temp_alerted_by_side = {"left": set(), "right": set()}
 
+        self._camera_last_seen = {}
+        self._camera_last_temp = {}
+        self._camera_dropped   = set()
+        self._dropout_timer.start()
+
         # Cumulative trigger-ON time — the duration that appears in scan notes
         # must match the UI countdown (gated on triggerState == "ON"), not the
         # wall-clock span of startCapture→_on_complete which includes pre-scan
         # flash + post-scan USB drain/writer-join (~3s tail).
         trigger_cumulative_s: float = 0.0
         trigger_on_mono: float | None = None
+        self._trigger_cumulative_s = 0.0
+        self._trigger_on_mono = None
 
         def _on_uncorrected(sample):
             """Fires for every non-dark frame (~40 Hz). Feeds the realtime plot."""
             current_side = sample.side
+            _key = (sample.side, int(sample.cam_id))
+            self._camera_last_seen[_key] = time.monotonic()
+            self._camera_last_temp[_key] = float(sample.temperature_c)
             alerted = temp_alerted_by_side.setdefault(current_side, set())
             threshold = self._camera_temp_alert_threshold_c
             if sample.temperature_c >= threshold and sample.cam_id not in alerted:
                 alerted.add(sample.cam_id)
+                elapsed_str = self._scan_elapsed_str()
                 msg = (
-                    f"ALERT: Camera {sample.cam_id + 1} ({current_side}) "
+                    f"[{elapsed_str}] ALERT: Camera {sample.cam_id + 1} ({current_side}) "
                     f"temperature {sample.temperature_c:.1f}°C >= {threshold:.0f}°C threshold."
                 )
-                self.captureLog.emit(msg)
                 run_logger.warning(msg)
                 logger.warning(msg)
+                self.notify(
+                    f"Camera {sample.cam_id + 1} ({current_side.upper()}) reached {sample.temperature_c:.1f}°C"
+                    f" at {elapsed_str} (threshold: {threshold:.0f}°C)",
+                    type_="warning",
+                    duration_ms=30000,
+                    tag=f"temp_alert_{current_side}_{sample.cam_id}",
+                )
 
             plot_ts = time.monotonic() - plot_t0
 
@@ -1387,6 +1803,13 @@ class MOTIONConnector(QObject):
             write_raw_csv=self._write_raw_csv,
             raw_csv_duration_sec=self._raw_csv_duration_sec,
             reduced_mode=self._app_config.get("reducedMode", False),
+            rolling_avg_enabled=True,
+            rolling_avg_window=int(
+                (self._app_config or {}).get(
+                    "cq_rolling_avg_window",
+                    _CQ_DEFAULT_ROLLING_WINDOW,
+                )
+            ),
         )
 
         def _on_trigger_state(state: str):
@@ -1397,8 +1820,43 @@ class MOTIONConnector(QObject):
             elif state == "OFF" and trigger_on_mono is not None:
                 trigger_cumulative_s += now - trigger_on_mono
                 trigger_on_mono = None
+            # Mirror to instance vars so _on_dropout_check and _scan_elapsed_str can read them
+            self._trigger_cumulative_s = trigger_cumulative_s
+            self._trigger_on_mono = trigger_on_mono
             self._trigger_state = state
             self.triggerStateChanged.emit()
+
+        dark_thresholds = (self._app_config or {}).get("cq_dark_threshold_per_camera")
+        light_thresholds = (self._app_config or {}).get("cq_light_threshold_per_camera")
+
+        def _on_cq_warning(
+            side: str, cam_id: int, type_key: str, value: float, active: bool
+        ):
+            label = self._camera_label(side, cam_id)
+            type_text = self._warning_text(type_key)
+            try:
+                if active:
+                    self.contactQualityWarning.emit(
+                        label,
+                        type_key,
+                        type_text,
+                        float(value),
+                    )
+                self.contactQualityIssueStateChanged.emit(
+                    label,
+                    type_key,
+                    type_text,
+                    float(value),
+                    bool(active),
+                )
+            except Exception as exc:
+                logger.warning("contact-quality callback error: %s", exc)
+
+        on_dark_frame_fn, on_rolling_avg_fn = self._make_contact_quality_callbacks(
+            dark_thresholds=dark_thresholds,
+            light_thresholds=light_thresholds,
+            warning_sink=_on_cq_warning,
+        )
 
         started = self._interface.start_scan(
             req,
@@ -1408,6 +1866,8 @@ class MOTIONConnector(QObject):
             on_trigger_state_fn=_on_trigger_state,
             on_uncorrected_fn=_on_uncorrected,
             on_corrected_batch_fn=None if self._uncorrected_only else _on_corrected_batch,
+            on_dark_frame_fn=on_dark_frame_fn,
+            on_rolling_avg_fn=on_rolling_avg_fn,
             on_error_fn=lambda e: self.captureLog.emit(f"Capture error: {e}"),
             on_side_stream_fn=lambda side, filepath: self.captureLog.emit(
                 f"[{side.upper()}] Streaming to: {os.path.basename(filepath)}"
@@ -1846,34 +2306,9 @@ class MOTIONConnector(QObject):
             return False
 
     def set_laser_power_from_config(self, interface):
-        logger.info("[Connector] Setting laser power from config...")
-        for idx, laser_param in enumerate(self.laser_params, start=1):
-            muxIdx = laser_param["muxIdx"]
-            channel = laser_param["channel"]
-            i2cAddr = laser_param["i2cAddr"]
-            offset = laser_param["offset"]
-            dataToSend = bytearray(laser_param["dataToSend"])
-
-            logger.debug(
-                f"[Connector] ({idx}/{len(self.laser_params)}) "
-                f"Writing I2C: muxIdx={muxIdx}, channel={channel}, "
-                f"i2cAddr=0x{i2cAddr:02X}, offset=0x{offset:02X}, "
-                f"data={list(dataToSend)}"
-            )
-
-            if not interface.console_module.write_i2c_packet(
-                mux_index=muxIdx,
-                channel=channel,
-                device_addr=i2cAddr,
-                reg_addr=offset,
-                data=dataToSend,
-            ):
-                logger.error(
-                    f"Failed to set laser power (muxIdx={muxIdx}, channel={channel})"
-                )
-                return False
-        logger.info("Laser power set successfully.")
-        return True
+        return apply_laser_power_from_config(            
+            interface, self.laser_params, self._fpga, self._console_mutex
+        )
 
     # --- SENSOR COMMUNICATION METHODS ---
     def _read_and_log_camera_uids(self):
@@ -1970,7 +2405,9 @@ class MOTIONConnector(QObject):
     def startConfigureCameraSensors(
         self, left_camera_mask: int, right_camera_mask: int
     ):
-        if self._config_running:
+        err = self._ensure_idle()
+        if err is not None:
+            self.configFinished.emit(False, err)
             return
         self._config_running = True
         req = ConfigureRequest(
