@@ -78,7 +78,7 @@ RUNNING = 4
 
 _CQ_DEFAULT_DARK_THRESHOLD_DN = 3.0
 _CQ_DEFAULT_LIGHT_THRESHOLD_DN = 15.0
-_CQ_AMBIENT_CLEAR_FRAMES = 6
+_CQ_AMBIENT_CLEAR_FRAMES = 1  # one clean dark frame is enough to clear the latched ambient warning
 _CQ_DEFAULT_ROLLING_WINDOW = 10
 
 
