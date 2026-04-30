@@ -41,7 +41,10 @@ jobs:
     timeout-minutes: 240
     defaults:
       run:
-        shell: pwsh
+        # Use Windows PowerShell 5.1 (powershell) rather than pwsh — the
+        # self-hosted Windows runner doesn't ship pwsh by default, and
+        # the resolve script below only uses features available in 5.1.
+        shell: powershell
 
     env:
       # SHELLY_IP_ADDRESS is provided by the self-hosted runner's session
