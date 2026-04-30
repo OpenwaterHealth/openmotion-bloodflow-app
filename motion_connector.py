@@ -34,7 +34,12 @@ from omotion.config import (
 from omotion.MotionProcessing import process_bin_file
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
 from processing.visualize_bloodflow import VisualizeBloodflow
-from motion_config import FpgaModel, apply_laser_power_from_config
+from motion_config import (
+    FpgaModel,
+    apply_laser_power_from_config,
+    load_laser_params,
+    load_tec_params,
+)
 from utils.resource_path import resource_path
 import numpy as np
 import pandas as pd
