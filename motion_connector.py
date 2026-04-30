@@ -799,6 +799,22 @@ class MOTIONConnector(QObject):
         argument is the stable MotionConsole/MotionSensor instance; we
         switch on handle.name. ``new`` is a ConnectionState enum.
         """
+        try:
+            self._on_handle_state_changed_impl(handle, old, new, reason)
+        except Exception as e:
+            # Top-level safety net: this slot is invoked from the SDK
+            # connection-monitor thread via Qt signals. Any uncaught
+            # exception here propagates as "Unhandled Python exception"
+            # at the Qt boundary and terminates the bloodflow process.
+            # Log loudly and swallow — the worst case is a stale UI
+            # state until the next connection event re-fires the slot.
+            logger.exception(
+                "_on_handle_state_changed crashed for handle=%s "
+                "old=%s new=%s reason=%s — swallowing to keep app alive",
+                getattr(handle, "name", "?"), old, new, reason,
+            )
+
+    def _on_handle_state_changed_impl(self, handle, old, new, reason):
         from omotion import ConnectionState
 
         is_now_connected = (new == ConnectionState.CONNECTED)
@@ -808,17 +824,33 @@ class MOTIONConnector(QObject):
         if name == "console":
             self._consoleConnected = is_now_connected
             if is_now_connected:
-                self._interface.log_console_info()
-                if self._interface.console.tec_voltage(self._tec_voltage_default):
-                    logger.info(f"Console TEC voltage set to {self._tec_voltage_default}V")
-                else:
-                    logger.error(
-                        f"Failed to set console TEC voltage to {self._tec_voltage_default}V"
+                # Race-guard: by the time this slot fires we observe
+                # CONNECTED, but the console can disconnect again before
+                # any of these calls return — particularly during the
+                # post-power-cycle reconnect storm where a single
+                # PermissionError on the COM port immediately drives
+                # CONNECTED -> DISCONNECTING. Without the try/except,
+                # tec_voltage / set_fan_speed raise
+                # "ValueError: Motion Console not connected" out of the
+                # Qt slot, which propagates as an unhandled Python
+                # exception and terminates the app process.
+                try:
+                    self._interface.log_console_info()
+                    if self._interface.console.tec_voltage(self._tec_voltage_default):
+                        logger.info(f"Console TEC voltage set to {self._tec_voltage_default}V")
+                    else:
+                        logger.error(
+                            f"Failed to set console TEC voltage to {self._tec_voltage_default}V"
+                        )
+                    if self._interface.console.set_fan_speed(fan_speed=100):
+                        logger.info("Console fan speed set to 100%")
+                    else:
+                        logger.error("Failed to set console fan speed")
+                except Exception as e:
+                    logger.warning(
+                        f"Console connect-time setup interrupted "
+                        f"(probably mid-flight disconnect): {e}"
                     )
-                if self._interface.console.set_fan_speed(fan_speed=100):
-                    logger.info("Console fan speed set to 100%")
-                else:
-                    logger.error("Failed to set console fan speed")
         elif name == "left":
             if is_now_connected:
                 self._leftSensorConnected = True
