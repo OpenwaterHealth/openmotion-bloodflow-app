@@ -1,0 +1,153 @@
+name: HIL tests
+
+# Runs HIL tests against a packaged Build & Release artifact on the
+# self-hosted runner (MOTION-RUNNER-1).
+#
+# Test set is auto-selected from the upstream commit:
+#   * head SHA has a release-pattern tag  →  pytest -m release
+#   * head_branch == "next" (no tag)       →  pytest -m dev
+#   * anything else                        →  skip
+#
+# Required runner-side environment:
+#   SHELLY_IP_ADDRESS — IP/hostname of the Shelly outlet powering the DUT.
+#                       Set on MOTION-RUNNER-1's user/machine env, not as
+#                       a GitHub secret, so the var is available to the
+#                       interactive desktop session pyautogui needs.
+
+on:
+  workflow_run:
+    workflows: ["Build & Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      test_set:
+        description: "Force a specific test set"
+        type: choice
+        default: dev
+        options:
+          - dev
+          - release
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  hil-tests:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: pwsh
+
+    env:
+      # SHELLY_IP_ADDRESS is provided by the self-hosted runner's session
+      # environment — set it on the runner itself, not as a repo secret.
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      # ──────────────────────────────────────────────────────────────
+      # Resolve which Build & Release artifact to test, and which set
+      # of tests applies. Tag detection is done via the GitHub API so
+      # we don't depend on the runner having a recent tag fetch.
+      # ──────────────────────────────────────────────────────────────
+      - name: Resolve build run + test set
+        id: resolve
+        run: |
+          $repo = '${{ github.repository }}'
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            $rid = (gh run list --repo $repo -w "Build & Release" -b next -s success -L 1 --json databaseId -q '.[0].databaseId').Trim()
+            if (-not $rid) { throw "No successful 'Build & Release' run on next" }
+            $sha = (gh run view --repo $repo $rid --json headSha -q '.headSha').Trim()
+            $set = '${{ inputs.test_set }}'
+            $skip = $false
+            Write-Host "manual dispatch → test set: $set, build run: $rid (sha $sha)"
+          } else {
+            $rid = '${{ github.event.workflow_run.id }}'
+            $sha = '${{ github.event.workflow_run.head_sha }}'
+            $branch = '${{ github.event.workflow_run.head_branch }}'
+
+            # Look for a release-pattern tag pointing at this SHA.
+            # /tags returns dereferenced commit SHAs already, so this
+            # works for both lightweight and annotated tags.
+            $tagsAtSha = gh api "repos/$repo/tags" --paginate --jq ".[] | select(.commit.sha == \`"$sha\`") | .name"
+            $relTag = $tagsAtSha | Where-Object { $_ -match '^(pre-)?[0-9]+\.[0-9]+\.[0-9]+$' } | Select-Object -First 1
+
+            if ($relTag) {
+              $set = 'release'
+              $skip = $false
+              Write-Host "release tag '$relTag' on $sha → test set: release"
+            } elseif ($branch -eq 'next') {
+              $set = 'dev'
+              $skip = $false
+              Write-Host "next-branch push (no release tag) → test set: dev"
+            } else {
+              $set = 'none'
+              $skip = $true
+              Write-Host "::notice ::Skipping HIL tests for branch '$branch' (no matching set)"
+            }
+          }
+          "id=$rid"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "sha=$sha"  | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "set=$set"  | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "skip=$($skip.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      # Test sources need to match the build SHA so QML coordinates and
+      # connector slot signatures stay in sync with the packaged app.
+      - name: Checkout test sources at build SHA
+        if: steps.resolve.outputs.skip == 'false'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.resolve.outputs.sha }}
+          fetch-depth: 1
+
+      - name: Download build artifact
+        if: steps.resolve.outputs.skip == 'false'
+        uses: actions/download-artifact@v4
+        with:
+          path: build-artifact
+          run-id: ${{ steps.resolve.outputs.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          merge-multiple: true
+
+      - name: Extract build .zip and resolve OPENWATER_EXE
+        if: steps.resolve.outputs.skip == 'false'
+        run: |
+          $zip = Get-ChildItem build-artifact -Recurse -Filter "OpenMotion-Bloodflow-*.zip" |
+                 Select-Object -First 1
+          if (-not $zip) { throw "no OpenMotion-Bloodflow-*.zip found in build artifact" }
+          Expand-Archive $zip.FullName -DestinationPath build-extracted -Force
+          $exe = Get-ChildItem build-extracted -Recurse -Filter "OpenWaterApp.exe" |
+                 Select-Object -First 1
+          if (-not $exe) { throw "OpenWaterApp.exe not found after extracting build" }
+          "OPENWATER_EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "OPENWATER_EXE = $($exe.FullName)"
+
+      - name: Install test dependencies
+        if: steps.resolve.outputs.skip == 'false'
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pyautogui pywinauto pygetwindow psutil requests
+
+      - name: Run pytest (-m ${{ steps.resolve.outputs.set }})
+        if: steps.resolve.outputs.skip == 'false'
+        working-directory: tests
+        run: pytest -m ${{ steps.resolve.outputs.set }}
+
+      # Logs upload runs even on failure — the bloodflow app log
+      # (state-machine transitions) is the most useful diagnostic when
+      # something goes wrong.
+      - name: Upload test + app logs
+        if: always() && steps.resolve.outputs.skip == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hil-test-logs-${{ steps.resolve.outputs.set }}-${{ github.run_id }}
+          path: |
+            tests/test_logs/**
+            tests/app-logs/**
+            app-logs/**
+          if-no-files-found: warn
+          retention-days: 14

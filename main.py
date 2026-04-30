@@ -1,6 +1,5 @@
 import sys
 import os
-import asyncio
 import json
 import warnings
 import logging
@@ -10,10 +9,9 @@ from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtQml import QQmlApplicationEngine, qmlRegisterSingletonInstance
 from PyQt6.QtCore import qInstallMessageHandler, QtMsgType
-from qasync import QEventLoop
 
 from motion_connector import MOTIONConnector
-from omotion.Interface import MOTIONInterface
+from omotion import MotionInterface
 from utils.single_instance import check_single_instance, cleanup_single_instance
 from version import get_version
 from utils.resource_path import resource_path
@@ -31,8 +29,12 @@ warnings.simplefilter("ignore", DeprecationWarning)
 
 # Wire up the things that get logged out of QT app to the proper logs
 def qt_message_handler(msg_type, context, message):
-    """Custom Qt message handler to forward QML console.log() messages to the run log."""
-    # Map Qt message types to logging levels
+    """Forward QML messages to the SDK log at the matching severity.
+
+    `console.log()` in QML is `QtDebugMsg` and is filtered out by default.
+    Use `console.warn()` / `console.error()` from QML for things that
+    should always reach the run log.
+    """
     log_level_map = {
         QtMsgType.QtDebugMsg: logging.DEBUG,
         QtMsgType.QtInfoMsg: logging.INFO,
@@ -40,15 +42,9 @@ def qt_message_handler(msg_type, context, message):
         QtMsgType.QtCriticalMsg: logging.ERROR,
         QtMsgType.QtFatalMsg: logging.CRITICAL,
     }
-
-    # Get the logging level (default to INFO for console.log)
     log_level = log_level_map.get(msg_type, logging.INFO)
-
-    qml_message = f"QML: {message}"
-
-    logger = logging.getLogger("openmotion.bloodflow-app.qml-console")
-    logger.setLevel(logging.INFO)  # or INFO depending on what you want to see
-    logger.info(qml_message)
+    qml_logger = logging.getLogger("openmotion.bloodflow-app.qml-console")
+    qml_logger.log(log_level, "QML: %s", message)
 
 
 def _load_app_config() -> dict:
@@ -187,8 +183,8 @@ def main():
     sdk_logger.addHandler(file_handler)
     sdk_logger.propagate = False  # Don't propagate to root, use our handlers
 
-    # Construct the MOTIONInterface here and inject it into the connector below
-    motion_interface = MOTIONInterface()
+    # Construct the MotionInterface here and inject it into the connector below
+    motion_interface = MotionInterface()
     motion_interface.log_system_info()
 
     qInstallMessageHandler(qt_message_handler)
@@ -227,54 +223,30 @@ def main():
         logger.error("Error: Failed to load QML file")
         sys.exit(-1)
 
-    loop = QEventLoop(app)
-    asyncio.set_event_loop(loop)
-
-    async def main_async():
-        logger.info("Starting MOTION monitoring...")
-        await connector._interface.start_monitoring()
-
-    async def shutdown():
-        logger.info("Shutting down MOTION monitoring...")
-        connector._interface.stop_monitoring()
-
-        pending_tasks = [t for t in asyncio.all_tasks() if not t.done()]
-        if pending_tasks:
-            logger.info(f"Cancelling {len(pending_tasks)} pending tasks...")
-            for task in pending_tasks:
-                task.cancel()
-            await asyncio.gather(*pending_tasks, return_exceptions=True)
-
-        logger.info("LIFU monitoring stopped. Application shutting down.")
+    # Start the SDK's connection monitor synchronously — it owns its own
+    # daemon thread, so the app's Qt event loop runs unblocked.
+    logger.info("Starting MOTION monitoring...")
+    motion_interface.start(wait=True, wait_timeout=2.0)
 
     def handle_exit():
         logger.info("Application closing...")
-        # Cease scan, stop console trigger, turn off camera modules before monitoring stops
         try:
             connector.shutdown()
         except Exception as e:
             logger.warning("Error during connector shutdown: %s", e)
-        asyncio.ensure_future(shutdown()).add_done_callback(lambda _: loop.stop())
-        engine.deleteLater()  # Ensure QML engine is destroyed
-        cleanup_single_instance()  # Clean up single-instance lock
+        try:
+            motion_interface.stop()
+        except Exception as e:
+            logger.warning("Error stopping MotionInterface: %s", e)
+        engine.deleteLater()
+        cleanup_single_instance()
 
     app.aboutToQuit.connect(handle_exit)
 
     try:
-        with loop:
-            loop.run_until_complete(main_async())
-            loop.run_forever()
-    except RuntimeError as e:
-        if "Event loop stopped before Future completed" in str(e):
-            logger.warning(
-                "App closed while a Future was still running (safe to ignore)"
-            )
-        else:
-            logger.error(f"Runtime error: {e}")
+        sys.exit(app.exec())
     except KeyboardInterrupt:
         logger.info("Application interrupted by user.")
-    finally:
-        loop.close()
 
 
 if __name__ == "__main__":
