@@ -2971,10 +2971,13 @@ class MOTIONConnector(QObject):
             self.captureLog.emit("⚠️ Cannot calibrate: console not connected.")
             return
 
-        left_mask  = int(self._app_config.get("leftMask", 0xFF))
-        right_mask = int(self._app_config.get("rightMask", 0xFF))
+        # Always exercise every camera on every connected sensor — calibration
+        # is a per-camera health check, not a user-tunable scan. The app
+        # config's leftMask/rightMask intentionally do NOT apply here.
+        left_mask  = 0xFF if self._leftSensorConnected  else 0x00
+        right_mask = 0xFF if self._rightSensorConnected else 0x00
         if (left_mask | right_mask) == 0:
-            self.captureLog.emit("⚠️ Cannot calibrate: no active cameras.")
+            self.captureLog.emit("⚠️ Cannot calibrate: no sensors connected.")
             return
 
         thresholds = CalibrationThresholds(
