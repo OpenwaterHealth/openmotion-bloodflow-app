@@ -111,6 +111,10 @@ def _load_app_config() -> dict:
         "bviClampLow": 0.0,
         "bviClampHigh": 10.0,
         "darkMode": True,
+        "cq_check_duration_sec": 1.0,
+        "cq_rolling_avg_window": 10,
+        "cq_dark_threshold_per_camera": [3.0] * 8,
+        "cq_light_threshold_per_camera": [15.0] * 8,
     }
     config_path = resource_path("config", "app_config.json")
     if not config_path.exists():
