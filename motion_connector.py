@@ -64,12 +64,6 @@ _CQ_DEFAULT_DARK_THRESHOLD_DN = 3.0
 _CQ_DEFAULT_LIGHT_THRESHOLD_DN = 15.0
 _CQ_DEFAULT_ROLLING_WINDOW = 10
 
-_BFI_CAL = VisualizeBloodflow(left_csv="", right_csv="")
-_BFI_C_MIN = _BFI_CAL.C_min
-_BFI_C_MAX = _BFI_CAL.C_max
-_BFI_I_MIN = _BFI_CAL.I_min
-_BFI_I_MAX = _BFI_CAL.I_max
-
 # Global loggers - will be configured by _configure_logging method
 logger = logging.getLogger("openmotion.bloodflow-app.connector")
 run_logger = logging.getLogger("bloodflow-app.runlog")
@@ -345,9 +339,6 @@ class MOTIONConnector(QObject):
         self._capture_right_path = ""
         self._scan_notes = ""
         self._scan_notes_path = ""  # path to current scan's notes file on disk
-        self._scan_workflow.set_realtime_calibration(
-            _BFI_C_MIN, _BFI_C_MAX, _BFI_I_MIN, _BFI_I_MAX
-        )
         self.connect_signals()
         self._viz_thread = None
         self._viz_worker = None
