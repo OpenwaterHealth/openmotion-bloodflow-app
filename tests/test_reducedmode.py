@@ -30,6 +30,7 @@ import pytest
 from conftest import (
     APP_KEYWORDS,
     SLEEP,
+    _find_exe,
     click_by_name,
     click_sidebar,
     ensure_visible,
@@ -701,24 +702,51 @@ _REPORT_SESSION_START = None
 
 
 def _report_get_app_version() -> str:
-    """Try to read the app build version from the OpenWaterApp.exe path."""
+    """Read the actual product version from OpenWaterApp.exe metadata.
+
+    Queries multiple PowerShell VersionInfo fields (FileVersion,
+    ProductVersion, FileVersionRaw, ProductVersionRaw) and returns the first
+    one that looks like a numeric version (matches digits and dots).
+    Falls back to the parent folder name if no numeric version is found.
+    """
+    import re
+    exe_path = ""
     try:
-        for proc_name in ["OpenWaterApp.exe", "OpenWaterApp_console.exe"]:
-            try:
-                result = subprocess.run(
-                    ["wmic", "process", "where", f"name='{proc_name}'",
-                     "get", "ExecutablePath", "/value"],
-                    capture_output=True, text=True, timeout=5,
-                )
-                for line in result.stdout.splitlines():
-                    if "ExecutablePath=" in line:
-                        path = line.split("=", 1)[1].strip()
-                        if path:
-                            return Path(path).parent.name
-            except Exception:
-                continue
-    except Exception:
-        pass
+        exe_path = _find_exe()
+        if not exe_path:
+            return os.environ.get("OPENWATER_VERSION", "unknown")
+
+        # Pull all the version-related VersionInfo fields at once
+        ps_cmd = (
+            f"$v = (Get-Item '{exe_path}').VersionInfo; "
+            "Write-Output $v.FileVersion; "
+            "Write-Output $v.ProductVersion; "
+            "Write-Output $v.FileVersionRaw; "
+            "Write-Output $v.ProductVersionRaw"
+        )
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_cmd],
+            capture_output=True, text=True, timeout=10,
+        )
+        candidates = [line.strip() for line in (result.stdout or "").splitlines()
+                      if line.strip()]
+        log.info(f"  Version metadata candidates: {candidates}")
+
+        # Pick the first candidate that looks like a version (e.g. "1.0.3")
+        version_re = re.compile(r"^\d+(\.\d+)+")
+        for c in candidates:
+            if version_re.match(c):
+                log.info(f"  Detected app version: {c}")
+                return c
+
+        # Fallback: parent folder name
+        version_folder = Path(exe_path).parent.name
+        log.info(f"  Detected app version (folder fallback): {version_folder}")
+        return version_folder
+    except Exception as e:
+        log.warning(f"  _report_get_app_version failed: {e}")
+        if exe_path:
+            return Path(exe_path).parent.name
     return os.environ.get("OPENWATER_VERSION", "unknown")
 
 
