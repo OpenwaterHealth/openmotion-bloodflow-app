@@ -1,13 +1,16 @@
 """
 Reduced Mode — end-to-end test.
 
-Covers the full Reduced Mode workflow using the global Settings modal (gear icon).
-Sensor dropdowns are a Scan Settings feature and are NOT tested here — Scan Settings
-is hidden while Reduced Mode is active.
+Covers the full Reduced Mode workflow using the global Settings modal
+(gear icon). Sensor dropdowns are a Scan Settings feature and are NOT
+tested here — Scan Settings is hidden while Reduced Mode is active.
 
-Two classes:
-  TestReducedMode       (01–20) — keyboard-driven interactions
-  TestReducedModeMouse  (21–40) — mouse-driven interactions
+Three classes:
+  TestReducedMode         (01–21) — keyboard-driven Notes / scan / history flow
+  TestReducedModeMouse    (22–32) — mouse-driven repeat of the same flow
+  TestReducedModeSettings (33–37) — Settings modal: Time Window dropdown
+                                    parametrized over 3/5/15/30s, plus
+                                    Auto-scale Y-axes toggle ON.
 """
 
 import time
@@ -44,9 +47,14 @@ REDUCED_MODE_TOGGLE = (0.400, 0.421)
 
 _TABS_TO_REDUCED_MODE = 16
 
-SCAN_WAIT   = 200   # seconds to run the scan (3 minutes 20 seconds)
-STOP_BUFFER = 15    # seconds to wait after stopping for data to save
-VIZ_WAIT    = 60    # seconds to leave each plot open
+SCAN_WAIT       = 200   # seconds to run the long scan (3 min 20 s)
+SHORT_SCAN_WAIT = 120   # seconds to run each Settings-feature scan (2 min)
+STOP_BUFFER     = 15    # seconds to wait after stopping for data to save
+VIZ_WAIT        = 60    # seconds to leave each plot open
+
+# Time window dropdown values shown in the Settings modal (seconds).
+# TestReducedModeSettings.test_33 parametrizes over each of these.
+TIME_WINDOW_OPTIONS = [3, 5, 15, 30]
 
 
 # ─────────────────────────────────────────────
@@ -151,6 +159,200 @@ def _wait_for_signal_quality_and_start_scan(timeout: int = 180) -> bool:
 
     log.warning(f"  Signal quality dialog did not appear within {timeout}s")
     return False
+
+
+def _select_time_window(seconds: int):
+    """Open the 'Time window' dropdown in the Settings modal and select
+    ``<seconds>``.
+
+    Locator strategy (style-guide §6 — UIA before coords):
+      1. Find the 'Time window' label Text via UIA, then click the
+         nearest ComboBox by vertical proximity.
+      2. Fall back to the first ComboBox in the modal if the label
+         can't be found (some Qt accessibility builds don't expose
+         pure-text label elements).
+
+    On the dropdown popup we navigate with keyboard (Home + N×Down +
+    Return) rather than coordinate-clicking the option, so the test
+    is unaffected by dropdown popup positioning.
+    """
+    require_focus()
+    log.info(f"  Selecting Time window = {seconds}s")
+
+    win = uia_window()
+    target_cb = None
+
+    try:
+        labels = win.descendants(title="Time window")
+        if labels:
+            label_cy = (labels[0].rectangle().top
+                        + labels[0].rectangle().bottom) // 2
+            cbs = win.descendants(control_type="ComboBox")
+            if cbs:
+                target_cb = min(
+                    cbs,
+                    key=lambda c: abs(
+                        (c.rectangle().top + c.rectangle().bottom) // 2
+                        - label_cy
+                    ),
+                )
+    except Exception as e:
+        log.warning(f"  Time window label-proximity lookup failed: {e}")
+
+    if target_cb is None:
+        try:
+            cbs = win.descendants(control_type="ComboBox")
+            if cbs:
+                target_cb = cbs[0]
+        except Exception as e:
+            log.warning(f"  ComboBox fallback failed: {e}")
+
+    if target_cb is None:
+        raise RuntimeError(
+            "Could not locate the Time window ComboBox in the Settings "
+            "modal. UIA returned no labelled element and no ComboBox "
+            "descendants — check that the modal is actually open and "
+            "scrolled to the top."
+        )
+
+    rect = target_cb.rectangle()
+    cx = (rect.left + rect.right) // 2
+    cy = (rect.top + rect.bottom) // 2
+    pyautogui.click(cx, cy)
+    time.sleep(0.5)
+
+    idx = TIME_WINDOW_OPTIONS.index(seconds)
+    pyautogui.press("home")
+    time.sleep(0.2)
+    for _ in range(idx):
+        pyautogui.press("down")
+        time.sleep(0.15)
+    pyautogui.press("return")
+    time.sleep(SLEEP)
+
+
+def _scroll_settings_to_top():
+    """Scroll the Settings modal up so Time Window / Auto-scale appear.
+
+    Mirror of ``_scroll_modal_to_bottom`` for the opposite direction;
+    Auto-scale lives near the top of the modal, Time Window just below
+    it. Eight short scroll-up nudges with brief pauses cope with
+    modals that animate.
+    """
+    ensure_visible()
+    w = get_app_window()
+    cx = w.left + w.width // 2
+    cy = w.top + w.height // 2
+    pyautogui.moveTo(cx, cy, duration=0.2)
+    for _ in range(8):
+        pyautogui.scroll(50)   # positive = scroll up
+        time.sleep(0.2)
+    time.sleep(0.5)
+
+
+def _toggle_auto_scale_on():
+    """Toggle the 'Auto-scale Y-axes' Switch ON in the Settings modal.
+
+    QML Switch elements aren't exposed as CheckBox/Button via UIA,
+    so we have two strategies:
+
+      1. Find any Text element whose contents match a known label
+         variant ('auto-scale', 'auto scale', 'autoscale', 'y-axes',
+         'y-axis'). When found, click ~43% across the window — that's
+         where the Switch sits relative to the label per current QML
+         layout. (Style-guide §6 calibrated coord, not a static ratio.)
+      2. Tab navigation fallback: focus the first ComboBox in the
+         modal (Time Window), Tab once to reach the toggle, Space to
+         flip it.
+
+    On total failure we dump the visible UIA texts so the failure is
+    diagnosable from the log alone (style-guide §9).
+    """
+    require_focus()
+    log.info("  Toggling Auto-scale Y-axes ON")
+    _scroll_settings_to_top()
+
+    win = uia_window()
+    label_elem = None
+    seen_texts: list[str] = []
+
+    try:
+        for elem in win.descendants():
+            try:
+                t = (elem.window_text() or "").strip()
+            except Exception:
+                continue
+            if t:
+                seen_texts.append(t)
+            tl = t.lower()
+            if any(tag in tl for tag in (
+                "auto-scale", "autoscale", "auto scale",
+                "y-axes", "y-axis",
+            )):
+                label_elem = elem
+                log.info(f"  Found auto-scale label: '{t}'")
+                break
+    except Exception as e:
+        log.warning(f"  Auto-scale label search failed: {e}")
+
+    if label_elem is not None:
+        rect = label_elem.rectangle()
+        label_cy = (rect.top + rect.bottom) // 2
+        w = get_app_window()
+        toggle_x = int(w.left + 0.43 * w.width)
+        log.info(f"  Clicking Auto-scale toggle at ({toggle_x}, {label_cy})")
+        pyautogui.click(toggle_x, label_cy)
+        time.sleep(SLEEP)
+        return
+
+    log.warning(
+        f"  Auto-scale label not found; first 40 UIA texts: "
+        f"{seen_texts[:40]}"
+    )
+    log.info("  Falling back to Tab navigation from Time Window combobox")
+    try:
+        cbs = win.descendants(control_type="ComboBox")
+        if cbs:
+            rect = cbs[0].rectangle()
+            cx = (rect.left + rect.right) // 2
+            cy = (rect.top + rect.bottom) // 2
+            pyautogui.click(cx, cy)
+            time.sleep(0.3)
+            pyautogui.press("tab")
+            time.sleep(0.2)
+            pyautogui.press("space")
+            time.sleep(SLEEP)
+            log.info("  Tab+Space fallback engaged Auto-scale toggle")
+            return
+    except Exception as e:
+        log.warning(f"  Tab fallback failed: {e}")
+
+    raise RuntimeError(
+        "Could not locate the Auto-scale Y-axes toggle. Both UIA "
+        "label search and Tab-navigation fallback failed; see the "
+        "WARNING above for the UIA text dump."
+    )
+
+
+def _run_scan(label: str, duration_sec: int):
+    """Click Start, dismiss the signal-quality dialog (Reduced Mode
+    auto-runs it), wait for ``duration_sec``, click Start again to
+    stop, dismiss the post-scan modal.
+
+    Used by ``TestReducedModeSettings`` to run a scan per Time Window
+    value and per Auto-scale state. Calibrated panel clicks per
+    style-guide §6.
+    """
+    log.info(f"  [{label}] Starting scan for {duration_sec}s")
+    click_panel("Start")
+    _wait_for_signal_quality_and_start_scan()
+    wait_with_log(duration_sec, f"[{label}] scan running")
+    click_panel("Start")  # toggle: Stop
+    log.info(f"  [{label}] Waiting {STOP_BUFFER}s for scan data to save...")
+    time.sleep(STOP_BUFFER)
+    require_focus()
+    pyautogui.press("escape")  # dismiss auto-opened Session Notes (style-guide §8)
+    time.sleep(SLEEP)
 
 
 def _scroll_modal_to_bottom():
@@ -429,3 +631,54 @@ class TestReducedModeMouse:
         require_focus()
         pyautogui.press("escape")
         time.sleep(SLEEP)
+
+
+# ─────────────────────────────────────────────
+# Settings feature class — Time Window dropdown + Auto-scale toggle
+# ─────────────────────────────────────────────
+@pytest.mark.incremental
+class TestReducedModeSettings:
+    """Reduced Mode Settings — Time Window dropdown + Auto-scale Y-axes.
+
+    For each Time Window value (3, 5, 15, 30 s): open Settings, select
+    the value, close Settings, run a 2-min scan. Then turn Auto-scale
+    Y-axes ON and run one final 2-min scan to verify both feature
+    paths produce a viable scan.
+
+    Sequenced after TestReducedMode/TestReducedModeMouse so the app
+    is already in Reduced Mode when this class executes.
+    """
+
+    @pytest.mark.parametrize(
+        "seconds", TIME_WINDOW_OPTIONS,
+        ids=[f"{s}s" for s in TIME_WINDOW_OPTIONS],
+    )
+    def test_33_time_window_scan(self, app, seconds):
+        """Pick the dropdown value, close Settings, run a 2-min scan."""
+        move_window_on_screen()
+        ensure_visible()
+        click_panel("Settings")
+        _select_time_window(seconds)
+        require_focus()
+        pyautogui.press("escape")
+        time.sleep(SLEEP)
+        _run_scan(f"TimeWindow={seconds}s", SHORT_SCAN_WAIT)
+
+    def test_34_open_settings_for_autoscale(self, app):
+        """Reopen Settings to enable Auto-scale Y-axes."""
+        move_window_on_screen()
+        ensure_visible()
+        click_panel("Settings")
+
+    def test_35_toggle_autoscale_on(self, app):
+        """Flip the Auto-scale Y-axes Switch to ON."""
+        _toggle_auto_scale_on()
+
+    def test_36_close_settings(self, app):
+        require_focus()
+        pyautogui.press("escape")
+        time.sleep(SLEEP)
+
+    def test_37_autoscale_scan(self, app):
+        """One final 2-min scan with Auto-scale enabled."""
+        _run_scan("AutoScale=ON", SHORT_SCAN_WAIT)

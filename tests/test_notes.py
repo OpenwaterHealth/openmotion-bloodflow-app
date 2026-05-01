@@ -1,6 +1,34 @@
 """
-Session Notes — exhaustive TextArea interaction tests.
+test_notes.py — Session Notes textarea regression suite.
 
+Marker: ``dev`` (~3 min, runs on every push to ``next``).
+
+What it covers
+--------------
+The Notes modal opened via the sidebar's Notes button, exercising the
+QML TextArea end to end:
+
+  - Open / auto-focus on first paint.
+  - Type / persist across modal close + reopen.
+  - Append, clear, multi-line, long text, numeric+punctuation.
+  - Clipboard ops: cut, paste, undo (Ctrl+X / Ctrl+V / Ctrl+Z).
+  - Sidebar toggle (clicking Notes a second time closes the modal).
+  - Rapid open/close cycles.
+
+Preconditions
+-------------
+- App is launched (handled by the session-scoped ``app`` fixture).
+- No hardware required — these tests don't touch the console / sensors.
+- Runner clipboard is sometimes polluted on self-hosted boxes (a
+  ``gh auth login`` setup string was bleeding into clipboard reads).
+  The ``_clear_clipboard`` helper wipes it before every copy → read.
+
+Failure modes the tests guard against
+-------------------------------------
+- TextArea losing focus across modal close/reopen.
+- Ctrl+A → Ctrl+C silently failing when focus is racy (retried 3×).
+- Stale clipboard contents appearing as if they were the typed note.
+- Multi-line content collapsing on round-trip.
 """
 
 import time

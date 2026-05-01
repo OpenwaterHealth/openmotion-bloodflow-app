@@ -5,14 +5,25 @@ Provides:
   - App launch/discovery as a session-scoped fixture
   - Window management utilities (coordinate clicks, UIA clicks)
   - Incremental test support (skip remaining tests in a class after first failure)
+  - Per-machine panel button calibration (autouse)
+  - Modal cleanup between test classes (autouse)
+  - App-alive guard between tests (autouse)
+  - Session-end JSON+Markdown test report (autouse) for V&V evidence
 """
 
+import atexit
+import getpass
+import json
+import platform
+import socket
 import time
 import subprocess
 import sys
 import os
 import glob as _glob
 import logging
+import xml.etree.ElementTree as ET
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -466,4 +477,254 @@ def _check_app_alive(request, app):
             f"previous test. See app-logs/ow-bloodflowapp-*.log for "
             f"diagnostics. (First detected at '{_app_dead_after}'.)"
         )
+    yield
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Test report generation — V&V evidence at session end
+# ─────────────────────────────────────────────────────────────────────────
+# Captures every collected pytest result and writes a structured report
+# at session end suitable for verification & validation evidence.
+# Output paths (relative to this conftest):
+#   tests/test_logs/HIL_Report_<timestamp>.json
+#   tests/test_logs/HIL_Report_<timestamp>.md
+#
+# Implementation details:
+#   - The report is built by parsing pytest's JUnit XML
+#     (tests/test_logs/results.xml, written by pytest.ini's --junitxml).
+#   - We register the writer via atexit rather than a fixture finalizer
+#     so it fires AFTER pytest has written results.xml. A fixture
+#     teardown would race the file write and capture stale data.
+#   - Generic across all test files — no per-file class filter.
+#
+# Originally adapted from a per-file version on origin/Varun-Test
+# (commits ba05bd0 + e3a017a in tests/test_reducedmode.py).
+
+_REPORT_SESSION_START: datetime | None = None
+
+
+def _report_get_app_version() -> str:
+    """Best-effort guess at the bundled bloodflow build version.
+
+    Reads it from the running OpenWaterApp.exe path (the build script
+    lays the version into the parent-directory name). Falls back to
+    ``$OPENWATER_VERSION`` if no app process is detected.
+    """
+    try:
+        for proc_name in ("OpenWaterApp.exe", "OpenWaterApp_console.exe"):
+            try:
+                result = subprocess.run(
+                    ["wmic", "process", "where", f"name='{proc_name}'",
+                     "get", "ExecutablePath", "/value"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                for line in result.stdout.splitlines():
+                    if "ExecutablePath=" in line:
+                        path = line.split("=", 1)[1].strip()
+                        if path:
+                            return Path(path).parent.name
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return os.environ.get("OPENWATER_VERSION", "unknown")
+
+
+def _report_get_environment() -> dict:
+    """Environment snapshot for the report header."""
+    return {
+        "tester":         os.environ.get("TESTER_NAME", getpass.getuser()),
+        "hostname":       socket.gethostname(),
+        "os":             f"{platform.system()} {platform.release()} "
+                          f"({platform.version()})",
+        "python_version": sys.version.split()[0],
+        "app_version":    _report_get_app_version(),
+    }
+
+
+def _parse_junit_xml(xml_path: Path) -> list[dict]:
+    """Parse pytest's JUnit XML into a list of per-test result dicts.
+
+    Includes every testcase regardless of file or class — this is a
+    suite-wide report, not a per-module one.
+    """
+    if not xml_path.exists():
+        log.warning(f"  JUnit XML not found at {xml_path}; report skipped")
+        return []
+    try:
+        tree = ET.parse(xml_path)
+    except Exception as e:
+        log.warning(f"  Failed to parse {xml_path}: {e}")
+        return []
+
+    out: list[dict] = []
+    for testcase in tree.iter("testcase"):
+        classname = testcase.get("classname", "")
+        test_class = classname.split(".")[-1] if classname else "<module>"
+        test_id = testcase.get("name", "")
+        duration = float(testcase.get("time", "0") or 0.0)
+
+        if testcase.find("failure") is not None:
+            status = "FAIL"
+            details = (testcase.find("failure").get("message", "") or "")[:300]
+        elif testcase.find("error") is not None:
+            status = "ERROR"
+            details = (testcase.find("error").get("message", "") or "")[:300]
+        elif testcase.find("skipped") is not None:
+            status = "SKIP"
+            details = (testcase.find("skipped").get("message", "") or "")[:300]
+        else:
+            status = "PASS"
+            details = ""
+
+        out.append({
+            "test_id":      test_id,
+            "test_class":   test_class,
+            "test_module":  classname.rsplit(".", 1)[0] if "." in classname else "",
+            "status":       status,
+            "duration_sec": round(duration, 2),
+            "details":      details,
+        })
+    return out
+
+
+def _write_hil_report() -> None:
+    """Build and write the JSON + Markdown report files. Called via
+    atexit so it runs after pytest's results.xml is finalised."""
+    log_dir = LOG_DIR  # tests/test_logs from the top of this file
+    junit_xml = log_dir / "results.xml"
+
+    # results.xml is written when pytest finalises the session, which
+    # may be slightly after our atexit runs in some plugin orderings.
+    # Poll briefly so we don't miss it on race-y exits.
+    for _ in range(10):
+        if junit_xml.exists() and junit_xml.stat().st_size > 0:
+            break
+        time.sleep(0.5)
+
+    results = _parse_junit_xml(junit_xml)
+    if not results:
+        log.warning("HIL report: no test results captured; skipping.")
+        return
+
+    log_dir.mkdir(exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    env = _report_get_environment()
+    duration = (
+        (datetime.now() - _REPORT_SESSION_START).total_seconds()
+        if _REPORT_SESSION_START else 0
+    )
+    summary = {
+        "total":   len(results),
+        "passed":  sum(1 for r in results if r["status"] == "PASS"),
+        "failed":  sum(1 for r in results if r["status"] == "FAIL"),
+        "errored": sum(1 for r in results if r["status"] == "ERROR"),
+        "skipped": sum(1 for r in results if r["status"] == "SKIP"),
+    }
+
+    # ── JSON ──
+    report_data = {
+        "report_title": "OpenWater BloodFlow — HIL Test Session Report",
+        "purpose":      "Verification & validation evidence for the HIL "
+                        "test suite.",
+        "session_start": _REPORT_SESSION_START.isoformat(timespec="seconds")
+                         if _REPORT_SESSION_START else "",
+        "session_end":   datetime.now().isoformat(timespec="seconds"),
+        "duration_sec":  round(duration, 1),
+        "environment":   env,
+        "summary":       summary,
+        "test_results":  results,
+    }
+    json_path = log_dir / f"HIL_Report_{ts}.json"
+    json_path.write_text(json.dumps(report_data, indent=2), encoding="utf-8")
+
+    # ── Markdown ──
+    lines = [
+        f"# {report_data['report_title']}",
+        "",
+        f"**Purpose:** {report_data['purpose']}",
+        "",
+        "## Session",
+        "",
+        f"- **Session Start:** {report_data['session_start']}",
+        f"- **Session End:**   {report_data['session_end']}",
+        f"- **Duration:**      {report_data['duration_sec']} s",
+        "",
+        "## Environment",
+        "",
+        f"- **Tester:** {env['tester']}",
+        f"- **Hostname:** {env['hostname']}",
+        f"- **OS:** {env['os']}",
+        f"- **Python:** {env['python_version']}",
+        f"- **App version:** {env['app_version']}",
+        "",
+        "## Summary",
+        "",
+        "| Metric  | Count |",
+        "|---------|-------|",
+        f"| Total   | {summary['total']} |",
+        f"| Passed  | {summary['passed']} |",
+        f"| Failed  | {summary['failed']} |",
+        f"| Errored | {summary['errored']} |",
+        f"| Skipped | {summary['skipped']} |",
+        "",
+        "## Test Results",
+        "",
+        "| # | Test | Class | Status | Duration (s) |",
+        "|---|------|-------|--------|--------------|",
+    ]
+    for i, r in enumerate(results, 1):
+        lines.append(
+            f"| {i} | `{r['test_id']}` | {r['test_class']} | "
+            f"**{r['status']}** | {r['duration_sec']} |"
+        )
+
+    failures = [r for r in results if r["status"] in ("FAIL", "ERROR")]
+    if failures:
+        lines += ["", "## Failure Details", ""]
+        for r in failures:
+            lines += [
+                f"### `{r['test_class']}::{r['test_id']}`",
+                "",
+                f"- **Status:** {r['status']}",
+                f"- **Module:** {r['test_module']}",
+                f"- **Error:** `{r['details'] or 'no message'}`",
+                "",
+            ]
+
+    lines += [
+        "",
+        "## Sign-Off",
+        "",
+        "| Role | Name | Signature | Date |",
+        "|------|------|-----------|------|",
+        f"| Tester | {env['tester']} | _______________ | _______________ |",
+        "| QA Reviewer | _______________ | _______________ | _______________ |",
+        "| Technical Lead | _______________ | _______________ | _______________ |",
+        "",
+        "---",
+        f"_Report generated automatically at "
+        f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}_",
+        "",
+    ]
+    md_path = log_dir / f"HIL_Report_{ts}.md"
+    md_path.write_text("\n".join(lines), encoding="utf-8")
+
+    log.info("HIL report written:")
+    log.info(f"  JSON:     {json_path}")
+    log.info(f"  Markdown: {md_path}")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _hil_report_session():
+    """Capture session start time and arm the atexit-registered writer.
+
+    Autouse + session-scope so it runs once for every pytest invocation
+    that touches this conftest, with no per-test setup/teardown.
+    """
+    global _REPORT_SESSION_START
+    _REPORT_SESSION_START = datetime.now()
+    log.info(f"HIL report session started at {_REPORT_SESSION_START}")
+    atexit.register(_write_hil_report)
     yield

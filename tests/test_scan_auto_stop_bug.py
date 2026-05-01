@@ -1,4 +1,41 @@
+"""
+test_scan_auto_stop_bug.py — reproduce GitHub issue #47.
 
+Marker: ``release`` (~70 min wall-clock — five 10-min All/All scans).
+For faster iteration use ``test_scan_auto_stop_bug_abbreviated.py``
+(~25 min).
+
+What it covers
+--------------
+Repros the auto-stop bug from
+``OpenwaterHealth/openmotion-bloodflow-app#47``: after running three
+back-to-back scans with manual console power-cycles between each,
+dropping the power-cycle on loops 4 and 5 causes loop 5 to fail to
+start. We drive five iterations of:
+
+  1. Configure All/All sensors at 10-minute duration.
+  2. Run Check; dismiss the signal-quality modal.
+  3. Click Start, wait for the Session Notes modal (scan complete).
+  4. Assert the reported scan duration ≥ 10 min (sub-10-min duration
+     is the bug signature: scan stopped automatically after FPGA
+     programming).
+  5. Between loops 1→2 and 2→3: power-cycle the Shelly outlet and
+     wait for the SDK to log DISCONNECTED then CONNECTED.
+  6. Between loops 3→4 and 4→5: skip the power-cycle (the repro
+     condition).
+
+Expected outcome
+----------------
+- Loops 1–4 pass.
+- Loop 5 fails with either "Session Notes never appeared" or a
+  reported duration < 10 min ("BUG REPRODUCED on iteration 5/5").
+
+Preconditions
+-------------
+- Shelly outlet reachable on the LAN with ``$SHELLY_IP_ADDRESS`` set.
+- Console + both sensors connected.
+- Bench accessible (test power-cycles physical hardware).
+"""
 
 import time
 
