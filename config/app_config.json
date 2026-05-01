@@ -55,7 +55,7 @@
   "rightMask": 102,
   "uncorrectedOnly": true,
   "autoConfigureOnStartup": false,
-  "developerMode": talse,
+  "developerMode": false,
   "showBfiBvi": true,
   "bfiMin": 1.0,
   "bfiMax": 9.0,
