@@ -2998,7 +2998,7 @@ class MOTIONConnector(QObject):
                 if self._eol_max_bvi_per_camera is not None else None
             ),
         )
-        output_dir = os.path.join(self._output_base, "app-logs", "calibrations")
+        output_dir = os.path.join(self._directory, "calibrations")
         os.makedirs(output_dir, exist_ok=True)
         # Use the same trigger config the BloodFlow / CQ scans use, so
         # the firmware's fsync_counter and dark schedule start fresh
