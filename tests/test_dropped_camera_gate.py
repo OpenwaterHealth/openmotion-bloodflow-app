@@ -13,12 +13,14 @@ UI:
     non-None warning string AND inserts the key into ``already_logged``;
     subsequent suppressions for the same key return ``(False, None)``.
 
-Lives under ``tests_unit/`` rather than ``tests/`` because the latter
-ships an autouse session-scoped fixture that launches the bloodflow
-app — these are pure-Python tests with no QApplication, no hardware,
-no UI.
+Marker
+------
+``pytest.mark.unit`` — the autouse fixtures in ``conftest.py`` short-
+circuit on this marker so unit tests don't drag in the bloodflow app
+launch / panel-button calibration / liveness-guard machinery the UI
+tests need. Pure Python, no QApplication, no hardware.
 
-Run with:  pytest tests_unit/ -v
+Run with:  pytest tests/test_dropped_camera_gate.py -v
 """
 
 import sys
@@ -31,6 +33,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from motion_connector import _check_dropped_camera_emit  # noqa: E402
+
+pytestmark = pytest.mark.unit
 
 
 def test_alive_camera_passes_through():

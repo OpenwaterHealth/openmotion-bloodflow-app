@@ -377,8 +377,19 @@ def app():
     )
 
 
+def _all_collected_are_unit(session) -> bool:
+    """True iff every collected test in the session carries the
+    ``unit`` marker. Used by the app-dependent autouse fixtures to
+    skip launching the bloodflow app when the operator only asked
+    for unit tests."""
+    items = getattr(session, "items", None) or []
+    if not items:
+        return False
+    return all(item.get_closest_marker("unit") is not None for item in items)
+
+
 @pytest.fixture(scope="session", autouse=True)
-def _calibrate_panel_buttons_once(app):
+def _calibrate_panel_buttons_once(request):
     """Run UIA-based panel button calibration once after the app
     launches. Sets a per-session cache that ``click_panel(label)`` and
     ``click_panel_button(label, fallback=...)`` both consult, so panel
@@ -388,7 +399,15 @@ def _calibrate_panel_buttons_once(app):
     Autouse so every test session gets calibration without each test
     needing to request the fixture explicitly. If the app fixture
     skipped (no exe / no main.py), we skip silently here too.
+
+    Skipped entirely when every collected test is unit-marked — those
+    tests don't drive the UI, so launching the app would just cost a
+    cold-start with nothing to use it.
     """
+    if _all_collected_are_unit(request.session):
+        yield
+        return
+    request.getfixturevalue("app")  # ensure the app launched
     try:
         from utils import calibrate_panel_buttons
         calibrate_panel_buttons()
@@ -426,7 +445,7 @@ def _dismiss_modals_if_any(max_presses: int = 3) -> int:
 
 
 @pytest.fixture(scope="class", autouse=True)
-def _dismiss_leftover_modals_per_class(app):
+def _dismiss_leftover_modals_per_class(request):
     """Dismiss any leftover modal at the start of every test class.
 
     Background: test_connection_redesign.test_03_power_cycle_during_scan
@@ -439,7 +458,13 @@ def _dismiss_leftover_modals_per_class(app):
 
     Class-scoped autouse + 3 Escape presses is idempotent and cheap;
     pressing Escape with no modal open is harmless.
+
+    Unit-marked tests skip — no modals to dismiss without an app.
     """
+    if request.node.get_closest_marker("unit") is not None:
+        yield
+        return
+    request.getfixturevalue("app")
     n = _dismiss_modals_if_any(max_presses=3)
     if n:
         log.info(f"  pre-class modal cleanup: sent {n} Escape press(es)")
@@ -447,7 +472,7 @@ def _dismiss_leftover_modals_per_class(app):
 
 
 @pytest.fixture(autouse=True)
-def _check_app_alive(request, app):
+def _check_app_alive(request):
     """Function-scoped guard that runs before every test.
 
     Detects the case where the bloodflow app has crashed between
@@ -460,7 +485,13 @@ def _check_app_alive(request, app):
     message naming the test that *first* detected the death — this
     is almost always either the test that triggered the crash, or
     the test immediately after it.
+
+    Unit-marked tests skip — there's no app to be alive.
     """
+    if request.node.get_closest_marker("unit") is not None:
+        yield
+        return
+    request.getfixturevalue("app")
     global _app_dead_after
     if _app_dead_after is not None:
         pytest.fail(
