@@ -442,8 +442,14 @@ Item {
                             }
                         }
 
-                        Text {
+                        // Use Controls Label (not plain Text) so the
+                        // status surfaces in the Windows UIA tree —
+                        // plain Text items aren't exposed to assistive
+                        // tech / UIA-driven tests by default. The
+                        // test_calibration_ui poll relies on this.
+                        Label {
                             id: calibStatusLabel
+                            objectName: "calibStatusLabel"
                             color: root.colTextPri
                             font.pixelSize: 13
                             text: {
@@ -457,12 +463,6 @@ Item {
                                 default:        return ""
                                 }
                             }
-                            // Surface the live status text to assistive
-                            // technology and to UIA-driven UI tests.
-                            // Without this, plain Text elements aren't
-                            // exposed in the accessibility tree, so a
-                            // screen reader (or our test_calibration_ui.py
-                            // poll) can't see the calibration result.
                             Accessible.role: Accessible.StaticText
                             Accessible.name: text
                         }
