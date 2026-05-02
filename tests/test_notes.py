@@ -129,8 +129,20 @@ class TestNotes:
         _open_notes()
 
     def test_02_auto_focus(self, app):
-        """TextArea receives forceActiveFocus() on open -- no click needed."""
-        pass
+        """TextArea receives forceActiveFocus() on open — typing
+        immediately should land in the field without an explicit click.
+        Probes by typing a sentinel, copying it back, and asserting
+        the round-trip succeeds. Cleans up so test_03 starts blank."""
+        require_focus()
+        sentinel = "AutoFocusProbe"
+        pyautogui.typewrite(sentinel, interval=0.04)
+        time.sleep(0.5)
+        clip = _copy_all_and_read()
+        assert sentinel in clip, (
+            f"TextArea did not auto-focus: typed {sentinel!r} but the "
+            f"select-all-copy round-trip reads {clip[:40]!r}"
+        )
+        _clear_textarea()
 
     def test_03_type_note(self, app):
         self.__class__.unique_note = f"AutoTest_{datetime.now():%H%M%S}"
