@@ -13,9 +13,7 @@ ComboBoxes are located by their UIA label name ("Left Sensor", "Right Sensor")
 so the tests automatically adapt when new fields are added to the modal.
 """
 
-import json
 import time
-from pathlib import Path
 
 import pyautogui
 import pytest
@@ -29,7 +27,13 @@ from conftest import (
     require_focus,
     uia_window,
 )
-from utils import SENSOR_OPTIONS, click_panel, focus_combobox_by_label
+from utils import (
+    SENSOR_OPTIONS,
+    click_panel,
+    focus_combobox_by_label,
+    force_app_config_value,
+    write_app_config_value,
+)
 
 pytestmark = pytest.mark.dev
 
@@ -37,71 +41,19 @@ pytestmark = pytest.mark.dev
 # inside the modal, not the calibrated sidebar panel.
 SCAN_MODAL_CLOSE = (0.360, 0.119)
 
-_APP_CONFIG_PATH = (
-    Path(__file__).resolve().parent.parent / "config" / "app_config.json"
-)
-
-
-def _read_reduced_mode() -> bool:
-    """Return the reducedMode flag from app_config.json (False if absent
-    or unreadable). The connector caches this at startup; this read is
-    a snapshot of what the running app would have loaded."""
-    try:
-        with _APP_CONFIG_PATH.open(encoding="utf-8") as fh:
-            return bool(json.load(fh).get("reducedMode", False))
-    except Exception:
-        return False
-
-
-def _write_reduced_mode(value: bool) -> None:
-    """Persist a new reducedMode value to app_config.json. Note: the
-    *running* app does not reload its config — this only affects the
-    next launch. Used by this module to leave the file in a known state
-    regardless of run outcome."""
-    try:
-        with _APP_CONFIG_PATH.open(encoding="utf-8") as fh:
-            cfg = json.load(fh)
-        cfg["reducedMode"] = bool(value)
-        with _APP_CONFIG_PATH.open("w", encoding="utf-8") as fh:
-            json.dump(cfg, fh, indent=2)
-    except Exception as e:
-        log.warning(f"  Failed to persist reducedMode={value}: {e}")
-
-
 # Every test in this module assumes reducedMode is off — in reduced
 # mode the BloodFlow page forces freeRun + a 12-hour duration and the
 # Reduced Mode toggle in Settings hides itself, so the modal layout
-# the tab walks rely on isn't there.
-#
-# Force the on-disk flag false at module import (before the
-# session-scoped ``app`` fixture spins up the app) so any fresh app
-# launch in this session boots in non-reduced mode. A module-scoped
-# autouse fixture below restores the original value after the last
-# test in this module finishes, regardless of pass/fail/skip.
-#
-# Caveat: if the app was already running before pytest started, it
-# cached the old config at its own launch and won't reload. The
-# warning logged here surfaces that case so the operator can relaunch
-# the app and re-run the suite.
-_INITIAL_REDUCED_MODE = _read_reduced_mode()
-if _INITIAL_REDUCED_MODE:
-    _write_reduced_mode(False)
-    log.warning(
-        "  reducedMode was on in app_config.json. Forced it false for "
-        "this test module — relaunch the app if it was already running, "
-        "otherwise the running instance is still in reduced mode and "
-        "tests will fail."
-    )
+# the tab walks rely on isn't there. Snapshot at module import (before
+# the session-scoped ``app`` fixture spins up the app) and restore on
+# teardown via the autouse fixture below.
+_INITIAL_REDUCED_MODE = force_app_config_value("reducedMode", False)
 
 
 @pytest.fixture(scope="module", autouse=True)
 def _restore_reduced_mode_on_module_teardown():
-    """Restore reducedMode to whatever the file held at module import,
-    so we never leave the user's config in a different state than we
-    found it."""
     yield
-    if _read_reduced_mode() != _INITIAL_REDUCED_MODE:
-        _write_reduced_mode(_INITIAL_REDUCED_MODE)
+    write_app_config_value("reducedMode", _INITIAL_REDUCED_MODE)
 
 
 # ─────────────────────────────────────────────

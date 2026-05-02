@@ -22,10 +22,12 @@ the scan-settings and scan-auto-stop tests; keep it in sync with the QML
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
 from pathlib import Path
+from typing import Any
 
 import pyautogui
 import pygetwindow as gw
@@ -105,6 +107,80 @@ _panel_button_cache: dict[str, tuple[int, int]] | None = None
 _PANEL_BUTTON_LABELS = (
     "Start", "Scan\nSettings", "Notes", "Check", "History", "Settings",
 )
+
+_APP_CONFIG_PATH = (
+    Path(__file__).resolve().parent.parent / "config" / "app_config.json"
+)
+
+
+# ─────────────────────────────────────────────
+# App config (read / write / snapshot-and-force)
+# ─────────────────────────────────────────────
+#
+# Test modules that need to pin a specific app_config.json value before
+# the bloodflow app launches (e.g. reducedMode=false, so the modal
+# layout matches what tab walks expect) can:
+#
+#     from utils import force_app_config_value, write_app_config_value
+#
+#     _INITIAL_REDUCED_MODE = force_app_config_value("reducedMode", False)
+#
+#     @pytest.fixture(scope="module", autouse=True)
+#     def _restore_reduced_mode():
+#         yield
+#         write_app_config_value("reducedMode", _INITIAL_REDUCED_MODE)
+#
+# Caveat: the connector caches its config at startup, so writes only
+# affect the *next* app launch. Force calls happen at module-import
+# time (before the session-scoped ``app`` fixture runs) precisely so
+# any fresh launch in this session boots with the desired value. If
+# the app was already running before pytest started, see
+# ``force_app_config_value``'s warning log.
+
+def read_app_config_value(key: str, default: Any = None) -> Any:
+    """Return the value of ``key`` in app_config.json, or ``default``
+    if the key is absent or the file is missing/unreadable."""
+    try:
+        with _APP_CONFIG_PATH.open(encoding="utf-8") as fh:
+            return json.load(fh).get(key, default)
+    except Exception:
+        return default
+
+
+def write_app_config_value(key: str, value: Any) -> None:
+    """Persist ``key=value`` to app_config.json. Logs a warning on
+    failure rather than raising — config IO shouldn't take a test
+    down."""
+    try:
+        with _APP_CONFIG_PATH.open(encoding="utf-8") as fh:
+            cfg = json.load(fh)
+        cfg[key] = value
+        with _APP_CONFIG_PATH.open("w", encoding="utf-8") as fh:
+            json.dump(cfg, fh, indent=2)
+    except Exception as e:
+        log.warning(f"  Failed to persist {key}={value}: {e}")
+
+
+def force_app_config_value(key: str, value: Any) -> Any:
+    """Snapshot the current value of ``key``, write ``value`` if it
+    differs, return the original. Pair with a teardown fixture that
+    calls ``write_app_config_value(key, original)`` so the file ends
+    in the same state we found it.
+
+    The running app caches its config at startup and won't reload, so
+    if a write happened the warning log tells the operator to relaunch
+    if they want this session's tests to actually see the new value.
+    """
+    initial = read_app_config_value(key)
+    if initial != value:
+        write_app_config_value(key, value)
+        log.warning(
+            f"  app_config.json {key} was {initial!r}; forced it to "
+            f"{value!r} for this test module — relaunch the app if it "
+            f"was already running, otherwise the running instance is "
+            f"still on the old value and tests may fail."
+        )
+    return initial
 
 
 # ─────────────────────────────────────────────
