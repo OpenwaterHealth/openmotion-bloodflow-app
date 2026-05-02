@@ -272,11 +272,47 @@ class TestHistory:
             if scan_text:
                 break
             time.sleep(0.3)
+
+        if not scan_text:
+            # Dump UIA tree state so we can tell apart 'modal didn't
+            # open' from 'modal opened but ComboBox is the wrong
+            # element' from 'ComboBox is there but window_text empty'.
+            try:
+                win = uia_window()
+                cbs = win.descendants(control_type="ComboBox")
+                log.warning(f"  UIA diagnostic: found {len(cbs)} ComboBox(es)")
+                for i, cb in enumerate(cbs):
+                    try:
+                        t = (cb.window_text() or "").strip()
+                        rect = cb.rectangle()
+                        log.warning(
+                            f"    ComboBox[{i}] text={t!r} "
+                            f"rect=({rect.left},{rect.top},{rect.right},{rect.bottom})"
+                        )
+                    except Exception as e:
+                        log.warning(f"    ComboBox[{i}] read failed: {e}")
+                # Also dump anything that looks like a History-modal
+                # marker so we can confirm the modal is even open.
+                texts = []
+                for elem in win.descendants():
+                    try:
+                        t = (elem.window_text() or "").strip()
+                    except Exception:
+                        continue
+                    if t and len(t) < 80:
+                        texts.append(t)
+                        if len(texts) >= 40:
+                            break
+                log.warning(f"  UIA visible texts (first 40): {texts}")
+            except Exception as e:
+                log.warning(f"  UIA diagnostic dump failed: {e}")
+
         assert len(scan_text) > 0, (
             "ComboBox is empty after 5 s -- no scans found. Run a "
             "scan first, or check that the History modal actually "
             "opened (test_01_open clicked the panel button — if the "
-            "click missed, the modal isn't up)."
+            "click missed, the modal isn't up). See UIA diagnostic "
+            "dump in the warning log above."
         )
         log.info(f"  Scan ComboBox text: '{scan_text}'")
 
