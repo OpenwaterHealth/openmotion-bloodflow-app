@@ -192,8 +192,16 @@ Item {
                 Layout.fillWidth: true
                 spacing: 10
 
-                Text {
+                // Read-only TextField (not Text) so the label surfaces in
+                // the Windows UIA tree — test_scan_settings.test_03 polls
+                // for this string.
+                TextField {
                     text: "User Label:"
+                    readOnly: true
+                    selectByMouse: false
+                    activeFocusOnTab: false
+                    background: null
+                    padding: 0
                     color: theme.textSecondary
                     font.pixelSize: 14
                     Layout.alignment: Qt.AlignVCenter
