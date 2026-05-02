@@ -81,6 +81,45 @@ _CQ_AMBIENT_CLEAR_FRAMES = 1  # one clean dark frame is enough to clear the latc
 _CQ_DEFAULT_ROLLING_WINDOW = 10
 
 
+def _check_dropped_camera_emit(
+    side: str,
+    cam_id: int,
+    dropped: set,
+    already_logged: set,
+) -> tuple[bool, str | None]:
+    """Decide whether to emit a per-camera sample to the UI given the
+    dropout watchdog's view of which cameras are 'Connection Lost'
+    (issue #85).
+
+    Returns ``(should_emit, recovery_warning)``:
+      - ``should_emit`` is True when the camera is alive (not in
+        ``dropped``); the caller proceeds with the normal emit.
+      - ``should_emit`` is False when the camera is in ``dropped``;
+        the caller suppresses the sample.
+      - ``recovery_warning`` is a non-None string the FIRST time a
+        given dropped camera key sends fresh data — the caller should
+        log it at WARNING. Subsequent calls return None so a flapping
+        camera doesn't spam 40 Hz worth of identical warnings.
+
+    Mutates ``already_logged`` by inserting the key on the first
+    suppression, which is what gates the one-per-dropout behavior.
+    """
+    key = (side, int(cam_id))
+    if key not in dropped:
+        return True, None
+    if key in already_logged:
+        return False, None
+    already_logged.add(key)
+    msg = (
+        f"UNEXPECTED: Camera {side.upper()} {int(cam_id) + 1} sent "
+        f"fresh data after being marked Connection Lost. Suppressing "
+        f"the sample. Investigate the dropout cause — camera flapping, "
+        f"firmware glitch, or a too-tight dropout threshold can all "
+        f"produce this."
+    )
+    return False, msg
+
+
 class _ContactQualityState:
     """Per-camera latch state for dark and rolling-average callbacks."""
 
@@ -274,6 +313,10 @@ class MOTIONConnector(QObject):
         self._camera_last_seen: dict[tuple[str, int], float] = {}
         self._camera_last_temp: dict[tuple[str, int], float] = {}
         self._camera_dropped: set[tuple[str, int]] = set()
+        # Tracks dropped-camera keys we've already surfaced a 'sent
+        # data after Connection Lost' warning for. One log per dropout
+        # — at 40 Hz a flapping camera would otherwise spam the logs.
+        self._camera_dropped_recovery_logged: set[tuple[str, int]] = set()
 
         # 1 Hz watchdog timer — started/stopped around the scan lifecycle.
         self._dropout_timer = QTimer(self)
@@ -1456,6 +1499,7 @@ class MOTIONConnector(QObject):
         self._camera_last_seen = {}
         self._camera_last_temp = {}
         self._camera_dropped = set()
+        self._camera_dropped_recovery_logged = set()
         self._dropout_timer.start()
 
         # Cumulative trigger-ON time — the duration that appears in scan notes
@@ -1472,12 +1516,19 @@ class MOTIONConnector(QObject):
             current_side = sample.side
             _key = (sample.side, int(sample.cam_id))
 
-            # Issue #85: once a camera is marked dropped by the watchdog,
-            # suppress its samples for the rest of the scan. Without this
-            # gate, intermittent sub-threshold blips keep painting fresh
-            # data onto a channel the user has been told is 'Connection
-            # Lost', so the plot disagrees with the dropout notification.
-            if _key in self._camera_dropped:
+            # Issue #85: gate UI emits on the watchdog's dropped-camera
+            # set. The helper also surfaces a one-time WARNING the first
+            # time a 'lost' camera sends fresh data, since that's
+            # unexpected (we shouldn't see a recovery without a fix).
+            should_emit, recovery_msg = _check_dropped_camera_emit(
+                sample.side, int(sample.cam_id),
+                self._camera_dropped,
+                self._camera_dropped_recovery_logged,
+            )
+            if recovery_msg is not None:
+                logger.warning(recovery_msg)
+                run_logger.warning(recovery_msg)
+            if not should_emit:
                 return
 
             self._camera_last_seen[_key] = time.monotonic()
@@ -1534,11 +1585,19 @@ class MOTIONConnector(QObject):
             plot_ts = time.monotonic() - plot_t0
             payload = []
             for s in batch.samples:
-                # Issue #85: same gate as the uncorrected stream — skip
-                # samples from cameras the watchdog has flagged so the
-                # corrected-batch UI doesn't keep painting 'Connection
-                # Lost' channels either.
-                if (s.side, int(s.cam_id)) in self._camera_dropped:
+                # Issue #85: same gate as the uncorrected stream. The
+                # one-time recovery WARNING is shared with _on_uncorrected
+                # via _camera_dropped_recovery_logged so we never log
+                # twice for the same dropped camera.
+                should_emit, recovery_msg = _check_dropped_camera_emit(
+                    s.side, int(s.cam_id),
+                    self._camera_dropped,
+                    self._camera_dropped_recovery_logged,
+                )
+                if recovery_msg is not None:
+                    logger.warning(recovery_msg)
+                    run_logger.warning(recovery_msg)
+                if not should_emit:
                     continue
                 payload.append({
                     'side': s.side,
