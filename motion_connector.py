@@ -1471,6 +1471,15 @@ class MOTIONConnector(QObject):
             """Fires for every non-dark frame (~40 Hz). Feeds the realtime plot."""
             current_side = sample.side
             _key = (sample.side, int(sample.cam_id))
+
+            # Issue #85: once a camera is marked dropped by the watchdog,
+            # suppress its samples for the rest of the scan. Without this
+            # gate, intermittent sub-threshold blips keep painting fresh
+            # data onto a channel the user has been told is 'Connection
+            # Lost', so the plot disagrees with the dropout notification.
+            if _key in self._camera_dropped:
+                return
+
             self._camera_last_seen[_key] = time.monotonic()
             self._camera_last_temp[_key] = float(sample.temperature_c)
             alerted = temp_alerted_by_side.setdefault(current_side, set())
@@ -1525,6 +1534,12 @@ class MOTIONConnector(QObject):
             plot_ts = time.monotonic() - plot_t0
             payload = []
             for s in batch.samples:
+                # Issue #85: same gate as the uncorrected stream — skip
+                # samples from cameras the watchdog has flagged so the
+                # corrected-batch UI doesn't keep painting 'Connection
+                # Lost' channels either.
+                if (s.side, int(s.cam_id)) in self._camera_dropped:
+                    continue
                 payload.append({
                     'side': s.side,
                     'camId': int(s.cam_id),
