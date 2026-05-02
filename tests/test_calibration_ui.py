@@ -112,14 +112,19 @@ def _click_run_calibration():
 
 
 def _read_calibration_status_text() -> str:
-    """Walk the Settings modal's Text descendants and return the
-    first one whose content matches the calibration status patterns
-    (running counter or a terminal label). Empty string if no
-    calibration-related text is visible.
+    """Walk every descendant of the app window (regardless of
+    control_type) and return the first window_text that matches one
+    of the calibration status patterns.
+
+    QML's Label element inconsistently surfaces through the UIA
+    bridge — sometimes as Text, sometimes as Custom / Pane / Group —
+    so a control_type filter loses the status label on real runs.
+    Iterating all descendants is slower but reliable. Empty string
+    if no calibration-related text is visible.
     """
     try:
         win = uia_window()
-        for elem in win.descendants(control_type="Text"):
+        for elem in win.descendants():
             try:
                 text = elem.window_text() or ""
             except Exception:
