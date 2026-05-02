@@ -13,7 +13,9 @@ ComboBoxes are located by their UIA label name ("Left Sensor", "Right Sensor")
 so the tests automatically adapt when new fields are added to the modal.
 """
 
+import json
 import time
+from pathlib import Path
 
 import pyautogui
 import pytest
@@ -34,6 +36,72 @@ pytestmark = pytest.mark.dev
 # Modal close button (top-right X) — still coord-based since it's
 # inside the modal, not the calibrated sidebar panel.
 SCAN_MODAL_CLOSE = (0.360, 0.119)
+
+_APP_CONFIG_PATH = (
+    Path(__file__).resolve().parent.parent / "config" / "app_config.json"
+)
+
+
+def _read_reduced_mode() -> bool:
+    """Return the reducedMode flag from app_config.json (False if absent
+    or unreadable). The connector caches this at startup; this read is
+    a snapshot of what the running app would have loaded."""
+    try:
+        with _APP_CONFIG_PATH.open(encoding="utf-8") as fh:
+            return bool(json.load(fh).get("reducedMode", False))
+    except Exception:
+        return False
+
+
+def _write_reduced_mode(value: bool) -> None:
+    """Persist a new reducedMode value to app_config.json. Note: the
+    *running* app does not reload its config — this only affects the
+    next launch. Used by this module to leave the file in a known state
+    regardless of run outcome."""
+    try:
+        with _APP_CONFIG_PATH.open(encoding="utf-8") as fh:
+            cfg = json.load(fh)
+        cfg["reducedMode"] = bool(value)
+        with _APP_CONFIG_PATH.open("w", encoding="utf-8") as fh:
+            json.dump(cfg, fh, indent=2)
+    except Exception as e:
+        log.warning(f"  Failed to persist reducedMode={value}: {e}")
+
+
+# Every test in this module assumes reducedMode is off — in reduced
+# mode the BloodFlow page forces freeRun + a 12-hour duration and the
+# Reduced Mode toggle in Settings hides itself, so the modal layout
+# the tab walks rely on isn't there.
+#
+# Force the on-disk flag false at module import (before the
+# session-scoped ``app`` fixture spins up the app) so any fresh app
+# launch in this session boots in non-reduced mode. A module-scoped
+# autouse fixture below restores the original value after the last
+# test in this module finishes, regardless of pass/fail/skip.
+#
+# Caveat: if the app was already running before pytest started, it
+# cached the old config at its own launch and won't reload. The
+# warning logged here surfaces that case so the operator can relaunch
+# the app and re-run the suite.
+_INITIAL_REDUCED_MODE = _read_reduced_mode()
+if _INITIAL_REDUCED_MODE:
+    _write_reduced_mode(False)
+    log.warning(
+        "  reducedMode was on in app_config.json. Forced it false for "
+        "this test module — relaunch the app if it was already running, "
+        "otherwise the running instance is still in reduced mode and "
+        "tests will fail."
+    )
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _restore_reduced_mode_on_module_teardown():
+    """Restore reducedMode to whatever the file held at module import,
+    so we never leave the user's config in a different state than we
+    found it."""
+    yield
+    if _read_reduced_mode() != _INITIAL_REDUCED_MODE:
+        _write_reduced_mode(_INITIAL_REDUCED_MODE)
 
 
 # ─────────────────────────────────────────────
@@ -260,3 +328,70 @@ class TestScanSettings:
         require_focus()
         pyautogui.press("escape")
         time.sleep(SLEEP)
+
+    def test_15_zero_duration_resets_to_one_minute_with_warning(self, app):
+        """Issue #82 regression: typing 0:00:00 into the H:M:S inputs
+        in Timed mode used to be silently swallowed and replaced with
+        the BloodFlow page's 1-hour fallback, with no UI feedback.
+        After commitDurationFields() runs (on close), entering all-zero
+        H:M:S must reset to 0:01:00 *and* surface a warning Text in the
+        modal.
+
+        Both halves matter — without the visible warning the user has
+        no way to learn the rule from the UI; without the reset the
+        scan still falls back silently.
+        """
+        warning_text = "Scan duration cannot be 0 seconds — reset to 1 minute."
+
+        # Open modal, walk to Hours, zero out all three fields, close.
+        click_panel("Scan\nSettings")
+        time.sleep(SLEEP)
+        focus_combobox_by_label("Left Sensor")
+        require_focus()
+        pyautogui.press("tab"); time.sleep(0.2)   # Left CB -> Right CB
+        pyautogui.press("tab"); time.sleep(0.2)   # Right CB -> Switch
+        pyautogui.press("tab"); time.sleep(0.3)   # Switch -> Hours
+
+        for _ in range(3):
+            pyautogui.hotkey("ctrl", "a"); time.sleep(0.1)
+            pyautogui.typewrite("0", interval=0.05)
+            pyautogui.press("tab"); time.sleep(0.2)
+
+        ensure_visible()
+        pyautogui.press("escape")                 # commit + close
+        time.sleep(SLEEP)
+
+        # Reopen so the post-commit state is observable.
+        click_panel("Scan\nSettings")
+        time.sleep(SLEEP)
+
+        try:
+            visible: list[str] = []
+            win = uia_window()
+            for elem in win.descendants():
+                try:
+                    t = (elem.window_text() or "").strip()
+                except Exception:
+                    continue
+                if t and len(t) < 200:
+                    visible.append(t)
+                    if len(visible) >= 80:
+                        break
+            log.info(f"  scan-settings UIA texts (post-reset): {visible}")
+
+            assert warning_text in visible, (
+                f"Issue #82 fix missing: zero-duration warning text "
+                f"{warning_text!r} not found after entering 0:00:00 "
+                f"and reopening. UIA-visible texts: {visible}"
+            )
+            # Minutes field should now show '01' — that's the value
+            # commitDurationFields() promotes to when it rejects 0:00:00.
+            assert "01" in visible, (
+                f"Issue #82 fix missing: after entering 0:00:00, the "
+                f"Minutes field should show '01' (the 1-minute "
+                f"fallback). UIA-visible texts: {visible}"
+            )
+        finally:
+            ensure_visible()
+            pyautogui.press("escape")
+            time.sleep(SLEEP)

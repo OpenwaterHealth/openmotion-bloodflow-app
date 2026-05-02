@@ -24,6 +24,12 @@ Item {
     property int seconds: 0
     property int durationSec: freeRun ? 0 : (hours * 3600 + minutes * 60 + seconds)
 
+    // Surfaced when commitDurationFields() rejects an all-zero entry.
+    // Visible until the user enters a non-zero duration and closes the
+    // modal again — so they see the explanation even after the modal
+    // briefly closes on commit.
+    property bool durationWarningVisible: false
+
     ListModel {
         id: sensorPatterns
         ListElement { name: "None";      maskHex: "0x00" }
@@ -91,9 +97,28 @@ Item {
         var h = parseInt(hoursField.text);   if (isNaN(h)) h = 0
         var m = parseInt(minutesField.text); if (isNaN(m)) m = 0
         var s = parseInt(secondsField.text); if (isNaN(s)) s = 0
-        root.hours   = Math.max(0, Math.min(99, h))
-        root.minutes = Math.max(0, Math.min(59, m))
-        root.seconds = Math.max(0, Math.min(59, s))
+        h = Math.max(0, Math.min(99, h))
+        m = Math.max(0, Math.min(59, m))
+        s = Math.max(0, Math.min(59, s))
+
+        // Reject 0:00:00 — a zero-second scan can't acquire any data.
+        // Reset to 1 minute and surface a warning so the user sees
+        // why their input was overridden. (Issue #82.)
+        if (!root.freeRun && h === 0 && m === 0 && s === 0) {
+            h = 0; m = 1; s = 0
+            root.durationWarningVisible = true
+        } else {
+            root.durationWarningVisible = false
+        }
+
+        root.hours   = h
+        root.minutes = m
+        root.seconds = s
+        // Sync field text back so the modal reflects the saved value
+        // (otherwise the rejected 00:00:00 would still show on next open).
+        hoursField.text   = String(h)
+        minutesField.text = String(m).padStart(2, '0')
+        secondsField.text = String(s).padStart(2, '0')
     }
 
     function setInitialSelection(leftArr, rightArr) {
@@ -167,8 +192,16 @@ Item {
                 Layout.fillWidth: true
                 spacing: 10
 
-                Text {
+                // Read-only TextField (not Text) so the label surfaces in
+                // the Windows UIA tree — test_scan_settings.test_03 polls
+                // for this string.
+                TextField {
                     text: "User Label:"
+                    readOnly: true
+                    selectByMouse: false
+                    activeFocusOnTab: false
+                    background: null
+                    padding: 0
                     color: theme.textSecondary
                     font.pixelSize: 14
                     Layout.alignment: Qt.AlignVCenter
@@ -409,6 +442,23 @@ Item {
                     }
                 }
                 Text { text: "H : M : S"; color: theme.textTertiary; font.pixelSize: 11; Layout.alignment: Qt.AlignBottom }
+            }
+
+            // Zero-duration warning (issue #82): TextField (not Text)
+            // so it surfaces in the Windows UIA tree for test polling.
+            TextField {
+                id: durationWarning
+                visible: root.durationWarningVisible && !root.freeRun
+                readOnly: true
+                selectByMouse: false
+                activeFocusOnTab: false
+                background: null
+                padding: 0
+                color: theme.accentRed
+                font.pixelSize: 12
+                horizontalAlignment: Text.AlignHCenter
+                Layout.alignment: Qt.AlignHCenter
+                text: "Scan duration cannot be 0 seconds — reset to 1 minute."
             }
 
             // Free run hint
