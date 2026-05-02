@@ -73,6 +73,28 @@ def _close_settings():
     time.sleep(SLEEP)
 
 
+def _scroll_button_into_view(win, btn, max_wheel_steps: int = 20) -> None:
+    """Mouse-wheel-scroll the Settings modal until ``btn``'s rectangle
+    lies inside the app window's visible area. The Calibration section
+    sits near the bottom of Settings (just above About), so on most
+    screen sizes it starts off-viewport when the modal opens."""
+    import pyautogui
+    win_rect = win.rectangle()
+    modal_cx = (win_rect.left + win_rect.right) // 2
+    modal_cy = (win_rect.top + win_rect.bottom) // 2
+    pyautogui.moveTo(modal_cx, modal_cy, duration=0.1)
+    for _ in range(max_wheel_steps):
+        rect = btn.rectangle()
+        cy = (rect.top + rect.bottom) // 2
+        if win_rect.top <= rect.top and rect.bottom <= win_rect.bottom:
+            return
+        # Negative scroll = wheel down = content scrolls up. Use
+        # direction relative to where the button currently sits.
+        direction = -1 if cy > win_rect.bottom else 1
+        pyautogui.scroll(direction * 200)
+        time.sleep(0.1)
+
+
 def _click_run_calibration():
     """Click the 'Run Calibration' ActionButton inside the Settings modal."""
     import pyautogui
@@ -80,6 +102,7 @@ def _click_run_calibration():
     btn = win.child_window(title="Run Calibration", control_type="Button")
     if not btn.exists(timeout=2):
         raise RuntimeError("Could not find 'Run Calibration' button in the Settings modal")
+    _scroll_button_into_view(win, btn)
     rect = btn.rectangle()
     cx = (rect.left + rect.right) // 2
     cy = (rect.top + rect.bottom) // 2
