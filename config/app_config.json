@@ -10,14 +10,14 @@
   "commVerbose": false,
   "verboseCommandHandling": false,
   "eol_min_mean_per_camera": [
-    130,
-    230,
-    250,
-    280,
-    280,
-    250,
-    230,
-    130
+    50,
+    70,
+    70,
+    70,
+    70,
+    70,
+    70,
+    50
   ],
   "eol_min_contrast_per_camera": [
     0.25,
@@ -29,28 +29,49 @@
     0.25,
     0.25
   ],
-  "cq_check_duration_sec": 1.0,
-  "cq_rolling_avg_window": 10,
-  "cq_dark_threshold_per_camera": [
-    3.0,
-    3.0,
-    3.0,
-    3.0,
-    3.0,
-    3.0,
-    3.0,
-    3.0
+  "eol_min_bfi_per_camera": [
+    -0.25,
+    -0.25,
+    -0.25,
+    -0.25,
+    -0.25,
+    -0.25,
+    -0.25,
+    -0.25
   ],
-  "cq_light_threshold_per_camera": [
-    15.0,
-    15.0,
-    15.0,
-    15.0,
-    15.0,
-    15.0,
-    15.0,
-    15.0
+  "eol_max_bfi_per_camera": [
+    0.25,
+    0.25,
+    0.25,
+    0.25,
+    0.25,
+    0.25,
+    0.25,
+    0.25
   ],
+  "eol_min_bvi_per_camera": [
+    4.75,
+    4.75,
+    4.75,
+    4.75,
+    4.75,
+    4.75,
+    4.75,
+    4.75
+  ],
+  "eol_max_bvi_per_camera": [
+    5.25,
+    5.25,
+    5.25,
+    5.25,
+    5.25,
+    5.25,
+    5.25,
+    5.25
+  ],
+  "max_calibration_time_sec": 600,
+  "calibration_scan_duration_sec": 5,
+  "calibration_scan_delay_sec": 1,
   "leftMask": 102,
   "rightMask": 102,
   "uncorrectedOnly": true,
@@ -65,7 +86,7 @@
   "meanMax": 200.0,
   "contrastMin": 0.0,
   "contrastMax": 0.7,
-  "dataDirectory": null,
+  "dataDirectory": "C:\\Users\\ethan\\Projects\\scan_data",
   "writeRawCsv": false,
   "rawCsvDurationSec": 60.0,
   "autoScale": false,
@@ -82,5 +103,27 @@
   "bfiClampHigh": 10.0,
   "bviClampLow": 0.0,
   "bviClampHigh": 10.0,
-  "darkMode": true
+  "darkMode": true,
+  "cq_check_duration_sec": 1.0,
+  "cq_rolling_avg_window": 10,
+  "cq_dark_threshold_per_camera": [
+    3.0,
+    3.0,
+    3.0,
+    3.0,
+    3.0,
+    3.0,
+    3.0,
+    3.0
+  ],
+  "cq_light_threshold_per_camera": [
+    100.0,
+    15.0,
+    15.0,
+    15.0,
+    15.0,
+    15.0,
+    15.0,
+    15.0
+  ]
 }

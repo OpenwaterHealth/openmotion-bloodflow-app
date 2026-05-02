@@ -64,12 +64,6 @@ _CQ_DEFAULT_DARK_THRESHOLD_DN = 3.0
 _CQ_DEFAULT_LIGHT_THRESHOLD_DN = 15.0
 _CQ_DEFAULT_ROLLING_WINDOW = 10
 
-_BFI_CAL = VisualizeBloodflow(left_csv="", right_csv="")
-_BFI_C_MIN = _BFI_CAL.C_min
-_BFI_C_MAX = _BFI_CAL.C_max
-_BFI_I_MIN = _BFI_CAL.I_min
-_BFI_I_MAX = _BFI_CAL.I_max
-
 # Global loggers - will be configured by _configure_logging method
 logger = logging.getLogger("openmotion.bloodflow-app.connector")
 run_logger = logging.getLogger("bloodflow-app.runlog")
@@ -188,6 +182,10 @@ class MOTIONConnector(QObject):
     captureProgress = pyqtSignal(int)  # 0..100
     captureLog = pyqtSignal(str)  # log lines
     captureFinished = pyqtSignal(bool, str, str, str)  # ok, error, leftPath, rightPath
+
+    # Calibration procedure signals
+    calibrationStateChanged = pyqtSignal()  # any of running/passed/failed/aborted/idle
+    _calibrationCompleteSignal = pyqtSignal(object)  # private worker→main marshalling
     scanNotesChanged = pyqtSignal()
     scanMeanSampled = pyqtSignal(
         str, int, float, float
@@ -332,6 +330,19 @@ class MOTIONConnector(QObject):
         self._eol_min_mean_per_camera     = list(eol_mean)     if isinstance(eol_mean,     (list, tuple)) else None
         self._eol_min_contrast_per_camera = list(eol_contrast) if isinstance(eol_contrast, (list, tuple)) else None
 
+        eol_bfi      = cfg.get("eol_min_bfi_per_camera")
+        eol_bfi_max  = cfg.get("eol_max_bfi_per_camera")
+        eol_bvi      = cfg.get("eol_min_bvi_per_camera")
+        eol_bvi_max  = cfg.get("eol_max_bvi_per_camera")
+        self._eol_min_bfi_per_camera = list(eol_bfi)     if isinstance(eol_bfi,     (list, tuple)) else None
+        self._eol_max_bfi_per_camera = list(eol_bfi_max) if isinstance(eol_bfi_max, (list, tuple)) else None
+        self._eol_min_bvi_per_camera = list(eol_bvi)     if isinstance(eol_bvi,     (list, tuple)) else None
+        self._eol_max_bvi_per_camera = list(eol_bvi_max) if isinstance(eol_bvi_max, (list, tuple)) else None
+        self._max_calibration_time_sec     = int(cfg.get("max_calibration_time_sec", 600))
+        self._calibration_scan_duration_sec = int(cfg.get("calibration_scan_duration_sec", 5))
+        self._calibration_scan_delay_sec    = int(cfg.get("calibration_scan_delay_sec", 1))
+        self._calibration_status = ""  # "", "running", "passed", "failed", "aborted"
+
         self._post_thread = None
         self._post_cancel = threading.Event()
 
@@ -345,9 +356,6 @@ class MOTIONConnector(QObject):
         self._capture_right_path = ""
         self._scan_notes = ""
         self._scan_notes_path = ""  # path to current scan's notes file on disk
-        self._scan_workflow.set_realtime_calibration(
-            _BFI_C_MIN, _BFI_C_MAX, _BFI_I_MIN, _BFI_I_MAX
-        )
         self.connect_signals()
         self._viz_thread = None
         self._viz_worker = None
@@ -790,6 +798,19 @@ class MOTIONConnector(QObject):
     @pyqtProperty(str, notify=triggerStateChanged)
     def triggerState(self):
         return self._trigger_state
+
+    # --- Calibration procedure properties (consumed by Settings.qml) ---
+    @pyqtProperty(bool, notify=calibrationStateChanged)
+    def calibrationRunning(self) -> bool:
+        return self._calibration_status == "running"
+
+    @pyqtProperty(str, notify=calibrationStateChanged)
+    def calibrationStatus(self) -> str:
+        return self._calibration_status
+
+    @pyqtProperty(int, notify=calibrationStateChanged)
+    def maxCalibrationTimeSec(self) -> int:
+        return self._max_calibration_time_sec
 
     # --- DEVICE CONNECTION / DISCONNECTION / STATE MANAGEMENT METHODS ---
     def _on_handle_state_changed(self, handle, old, new, reason):
@@ -2936,6 +2957,117 @@ class MOTIONConnector(QObject):
         self.safetyTripDuringCaptureRequested.connect(
             self._on_safety_trip_during_capture
         )
+        # Worker → Qt main thread for the calibration completion callback.
+        self._calibrationCompleteSignal.connect(self._on_calibration_complete)
+
+    @pyqtSlot()
+    def runCalibration(self):
+        """Kick off the SDK calibration procedure. Idempotent if already
+        running. Marshals the worker-thread completion back onto the Qt
+        event loop via _calibrationCompleteSignal.
+        """
+        from omotion import CalibrationRequest, CalibrationThresholds
+
+        if self._calibration_status == "running":
+            return
+
+        if not self._consoleConnected:
+            self.captureLog.emit("⚠️ Cannot calibrate: console not connected.")
+            return
+
+        # Always exercise every camera on every connected sensor — calibration
+        # is a per-camera health check, not a user-tunable scan. The app
+        # config's leftMask/rightMask intentionally do NOT apply here.
+        left_mask  = 0xFF if self._leftSensorConnected  else 0x00
+        right_mask = 0xFF if self._rightSensorConnected else 0x00
+        if (left_mask | right_mask) == 0:
+            self.captureLog.emit("⚠️ Cannot calibrate: no sensors connected.")
+            return
+
+        thresholds = CalibrationThresholds(
+            min_mean_per_camera=list(self._eol_min_mean_per_camera or [0.0]*8),
+            min_contrast_per_camera=list(self._eol_min_contrast_per_camera or [0.0]*8),
+            min_bfi_per_camera=list(self._eol_min_bfi_per_camera or [0.0]*8),
+            min_bvi_per_camera=list(self._eol_min_bvi_per_camera or [0.0]*8),
+            max_bfi_per_camera=(
+                list(self._eol_max_bfi_per_camera)
+                if self._eol_max_bfi_per_camera is not None else None
+            ),
+            max_bvi_per_camera=(
+                list(self._eol_max_bvi_per_camera)
+                if self._eol_max_bvi_per_camera is not None else None
+            ),
+        )
+        output_dir = os.path.join(self._output_base, "app-logs", "calibrations")
+        os.makedirs(output_dir, exist_ok=True)
+        # Use the same trigger config the BloodFlow / CQ scans use, so
+        # the firmware's fsync_counter and dark schedule start fresh
+        # before each sub-scan. This mirrors what SetTriggerLaserTask
+        # does in the QML scan chain — without it, the calibration
+        # would inherit whatever firmware state was left over from a
+        # previous scan, causing the off-by-one symptom in the dark
+        # schedule.
+        trigger_config = {
+            "TriggerStatus": 2,                   # 2 = laser ON
+            "TriggerFrequencyHz": 40,
+            "TriggerPulseWidthUsec": 500,
+            "LaserPulseDelayUsec": 100,
+            "LaserPulseWidthUsec": 500,
+            "LaserPulseSkipInterval": 600,
+            "LaserPulseSkipDelayUsec": 1800,
+            "EnableSyncOut": True,
+            "EnableTaTrigger": True,
+        }
+        req = CalibrationRequest(
+            operator_id="bloodflow-app",
+            output_dir=output_dir,
+            left_camera_mask=left_mask,
+            right_camera_mask=right_mask,
+            thresholds=thresholds,
+            duration_sec=self._calibration_scan_duration_sec,
+            scan_delay_sec=self._calibration_scan_delay_sec,
+            max_duration_sec=self._max_calibration_time_sec,
+            trigger_config=trigger_config,
+        )
+
+        self._calibration_status = "running"
+        self.calibrationStateChanged.emit()
+        self.captureLog.emit("Calibration: starting…")
+
+        started = self._interface.start_calibration(
+            req,
+            on_log_fn=lambda msg: self.captureLog.emit(msg),
+            on_complete_fn=self._calibrationCompleteSignal.emit,
+        )
+        if not started:
+            self._calibration_status = ""
+            self.calibrationStateChanged.emit()
+            self.captureLog.emit("⚠️ Calibration failed to start.")
+
+    @pyqtSlot(object)
+    def _on_calibration_complete(self, result):
+        """Runs on the Qt main thread (queued from worker via signal)."""
+        if result.canceled:
+            self._calibration_status = "aborted"
+            self.captureLog.emit(
+                f"⚠️ Calibration aborted: {result.error or 'canceled'}"
+            )
+        elif not result.ok:
+            self._calibration_status = "aborted"
+            self.captureLog.emit(
+                f"⚠️ Calibration aborted: {result.error or 'unknown error'}"
+            )
+        elif result.passed:
+            self._calibration_status = "passed"
+            self.captureLog.emit(
+                f"✅ Calibration: PASS  (CSV: {result.csv_path})"
+            )
+        else:
+            self._calibration_status = "failed"
+            self.captureLog.emit(
+                f"❌ Calibration: FAIL  (CSV: {result.csv_path})"
+            )
+        self.calibrationStateChanged.emit()
 
     @property
     def interface(self):

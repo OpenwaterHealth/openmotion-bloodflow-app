@@ -79,6 +79,13 @@ def _load_app_config() -> dict:
         "verboseCommandHandling": False,  # Enable printf in MCU command handlers
         "eol_min_mean_per_camera": [0] * 8,
         "eol_min_contrast_per_camera": [0] * 8,
+        "eol_min_bfi_per_camera": [0.0] * 8,
+        "eol_max_bfi_per_camera": None,
+        "eol_min_bvi_per_camera": [0.0] * 8,
+        "eol_max_bvi_per_camera": None,
+        "max_calibration_time_sec": 600,
+        "calibration_scan_duration_sec": 5,
+        "calibration_scan_delay_sec": 1,
         "leftMask": 0x66,   # 0b01100110 — cameras 2,3,6,7 (Middle pattern)
         "rightMask": 0x66,
         "uncorrectedOnly": False,

@@ -410,6 +410,78 @@ Item {
                     }
                 }
 
+                // ── Calibration ──────────────────────────────────────────────
+                SectionCard {
+                    title: "Calibration"
+
+                    FieldRow {
+                        ActionButton {
+                            id: runCalibrationButton
+                            text: "Run Calibration"
+                            Layout.preferredWidth: 160
+                            enabled: MOTIONInterface.consoleConnected && !MOTIONInterface.calibrationRunning
+                            onClicked: MOTIONInterface.runCalibration()
+                        }
+
+                        // Indicator light
+                        Rectangle {
+                            id: calibLight
+                            width: 14
+                            height: 14
+                            radius: 7
+                            border.width: 1
+                            border.color: root.colBorderSoft
+                            color: {
+                                switch (MOTIONInterface.calibrationStatus) {
+                                case "running": return "#2196F3"  // blue
+                                case "passed":  return "#4CAF50"  // green
+                                case "failed":  return "#F44336"  // red
+                                case "aborted": return "#FF9800"  // orange
+                                default:        return "#9E9E9E"  // gray
+                                }
+                            }
+                        }
+
+                        Text {
+                            id: calibStatusLabel
+                            color: root.colTextPri
+                            font.pixelSize: 13
+                            text: {
+                                switch (MOTIONInterface.calibrationStatus) {
+                                case "running":
+                                    return "Calibrating... (" + calibTimer.elapsedSec
+                                           + "s / " + MOTIONInterface.maxCalibrationTimeSec + "s)"
+                                case "passed":  return "Calibration Passed"
+                                case "failed":  return "Calibration Failed"
+                                case "aborted": return "Calibration Aborted"
+                                default:        return ""
+                                }
+                            }
+                        }
+
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    // 1 Hz tick driving the elapsed counter while running.
+                    Timer {
+                        id: calibTimer
+                        property int elapsedSec: 0
+                        interval: 1000
+                        repeat: true
+                        running: MOTIONInterface.calibrationRunning
+                        onTriggered: elapsedSec += 1
+                    }
+
+                    Connections {
+                        target: MOTIONInterface
+                        function onCalibrationStateChanged() {
+                            if (MOTIONInterface.calibrationStatus === "running") {
+                                calibTimer.elapsedSec = 0
+                            }
+                        }
+                    }
+                }
+
                 // ── Default Camera Configuration ─────────────────────────────
                 SectionCard {
                     visible: !root.reducedMode
