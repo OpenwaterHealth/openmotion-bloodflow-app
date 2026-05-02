@@ -442,16 +442,27 @@ Item {
                             }
                         }
 
-                        // Use Controls Label (not plain Text) so the
-                        // status surfaces in the Windows UIA tree —
-                        // plain Text items aren't exposed to assistive
-                        // tech / UIA-driven tests by default. The
-                        // test_calibration_ui poll relies on this.
-                        Label {
+                        // Read-only TextField (styled as a label) so the
+                        // live status surfaces in the Windows UIA tree.
+                        // Plain Text / Controls Label both inherit from
+                        // Text and don't get exposed to UIA on Qt 6 by
+                        // default — but TextField values do, which is
+                        // what the test_calibration_ui poll relies on.
+                        TextField {
                             id: calibStatusLabel
                             objectName: "calibStatusLabel"
+                            readOnly: true
+                            selectByMouse: false
+                            activeFocusOnTab: false
+                            background: null
+                            padding: 0
+                            leftPadding: 0
+                            rightPadding: 0
+                            topPadding: 0
+                            bottomPadding: 0
                             color: root.colTextPri
                             font.pixelSize: 13
+                            implicitWidth: Math.max(180, contentWidth + 4)
                             text: {
                                 switch (MOTIONInterface.calibrationStatus) {
                                 case "running":
@@ -463,8 +474,6 @@ Item {
                                 default:        return ""
                                 }
                             }
-                            Accessible.role: Accessible.StaticText
-                            Accessible.name: text
                         }
 
                         Item { Layout.fillWidth: true }
