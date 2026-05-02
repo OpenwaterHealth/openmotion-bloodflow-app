@@ -274,10 +274,46 @@ class TestHistory:
             time.sleep(0.3)
 
         if not scan_text:
-            # Dump UIA tree state so we can tell apart 'modal didn't
+            # Dump UIA + Win32 state so we can tell apart 'modal didn't
             # open' from 'modal opened but ComboBox is the wrong
-            # element' from 'ComboBox is there but window_text empty'.
+            # element' from 'ComboBox is there but window_text empty'
+            # from 'wrong window matched (zombie / second instance)'.
             try:
+                # 1) Enumerate every desktop window whose title matches
+                #    our app keywords. If there are 2+, the UIA spec
+                #    might be grabbing the wrong (hidden / zombie) one.
+                import pygetwindow as gw
+                from conftest import APP_KEYWORDS
+                hits = [
+                    w for w in gw.getAllWindows()
+                    if w.title and any(k in w.title.lower() for k in APP_KEYWORDS)
+                ]
+                log.warning(f"  pygetwindow matched {len(hits)} window(s):")
+                for w in hits:
+                    try:
+                        log.warning(
+                            f"    title={w.title!r} visible={w.visible} "
+                            f"minimized={w.isMinimized} "
+                            f"rect=({w.left},{w.top},{w.right},{w.bottom})"
+                        )
+                    except Exception as e:
+                        log.warning(f"    window read failed: {e}")
+
+                # 2) Enumerate matching pythonw / openwater processes
+                #    in case a stale instance is up.
+                import psutil
+                procs = []
+                for p in psutil.process_iter(["name", "cmdline", "pid"]):
+                    try:
+                        n = (p.info.get("name") or "").lower()
+                        cl = " ".join(p.info.get("cmdline") or []).lower()
+                        if "openwater" in n or ("python" in n and "main.py" in cl and "bloodflow" in cl):
+                            procs.append((p.info.get("pid"), n, cl[:120]))
+                    except Exception:
+                        continue
+                log.warning(f"  bloodflow processes: {procs}")
+
+                # 3) UIA tree dump as before.
                 win = uia_window()
                 cbs = win.descendants(control_type="ComboBox")
                 log.warning(f"  UIA diagnostic: found {len(cbs)} ComboBox(es)")
@@ -291,8 +327,6 @@ class TestHistory:
                         )
                     except Exception as e:
                         log.warning(f"    ComboBox[{i}] read failed: {e}")
-                # Also dump anything that looks like a History-modal
-                # marker so we can confirm the modal is even open.
                 texts = []
                 for elem in win.descendants():
                     try:
