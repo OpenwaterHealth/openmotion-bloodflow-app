@@ -7,8 +7,10 @@ least one entry to show. The fresh self-hosted runner doesn't have
 prior scan data; this seeds it.
 """
 
+import json
 import re
 import time
+from pathlib import Path
 
 import pyautogui
 import pytest
@@ -34,6 +36,66 @@ from utils import (
 pytestmark = pytest.mark.dev
 
 VIZ_WAIT = 60  # seconds to leave each plot open
+
+_APP_CONFIG_PATH = (
+    Path(__file__).resolve().parent.parent / "config" / "app_config.json"
+)
+
+
+def _read_reduced_mode() -> bool:
+    """Return the reducedMode flag from app_config.json (False if absent
+    or unreadable). The connector caches this at startup; this read is
+    a snapshot of what the running app would have loaded."""
+    try:
+        with _APP_CONFIG_PATH.open(encoding="utf-8") as fh:
+            return bool(json.load(fh).get("reducedMode", False))
+    except Exception:
+        return False
+
+
+def _write_reduced_mode(value: bool) -> None:
+    """Persist a new reducedMode value to app_config.json. Note: the
+    *running* app does not reload its config — this only affects the
+    next launch."""
+    try:
+        with _APP_CONFIG_PATH.open(encoding="utf-8") as fh:
+            cfg = json.load(fh)
+        cfg["reducedMode"] = bool(value)
+        with _APP_CONFIG_PATH.open("w", encoding="utf-8") as fh:
+            json.dump(cfg, fh, indent=2)
+    except Exception as e:
+        log.warning(f"  Failed to persist reducedMode={value}: {e}")
+
+
+# Same rationale as test_scan_settings: this module's seed scan opens
+# Scan Settings, which is hidden in reduced mode. Force the on-disk
+# flag false at module import (before the session-scoped ``app``
+# fixture spins up the app) so any fresh launch boots in non-reduced
+# mode; a module-scoped autouse fixture restores the original value on
+# teardown.
+#
+# Caveat: if the app was already running before pytest started, it
+# cached the old config at launch and won't reload. The warning here
+# surfaces that case so the operator can relaunch and re-run.
+_INITIAL_REDUCED_MODE = _read_reduced_mode()
+if _INITIAL_REDUCED_MODE:
+    _write_reduced_mode(False)
+    log.warning(
+        "  reducedMode was on in app_config.json. Forced it false for "
+        "this test module — relaunch the app if it was already running, "
+        "otherwise the running instance is still in reduced mode and "
+        "the seed scan will fail (Scan Settings panel button is hidden "
+        "in reduced mode)."
+    )
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _restore_reduced_mode_on_module_teardown():
+    """Restore reducedMode to whatever the file held at module import,
+    so we never leave the user's config in a different state."""
+    yield
+    if _read_reduced_mode() != _INITIAL_REDUCED_MODE:
+        _write_reduced_mode(_INITIAL_REDUCED_MODE)
 
 # How long to seed the history with at the start. Short to keep
 # the dev-tier suite snappy, but long enough that the SDK actually
