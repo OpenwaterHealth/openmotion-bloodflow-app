@@ -457,6 +457,14 @@ Item {
                                 default:        return ""
                                 }
                             }
+                            // Surface the live status text to assistive
+                            // technology and to UIA-driven UI tests.
+                            // Without this, plain Text elements aren't
+                            // exposed in the accessibility tree, so a
+                            // screen reader (or our test_calibration_ui.py
+                            // poll) can't see the calibration result.
+                            Accessible.role: Accessible.StaticText
+                            Accessible.name: text
                         }
 
                         Item { Layout.fillWidth: true }
