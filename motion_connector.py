@@ -330,10 +330,14 @@ class MOTIONConnector(QObject):
         self._eol_min_mean_per_camera     = list(eol_mean)     if isinstance(eol_mean,     (list, tuple)) else None
         self._eol_min_contrast_per_camera = list(eol_contrast) if isinstance(eol_contrast, (list, tuple)) else None
 
-        eol_bfi  = cfg.get("eol_min_bfi_per_camera")
-        eol_bvi  = cfg.get("eol_min_bvi_per_camera")
-        self._eol_min_bfi_per_camera = list(eol_bfi) if isinstance(eol_bfi, (list, tuple)) else None
-        self._eol_min_bvi_per_camera = list(eol_bvi) if isinstance(eol_bvi, (list, tuple)) else None
+        eol_bfi      = cfg.get("eol_min_bfi_per_camera")
+        eol_bfi_max  = cfg.get("eol_max_bfi_per_camera")
+        eol_bvi      = cfg.get("eol_min_bvi_per_camera")
+        eol_bvi_max  = cfg.get("eol_max_bvi_per_camera")
+        self._eol_min_bfi_per_camera = list(eol_bfi)     if isinstance(eol_bfi,     (list, tuple)) else None
+        self._eol_max_bfi_per_camera = list(eol_bfi_max) if isinstance(eol_bfi_max, (list, tuple)) else None
+        self._eol_min_bvi_per_camera = list(eol_bvi)     if isinstance(eol_bvi,     (list, tuple)) else None
+        self._eol_max_bvi_per_camera = list(eol_bvi_max) if isinstance(eol_bvi_max, (list, tuple)) else None
         self._max_calibration_time_sec     = int(cfg.get("max_calibration_time_sec", 600))
         self._calibration_scan_duration_sec = int(cfg.get("calibration_scan_duration_sec", 5))
         self._calibration_scan_delay_sec    = int(cfg.get("calibration_scan_delay_sec", 1))
@@ -2985,6 +2989,14 @@ class MOTIONConnector(QObject):
             min_contrast_per_camera=list(self._eol_min_contrast_per_camera or [0.0]*8),
             min_bfi_per_camera=list(self._eol_min_bfi_per_camera or [0.0]*8),
             min_bvi_per_camera=list(self._eol_min_bvi_per_camera or [0.0]*8),
+            max_bfi_per_camera=(
+                list(self._eol_max_bfi_per_camera)
+                if self._eol_max_bfi_per_camera is not None else None
+            ),
+            max_bvi_per_camera=(
+                list(self._eol_max_bvi_per_camera)
+                if self._eol_max_bvi_per_camera is not None else None
+            ),
         )
         output_dir = os.path.join(self._output_base, "app-logs", "calibrations")
         os.makedirs(output_dir, exist_ok=True)

@@ -29,29 +29,10 @@
     0.25,
     0.25
   ],
-  "eol_min_bfi_per_camera": [
-    3.0,
-    3.0,
-    3.0,
-    3.0,
-    3.0,
-    3.0,
-    3.0,
-    3.0
-  ],
-  "eol_min_bvi_per_camera": [
-    3.0,
-    3.0,
-    3.0,
-    3.0,
-    3.0,
-    3.0,
-    3.0,
-    3.0
-  ],
-  "max_calibration_time_sec": 600,
-  "calibration_scan_duration_sec": 5,
-  "calibration_scan_delay_sec": 1,
+  "eol_min_bfi_per_camera": [-0.1, -0.1, -0.1, -0.1, -0.1, -0.1, -0.1, -0.1],
+  "eol_max_bfi_per_camera": [ 0.1,  0.1,  0.1,  0.1,  0.1,  0.1,  0.1,  0.1],
+  "eol_min_bvi_per_camera": [ 4.9,  4.9,  4.9,  4.9,  4.9,  4.9,  4.9,  4.9],
+  "eol_max_bvi_per_camera": [ 5.1,  5.1,  5.1,  5.1,  5.1,  5.1,  5.1,  5.1],
   "leftMask": 102,
   "rightMask": 102,
   "uncorrectedOnly": true,
