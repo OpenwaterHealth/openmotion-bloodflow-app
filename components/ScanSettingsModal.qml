@@ -24,12 +24,6 @@ Item {
     property int seconds: 0
     property int durationSec: freeRun ? 0 : (hours * 3600 + minutes * 60 + seconds)
 
-    // Surfaced when commitDurationFields() rejects an all-zero entry.
-    // Visible until the user enters a non-zero duration and closes the
-    // modal again — so they see the explanation even after the modal
-    // briefly closes on commit.
-    property bool durationWarningVisible: false
-
     ListModel {
         id: sensorPatterns
         ListElement { name: "None";      maskHex: "0x00" }
@@ -102,13 +96,15 @@ Item {
         s = Math.max(0, Math.min(59, s))
 
         // Reject 0:00:00 — a zero-second scan can't acquire any data.
-        // Reset to 1 minute and surface a warning so the user sees
-        // why their input was overridden. (Issue #82.)
+        // Reset to 1 minute and fire a warning toast so the user sees
+        // why their input was overridden. (Issue #82.) The 'tag'
+        // dedupes repeated rejections into a single visible toast.
         if (!root.freeRun && h === 0 && m === 0 && s === 0) {
             h = 0; m = 1; s = 0
-            root.durationWarningVisible = true
-        } else {
-            root.durationWarningVisible = false
+            MOTIONInterface.notify(
+                "Scan duration cannot be 0 seconds — reset to 1 minute.",
+                "warning", 5000, true, "scan-duration-zero"
+            )
         }
 
         root.hours   = h
@@ -442,23 +438,6 @@ Item {
                     }
                 }
                 Text { text: "H : M : S"; color: theme.textTertiary; font.pixelSize: 11; Layout.alignment: Qt.AlignBottom }
-            }
-
-            // Zero-duration warning (issue #82): TextField (not Text)
-            // so it surfaces in the Windows UIA tree for test polling.
-            TextField {
-                id: durationWarning
-                visible: root.durationWarningVisible && !root.freeRun
-                readOnly: true
-                selectByMouse: false
-                activeFocusOnTab: false
-                background: null
-                padding: 0
-                color: theme.accentRed
-                font.pixelSize: 12
-                horizontalAlignment: Text.AlignHCenter
-                Layout.alignment: Qt.AlignHCenter
-                text: "Scan duration cannot be 0 seconds — reset to 1 minute."
             }
 
             // Free run hint
