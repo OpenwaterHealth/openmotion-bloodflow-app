@@ -325,19 +325,19 @@ class MOTIONConnector(QObject):
         self._fpga = FpgaModel()
         self._console_mutex = QRecursiveMutex()
 
-        eol_mean     = cfg.get("eol_min_mean_per_camera")
-        eol_contrast = cfg.get("eol_min_contrast_per_camera")
-        self._eol_min_mean_per_camera     = list(eol_mean)     if isinstance(eol_mean,     (list, tuple)) else None
-        self._eol_min_contrast_per_camera = list(eol_contrast) if isinstance(eol_contrast, (list, tuple)) else None
+        ft_mean     = cfg.get("ft_min_mean_per_camera")
+        ft_contrast = cfg.get("ft_min_contrast_per_camera")
+        self._ft_min_mean_per_camera     = list(ft_mean)     if isinstance(ft_mean,     (list, tuple)) else None
+        self._ft_min_contrast_per_camera = list(ft_contrast) if isinstance(ft_contrast, (list, tuple)) else None
 
-        eol_bfi      = cfg.get("eol_min_bfi_per_camera")
-        eol_bfi_max  = cfg.get("eol_max_bfi_per_camera")
-        eol_bvi      = cfg.get("eol_min_bvi_per_camera")
-        eol_bvi_max  = cfg.get("eol_max_bvi_per_camera")
-        self._eol_min_bfi_per_camera = list(eol_bfi)     if isinstance(eol_bfi,     (list, tuple)) else None
-        self._eol_max_bfi_per_camera = list(eol_bfi_max) if isinstance(eol_bfi_max, (list, tuple)) else None
-        self._eol_min_bvi_per_camera = list(eol_bvi)     if isinstance(eol_bvi,     (list, tuple)) else None
-        self._eol_max_bvi_per_camera = list(eol_bvi_max) if isinstance(eol_bvi_max, (list, tuple)) else None
+        ft_bfi      = cfg.get("ft_min_bfi_per_camera")
+        ft_bfi_max  = cfg.get("ft_max_bfi_per_camera")
+        ft_bvi      = cfg.get("ft_min_bvi_per_camera")
+        ft_bvi_max  = cfg.get("ft_max_bvi_per_camera")
+        self._ft_min_bfi_per_camera = list(ft_bfi)     if isinstance(ft_bfi,     (list, tuple)) else None
+        self._ft_max_bfi_per_camera = list(ft_bfi_max) if isinstance(ft_bfi_max, (list, tuple)) else None
+        self._ft_min_bvi_per_camera = list(ft_bvi)     if isinstance(ft_bvi,     (list, tuple)) else None
+        self._ft_max_bvi_per_camera = list(ft_bvi_max) if isinstance(ft_bvi_max, (list, tuple)) else None
         self._max_calibration_time_sec     = int(cfg.get("max_calibration_time_sec", 600))
         self._calibration_scan_duration_sec = int(cfg.get("calibration_scan_duration_sec", 5))
         self._calibration_scan_delay_sec    = int(cfg.get("calibration_scan_delay_sec", 1))
@@ -405,18 +405,18 @@ class MOTIONConnector(QObject):
 
         self._interface.console.telemetry.add_listener(self._on_telemetry_update)
 
-    def set_eol_thresholds(
+    def set_ft_thresholds(
         self,
         min_mean_per_camera=None,
         min_contrast_per_camera=None,
     ):
-        """Set EOL test thresholds per camera (index 0-7). None or list of up to 8 numbers."""
-        self._eol_min_mean_per_camera = (
+        """Set FT thresholds per camera (index 0-7). None or list of up to 8 numbers."""
+        self._ft_min_mean_per_camera = (
             min_mean_per_camera
             if isinstance(min_mean_per_camera, (list, tuple))
             else None
         )
-        self._eol_min_contrast_per_camera = (
+        self._ft_min_contrast_per_camera = (
             min_contrast_per_camera
             if isinstance(min_contrast_per_camera, (list, tuple))
             else None
@@ -1686,7 +1686,7 @@ class MOTIONConnector(QObject):
         run_logger.info("Scan image stats per camera:")
 
         # Build rows for CSV export (same data as log output)
-        eol_rows = []
+        ft_rows = []
 
         for idx in range(len(per_cam_mean)):
             cam_id = None
@@ -1739,18 +1739,18 @@ class MOTIONConnector(QObject):
                 security_id = ""
                 hwid = ""
 
-            # EOL thresholds: use cam_id (0-7) to index per-camera minimums
+            # FT thresholds: use cam_id (0-7) to index per-camera minimums
             cam_idx = cid if cid >= 0 else idx
             min_mean = None
             min_contrast = None
-            if self._eol_min_mean_per_camera and cam_idx < len(
-                self._eol_min_mean_per_camera
+            if self._ft_min_mean_per_camera and cam_idx < len(
+                self._ft_min_mean_per_camera
             ):
-                min_mean = self._eol_min_mean_per_camera[cam_idx]
-            if self._eol_min_contrast_per_camera and cam_idx < len(
-                self._eol_min_contrast_per_camera
+                min_mean = self._ft_min_mean_per_camera[cam_idx]
+            if self._ft_min_contrast_per_camera and cam_idx < len(
+                self._ft_min_contrast_per_camera
             ):
-                min_contrast = self._eol_min_contrast_per_camera[cam_idx]
+                min_contrast = self._ft_min_contrast_per_camera[cam_idx]
 
             if min_mean is not None and not isinstance(min_mean, (int, float)):
                 min_mean = None
@@ -1765,7 +1765,7 @@ class MOTIONConnector(QObject):
             else:
                 contrast_test = "PASS" if avg_contrast >= min_contrast else "FAIL"
 
-            eol_rows.append(
+            ft_rows.append(
                 {
                     "camera_index": idx,
                     "side": side or "",
@@ -1779,13 +1779,13 @@ class MOTIONConnector(QObject):
                 }
             )
 
-        # Write CSV to app-logs/eol-test-csvs
+        # Write CSV to app-logs/ft-test-csvs
         try:
-            eol_dir = os.path.join(self._output_base, "app-logs", "eol-test-csvs")
-            os.makedirs(eol_dir, exist_ok=True)
+            ft_dir = os.path.join(self._output_base, "app-logs", "ft-test-csvs")
+            os.makedirs(ft_dir, exist_ok=True)
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            eol_path = os.path.join(eol_dir, f"eol-test-{ts}.csv")
-            with open(eol_path, "w", newline="", encoding="utf-8") as f:
+            ft_path = os.path.join(ft_dir, f"ft-test-{ts}.csv")
+            with open(ft_path, "w", newline="", encoding="utf-8") as f:
                 w = csv.DictWriter(
                     f,
                     fieldnames=[
@@ -1801,24 +1801,24 @@ class MOTIONConnector(QObject):
                     ],
                 )
                 w.writeheader()
-                w.writerows(eol_rows)
-            logger.info(f"Scan image stats CSV written to {eol_path}")
-            run_logger.info(f"Scan image stats CSV written to {eol_path}")
+                w.writerows(ft_rows)
+            logger.info(f"Scan image stats CSV written to {ft_path}")
+            run_logger.info(f"Scan image stats CSV written to {ft_path}")
         except Exception as e:
-            logger.warning(f"Failed to write EOL test CSV: {e}")
-            run_logger.warning(f"Failed to write EOL test CSV: {e}")
+            logger.warning(f"Failed to write FT CSV: {e}")
+            run_logger.warning(f"Failed to write FT CSV: {e}")
 
-        # Emit a single end-of-scan EOL verdict to the Qt capture log window.
-        overall_eol_pass = bool(eol_rows) and all(
+        # Emit a single end-of-scan FT verdict to the Qt capture log window.
+        overall_ft_pass = bool(ft_rows) and all(
             row.get("mean_test") == "PASS" and row.get("contrast_test") == "PASS"
-            for row in eol_rows
+            for row in ft_rows
         )
-        eol_result = "PASS" if overall_eol_pass else "FAIL"
-        status_emoji = "✅" if overall_eol_pass else "❌"
-        eol_msg = f"{status_emoji} EOL criteria result: {eol_result}"
-        self.captureLog.emit(eol_msg)
-        logger.info(eol_msg)
-        run_logger.info(eol_msg)
+        ft_result = "PASS" if overall_ft_pass else "FAIL"
+        status_emoji = "✅" if overall_ft_pass else "❌"
+        ft_msg = f"{status_emoji} FT criteria result: {ft_result}"
+        self.captureLog.emit(ft_msg)
+        logger.info(ft_msg)
+        run_logger.info(ft_msg)
 
     def _on_safety_trip_during_capture(self):
         """Called on main thread when safety tripped while scan was running: show message and cancel scan in 5 s."""
@@ -2985,17 +2985,17 @@ class MOTIONConnector(QObject):
             return
 
         thresholds = CalibrationThresholds(
-            min_mean_per_camera=list(self._eol_min_mean_per_camera or [0.0]*8),
-            min_contrast_per_camera=list(self._eol_min_contrast_per_camera or [0.0]*8),
-            min_bfi_per_camera=list(self._eol_min_bfi_per_camera or [0.0]*8),
-            min_bvi_per_camera=list(self._eol_min_bvi_per_camera or [0.0]*8),
+            min_mean_per_camera=list(self._ft_min_mean_per_camera or [0.0]*8),
+            min_contrast_per_camera=list(self._ft_min_contrast_per_camera or [0.0]*8),
+            min_bfi_per_camera=list(self._ft_min_bfi_per_camera or [0.0]*8),
+            min_bvi_per_camera=list(self._ft_min_bvi_per_camera or [0.0]*8),
             max_bfi_per_camera=(
-                list(self._eol_max_bfi_per_camera)
-                if self._eol_max_bfi_per_camera is not None else None
+                list(self._ft_max_bfi_per_camera)
+                if self._ft_max_bfi_per_camera is not None else None
             ),
             max_bvi_per_camera=(
-                list(self._eol_max_bvi_per_camera)
-                if self._eol_max_bvi_per_camera is not None else None
+                list(self._ft_max_bvi_per_camera)
+                if self._ft_max_bvi_per_camera is not None else None
             ),
         )
         output_dir = os.path.join(self._directory, "calibrations")

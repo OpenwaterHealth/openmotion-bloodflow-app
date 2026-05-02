@@ -9,7 +9,7 @@
   "powerOffUnusedCameras": false,
   "commVerbose": false,
   "verboseCommandHandling": false,
-  "eol_min_mean_per_camera": [
+  "ft_min_mean_per_camera": [
     50,
     70,
     70,
@@ -19,7 +19,7 @@
     70,
     50
   ],
-  "eol_min_contrast_per_camera": [
+  "ft_min_contrast_per_camera": [
     0.25,
     0.25,
     0.25,
@@ -29,7 +29,7 @@
     0.25,
     0.25
   ],
-  "eol_min_bfi_per_camera": [
+  "ft_min_bfi_per_camera": [
     -0.25,
     -0.25,
     -0.25,
@@ -39,7 +39,7 @@
     -0.25,
     -0.25
   ],
-  "eol_max_bfi_per_camera": [
+  "ft_max_bfi_per_camera": [
     0.25,
     0.25,
     0.25,
@@ -49,7 +49,7 @@
     0.25,
     0.25
   ],
-  "eol_min_bvi_per_camera": [
+  "ft_min_bvi_per_camera": [
     4.75,
     4.75,
     4.75,
@@ -59,7 +59,7 @@
     4.75,
     4.75
   ],
-  "eol_max_bvi_per_camera": [
+  "ft_max_bvi_per_camera": [
     5.25,
     5.25,
     5.25,
