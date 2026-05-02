@@ -2988,6 +2988,24 @@ class MOTIONConnector(QObject):
         )
         output_dir = os.path.join(self._output_base, "app-logs", "calibrations")
         os.makedirs(output_dir, exist_ok=True)
+        # Use the same trigger config the BloodFlow / CQ scans use, so
+        # the firmware's fsync_counter and dark schedule start fresh
+        # before each sub-scan. This mirrors what SetTriggerLaserTask
+        # does in the QML scan chain — without it, the calibration
+        # would inherit whatever firmware state was left over from a
+        # previous scan, causing the off-by-one symptom in the dark
+        # schedule.
+        trigger_config = {
+            "TriggerStatus": 2,                   # 2 = laser ON
+            "TriggerFrequencyHz": 40,
+            "TriggerPulseWidthUsec": 500,
+            "LaserPulseDelayUsec": 100,
+            "LaserPulseWidthUsec": 500,
+            "LaserPulseSkipInterval": 600,
+            "LaserPulseSkipDelayUsec": 1800,
+            "EnableSyncOut": True,
+            "EnableTaTrigger": True,
+        }
         req = CalibrationRequest(
             operator_id="bloodflow-app",
             output_dir=output_dir,
@@ -2997,6 +3015,7 @@ class MOTIONConnector(QObject):
             duration_sec=self._calibration_scan_duration_sec,
             scan_delay_sec=self._calibration_scan_delay_sec,
             max_duration_sec=self._max_calibration_time_sec,
+            trigger_config=trigger_config,
         )
 
         self._calibration_status = "running"
