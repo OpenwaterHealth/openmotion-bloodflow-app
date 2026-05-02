@@ -253,11 +253,30 @@ class TestHistory:
 
     def test_01_open(self, app):
         click_panel("History")
+        # Modal needs time to render and populate the scan picker
+        # ComboBox before test_02 reads it. Without this, test_02
+        # races ahead of Qt and reads the ComboBox while it's still
+        # empty even though scans exist on disk.
+        time.sleep(SLEEP)
 
     def test_02_latest_scan_listed(self, app):
-        scan_text = selected_scan_text()
+        # Poll for up to 5 s — even after test_01's sleep the
+        # ComboBox can take an extra moment to populate on a slow
+        # runner. The seed fixture proves the value eventually
+        # appears (it uses a 2 s sleep then reads); make this test
+        # equally tolerant.
+        deadline = time.time() + 5.0
+        scan_text = ""
+        while time.time() < deadline:
+            scan_text = selected_scan_text()
+            if scan_text:
+                break
+            time.sleep(0.3)
         assert len(scan_text) > 0, (
-            "ComboBox is empty -- no scans found. Run a scan first."
+            "ComboBox is empty after 5 s -- no scans found. Run a "
+            "scan first, or check that the History modal actually "
+            "opened (test_01_open clicked the panel button — if the "
+            "click missed, the modal isn't up)."
         )
         log.info(f"  Scan ComboBox text: '{scan_text}'")
 
