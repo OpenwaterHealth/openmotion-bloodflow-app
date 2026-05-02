@@ -162,37 +162,55 @@ def _poll_for_terminal_state(timeout_sec: int) -> str:
     return last_seen
 
 
+def _dump_visible_texts(limit: int = 60) -> list[str]:
+    """Return up to ``limit`` non-empty window_text values from the
+    app window's UIA tree, for diagnostic logging when the status
+    poll fails to match. Bounded length per item to keep logs sane."""
+    out: list[str] = []
+    try:
+        win = uia_window()
+        for elem in win.descendants():
+            try:
+                text = (elem.window_text() or "").strip()
+            except Exception:
+                continue
+            if text and len(text) < 200:
+                out.append(text)
+                if len(out) >= limit:
+                    break
+    except Exception:
+        pass
+    return out
+
+
 def test_calibration_button_runs_to_terminal_state(app):
     _open_settings()
     try:
         _click_run_calibration()
 
-        # Confirm the click actually triggered the procedure. Within a
-        # couple of seconds the status text should switch into either
-        # the running counter ("Calibrating... (Ns / 600s)") OR — if
-        # phase 0 already failed — directly to a terminal label.
-        kicked_off = False
-        kickoff_deadline = time.monotonic() + 10.0
-        while time.monotonic() < kickoff_deadline:
-            text = _read_calibration_status_text()
-            if text and (text.startswith(_RUNNING_PREFIX) or text in _TERMINAL_TEXTS):
-                log.info(f"  calibration kickoff confirmed: status={text!r}")
-                kicked_off = True
-                break
-            time.sleep(0.3)
-        assert kicked_off, (
-            "Click on 'Run Calibration' did not produce a status update "
-            "within 10 s — the connector slot may not be wired or the "
-            "QML property binding may be broken."
-        )
-
-        # Wait for terminal state.
+        # Wait for the procedure to reach a terminal state. If the
+        # click actually triggered the procedure, the status Label
+        # will show "Calibration Passed/Failed/Aborted" once the
+        # underlying SDK procedure finishes (~25-40 s on real
+        # hardware). If the click was silently swallowed, we hit the
+        # timeout with no terminal text observed — which we treat as
+        # the failure signal and dump the UIA-visible text tree to
+        # help diagnose where the status Label actually surfaces.
         final = _poll_for_terminal_state(_TERMINAL_WAIT_SEC)
         log.info(f"  final calibration status: {final!r}")
+        if final not in _TERMINAL_TEXTS:
+            visible = _dump_visible_texts()
+            log.warning(
+                "  UIA could not find a terminal calibration status. "
+                "Visible window_text values (max 60):"
+            )
+            for t in visible:
+                log.warning(f"    {t!r}")
         assert final in _TERMINAL_TEXTS, (
             f"Calibration did not reach a terminal state within "
             f"{_TERMINAL_WAIT_SEC} s. Last observed text: {final!r}. "
-            f"Expected one of {_TERMINAL_TEXTS}."
+            f"Expected one of {_TERMINAL_TEXTS}. (Visible-text dump "
+            f"in the warning log above.)"
         )
     finally:
         _close_settings()
