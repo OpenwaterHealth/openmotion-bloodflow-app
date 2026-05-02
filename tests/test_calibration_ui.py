@@ -75,53 +75,24 @@ def _close_settings():
 
 def _click_run_calibration():
     """Click the 'Run Calibration' ActionButton inside the Settings modal."""
+    import pyautogui
     win = uia_window()
-    # The Settings modal's ActionButton renders as a UIA Button with
-    # the literal label text. Search descendants — covers both Button
-    # and Custom control types depending on the QML→UIA bridge.
-    for ct in ("Button", "Custom", "Pane", "Group"):
-        try:
-            btn = win.child_window(title="Run Calibration", control_type=ct)
-            if btn.exists(timeout=2):
-                rect = btn.rectangle()
-                cx = (rect.left + rect.right) // 2
-                cy = (rect.top + rect.bottom) // 2
-                log.info(f"  click 'Run Calibration' (type={ct}) at ({cx}, {cy})")
-                import pyautogui
-                pyautogui.moveTo(cx, cy, duration=0.3)
-                pyautogui.click(cx, cy)
-                time.sleep(SLEEP)
-                return
-        except Exception:
-            continue
-
-    # Fallback: descendants by name
-    matches = win.descendants(title="Run Calibration")
-    if matches:
-        elem = matches[0]
-        rect = elem.rectangle()
-        cx = (rect.left + rect.right) // 2
-        cy = (rect.top + rect.bottom) // 2
-        log.info(f"  click 'Run Calibration' (descendant) at ({cx}, {cy})")
-        import pyautogui
-        pyautogui.moveTo(cx, cy, duration=0.3)
-        pyautogui.click(cx, cy)
-        time.sleep(SLEEP)
-        return
-    raise RuntimeError("Could not find 'Run Calibration' button in the Settings modal")
+    btn = win.child_window(title="Run Calibration", control_type="Button")
+    if not btn.exists(timeout=2):
+        raise RuntimeError("Could not find 'Run Calibration' button in the Settings modal")
+    rect = btn.rectangle()
+    cx = (rect.left + rect.right) // 2
+    cy = (rect.top + rect.bottom) // 2
+    log.info(f"  click 'Run Calibration' at ({cx}, {cy})")
+    pyautogui.moveTo(cx, cy, duration=0.3)
+    pyautogui.click(cx, cy)
+    time.sleep(SLEEP)
 
 
 def _read_calibration_status_text() -> str:
-    """Walk every descendant of the app window (regardless of
-    control_type) and return the first window_text that matches one
-    of the calibration status patterns.
-
-    QML's Label element inconsistently surfaces through the UIA
-    bridge — sometimes as Text, sometimes as Custom / Pane / Group —
-    so a control_type filter loses the status label on real runs.
-    Iterating all descendants is slower but reliable. Empty string
-    if no calibration-related text is visible.
-    """
+    """Walk every descendant of the app window and return the first
+    window_text matching a calibration status pattern. Empty string
+    if no calibration-related text is visible."""
     try:
         win = uia_window()
         for elem in win.descendants():
@@ -162,55 +133,16 @@ def _poll_for_terminal_state(timeout_sec: int) -> str:
     return last_seen
 
 
-def _dump_visible_texts(limit: int = 60) -> list[str]:
-    """Return up to ``limit`` non-empty window_text values from the
-    app window's UIA tree, for diagnostic logging when the status
-    poll fails to match. Bounded length per item to keep logs sane."""
-    out: list[str] = []
-    try:
-        win = uia_window()
-        for elem in win.descendants():
-            try:
-                text = (elem.window_text() or "").strip()
-            except Exception:
-                continue
-            if text and len(text) < 200:
-                out.append(text)
-                if len(out) >= limit:
-                    break
-    except Exception:
-        pass
-    return out
-
-
 def test_calibration_button_runs_to_terminal_state(app):
     _open_settings()
     try:
         _click_run_calibration()
-
-        # Wait for the procedure to reach a terminal state. If the
-        # click actually triggered the procedure, the status Label
-        # will show "Calibration Passed/Failed/Aborted" once the
-        # underlying SDK procedure finishes (~25-40 s on real
-        # hardware). If the click was silently swallowed, we hit the
-        # timeout with no terminal text observed — which we treat as
-        # the failure signal and dump the UIA-visible text tree to
-        # help diagnose where the status Label actually surfaces.
         final = _poll_for_terminal_state(_TERMINAL_WAIT_SEC)
         log.info(f"  final calibration status: {final!r}")
-        if final not in _TERMINAL_TEXTS:
-            visible = _dump_visible_texts()
-            log.warning(
-                "  UIA could not find a terminal calibration status. "
-                "Visible window_text values (max 60):"
-            )
-            for t in visible:
-                log.warning(f"    {t!r}")
         assert final in _TERMINAL_TEXTS, (
             f"Calibration did not reach a terminal state within "
             f"{_TERMINAL_WAIT_SEC} s. Last observed text: {final!r}. "
-            f"Expected one of {_TERMINAL_TEXTS}. (Visible-text dump "
-            f"in the warning log above.)"
+            f"Expected one of {_TERMINAL_TEXTS}."
         )
     finally:
         _close_settings()
