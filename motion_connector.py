@@ -2018,6 +2018,21 @@ class MOTIONConnector(QObject):
             "adc1": {"raws": self._pdu_raws[8:], "vals": self._pdu_vals[8:]},
         }
 
+    @staticmethod
+    def _format_safety_fault_detail(safety_se: int, safety_so: int) -> str:
+        """Render the dev-mode fault detail line for the laser-safety
+        toast — both safety_se and safety_so byte bitmaps decoded via
+        the SDK's _decode_safety_faults mapping. Pure function: same
+        bytes always produce the same string, so the toast text is
+        stable across re-fires (issue #76)."""
+        from omotion.ConsoleTelemetry import _decode_safety_faults
+        se = _decode_safety_faults(safety_se)
+        so = _decode_safety_faults(safety_so)
+        return (
+            f"safety_se=0x{safety_se:02X} ({', '.join(se) or 'no faults'}); "
+            f"safety_so=0x{safety_so:02X} ({', '.join(so) or 'no faults'})"
+        )
+
     @pyqtSlot()
     def readSafetyStatus(self, snap=None):
         if snap is None:
@@ -2029,38 +2044,38 @@ class MOTIONConnector(QObject):
             if snap.safety_ok:
                 if self._safetyFailure:
                     self.safetyFailure = False
-            else:
-                if not self._safetyFailure:
-                    # Decode which safety bits tripped so the developer-
-                    # mode toast (and the log) can name them. The SDK
-                    # owns the bit→label mapping in ConsoleTelemetry.
-                    from omotion.ConsoleTelemetry import _decode_safety_faults
-                    se_faults = _decode_safety_faults(snap.safety_se)
-                    so_faults = _decode_safety_faults(snap.safety_so)
-                    fault_detail = (
-                        f"safety_se=0x{snap.safety_se:02X} "
-                        f"({', '.join(se_faults) or 'no faults'}); "
-                        f"safety_so=0x{snap.safety_so:02X} "
-                        f"({', '.join(so_faults) or 'no faults'})"
-                    )
-                    logger.error(f"Laser safety failure: {fault_detail}")
-                    self.safetyFailure = True
-                    self._fire_safety_notification(fault_detail)
-                    self.stopTrigger()
-                    # laserStateChanged is the notify signal for the
-                    # zero-arg laserOn pyqtProperty — set the underlying
-                    # state and emit() without args so QML re-reads the
-                    # property. Previous form passed `False` and PyQt
-                    # raised "signal has 0 arguments but 1 provided",
-                    # which surfaced via the dev-mode safety toast.
-                    self._laserOn = False
-                    self.laserStateChanged.emit()
-                    if self._capture_running and not self._safety_cancel_scheduled:
-                        self.safetyTripDuringCaptureRequested.emit()
+                return
+            # Safety is NOT ok. (Re-)fire the notification on every
+            # poll so the toast is always present while safety is
+            # failed — issue #76: previously the fire was gated on
+            # the False→True transition, so once the operator started
+            # a second scan without power-cycling the console they
+            # got no popup. Tag-based dedup means the same toast just
+            # refreshes; no UI spam.
+            fault_detail = self._format_safety_fault_detail(
+                snap.safety_se, snap.safety_so,
+            )
+            self._fire_safety_notification(fault_detail)
+            if self._safetyFailure:
+                return  # heavy side effects already ran on the trip
+            # First time we see a trip in this session — log, set the
+            # flag (so the safetyFailure setter fires its signal),
+            # stop the trigger, drop the laser, and notify any
+            # in-flight capture so it tears down cleanly.
+            logger.error(f"Laser safety failure: {fault_detail}")
+            self.safetyFailure = True
+            self.stopTrigger()
+            # laserStateChanged is the notify signal for the zero-arg
+            # laserOn pyqtProperty — set the underlying state and
+            # emit() without args so QML re-reads the property.
+            self._laserOn = False
+            self.laserStateChanged.emit()
+            if self._capture_running and not self._safety_cancel_scheduled:
+                self.safetyTripDuringCaptureRequested.emit()
         except Exception as e:
             logger.error(f"readSafetyStatus failed: {e}")
-            self.safetyFailure = True
             self._fire_safety_notification(f"telemetry exception: {e}")
+            self.safetyFailure = True
             if self._capture_running and not self._safety_cancel_scheduled:
                 self.safetyTripDuringCaptureRequested.emit()
 
