@@ -865,40 +865,68 @@ def close_plot_window() -> bool:
     return False
 
 
-def dismiss_signal_quality_modal() -> bool:
-    """If the 'Good signal quality' modal appears, click Dismiss.
+# ContactQualityModal title strings for each post-``checking`` state
+# (see components/ContactQualityModal.qml line ~271). Stored exactly as
+# the QML renders them so targeted ``descendants(title=...)`` queries
+# match. Same data also appears in MODAL_FINGERPRINTS["ContactQuality"]
+# above; kept inline here so dismiss_signal_quality_modal is
+# self-contained and the comment about *why* targeted queries are
+# needed stays close to the call.
+_CONTACT_QUALITY_POST_CHECKING_TITLES = (
+    "Good signal quality",
+    "Contact check failed",
+    "Contact Quality Notification",
+)
 
-    Returns True if a Dismiss was clicked, False if the modal wasn't found.
-    """
+
+def dismiss_signal_quality_modal() -> bool:
+    """If the contact-quality modal is past the ``checking`` state,
+    click its ``Dismiss`` button.
+
+    Uses targeted ``descendants(title=...)`` queries instead of an
+    unfiltered tree walk — the walk silently misses plain QML Text
+    elements in this app (same root cause as ``calibrate_panel_buttons``
+    falling back to the QML pixel layout, and as ``_find_modal_state``
+    in test_reducedmode using the same approach). Buttons reliably
+    surface in UIA, so the Dismiss-button query is also targeted.
+
+    Returns True if a Dismiss was clicked, False if the modal wasn't
+    detected (still ``checking``, never opened, or already gone)."""
     try:
         win = uia_window()
-        signal_modal_found = False
-        for elem in win.descendants():
-            try:
-                text = elem.window_text().strip().lower()
-                if "good signal quality" in text or "signal quality" in text:
-                    signal_modal_found = True
-                    break
-            except Exception:
-                continue
-
-        if not signal_modal_found:
-            return False
-
-        log.info("  Signal quality modal detected — looking for Dismiss button")
-        for elem in win.descendants():
-            try:
-                if elem.window_text().strip() == "Dismiss":
-                    rect = elem.rectangle()
-                    cx = (rect.left + rect.right) // 2
-                    cy = (rect.top + rect.bottom) // 2
-                    log.info(f"  Clicking Dismiss button at ({cx}, {cy})")
-                    pyautogui.click(cx, cy)
-                    time.sleep(SLEEP)
-                    return True
-            except Exception:
-                continue
-        log.warning("  'Good signal quality' detected but Dismiss button not found")
     except Exception as e:
-        log.warning(f"  dismiss_signal_quality_modal failed: {e}")
+        log.warning(f"  dismiss_signal_quality_modal: uia_window failed: {e}")
+        return False
+
+    detected_title = None
+    for title in _CONTACT_QUALITY_POST_CHECKING_TITLES:
+        try:
+            if win.descendants(title=title):
+                detected_title = title
+                break
+        except Exception:
+            continue
+
+    if detected_title is None:
+        return False
+
+    log.info(f"  Contact-quality modal detected (state: {detected_title!r})")
+    try:
+        hits = win.descendants(title="Dismiss", control_type="Button")
+        if hits:
+            elem = hits[0]
+            rect = elem.rectangle()
+            cx = (rect.left + rect.right) // 2
+            cy = (rect.top + rect.bottom) // 2
+            log.info(f"  Clicking Dismiss button at ({cx}, {cy})")
+            pyautogui.click(cx, cy)
+            time.sleep(SLEEP)
+            return True
+    except Exception as e:
+        log.warning(f"  Dismiss-button lookup failed: {e}")
+
+    log.warning(
+        f"  Contact-quality modal detected ({detected_title!r}) but no "
+        f"Dismiss button found"
+    )
     return False
