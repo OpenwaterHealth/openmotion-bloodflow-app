@@ -24,6 +24,12 @@ Rectangle {
     // (issue #75). Either runner being non-idle counts as busy.
     readonly property bool checkRunning: qualityCheckRunner.running
 
+    // Hand main.qml the same ModalManager BloodFlow's icon-bar uses,
+    // so the close-while-busy handler can dismiss any open modal
+    // (saving its state via the modal's close() function) before the
+    // app tears down.
+    readonly property alias modalManager: modalManager
+
     // FDA mode (read from app config). Forces Far camera pattern + free run,
     // hides scan-settings button, and swaps in the FDA plot view.
     property bool reducedMode: MOTIONInterface.appConfig.reducedMode === true

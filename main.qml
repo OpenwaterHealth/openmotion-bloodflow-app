@@ -25,6 +25,17 @@ ApplicationWindow {
         bloodFlowPage.checkRunning ||
         MOTIONInterface.calibrationRunning
 
+    // Most-specific in-progress label for the warn-toast text. First
+    // match wins — calibration is rarest + costliest to interrupt,
+    // scan next, configuration / contact-quality check after.
+    function _inProgressLabel() {
+        if (MOTIONInterface.calibrationRunning) return "Calibration"
+        if (bloodFlowPage.scanning)             return "Scan"
+        if (bloodFlowPage.configuring)          return "Camera configuration"
+        if (bloodFlowPage.checkRunning)         return "Contact-quality check"
+        return ""
+    }
+
     // Two-click exit while busy: the first close attempt arms this
     // flag and shows a toast; a second click within the toast's
     // lifetime quits. The timer auto-disarms after the toast goes
@@ -64,6 +75,8 @@ ApplicationWindow {
             durationSec: bloodFlowPage.durationSec
 
             // Issue #75: warn-then-quit on close-while-busy.
+            //   * Always: dismiss the open modal first (if any +
+            //     dismissable) so its close() saves before we proceed.
             //   * not busy → quit immediately
             //   * busy + not armed → fire toast, arm; auto-disarm when
             //     the toast naturally expires
@@ -71,6 +84,7 @@ ApplicationWindow {
             //     main.py runs connector.shutdown() / motion_interface
             //     .stop() which tears down whatever was in flight)
             onCloseRequested: {
+                bloodFlowPage.modalManager.closeCurrent()
                 if (!window._anyInProgress) {
                     Qt.quit()
                     return
@@ -80,7 +94,8 @@ ApplicationWindow {
                     return
                 }
                 MOTIONInterface.notify(
-                    "Something is in progress. Click X again to cancel and exit.",
+                    window._inProgressLabel()
+                        + " in progress.\nClick X again to cancel and exit.",
                     "warning",
                     window._exitArmDurationMs,
                     true,
