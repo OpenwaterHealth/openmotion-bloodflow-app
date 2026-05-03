@@ -860,8 +860,13 @@ Item {
                         Text { text: MOTIONInterface.get_sdk_version(); color: root.colTextPri; font.pixelSize: 13; font.family: "Consolas" }
                         Item { Layout.fillWidth: true }
                     }
+                    // Updates row is hidden in reduced (clinical) mode —
+                    // clinical users shouldn't see update prompts. The
+                    // auto-check banner is gated separately in
+                    // UpdateBanner.qml. Issue #96.
                     FieldRow {
                         label: "Updates"
+                        visible: !root.reducedMode
                         ActionButton {
                             id: updateCheckBtn
                             text: "Check for Updates"
@@ -883,6 +888,7 @@ Item {
 
                     Connections {
                         target: MOTIONInterface
+                        enabled: !root.reducedMode
                         function onUpdateAvailable(version, url) {
                             updateCheckBtn.text = "Check for Updates"
                             updateCheckBtn.enabled = true

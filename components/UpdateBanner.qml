@@ -89,19 +89,29 @@ Rectangle {
         }
     }
 
+    // Reduced (clinical) mode: clinical users shouldn't see update
+    // prompts. Skip the auto-check on launch and refuse to show the
+    // banner even if MOTIONInterface.checkForUpdates() is somehow
+    // triggered (e.g. via developer-mode-only Settings row that
+    // shouldn't be reachable in reduced mode anyway). Issue #96.
+    readonly property bool _reducedMode: MOTIONInterface.appConfig.reducedMode === true
+
     Connections {
         target: MOTIONInterface
         function onUpdateAvailable(version, url) {
+            if (banner._reducedMode) return
             banner.latestVersion = version
             banner.downloadUrl = url
             banner.visible = true
         }
     }
 
-    // Auto-check on creation (after a brief delay to let the app settle)
+    // Auto-check on creation (after a brief delay to let the app settle).
+    // Disabled in reduced mode so clinical sessions don't make outbound
+    // GitHub API calls or surface upgrade prompts.
     Timer {
         interval: 3000
-        running: true
+        running: !banner._reducedMode
         repeat: false
         onTriggered: MOTIONInterface.checkForUpdates()
     }
