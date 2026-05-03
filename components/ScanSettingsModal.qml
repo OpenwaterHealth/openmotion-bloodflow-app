@@ -11,6 +11,9 @@ Item {
 
     AppTheme { id: theme }
 
+    // Modal interface — see HistoryModal.qml for rationale.
+    readonly property string label: "Scan Settings"
+
     // Camera selection
     signal selectionChanged(int leftMask, int rightMask)
 
@@ -167,7 +170,7 @@ Item {
 
             // Title
             Text {
-                text: "Scan Settings"
+                text: root.label
                 color: theme.textPrimary
                 font.pixelSize: 20
                 font.weight: Font.Bold

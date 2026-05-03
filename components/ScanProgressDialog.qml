@@ -10,6 +10,12 @@ Item {
 
     AppTheme { id: theme }
 
+    // Modal interface — see HistoryModal.qml for rationale. The
+    // visible title (``message`` below) tracks the live scan stage
+    // ("Scanning…" → "Aborting…" → "Capture complete"); ``label`` is
+    // the stable identifier consumers use.
+    readonly property string label: "Scan Progress"
+
     // API
     signal cancelRequested()
     property alias message: titleLabel.text

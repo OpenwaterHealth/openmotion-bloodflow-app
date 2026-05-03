@@ -16,6 +16,49 @@ ApplicationWindow {
 
     AppTheme { id: theme }
 
+    // Issue #75: aggregate 'something is happening' state used by the
+    // close-while-busy warning. Anything that the user would not want
+    // to interrupt mid-flight by accident counts.
+    readonly property bool _anyInProgress:
+        bloodFlowPage.scanning ||
+        bloodFlowPage.configuring ||
+        bloodFlowPage.checkRunning ||
+        MOTIONInterface.calibrationRunning
+
+    // Most-specific in-progress label for the warn-toast text. First
+    // match wins — calibration is rarest + costliest to interrupt,
+    // scan next, configuration / contact-quality check after.
+    //
+    // If a non-dismissable modal is on screen at click time
+    // (ContactQualityModal mid-check, etc.), prefer its declared
+    // ``label`` — that's the most user-meaningful description of
+    // what's blocking the close. Modals expose ``label`` as part of
+    // their formal interface; see HistoryModal.qml for the contract.
+    function _inProgressLabel() {
+        var m = bloodFlowPage.modalManager.current
+        if (m && m.dismissable === false && m.label) return m.label
+        if (MOTIONInterface.calibrationRunning) return "Calibration"
+        if (bloodFlowPage.scanning)             return "Scan"
+        if (bloodFlowPage.configuring)          return "Camera configuration"
+        if (bloodFlowPage.checkRunning)         return "Contact-quality check"
+        return ""
+    }
+
+    // Two-click exit while busy: the first close attempt arms this
+    // flag and shows a toast; a second click within the toast's
+    // lifetime quits. The timer auto-disarms after the toast goes
+    // away so the warning has to be re-shown if the user comes back
+    // later.
+    property bool _exitArmed: false
+    readonly property int _exitArmDurationMs: 5000
+
+    Timer {
+        id: exitDisarmTimer
+        interval: window._exitArmDurationMs
+        repeat: false
+        onTriggered: window._exitArmed = false
+    }
+
     Rectangle {
         anchors.fill: parent
         color: theme.bgBase
@@ -38,6 +81,37 @@ ApplicationWindow {
             reducedMode:     bloodFlowPage.reducedMode
             elapsedSec:  bloodFlowPage.elapsedSec
             durationSec: bloodFlowPage.durationSec
+
+            // Issue #75: warn-then-quit on close-while-busy.
+            //   * Always: dismiss the open modal first (if any +
+            //     dismissable) so its close() saves before we proceed.
+            //   * not busy → quit immediately
+            //   * busy + not armed → fire toast, arm; auto-disarm when
+            //     the toast naturally expires
+            //   * busy + armed → quit (existing handle_exit path in
+            //     main.py runs connector.shutdown() / motion_interface
+            //     .stop() which tears down whatever was in flight)
+            onCloseRequested: {
+                bloodFlowPage.modalManager.closeCurrent()
+                if (!window._anyInProgress) {
+                    Qt.quit()
+                    return
+                }
+                if (window._exitArmed) {
+                    Qt.quit()
+                    return
+                }
+                MOTIONInterface.notify(
+                    window._inProgressLabel()
+                        + " in progress.\nClick X again to cancel and exit.",
+                    "warning",
+                    window._exitArmDurationMs,
+                    true,
+                    "exit-while-busy",
+                )
+                window._exitArmed = true
+                exitDisarmTimer.restart()
+            }
         }
 
         // Update available banner (slides in below header)
