@@ -86,7 +86,7 @@
   "meanMax": 200.0,
   "contrastMin": 0.0,
   "contrastMax": 0.7,
-  "dataDirectory": "C:\\Users\\ethan\\Projects\\scan_data",
+  "dataDirectory": null,
   "writeRawCsv": false,
   "rawCsvDurationSec": 60.0,
   "autoScale": false,
@@ -117,7 +117,7 @@
     3.0
   ],
   "cq_light_threshold_per_camera": [
-    100.0,
+    15.0,
     15.0,
     15.0,
     15.0,
@@ -125,5 +125,6 @@
     15.0,
     15.0,
     15.0
-  ]
+  ],
+  "triggerConfig": null
 }
