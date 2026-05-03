@@ -883,34 +883,59 @@ def dismiss_signal_quality_modal() -> bool:
     """If the contact-quality modal is past the ``checking`` state,
     click its ``Dismiss`` button.
 
-    Uses targeted ``descendants(title=...)`` queries instead of an
-    unfiltered tree walk — the walk silently misses plain QML Text
-    elements in this app (same root cause as ``calibrate_panel_buttons``
-    falling back to the QML pixel layout, and as ``_find_modal_state``
-    in test_reducedmode using the same approach). Buttons reliably
-    surface in UIA, so the Dismiss-button query is also targeted.
+    Two-pass detection (mirrors ``_find_modal_state`` in
+    test_reducedmode):
+
+      1. **Targeted title query** for each post-``checking`` state
+         title. Uses ``descendants(title=...)`` instead of an
+         unfiltered tree walk — the walk silently misses plain QML
+         Text in this app (same root cause as panel-button calibration
+         falling back to the QML pixel layout).
+      2. **Button fallback** if no title matched. Any of
+         ``Start Scan`` / ``Dismiss`` / ``Retest`` being present
+         means the modal is past ``checking`` (the footer renders
+         only on ``state_ !== "checking"``); QML Buttons reliably
+         surface in UIA even when sibling Text elements don't.
+
+    Without the button fallback this helper returns False even when
+    the modal is clearly on screen, which is what test_reducedmode
+    hit + fixed earlier and what test_usb_disconnect_freeze burns
+    its 120 s Check polling on.
 
     Returns True if a Dismiss was clicked, False if the modal wasn't
-    detected (still ``checking``, never opened, or already gone)."""
+    detected (still ``checking``, never opened, or already gone).
+    """
     try:
         win = uia_window()
     except Exception as e:
         log.warning(f"  dismiss_signal_quality_modal: uia_window failed: {e}")
         return False
 
-    detected_title = None
+    # Pass 1: targeted title query.
+    detected_via = None
     for title in _CONTACT_QUALITY_POST_CHECKING_TITLES:
         try:
             if win.descendants(title=title):
-                detected_title = title
+                detected_via = f"title={title!r}"
                 break
         except Exception:
             continue
 
-    if detected_title is None:
+    # Pass 2: button fallback. Any post-checking footer button means
+    # the modal is up and dismissable.
+    if detected_via is None:
+        for btn_name in ("Start Scan", "Dismiss", "Retest"):
+            try:
+                if win.descendants(title=btn_name, control_type="Button"):
+                    detected_via = f"button={btn_name!r}"
+                    break
+            except Exception:
+                continue
+
+    if detected_via is None:
         return False
 
-    log.info(f"  Contact-quality modal detected (state: {detected_title!r})")
+    log.info(f"  Contact-quality modal detected via {detected_via}")
     try:
         hits = win.descendants(title="Dismiss", control_type="Button")
         if hits:
@@ -926,7 +951,6 @@ def dismiss_signal_quality_modal() -> bool:
         log.warning(f"  Dismiss-button lookup failed: {e}")
 
     log.warning(
-        f"  Contact-quality modal detected ({detected_title!r}) but no "
-        f"Dismiss button found"
+        f"  Modal detected via {detected_via} but Dismiss button not found"
     )
     return False
