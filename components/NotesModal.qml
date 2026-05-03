@@ -26,7 +26,7 @@ Item {
     Rectangle {
         anchors.fill: parent
         color: "#000000AA"
-        MouseArea { anchors.fill: parent; onClicked: {} }
+        MouseArea { anchors.fill: parent; onClicked: root.close() }
     }
 
     Rectangle {

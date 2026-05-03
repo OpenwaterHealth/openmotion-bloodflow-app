@@ -141,7 +141,13 @@ Rectangle {
         camerasReady: bloodFlow.camerasReady && !bloodFlow.configuring
         reducedMode: bloodFlow.reducedMode
 
+        // Action buttons — close any open modal first (which by
+        // convention saves), then perform the action. If the open
+        // modal is non-dismissable (e.g. ContactQualityModal during
+        // an in-flight check), modalManager.closeCurrent() is a
+        // no-op and the action below still runs.
         onStartStopClicked: {
+            modalManager.closeCurrent()
             if (bloodFlow.scanning) {
                 scanRunner.cancel()
                 scanDialog.close()
@@ -159,26 +165,39 @@ Rectangle {
                 }
             }
         }
+        onCheckClicked: {
+            modalManager.closeCurrent()
+            contactQualityModal.reset(false, 0)
+            qualityCheckRunner.start()
+        }
 
+        // Toggle buttons — open the named modal, or close it if it's
+        // already open. modalManager.toggle() handles closing whatever
+        // else might be on screen first.
         onScanSettingsClicked: {
-            var wasOpen = scanSettingsModal.visible
-            closeAllModals()
-            if (!wasOpen) {
+            if (!scanSettingsModal.visible) {
                 scanSettingsModal.setInitialSelection(
                     maskToArray(leftMask),
                     maskToArray(rightMask)
                 )
-                scanSettingsModal.open()
             }
+            modalManager.toggle(scanSettingsModal)
         }
-        onNotesClicked:    { var o = notesModal.visible;    closeAllModals(); if (!o) notesModal.open() }
-        onCheckClicked:    {
-            contactQualityModal.reset(false, 0)
-            qualityCheckRunner.start()
-        }
-        onHistoryClicked:  { var o = historyModal.visible;  closeAllModals(); if (!o) historyModal.open() }
-        onLogClicked:      { var o = scanDialog.visible;    closeAllModals(); if (!o) scanDialog.open() }
-        onSettingsClicked: { var o = settingsModal.visible; closeAllModals(); if (!o) settingsModal.open() }
+        onNotesClicked:    modalManager.toggle(notesModal)
+        onHistoryClicked:  modalManager.toggle(historyModal)
+        onLogClicked:      modalManager.toggle(scanDialog)
+        onSettingsClicked: modalManager.toggle(settingsModal)
+    }
+
+    // Single source of truth for which modal is on screen. See
+    // ModalManager.qml for semantics. The list must include every
+    // modal that should participate in click-outside / icon-bar
+    // close behavior; ContactQualityModal opts out of dismissal
+    // dynamically via its `dismissable` property.
+    ModalManager {
+        id: modalManager
+        modals: [scanSettingsModal, notesModal, historyModal,
+                 settingsModal, contactQualityModal, scanDialog]
     }
 
     // Data viewer — fills remaining space to the right of ButtonPanel
@@ -240,14 +259,6 @@ Rectangle {
         anchors.right: parent.right
         anchors.margins: 8
         anchors.leftMargin: 16
-    }
-
-    function closeAllModals() {
-        if (scanSettingsModal.visible) scanSettingsModal.close()
-        if (notesModal.visible)        notesModal.close()
-        if (historyModal.visible)      historyModal.close()
-        if (settingsModal.visible)     settingsModal.close()
-        if (scanDialog.visible)        scanDialog.close()
     }
 
     // ===== MODALS =====

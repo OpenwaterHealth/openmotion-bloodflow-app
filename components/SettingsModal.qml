@@ -319,7 +319,7 @@ Item {
     Rectangle {
         anchors.fill: parent
         color: "#000000B0"
-        MouseArea { anchors.fill: parent; onClicked: {} }
+        MouseArea { anchors.fill: parent; onClicked: root.close() }
     }
 
     // ── Modal panel ─────────────────────────────────────────────────────────

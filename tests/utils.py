@@ -82,12 +82,24 @@ _PANEL_CONTENT_MARG  = 6    # ColumnLayout anchors.margins: 6 inside ButtonPanel
 _PANEL_BUTTON_HALF   = 34   # half of 68 px button
 _PANEL_SLOT_PX       = 85   # vertical spacing between button centers
 
-# Slot index for each top-of-panel button (counted from Start = 0).
+# Slot index for each top-of-panel button (counted from Start = 0)
+# in normal (non-reduced) mode.
 PANEL_BUTTON_SLOTS = {
     "Start":         0,
     "Scan\nSettings": 1,
     "Notes":          2,
     "Check":          3,
+}
+
+# In reduced mode, ``Scan\nSettings`` and ``Check`` are hidden
+# (``visible: !panel.reducedMode`` in components/ButtonPanel.qml),
+# so the QML ColumnLayout collapses and Notes slides up into the
+# former Scan Settings slot. The fallback screen-pos math needs to
+# know this or it computes Notes at its non-reduced y coordinate
+# and every click on Notes in reduced mode misses by one slot.
+PANEL_BUTTON_SLOTS_REDUCED = {
+    "Start": 0,
+    "Notes": 1,
 }
 
 # History and Settings sit at the bottom of the panel below a
@@ -479,12 +491,22 @@ def panel_button_screen_pos(label: str) -> tuple[int, int] | None:
     bottom; they don't shift with the banner because main.qml only
     grows the page-Item's topMargin when the banner appears, leaving
     the bottom anchored to parent.bottom.
+
+    When ``reducedMode`` is enabled in ``app_config.json`` we use the
+    reduced slot map — Notes moves up into slot 1, and
+    ``Scan\\nSettings`` / ``Check`` have no slot at all (they are
+    ``visible: false`` in ButtonPanel.qml and shouldn't be clicked).
     """
     w = get_app_window()
     x = w.left + _PANEL_OUTER_LEFT + _PANEL_INNER_LEFT + _PANEL_CONTENT_MARG + _PANEL_BUTTON_HALF
 
-    if label in PANEL_BUTTON_SLOTS:
-        slot = PANEL_BUTTON_SLOTS[label]
+    if read_app_config_value("reducedMode", False):
+        top_slots = PANEL_BUTTON_SLOTS_REDUCED
+    else:
+        top_slots = PANEL_BUTTON_SLOTS
+
+    if label in top_slots:
+        slot = top_slots[label]
         state = _detect_banner_state()
         if state is True:
             header_px = _PANEL_HEADER_PX + BANNER_OFFSET_PX
@@ -714,6 +736,97 @@ def click_panel_button(label: str, fallback: tuple[float, float] | None = None) 
 # Modal / dialog handling
 # ─────────────────────────────────────────────
 _PLOT_TITLE_RE = re.compile(r"^Figure \d+", re.IGNORECASE)
+
+
+# Each modal in the bloodflow app is a QML ``Item`` overlay
+# (anchors.fill: parent, visible toggle, z-index) inside the main
+# OpenWater Bloodflow window — not a Qt Dialog or separate Window —
+# so they don't surface as distinct UIA windows. We detect which
+# modal(s) are open with two passes per fingerprint:
+#
+#   1. Targeted ``descendants(title=...)`` query for each text
+#      fingerprint. Targeted queries hit a different UIA code path
+#      than the unfiltered descendants walk and reliably find Text
+#      elements that the walk silently misses (same root cause as
+#      ``calibrate_panel_buttons`` always falling back to the QML
+#      pixel layout). Empirically this is what works for click_by_name
+#      against modal contents (e.g. "Visualize BFI/BVI" in History).
+#   2. ``descendants(title=..., control_type="Button")`` fallback for
+#      modals that expose a uniquely-named Button. Qt Buttons are
+#      always exposed via UIA even when sibling Text elements vanish.
+#
+# Fingerprint values must match the QML *exactly* (case + whitespace)
+# because targeted queries are exact matches, not substrings. Each
+# entry is (text fingerprints, button fingerprints).
+_TextFingerprints = tuple[str, ...]
+_ButtonFingerprints = tuple[str, ...]
+MODAL_FINGERPRINTS: dict[str, tuple[_TextFingerprints, _ButtonFingerprints]] = {
+    # SettingsModal (gear icon)
+    "Settings":       (("Time window",), ("Run Calibration", "Check for Updates")),
+    # ScanSettingsModal
+    "ScanSettings":   (("Scan Settings", "Camera Configuration"), ()),
+    # NotesModal
+    "Notes":          (("Session Notes",), ()),
+    # HistoryModal
+    "History":        (("Scan History",), ("Open Folder", "Refresh")),
+    # ContactQualityModal — title varies by state_; match all four
+    # plus the buttons that only its preScanMode footer renders.
+    "ContactQuality": (
+        (
+            "Checking contact quality\u2026",  # \u2026 = "…"
+            "Good signal quality",
+            "Contact check failed",
+            "Contact Quality Notification",
+        ),
+        # "Dismiss" / "Retest" appear on multiple modals so they can't
+        # be unique fingerprints on their own; "Start Scan" is unique
+        # to ContactQualityModal in preScanMode.
+        ("Start Scan",),
+    ),
+}
+
+
+def visible_modals() -> set[str]:
+    """Return the set of modal names currently visible in the app.
+
+    Identifies each modal via the fingerprints in
+    ``MODAL_FINGERPRINTS`` using targeted UIA queries (not a tree
+    walk — see the comment above the dict for why). Returns names
+    like ``"Settings"`` / ``"ContactQuality"``; an empty set means
+    no modal is open.
+
+    Used by tests that need to assert mutual exclusivity — see
+    ``test_reducedmode.TestModalExclusivity``.
+    """
+    found: set[str] = set()
+    try:
+        win = uia_window()
+    except Exception as e:
+        log.warning(f"  visible_modals: uia_window failed: {e}")
+        return found
+
+    for modal_name, (text_fps, button_fps) in MODAL_FINGERPRINTS.items():
+        matched = False
+        for fp in text_fps:
+            try:
+                if win.descendants(title=fp):
+                    matched = True
+                    break
+            except Exception:
+                continue
+        if matched:
+            found.add(modal_name)
+            continue
+        for fp in button_fps:
+            try:
+                if win.descendants(title=fp, control_type="Button"):
+                    matched = True
+                    break
+            except Exception:
+                continue
+        if matched:
+            found.add(modal_name)
+    return found
 
 
 def close_plot_window() -> bool:
