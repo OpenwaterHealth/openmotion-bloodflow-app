@@ -317,7 +317,7 @@ class TestForceLaserFail:
             log.info("=" * 60)
             _kill_bloodflow_processes()
             time.sleep(2)
-            _set_force_laser_fail(original_flag)
+            _set_force_laser_fail(False)
             log.info("  power-cycling outlet (off 5s, on)")
             outlet.power_cycle(off_time=5.0)
             time.sleep(3)
@@ -333,7 +333,7 @@ class TestForceLaserFail:
                 )
                 return
             recalibrate_panel_buttons()
-            log.info("  cleanup complete; app is running with restored config")
+            log.info("  cleanup complete; app is running with forceLaserFail=false")
 
         # ─── Phase 4: verify clean state ──────────────────────────
         log.info("=" * 60)
