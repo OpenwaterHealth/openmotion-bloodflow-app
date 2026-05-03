@@ -28,7 +28,15 @@ ApplicationWindow {
     // Most-specific in-progress label for the warn-toast text. First
     // match wins — calibration is rarest + costliest to interrupt,
     // scan next, configuration / contact-quality check after.
+    //
+    // If a non-dismissable modal is on screen at click time
+    // (ContactQualityModal mid-check, etc.), prefer its declared
+    // ``label`` — that's the most user-meaningful description of
+    // what's blocking the close. Modals expose ``label`` as part of
+    // their formal interface; see HistoryModal.qml for the contract.
     function _inProgressLabel() {
+        var m = bloodFlowPage.modalManager.current
+        if (m && m.dismissable === false && m.label) return m.label
         if (MOTIONInterface.calibrationRunning) return "Calibration"
         if (bloodFlowPage.scanning)             return "Scan"
         if (bloodFlowPage.configuring)          return "Camera configuration"

@@ -56,6 +56,16 @@ Item {
     readonly property bool dismissable: state_ !== "checking"
                                         && !preScanMode
                                         && !liveScan
+
+    // Modal interface — see HistoryModal.qml for rationale. Derived
+    // from state_ since this modal's title shifts with the check
+    // outcome; the title Text below binds to this.
+    readonly property string label: {
+        if (state_ === "checking") return "Checking contact quality…"
+        if (state_ === "ok")       return "Good signal quality"
+        if (state_ === "error")    return "Contact check failed"
+        return "Contact Quality Notification"
+    }
     // Require an all-clear holdoff before enabling Continue.
     property int clearHoldoffMs: 2000
     // Active camera masks for current scan selection (used in live-scan mode).
@@ -282,12 +292,7 @@ Item {
                 font.bold: true
                 color: theme.textPrimary
                 wrapMode: Text.WordWrap
-                text: {
-                    if (root.state_ === "checking") return "Checking contact quality…"
-                    if (root.state_ === "ok")       return "Good signal quality"
-                    if (root.state_ === "error")    return "Contact check failed"
-                    return "Contact Quality Notification"
-                }
+                text: root.label
             }
 
             // Spinner for "checking" state

@@ -11,6 +11,9 @@ Item {
 
     AppTheme { id: theme }
 
+    // Modal interface — see HistoryModal.qml for rationale.
+    readonly property string label: "Session Notes"
+
     function open() {
         notesArea.text = MOTIONInterface.scanNotes
         root.visible = true
@@ -60,7 +63,7 @@ Item {
             spacing: 16
 
             Text {
-                text: "Session Notes"
+                text: root.label
                 color: theme.textPrimary
                 font.pixelSize: 20
                 font.weight: Font.Bold

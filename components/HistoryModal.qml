@@ -12,6 +12,12 @@ Item {
 
     AppTheme { id: theme }
 
+    // Modal interface: the user-visible label for this modal. Single
+    // source of truth — the title Text below binds to this, and the
+    // ModalManager / close-while-busy handler can read it without
+    // hardcoding the string.
+    readonly property string label: "Scan History"
+
     property var scans: []
     property var selected: ({})
     property bool visualizing: false
@@ -105,7 +111,7 @@ Item {
                 spacing: 12
 
                 Text {
-                    text: "Scan History"
+                    text: root.label
                     font.pixelSize: 20
                     font.weight: Font.Bold
                     color: theme.textPrimary

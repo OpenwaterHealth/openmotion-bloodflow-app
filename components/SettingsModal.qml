@@ -12,6 +12,9 @@ Item {
 
     AppTheme { id: theme }
 
+    // Modal interface — see HistoryModal.qml for rationale.
+    readonly property string label: "Settings"
+
     // ── Settings values — initialised from live config on creation ──────────
     property int    defaultLeftMaskIndex:  4
     property int    defaultRightMaskIndex: 4
@@ -346,7 +349,7 @@ Item {
                 anchors.left: parent.left
                 anchors.leftMargin: 24
                 anchors.verticalCenter: parent.verticalCenter
-                text: "Settings"
+                text: root.label
                 color: root.colTextPri
                 font.pixelSize: 20
                 font.weight: Font.DemiBold
