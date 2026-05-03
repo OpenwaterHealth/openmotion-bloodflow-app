@@ -1166,38 +1166,60 @@ class MOTIONConnector(QObject):
             )
             return TEC_VOLTAGE_DEFAULT
 
+    # Suffix patterns that distinguish the corrected (canonical) CSV
+    # from per-scan auxiliary CSVs (raw histo, telemetry). Issue #44:
+    # the canonical file dropped its ``_corrected`` suffix so the
+    # previous ``*_corrected.csv`` glob no longer matches new scans.
+    # Discovery now globs all CSVs and excludes anything matching one
+    # of these aux patterns. Order matters: longer / more-specific
+    # patterns first so an aux file isn't mistaken for canonical.
+    _AUX_CSV_RE = re.compile(
+        r"_("
+        r"telemetry"                                  # _telemetry.csv
+        r"|(?:left|right)_mask[0-9A-Fa-f]+(?:_raw)?"  # raw histo, new + legacy
+        r")$"
+    )
+
     @pyqtSlot(result=list)
     def get_scan_list(self):
         """Return sorted list of scan IDs.
 
-        Supports two filename formats:
-          New: {YYYYMMDD_HHMMSS}_{sessionId}_corrected.csv
-          Old: scan_{sessionId}_{YYYYMMDD_HHMMSS}_corrected.csv
+        Supports three filename formats for the canonical scan CSV:
+          New (post-#44): {YYYYMMDD_HHMMSS}_{sessionId}.csv
+          Mid:            {YYYYMMDD_HHMMSS}_{sessionId}_corrected.csv
+          Legacy:         scan_{sessionId}_{YYYYMMDD_HHMMSS}_corrected.csv
         """
         base_path = Path(self._directory)
         if not base_path.exists():
             return []
 
-        ids = []
-        for f in base_path.glob("*_corrected.csv"):
+        seen: set[str] = set()
+        ids: list[str] = []
+        for f in base_path.glob("*.csv"):
             if not f.is_file():
                 continue
-            stem = f.stem  # strip ".csv" → "..._corrected"
-            if not stem.endswith("_corrected"):
+            stem = f.stem
+            # Skip per-scan auxiliary files (raw histo, telemetry).
+            if self._AUX_CSV_RE.search(stem):
                 continue
-            stem = stem[:-10]  # strip "_corrected"
-
+            # Mid format: strip the ``_corrected`` suffix to get the
+            # canonical scan id.
+            if stem.endswith("_corrected"):
+                stem = stem[:-10]
+            # Legacy format: ``scan_{sessionId}_{ts}`` — strip the
+            # ``scan_`` prefix.
             if stem.startswith("scan_"):
-                # Old format: scan_{sessionId}_{ts}
                 stem = stem[5:]
-
+            if stem in seen:
+                continue
+            seen.add(stem)
             ids.append(stem)
 
         def ts_key(s):
-            # New format starts with YYYYMMDD (8 digits)
+            # New / mid format starts with YYYYMMDD (8 digits)
             if re.match(r'^\d{8}_\d{6}', s):
                 return s[:15]       # YYYYMMDD_HHMMSS
-            # Old format: sessionId_YYYYMMDD_HHMMSS
+            # Legacy format: sessionId_YYYYMMDD_HHMMSS
             parts = s.split("_", 1)
             return parts[1] if len(parts) == 2 else s
 
@@ -1207,23 +1229,43 @@ class MOTIONConnector(QObject):
     def get_scan_details(self, scan_id: str):
         """
         scan_id is either:
-          New format: 'YYYYMMDD_HHMMSS_userLabel'
-          Old format: 'userLabel_YYYYMMDD_HHMMSS'
+          New / mid format: 'YYYYMMDD_HHMMSS_userLabel'
+          Legacy format:    'userLabel_YYYYMMDD_HHMMSS'
+
+        For each format we try to resolve the canonical CSV across
+        all naming generations (#44):
+          New:    {scan_id}.csv
+          Mid:    {scan_id}_corrected.csv
+          Legacy: scan_{scan_id}_corrected.csv
+        And the raw histo CSVs across two generations:
+          New:    {scan_id}_(left|right)_mask*_raw.csv
+          Legacy: {scan_id}_(left|right)_mask*.csv
         """
         base = Path(self._directory)
 
         # Detect format by checking if it starts with a date
         if re.match(r'^\d{8}_\d{6}_', scan_id):
-            # New format: YYYYMMDD_HHMMSS_userLabel
+            # New / mid: YYYYMMDD_HHMMSS_userLabel
             parts = scan_id.split("_", 2)
             ts = parts[0] + "_" + parts[1]
             subject = parts[2] if len(parts) > 2 else ""
             notes_path = base / f"{scan_id}_notes.txt"
-            left      = next(base.glob(f"{scan_id}_left_mask*.csv"), None)
-            right     = next(base.glob(f"{scan_id}_right_mask*.csv"), None)
-            corrected = next(base.glob(f"{scan_id}_corrected.csv"), None)
+            left      = (next(base.glob(f"{scan_id}_left_mask*_raw.csv"), None)
+                         or next(base.glob(f"{scan_id}_left_mask*.csv"), None))
+            right     = (next(base.glob(f"{scan_id}_right_mask*_raw.csv"), None)
+                         or next(base.glob(f"{scan_id}_right_mask*.csv"), None))
+            # Prefer new naming (no suffix); fall back to mid format
+            # (_corrected). Filter out files that match the raw
+            # mask pattern so they aren't picked up as the canonical
+            # CSV.
+            corrected = next(
+                (p for p in base.glob(f"{scan_id}.csv") if p.is_file()),
+                None,
+            )
+            if corrected is None:
+                corrected = next(base.glob(f"{scan_id}_corrected.csv"), None)
         else:
-            # Old format: userLabel_YYYYMMDD_HHMMSS
+            # Legacy: userLabel_YYYYMMDD_HHMMSS
             parts = scan_id.split("_", 1)
             subject = parts[0]
             ts = parts[1] if len(parts) > 1 else ""
@@ -1235,11 +1277,11 @@ class MOTIONConnector(QObject):
         left_mask = ""
         right_mask = ""
         if left:
-            m = re.search(r"_mask([0-9A-Fa-f]+)\.csv$", left.name)
+            m = re.search(r"_mask([0-9A-Fa-f]+)(?:_raw)?\.csv$", left.name)
             if m:
                 left_mask = m.group(1)
         if right:
-            m = re.search(r"_mask([0-9A-Fa-f]+)\.csv$", right.name)
+            m = re.search(r"_mask([0-9A-Fa-f]+)(?:_raw)?\.csv$", right.name)
             if m:
                 right_mask = m.group(1)
 
