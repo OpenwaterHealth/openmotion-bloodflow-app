@@ -713,29 +713,41 @@ def click_panel_button(label: str, fallback: tuple[float, float] | None = None) 
 # ─────────────────────────────────────────────
 # Modal / dialog handling
 # ─────────────────────────────────────────────
-def close_plot_window() -> bool:
-    """Close the plot window opened by the app via Alt+F4.
+_PLOT_TITLE_RE = re.compile(r"^Figure \d+", re.IGNORECASE)
 
-    Iterates all top-level windows and closes the first one whose title
-    does not match the main app keywords, avoiding closing the main app.
+
+def close_plot_window() -> bool:
+    """Close the matplotlib plot window opened by the app via Alt+F4.
+
+    Filters to windows whose title matches matplotlib's default
+    ``Figure N`` pattern. Earlier this function iterated every visible
+    desktop window and Alt+F4'd the first non-bloodflow one, which on
+    a busy machine meant trying to activate Parsec / LGDisplay / Chrome
+    / 'Program Manager' (the desktop itself) etc. — the activate
+    fallbacks for those special windows can move the mouse cursor and
+    trip pyautogui.FAILSAFE, which then breaks every subsequent
+    pyautogui call in the suite.
     """
     for w in gw.getAllWindows():
-        if not w.title.strip():
+        title = (w.title or "").strip()
+        if not title:
             continue
-        if any(k in w.title.lower() for k in APP_KEYWORDS):
+        if any(k in title.lower() for k in APP_KEYWORDS):
             continue
+        if not _PLOT_TITLE_RE.match(title):
+            continue  # Not a matplotlib plot — leave it alone.
         try:
             if w.isMinimized:
                 w.restore()
                 time.sleep(1)
             w.activate()
             time.sleep(0.5)
-            log.info(f"  Closing plot window: '{w.title}'")
+            log.info(f"  Closing plot window: '{title}'")
             pyautogui.hotkey("alt", "f4")
             time.sleep(SLEEP)
             return True
         except Exception as e:
-            log.warning(f"  Could not close '{w.title}': {e}")
+            log.warning(f"  Could not close '{title}': {e}")
     log.warning("  No plot window found to close")
     return False
 
