@@ -48,7 +48,7 @@ from conftest import (
     ensure_visible,
     log,
 )
-from utils import (
+from hil_helpers import (
     RE_CONNECTED,
     click_panel,
     find_app_log,

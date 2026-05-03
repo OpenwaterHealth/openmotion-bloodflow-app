@@ -38,7 +38,7 @@ import pyautogui
 import pytest
 
 from conftest import SLEEP, ensure_visible, get_clipboard, log, require_focus
-from utils import click_panel, move_window_on_screen
+from hil_helpers import click_panel, move_window_on_screen
 
 pytestmark = pytest.mark.dev
 

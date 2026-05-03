@@ -23,7 +23,7 @@ from conftest import (
     uia_window,
     wait_with_log,
 )
-from utils import (
+from hil_helpers import (
     SENSOR_OPTIONS,
     click_element_center,
     click_panel,
