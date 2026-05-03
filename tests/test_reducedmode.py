@@ -198,10 +198,12 @@ def _wait_for_signal_quality_and_start_scan(timeout: int = 180) -> bool:
     Buttons are reliably exposed via UIA even when sibling Text
     elements aren't.
 
-    The caller is expected to check the return value. ``test_14`` /
-    ``test_25`` / ``_run_scan`` currently ignore it, which causes
-    the rest of the scan flow to run out of phase if the modal
-    never reaches ``ok``; fixing those call sites is a follow-up.
+    Callers MUST check the return value (or use
+    ``_assert_scan_started``). If we never clicked ``Start Scan``,
+    the scan didn't actually start, and any subsequent
+    ``wait_with_log(SCAN_WAIT, ...)`` / ``click_panel('Start')``
+    (intended as Stop) calls run out of phase — the second Start
+    click would then *begin* a scan rather than stop one.
     """
     log.info(
         f"  Waiting up to {timeout}s for ContactQualityModal to reach "
@@ -290,6 +292,29 @@ def _wait_for_signal_quality_and_start_scan(timeout: int = 180) -> bool:
         f"{timeout}s (last seen state: {last_state or 'not visible'})"
     )
     return False
+
+
+def _assert_scan_started(timeout: int = 180) -> None:
+    """Wait for the contact-quality pre-scan check, click ``Start Scan``,
+    and assert the scan actually began.
+
+    Wraps ``_wait_for_signal_quality_and_start_scan`` so every caller
+    that performs ``click_panel('Start')`` immediately followed by a
+    scan-running ``wait_with_log`` gets a hard failure instead of
+    silently running out of phase. The ``incremental`` marker on the
+    test classes will then skip the dependent steps cleanly.
+    """
+    if _wait_for_signal_quality_and_start_scan(timeout=timeout):
+        return
+    pytest.fail(
+        "Pre-scan contact-quality check did not reach 'ok' and we "
+        "never clicked 'Start Scan' — see prior WARNING lines for "
+        "the modal state-transition trace. The scan did not actually "
+        "start, so any subsequent wait_with_log / Stop-click would "
+        "run out of phase. Common causes: laser-pulse hardware error "
+        "during pre-scan, sensor mask doesn't match physical sensors, "
+        "or modal stuck in 'checking' past the timeout."
+    )
 
 
 def _select_time_window(seconds: int):
@@ -476,7 +501,7 @@ def _run_scan(label: str, duration_sec: int):
     """
     log.info(f"  [{label}] Starting scan for {duration_sec}s")
     click_panel("Start")
-    _wait_for_signal_quality_and_start_scan()
+    _assert_scan_started()
     wait_with_log(duration_sec, f"[{label}] scan running")
     click_panel("Start")  # toggle: Stop
     log.info(f"  [{label}] Waiting {STOP_BUFFER}s for scan data to save...")
@@ -637,8 +662,12 @@ class TestReducedMode:
     def test_14_start_scan(self, app):
         """Click Start — the app auto-runs signal quality check, then click 'Start Scan'."""
         click_panel("Start")
-        # In Reduced Mode, the 'Good signal quality' dialog auto-appears
-        _wait_for_signal_quality_and_start_scan()
+        # In Reduced Mode, the 'Good signal quality' dialog auto-appears.
+        # _assert_scan_started fails the test (and short-circuits the
+        # rest of the @incremental class) if the check never reaches
+        # 'ok' — preventing test_15/16 from running on a non-existent
+        # scan.
+        _assert_scan_started()
 
     def test_15_wait_2_minutes(self, app):
         wait_with_log(SCAN_WAIT, "2-minute manual scan running")
@@ -713,8 +742,12 @@ class TestReducedModeMouse:
     def test_25_start_scan(self, app):
         """Click Start — the app auto-runs signal quality check, then click 'Start Scan'."""
         click_panel("Start")
-        # In Reduced Mode, the 'Good signal quality' dialog auto-appears
-        _wait_for_signal_quality_and_start_scan()
+        # In Reduced Mode, the 'Good signal quality' dialog auto-appears.
+        # _assert_scan_started fails the test (and short-circuits the
+        # rest of the @incremental class) if the check never reaches
+        # 'ok' — preventing test_26/27 from running on a non-existent
+        # scan.
+        _assert_scan_started()
 
     def test_26_wait_scan(self, app):
         wait_with_log(SCAN_WAIT, "manual scan running")
