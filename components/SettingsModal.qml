@@ -816,7 +816,11 @@ Item {
                                     return "Calibrating... (" + calibTimer.elapsedSec
                                            + "s / " + MOTIONInterface.maxCalibrationTimeSec + "s)"
                                 case "passed":  return "Calibration Passed"
-                                case "failed":  return "Calibration Failed"
+                                case "failed":
+                                    var reason = MOTIONInterface.calibrationFailureReason
+                                    return reason
+                                        ? "Calibration Failed — " + reason
+                                        : "Calibration Failed"
                                 case "aborted": return "Calibration Aborted"
                                 default:        return ""
                                 }

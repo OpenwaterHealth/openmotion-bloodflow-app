@@ -385,6 +385,7 @@ class MOTIONConnector(QObject):
         self._calibration_scan_duration_sec = int(cfg.get("calibration_scan_duration_sec", 5))
         self._calibration_scan_delay_sec    = int(cfg.get("calibration_scan_delay_sec", 1))
         self._calibration_status = ""  # "", "running", "passed", "failed", "aborted"
+        self._calibration_failure_reason = ""  # populated only on FAIL in dev mode
 
         self._post_thread = None
         self._post_cancel = threading.Event()
@@ -860,6 +861,10 @@ class MOTIONConnector(QObject):
     @pyqtProperty(str, notify=calibrationStateChanged)
     def calibrationStatus(self) -> str:
         return self._calibration_status
+
+    @pyqtProperty(str, notify=calibrationStateChanged)
+    def calibrationFailureReason(self) -> str:
+        return self._calibration_failure_reason
 
     @pyqtProperty(int, notify=calibrationStateChanged)
     def maxCalibrationTimeSec(self) -> int:
@@ -3182,6 +3187,7 @@ class MOTIONConnector(QObject):
     @pyqtSlot(object)
     def _on_calibration_complete(self, result):
         """Runs on the Qt main thread (queued from worker via signal)."""
+        self._calibration_failure_reason = ""  # reset each run
         if result.canceled:
             self._calibration_status = "aborted"
             self.captureLog.emit(
@@ -3199,6 +3205,15 @@ class MOTIONConnector(QObject):
             )
         else:
             self._calibration_status = "failed"
+            if self._app_config.get("developerMode", False):
+                tests = (("mean", "mean_test"), ("contrast", "contrast_test"),
+                         ("bfi", "bfi_test"), ("bvi", "bvi_test"))
+                self._calibration_failure_reason = "; ".join(
+                    f"{'L' if r.side == 'left' else 'R'}{r.cam_id + 1}:"
+                    f"{','.join(n for n, a in tests if getattr(r, a) == 'FAIL')}"
+                    for r in result.rows
+                    if any(getattr(r, a) == "FAIL" for _, a in tests)
+                )
             self.captureLog.emit(
                 f"❌ Calibration: FAIL  (CSV: {result.csv_path})"
             )
