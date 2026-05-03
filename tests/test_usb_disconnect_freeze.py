@@ -51,13 +51,29 @@ from utils import (
     click_panel_button,
     dismiss_signal_quality_modal,
     find_app_log,
+    force_app_config_value,
     is_app_alive,
     log_size,
     move_window_on_screen,
     wait_for_pattern,
+    write_app_config_value,
 )
 
 pytestmark = pytest.mark.release
+
+# This test opens Scan Settings to configure the sensor masks +
+# duration before each iteration. Scan Settings is hidden in reduced
+# mode, so force the on-disk flag false at module-import time
+# (before the session-scoped ``app`` fixture launches the app); a
+# module-scoped autouse fixture restores the original value on
+# teardown. Same pattern as test_history / test_scan_settings.
+_INITIAL_REDUCED_MODE = force_app_config_value("reducedMode", False)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _restore_reduced_mode_on_module_teardown():
+    yield
+    write_app_config_value("reducedMode", _INITIAL_REDUCED_MODE)
 
 # ─────────────────────────────────────────────
 # Configuration
