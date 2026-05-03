@@ -70,10 +70,11 @@ CONFIG_PATH = PROJECT_ROOT / "config" / "app_config.json"
 RE_SAFETY_TRIP = re.compile(r"Laser safety failure:")
 
 # How long the test will wait after Check fires before giving up on
-# seeing the safety toast. The fault-laser params trip the interlock
-# almost immediately on the first laser pulse, so anything more than
-# ~30s is conservative; bumped to 90s to absorb camera-config time.
-SAFETY_TRIP_TIMEOUT = 90
+# seeing the safety failure log line. The fault-laser params trip the
+# interlock almost immediately on the first laser pulse, so anything
+# more than ~30s is conservative; 130s (2 min 10 s) covers slow
+# camera-config + the contact-quality preflight that Check kicks off.
+SAFETY_TRIP_TIMEOUT = 130
 
 # How long to wait for the SDK to reach CONNECTED state after a
 # relaunch. Console enumeration + ping/version handshake is ~5s
