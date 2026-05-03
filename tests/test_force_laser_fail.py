@@ -32,6 +32,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -46,7 +47,6 @@ from conftest import (
     SLEEP,
     ensure_visible,
     log,
-    uia_window,
 )
 from utils import (
     RE_CONNECTED,
@@ -61,11 +61,13 @@ pytestmark = pytest.mark.release
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "app_config.json"
 
-# Substring of the persistent toast fired by motion_connector.
-# _fire_safety_notification. Match a unique-enough prefix; the full
-# message also contains the dev-mode fault detail line, but that's
-# optional so we don't depend on it.
-EXPECTED_TOAST_PREFIX = "Laser safety warning detected"
+# When the interlock trips, motion_connector logs a single ERROR
+# line at the safety-status check site (line ~1984) before firing
+# the toast. We detect the trip by tailing the log for this prefix
+# rather than walking UIA for the toast text — the toast is rendered
+# in NotificationCenter as a plain QML Text, which doesn't surface in
+# the Windows UIA tree, so a UIA-based check would silently time out.
+RE_SAFETY_TRIP = re.compile(r"Laser safety failure:")
 
 # How long the test will wait after Check fires before giving up on
 # seeing the safety toast. The fault-laser params trip the interlock
@@ -195,42 +197,26 @@ def _read_force_laser_fail() -> bool:
 
 
 # ─────────────────────────────────────────────
-# Toast detection
+# Safety trip detection (log-tail based)
 # ─────────────────────────────────────────────
-def _has_laser_safety_toast() -> bool:
-    """True iff the persistent laser-safety toast is currently visible."""
-    try:
-        win = uia_window()
-    except Exception:
-        return False
-    try:
-        for elem in win.descendants():
-            try:
-                text = (elem.window_text() or "")
-            except Exception:
-                continue
-            if EXPECTED_TOAST_PREFIX in text:
-                return True
-    except Exception as e:
-        log.warning(f"  _has_laser_safety_toast: descendants walk failed: {e}")
-    return False
+def _wait_for_safety_trip(timeout: int = SAFETY_TRIP_TIMEOUT) -> str | None:
+    """Tail the most recent bloodflow app log for the 'Laser safety
+    failure' line. Returns the matching log line or None on timeout.
+
+    Uses offset=0 because each launch rotates the log file (filename
+    contains a timestamp), so 0 means 'scan the entire fresh log'."""
+    log_path = find_app_log()
+    if log_path is None:
+        return None
+    return wait_for_pattern(RE_SAFETY_TRIP, log_path, 0, timeout)
 
 
-def _wait_for_safety_toast(timeout: int = SAFETY_TRIP_TIMEOUT) -> bool:
-    deadline = time.time() + timeout
-    last_log_t = 0.0
-    while time.time() < deadline:
-        if _has_laser_safety_toast():
-            return True
-        now = time.time()
-        if now - last_log_t > 10:
-            log.info(
-                f"  waiting for laser safety toast... "
-                f"{int(deadline - now)}s remaining"
-            )
-            last_log_t = now
-        time.sleep(2)
-    return False
+def _check_no_recent_safety_trip(window_sec: int) -> str | None:
+    """Watch the current log for ``window_sec`` and return the first
+    matching 'Laser safety failure' line if one appears, or None if
+    none did. Used by Phase 4 to verify the relaunch with
+    forceLaserFail=false didn't re-trip the interlock."""
+    return _wait_for_safety_trip(window_sec)
 
 
 # ─────────────────────────────────────────────
@@ -308,16 +294,17 @@ class TestForceLaserFail:
             log.info("=" * 60)
             click_panel("Check")
             log.info(
-                f"  waiting up to {SAFETY_TRIP_TIMEOUT}s for laser "
-                f"safety toast..."
+                f"  waiting up to {SAFETY_TRIP_TIMEOUT}s for "
+                f"'Laser safety failure' line in the app log..."
             )
-            assert _wait_for_safety_toast(SAFETY_TRIP_TIMEOUT), (
-                f"Laser safety toast did not appear within "
-                f"{SAFETY_TRIP_TIMEOUT}s with forceLaserFail=true. "
+            trip_line = _wait_for_safety_trip(SAFETY_TRIP_TIMEOUT)
+            assert trip_line, (
+                f"'Laser safety failure' did not appear in the app log "
+                f"within {SAFETY_TRIP_TIMEOUT}s with forceLaserFail=true. "
                 f"The fault laser params should have tripped the "
                 f"safety interlock immediately on first laser pulse."
             )
-            log.info("  PASS: laser safety toast detected")
+            log.info(f"  PASS: safety trip detected: {trip_line.strip()}")
 
         finally:
             # ─── Phase 3 (always): restore flag, power-cycle, relaunch ─
@@ -350,16 +337,18 @@ class TestForceLaserFail:
         # ─── Phase 4: verify clean state ──────────────────────────
         log.info("=" * 60)
         log.info(
-            f"Phase 4: verifying clean state (no safety toast "
-            f"after {CLEAN_STATE_SETTLE_SEC}s settle)"
+            f"Phase 4: verifying clean state (no 'Laser safety "
+            f"failure' line in app log over a {CLEAN_STATE_SETTLE_SEC}s "
+            f"window)"
         )
         log.info("=" * 60)
-        time.sleep(CLEAN_STATE_SETTLE_SEC)
-        assert not _has_laser_safety_toast(), (
-            "Laser safety toast still visible after restoring "
-            "forceLaserFail=false and power-cycling. Either the flag "
-            "wasn't honoured on relaunch (check load_laser_params "
-            "wiring), or the safety interlock latched in hardware "
-            "and a single power-cycle wasn't enough to clear it."
+        late_trip = _check_no_recent_safety_trip(CLEAN_STATE_SETTLE_SEC)
+        assert late_trip is None, (
+            f"'Laser safety failure' appeared in the app log after "
+            f"restoring forceLaserFail=false and power-cycling: "
+            f"{late_trip.strip() if late_trip else ''}. Either the "
+            f"flag wasn't honoured on relaunch (check load_laser_params "
+            f"wiring), or the safety interlock latched in hardware and "
+            f"a single power-cycle wasn't enough to clear it."
         )
         log.info("  PASS: clean state confirmed")
