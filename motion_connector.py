@@ -569,20 +569,32 @@ class MOTIONConnector(QObject):
         self._runlog_handler = run_handler
         self._runlog_active = True
 
-        # Initialize CSV telemetry log (same basename as run log)
-        try:
-            self._runlog_csv_file = open(
-                self._runlog_csv_path, "w", newline="", encoding="utf-8"
+        # Initialize CSV telemetry log (same basename as run log).
+        # Telemetry CSVs are a developer artifact: clinical users have no
+        # use for raw tcm/tcl/pdc samples, so only emit them when
+        # developerMode is on (issue #43). _write_runlog_csv_sample and
+        # _stop_runlog already short-circuit on a None writer/file.
+        if self._app_config.get("developerMode", False):
+            try:
+                self._runlog_csv_file = open(
+                    self._runlog_csv_path, "w", newline="", encoding="utf-8"
+                )
+                self._runlog_csv_writer = csv.writer(self._runlog_csv_file)
+                self._runlog_csv_writer.writerow(
+                    ["timestamp", "unix_ms", "tcm", "tcl", "pdc"]
+                )
+                self._runlog_csv_file.flush()
+            except Exception as e:
+                logger.error(f"Failed to open run CSV log: {e}")
+                self._runlog_csv_file = None
+                self._runlog_csv_writer = None
+        else:
+            logger.debug(
+                "[RUNLOG] telemetry CSV skipped (developerMode disabled)"
             )
-            self._runlog_csv_writer = csv.writer(self._runlog_csv_file)
-            self._runlog_csv_writer.writerow(
-                ["timestamp", "unix_ms", "tcm", "tcl", "pdc"]
-            )
-            self._runlog_csv_file.flush()
-        except Exception as e:
-            logger.error(f"Failed to open run CSV log: {e}")
             self._runlog_csv_file = None
             self._runlog_csv_writer = None
+            self._runlog_csv_path = None
 
         # --- Gather version info for header ---
         # SDK version (MOTION SDK / sensor SDK)
