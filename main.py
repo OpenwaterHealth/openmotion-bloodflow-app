@@ -122,6 +122,10 @@ def _load_app_config() -> dict:
         "cq_rolling_avg_window": 10,
         "cq_dark_threshold_per_camera": [3.0] * 8,
         "cq_light_threshold_per_camera": [15.0] * 8,
+        # Optional override for the SDK's DEFAULT_TRIGGER_CONFIG. Keys
+        # specified here shallow-merge over the SDK default at
+        # MotionInterface construction time. Absent → use SDK default.
+        "triggerConfig": None,
     }
     config_path = resource_path("config", "app_config.json")
     if not config_path.exists():
@@ -211,8 +215,14 @@ def main():
     sdk_logger.addHandler(file_handler)
     sdk_logger.propagate = False  # Don't propagate to root, use our handlers
 
-    # Construct the MotionInterface here and inject it into the connector below
-    motion_interface = MotionInterface()
+    # Construct the MotionInterface here and inject it into the connector
+    # below. The optional ``triggerConfig`` key in app_config.json is
+    # passed as ``default_trigger_config`` so app-level tweaks layer on
+    # top of the SDK defaults at construction time. Workflows resolve
+    # to (interface default ⊕ per-request override) thereafter.
+    motion_interface = MotionInterface(
+        default_trigger_config=app_config.get("triggerConfig") or None,
+    )
     motion_interface.log_system_info()
 
     qInstallMessageHandler(qt_message_handler)

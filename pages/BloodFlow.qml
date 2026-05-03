@@ -346,16 +346,12 @@ Rectangle {
         disableLaser: false
         laserOn: true
         laserPower: 50
-        triggerConfig: (typeof appTriggerConfig !== "undefined") ? appTriggerConfig : ({
-            "TriggerFrequencyHz": 40,
-            "TriggerPulseWidthUsec": 500,
-            "LaserPulseDelayUsec": 100,
-            "LaserPulseWidthUsec": 500,
-            "LaserPulseSkipInterval": 600,
-            "LaserPulseSkipDelayUsec": 1800,
-            "EnableSyncOut": true,
-            "EnableTaTrigger": true
-        })
+        // triggerConfig left at the SetTriggerLaserTask default ({}) so
+        // the connector's setTrigger merges only TriggerStatus over the
+        // SDK-resolved default trigger config. Local overrides go in
+        // app_config.json's triggerConfig key (passed through to
+        // MotionInterface(default_trigger_config=...) at startup).
+        triggerConfig: (typeof appTriggerConfig !== "undefined") ? appTriggerConfig : ({})
 
         onStageUpdate: function(txt) {
             scanDialog.stageText = txt
@@ -415,16 +411,8 @@ Rectangle {
         rightMask: MOTIONInterface.rightSensorConnected ? 0xFF : 0x00
         laserOn: true
         laserPower: 50
-        triggerConfig: (typeof appTriggerConfig !== "undefined") ? appTriggerConfig : ({
-            "TriggerFrequencyHz": 40,
-            "TriggerPulseWidthUsec": 500,
-            "LaserPulseDelayUsec": 100,
-            "LaserPulseWidthUsec": 500,
-            "LaserPulseSkipInterval": 600,
-            "LaserPulseSkipDelayUsec": 1800,
-            "EnableSyncOut": true,
-            "EnableTaTrigger": true
-        })
+        // See note on the scanRunner triggerConfig above — same here.
+        triggerConfig: (typeof appTriggerConfig !== "undefined") ? appTriggerConfig : ({})
 
         onStageUpdate: function(txt) {
             console.log("ContactQuality: " + txt)
