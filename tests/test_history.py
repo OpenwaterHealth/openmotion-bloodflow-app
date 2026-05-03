@@ -247,24 +247,51 @@ def _seed_with_short_scan(app):
     yield
 
 
+def _is_history_open() -> bool:
+    """True iff the History modal appears to be on top — detected via
+    the presence of any ComboBox in the UIA tree (the scan picker is
+    the only ComboBox the bloodflow page exposes when no other modal
+    is up)."""
+    try:
+        win = uia_window()
+        return bool(win.descendants(control_type="ComboBox"))
+    except Exception:
+        return False
+
+
+def _ensure_history_open() -> None:
+    """Open the History modal if it isn't already. The History panel
+    button is a TOGGLE (BloodFlow.qml's onHistoryClicked: 'closeAll +
+    open if it was closed') — clicking when the modal is open closes
+    it. So check first, click only if needed.
+
+    Combined with HistoryModal having no Escape handler, this matters:
+    the seed fixture's pyautogui.press('escape') silently fails to
+    close the modal, so without this check, test_01's click ends up
+    closing the modal that the fixture left open."""
+    if _is_history_open():
+        log.info("  History modal already open — no click needed")
+        return
+    log.info("  History modal not open — clicking the History panel")
+    click_panel("History")
+    time.sleep(SLEEP)
+
+
 @pytest.mark.incremental
 class TestHistory:
     """History modal — scan listing and visualization."""
 
     def test_01_open(self, app):
-        click_panel("History")
-        # Modal needs time to render and populate the scan picker
-        # ComboBox before test_02 reads it. Without this, test_02
-        # races ahead of Qt and reads the ComboBox while it's still
-        # empty even though scans exist on disk.
-        time.sleep(SLEEP)
+        _ensure_history_open()
 
     def test_02_latest_scan_listed(self, app):
-        # Poll for up to 5 s — even after test_01's sleep the
-        # ComboBox can take an extra moment to populate on a slow
-        # runner. The seed fixture proves the value eventually
-        # appears (it uses a 2 s sleep then reads); make this test
-        # equally tolerant.
+        # Defensive: re-ensure the modal is up before reading. The
+        # seed fixture's close-with-escape doesn't actually fire
+        # (HistoryModal has no Keys handler), so we can't trust the
+        # state coming into this test.
+        _ensure_history_open()
+        # Poll for up to 5 s — the ComboBox can take a moment to
+        # populate on a slow runner.
         deadline = time.time() + 5.0
         scan_text = ""
         while time.time() < deadline:
@@ -272,81 +299,9 @@ class TestHistory:
             if scan_text:
                 break
             time.sleep(0.3)
-
-        if not scan_text:
-            # Dump UIA + Win32 state so we can tell apart 'modal didn't
-            # open' from 'modal opened but ComboBox is the wrong
-            # element' from 'ComboBox is there but window_text empty'
-            # from 'wrong window matched (zombie / second instance)'.
-            try:
-                # 1) Enumerate every desktop window whose title matches
-                #    our app keywords. If there are 2+, the UIA spec
-                #    might be grabbing the wrong (hidden / zombie) one.
-                import pygetwindow as gw
-                from conftest import APP_KEYWORDS
-                hits = [
-                    w for w in gw.getAllWindows()
-                    if w.title and any(k in w.title.lower() for k in APP_KEYWORDS)
-                ]
-                log.warning(f"  pygetwindow matched {len(hits)} window(s):")
-                for w in hits:
-                    try:
-                        log.warning(
-                            f"    title={w.title!r} visible={w.visible} "
-                            f"minimized={w.isMinimized} "
-                            f"rect=({w.left},{w.top},{w.right},{w.bottom})"
-                        )
-                    except Exception as e:
-                        log.warning(f"    window read failed: {e}")
-
-                # 2) Enumerate matching pythonw / openwater processes
-                #    in case a stale instance is up.
-                import psutil
-                procs = []
-                for p in psutil.process_iter(["name", "cmdline", "pid"]):
-                    try:
-                        n = (p.info.get("name") or "").lower()
-                        cl = " ".join(p.info.get("cmdline") or []).lower()
-                        if "openwater" in n or ("python" in n and "main.py" in cl and "bloodflow" in cl):
-                            procs.append((p.info.get("pid"), n, cl[:120]))
-                    except Exception:
-                        continue
-                log.warning(f"  bloodflow processes: {procs}")
-
-                # 3) UIA tree dump as before.
-                win = uia_window()
-                cbs = win.descendants(control_type="ComboBox")
-                log.warning(f"  UIA diagnostic: found {len(cbs)} ComboBox(es)")
-                for i, cb in enumerate(cbs):
-                    try:
-                        t = (cb.window_text() or "").strip()
-                        rect = cb.rectangle()
-                        log.warning(
-                            f"    ComboBox[{i}] text={t!r} "
-                            f"rect=({rect.left},{rect.top},{rect.right},{rect.bottom})"
-                        )
-                    except Exception as e:
-                        log.warning(f"    ComboBox[{i}] read failed: {e}")
-                texts = []
-                for elem in win.descendants():
-                    try:
-                        t = (elem.window_text() or "").strip()
-                    except Exception:
-                        continue
-                    if t and len(t) < 80:
-                        texts.append(t)
-                        if len(texts) >= 40:
-                            break
-                log.warning(f"  UIA visible texts (first 40): {texts}")
-            except Exception as e:
-                log.warning(f"  UIA diagnostic dump failed: {e}")
-
         assert len(scan_text) > 0, (
             "ComboBox is empty after 5 s -- no scans found. Run a "
-            "scan first, or check that the History modal actually "
-            "opened (test_01_open clicked the panel button — if the "
-            "click missed, the modal isn't up). See UIA diagnostic "
-            "dump in the warning log above."
+            "scan first, or the History modal failed to open."
         )
         log.info(f"  Scan ComboBox text: '{scan_text}'")
 
