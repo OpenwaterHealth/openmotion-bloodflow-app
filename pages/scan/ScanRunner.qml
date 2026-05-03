@@ -39,6 +39,11 @@ QtObject {
     // internal
     property string _stage: "idle"
     property bool _done: false
+
+    // True from the moment a runner starts until it reports
+    // finished/cancelled. Used by main.qml's close-while-busy warning
+    // (issue #75) to know whether a check / scan is in flight.
+    readonly property bool running: _stage !== "idle" && !_done
     function _finish(ok, err, l, r) {
         if (_done) return
         _done = true

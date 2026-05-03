@@ -19,6 +19,11 @@ Rectangle {
     property bool camerasReady: true  // starts true, goes false when camera selection changes
     property bool configuring: false  // true during camera flash
 
+    // Aggregate live state of the contact-quality runners so main.qml
+    // can detect 'check in progress' for the close-while-busy warning
+    // (issue #75). Either runner being non-idle counts as busy.
+    readonly property bool checkRunning: qualityCheckRunner.running
+
     // FDA mode (read from app config). Forces Far camera pattern + free run,
     // hides scan-settings button, and swaps in the FDA plot view.
     property bool reducedMode: MOTIONInterface.appConfig.reducedMode === true

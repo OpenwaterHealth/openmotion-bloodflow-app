@@ -16,6 +16,30 @@ ApplicationWindow {
 
     AppTheme { id: theme }
 
+    // Issue #75: aggregate 'something is happening' state used by the
+    // close-while-busy warning. Anything that the user would not want
+    // to interrupt mid-flight by accident counts.
+    readonly property bool _anyInProgress:
+        bloodFlowPage.scanning ||
+        bloodFlowPage.configuring ||
+        bloodFlowPage.checkRunning ||
+        MOTIONInterface.calibrationRunning
+
+    // Two-click exit while busy: the first close attempt arms this
+    // flag and shows a toast; a second click within the toast's
+    // lifetime quits. The timer auto-disarms after the toast goes
+    // away so the warning has to be re-shown if the user comes back
+    // later.
+    property bool _exitArmed: false
+    readonly property int _exitArmDurationMs: 5000
+
+    Timer {
+        id: exitDisarmTimer
+        interval: window._exitArmDurationMs
+        repeat: false
+        onTriggered: window._exitArmed = false
+    }
+
     Rectangle {
         anchors.fill: parent
         color: theme.bgBase
@@ -38,6 +62,33 @@ ApplicationWindow {
             reducedMode:     bloodFlowPage.reducedMode
             elapsedSec:  bloodFlowPage.elapsedSec
             durationSec: bloodFlowPage.durationSec
+
+            // Issue #75: warn-then-quit on close-while-busy.
+            //   * not busy → quit immediately
+            //   * busy + not armed → fire toast, arm; auto-disarm when
+            //     the toast naturally expires
+            //   * busy + armed → quit (existing handle_exit path in
+            //     main.py runs connector.shutdown() / motion_interface
+            //     .stop() which tears down whatever was in flight)
+            onCloseRequested: {
+                if (!window._anyInProgress) {
+                    Qt.quit()
+                    return
+                }
+                if (window._exitArmed) {
+                    Qt.quit()
+                    return
+                }
+                MOTIONInterface.notify(
+                    "Something is in progress. Click X again to cancel and exit.",
+                    "warning",
+                    window._exitArmDurationMs,
+                    true,
+                    "exit-while-busy",
+                )
+                window._exitArmed = true
+                exitDisarmTimer.restart()
+            }
         }
 
         // Update available banner (slides in below header)

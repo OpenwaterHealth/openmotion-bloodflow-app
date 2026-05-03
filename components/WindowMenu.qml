@@ -10,6 +10,11 @@ Rectangle {
     color: theme.bgContainer // Header background color
     radius: 20
 
+    // Emitted when the user clicks the exit (X) icon in the title
+    // bar. main.qml owns the actual quit decision so it can show the
+    // close-while-busy warning before tearing down (issue #75).
+    signal closeRequested()
+
     // Properties to configure the logo
     property string logoSource: "" // Default to no logo
 
@@ -206,14 +211,12 @@ Rectangle {
                     }
                 }
             }
-            // Exit Button
+            // Exit Button. Delegates to main.qml via closeRequested
+            // so the close-while-busy warning (#75) can intercept.
             IconWindowButton {
                 buttonIcon: "\ue9b3" // Exit (close) icon
                 Layout.alignment: Qt.AlignHCenter
-                onClicked: {
-                    console.log("User pressed quit button")
-                    Qt.quit(); // Close the application
-                }
+                onClicked: windowMenu.closeRequested()
             }
         }
     }
