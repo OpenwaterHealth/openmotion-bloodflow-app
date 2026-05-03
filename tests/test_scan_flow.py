@@ -48,7 +48,7 @@ from conftest import (
     uia_window,
     wait_with_log,
 )
-from utils import (
+from hil_helpers import (
     click_panel,
     close_plot_window,
     dismiss_signal_quality_modal,

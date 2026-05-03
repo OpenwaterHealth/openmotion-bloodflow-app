@@ -27,7 +27,7 @@ from conftest import (
     require_focus,
     uia_window,
 )
-from utils import (
+from hil_helpers import (
     SENSOR_OPTIONS,
     click_panel,
     focus_combobox_by_label,

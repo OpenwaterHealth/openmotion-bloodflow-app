@@ -43,7 +43,7 @@ import pytest
 from pywinauto import findwindows
 
 from conftest import SLEEP, ensure_visible, log, uia_window
-from utils import click_panel
+from hil_helpers import click_panel
 
 pytestmark = pytest.mark.dev
 

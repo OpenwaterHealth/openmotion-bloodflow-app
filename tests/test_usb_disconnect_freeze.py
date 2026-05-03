@@ -43,7 +43,7 @@ from conftest import (
     require_focus,
     uia_window,
 )
-from utils import (
+from hil_helpers import (
     RE_CONNECTED,
     RE_DISCONNECTED,
     SENSOR_OPTIONS,

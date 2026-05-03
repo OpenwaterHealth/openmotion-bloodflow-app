@@ -409,7 +409,7 @@ def _calibrate_panel_buttons_once(request):
         return
     request.getfixturevalue("app")  # ensure the app launched
     try:
-        from utils import calibrate_panel_buttons
+        from hil_helpers import calibrate_panel_buttons
         calibrate_panel_buttons()
     except Exception as e:
         log.warning(f"  panel button calibration failed at session start: {e}")

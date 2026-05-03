@@ -133,7 +133,7 @@ _APP_CONFIG_PATH = (
 # the bloodflow app launches (e.g. reducedMode=false, so the modal
 # layout matches what tab walks expect) can:
 #
-#     from utils import force_app_config_value, write_app_config_value
+#     from hil_helpers import force_app_config_value, write_app_config_value
 #
 #     _INITIAL_REDUCED_MODE = force_app_config_value("reducedMode", False)
 #

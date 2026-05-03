@@ -33,7 +33,7 @@ from conftest import (
     log,
     require_focus,
 )
-from utils import (
+from hil_helpers import (
     RE_CONNECTED,
     RE_DISCONNECTED,
     click_panel,
