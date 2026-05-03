@@ -1686,6 +1686,11 @@ class MOTIONConnector(QObject):
             write_raw_csv=self._write_raw_csv,
             raw_csv_duration_sec=self._raw_csv_duration_sec,
             reduced_mode=self._app_config.get("reducedMode", False),
+            # Issue #43: clinical users don't need the per-scan
+            # _telemetry.csv with TCM/TCL/PDC samples — gate it on
+            # developerMode so the SDK skips creating the file
+            # entirely. ScanRequest defaults to True for back-compat.
+            write_telemetry_csv=self._app_config.get("developerMode", False),
         )
 
         def _on_trigger_state(state: str):
