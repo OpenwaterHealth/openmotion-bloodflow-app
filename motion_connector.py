@@ -2394,6 +2394,15 @@ class MOTIONConnector(QObject):
         """1 Hz watchdog: emit cameraDropoutDetected for any camera silent > threshold."""
         if not self._capture_running:
             return
+        # Also bail when the trigger is OFF. _capture_running only
+        # flips false in _on_complete after the post-scan cleanup
+        # finishes, so between trigger-stop and that flip there's a
+        # 2+ s window where samples have legitimately stopped arriving
+        # but the watchdog still considers the cameras 'live'. Without
+        # this gate, every natural scan end fires a spurious 'Camera
+        # X connection lost at HH:MM:SS' toast on every active cam.
+        if self._trigger_state != "ON":
+            return
         now = time.monotonic()
         threshold = self._camera_dropout_threshold_sec
         for key, last_t in list(self._camera_last_seen.items()):
