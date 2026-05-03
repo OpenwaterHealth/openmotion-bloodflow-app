@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """
-Plot BFI and BVI from a _corrected.csv file produced by the OpenMOTION SDK.
+Plot BFI and BVI from a post-processed scan CSV produced by the
+OpenMOTION SDK.
+
+The script name still uses ``plot_corrected_scan`` for back-compat
+with the bundled SDK copy (loaded by name from
+``motion_connector._load_plot_corrected_scan``). As of issue #44 the
+post-processed scan CSV no longer carries a ``_corrected`` suffix,
+but the script accepts any CSV that has a ``timestamp_s`` column and
+the BFI/BVI per-camera or per-side columns documented below.
 
 Supports two CSV formats:
 
@@ -30,7 +38,7 @@ Optional secondary figure (--show-signal) adds mean, std, and contrast
 
 Usage
 -----
-    python plot_corrected_scan.py --csv path/to/_corrected.csv
+    python plot_corrected_scan.py --csv path/to/scan.csv
     python plot_corrected_scan.py --csv scan.csv --show-signal --save
 """
 
@@ -143,8 +151,13 @@ def _requested_sides(df: pd.DataFrame, requested: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Plot OpenMOTION corrected scan CSV")
-    p.add_argument("--csv", required=True, help="Path to the _corrected.csv file")
+    p = argparse.ArgumentParser(
+        description="Plot OpenMOTION post-processed scan CSV (BFI/BVI)"
+    )
+    p.add_argument(
+        "--csv", required=True,
+        help="Path to the post-processed scan CSV file",
+    )
     p.add_argument(
         "--sides", choices=["left", "right", "both"], default="both",
         help="Which sensor side(s) to plot (default: both)",
@@ -306,7 +319,7 @@ def main() -> None:
     print(f"  {len(df)} rows, {len(df.columns)} columns")
 
     if "timestamp_s" not in df.columns:
-        print("ERROR: 'timestamp_s' column not found — is this a _corrected.csv?",
+        print("ERROR: 'timestamp_s' column not found — is this a post-processed scan CSV?",
               file=sys.stderr)
         sys.exit(1)
 

@@ -263,14 +263,33 @@ CONSOLE_CONNECTED (2) ──► READY (3) ──► RUNNING (4)
 
 ### 4.9 Scan File Naming Convention
 
+Current convention (issue #44 — applied SDK-side; the app reads both):
+
 ```
-scan_{subjectId}_{YYYYMMDD_HHMMSS}_{side}_mask{XX}.csv   # histogram data
-scan_{subjectId}_{YYYYMMDD_HHMMSS}_notes.txt              # scan notes
-scan_{subjectId}_{YYYYMMDD_HHMMSS}_bfi_results.csv        # computed BFI/BVI
+{YYYYMMDD_HHMMSS}_{subjectId}.csv                              # post-processed BFI/BVI scan output
+{YYYYMMDD_HHMMSS}_{subjectId}_{side}_mask{XX}_raw.csv          # raw histogram data (when writeRawCsv=True)
+{YYYYMMDD_HHMMSS}_{subjectId}_telemetry.csv                    # per-frame telemetry log
+{YYYYMMDD_HHMMSS}_{subjectId}_notes.txt                        # scan notes
+{YYYYMMDD_HHMMSS}_{subjectId}_bfi_results.csv                  # legacy results CSV (visualize_bloodflow path)
 ```
 
-**Structure type:** Filesystem directory listing, glob-matched  
-**Access pattern:** `get_scan_list()` globs for `scan_*_notes.txt`, extracts `{subjectId}_{timestamp}`, sorts by timestamp descending.
+Notes on the suffixes:
+- The post-processed output **no longer carries a ``_corrected`` suffix**. The plain ``.csv`` IS the normal output.
+- Raw histogram captures append ``_raw`` to make their purpose explicit. The ``_raw`` suffix is added only when ``writeRawCsv=True``.
+
+Legacy formats still accepted on read for back-compat with historical scans on disk:
+
+```
+{YYYYMMDD_HHMMSS}_{subjectId}_corrected.csv                    # legacy post-processed output
+{YYYYMMDD_HHMMSS}_{subjectId}_{side}_mask{XX}.csv              # legacy raw histogram (no _raw suffix)
+scan_{subjectId}_{YYYYMMDD_HHMMSS}_corrected.csv               # original "scan_" prefixed format
+scan_{subjectId}_{YYYYMMDD_HHMMSS}_{side}_mask{XX}.csv
+scan_{subjectId}_{YYYYMMDD_HHMMSS}_notes.txt
+scan_{subjectId}_{YYYYMMDD_HHMMSS}_bfi_results.csv
+```
+
+**Structure type:** Filesystem directory listing, glob-matched.
+**Access pattern:** `get_scan_list()` globs ``*_corrected.csv`` plus any ``\d{8}_\d{6}_*.csv`` that is not an aux file (``_left_mask``, ``_right_mask``, ``_telemetry``, ``_bfi_results``, etc.). `get_scan_details()` looks up the post-processed CSV under the new no-suffix name first, then falls back to the legacy ``_corrected.csv`` name; raw files are looked up with the ``_raw`` suffix first, then without.
 
 ### 4.10 Real-Time Correction State (Per-Camera)
 

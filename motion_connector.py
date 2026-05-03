@@ -1096,28 +1096,56 @@ class MOTIONConnector(QObject):
     def get_scan_list(self):
         """Return sorted list of scan IDs.
 
-        Supports two filename formats:
-          New: {YYYYMMDD_HHMMSS}_{sessionId}_corrected.csv
-          Old: scan_{sessionId}_{YYYYMMDD_HHMMSS}_corrected.csv
+        Supports three filename formats for the post-processed (BFI/BVI)
+        scan output:
+
+          Current: {YYYYMMDD_HHMMSS}_{sessionId}.csv          (no suffix)
+          Legacy:  {YYYYMMDD_HHMMSS}_{sessionId}_corrected.csv
+          Legacy:  scan_{sessionId}_{YYYYMMDD_HHMMSS}_corrected.csv
+
+        The ``_corrected`` suffix was dropped in issue #44 — the post-
+        processed CSV no longer carries it. We still glob for legacy
+        ``_corrected.csv`` files so historical scans on disk remain
+        visible in the History modal.
         """
         base_path = Path(self._directory)
         if not base_path.exists():
             return []
 
-        ids = []
+        # Sub-suffixes that distinguish auxiliary scan files from the
+        # primary post-processed CSV. Any *.csv whose stem ends with
+        # one of these is NOT the per-scan output file.
+        aux_suffix_re = re.compile(
+            r"_(?:left|right)_mask[0-9A-Fa-f]+(?:_raw)?$"
+            r"|_telemetry$"
+            r"|_bfi_results$"
+            r"|_(?:left|right)_mask[0-9A-Fa-f]+_(?:bfi|signal)$"
+        )
+
+        ids = set()
+
+        # Legacy: explicit "_corrected.csv" suffix.
         for f in base_path.glob("*_corrected.csv"):
             if not f.is_file():
                 continue
-            stem = f.stem  # strip ".csv" → "..._corrected"
-            if not stem.endswith("_corrected"):
-                continue
-            stem = stem[:-10]  # strip "_corrected"
-
+            stem = f.stem[:-10]  # strip "_corrected"
             if stem.startswith("scan_"):
-                # Old format: scan_{sessionId}_{ts}
-                stem = stem[5:]
+                stem = stem[5:]  # legacy "scan_" prefix
+            ids.add(stem)
 
-            ids.append(stem)
+        # Current: no "_corrected" suffix. Match files that start with
+        # the new YYYYMMDD_HHMMSS_* pattern and are not aux files.
+        for f in base_path.glob("*.csv"):
+            if not f.is_file():
+                continue
+            stem = f.stem
+            if not re.match(r"^\d{8}_\d{6}_", stem):
+                continue
+            if stem.endswith("_corrected"):
+                continue  # already handled above
+            if aux_suffix_re.search(stem):
+                continue
+            ids.add(stem)
 
         def ts_key(s):
             # New format starts with YYYYMMDD (8 digits)
@@ -1135,8 +1163,22 @@ class MOTIONConnector(QObject):
         scan_id is either:
           New format: 'YYYYMMDD_HHMMSS_userLabel'
           Old format: 'userLabel_YYYYMMDD_HHMMSS'
+
+        The post-processed CSV is looked up first under the current
+        no-suffix convention, then under the legacy ``_corrected.csv``
+        name. Raw histogram files are looked up first with a ``_raw``
+        suffix (current convention from issue #44) and then without
+        (legacy).
         """
         base = Path(self._directory)
+
+        def _first_match(*patterns):
+            """Return the first existing file across the given globs."""
+            for pat in patterns:
+                hit = next(base.glob(pat), None)
+                if hit is not None:
+                    return hit
+            return None
 
         # Detect format by checking if it starts with a date
         if re.match(r'^\d{8}_\d{6}_', scan_id):
@@ -1145,18 +1187,38 @@ class MOTIONConnector(QObject):
             ts = parts[0] + "_" + parts[1]
             subject = parts[2] if len(parts) > 2 else ""
             notes_path = base / f"{scan_id}_notes.txt"
-            left      = next(base.glob(f"{scan_id}_left_mask*.csv"), None)
-            right     = next(base.glob(f"{scan_id}_right_mask*.csv"), None)
-            corrected = next(base.glob(f"{scan_id}_corrected.csv"), None)
+            left      = _first_match(
+                f"{scan_id}_left_mask*_raw.csv",
+                f"{scan_id}_left_mask*.csv",
+            )
+            right     = _first_match(
+                f"{scan_id}_right_mask*_raw.csv",
+                f"{scan_id}_right_mask*.csv",
+            )
+            # Current convention is no suffix; fall back to legacy
+            # ``_corrected.csv`` for scans collected before issue #44.
+            corrected = _first_match(
+                f"{scan_id}.csv",
+                f"{scan_id}_corrected.csv",
+            )
         else:
             # Old format: userLabel_YYYYMMDD_HHMMSS
             parts = scan_id.split("_", 1)
             subject = parts[0]
             ts = parts[1] if len(parts) > 1 else ""
             notes_path = base / f"scan_{scan_id}_notes.txt"
-            left      = next(base.glob(f"scan_{scan_id}_left_mask*.csv"), None)
-            right     = next(base.glob(f"scan_{scan_id}_right_mask*.csv"), None)
-            corrected = next(base.glob(f"scan_{scan_id}_corrected.csv"), None)
+            left      = _first_match(
+                f"scan_{scan_id}_left_mask*_raw.csv",
+                f"scan_{scan_id}_left_mask*.csv",
+            )
+            right     = _first_match(
+                f"scan_{scan_id}_right_mask*_raw.csv",
+                f"scan_{scan_id}_right_mask*.csv",
+            )
+            corrected = _first_match(
+                f"scan_{scan_id}.csv",
+                f"scan_{scan_id}_corrected.csv",
+            )
 
         left_mask = ""
         right_mask = ""
@@ -2768,12 +2830,17 @@ class MOTIONConnector(QObject):
 
     @pyqtSlot(str, result=bool)
     def visualize_corrected(self, corrected_csv: str) -> bool:
-        """Plot BFI/BVI from a _corrected.csv using plot_corrected_scan from the SDK."""
+        """Plot BFI/BVI from a post-processed scan CSV using
+        plot_corrected_scan from the SDK. Slot name kept for QML
+        back-compat; the input CSV no longer requires a ``_corrected``
+        suffix (see issue #44)."""
         return self._launch_correct_viz(corrected_csv, mode="bfi")
 
     @pyqtSlot(str, result=bool)
     def visualize_corrected_signal(self, corrected_csv: str) -> bool:
-        """Plot contrast/mean from a _corrected.csv using plot_corrected_scan from the SDK."""
+        """Plot contrast/mean from a post-processed scan CSV using
+        plot_corrected_scan from the SDK. Slot name kept for QML
+        back-compat (see ``visualize_corrected`` and issue #44)."""
         return self._launch_correct_viz(corrected_csv, mode="signal")
 
     def _launch_correct_viz(self, corrected_csv: str, mode: str) -> bool:
@@ -3072,11 +3139,12 @@ class _CorrectVizWorker(QObject):
             df = pd.read_csv(self.corrected_csv)
             if "timestamp_s" not in df.columns:
                 raise ValueError(
-                    "'timestamp_s' column not found — is this a _corrected.csv file?"
+                    "'timestamp_s' column not found — is this a "
+                    "post-processed scan CSV?"
                 )
             active_sides = mod._requested_sides(df, "both")
             if not active_sides:
-                raise ValueError("No camera data found in corrected CSV.")
+                raise ValueError("No camera data found in scan CSV.")
 
             reduced = mod._is_reduced_mode(df)
             if reduced:
