@@ -2947,7 +2947,15 @@ class MOTIONConnector(QObject):
 
     @pyqtSlot()
     def checkForUpdates(self):
-        """Check GitHub releases for a newer version (runs in a background thread)."""
+        """Check GitHub releases for a newer version (runs in a background thread).
+
+        Skipped entirely in reduced (clinical) mode — the simplified clinical
+        UI must not surface user-driven self-update flows or make outbound
+        network calls. See issue #96.
+        """
+        if self._app_config.get("reducedMode", False):
+            logger.info("Update check skipped: reduced mode is enabled")
+            return
         t = threading.Thread(target=self._check_for_updates_worker, daemon=True)
         t.start()
 

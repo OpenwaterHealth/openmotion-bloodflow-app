@@ -779,6 +779,9 @@ Item {
                     }
                     FieldRow {
                         label: "Updates"
+                        // Hidden in reduced (clinical) mode — no user-driven
+                        // self-update flow in that mode; see issue #96.
+                        visible: !root.reducedMode
                         ActionButton {
                             id: updateCheckBtn
                             text: "Check for Updates"

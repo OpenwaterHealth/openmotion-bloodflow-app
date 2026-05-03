@@ -98,10 +98,12 @@ Rectangle {
         }
     }
 
-    // Auto-check on creation (after a brief delay to let the app settle)
+    // Auto-check on creation (after a brief delay to let the app settle).
+    // Skipped in reduced (clinical) mode — see issue #96; the connector's
+    // checkForUpdates() slot also no-ops in that mode as defence in depth.
     Timer {
         interval: 3000
-        running: true
+        running: MOTIONInterface.appConfig.reducedMode !== true
         repeat: false
         onTriggered: MOTIONInterface.checkForUpdates()
     }
