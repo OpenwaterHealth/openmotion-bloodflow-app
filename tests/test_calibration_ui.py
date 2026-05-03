@@ -73,11 +73,20 @@ def _close_settings():
     time.sleep(SLEEP)
 
 
-def _scroll_button_into_view(win, btn, max_wheel_steps: int = 20) -> None:
+def _scroll_button_into_view(win, btn, max_wheel_steps: int = 30) -> None:
     """Mouse-wheel-scroll the Settings modal until ``btn``'s rectangle
     lies inside the app window's visible area. The Calibration section
     sits near the bottom of Settings (just above About), so on most
-    screen sizes it starts off-viewport when the modal opens."""
+    screen sizes it starts off-viewport when the modal opens.
+
+    Two-sided convergence: if the button's bottom is below the window
+    we scroll down; if the top is above we scroll up; otherwise we're
+    in view and bail. The previous one-sided ``cy > win.bottom`` check
+    oscillated around the window boundary because crossing the center
+    flipped the direction even when the button hadn't fully entered.
+    The scroll step is also small (3 wheel clicks at a time) so an
+    overshoot is recoverable rather than a half-modal lurch.
+    """
     import pyautogui
     win_rect = win.rectangle()
     modal_cx = (win_rect.left + win_rect.right) // 2
@@ -85,14 +94,13 @@ def _scroll_button_into_view(win, btn, max_wheel_steps: int = 20) -> None:
     pyautogui.moveTo(modal_cx, modal_cy, duration=0.1)
     for _ in range(max_wheel_steps):
         rect = btn.rectangle()
-        cy = (rect.top + rect.bottom) // 2
-        if win_rect.top <= rect.top and rect.bottom <= win_rect.bottom:
+        if rect.bottom > win_rect.bottom:
+            pyautogui.scroll(-3)   # see lower content
+        elif rect.top < win_rect.top:
+            pyautogui.scroll(3)    # see higher content
+        else:
             return
-        # Negative scroll = wheel down = content scrolls up. Use
-        # direction relative to where the button currently sits.
-        direction = -1 if cy > win_rect.bottom else 1
-        pyautogui.scroll(direction * 200)
-        time.sleep(0.1)
+        time.sleep(0.25)           # let UIA refresh its rect cache
 
 
 def _click_run_calibration():
@@ -103,9 +111,22 @@ def _click_run_calibration():
     if not btn.exists(timeout=2):
         raise RuntimeError("Could not find 'Run Calibration' button in the Settings modal")
     _scroll_button_into_view(win, btn)
+    # Re-read the rect immediately before clicking. The scroll loop
+    # exits as soon as UIA reports the button is in the visible area;
+    # this snapshot is the freshest screen position we have.
     rect = btn.rectangle()
     cx = (rect.left + rect.right) // 2
     cy = (rect.top + rect.bottom) // 2
+    win_rect = win.rectangle()
+    if not (win_rect.left <= cx <= win_rect.right
+            and win_rect.top <= cy <= win_rect.bottom):
+        raise RuntimeError(
+            f"'Run Calibration' resolved to ({cx}, {cy}), which is outside "
+            f"the app window rect ({win_rect.left}, {win_rect.top})-"
+            f"({win_rect.right}, {win_rect.bottom}). Likely a stale UIA "
+            f"rect after scrolling — pyautogui would click on the desktop "
+            f"and the scan would never start."
+        )
     log.info(f"  click 'Run Calibration' at ({cx}, {cy})")
     pyautogui.moveTo(cx, cy, duration=0.3)
     pyautogui.click(cx, cy)
