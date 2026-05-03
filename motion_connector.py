@@ -2150,6 +2150,15 @@ class MOTIONConnector(QObject):
         try:
             json_trigger_data = json.loads(triggerjson)
 
+            # Resolve to (interface default ⊕ override). QML callers
+            # only need to specify the fields they want to change
+            # (typically just ``TriggerStatus``); absent fields fall
+            # through to the SDK's resolved default rather than being
+            # sent as missing keys.
+            json_trigger_data = self._interface.resolve_trigger_config(
+                json_trigger_data
+            )
+
             trigger_setting = self._interface.console.set_trigger_json(
                 data=json_trigger_data
             )
@@ -3140,24 +3149,11 @@ class MOTIONConnector(QObject):
         )
         output_dir = os.path.join(self._directory, "calibrations")
         os.makedirs(output_dir, exist_ok=True)
-        # Use the same trigger config the BloodFlow / CQ scans use, so
-        # the firmware's fsync_counter and dark schedule start fresh
-        # before each sub-scan. This mirrors what SetTriggerLaserTask
-        # does in the QML scan chain — without it, the calibration
-        # would inherit whatever firmware state was left over from a
-        # previous scan, causing the off-by-one symptom in the dark
-        # schedule.
-        trigger_config = {
-            "TriggerStatus": 2,                   # 2 = laser ON
-            "TriggerFrequencyHz": 40,
-            "TriggerPulseWidthUsec": 500,
-            "LaserPulseDelayUsec": 100,
-            "LaserPulseWidthUsec": 500,
-            "LaserPulseSkipInterval": 600,
-            "LaserPulseSkipDelayUsec": 1800,
-            "EnableSyncOut": True,
-            "EnableTaTrigger": True,
-        }
+        # CalibrationWorkflow resolves the trigger config to the
+        # interface's default (SDK ⊕ app override at construction)
+        # when the request doesn't override — matches what the QML
+        # scan / CQ flows do via SetTriggerLaserTask. Pass None so
+        # the workflow always sees the canonical config.
         req = CalibrationRequest(
             operator_id="bloodflow-app",
             output_dir=output_dir,
@@ -3167,7 +3163,6 @@ class MOTIONConnector(QObject):
             duration_sec=self._calibration_scan_duration_sec,
             scan_delay_sec=self._calibration_scan_delay_sec,
             max_duration_sec=self._max_calibration_time_sec,
-            trigger_config=trigger_config,
         )
 
         self._calibration_status = "running"
