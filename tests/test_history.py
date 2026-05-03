@@ -28,12 +28,27 @@ from utils import (
     click_element_center,
     click_panel,
     close_plot_window,
+    force_app_config_value,
     selected_scan_text,
+    write_app_config_value,
 )
 
 pytestmark = pytest.mark.dev
 
 VIZ_WAIT = 60  # seconds to leave each plot open
+
+# Same rationale as test_scan_settings: this module's seed scan opens
+# Scan Settings, which is hidden in reduced mode. Snapshot at module
+# import (before the session-scoped ``app`` fixture spins up the app)
+# so any fresh launch in this session boots in non-reduced mode;
+# restore on teardown via the autouse fixture below.
+_INITIAL_REDUCED_MODE = force_app_config_value("reducedMode", False)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _restore_reduced_mode_on_module_teardown():
+    yield
+    write_app_config_value("reducedMode", _INITIAL_REDUCED_MODE)
 
 # How long to seed the history with at the start. Short to keep
 # the dev-tier suite snappy, but long enough that the SDK actually
@@ -232,17 +247,61 @@ def _seed_with_short_scan(app):
     yield
 
 
+def _is_history_open() -> bool:
+    """True iff the History modal appears to be on top — detected via
+    the presence of any ComboBox in the UIA tree (the scan picker is
+    the only ComboBox the bloodflow page exposes when no other modal
+    is up)."""
+    try:
+        win = uia_window()
+        return bool(win.descendants(control_type="ComboBox"))
+    except Exception:
+        return False
+
+
+def _ensure_history_open() -> None:
+    """Open the History modal if it isn't already. The History panel
+    button is a TOGGLE (BloodFlow.qml's onHistoryClicked: 'closeAll +
+    open if it was closed') — clicking when the modal is open closes
+    it. So check first, click only if needed.
+
+    Combined with HistoryModal having no Escape handler, this matters:
+    the seed fixture's pyautogui.press('escape') silently fails to
+    close the modal, so without this check, test_01's click ends up
+    closing the modal that the fixture left open."""
+    if _is_history_open():
+        log.info("  History modal already open — no click needed")
+        return
+    log.info("  History modal not open — clicking the History panel")
+    click_panel("History")
+    time.sleep(SLEEP)
+
+
 @pytest.mark.incremental
 class TestHistory:
     """History modal — scan listing and visualization."""
 
     def test_01_open(self, app):
-        click_panel("History")
+        _ensure_history_open()
 
     def test_02_latest_scan_listed(self, app):
-        scan_text = selected_scan_text()
+        # Defensive: re-ensure the modal is up before reading. The
+        # seed fixture's close-with-escape doesn't actually fire
+        # (HistoryModal has no Keys handler), so we can't trust the
+        # state coming into this test.
+        _ensure_history_open()
+        # Poll for up to 5 s — the ComboBox can take a moment to
+        # populate on a slow runner.
+        deadline = time.time() + 5.0
+        scan_text = ""
+        while time.time() < deadline:
+            scan_text = selected_scan_text()
+            if scan_text:
+                break
+            time.sleep(0.3)
         assert len(scan_text) > 0, (
-            "ComboBox is empty -- no scans found. Run a scan first."
+            "ComboBox is empty after 5 s -- no scans found. Run a "
+            "scan first, or the History modal failed to open."
         )
         log.info(f"  Scan ComboBox text: '{scan_text}'")
 

@@ -378,6 +378,14 @@ Item {
                 Text { text: "Processing..."; color: theme.textPrimary; font.pixelSize: 14 }
             }
         }
+
+        // Match the other modals (SettingsModal, ScanSettingsModal):
+        // Escape closes. Without this, ``pyautogui.press('escape')`` is
+        // a no-op for History, which left the modal stuck open between
+        // tests and broke test_history.test_02 in confusing ways.
+        Keys.onReleased: function(event) {
+            if (event.key === Qt.Key_Escape) { root.close(); event.accepted = true }
+        }
     }
 
     Dialogs.MessageDialog {
