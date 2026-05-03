@@ -64,11 +64,16 @@ def outlet():
     """Provide the Shelly outlet; skip the module if it is unreachable."""
     try:
         out = shelly.default_outlet()
-        out.is_on()  # one round-trip to confirm reachability
+        # Log which host we resolved + the relay's current state so a
+        # confused operator (multiple Shellys on the network, stale env
+        # var pointing at the wrong one, etc.) can see at a glance
+        # whether the right outlet is being driven.
+        host = getattr(out, "host", "<unknown>")
+        state = "ON" if out.is_on() else "OFF"
+        log.info(f"  Shelly outlet: host={host} relay={state}")
     except Exception as e:
         pytest.skip(f"Shelly outlet not reachable: {e}")
     yield out
-    # Always leave the outlet on after the module so the device is usable.
     try:
         out.on()
     except Exception:
