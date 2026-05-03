@@ -30,7 +30,7 @@ For style guidance on writing or editing tests, see
 | File | Tests | Coverage | Wall-clock |
 |---|---|---|---|
 | `test_scan_flow.py` | 16 | End-to-end happy path: configure → notes → check → 2-min scan → visualize. | ~10 min |
-| `test_reducedmode.py` | 40 | Reduced Mode workflow in three classes: keyboard-driven (01–21), mouse-driven (22–32), Settings feature (33–37: Time Window dropdown × 4, Auto-scale Y-axes ON). | ~50 min |
+| `test_reducedmode.py` | 37 | Reduced Mode workflow in four classes (Reduced Mode forced on via `app_config.json`, not the Settings modal): keyboard-driven (05–21), mouse-driven (22–32), Settings feature (33–37: Time Window dropdown × 4, Auto-scale Y-axes ON), and modal-exclusivity detector (38: opens Settings then clicks Start, asserts only one modal is visible — verifies the `modalManager.closeCurrent()` call in `BloodFlow.qml`'s `onStartStopClicked` dismisses Settings before `ContactQualityModal` opens). | ~52 min |
 | `test_connection_redesign.py` | 4 | Power-cycle resilience: app off + power on → auto-connect; idle power-cycle; mid-scan power-cycle; rapid 5× toggle survival. Requires Shelly outlet. | ~5 min |
 | `test_scan_auto_stop_bug.py` | 5 | GH issue #47 repro: 5×10-min All/All scans, power-cycle between loops 1–3, skip cycle on 4–5. Loop 5 expected to fail. Requires Shelly. | ~70 min |
 | `test_scan_auto_stop_bug_abbreviated.py` | 5 | Same repro logic with 2-min Far/Far scans for fast iteration. | ~25 min |

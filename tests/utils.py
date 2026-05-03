@@ -82,12 +82,24 @@ _PANEL_CONTENT_MARG  = 6    # ColumnLayout anchors.margins: 6 inside ButtonPanel
 _PANEL_BUTTON_HALF   = 34   # half of 68 px button
 _PANEL_SLOT_PX       = 85   # vertical spacing between button centers
 
-# Slot index for each top-of-panel button (counted from Start = 0).
+# Slot index for each top-of-panel button (counted from Start = 0)
+# in normal (non-reduced) mode.
 PANEL_BUTTON_SLOTS = {
     "Start":         0,
     "Scan\nSettings": 1,
     "Notes":          2,
     "Check":          3,
+}
+
+# In reduced mode, ``Scan\nSettings`` and ``Check`` are hidden
+# (``visible: !panel.reducedMode`` in components/ButtonPanel.qml),
+# so the QML ColumnLayout collapses and Notes slides up into the
+# former Scan Settings slot. The fallback screen-pos math needs to
+# know this or it computes Notes at its non-reduced y coordinate
+# and every click on Notes in reduced mode misses by one slot.
+PANEL_BUTTON_SLOTS_REDUCED = {
+    "Start": 0,
+    "Notes": 1,
 }
 
 # History and Settings sit at the bottom of the panel below a
@@ -479,12 +491,22 @@ def panel_button_screen_pos(label: str) -> tuple[int, int] | None:
     bottom; they don't shift with the banner because main.qml only
     grows the page-Item's topMargin when the banner appears, leaving
     the bottom anchored to parent.bottom.
+
+    When ``reducedMode`` is enabled in ``app_config.json`` we use the
+    reduced slot map — Notes moves up into slot 1, and
+    ``Scan\\nSettings`` / ``Check`` have no slot at all (they are
+    ``visible: false`` in ButtonPanel.qml and shouldn't be clicked).
     """
     w = get_app_window()
     x = w.left + _PANEL_OUTER_LEFT + _PANEL_INNER_LEFT + _PANEL_CONTENT_MARG + _PANEL_BUTTON_HALF
 
-    if label in PANEL_BUTTON_SLOTS:
-        slot = PANEL_BUTTON_SLOTS[label]
+    if read_app_config_value("reducedMode", False):
+        top_slots = PANEL_BUTTON_SLOTS_REDUCED
+    else:
+        top_slots = PANEL_BUTTON_SLOTS
+
+    if label in top_slots:
+        slot = top_slots[label]
         state = _detect_banner_state()
         if state is True:
             header_px = _PANEL_HEADER_PX + BANNER_OFFSET_PX
@@ -716,6 +738,97 @@ def click_panel_button(label: str, fallback: tuple[float, float] | None = None) 
 _PLOT_TITLE_RE = re.compile(r"^Figure \d+", re.IGNORECASE)
 
 
+# Each modal in the bloodflow app is a QML ``Item`` overlay
+# (anchors.fill: parent, visible toggle, z-index) inside the main
+# OpenWater Bloodflow window — not a Qt Dialog or separate Window —
+# so they don't surface as distinct UIA windows. We detect which
+# modal(s) are open with two passes per fingerprint:
+#
+#   1. Targeted ``descendants(title=...)`` query for each text
+#      fingerprint. Targeted queries hit a different UIA code path
+#      than the unfiltered descendants walk and reliably find Text
+#      elements that the walk silently misses (same root cause as
+#      ``calibrate_panel_buttons`` always falling back to the QML
+#      pixel layout). Empirically this is what works for click_by_name
+#      against modal contents (e.g. "Visualize BFI/BVI" in History).
+#   2. ``descendants(title=..., control_type="Button")`` fallback for
+#      modals that expose a uniquely-named Button. Qt Buttons are
+#      always exposed via UIA even when sibling Text elements vanish.
+#
+# Fingerprint values must match the QML *exactly* (case + whitespace)
+# because targeted queries are exact matches, not substrings. Each
+# entry is (text fingerprints, button fingerprints).
+_TextFingerprints = tuple[str, ...]
+_ButtonFingerprints = tuple[str, ...]
+MODAL_FINGERPRINTS: dict[str, tuple[_TextFingerprints, _ButtonFingerprints]] = {
+    # SettingsModal (gear icon)
+    "Settings":       (("Time window",), ("Run Calibration", "Check for Updates")),
+    # ScanSettingsModal
+    "ScanSettings":   (("Scan Settings", "Camera Configuration"), ()),
+    # NotesModal
+    "Notes":          (("Session Notes",), ()),
+    # HistoryModal
+    "History":        (("Scan History",), ("Open Folder", "Refresh")),
+    # ContactQualityModal — title varies by state_; match all four
+    # plus the buttons that only its preScanMode footer renders.
+    "ContactQuality": (
+        (
+            "Checking contact quality\u2026",  # \u2026 = "…"
+            "Good signal quality",
+            "Contact check failed",
+            "Contact Quality Notification",
+        ),
+        # "Dismiss" / "Retest" appear on multiple modals so they can't
+        # be unique fingerprints on their own; "Start Scan" is unique
+        # to ContactQualityModal in preScanMode.
+        ("Start Scan",),
+    ),
+}
+
+
+def visible_modals() -> set[str]:
+    """Return the set of modal names currently visible in the app.
+
+    Identifies each modal via the fingerprints in
+    ``MODAL_FINGERPRINTS`` using targeted UIA queries (not a tree
+    walk — see the comment above the dict for why). Returns names
+    like ``"Settings"`` / ``"ContactQuality"``; an empty set means
+    no modal is open.
+
+    Used by tests that need to assert mutual exclusivity — see
+    ``test_reducedmode.TestModalExclusivity``.
+    """
+    found: set[str] = set()
+    try:
+        win = uia_window()
+    except Exception as e:
+        log.warning(f"  visible_modals: uia_window failed: {e}")
+        return found
+
+    for modal_name, (text_fps, button_fps) in MODAL_FINGERPRINTS.items():
+        matched = False
+        for fp in text_fps:
+            try:
+                if win.descendants(title=fp):
+                    matched = True
+                    break
+            except Exception:
+                continue
+        if matched:
+            found.add(modal_name)
+            continue
+        for fp in button_fps:
+            try:
+                if win.descendants(title=fp, control_type="Button"):
+                    matched = True
+                    break
+            except Exception:
+                continue
+        if matched:
+            found.add(modal_name)
+    return found
+
+
 def close_plot_window() -> bool:
     """Close the matplotlib plot window opened by the app via Alt+F4.
 
@@ -752,40 +865,92 @@ def close_plot_window() -> bool:
     return False
 
 
-def dismiss_signal_quality_modal() -> bool:
-    """If the 'Good signal quality' modal appears, click Dismiss.
+# ContactQualityModal title strings for each post-``checking`` state
+# (see components/ContactQualityModal.qml line ~271). Stored exactly as
+# the QML renders them so targeted ``descendants(title=...)`` queries
+# match. Same data also appears in MODAL_FINGERPRINTS["ContactQuality"]
+# above; kept inline here so dismiss_signal_quality_modal is
+# self-contained and the comment about *why* targeted queries are
+# needed stays close to the call.
+_CONTACT_QUALITY_POST_CHECKING_TITLES = (
+    "Good signal quality",
+    "Contact check failed",
+    "Contact Quality Notification",
+)
 
-    Returns True if a Dismiss was clicked, False if the modal wasn't found.
+
+def dismiss_signal_quality_modal() -> bool:
+    """If the contact-quality modal is past the ``checking`` state,
+    click its ``Dismiss`` button.
+
+    Two-pass detection (mirrors ``_find_modal_state`` in
+    test_reducedmode):
+
+      1. **Targeted title query** for each post-``checking`` state
+         title. Uses ``descendants(title=...)`` instead of an
+         unfiltered tree walk — the walk silently misses plain QML
+         Text in this app (same root cause as panel-button calibration
+         falling back to the QML pixel layout).
+      2. **Button fallback** if no title matched. Any of
+         ``Start Scan`` / ``Dismiss`` / ``Retest`` being present
+         means the modal is past ``checking`` (the footer renders
+         only on ``state_ !== "checking"``); QML Buttons reliably
+         surface in UIA even when sibling Text elements don't.
+
+    Without the button fallback this helper returns False even when
+    the modal is clearly on screen, which is what test_reducedmode
+    hit + fixed earlier and what test_usb_disconnect_freeze burns
+    its 120 s Check polling on.
+
+    Returns True if a Dismiss was clicked, False if the modal wasn't
+    detected (still ``checking``, never opened, or already gone).
     """
     try:
         win = uia_window()
-        signal_modal_found = False
-        for elem in win.descendants():
+    except Exception as e:
+        log.warning(f"  dismiss_signal_quality_modal: uia_window failed: {e}")
+        return False
+
+    # Pass 1: targeted title query.
+    detected_via = None
+    for title in _CONTACT_QUALITY_POST_CHECKING_TITLES:
+        try:
+            if win.descendants(title=title):
+                detected_via = f"title={title!r}"
+                break
+        except Exception:
+            continue
+
+    # Pass 2: button fallback. Any post-checking footer button means
+    # the modal is up and dismissable.
+    if detected_via is None:
+        for btn_name in ("Start Scan", "Dismiss", "Retest"):
             try:
-                text = elem.window_text().strip().lower()
-                if "good signal quality" in text or "signal quality" in text:
-                    signal_modal_found = True
+                if win.descendants(title=btn_name, control_type="Button"):
+                    detected_via = f"button={btn_name!r}"
                     break
             except Exception:
                 continue
 
-        if not signal_modal_found:
-            return False
+    if detected_via is None:
+        return False
 
-        log.info("  Signal quality modal detected — looking for Dismiss button")
-        for elem in win.descendants():
-            try:
-                if elem.window_text().strip() == "Dismiss":
-                    rect = elem.rectangle()
-                    cx = (rect.left + rect.right) // 2
-                    cy = (rect.top + rect.bottom) // 2
-                    log.info(f"  Clicking Dismiss button at ({cx}, {cy})")
-                    pyautogui.click(cx, cy)
-                    time.sleep(SLEEP)
-                    return True
-            except Exception:
-                continue
-        log.warning("  'Good signal quality' detected but Dismiss button not found")
+    log.info(f"  Contact-quality modal detected via {detected_via}")
+    try:
+        hits = win.descendants(title="Dismiss", control_type="Button")
+        if hits:
+            elem = hits[0]
+            rect = elem.rectangle()
+            cx = (rect.left + rect.right) // 2
+            cy = (rect.top + rect.bottom) // 2
+            log.info(f"  Clicking Dismiss button at ({cx}, {cy})")
+            pyautogui.click(cx, cy)
+            time.sleep(SLEEP)
+            return True
     except Exception as e:
-        log.warning(f"  dismiss_signal_quality_modal failed: {e}")
+        log.warning(f"  Dismiss-button lookup failed: {e}")
+
+    log.warning(
+        f"  Modal detected via {detected_via} but Dismiss button not found"
+    )
     return False

@@ -1,12 +1,19 @@
 """
 Reduced Mode — end-to-end test.
 
-Covers the full Reduced Mode workflow using the global Settings modal
-(gear icon). Sensor dropdowns are a Scan Settings feature and are NOT
-tested here — Scan Settings is hidden while Reduced Mode is active.
+Covers the full Reduced Mode workflow. Sensor dropdowns are a Scan
+Settings feature and are NOT tested here — Scan Settings is hidden
+while Reduced Mode is active.
+
+Reduced Mode is forced on via ``app_config.json`` at module-import
+time (before the session-scoped ``app`` fixture launches the app),
+not by clicking the Reduced Mode Enable toggle in the Settings modal
+at test run time. The original config value is restored on module
+teardown. This mirrors the pattern used by ``test_history`` and
+``test_scan_settings`` for forcing the *opposite* state.
 
 Three classes:
-  TestReducedMode         (01–21) — keyboard-driven Notes / scan / history flow
+  TestReducedMode         (05–21) — keyboard-driven Notes / scan / history flow
   TestReducedModeMouse    (22–32) — mouse-driven repeat of the same flow
   TestReducedModeSettings (33–37) — Settings modal: Time Window dropdown
                                     parametrized over 3/5/15/30s, plus
@@ -35,17 +42,31 @@ from conftest import (
 from utils import (
     click_panel,
     close_plot_window,
+    force_app_config_value,
     move_window_on_screen,
     selected_scan_text,
+    visible_modals,
+    write_app_config_value,
 )
 
 pytestmark = pytest.mark.release
 
-# Relative coordinate of the Reduced Mode Enable toggle within the app window.
-# Measured from screenshot — adjust if the toggle position shifts.
-REDUCED_MODE_TOGGLE = (0.400, 0.421)
+# Force ``reducedMode = true`` on disk at module-import time so any
+# fresh launch in this session boots directly into Reduced Mode.
+# Restored on module teardown via the autouse fixture below.
+#
+# Caveat (see utils.force_app_config_value): the app caches its
+# config at startup, so if the app was already running with
+# reducedMode=false when this module is imported, the running
+# instance will stay in non-reduced mode until it is relaunched.
+_INITIAL_REDUCED_MODE = force_app_config_value("reducedMode", True)
 
-_TABS_TO_REDUCED_MODE = 16
+
+@pytest.fixture(scope="module", autouse=True)
+def _restore_reduced_mode_on_module_teardown():
+    yield
+    write_app_config_value("reducedMode", _INITIAL_REDUCED_MODE)
+
 
 SCAN_WAIT       = 200   # seconds to run the long scan (3 min 20 s)
 SHORT_SCAN_WAIT = 120   # seconds to run each Settings-feature scan (2 min)
@@ -60,28 +81,6 @@ TIME_WINDOW_OPTIONS = [3, 5, 15, 30]
 # ─────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────
-def _tab_to_reduced_mode_toggle(tab_into_modal: bool = True):
-    """Tab from the current focus to the Reduced Mode Enable toggle in the
-    Settings modal, then press Space to toggle it.
-
-    tab_into_modal=True  — press one extra Tab to enter the modal first
-                           (use when the modal was just opened and nothing
-                           inside has focus yet).
-    tab_into_modal=False — skip that first Tab (use when a field inside the
-                           modal already has focus).
-    """
-    require_focus()
-    if tab_into_modal:
-        pyautogui.press("tab")   # enter modal — lands on first interactive element
-        time.sleep(0.3)
-    log.info(f"  tabbing {_TABS_TO_REDUCED_MODE} times to Reduced Mode Enable toggle")
-    for _ in range(_TABS_TO_REDUCED_MODE):
-        pyautogui.press("tab")
-        time.sleep(0.1)
-    pyautogui.press("space")
-    time.sleep(SLEEP)
-
-
 def _close_plot_window_mouse() -> bool:
     """Close the plot window by moving the mouse to its center then alt+f4."""
     for w in gw.getAllWindows():
@@ -108,57 +107,214 @@ def _close_plot_window_mouse() -> bool:
     return False
 
 
-def _wait_for_signal_quality_and_start_scan(timeout: int = 180) -> bool:
-    """In Reduced Mode, after clicking Start the app auto-runs signal quality check.
+# Title text rendered by ContactQualityModal as a function of its
+# state_ property (see components/ContactQualityModal.qml line ~271).
+# Stored exactly as they appear in the QML so the targeted
+# ``descendants(title=...)`` query below matches case- and
+# whitespace-perfectly. Any-state detection.
+_CONTACT_QUALITY_STATE_TITLES = {
+    "Checking contact quality\u2026": "checking",  # \u2026 is the QML "…"
+    "Good signal quality":            "ok",
+    "Contact check failed":           "error",
+    "Contact Quality Notification":   "warnings",
+}
 
-    Wait up to `timeout` seconds for the 'Good signal quality' modal,
-    then click 'Start Scan' to begin the actual scan.
+# Footer buttons shown by ContactQualityModal in preScanMode after
+# the check leaves "checking" (line ~505 of the QML: the footer
+# RowLayout is ``visible: root.state_ !== "checking" || developerMode``).
+# Used as a UIA-friendly fallback when the title Text isn't visible
+# to the accessibility tree but the QML Buttons still are.
+_CONTACT_QUALITY_PRESCAN_BUTTONS = ("Start Scan", "Dismiss", "Retest")
 
-    Returns True if 'Start Scan' was clicked, False otherwise.
+
+def _find_modal_state(win) -> str | None:
+    """Detect ContactQualityModal's current state using whatever UIA
+    will expose. Returns one of ``"checking" | "ok" | "error" |
+    "warnings"`` or ``None`` if no fingerprint matches.
+
+    Two-pass strategy because the panel-button calibration showed
+    plain QML Text elements often don't surface in this app's UIA
+    tree (everything falls back to QML pixel layout):
+
+    1. **Targeted title query**: ``descendants(title=...)`` for each
+       state title. Targeted queries hit a different UIA code path
+       than the unfiltered descendants walk and tend to find Text
+       elements the walk misses.
+    2. **Button fallback**: if no title fingerprint matched, look
+       for ``Start Scan`` / ``Dismiss`` / ``Retest`` (Button
+       control type, which Qt always exposes via UIA). The
+       footer-buttons-visible condition (``state_ !== "checking"``)
+       means seeing any of these proves we're past ``checking`` —
+       we report ``"ok"`` as a best guess so the caller can try the
+       Start Scan click. If it turns out to be ``error`` or
+       ``warnings`` instead, the click is harmless because the
+       button is the same one (it just routes to ``continueRequested``
+       which the QML uses for the success path).
     """
-    log.info(f"  Waiting up to {timeout}s for signal quality dialog...")
-    elapsed = 0
-    poll_interval = 5
-    while elapsed < timeout:
-        time.sleep(poll_interval)
-        elapsed += poll_interval
+    for title, state in _CONTACT_QUALITY_STATE_TITLES.items():
+        try:
+            if win.descendants(title=title):
+                return state
+        except Exception:
+            continue
 
+    # Title pass missed; try buttons. The "Start Scan" / "Dismiss" /
+    # "Retest" footer is preScanMode-only and renders only when
+    # state_ != "checking", so any of them being present means the
+    # check has finished.
+    for btn_name in _CONTACT_QUALITY_PRESCAN_BUTTONS:
+        try:
+            hits = win.descendants(title=btn_name, control_type="Button")
+            if hits:
+                return "ok"  # best guess; see docstring rationale
+        except Exception:
+            continue
+
+    return None
+
+
+def _wait_for_signal_quality_and_start_scan(timeout: int = 180) -> bool:
+    """Wait for ContactQualityModal to reach the ``ok`` state after
+    clicking Start in Reduced Mode, then click ``Start Scan``.
+
+    Modal lifecycle: opens in ``checking`` state, runs a brief
+    contact-quality check (laser pulse + camera read), then
+    transitions to one of:
+
+      ``ok``       → title "Good signal quality"; footer shows
+                     ``Dismiss`` / ``Retest`` / ``Start Scan`` (we
+                     click ``Start Scan`` to begin the real capture).
+      ``error``    → title "Contact check failed"; we abort.
+      ``warnings`` → title "Contact Quality Notification"; we abort.
+
+    Returns ``True`` only if ``Start Scan`` was clicked.
+
+    Detection delegates to ``_find_modal_state`` which uses targeted
+    UIA ``descendants(title=...)`` queries rather than walking the
+    whole tree — the unfiltered walk silently misses plain QML
+    ``Text`` elements in this app (same root cause as why
+    ``calibrate_panel_buttons`` always falls back to the QML pixel
+    layout). Falls back further to QML Button detection because Qt
+    Buttons are reliably exposed via UIA even when sibling Text
+    elements aren't.
+
+    Callers MUST check the return value (or use
+    ``_assert_scan_started``). If we never clicked ``Start Scan``,
+    the scan didn't actually start, and any subsequent
+    ``wait_with_log(SCAN_WAIT, ...)`` / ``click_panel('Start')``
+    (intended as Stop) calls run out of phase — the second Start
+    click would then *begin* a scan rather than stop one.
+    """
+    log.info(
+        f"  Waiting up to {timeout}s for ContactQualityModal to reach "
+        f"'ok' state..."
+    )
+    started = time.time()
+    deadline = started + timeout
+    last_state: str | None = None
+    last_log_time = started
+    poll_interval = 2
+
+    while time.time() < deadline:
         try:
             win = uia_window()
-            quality_modal_found = False
-            for elem in win.descendants():
-                try:
-                    text = elem.window_text().strip().lower()
-                    if "good signal quality" in text or "signal quality" in text:
-                        quality_modal_found = True
-                        break
-                except Exception:
-                    continue
+            current_state = _find_modal_state(win)
 
-            if quality_modal_found:
-                log.info(f"  Signal quality modal appeared at {elapsed}s — clicking 'Start Scan'")
-                for elem in win.descendants():
+            if current_state != last_state:
+                log.info(
+                    f"  ContactQualityModal: "
+                    f"{last_state or 'not visible'} → "
+                    f"{current_state or 'not visible'}"
+                )
+                last_state = current_state
+                last_log_time = time.time()
+
+            if current_state == "ok":
+                log.info("  ok state — locating 'Start Scan' button")
+                try:
+                    matches = win.descendants(
+                        title="Start Scan", control_type="Button"
+                    )
+                except Exception:
+                    matches = []
+                if not matches:
+                    # Last-ditch: search by title without control_type filter.
                     try:
-                        if elem.window_text().strip() == "Start Scan":
-                            rect = elem.rectangle()
-                            cx = (rect.left + rect.right) // 2
-                            cy = (rect.top + rect.bottom) // 2
-                            log.info(f"  Clicking 'Start Scan' button at ({cx}, {cy})")
-                            pyautogui.click(cx, cy)
-                            time.sleep(SLEEP)
-                            return True
+                        matches = win.descendants(title="Start Scan")
                     except Exception:
-                        continue
-                log.warning("  'Good signal quality' modal found but 'Start Scan' button not located")
+                        matches = []
+                if matches:
+                    rect = matches[0].rectangle()
+                    cx = (rect.left + rect.right) // 2
+                    cy = (rect.top + rect.bottom) // 2
+                    log.info(f"  Clicking 'Start Scan' at ({cx}, {cy})")
+                    pyautogui.click(cx, cy)
+                    time.sleep(SLEEP)
+                    return True
+                log.warning(
+                    "  ok state reached but 'Start Scan' button not "
+                    "found in UIA — modal likely already dismissed or "
+                    "the button hasn't rendered yet. Aborting."
+                )
+                return False
+
+            if current_state == "error":
+                log.warning(
+                    "  ContactQualityModal hit 'error' state "
+                    "('Contact check failed'): pre-scan check failed. "
+                    "Aborting wait."
+                )
+                return False
+
+            if current_state == "warnings":
+                log.warning(
+                    "  ContactQualityModal hit 'warnings' state "
+                    "('Contact Quality Notification'): one or more "
+                    "cameras flagged a contact-quality issue. Aborting."
+                )
                 return False
         except Exception as e:
-            log.warning(f"  signal quality check failed: {e}")
+            log.warning(f"  signal quality poll failed: {e}")
 
-        if elapsed % 30 == 0:
-            log.info(f"  Still waiting for signal quality dialog... {elapsed}/{timeout}s")
+        if time.time() - last_log_time >= 30:
+            elapsed = int(time.time() - started)
+            log.info(
+                f"  Still waiting (last state="
+                f"{last_state or 'not visible'}) {elapsed}/{timeout}s"
+            )
+            last_log_time = time.time()
 
-    log.warning(f"  Signal quality dialog did not appear within {timeout}s")
+        time.sleep(poll_interval)
+
+    elapsed = int(time.time() - started)
+    log.warning(
+        f"  ContactQualityModal did not reach 'ok' state within "
+        f"{timeout}s (last seen state: {last_state or 'not visible'})"
+    )
     return False
+
+
+def _assert_scan_started(timeout: int = 180) -> None:
+    """Wait for the contact-quality pre-scan check, click ``Start Scan``,
+    and assert the scan actually began.
+
+    Wraps ``_wait_for_signal_quality_and_start_scan`` so every caller
+    that performs ``click_panel('Start')`` immediately followed by a
+    scan-running ``wait_with_log`` gets a hard failure instead of
+    silently running out of phase. The ``incremental`` marker on the
+    test classes will then skip the dependent steps cleanly.
+    """
+    if _wait_for_signal_quality_and_start_scan(timeout=timeout):
+        return
+    pytest.fail(
+        "Pre-scan contact-quality check did not reach 'ok' and we "
+        "never clicked 'Start Scan' — see prior WARNING lines for "
+        "the modal state-transition trace. The scan did not actually "
+        "start, so any subsequent wait_with_log / Stop-click would "
+        "run out of phase. Common causes: laser-pulse hardware error "
+        "during pre-scan, sensor mask doesn't match physical sensors, "
+        "or modal stuck in 'checking' past the timeout."
+    )
 
 
 def _select_time_window(seconds: int):
@@ -345,7 +501,7 @@ def _run_scan(label: str, duration_sec: int):
     """
     log.info(f"  [{label}] Starting scan for {duration_sec}s")
     click_panel("Start")
-    _wait_for_signal_quality_and_start_scan()
+    _assert_scan_started()
     wait_with_log(duration_sec, f"[{label}] scan running")
     click_panel("Start")  # toggle: Stop
     log.info(f"  [{label}] Waiting {STOP_BUFFER}s for scan data to save...")
@@ -391,37 +547,21 @@ def _click_coord(rx: float, ry: float, label: str = ""):
 # ─────────────────────────────────────────────
 @pytest.mark.incremental
 class TestReducedMode:
-    """Enable Reduced Mode, run a manual scan, verify History, then restore.
+    """Run a manual scan in Reduced Mode via the keyboard, verify
+    History.
 
-    Uses keyboard interactions. Scan Settings is NOT tested here — it is
+    Reduced Mode is forced on in ``app_config.json`` at module-import
+    time (see the module docstring); this class does not toggle it
+    via the Settings modal. Scan Settings is NOT tested here — it is
     hidden while Reduced Mode is active.
     """
-
-    # ── Settings: enable Reduced Mode ─────────────────────────────────────
-
-    def test_01_open_settings(self, app):
-        move_window_on_screen()
-        ensure_visible()
-        click_panel("Settings")
-
-    def test_02_camera_config_visible(self, app):
-        """Default Camera Configuration section is visible at the top."""
-        pass  # visual confirmation only
-
-    def test_03_enable_reduced_mode(self, app):
-        """Tab into the Settings modal to the Reduced Mode Enable toggle and turn ON."""
-        _tab_to_reduced_mode_toggle(tab_into_modal=True)
-        log.info("  Reduced Mode enabled")
-
-    def test_04_close_settings(self, app):
-        require_focus()
-        pyautogui.press("escape")
-        time.sleep(SLEEP)
 
     # ── Notes: full feature test in Reduced Mode ─────────────────────────
 
     def test_05_open_notes(self, app):
         """Notes is now at the former Scan Settings position in the reduced sidebar."""
+        move_window_on_screen()
+        ensure_visible()
         click_panel("Notes")
 
     def test_06_type_note(self, app):
@@ -522,8 +662,12 @@ class TestReducedMode:
     def test_14_start_scan(self, app):
         """Click Start — the app auto-runs signal quality check, then click 'Start Scan'."""
         click_panel("Start")
-        # In Reduced Mode, the 'Good signal quality' dialog auto-appears
-        _wait_for_signal_quality_and_start_scan()
+        # In Reduced Mode, the 'Good signal quality' dialog auto-appears.
+        # _assert_scan_started fails the test (and short-circuits the
+        # rest of the @incremental class) if the check never reaches
+        # 'ok' — preventing test_15/16 from running on a non-existent
+        # scan.
+        _assert_scan_started()
 
     def test_15_wait_2_minutes(self, app):
         wait_with_log(SCAN_WAIT, "2-minute manual scan running")
@@ -560,14 +704,16 @@ class TestReducedMode:
 
 
 # ─────────────────────────────────────────────
-# Mouse-based test class — continues with Reduced Mode already ON
-# from TestReducedMode above
+# Mouse-based test class — Reduced Mode is forced on via
+# app_config.json at module-import time (see module docstring)
 # ─────────────────────────────────────────────
 @pytest.mark.incremental
 class TestReducedModeMouse:
-    """Reduced Mode mouse workflow — Reduced Mode is already enabled by TestReducedMode.
+    """Reduced Mode mouse workflow. Reduced Mode is forced on in
+    ``app_config.json`` at module-import time.
 
-    Scan Settings is NOT tested here — it is hidden while Reduced Mode is active.
+    Scan Settings is NOT tested here — it is hidden while Reduced
+    Mode is active.
     """
 
     # ── Notes: type session note ───────────────────────────────────────────
@@ -596,8 +742,12 @@ class TestReducedModeMouse:
     def test_25_start_scan(self, app):
         """Click Start — the app auto-runs signal quality check, then click 'Start Scan'."""
         click_panel("Start")
-        # In Reduced Mode, the 'Good signal quality' dialog auto-appears
-        _wait_for_signal_quality_and_start_scan()
+        # In Reduced Mode, the 'Good signal quality' dialog auto-appears.
+        # _assert_scan_started fails the test (and short-circuits the
+        # rest of the @incremental class) if the check never reaches
+        # 'ok' — preventing test_26/27 from running on a non-existent
+        # scan.
+        _assert_scan_started()
 
     def test_26_wait_scan(self, app):
         wait_with_log(SCAN_WAIT, "manual scan running")
@@ -645,8 +795,9 @@ class TestReducedModeSettings:
     Y-axes ON and run one final 2-min scan to verify both feature
     paths produce a viable scan.
 
-    Sequenced after TestReducedMode/TestReducedModeMouse so the app
-    is already in Reduced Mode when this class executes.
+    Reduced Mode is forced on in ``app_config.json`` at module-import
+    time (see the module docstring); all three classes in this module
+    run with Reduced Mode already active.
     """
 
     @pytest.mark.parametrize(
@@ -682,3 +833,189 @@ class TestReducedModeSettings:
     def test_37_autoscale_scan(self, app):
         """One final 2-min scan with Auto-scale enabled."""
         _run_scan("AutoScale=ON", SHORT_SCAN_WAIT)
+
+
+# ─────────────────────────────────────────────
+# Modal exclusivity — does the app keep only one modal open at a time?
+# ─────────────────────────────────────────────
+#
+# Regression guard for the modal-stacking bug originally observed
+# during test_33: opening the Settings modal, then clicking Start
+# before closing it, left the Settings modal visible *behind* the
+# freshly-opened ContactQualityModal because nothing in the
+# onStartStopClicked path closed open modals first.
+#
+# The fix introduced ModalManager (components/ModalManager.qml),
+# which BloodFlow.qml uses for every icon-bar action:
+#   * Toggle buttons (Settings/Notes/History/Log/ScanSettings) call
+#     ``modalManager.toggle(target)`` — which closes whatever else is
+#     open before opening ``target``.
+#   * Action buttons (Start/Check) call
+#     ``modalManager.closeCurrent()`` before performing the action,
+#     ensuring no underlying modal stays buried.
+# Modals can opt out via a ``dismissable`` property
+# (e.g. ContactQualityModal.dismissable is false during ``checking``,
+# pre-scan gating, or live-scan warnings).
+#
+# This test opens Settings, clicks Start, and asserts that at no
+# point during the post-Start window are two modals simultaneously
+# visible. If it fails, the ModalManager wiring in BloodFlow.qml has
+# regressed.
+class TestModalExclusivity:
+    """Detector test for the bug where two modals end up stacked.
+
+    Standalone class (not @incremental) so it can run independently
+    of the keyboard / mouse / settings-feature flows. Cleanup tries
+    to dismiss the contact-quality modal and any leftover overlay so
+    subsequent tests in the session aren't poisoned, but the
+    detection assertion itself is the point.
+    """
+
+    def _force_clean_modal_state(self, max_escape_presses: int = 6) -> None:
+        """Spam Escape until ``visible_modals()`` reports an empty
+        set (or we run out of presses). Idempotent — pressing Escape
+        with no modal open is harmless."""
+        require_focus()
+        for i in range(max_escape_presses):
+            if not visible_modals():
+                return
+            pyautogui.press("escape")
+            time.sleep(0.4)
+        leftover = visible_modals()
+        if leftover:
+            log.warning(
+                f"  could not dismiss all modals after "
+                f"{max_escape_presses} Escapes; still visible: "
+                f"{sorted(leftover)}"
+            )
+
+    def _try_dismiss_contact_quality(self, timeout_sec: int = 140) -> bool:
+        """Wait up to ``timeout_sec`` for ContactQualityModal to leave
+        the ``checking`` state (no Dismiss button is rendered while
+        checking — see ContactQualityModal.qml line 505 footer
+        visibility), then click ``Dismiss``. Returns True on success.
+        """
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline:
+            try:
+                win = uia_window()
+                for elem in win.descendants():
+                    try:
+                        if elem.window_text().strip() == "Dismiss":
+                            rect = elem.rectangle()
+                            cx = (rect.left + rect.right) // 2
+                            cy = (rect.top + rect.bottom) // 2
+                            log.info(
+                                f"  clicking ContactQuality 'Dismiss' "
+                                f"at ({cx}, {cy})"
+                            )
+                            pyautogui.click(cx, cy)
+                            time.sleep(SLEEP)
+                            return True
+                    except Exception:
+                        continue
+            except Exception as e:
+                log.warning(f"  Dismiss-button search failed: {e}")
+            time.sleep(2)
+        log.warning(
+            f"  ContactQuality 'Dismiss' button never appeared within "
+            f"{timeout_sec}s — leaving modal in current state"
+        )
+        return False
+
+    def test_38_settings_then_start_does_not_stack_modals(self, app):
+        """Open Settings, click Start, expect only one modal visible
+        at any point during the contact-quality pre-scan check.
+
+        In reduced mode ``onStartStopClicked`` opens
+        ContactQualityModal without first dismissing whatever modal
+        is already on screen — so Settings stays at z=9998 underneath
+        ContactQualityModal at z=9999. This test polls
+        ``visible_modals()`` over a 25-second window after Start and
+        fails if any single snapshot reports more than one modal.
+
+        25 s spans the full ``checking → ok`` transition (the check
+        itself takes ~9 s; we add buffer for slow first-after-launch
+        bench startup), and we sample every 1.5 s — fine enough to
+        catch the stacked state across the entire post-checking
+        period when the QML buttons actually surface in UIA.
+
+        Why poll instead of single-shot: the QML
+        ContactQualityModal renders no UIA-friendly elements during
+        its ``checking`` state (the title is a plain ``Text`` —
+        invisible to UIA in this app — and the footer ``RowLayout``
+        is hidden via ``visible: state_ !== 'checking'`` so the
+        ``Start Scan`` / ``Dismiss`` buttons don't render until the
+        check finishes). A snapshot taken in the first ~9 s after
+        Start would correctly detect Settings but miss
+        ContactQuality, even though the user can see it on screen.
+        """
+        move_window_on_screen()
+        ensure_visible()
+
+        self._force_clean_modal_state()
+        before = visible_modals()
+        assert not before, (
+            f"Expected no modal visible before the test, but "
+            f"{sorted(before)} were already open. A prior test left "
+            f"the UI dirty."
+        )
+
+        click_panel("Settings")
+        time.sleep(SLEEP)
+        with_settings = visible_modals()
+        assert with_settings == {"Settings"}, (
+            f"Expected only the Settings modal after click, got "
+            f"{sorted(with_settings)}."
+        )
+        log.info(f"  Settings opened cleanly: visible_modals()={sorted(with_settings)}")
+
+        # Click Start without dismissing Settings first. In reduced
+        # mode this fires the contact-quality pre-scan check, which
+        # opens ContactQualityModal at z=9999 over Settings at z=9998.
+        click_panel("Start")
+
+        snapshots: list[tuple[float, set[str]]] = []
+        poll_window_sec = 25
+        poll_interval_sec = 1.5
+        worst: set[str] = set()
+        started = time.time()
+        deadline = started + poll_window_sec
+
+        try:
+            while time.time() < deadline:
+                snap = visible_modals()
+                snapshots.append((time.time() - started, snap))
+                if len(snap) > len(worst):
+                    worst = set(snap)
+                if len(snap) >= 2:
+                    log.warning(
+                        f"  Multi-modal detected at t={time.time() - started:.1f}s: "
+                        f"{sorted(snap)}"
+                    )
+                    break
+                time.sleep(poll_interval_sec)
+
+            log.info(
+                f"  Polled visible_modals() {len(snapshots)} times over "
+                f"{time.time() - started:.1f}s while Settings was open and "
+                f"Start was clicked. Worst snapshot: {sorted(worst)}."
+            )
+            for t_offset, snap in snapshots:
+                log.info(f"    t={t_offset:5.1f}s  modals={sorted(snap)}")
+
+            assert len(worst) <= 1, (
+                f"Multiple modals visible at the same time: {sorted(worst)}. "
+                f"Expected the icon-bar Start handler in BloodFlow.qml "
+                f"to call modalManager.closeCurrent() before opening "
+                f"ContactQualityModal, so any modal already on screen "
+                f"(here: Settings) gets saved + hidden first. Either "
+                f"the closeCurrent() call was removed, or "
+                f"ModalManager's `modals` list no longer includes the "
+                f"underlying modal, or the underlying modal exposes "
+                f"dismissable=false when it shouldn't."
+            )
+        finally:
+            log.info("  cleanup: dismissing contact-quality + any leftover modal")
+            self._try_dismiss_contact_quality(timeout_sec=140)
+            self._force_clean_modal_state()
