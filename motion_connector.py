@@ -620,20 +620,30 @@ class MOTIONConnector(QObject):
         self._runlog_handler = run_handler
         self._runlog_active = True
 
-        # Initialize CSV telemetry log (same basename as run log)
-        try:
-            self._runlog_csv_file = open(
-                self._runlog_csv_path, "w", newline="", encoding="utf-8"
-            )
-            self._runlog_csv_writer = csv.writer(self._runlog_csv_file)
-            self._runlog_csv_writer.writerow(
-                ["timestamp", "unix_ms", "tcm", "tcl", "pdc"]
-            )
-            self._runlog_csv_file.flush()
-        except Exception as e:
-            logger.error(f"Failed to open run CSV log: {e}")
+        # Initialize CSV telemetry log (same basename as run log).
+        # Issue #43: clinical users don't need per-scan TCM / TCL / PDC
+        # samples — gate the file creation on developerMode. Skipping
+        # the open leaves _runlog_csv_writer as None, which
+        # _write_runlog_csv_sample already null-checks, so per-update
+        # writes become no-ops.
+        if self._app_config.get("developerMode", False):
+            try:
+                self._runlog_csv_file = open(
+                    self._runlog_csv_path, "w", newline="", encoding="utf-8"
+                )
+                self._runlog_csv_writer = csv.writer(self._runlog_csv_file)
+                self._runlog_csv_writer.writerow(
+                    ["timestamp", "unix_ms", "tcm", "tcl", "pdc"]
+                )
+                self._runlog_csv_file.flush()
+            except Exception as e:
+                logger.error(f"Failed to open run CSV log: {e}")
+                self._runlog_csv_file = None
+                self._runlog_csv_writer = None
+        else:
             self._runlog_csv_file = None
             self._runlog_csv_writer = None
+            self._runlog_csv_path = None
 
         # --- Gather version info for header ---
         # SDK version (MOTION SDK / sensor SDK)
