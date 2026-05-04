@@ -357,22 +357,6 @@ class MOTIONConnector(QObject):
         self._config_running = False
         self._laserOn = False
         self._safetyFailure = False
-        # If the previous session ended in a safety failure, restore
-        # the in-memory flag and re-fire the toast so the user sees the
-        # warning across app restarts (#107). The toast is deferred to
-        # the next event-loop iteration because QML hasn't yet
-        # connected to ``notificationRequested`` at __init__ time. Once
-        # live telemetry reports a healthy ``safety_ok``, the
-        # ``safetyFailure`` setter clears the flag (and the toast) and
-        # writes False back to disk.
-        if cfg.get("lastKnownSafetyFailure", False):
-            self._safetyFailure = True
-            QTimer.singleShot(
-                0,
-                lambda: self._fire_safety_notification(
-                    "persisted from previous session"
-                ),
-            )
         self._running = False
         self._trigger_state = "OFF"
         self._state = DISCONNECTED
@@ -837,12 +821,6 @@ class MOTIONConnector(QObject):
             # we don't double-fire without context.
             if not value:
                 self.dismissNotification("laser_safety")
-            # Persist so the toast survives an app restart (#107). On
-            # next launch __init__ reads ``lastKnownSafetyFailure``
-            # and restores the warning even if the first telemetry
-            # snapshot misses the latched fault.
-            self._app_config["lastKnownSafetyFailure"] = bool(value)
-            self._save_app_config()
 
     def _fire_safety_notification(self, fault_detail: str = ""):
         """Fire the persistent laser-safety toast.
