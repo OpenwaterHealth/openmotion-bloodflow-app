@@ -30,7 +30,6 @@ Marked ``release`` because it (a) tampers with persistent app config,
 from __future__ import annotations
 
 import glob
-import json
 import os
 import re
 import subprocess
@@ -54,14 +53,13 @@ from hil_helpers import (
     find_app_log,
     force_app_config_value,
     log_size,
+    read_app_config_value,
     recalibrate_panel_buttons,
     wait_for_pattern,
     write_app_config_value,
 )
 
 pytestmark = pytest.mark.release
-
-CONFIG_PATH = PROJECT_ROOT / "config" / "app_config.json"
 
 # This test drives the Check button to fire the laser, which only
 # exists on the sidebar in non-reduced mode (ButtonPanel.qml line 166
@@ -195,26 +193,6 @@ def _wait_for_connect(timeout: int = APP_CONNECT_TIMEOUT) -> str | None:
 
 
 # ─────────────────────────────────────────────
-# Config helpers
-# ─────────────────────────────────────────────
-def _set_force_laser_fail(value: bool) -> None:
-    """Toggle ``forceLaserFail`` in ``app_config.json``. Preserves all
-    other keys and key order."""
-    with CONFIG_PATH.open("r", encoding="utf-8") as f:
-        cfg = json.load(f)
-    cfg["forceLaserFail"] = bool(value)
-    with CONFIG_PATH.open("w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2)
-        f.write("\n")
-    log.info(f"  config: forceLaserFail = {value}")
-
-
-def _read_force_laser_fail() -> bool:
-    with CONFIG_PATH.open("r", encoding="utf-8") as f:
-        return bool(json.load(f).get("forceLaserFail", False))
-
-
-# ─────────────────────────────────────────────
 # Safety trip detection (log-tail based)
 # ─────────────────────────────────────────────
 def _wait_for_safety_trip(timeout: int = SAFETY_TRIP_TIMEOUT) -> str | None:
@@ -273,7 +251,7 @@ class TestForceLaserFail:
         test even gets to run. The body manages every subsequent
         launch/kill itself.
         """
-        original_flag = _read_force_laser_fail()
+        original_flag = bool(read_app_config_value("forceLaserFail", False))
         log.info(
             f"original config state: forceLaserFail = {original_flag}"
         )
@@ -287,7 +265,10 @@ class TestForceLaserFail:
             log.info("=" * 60)
             _kill_bloodflow_processes()
             time.sleep(2)
-            _set_force_laser_fail(True)
+            # Snapshot+set in one call. The returned ``initial`` matches
+            # ``original_flag`` we already captured above; the assertion
+            # is just a tripwire if the two ever drift.
+            assert force_app_config_value("forceLaserFail", True) == original_flag
             _launch_app()
             assert _wait_for_app_window(timeout=30), (
                 "App window did not appear after relaunch with "
@@ -398,7 +379,11 @@ class TestForceLaserFail:
             log.info("=" * 60)
             _kill_bloodflow_processes()
             time.sleep(2)
-            _set_force_laser_fail(False)
+            # Restore to the value we observed at test entry rather
+            # than a hard-coded False — preserves whatever the bench
+            # was configured with going in.
+            write_app_config_value("forceLaserFail", original_flag)
+            log.info(f"  config: forceLaserFail = {original_flag}")
             log.info("  power-cycling outlet (off 5s, on)")
             outlet.power_cycle(off_time=5.0)
             time.sleep(3)
