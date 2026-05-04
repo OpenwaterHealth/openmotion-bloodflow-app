@@ -1,36 +1,45 @@
 """
-test_force_laser_fail.py — verify the ``forceLaserFail`` config flag.
+test_force_laser_fail.py — verify forceLaserFail tripping and recovery.
 
-End-to-end check that the ``forceLaserFail: true`` flag in
-``config/app_config.json`` causes the app to load
-``config/laser_params_fault.json`` instead of the normal laser
-parameters, which in turn trips the hardware safety interlock and
-fires the persistent "Laser safety warning detected" toast.
+End-to-end check that:
 
-Test sequence (one method, with cleanup in ``finally``):
+  - ``forceLaserFail: true`` in ``config/app_config.json`` causes the
+    app to load ``config/laser_params_fault.json``, which trips the
+    hardware safety interlock and fires the persistent
+    "Laser safety warning detected" toast on first laser pulse.
+  - Closing and reopening the app while the hardware is still in the
+    safety-failure state surfaces the failure again on the second
+    launch — without the connector having to persist anything to
+    ``app_config.json`` (issue #107).
+  - Restoring ``forceLaserFail = false`` and power-cycling the
+    console clears the latched safety state and lets a subsequent
+    Check fire cleanly.
 
-  1. Snapshot the original ``forceLaserFail`` value.
-  2. Kill the running bloodflow app.
-  3. Set ``forceLaserFail = true`` in ``app_config.json``.
-  4. Launch the app, wait for it to connect.
-  5. Click Check (which fires the laser briefly).
-  6. Wait up to ``SAFETY_TRIP_TIMEOUT`` seconds for the laser-safety
-     toast to appear in the UI.
-  7. **Always** in ``finally``: kill the app, restore the original
-     flag, power-cycle the console (clears any latched safety state
-     in the hardware), launch the app again, recalibrate panel
-     buttons. This leaves the bench in a clean state for subsequent
-     tests in the same session.
+Steps (one method, full cleanup in ``finally``):
+
+  1. Close the app if it is open.
+  2. On disk: turn reduced mode OFF and forceLaserFail ON.
+  3. Open the app, calibrate panel buttons, wait for CONNECT.
+  4. Click Check. Expect the 'Laser safety failure' line in the log.
+  5. Close the app.
+  6. Open the app again (no power-cycle, no Check click). Expect the
+     'Laser safety failure' line to reappear in the freshly-rotated
+     log purely from telemetry observing the still-latched hardware.
+  7. Close the app, turn forceLaserFail OFF on disk.
+  8. Power-cycle the console (clears the latched safety state).
+  9. Open the app, click Check. Expect no safety-failure line.
+ 10. Restore forceLaserFail and reducedMode to whatever was on disk
+     at test entry; relaunch the app one more time so the bench is
+     clean for whatever follows.
 
 Marked ``release`` because it (a) tampers with persistent app config,
 (b) requires a Shelly outlet to power-cycle the console, and (c) takes
-~2 minutes end-to-end. Don't run in the dev-tier HIL set.
+~3 minutes end-to-end. Don't run in the dev-tier HIL set.
 """
 
 from __future__ import annotations
 
 import glob
-import json
 import os
 import re
 import subprocess
@@ -52,50 +61,66 @@ from hil_helpers import (
     RE_CONNECTED,
     click_panel,
     find_app_log,
-    log_size,
+    read_app_config_value,
     recalibrate_panel_buttons,
     wait_for_pattern,
+    write_app_config_value,
 )
 
 pytestmark = pytest.mark.release
 
-CONFIG_PATH = PROJECT_ROOT / "config" / "app_config.json"
-
-# When the interlock trips, motion_connector logs a single ERROR
-# line at the safety-status check site (line ~1984) before firing
-# the toast. We detect the trip by tailing the log for this prefix
-# rather than walking UIA for the toast text — the toast is rendered
-# in NotificationCenter as a plain QML Text, which doesn't surface in
-# the Windows UIA tree, so a UIA-based check would silently time out.
+# When the interlock trips, motion_connector logs a single ERROR line
+# at the safety-status check site before firing the toast. We detect
+# the trip by tailing the log for this prefix rather than walking UIA
+# for the toast text — the toast is rendered in NotificationCenter as
+# a plain QML Text, which doesn't surface in the Windows UIA tree, so
+# a UIA-based check would silently time out.
 RE_SAFETY_TRIP = re.compile(r"Laser safety failure:")
 
-# How long the test will wait after Check fires before giving up on
-# seeing the safety failure log line. The fault-laser params trip the
-# interlock almost immediately on the first laser pulse, so anything
-# more than ~30s is conservative; 130s (2 min 10 s) covers slow
-# camera-config + the contact-quality preflight that Check kicks off.
+# Positive proof that the laser actually pulsed during a Check run.
+# Emitted by the SDK's ScanWorkflow right before it calls the
+# console's start_trigger; Check / contact-quality preflight reaches
+# this code path through ``interface.start_scan``. Used by Step 9 to
+# distinguish "Check ran cleanly" from "Check never got far enough
+# to fire the laser, so we don't know if safety would have tripped or
+# not".
+#
+# An earlier version of this regex looked for
+# "Trigger started successfully" — the line emitted by
+# ``motion_connector.startTrigger``. That path is *not* taken during
+# a Check run (the SDK uses its own start_trigger), so the regex
+# never matched and Step 9 falsely failed even when the laser fired
+# cleanly.
+RE_TRIGGER_STARTED = re.compile(r"Starting trigger")
+
+# Wall-clock budget for seeing the safety-failure log line after Check
+# fires. Fault-laser params trip the interlock almost immediately on
+# the first laser pulse; 130 s covers slow camera-config plus the
+# contact-quality preflight that Check kicks off.
 SAFETY_TRIP_TIMEOUT = 130
 
-# How long to wait for the SDK to reach CONNECTED state after a
-# relaunch. Console enumeration + ping/version handshake is ~5s
-# normally; 60s is conservative.
+# Wall-clock budget for the SDK to reach CONNECTED after a relaunch.
+# Console enumeration + ping/version handshake is ~5 s normally; 60 s
+# is conservative.
 APP_CONNECT_TIMEOUT = 60
 
-# Time after Phase 4 power-cycle relaunch to settle before checking
-# that the toast is *not* present (i.e. clean state).
-CLEAN_STATE_SETTLE_SEC = 15
+# Grace window after seeing 'Trigger started successfully' before we
+# scan the log for a (definitely-not-wanted) safety failure. The
+# fault-laser params trip the safety chip on the first laser pulse,
+# so a real trip would log within the first second of trigger; 10 s
+# is generous.
+POST_TRIGGER_SAFETY_GRACE_SEC = 10
 
 
 # ─────────────────────────────────────────────
-# App lifecycle helpers — duplicate of conftest's app-fixture logic
-# kept inline because the fixture isn't designed to be re-run mid
-# session.
+# App lifecycle helpers
 # ─────────────────────────────────────────────
+# Inline rather than reusing conftest's session-scoped ``app`` fixture
+# because that fixture isn't designed to be re-run mid-session — this
+# test relaunches the app several times within a single method.
 def _from_source_mode() -> bool:
     return os.environ.get("OPENWATER_FROM_SOURCE", "").lower() in (
-        "1",
-        "true",
-        "yes",
+        "1", "true", "yes",
     )
 
 
@@ -177,47 +202,38 @@ def _wait_for_connect(timeout: int = APP_CONNECT_TIMEOUT) -> str | None:
     return wait_for_pattern(RE_CONNECTED, log_path, 0, timeout)
 
 
-# ─────────────────────────────────────────────
-# Config helpers
-# ─────────────────────────────────────────────
-def _set_force_laser_fail(value: bool) -> None:
-    """Toggle ``forceLaserFail`` in ``app_config.json``. Preserves all
-    other keys and key order."""
-    with CONFIG_PATH.open("r", encoding="utf-8") as f:
-        cfg = json.load(f)
-    cfg["forceLaserFail"] = bool(value)
-    with CONFIG_PATH.open("w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2)
-        f.write("\n")
-    log.info(f"  config: forceLaserFail = {value}")
-
-
-def _read_force_laser_fail() -> bool:
-    with CONFIG_PATH.open("r", encoding="utf-8") as f:
-        return bool(json.load(f).get("forceLaserFail", False))
-
-
-# ─────────────────────────────────────────────
-# Safety trip detection (log-tail based)
-# ─────────────────────────────────────────────
 def _wait_for_safety_trip(timeout: int = SAFETY_TRIP_TIMEOUT) -> str | None:
     """Tail the most recent bloodflow app log for the 'Laser safety
-    failure' line. Returns the matching log line or None on timeout.
-
-    Uses offset=0 because each launch rotates the log file (filename
-    contains a timestamp), so 0 means 'scan the entire fresh log'."""
+    failure' line. ``offset=0`` because each launch rotates the log
+    file (filename contains a timestamp), so 0 means 'scan the entire
+    fresh log'."""
     log_path = find_app_log()
     if log_path is None:
         return None
     return wait_for_pattern(RE_SAFETY_TRIP, log_path, 0, timeout)
 
 
-def _check_no_recent_safety_trip(window_sec: int) -> str | None:
-    """Watch the current log for ``window_sec`` and return the first
-    matching 'Laser safety failure' line if one appears, or None if
-    none did. Used by Phase 4 to verify the relaunch with
-    forceLaserFail=false didn't re-trip the interlock."""
-    return _wait_for_safety_trip(window_sec)
+def _restart_app(label: str) -> None:
+    """Kill, relaunch, wait-for-window, recalibrate, wait-for-connect.
+
+    Centralizes the post-relaunch setup so each step in the lifecycle
+    test reads as a single call. ``label`` is logged for context.
+    """
+    log.info(f"  [{label}] relaunching app")
+    _kill_bloodflow_processes()
+    time.sleep(2)
+    _launch_app()
+    assert _wait_for_app_window(timeout=30), (
+        f"[{label}] app window did not appear within 30 s of launch"
+    )
+    recalibrate_panel_buttons()
+    connect_line = _wait_for_connect(timeout=APP_CONNECT_TIMEOUT)
+    assert connect_line, (
+        f"[{label}] app did not reach CONNECTED state within "
+        f"{APP_CONNECT_TIMEOUT} s of relaunch"
+    )
+    log.info(f"  [{label}] connected: {connect_line.strip()}")
+    time.sleep(SLEEP)  # let camera auto-config settle
 
 
 # ─────────────────────────────────────────────
@@ -243,12 +259,10 @@ def outlet():
 # Test
 # ─────────────────────────────────────────────
 class TestForceLaserFail:
-    """End-to-end verification of the forceLaserFail config flag."""
+    """End-to-end verification of forceLaserFail tripping + #107 recovery."""
 
     def test_force_laser_fail_lifecycle(self, outlet, app):
-        """Toggle the flag, run a scan, watch the safety trip, then
-        restore the flag and power-cycle so the bench is clean for
-        whatever runs next.
+        """Walk through the 10-step lifecycle from the module docstring.
 
         ``app`` fixture dependency is intentional: it ensures the app
         has already been launched once at session start, so the
@@ -256,100 +270,215 @@ class TestForceLaserFail:
         test even gets to run. The body manages every subsequent
         launch/kill itself.
         """
-        original_flag = _read_force_laser_fail()
+        # Snapshot original config so the finally block can fully
+        # restore it. Both flags affect what the test sees, so both
+        # have to be remembered.
+        original_force_laser_fail = bool(
+            read_app_config_value("forceLaserFail", False)
+        )
+        original_reduced_mode = bool(
+            read_app_config_value("reducedMode", False)
+        )
         log.info(
-            f"original config state: forceLaserFail = {original_flag}"
+            f"original config state: forceLaserFail="
+            f"{original_force_laser_fail}, reducedMode="
+            f"{original_reduced_mode}"
         )
 
         try:
-            # ─── Phase 1: enable forceLaserFail and relaunch app ──
+            # ─── Step 1+2: kill, then write both flags before launch ─
+            # ``force_app_config_value`` writes to disk but does not
+            # poke the running app, so this only has the right effect
+            # if the app has already been killed. The running app caches
+            # its config at startup and won't reload.
             log.info("=" * 60)
             log.info(
-                "Phase 1: enabling forceLaserFail and relaunching app"
+                "Step 1+2: killing app, then writing reducedMode=false "
+                "+ forceLaserFail=true to disk"
             )
             log.info("=" * 60)
             _kill_bloodflow_processes()
             time.sleep(2)
-            _set_force_laser_fail(True)
-            _launch_app()
-            assert _wait_for_app_window(timeout=30), (
-                "App window did not appear after relaunch with "
-                "forceLaserFail=true"
-            )
+            write_app_config_value("reducedMode", False)
+            write_app_config_value("forceLaserFail", True)
+            log.info("  config staged for fault-trip launch")
 
-            # Window almost certainly moved on relaunch; refresh
-            # the per-machine panel button calibration cache.
-            recalibrate_panel_buttons()
-
-            connect_line = _wait_for_connect(timeout=APP_CONNECT_TIMEOUT)
-            assert connect_line, (
-                f"App did not reach CONNECTED state within "
-                f"{APP_CONNECT_TIMEOUT}s after relaunch"
-            )
-            log.info(f"  connected: {connect_line}")
-            time.sleep(SLEEP)  # let camera auto-config settle
-
-            # ─── Phase 2: fire the laser, expect safety trip ──────
+            # ─── Step 3: launch + calibrate ──────────────────────────
             log.info("=" * 60)
-            log.info("Phase 2: clicking Check to fire the laser")
+            log.info("Step 3: launching app, calibrating panel buttons")
+            log.info("=" * 60)
+            _restart_app("step 3")
+
+            # ─── Step 4: click Check, watch it fail ──────────────────
+            log.info("=" * 60)
+            log.info(
+                "Step 4: clicking Check, expecting 'Laser safety "
+                "failure' in the app log"
+            )
             log.info("=" * 60)
             click_panel("Check")
             log.info(
-                f"  waiting up to {SAFETY_TRIP_TIMEOUT}s for "
-                f"'Laser safety failure' line in the app log..."
+                f"  waiting up to {SAFETY_TRIP_TIMEOUT} s for trip line"
             )
             trip_line = _wait_for_safety_trip(SAFETY_TRIP_TIMEOUT)
             assert trip_line, (
                 f"'Laser safety failure' did not appear in the app log "
-                f"within {SAFETY_TRIP_TIMEOUT}s with forceLaserFail=true. "
+                f"within {SAFETY_TRIP_TIMEOUT} s with forceLaserFail=true. "
                 f"The fault laser params should have tripped the "
-                f"safety interlock immediately on first laser pulse."
+                f"interlock immediately on first laser pulse."
             )
             log.info(f"  PASS: safety trip detected: {trip_line.strip()}")
 
-        finally:
-            # ─── Phase 3 (always): restore flag, power-cycle, relaunch ─
+            # ─── Step 5+6: close, reopen WITHOUT power-cycle, expect re-trip ─
+            # Issue #107: closing and reopening the app while the
+            # hardware safety latch is still tripped should make the
+            # toast (and the log line) reappear from telemetry alone —
+            # no Check click, no config write, no state persisted.
             log.info("=" * 60)
             log.info(
-                "Phase 3 (cleanup): restoring flag, power-cycling, "
-                "relaunching app"
+                "Step 5+6: closing the app, reopening WITHOUT power-cycle, "
+                "expecting safety failure to re-surface from latched "
+                "hardware via telemetry"
+            )
+            log.info("=" * 60)
+            _restart_app("step 6")
+            log.info(
+                f"  waiting up to {SAFETY_TRIP_TIMEOUT} s for the trip "
+                f"line in the fresh log (no Check click — telemetry "
+                f"should observe the latched fault on its own)"
+            )
+            second_trip = _wait_for_safety_trip(SAFETY_TRIP_TIMEOUT)
+            assert second_trip, (
+                f"Issue #107 reproduction: 'Laser safety failure' "
+                f"did not appear in the SECOND-launch app log within "
+                f"{SAFETY_TRIP_TIMEOUT} s. The safety chip's fault "
+                f"latch should still be tripped after a USB "
+                f"disconnect/reconnect, and the telemetry reader "
+                f"thread should observe it on the first poll cycle "
+                f"and fire the persistent laser-safety toast — even "
+                f"without any state written to app_config.json. If "
+                f"this fails, either the SDK silently defaulted "
+                f"safety_ok=True when the chip didn't respond, or "
+                f"the chip cleared its latch on USB reset (in which "
+                f"case the detection has to come from a different "
+                f"signal)."
+            )
+            log.info(
+                f"  PASS: second-launch safety trip detected: "
+                f"{second_trip.strip()}"
+            )
+
+            # ─── Step 7: close app, turn off forceLaserFail ──────────
+            log.info("=" * 60)
+            log.info(
+                "Step 7: closing app, writing forceLaserFail=false"
             )
             log.info("=" * 60)
             _kill_bloodflow_processes()
             time.sleep(2)
-            _set_force_laser_fail(False)
-            log.info("  power-cycling outlet (off 5s, on)")
+            write_app_config_value("forceLaserFail", False)
+
+            # ─── Step 8: power-cycle the console ─────────────────────
+            # The hardware safety latch only clears on a console power
+            # cycle. Without this, Step 9's Check would re-trip the
+            # interlock from the same latched state we observed in
+            # Step 6 — so the "clean run" assertion would fail not
+            # because the fix is broken but because the bench was
+            # never reset.
+            log.info("=" * 60)
+            log.info("Step 8: power-cycling the console (off 5s, on)")
+            log.info("=" * 60)
             outlet.power_cycle(off_time=5.0)
-            time.sleep(3)
+            time.sleep(3)  # let USB enumeration settle before relaunch
+
+            # ─── Step 9: launch + click Check, expect clean run ──────
+            # "Clean run" means two things, in order:
+            #   (a) the laser actually fires (we see
+            #       'Trigger started successfully' in the fresh log),
+            #   (b) no 'Laser safety failure:' line shows up — neither
+            #       before, during, nor in the grace window after.
+            #
+            # An earlier version of this step only waited 15 s after
+            # the click for a safety failure and then declared success.
+            # That's wrong: the contact-quality preflight Check kicks
+            # off takes ~2 minutes before the laser actually pulses,
+            # so 15 s of "no failure line" mostly proved the laser
+            # hadn't fired YET — not that it fired cleanly.
+            log.info("=" * 60)
+            log.info(
+                "Step 9: launching app, clicking Check, expecting the "
+                "laser to fire AND no 'Laser safety failure' in the "
+                "freshly-rotated log"
+            )
+            log.info("=" * 60)
+            _restart_app("step 9")
+            click_panel("Check")
+            log.info(
+                f"  waiting up to {SAFETY_TRIP_TIMEOUT} s for "
+                f"'Trigger started successfully' (positive proof the "
+                f"laser pulsed)"
+            )
+            log_path = find_app_log()
+            assert log_path is not None, (
+                "Step 9: could not locate the bloodflow app log; "
+                "cannot verify Check fired the laser"
+            )
+            trigger_line = wait_for_pattern(
+                RE_TRIGGER_STARTED, log_path, 0, SAFETY_TRIP_TIMEOUT
+            )
+            assert trigger_line, (
+                f"Step 9: 'Trigger started successfully' did not "
+                f"appear in the fresh app log within "
+                f"{SAFETY_TRIP_TIMEOUT} s of clicking Check. The "
+                f"laser never fired, so the test can't verify the "
+                f"safety interlock cleared. Likely causes: Check "
+                f"didn't actually click (panel calibration off), or "
+                f"contact-quality preflight stalled before reaching "
+                f"the trigger stage."
+            )
+            log.info(f"  laser fired: {trigger_line.strip()}")
+            log.info(
+                f"  grace window: waiting {POST_TRIGGER_SAFETY_GRACE_SEC} s "
+                f"to catch any late safety trip"
+            )
+            late_trip = _wait_for_safety_trip(POST_TRIGGER_SAFETY_GRACE_SEC)
+            assert late_trip is None, (
+                f"Step 9: 'Laser safety failure' appeared after the "
+                f"laser fired with forceLaserFail=false and a fresh "
+                f"power cycle: {late_trip.strip()}. Either the flag "
+                f"wasn't honoured on relaunch (check load_laser_params "
+                f"wiring) or the safety interlock didn't clear on the "
+                f"power cycle."
+            )
+            log.info(
+                "  PASS: clean state confirmed — laser fired without "
+                "tripping safety"
+            )
+
+        finally:
+            # ─── Step 10: restore both flags to their original values ─
+            # Always runs so the bench ends in the same configuration
+            # we found it. Log loudly but don't raise on cleanup
+            # failure — that would mask whatever real failure already
+            # broke the test.
+            log.info("=" * 60)
+            log.info(
+                f"Step 10 (cleanup): restoring forceLaserFail="
+                f"{original_force_laser_fail}, reducedMode="
+                f"{original_reduced_mode}"
+            )
+            log.info("=" * 60)
+            _kill_bloodflow_processes()
+            time.sleep(2)
+            write_app_config_value("forceLaserFail", original_force_laser_fail)
+            write_app_config_value("reducedMode", original_reduced_mode)
             _launch_app()
             if not _wait_for_app_window(timeout=30):
-                # Don't mask the original failure with a teardown one;
-                # log loudly but don't raise.
                 log.error(
                     "Cleanup failure: app window did not reappear "
-                    "after restore + power-cycle. Subsequent tests "
-                    "will likely fail until the app is relaunched "
-                    "manually."
+                    "after restore. Subsequent tests will likely fail "
+                    "until the app is relaunched manually."
                 )
                 return
             recalibrate_panel_buttons()
-            log.info("  cleanup complete; app is running with forceLaserFail=false")
-
-        # ─── Phase 4: verify clean state ──────────────────────────
-        log.info("=" * 60)
-        log.info(
-            f"Phase 4: verifying clean state (no 'Laser safety "
-            f"failure' line in app log over a {CLEAN_STATE_SETTLE_SEC}s "
-            f"window)"
-        )
-        log.info("=" * 60)
-        late_trip = _check_no_recent_safety_trip(CLEAN_STATE_SETTLE_SEC)
-        assert late_trip is None, (
-            f"'Laser safety failure' appeared in the app log after "
-            f"restoring forceLaserFail=false and power-cycling: "
-            f"{late_trip.strip() if late_trip else ''}. Either the "
-            f"flag wasn't honoured on relaunch (check load_laser_params "
-            f"wiring), or the safety interlock latched in hardware and "
-            f"a single power-cycle wasn't enough to clear it."
-        )
-        log.info("  PASS: clean state confirmed")
+            log.info("  cleanup complete; original config restored")

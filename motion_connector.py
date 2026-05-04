@@ -2026,6 +2026,33 @@ class MOTIONConnector(QObject):
             logger.warning("readSafetyStatus: no telemetry snapshot yet")
             return
         try:
+            # If the safety interlock chip didn't respond on this poll,
+            # ``safety_ok`` is the dataclass default ``True`` — not a
+            # verified clear signal. Treat the inability to verify
+            # safety as a safety failure itself: trip on the FIRST
+            # unknown poll, no streak required (issue #107). Telemetry
+            # polls at ~1 Hz, so a genuinely-clean chip will respond
+            # well before the user can issue a Check; a stuck chip
+            # surfaces immediately.
+            #
+            # Backward compat: snapshots from older SDK builds without
+            # ``safety_known`` keep the existing (less safe) behavior
+            # of trusting the default ``True``.
+            if not getattr(snap, "safety_known", True):
+                if not self._safetyFailure:
+                    fault_detail = (
+                        "safety interlock chip unresponsive — cannot "
+                        "verify laser safety state"
+                    )
+                    logger.error(f"Laser safety failure: {fault_detail}")
+                    self.safetyFailure = True
+                    self._fire_safety_notification(fault_detail)
+                    self.stopTrigger()
+                    self._laserOn = False
+                    self.laserStateChanged.emit()
+                    if self._capture_running and not self._safety_cancel_scheduled:
+                        self.safetyTripDuringCaptureRequested.emit()
+                return
             if snap.safety_ok:
                 if self._safetyFailure:
                     self.safetyFailure = False

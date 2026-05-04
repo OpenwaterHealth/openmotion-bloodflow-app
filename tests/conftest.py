@@ -152,19 +152,96 @@ def _find_exe() -> str:
 # ─────────────────────────────────────────────
 # Window helpers
 # ─────────────────────────────────────────────
+# Process names accepted as the bloodflow app. ``OpenWaterApp.exe`` is
+# the packaged build; ``python.exe`` / ``pythonw.exe`` covers the
+# from-source mode (verified by also checking ``main.py`` in the
+# command line, since plenty of other things run under python.exe).
+_APP_PROCESS_NAMES = ("openwaterapp.exe", "python.exe", "pythonw.exe")
+
+
+def _window_process_name(w) -> str | None:
+    """Return the lowercase exe name of the process owning window ``w``,
+    or ``None`` if the lookup fails. Uses the Win32 HWND→PID→psutil
+    chain — pygetwindow doesn't expose PID directly."""
+    hwnd = getattr(w, "_hWnd", None)
+    if hwnd is None:
+        return None
+    try:
+        import ctypes
+        pid = ctypes.c_ulong()
+        ctypes.windll.user32.GetWindowThreadProcessId(
+            hwnd, ctypes.byref(pid)
+        )
+        if pid.value == 0:
+            return None
+        return psutil.Process(pid.value).name().lower()
+    except Exception:
+        return None
+
+
+def _is_bloodflow_window(w) -> bool:
+    """True if window ``w`` is owned by the bloodflow app process.
+
+    Filtering on the OS-reported process name — rather than the title
+    string — catches the case where the user has File Explorer open
+    at ``C:\\Users\\...\\openmotion-bloodflow-app`` (title:
+    ``openmotion-bloodflow-app``) which incidentally matches
+    APP_KEYWORDS. ensure_visible would otherwise activate Explorer,
+    every subsequent pixel-coord click would land inside it, and the
+    user sees the test "bringing up another application and clicking
+    around inside it".
+    """
+    title = (w.title or "").strip()
+    if not title:
+        return False
+    proc_name = _window_process_name(w)
+    if proc_name is None:
+        # Process lookup failed; fall back to the old keyword check
+        # rather than locking out tests on systems where the Win32
+        # call is unavailable (CI containers etc).
+        return any(k in title.lower() for k in APP_KEYWORDS)
+    if proc_name not in _APP_PROCESS_NAMES:
+        return False
+    if proc_name in ("python.exe", "pythonw.exe"):
+        # In from-source mode several python.exe windows can co-exist
+        # (e.g. the pytest runner itself). Disambiguate by command line.
+        try:
+            hwnd = getattr(w, "_hWnd", None)
+            if hwnd is None:
+                return False
+            import ctypes
+            pid = ctypes.c_ulong()
+            ctypes.windll.user32.GetWindowThreadProcessId(
+                hwnd, ctypes.byref(pid)
+            )
+            cmdline = " ".join(psutil.Process(pid.value).cmdline()).lower()
+            return "main.py" in cmdline and "openmotion-bloodflow-app" in cmdline
+        except Exception:
+            return False
+    return True
+
+
 def ensure_visible():
-    """Bring the app window to the foreground."""
+    """Bring the bloodflow app window to the foreground.
+
+    Identifies the right window by owning-process name (OpenWaterApp.exe
+    or python main.py with the bloodflow project on the command line),
+    so a sibling File Explorer window pointed at the project folder
+    can't masquerade as the app. Otherwise every subsequent
+    pixel-coord click would land inside Explorer.
+    """
     for w in gw.getAllWindows():
-        if any(k in w.title.lower() for k in APP_KEYWORDS):
-            try:
-                if w.isMinimized:
-                    w.restore()
-                    time.sleep(2)
-                w.activate()
-                time.sleep(1)
-            except Exception:
-                pass
-            return True
+        if not _is_bloodflow_window(w):
+            continue
+        try:
+            if w.isMinimized:
+                w.restore()
+                time.sleep(2)
+            w.activate()
+            time.sleep(1)
+        except Exception:
+            pass
+        return True
     return False
 
 
@@ -202,9 +279,14 @@ def uia_window(retries: int = 3):
 
 
 def get_app_window():
-    """Return a pygetwindow Window object for the app."""
+    """Return a pygetwindow Window object for the bloodflow app.
+
+    Uses the same owning-process filter as ``ensure_visible`` so we
+    never return a File Explorer / browser / shell window that
+    incidentally matches APP_KEYWORDS.
+    """
     for w in gw.getAllWindows():
-        if any(k in w.title.lower() for k in APP_KEYWORDS):
+        if _is_bloodflow_window(w):
             return w
     raise RuntimeError("App window not found")
 
