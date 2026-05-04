@@ -465,62 +465,61 @@ def _toggle_auto_scale_on():
         f"  Auto-scale label not found; first 40 UIA texts: "
         f"{seen_texts[:40]}"
     )
-    # The previous Tab+Space fallback assumed the first ComboBox in
-    # Settings was Time Window, which is only true in reduced mode. In
-    # non-reduced mode the first ComboBox is Default Camera Left Sensor
-    # — Tab+Space then opens the Right Sensor dropdown, leaves the
-    # modal in a weird focus state, and (more dangerously) the next
-    # spurious Space could cycle the Reduced Mode Enable PillSwitch
-    # if focus has drifted. Either way the Auto-scale toggle didn't
-    # actually flip.
+    # Tab+Space fallback. The danger this fallback used to court was
+    # firing in non-reduced-mode Settings, where the first ComboBox is
+    # Default Camera Left Sensor (not Time Window) and Tab from there
+    # lands on Right Sensor — Space then opened a sensor dropdown
+    # instead of toggling Auto-scale, with cascading state corruption.
     #
-    # Only fall back when we can ANCHOR on the Time Window ComboBox
-    # specifically (its label "Time window" is reachable via UIA even
-    # when the PillSwitch isn't). If we can't, fail loudly rather than
-    # blindly Tab+Space-ing into whatever currently has focus.
-    log.info("  Label search missed; trying anchored Time Window → Tab → Space")
+    # Anchoring on the "Time window" label doesn't work either: Qt's
+    # accessibility bridge does not expose FieldRow labels (plain QML
+    # Text) as descendants() titles. Iteration 2 confirmed this — the
+    # title query returned nothing in a real reduced-mode Settings
+    # modal, and the test failed even though Tab+Space would have
+    # worked correctly there.
+    #
+    # The reliable discriminator is ComboBox count:
+    #   - reduced-mode Settings  → 1 ComboBox  (Time Window)
+    #   - non-reduced Settings   → 3 ComboBoxes (Default Camera Left,
+    #     Default Camera Right, Time Window)
+    # Only fire Tab+Space when count == 1; that's the only case where
+    # first-ComboBox = Time Window and the next focusable is the
+    # Auto-scale PillSwitch.
+    log.info("  Label search missed; checking ComboBox count to safely Tab+Space")
     try:
-        time_window_label = None
-        for elem in win.descendants(title="Time window"):
-            time_window_label = elem
-            break
-        if time_window_label is None:
-            for t in seen_texts:
-                if t.lower().strip() == "time window":
-                    log.info("  'Time window' present in UIA texts but title query missed")
-                    break
-            raise RuntimeError("'Time window' label not findable via UIA title query")
-
-        # Click ~half-width right of the label — that's where the
-        # StyledCombo sits in the FieldRow layout.
-        rect = time_window_label.rectangle()
-        label_cy = (rect.top + rect.bottom) // 2
-        w = get_app_window()
-        combo_x = int(w.left + 0.43 * w.width)
-        log.info(f"  Clicking Time Window ComboBox at ({combo_x}, {label_cy})")
-        pyautogui.click(combo_x, label_cy)
-        time.sleep(0.3)
-        # Close any popup the click may have opened, then Tab to
-        # land on the next focusable item (Auto-scale PillSwitch in
-        # reduced mode), Space to flip.
-        pyautogui.press("escape")
-        time.sleep(0.2)
-        pyautogui.press("tab")
-        time.sleep(0.2)
-        pyautogui.press("space")
-        time.sleep(SLEEP)
-        log.info("  Anchored fallback engaged Auto-scale toggle")
-        return
+        cbs = win.descendants(control_type="ComboBox")
     except Exception as e:
-        log.warning(f"  Anchored Time Window fallback failed: {e}")
+        cbs = []
+        log.warning(f"  ComboBox enumeration failed: {e}")
+
+    if len(cbs) == 1:
+        log.info(
+            "  Settings modal exposes 1 ComboBox → reduced-mode layout "
+            "confirmed; firing Tab+Space from Time Window"
+        )
+        try:
+            rect = cbs[0].rectangle()
+            cx = (rect.left + rect.right) // 2
+            cy = (rect.top + rect.bottom) // 2
+            pyautogui.click(cx, cy)
+            time.sleep(0.3)
+            pyautogui.press("tab")
+            time.sleep(0.2)
+            pyautogui.press("space")
+            time.sleep(SLEEP)
+            log.info("  Tab+Space (count-guarded) engaged Auto-scale toggle")
+            return
+        except Exception as e:
+            log.warning(f"  count-guarded Tab+Space failed: {e}")
 
     raise RuntimeError(
-        "Could not locate the Auto-scale Y-axes toggle. Both the UIA "
-        "label search and the anchored Time Window fallback failed; "
-        "see the WARNING above for the UIA text dump. Refusing to "
-        "blindly Tab+Space — that path historically toggled the wrong "
-        "PillSwitch and pushed the running app into reduced mode, "
-        "which hid Scan Settings for every downstream test."
+        f"Could not locate the Auto-scale Y-axes toggle. Label search "
+        f"missed, and the Tab+Space fallback was refused because "
+        f"Settings exposes {len(cbs)} ComboBox(es) — only 1 is safe "
+        f"(reduced-mode layout: Time Window first, Auto-scale PillSwitch "
+        f"on Tab). {len(cbs)} ComboBoxes means the modal is in "
+        f"non-reduced layout and Tab+Space would target the wrong "
+        f"control. See the WARNING above for the UIA text dump."
     )
 
 
