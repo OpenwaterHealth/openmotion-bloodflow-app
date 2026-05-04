@@ -51,6 +51,7 @@ from conftest import (
     read_combobox_values,
     require_focus,
     uia_window,
+    wait_for_combobox,
 )
 from hil_helpers import (
     RE_CONNECTED,
@@ -164,15 +165,19 @@ def _check_scan_finished():
 
 
 def _click_combobox(combobox_index: int):
-    """Click a ComboBox by its index in the UIA tree (0=Left, 1=Right)."""
+    """Click a ComboBox by its index in the UIA tree (0=Left, 1=Right).
+
+    Polls via shared ``wait_for_combobox`` helper so a brief Qt-a11y
+    bridge lag right after Scan Settings opens doesn't fail the test.
+    """
     ensure_visible()
-    time.sleep(0.2)
-    win = uia_window()
-    cbs = win.descendants(control_type="ComboBox")
-    assert len(cbs) > combobox_index, (
-        f"Expected at least {combobox_index + 1} ComboBox(es), found {len(cbs)}"
+    elem = wait_for_combobox(combobox_index, timeout=15)
+    assert elem is not None, (
+        f"ComboBox[{combobox_index}] not visible in Scan Settings "
+        f"after polling 15 s — Qt accessibility bridge may not be "
+        f"reflecting modal contents on this runner."
     )
-    click_element_center(cbs[combobox_index], f"ComboBox[{combobox_index}]")
+    click_element_center(elem, f"ComboBox[{combobox_index}]")
 
 
 def _select_all_by_mouse(combobox_index: int, side: str):

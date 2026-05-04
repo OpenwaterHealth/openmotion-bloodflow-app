@@ -73,63 +73,28 @@ def _close_settings():
     time.sleep(SLEEP)
 
 
-def _scroll_button_into_view(win, btn, max_wheel_steps: int = 30) -> None:
-    """Mouse-wheel-scroll the Settings modal until ``btn``'s rectangle
-    lies inside the app window's visible area. The Calibration section
-    sits near the bottom of Settings (just above About), so on most
-    screen sizes it starts off-viewport when the modal opens.
-
-    Two-sided convergence: if the button's bottom is below the window
-    we scroll down; if the top is above we scroll up; otherwise we're
-    in view and bail. The previous one-sided ``cy > win.bottom`` check
-    oscillated around the window boundary because crossing the center
-    flipped the direction even when the button hadn't fully entered.
-    The scroll step is also small (3 wheel clicks at a time) so an
-    overshoot is recoverable rather than a half-modal lurch.
-    """
-    import pyautogui
-    win_rect = win.rectangle()
-    modal_cx = (win_rect.left + win_rect.right) // 2
-    modal_cy = (win_rect.top + win_rect.bottom) // 2
-    pyautogui.moveTo(modal_cx, modal_cy, duration=0.1)
-    for _ in range(max_wheel_steps):
-        rect = btn.rectangle()
-        if rect.bottom > win_rect.bottom:
-            pyautogui.scroll(-3)   # see lower content
-        elif rect.top < win_rect.top:
-            pyautogui.scroll(3)    # see higher content
-        else:
-            return
-        time.sleep(0.25)           # let UIA refresh its rect cache
-
-
 def _click_run_calibration():
-    """Click the 'Run Calibration' ActionButton inside the Settings modal."""
-    import pyautogui
+    """Invoke the 'Run Calibration' ActionButton inside the Settings modal.
+
+    The Calibration section lives near the bottom of Settings (just
+    above About), so the button is typically scrolled out of the
+    viewport when the modal opens. UIA's BoundingRectangle for items
+    clipped by a QML ScrollView is unreliable — it reports the logical
+    position within the scrollable content, NOT the on-screen position
+    — so coord-based clicking either misses or hits the desktop. The
+    ScrollView clips the visible cursor too: even if we wheel the
+    content into view, pyautogui's click reads pre-scroll coords.
+
+    Use UIA's InvokePattern instead. pywinauto's ``Button.click()``
+    routes to Invoke() on UIA backends, which fires the button
+    regardless of whether it's currently on screen.
+    """
     win = uia_window()
     btn = win.child_window(title="Run Calibration", control_type="Button")
     if not btn.exists(timeout=2):
         raise RuntimeError("Could not find 'Run Calibration' button in the Settings modal")
-    _scroll_button_into_view(win, btn)
-    # Re-read the rect immediately before clicking. The scroll loop
-    # exits as soon as UIA reports the button is in the visible area;
-    # this snapshot is the freshest screen position we have.
-    rect = btn.rectangle()
-    cx = (rect.left + rect.right) // 2
-    cy = (rect.top + rect.bottom) // 2
-    win_rect = win.rectangle()
-    if not (win_rect.left <= cx <= win_rect.right
-            and win_rect.top <= cy <= win_rect.bottom):
-        raise RuntimeError(
-            f"'Run Calibration' resolved to ({cx}, {cy}), which is outside "
-            f"the app window rect ({win_rect.left}, {win_rect.top})-"
-            f"({win_rect.right}, {win_rect.bottom}). Likely a stale UIA "
-            f"rect after scrolling — pyautogui would click on the desktop "
-            f"and the scan would never start."
-        )
-    log.info(f"  click 'Run Calibration' at ({cx}, {cy})")
-    pyautogui.moveTo(cx, cy, duration=0.3)
-    pyautogui.click(cx, cy)
+    log.info("  invoking 'Run Calibration' via UIA")
+    btn.click()
     time.sleep(SLEEP)
 
 

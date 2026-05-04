@@ -160,48 +160,37 @@ class TestScanSettings:
         """The 'User Label:' field (formerly 'Session') is rendered in
         the modal header. Verifies the label text is reachable via UIA.
 
-        Polls for up to 10 seconds because Qt's accessibility bridge
-        sometimes lags reflecting modal contents on the self-hosted
-        runner. On final timeout, dumps the first 30 UIA texts seen
-        for post-mortem diagnostics.
+        Uses a targeted ``descendants(title=...)`` query rather than an
+        unfiltered descendants walk — Qt's accessibility bridge surfaces
+        plain QML Text/TextField items inconsistently in unfiltered
+        walks but reliably resolves them via title-keyed lookup.
+
+        Polls for up to 10 seconds because the bridge can lag for a
+        beat after the modal opens.
         """
         require_focus()
         pyautogui.press("tab")   # enter modal — focus first interactive element
         time.sleep(0.5)
 
         deadline = time.time() + 10.0
-        last_seen: list[str] = []
         while time.time() < deadline:
             try:
                 win = uia_window()
-                texts = []
-                for elem in win.descendants():
-                    try:
-                        txt = (elem.window_text() or "").strip()
-                    except Exception:
-                        continue
-                    if not txt:
-                        continue
-                    texts.append(txt)
-                    if txt in ("User Label:", "User Label"):
-                        log.info("  'User Label' label rendered in modal")
+                for title in ("User Label:", "User Label"):
+                    if win.descendants(title=title):
+                        log.info(f"  '{title}' label rendered in modal")
                         return
-                last_seen = texts
             except Exception as e:
                 log.warning(f"  UIA probe failed: {e}")
             time.sleep(1)
 
-        log.warning(
-            f"  test_03_user_label diagnostic — first 30 UIA texts "
-            f"seen in window: {last_seen[:30]}"
-        )
         pytest.fail(
             "'User Label' text not found in scan-settings modal after "
-            "polling 10 s. The label was renamed from 'Session' to "
-            "'User Label' in ScanSettingsModal.qml — UIA should expose "
-            "the Text element. See diagnostic dump above for what UIA "
-            "*did* see; if the modal contents aren't there, this is a "
-            "Qt-accessibility-bridge issue, not a label-rename issue."
+            "polling 10 s via targeted descendants(title=...) query. "
+            "The label was renamed from 'Session' to 'User Label' in "
+            "ScanSettingsModal.qml — if it's missing here, either the "
+            "rename was reverted or the Qt accessibility bridge is no "
+            "longer surfacing the field."
         )
 
     def test_04_user_label_value_present(self, app):
