@@ -214,20 +214,44 @@ def _restart_app(label: str) -> None:
 # ─────────────────────────────────────────────
 # Settings modal manipulation
 # ─────────────────────────────────────────────
-def _scroll_modal_to_bottom() -> None:
-    """Scroll the active modal's content all the way down. The
-    Developer section sits at the bottom of Settings, so we need to
-    bring its labels into view before walking UIA to find them."""
+def _scroll_until_label_visible(
+    needle: str,
+    max_passes: int = 12,
+    scroll_per_pass: int = 200,
+) -> bool:
+    """Scroll the modal under the cursor down until ``needle`` (case-
+    insensitive) shows up in the UIA descendants list, OR we've made
+    ``max_passes`` × ``scroll_per_pass`` worth of wheel ticks without
+    finding it.
+
+    The Settings modal is *long* (Sensor Placement, Default Camera,
+    Data Output, Realtime Plot Display, Manual Plot Bounds, Reduced
+    Mode, Appearance, Developer, Calibration, About). On the bench
+    the Developer section was sitting well past 5 × scroll(-50)
+    worth of ticks, so we poll: scroll a chunk, check if the label
+    is now reachable via UIA, repeat. Returns True on success,
+    False on timeout (caller decides whether to fail).
+    """
     ensure_visible()
     w = get_app_window()
     cx = w.left + w.width // 2
     cy = w.top + w.height // 2
     pyautogui.moveTo(cx, cy, duration=0.2)
-    for _ in range(5):
-        pyautogui.scroll(-50)
-        time.sleep(0.3)
-    time.sleep(0.5)
-    log.info("  Settings modal scrolled to bottom")
+    for i in range(max_passes):
+        if _find_label_rect(needle) is not None:
+            log.info(f"  '{needle}' visible after {i} scroll pass(es)")
+            return True
+        pyautogui.scroll(-scroll_per_pass)
+        time.sleep(0.4)
+    # One last check after the final scroll
+    if _find_label_rect(needle) is not None:
+        log.info(f"  '{needle}' visible after {max_passes} scroll pass(es)")
+        return True
+    log.warning(
+        f"  '{needle}' still not visible after {max_passes} × "
+        f"scroll({scroll_per_pass}) ticks"
+    )
+    return False
 
 
 def _find_label_rect(needle: str):
@@ -529,7 +553,16 @@ class TestRawCsvSave:
             log.info("=" * 60)
             click_panel("Settings")
             time.sleep(SLEEP)
-            _scroll_modal_to_bottom()  # Developer section is at the bottom
+            # Developer section is at the bottom of a long modal.
+            # Scroll until the label is reachable via UIA — fail
+            # loudly if it never appears (developer-mode flag not
+            # applied, or Settings modal didn't actually open).
+            assert _scroll_until_label_visible("Save raw CSV"), (
+                "Could not bring 'Save raw CSV' label into view after "
+                "scrolling the Settings modal. Either the modal didn't "
+                "open, the Developer section is hidden (developerMode "
+                "flag not applied?), or the label was renamed."
+            )
             _toggle_raw_csv_save_on()
             _set_raw_csv_duration_sec(RAW_CSV_DURATION_SEC)
             require_focus_via_ensure_visible()
@@ -653,23 +686,21 @@ class TestRawCsvSave:
             log.info("  PASS: all three CSVs span their expected durations")
 
         finally:
-            # ─── Step 9 (cleanup): restore original config ───────────
+            # ─── Step 9 (cleanup): restore original config on disk ───
+            # No kill / relaunch needed: the running app already
+            # consumed our config (writeRawCsv / rawCsvDurationSec /
+            # dataDirectory take effect immediately via the connector
+            # slots; developerMode / reducedMode were captured at
+            # launch and won't change for THIS app instance regardless
+            # of what we write back). Whatever runs next is responsible
+            # for its own kill+relaunch if it needs the disk values
+            # honoured at startup.
             log.info("=" * 60)
             log.info(
-                f"Step 9 (cleanup): restoring original config: {original}"
+                f"Step 9 (cleanup): restoring original config to disk: "
+                f"{original}"
             )
             log.info("=" * 60)
-            _kill_bloodflow_processes()
-            time.sleep(2)
             for key, value in original.items():
                 write_app_config_value(key, value)
-            _launch_app()
-            if not _wait_for_app_window(timeout=30):
-                log.error(
-                    "Cleanup failure: app window did not reappear after "
-                    "config restore. Subsequent tests will likely fail "
-                    "until the app is relaunched manually."
-                )
-                return
-            recalibrate_panel_buttons()
             log.info("  cleanup complete; original config restored")
