@@ -221,44 +221,98 @@ def click_sidebar(rx: float, ry: float, label: str = ""):
     time.sleep(SLEEP)
 
 
-def click_by_name(name: str):
-    """Find a UI element by its visible label via UIA, then click its center."""
-    ensure_visible()
-    win = uia_window()
-    log.info(f"  find by name: '{name}'")
+def click_by_name(name: str, timeout: float = 8.0):
+    """Find a UI element by its visible label via UIA, then click it.
 
-    # Search entire tree first (finds disabled buttons too)
-    try:
-        matches = win.descendants(title=name)
-        if matches:
-            elem = matches[0]
+    Polls for up to ``timeout`` seconds. The UIA tree can lag for a
+    second or two after a foreground change (e.g. the matplotlib plot
+    window closing and focus returning to the bloodflow app), so a
+    one-shot lookup is too brittle — TestHistory.test_05 hit exactly
+    that race when "Visualize Contrast/Mean" was queried right after
+    Alt+F4'ing the BFI/BVI plot.
+
+    Lookup order on each poll iteration:
+      1. ``descendants(title=name, control_type="Button")`` — the
+         common case. Filters out duplicate Text/Group nodes that may
+         shadow the actual clickable button.
+      2. ``descendants(title=name)`` — broader fallback for non-Button
+         elements (TextField, Custom, etc.).
+      3. ``child_window(title=name, control_type=...)`` walked across
+         a handful of control types, with the bottom of the timeout
+         budget — last-resort.
+
+    Clicks via UIA's InvokePattern (``elem.click_input()`` style isn't
+    used because it relies on the pixel position, which can be wrong
+    for ScrollView-clipped items; ``elem.invoke()`` fires the button
+    regardless of position). Falls back to a pixel click for elements
+    that don't expose Invoke (TextField, Group, etc.).
+    """
+    ensure_visible()
+    log.info(f"  find by name: '{name}' (timeout {timeout:.1f}s)")
+    deadline = time.monotonic() + timeout
+    last_err = None
+
+    def _try_click(elem, source: str) -> bool:
+        try:
+            try:
+                elem.invoke()  # UIA InvokePattern — coord-free
+                log.info(f"     invoked via {source} (UIA)")
+                time.sleep(SLEEP)
+                return True
+            except Exception:
+                pass
             rect = elem.rectangle()
             cx = (rect.left + rect.right) // 2
             cy = (rect.top + rect.bottom) // 2
-            log.info(f"     found via descendants  center=({cx}, {cy})")
+            log.info(f"     {source}  click center=({cx}, {cy})")
             pyautogui.moveTo(cx, cy, duration=0.3)
             pyautogui.click(cx, cy)
             time.sleep(SLEEP)
-            return
-    except Exception as e:
-        log.warning(f"     descendants search failed: {e}")
+            return True
+        except Exception as e:
+            log.warning(f"     click via {source} failed: {e}")
+            return False
 
-    # Fallback: child_window per control type
-    for ct in ["Button", "Custom", "Text", "Group", "ListItem", "Pane"]:
+    while time.monotonic() < deadline:
         try:
-            elem = win.child_window(title=name, control_type=ct)
-            if elem.exists(timeout=2):
-                rect = elem.rectangle()
-                cx = (rect.left + rect.right) // 2
-                cy = (rect.top + rect.bottom) // 2
-                log.info(f"     found control_type='{ct}'  center=({cx}, {cy})")
-                pyautogui.moveTo(cx, cy, duration=0.3)
-                pyautogui.click(cx, cy)
-                time.sleep(SLEEP)
-                return
-        except Exception:
-            continue
-    raise RuntimeError(f"Could not find '{name}' via UI Automation")
+            win = uia_window()
+            try:
+                matches = win.descendants(title=name, control_type="Button")
+                if matches and _try_click(matches[0], "descendants(Button)"):
+                    return
+            except Exception as e:
+                last_err = e
+
+            try:
+                matches = win.descendants(title=name)
+                if matches and _try_click(matches[0], "descendants"):
+                    return
+            except Exception as e:
+                last_err = e
+        except Exception as e:
+            last_err = e
+        time.sleep(0.5)
+
+    # Final last-resort: child_window walked across control types,
+    # with a short per-CT timeout. Only reached if every poll above
+    # failed — covers oddly-typed elements that descendants misses.
+    try:
+        win = uia_window()
+        for ct in ("Button", "Custom", "Text", "Group", "ListItem", "Pane"):
+            try:
+                elem = win.child_window(title=name, control_type=ct)
+                if elem.exists(timeout=1):
+                    if _try_click(elem, f"child_window(ct={ct})"):
+                        return
+            except Exception:
+                continue
+    except Exception as e:
+        last_err = e
+
+    raise RuntimeError(
+        f"Could not find '{name}' via UI Automation after {timeout:.1f}s "
+        f"(last error: {last_err!r})"
+    )
 
 
 def wait_with_log(total_seconds: int, label: str):
@@ -308,6 +362,38 @@ def read_combobox_values():
         log.warning(f"  read_combobox_values failed: {e}")
     log.info(f"  ComboBox values: {results}")
     return results
+
+
+def wait_for_combobox(idx: int, timeout: float = 15.0):
+    """Poll UIA up to ``timeout`` seconds for at least ``idx + 1``
+    ComboBoxes to appear in the app window. Returns the matching
+    ComboBox element on success, or ``None`` on timeout.
+
+    Same pattern as ``test_history._wait_for_combobox`` — promoted
+    here so every test that opens Scan Settings can share it. The
+    Qt accessibility bridge can take a couple of seconds to expose
+    modal contents on the self-hosted runner; a one-shot
+    ``descendants(control_type="ComboBox")`` query right after
+    ``click_panel("Scan\\nSettings")`` returns ``[]`` and the calling
+    test bails with "Expected at least 1 ComboBox(es), found 0".
+    """
+    deadline = time.monotonic() + timeout
+    last_count = -1
+    while time.monotonic() < deadline:
+        ensure_visible()
+        try:
+            cbs = uia_window().descendants(control_type="ComboBox")
+        except Exception:
+            cbs = []
+        if len(cbs) > idx:
+            return cbs[idx]
+        if len(cbs) != last_count:
+            log.info(
+                f"  waiting for ComboBox[{idx}]... currently {len(cbs)} visible"
+            )
+            last_count = len(cbs)
+        time.sleep(0.5)
+    return None
 
 
 def get_clipboard() -> str:

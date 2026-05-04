@@ -42,6 +42,7 @@ from conftest import (
     read_combobox_values,
     require_focus,
     uia_window,
+    wait_for_combobox,
 )
 from hil_helpers import (
     RE_CONNECTED,
@@ -114,14 +115,16 @@ RE_STARTING_TRIGGER = re.compile(r"Starting trigger")
 # Helpers
 # ─────────────────────────────────────────────
 def _click_combobox(combobox_index: int):
+    """Click a Scan Settings ComboBox by tree index, polling for the
+    Qt accessibility bridge to expose modal contents."""
     ensure_visible()
-    time.sleep(0.2)
-    win = uia_window()
-    cbs = win.descendants(control_type="ComboBox")
-    assert len(cbs) > combobox_index, (
-        f"Expected at least {combobox_index + 1} ComboBox(es), found {len(cbs)}"
+    elem = wait_for_combobox(combobox_index, timeout=15)
+    assert elem is not None, (
+        f"ComboBox[{combobox_index}] not visible in Scan Settings "
+        f"after polling 15 s — Qt accessibility bridge may not be "
+        f"reflecting modal contents on this runner."
     )
-    click_element_center(cbs[combobox_index], f"ComboBox[{combobox_index}]")
+    click_element_center(elem, f"ComboBox[{combobox_index}]")
 
 
 def _select_sensor_by_mouse(combobox_index: int, side: str, option: str):
