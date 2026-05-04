@@ -307,6 +307,70 @@ class TestForceLaserFail:
             )
             log.info(f"  PASS: safety trip detected: {trip_line.strip()}")
 
+            # ─── Phase 2.5: relaunch (no power-cycle) and re-detect ──
+            # Issue #107: closing and reopening the app after a safety
+            # failure must surface the failure again on the second
+            # launch. The hardware safety latch persists across USB
+            # disconnect/reconnect (the safety chip stays tripped until
+            # the console is power-cycled), so the telemetry reader
+            # thread should see the same fault state on the next poll
+            # cycle and re-fire the persistent toast — without any
+            # state being persisted to ``app_config.json``.
+            #
+            # Verifies by tailing the FRESH app log (each launch
+            # rotates the file) for the same 'Laser safety failure:'
+            # ERROR line that Phase 2 watched for.
+            log.info("=" * 60)
+            log.info(
+                "Phase 2.5: relaunching WITHOUT power-cycle, expecting "
+                "safety failure to re-surface from latched hardware"
+            )
+            log.info("=" * 60)
+            _kill_bloodflow_processes()
+            time.sleep(2)
+            # Leave forceLaserFail=true on disk; even if a non-latched
+            # safety chip needed a re-trigger, the relaunched app
+            # would still load the fault params and trip again. The
+            # primary expectation is that the latched hardware state
+            # is observed directly without needing a re-trigger.
+            _launch_app()
+            assert _wait_for_app_window(timeout=30), (
+                "App window did not appear after Phase 2.5 relaunch"
+            )
+            recalibrate_panel_buttons()
+            connect_line = _wait_for_connect(timeout=APP_CONNECT_TIMEOUT)
+            assert connect_line, (
+                f"App did not reach CONNECTED state within "
+                f"{APP_CONNECT_TIMEOUT}s after Phase 2.5 relaunch"
+            )
+            log.info(f"  reconnected: {connect_line}")
+            log.info(
+                f"  waiting up to {SAFETY_TRIP_TIMEOUT}s for the "
+                f"'Laser safety failure' line in the fresh app log "
+                f"(no Check click — telemetry should observe the "
+                f"latched fault on its own)..."
+            )
+            second_trip = _wait_for_safety_trip(SAFETY_TRIP_TIMEOUT)
+            assert second_trip, (
+                f"Issue #107 reproduction: 'Laser safety failure' "
+                f"did not appear in the SECOND-launch app log within "
+                f"{SAFETY_TRIP_TIMEOUT}s. The safety chip's fault "
+                f"latch should still be tripped after a USB "
+                f"disconnect/reconnect, and the telemetry reader "
+                f"thread should observe it on the first poll cycle "
+                f"and fire the persistent laser-safety toast — even "
+                f"without any state written to app_config.json. If "
+                f"this fails, either the SDK silently defaulted "
+                f"safety_ok=True when the chip didn't respond, or "
+                f"the chip cleared its latch on USB reset (in which "
+                f"case the detection has to come from a different "
+                f"signal)."
+            )
+            log.info(
+                f"  PASS: second-launch safety trip detected: "
+                f"{second_trip.strip()}"
+            )
+
         finally:
             # ─── Phase 3 (always): restore flag, power-cycle, relaunch ─
             log.info("=" * 60)

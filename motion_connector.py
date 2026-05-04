@@ -57,6 +57,15 @@ R_s = 0.020  # (R217)
 TEC_VOLTAGE_DEFAULT = -0.07  # volts (DVT1a=-0.07, EVT2=1.16)
 DATA_ACQ_INTERVAL = 1.0
 
+# Number of consecutive telemetry snapshots that come back with
+# ``safety_known=False`` (interlock chip didn't respond) before we
+# treat the inability to verify safety as a safety failure. The
+# poller runs at ~1 Hz, so 5 ≈ 5 s — long enough to ride out the
+# common one-off USB-reconnect race after app launch, short enough
+# that a genuinely stuck chip surfaces in the UI well before the
+# user attempts a scan. See issue #107.
+_SAFETY_UNKNOWN_TRIP_COUNT = 5
+
 # Contact-quality quick-check defaults (overridable via app_config keys
 # cq_dark_threshold_per_camera / cq_light_threshold_per_camera /
 # cq_rolling_avg_window).
@@ -357,6 +366,12 @@ class MOTIONConnector(QObject):
         self._config_running = False
         self._laserOn = False
         self._safetyFailure = False
+        # Consecutive snapshots where ``safety_known`` was False (the
+        # safety interlock chip did not respond on I2C). When this hits
+        # ``_SAFETY_UNKNOWN_TRIP_COUNT`` we treat the inability to
+        # verify safety as a safety failure itself — see issue #107.
+        # Reset to 0 on every snapshot that DOES come back known.
+        self._safety_unknown_streak = 0
         self._running = False
         self._trigger_state = "OFF"
         self._state = DISCONNECTED
@@ -2026,6 +2041,49 @@ class MOTIONConnector(QObject):
             logger.warning("readSafetyStatus: no telemetry snapshot yet")
             return
         try:
+            # If the safety interlock chip didn't respond, ``safety_ok``
+            # is the dataclass default ``True`` — not a verified clear
+            # signal. Track consecutive unknown snapshots; if the chip
+            # stays silent past ``_SAFETY_UNKNOWN_TRIP_COUNT`` polls,
+            # treat the inability to verify safety as a safety failure
+            # itself (issue #107). Until then, just preserve the last
+            # known state — riding out the common one-off USB-reconnect
+            # race that produces a single unknown snapshot.
+            #
+            # Backward compat: snapshots from older SDK builds without
+            # ``safety_known`` keep the existing (less safe) behavior
+            # of trusting the default.
+            if not getattr(snap, "safety_known", True):
+                self._safety_unknown_streak += 1
+                logger.warning(
+                    "readSafetyStatus: safety chip unresponsive "
+                    "(safety_known=False, streak=%d/%d) — preserving "
+                    "last known _safetyFailure=%s",
+                    self._safety_unknown_streak,
+                    _SAFETY_UNKNOWN_TRIP_COUNT,
+                    self._safetyFailure,
+                )
+                if (
+                    self._safety_unknown_streak >= _SAFETY_UNKNOWN_TRIP_COUNT
+                    and not self._safetyFailure
+                ):
+                    fault_detail = (
+                        f"safety interlock chip unresponsive for "
+                        f"{self._safety_unknown_streak} consecutive "
+                        f"polls — cannot verify laser safety state"
+                    )
+                    logger.error(f"Laser safety failure: {fault_detail}")
+                    self.safetyFailure = True
+                    self._fire_safety_notification(fault_detail)
+                    self.stopTrigger()
+                    self._laserOn = False
+                    self.laserStateChanged.emit()
+                    if self._capture_running and not self._safety_cancel_scheduled:
+                        self.safetyTripDuringCaptureRequested.emit()
+                return
+            # Chip responded — reset the unknown streak so a future
+            # outage starts counting fresh.
+            self._safety_unknown_streak = 0
             if snap.safety_ok:
                 if self._safetyFailure:
                     self.safetyFailure = False
