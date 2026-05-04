@@ -3201,6 +3201,36 @@ class MOTIONConnector(QObject):
         self.calibrationStateChanged.emit()
         self.captureLog.emit("Calibration: starting…")
 
+        # Issue #108: apply laser-power params to the firmware before
+        # calibration runs. The normal scan chain does this via
+        # SetTriggerLaserTask in QML (after FlashSensorsTask, before
+        # the actual scan), but the calibration path goes directly
+        # from runCalibration → SDK CalibrationWorkflow and skips that
+        # chain entirely. On a cold start — when no scan or Check has
+        # programmed the laser channels yet — the calibration scan
+        # would fire its trigger over an unprogrammed laser, every
+        # camera would see only dark, and phase 1 would abort with
+        # 'zero or negative aggregate'. Applying the params here is
+        # idempotent; runs that already had a scan kick the same
+        # values back in without harm.
+        try:
+            ok = self.set_laser_power_from_config(self._interface)
+            if not ok:
+                logger.warning(
+                    "runCalibration: set_laser_power_from_config "
+                    "returned False — proceeding anyway, but the "
+                    "calibration scan will likely abort with "
+                    "'zero or negative aggregate' if this is a cold "
+                    "start. See issue #108."
+                )
+            else:
+                logger.info("runCalibration: laser params applied")
+        except Exception as e:
+            logger.error(
+                "runCalibration: applying laser params raised: %s — "
+                "proceeding anyway", e
+            )
+
         started = self._interface.start_calibration(
             req,
             on_log_fn=lambda msg: self.captureLog.emit(msg),
