@@ -52,14 +52,31 @@ from hil_helpers import (
     RE_CONNECTED,
     click_panel,
     find_app_log,
+    force_app_config_value,
     log_size,
     recalibrate_panel_buttons,
     wait_for_pattern,
+    write_app_config_value,
 )
 
 pytestmark = pytest.mark.release
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "app_config.json"
+
+# This test drives the Check button to fire the laser, which only
+# exists on the sidebar in non-reduced mode (ButtonPanel.qml line 166
+# gates Check on ``visible: !panel.reducedMode``). Force ``reducedMode
+# = false`` on disk at module-import time so the relaunched app boots
+# with the Check button visible; restore the original value on
+# teardown via the autouse fixture below. Mirrors the pattern in
+# test_history / test_scan_settings / test_scan_auto_stop_bug.
+_INITIAL_REDUCED_MODE = force_app_config_value("reducedMode", False)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _restore_reduced_mode_on_module_teardown():
+    yield
+    write_app_config_value("reducedMode", _INITIAL_REDUCED_MODE)
 
 # When the interlock trips, motion_connector logs a single ERROR
 # line at the safety-status check site (line ~1984) before firing
