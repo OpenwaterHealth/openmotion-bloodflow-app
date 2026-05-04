@@ -277,52 +277,160 @@ def _find_label_rect(needle: str):
     return None
 
 
-# Window-relative X for the Settings modal's first FieldRow control
-# slot. Empirically derived in test_reducedmode._toggle_auto_scale_on
-# and known to land on every FieldRow's PillSwitch / TextField. Used
-# here for the same reason — the UIA rectangle of a label Text returns
-# the painted-text bounds (not the layout slot), so right-edge + offset
-# lands in the gap before the control rather than on it.
-_SETTINGS_CONTROL_X_FRACTION = 0.43
+# Vertical tolerance (pixels) when matching a control's center Y to
+# its label's center Y. FieldRow children are vertically centered, so
+# the label and its control row should agree to within ~12 px even
+# at small label widths.
+_ROW_Y_TOLERANCE_PX = 18
 
 
-def _click_field_control(label_needle: str, action_label: str) -> int:
-    """Locate ``label_needle`` in the Settings modal's UIA tree, then
-    click at ``_SETTINGS_CONTROL_X_FRACTION`` × window.width on the
-    label's Y coordinate. Returns the click Y (so callers can do a
-    follow-up Y-aligned action without re-querying).
+def _find_control_aligned_with_label(
+    label_needle: str,
+    control_types: tuple[str, ...],
+) -> Optional[object]:
+    """Locate ``label_needle`` in the UIA tree, then return the
+    nearest UIA element whose ``control_type`` is in ``control_types``
+    AND whose center Y is within ``_ROW_Y_TOLERANCE_PX`` of the
+    label's center Y AND whose center X is to the RIGHT of the label
+    (FieldRow lays out left-to-right). Among candidates the leftmost
+    wins — that's the first non-label element on the row, which is
+    what FieldRow puts immediately after the label slot.
+
+    Returns the element itself or ``None`` if no aligned candidate.
     """
-    found = _find_label_rect(label_needle)
-    if found is None:
-        pytest.fail(
-            f"Could not locate '{label_needle}' label in Settings. "
-            f"The Developer section may be hidden (developerMode flag "
-            f"not applied?) or the label text was renamed."
+    label = _find_label_rect(label_needle)
+    if label is None:
+        return None
+    (label_left, label_top, label_right, label_bottom), _ = label
+    label_cx = (label_left + label_right) // 2
+    label_cy = (label_top + label_bottom) // 2
+
+    best = None
+    best_x = None
+    try:
+        win = uia_window()
+        for ct in control_types:
+            try:
+                candidates = win.descendants(control_type=ct)
+            except Exception:
+                continue
+            for elem in candidates:
+                try:
+                    rect = elem.rectangle()
+                except Exception:
+                    continue
+                cy = (rect.top + rect.bottom) // 2
+                cx = (rect.left + rect.right) // 2
+                # Same row as the label?
+                if abs(cy - label_cy) > _ROW_Y_TOLERANCE_PX:
+                    continue
+                # Right of the label, with a small buffer past the
+                # label's right edge so we don't grab the label
+                # itself if UIA happens to expose it as the requested
+                # control_type.
+                if cx <= label_right + 4:
+                    continue
+                if best is None or cx < best_x:
+                    best = elem
+                    best_x = cx
+    except Exception as e:
+        log.warning(
+            f"  _find_control_aligned_with_label('{label_needle}', "
+            f"{control_types}) UIA walk failed: {e}"
         )
-    (_, top, _, bottom), _ = found
-    label_cy = (top + bottom) // 2
-    w = get_app_window()
-    click_x = int(w.left + _SETTINGS_CONTROL_X_FRACTION * w.width)
-    log.info(f"  {action_label} at ({click_x}, {label_cy})")
-    pyautogui.click(click_x, label_cy)
-    time.sleep(SLEEP)
-    return label_cy
+    return best
 
 
 def _toggle_raw_csv_save_on() -> None:
-    """Find the 'Save raw CSV' label and click the PillSwitch beside it."""
-    _click_field_control("Save raw CSV", "clicking Save-raw-CSV PillSwitch")
+    """Find the 'Save raw CSV' PillSwitch and toggle it.
+
+    Switch elements show up in UIA as ``CheckBox`` (typical for QML
+    Switch) or sometimes ``Button`` / ``Custom`` depending on the Qt
+    version. We try the row-aligned match first; if that fails, we
+    fall back to clicking the ComboBox-style coordinate the
+    ``test_reducedmode`` auto-scale helper uses.
+    """
+    elem = _find_control_aligned_with_label(
+        "Save raw CSV",
+        ("CheckBox", "Button", "Custom", "Pane", "Group"),
+    )
+    if elem is not None:
+        try:
+            elem.toggle()
+            log.info("  toggled Save-raw-CSV via UIA toggle()")
+            time.sleep(SLEEP)
+            return
+        except Exception as e:
+            log.info(
+                f"  UIA toggle() not available on Save-raw-CSV "
+                f"control: {e} — falling back to click_input"
+            )
+        try:
+            elem.click_input()
+            log.info("  toggled Save-raw-CSV via UIA click_input")
+            time.sleep(SLEEP)
+            return
+        except Exception as e:
+            log.warning(
+                f"  UIA click_input on Save-raw-CSV failed: {e}"
+            )
+
+    # Fallback: row-aligned coordinate click. Same fraction the
+    # test_reducedmode auto-scale toggle uses.
+    log.info("  falling back to coord click for Save-raw-CSV")
+    label = _find_label_rect("Save raw CSV")
+    if label is None:
+        pytest.fail(
+            "Could not locate 'Save raw CSV' label in Settings — "
+            "Developer section may be hidden or label was renamed."
+        )
+    (_, top, _, bottom), _ = label
+    label_cy = (top + bottom) // 2
+    w = get_app_window()
+    click_x = int(w.left + 0.43 * w.width)
+    log.info(f"  clicking Save-raw-CSV PillSwitch at ({click_x}, {label_cy})")
+    pyautogui.click(click_x, label_cy)
+    time.sleep(SLEEP)
 
 
 def _set_raw_csv_duration_sec(seconds: int) -> None:
-    """Click into the 'Raw CSV duration' TextField and type ``seconds``.
-    Tab afterwards so ``onEditingFinished`` fires and the value is
-    committed through to ``setRawCsvDurationSec`` (which writes to
-    disk)."""
-    _click_field_control(
+    """Click into the 'Raw CSV duration' TextField, ctrl-a, type the
+    value, Tab to commit. The TextField fires ``onEditingFinished``
+    on focus loss → setRawCsvDurationSec → write to disk.
+    """
+    elem = _find_control_aligned_with_label(
         "Raw CSV duration",
-        f"clicking Raw-CSV-duration TextField and typing '{seconds}'",
+        ("Edit", "Custom", "Pane"),
     )
+    if elem is not None:
+        try:
+            click_element_center(elem, "Raw CSV duration TextField")
+        except Exception as e:
+            log.warning(
+                f"  click_element_center on Raw-CSV-duration failed: {e}"
+            )
+            elem = None
+
+    if elem is None:
+        # Coord-based fallback.
+        label = _find_label_rect("Raw CSV duration")
+        if label is None:
+            pytest.fail(
+                "Could not locate 'Raw CSV duration' label. Either "
+                "the Save-raw-CSV toggle didn't fire (the duration "
+                "field is enabled-only) or the label was renamed."
+            )
+        (_, top, _, bottom), _ = label
+        label_cy = (top + bottom) // 2
+        w = get_app_window()
+        field_x = int(w.left + 0.43 * w.width)
+        log.info(
+            f"  clicking Raw-CSV-duration field at ({field_x}, "
+            f"{label_cy}) (coord fallback)"
+        )
+        pyautogui.click(field_x, label_cy)
+
+    time.sleep(0.3)
     pyautogui.hotkey("ctrl", "a")
     time.sleep(0.1)
     pyautogui.typewrite(str(seconds), interval=0.05)
