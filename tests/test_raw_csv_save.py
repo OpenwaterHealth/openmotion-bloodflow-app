@@ -362,101 +362,94 @@ def _find_control_aligned_with_label(
     return best
 
 
-def _toggle_raw_csv_save_on() -> None:
-    """Find the 'Save raw CSV' PillSwitch and toggle it.
+def _focus_soft_reset_button() -> None:
+    """Set keyboard focus to the Developer section's 'Soft Reset' button
+    *without invoking it*.
 
-    Switch elements show up in UIA as ``CheckBox`` (typical for QML
-    Switch) or sometimes ``Button`` / ``Custom`` depending on the Qt
-    version. We try the row-aligned match first; if that fails, we
-    fall back to clicking the ComboBox-style coordinate the
-    ``test_reducedmode`` auto-scale helper uses.
+    Why this anchor: Qt's a11y bridge doesn't surface FieldRow's plain
+    QML Text labels (verified by UIA-text dump — the Developer section
+    has 'Soft Reset', 'Run Calibration', 'Check for Updates' visible
+    but no 'Save raw CSV' / 'Raw CSV duration' / 'Console' labels).
+    The 'Soft Reset' Button IS surfaced and is the FIRST focusable
+    element in the Developer SectionCard. Tab order from there hits
+    the Save raw CSV PillSwitch next, then the Raw CSV duration
+    TextField. That gives us a deterministic path to both controls.
+
+    Why set_focus over clicking: clicking 'Soft Reset' would fire
+    ``softResetSensor("console")`` and tear down the USB connection
+    mid-test. UIA's SetFocus pattern just moves keyboard focus
+    without invoking the button.
     """
-    elem = _find_control_aligned_with_label(
-        "Save raw CSV",
-        ("CheckBox", "Button", "Custom", "Pane", "Group"),
-    )
-    if elem is not None:
-        try:
-            elem.toggle()
-            log.info("  toggled Save-raw-CSV via UIA toggle()")
-            time.sleep(SLEEP)
-            return
-        except Exception as e:
-            log.info(
-                f"  UIA toggle() not available on Save-raw-CSV "
-                f"control: {e} — falling back to click_input"
-            )
-        try:
-            elem.click_input()
-            log.info("  toggled Save-raw-CSV via UIA click_input")
-            time.sleep(SLEEP)
-            return
-        except Exception as e:
-            log.warning(
-                f"  UIA click_input on Save-raw-CSV failed: {e}"
-            )
-
-    # Fallback: row-aligned coordinate click. Same fraction the
-    # test_reducedmode auto-scale toggle uses.
-    log.info("  falling back to coord click for Save-raw-CSV")
-    label = _find_label_rect("Save raw CSV")
-    if label is None:
+    win = uia_window()
+    matches = win.descendants(title="Soft Reset", control_type="Button")
+    if not matches:
+        # Last-resort: walk Buttons by title text in case a build
+        # renamed the button.
+        matches = [
+            b for b in win.descendants(control_type="Button")
+            if (b.window_text() or "").strip().lower() == "soft reset"
+        ]
+    if not matches:
         pytest.fail(
-            "Could not locate 'Save raw CSV' label in Settings — "
-            "Developer section may be hidden or label was renamed."
+            "Could not locate the 'Soft Reset' button to anchor "
+            "focus on. The Developer section may be hidden "
+            "(developerMode flag not applied?) or the button was "
+            "renamed."
         )
-    (_, top, _, bottom), _ = label
-    label_cy = (top + bottom) // 2
-    w = get_app_window()
-    click_x = int(w.left + 0.43 * w.width)
-    log.info(f"  clicking Save-raw-CSV PillSwitch at ({click_x}, {label_cy})")
-    pyautogui.click(click_x, label_cy)
+    btn = matches[0]
+    try:
+        btn.set_focus()
+        log.info("  focused Soft Reset (without invoking)")
+    except Exception as e:
+        # Shouldn't happen on a Button, but log and surface clearly.
+        pytest.fail(
+            f"Could not set keyboard focus on the Soft Reset button: "
+            f"{e}. Without focus we can't Tab-walk to the Save raw "
+            f"CSV switch."
+        )
+    time.sleep(0.3)
+
+
+def _toggle_raw_csv_save_on() -> None:
+    """Toggle the Save raw CSV PillSwitch via Tab+Space from Soft Reset.
+
+    Plain Text labels in the Developer section don't surface in UIA,
+    so we can't click by label-rect. Instead we anchor on the
+    'Soft Reset' Button (the section's first focusable child),
+    set_focus on it without invoking, then Tab once to land on the
+    Save raw CSV PillSwitch and Space to flip it.
+    """
+    _focus_soft_reset_button()
+    pyautogui.press("tab")
+    time.sleep(0.3)
+    pyautogui.press("space")
+    log.info("  Tab+Space from Soft Reset — Save raw CSV toggled")
     time.sleep(SLEEP)
 
 
 def _set_raw_csv_duration_sec(seconds: int) -> None:
-    """Click into the 'Raw CSV duration' TextField, ctrl-a, type the
-    value, Tab to commit. The TextField fires ``onEditingFinished``
-    on focus loss → setRawCsvDurationSec → write to disk.
+    """Type ``seconds`` into the Raw CSV duration TextField via
+    Tab-from-Soft-Reset navigation.
+
+    Tab order in the Developer SectionCard:
+        Soft Reset -> Save raw CSV PillSwitch -> Raw CSV duration TextField
+
+    So two Tab presses from Soft Reset focus lands on the duration
+    field. Re-anchoring (vs. continuing from where ``_toggle_raw_csv_save_on``
+    left us) is deliberate — keeps each helper independent and makes
+    transient focus loss recoverable.
     """
-    elem = _find_control_aligned_with_label(
-        "Raw CSV duration",
-        ("Edit", "Custom", "Pane"),
-    )
-    if elem is not None:
-        try:
-            click_element_center(elem, "Raw CSV duration TextField")
-        except Exception as e:
-            log.warning(
-                f"  click_element_center on Raw-CSV-duration failed: {e}"
-            )
-            elem = None
-
-    if elem is None:
-        # Coord-based fallback.
-        label = _find_label_rect("Raw CSV duration")
-        if label is None:
-            pytest.fail(
-                "Could not locate 'Raw CSV duration' label. Either "
-                "the Save-raw-CSV toggle didn't fire (the duration "
-                "field is enabled-only) or the label was renamed."
-            )
-        (_, top, _, bottom), _ = label
-        label_cy = (top + bottom) // 2
-        w = get_app_window()
-        field_x = int(w.left + 0.43 * w.width)
-        log.info(
-            f"  clicking Raw-CSV-duration field at ({field_x}, "
-            f"{label_cy}) (coord fallback)"
-        )
-        pyautogui.click(field_x, label_cy)
-
+    _focus_soft_reset_button()
+    pyautogui.press("tab")  # → Save raw CSV PillSwitch
+    time.sleep(0.2)
+    pyautogui.press("tab")  # → Raw CSV duration TextField
     time.sleep(0.3)
     pyautogui.hotkey("ctrl", "a")
     time.sleep(0.1)
     pyautogui.typewrite(str(seconds), interval=0.05)
     time.sleep(0.2)
     pyautogui.press("tab")  # commit via focus-loss → onEditingFinished
+    log.info(f"  typed '{seconds}' into Raw CSV duration TextField")
     time.sleep(SLEEP)
 
 
@@ -683,14 +676,16 @@ class TestRawCsvSave:
             click_panel("Settings")
             time.sleep(SLEEP)
             # Developer section is at the bottom of a long modal.
-            # Scroll until the label is reachable via UIA — fail
-            # loudly if it never appears (developer-mode flag not
-            # applied, or Settings modal didn't actually open).
-            assert _scroll_until_label_visible("Save raw CSV"), (
-                "Could not bring 'Save raw CSV' label into view after "
-                "scrolling the Settings modal. Either the modal didn't "
-                "open, the Developer section is hidden (developerMode "
-                "flag not applied?), or the label was renamed."
+            # Anchor scroll on 'Soft Reset' (the first focusable
+            # control in the Developer SectionCard) rather than the
+            # 'Save raw CSV' label — the latter is a plain QML Text
+            # which Qt's a11y bridge doesn't surface in UIA, but the
+            # Soft Reset Button is reliably exposed.
+            assert _scroll_until_label_visible("Soft Reset"), (
+                "Could not bring the Developer section into view "
+                "after scrolling the Settings modal. Either the modal "
+                "didn't open or the Developer section is hidden "
+                "(developerMode flag not applied?)."
             )
             _toggle_raw_csv_save_on()
             _set_raw_csv_duration_sec(RAW_CSV_DURATION_SEC)
