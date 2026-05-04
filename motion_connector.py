@@ -262,6 +262,13 @@ class MOTIONConnector(QObject):
         workflow = self._scan_workflow
         if workflow is not None and getattr(workflow, "running", False):
             return "Scan already running"
+
+        # Check sensor initialization state on cold start to prevent race condition
+        if self._leftSensorConnected and not self._left_sensor_initialized:
+            return "Left sensor initializing, please wait"
+        if self._rightSensorConnected and not self._right_sensor_initialized:
+            return "Right sensor initializing, please wait"
+
         return None
 
     @staticmethod
@@ -351,6 +358,10 @@ class MOTIONConnector(QObject):
         self._trigger_state = "OFF"
         self._state = DISCONNECTED
         self._last_fan_status: dict[str, bool | None] = {"left": None, "right": None}
+
+        # Track sensor initialization state to prevent premature calibration on cold start
+        self._left_sensor_initialized = False
+        self._right_sensor_initialized = False
 
         self.laser_params = load_laser_params(config_dir)
         self._tec_voltage_default = load_tec_params(config_dir)
@@ -562,6 +573,15 @@ class MOTIONConnector(QObject):
         except Exception as e:
             logger.debug("Could not refresh sensor ID cache for %s: %s", side, e)
         # self._interface.log_sensor_info(side)
+
+        # Mark sensor as initialized to allow calibration
+        if side == "left":
+            self._left_sensor_initialized = True
+            logger.info("Left sensor initialization complete")
+        elif side == "right":
+            self._right_sensor_initialized = True
+            logger.info("Right sensor initialization complete")
+
         self.connectionStatusChanged.emit()
 
     def _start_runlog(self, subject_id: str = None):
@@ -835,6 +855,7 @@ class MOTIONConnector(QObject):
         """Handle device disconnection."""
         if descriptor.upper() == "SENSOR_LEFT":
             self._leftSensorConnected = False
+            self._left_sensor_initialized = False
             self._last_fan_status["left"] = None
             try:
                 sensor = (
@@ -851,6 +872,7 @@ class MOTIONConnector(QObject):
                 pass
         elif descriptor.upper() == "SENSOR_RIGHT":
             self._rightSensorConnected = False
+            self._right_sensor_initialized = False
             self._last_fan_status["right"] = None
             try:
                 sensor = (
