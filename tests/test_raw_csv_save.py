@@ -214,6 +214,29 @@ def _restart_app(label: str) -> None:
 # ─────────────────────────────────────────────
 # Settings modal manipulation
 # ─────────────────────────────────────────────
+def _dump_uia_texts(max_items: int = 80) -> list[str]:
+    """Return up to ``max_items`` non-empty window_text() strings from
+    every descendant of the app window. Used by failure paths to make
+    it obvious whether a label is missing entirely vs. surfacing under
+    an unexpected form (whitespace, accidental empty SectionCard, etc).
+    """
+    seen: list[str] = []
+    try:
+        win = uia_window()
+        for elem in win.descendants():
+            try:
+                t = (elem.window_text() or "").strip()
+            except Exception:
+                continue
+            if t and len(t) <= 80:
+                seen.append(t)
+                if len(seen) >= max_items:
+                    break
+    except Exception as e:
+        log.warning(f"  _dump_uia_texts failed: {e}")
+    return seen
+
+
 def _scroll_until_label_visible(
     needle: str,
     max_passes: int = 12,
@@ -224,13 +247,9 @@ def _scroll_until_label_visible(
     ``max_passes`` × ``scroll_per_pass`` worth of wheel ticks without
     finding it.
 
-    The Settings modal is *long* (Sensor Placement, Default Camera,
-    Data Output, Realtime Plot Display, Manual Plot Bounds, Reduced
-    Mode, Appearance, Developer, Calibration, About). On the bench
-    the Developer section was sitting well past 5 × scroll(-50)
-    worth of ticks, so we poll: scroll a chunk, check if the label
-    is now reachable via UIA, repeat. Returns True on success,
-    False on timeout (caller decides whether to fail).
+    On failure, dumps the UIA texts that ARE visible so the operator
+    can see whether the label is genuinely missing (Qt bridge dropped
+    it) vs. surfacing under a slightly different form.
     """
     ensure_visible()
     w = get_app_window()
@@ -247,9 +266,11 @@ def _scroll_until_label_visible(
     if _find_label_rect(needle) is not None:
         log.info(f"  '{needle}' visible after {max_passes} scroll pass(es)")
         return True
+
+    visible = _dump_uia_texts()
     log.warning(
         f"  '{needle}' still not visible after {max_passes} × "
-        f"scroll({scroll_per_pass}) ticks"
+        f"scroll({scroll_per_pass}) ticks. UIA texts seen: {visible}"
     )
     return False
 
