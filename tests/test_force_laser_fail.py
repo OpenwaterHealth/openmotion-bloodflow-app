@@ -349,19 +349,28 @@ class TestForceLaserFail:
                 f"{second_trip.strip()}"
             )
 
-            # ─── Step 7+8: close, turn off forceLaserFail, power-cycle ─
+            # ─── Step 7: close app, turn off forceLaserFail ──────────
             log.info("=" * 60)
             log.info(
-                "Step 7+8: closing app, writing forceLaserFail=false, "
-                "power-cycling the console"
+                "Step 7: closing app, writing forceLaserFail=false"
             )
             log.info("=" * 60)
             _kill_bloodflow_processes()
             time.sleep(2)
             write_app_config_value("forceLaserFail", False)
-            log.info("  power-cycling outlet (off 5s, on)")
+
+            # ─── Step 8: power-cycle the console ─────────────────────
+            # The hardware safety latch only clears on a console power
+            # cycle. Without this, Step 9's Check would re-trip the
+            # interlock from the same latched state we observed in
+            # Step 6 — so the "clean run" assertion would fail not
+            # because the fix is broken but because the bench was
+            # never reset.
+            log.info("=" * 60)
+            log.info("Step 8: power-cycling the console (off 5s, on)")
+            log.info("=" * 60)
             outlet.power_cycle(off_time=5.0)
-            time.sleep(3)
+            time.sleep(3)  # let USB enumeration settle before relaunch
 
             # ─── Step 9: launch + click Check, expect clean run ──────
             log.info("=" * 60)
