@@ -393,6 +393,33 @@ def wait_for_combobox(idx: int, timeout: float = 15.0):
             )
             last_count = len(cbs)
         time.sleep(0.5)
+
+    # Diagnostics: on timeout, dump what the UIA tree DOES expose so
+    # the failing test report can distinguish "modal didn't open" from
+    # "modal opened but UIA can't see ComboBoxes". Prior runs hit this
+    # path silently and we burned an iteration debugging the wrong
+    # hypothesis.
+    try:
+        win = uia_window()
+        sample: list[str] = []
+        for elem in win.descendants():
+            try:
+                t = (elem.window_text() or "").strip()
+            except Exception:
+                continue
+            if t and len(t) < 80:
+                sample.append(t)
+                if len(sample) >= 30:
+                    break
+        log.warning(
+            f"  wait_for_combobox({idx}) timed out — UIA texts visible "
+            f"in window (first 30): {sample}"
+        )
+    except Exception as e:
+        log.warning(
+            f"  wait_for_combobox({idx}) timed out and UIA dump itself "
+            f"failed: {e}"
+        )
     return None
 
 
