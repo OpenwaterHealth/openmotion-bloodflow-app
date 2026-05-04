@@ -78,11 +78,20 @@ pytestmark = pytest.mark.release
 RE_SAFETY_TRIP = re.compile(r"Laser safety failure:")
 
 # Positive proof that the laser actually pulsed during a Check run.
-# Logged by motion_connector.startTrigger after the trigger fires
-# successfully. Used by Step 9 to distinguish "Check ran cleanly" from
-# "Check never got far enough to fire the laser, so we don't know if
-# safety would have tripped or not".
-RE_TRIGGER_STARTED = re.compile(r"Trigger started successfully")
+# Emitted by the SDK's ScanWorkflow right before it calls the
+# console's start_trigger; Check / contact-quality preflight reaches
+# this code path through ``interface.start_scan``. Used by Step 9 to
+# distinguish "Check ran cleanly" from "Check never got far enough
+# to fire the laser, so we don't know if safety would have tripped or
+# not".
+#
+# An earlier version of this regex looked for
+# "Trigger started successfully" — the line emitted by
+# ``motion_connector.startTrigger``. That path is *not* taken during
+# a Check run (the SDK uses its own start_trigger), so the regex
+# never matched and Step 9 falsely failed even when the laser fired
+# cleanly.
+RE_TRIGGER_STARTED = re.compile(r"Starting trigger")
 
 # Wall-clock budget for seeing the safety-failure log line after Check
 # fires. Fault-laser params trip the interlock almost immediately on
