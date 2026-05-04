@@ -55,6 +55,10 @@ Item {
         anchors.centerIn: parent
         focus: true
 
+        // Absorb empty-space clicks inside the dialog so they don't
+        // propagate to the backdrop and close it (issue #106).
+        MouseArea { anchors.fill: parent }
+
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: 20

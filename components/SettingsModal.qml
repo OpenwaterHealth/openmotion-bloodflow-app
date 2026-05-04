@@ -336,6 +336,10 @@ Item {
         border.width: 1
         anchors.centerIn: parent
 
+        // Absorb empty-space clicks inside the modal so they don't
+        // propagate to the backdrop and close the modal (issue #106).
+        MouseArea { anchors.fill: parent }
+
         // Title bar
         Rectangle {
             id: titleBar

@@ -41,6 +41,10 @@ Item {
         border.width: 2
         anchors.centerIn: parent
 
+        // Absorb empty-space clicks inside the modal so they don't
+        // propagate to the backdrop and close the modal (issue #106).
+        MouseArea { anchors.fill: parent }
+
         // X close button
         Rectangle {
             width: 28; height: 28; radius: 14
