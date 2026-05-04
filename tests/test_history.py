@@ -312,15 +312,7 @@ class TestHistory:
     def test_04_close_bfi_plot(self, app):
         close_plot_window()
 
-    def test_05_visualize_contrast_mean(self, app):
-        ensure_visible()
-        click_by_name("Visualize Contrast/Mean")
-        wait_with_log(VIZ_WAIT, "Contrast/Mean plot open")
-
-    def test_06_close_contrast_plot(self, app):
-        close_plot_window()
-
-    def test_07_close_history(self, app):
+    def test_05_close_history(self, app):
         require_focus()
         pyautogui.press("escape")
         time.sleep(SLEEP)

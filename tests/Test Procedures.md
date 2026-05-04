@@ -21,7 +21,7 @@ For style guidance on writing or editing tests, see
 
 | File | Tests | Coverage |
 |---|---|---|
-| `test_history.py` | 7 | History modal: open, scan listing, BFI/BVI + Contrast/Mean visualize, close. Class-scoped autouse fixture seeds a 30 s Middle/Middle scan if History is empty. |
+| `test_history.py` | 5 | History modal: open, scan listing, BFI/BVI visualize, close. Class-scoped autouse fixture seeds a 30 s Middle/Middle scan if History is empty. |
 | `test_notes.py` | 18 | Notes textarea: open/auto-focus, type, persist across reopen, append, clear, multi-line, long text, numeric+punctuation, cut/paste/undo, sidebar toggle, rapid open/close. |
 | `test_scan_settings.py` | 30 | Scan Settings modal: User Label field, Left/Right sensor dropdowns (parametrized over all 9 options × 2), duration toggle (Timed ↔ Free Run), H/M/S inputs, close via X and Escape. |
 

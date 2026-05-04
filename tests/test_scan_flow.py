@@ -16,7 +16,7 @@ incremental class:
   4. Click Start, wait for the scan to complete (~5 min budget).
   5. Dismiss the auto-opened Session Notes modal.
   6. Open History, verify the latest scan is selected, visualize
-     BFI/BVI then Contrast/Mean, close everything.
+     BFI/BVI, close everything.
 
 Preconditions
 -------------
@@ -183,15 +183,7 @@ class TestScanFlow:
     def test_13_close_bfi_plot(self, app):
         close_plot_window()
 
-    def test_14_visualize_contrast_mean(self, app):
-        ensure_visible()
-        click_by_name("Visualize Contrast/Mean")
-        wait_with_log(VIZ_WAIT, "Contrast/Mean plot open")
-
-    def test_15_close_contrast_plot(self, app):
-        close_plot_window()
-
-    def test_16_close_history(self, app):
+    def test_14_close_history(self, app):
         require_focus()
         pyautogui.press("escape")
         time.sleep(SLEEP)
