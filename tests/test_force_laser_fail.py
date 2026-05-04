@@ -77,6 +77,13 @@ pytestmark = pytest.mark.release
 # a UIA-based check would silently time out.
 RE_SAFETY_TRIP = re.compile(r"Laser safety failure:")
 
+# Positive proof that the laser actually pulsed during a Check run.
+# Logged by motion_connector.startTrigger after the trigger fires
+# successfully. Used by Step 9 to distinguish "Check ran cleanly" from
+# "Check never got far enough to fire the laser, so we don't know if
+# safety would have tripped or not".
+RE_TRIGGER_STARTED = re.compile(r"Trigger started successfully")
+
 # Wall-clock budget for seeing the safety-failure log line after Check
 # fires. Fault-laser params trip the interlock almost immediately on
 # the first laser pulse; 130 s covers slow camera-config plus the
@@ -88,9 +95,12 @@ SAFETY_TRIP_TIMEOUT = 130
 # is conservative.
 APP_CONNECT_TIMEOUT = 60
 
-# How long to watch the post-cleanup log for a (definitely-not-wanted)
-# 'Laser safety failure' line.
-CLEAN_STATE_SETTLE_SEC = 15
+# Grace window after seeing 'Trigger started successfully' before we
+# scan the log for a (definitely-not-wanted) safety failure. The
+# fault-laser params trip the safety chip on the first laser pulse,
+# so a real trip would log within the first second of trigger; 10 s
+# is generous.
+POST_TRIGGER_SAFETY_GRACE_SEC = 10
 
 
 # ─────────────────────────────────────────────
@@ -373,24 +383,68 @@ class TestForceLaserFail:
             time.sleep(3)  # let USB enumeration settle before relaunch
 
             # ─── Step 9: launch + click Check, expect clean run ──────
+            # "Clean run" means two things, in order:
+            #   (a) the laser actually fires (we see
+            #       'Trigger started successfully' in the fresh log),
+            #   (b) no 'Laser safety failure:' line shows up — neither
+            #       before, during, nor in the grace window after.
+            #
+            # An earlier version of this step only waited 15 s after
+            # the click for a safety failure and then declared success.
+            # That's wrong: the contact-quality preflight Check kicks
+            # off takes ~2 minutes before the laser actually pulses,
+            # so 15 s of "no failure line" mostly proved the laser
+            # hadn't fired YET — not that it fired cleanly.
             log.info("=" * 60)
             log.info(
-                "Step 9: launching app, clicking Check, expecting NO "
-                "'Laser safety failure' in the freshly-rotated log"
+                "Step 9: launching app, clicking Check, expecting the "
+                "laser to fire AND no 'Laser safety failure' in the "
+                "freshly-rotated log"
             )
             log.info("=" * 60)
             _restart_app("step 9")
             click_panel("Check")
-            late_trip = _wait_for_safety_trip(CLEAN_STATE_SETTLE_SEC)
-            assert late_trip is None, (
-                f"'Laser safety failure' appeared after restoring "
-                f"forceLaserFail=false and power-cycling: "
-                f"{late_trip.strip() if late_trip else ''}. Either the "
-                f"flag wasn't honoured on relaunch (check load_laser_params "
-                f"wiring) or the safety interlock didn't clear on the "
-                f"power-cycle."
+            log.info(
+                f"  waiting up to {SAFETY_TRIP_TIMEOUT} s for "
+                f"'Trigger started successfully' (positive proof the "
+                f"laser pulsed)"
             )
-            log.info("  PASS: clean state confirmed — Check ran without trip")
+            log_path = find_app_log()
+            assert log_path is not None, (
+                "Step 9: could not locate the bloodflow app log; "
+                "cannot verify Check fired the laser"
+            )
+            trigger_line = wait_for_pattern(
+                RE_TRIGGER_STARTED, log_path, 0, SAFETY_TRIP_TIMEOUT
+            )
+            assert trigger_line, (
+                f"Step 9: 'Trigger started successfully' did not "
+                f"appear in the fresh app log within "
+                f"{SAFETY_TRIP_TIMEOUT} s of clicking Check. The "
+                f"laser never fired, so the test can't verify the "
+                f"safety interlock cleared. Likely causes: Check "
+                f"didn't actually click (panel calibration off), or "
+                f"contact-quality preflight stalled before reaching "
+                f"the trigger stage."
+            )
+            log.info(f"  laser fired: {trigger_line.strip()}")
+            log.info(
+                f"  grace window: waiting {POST_TRIGGER_SAFETY_GRACE_SEC} s "
+                f"to catch any late safety trip"
+            )
+            late_trip = _wait_for_safety_trip(POST_TRIGGER_SAFETY_GRACE_SEC)
+            assert late_trip is None, (
+                f"Step 9: 'Laser safety failure' appeared after the "
+                f"laser fired with forceLaserFail=false and a fresh "
+                f"power cycle: {late_trip.strip()}. Either the flag "
+                f"wasn't honoured on relaunch (check load_laser_params "
+                f"wiring) or the safety interlock didn't clear on the "
+                f"power cycle."
+            )
+            log.info(
+                "  PASS: clean state confirmed — laser fired without "
+                "tripping safety"
+            )
 
         finally:
             # ─── Step 10: restore both flags to their original values ─
