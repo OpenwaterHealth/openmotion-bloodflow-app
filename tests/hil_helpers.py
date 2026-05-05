@@ -120,9 +120,61 @@ _PANEL_BUTTON_LABELS = (
     "Start", "Scan\nSettings", "Notes", "Check", "History", "Settings",
 )
 
-_APP_CONFIG_PATH = (
+_REPO_APP_CONFIG_PATH = (
     Path(__file__).resolve().parent.parent / "config" / "app_config.json"
 )
+
+
+def _from_source_mode() -> bool:
+    return os.environ.get("OPENWATER_FROM_SOURCE", "").lower() in (
+        "1", "true", "yes",
+    )
+
+
+def _resolve_app_config_path() -> Path:
+    """Return the app_config.json the running/about-to-run bloodflow app
+    actually reads.
+
+    From-source mode reads ``<repo>/config/app_config.json`` (cwd is
+    PROJECT_ROOT when ``python main.py`` is launched). The packaged
+    PyInstaller exe reads ``<exe-dir>/_internal/config/app_config.json``
+    — its own bundled copy, NOT the repo's. Tests that write to the
+    wrong file silently no-op against the running exe and the
+    snapshot-and-restore dance leaves an alien value on disk afterward.
+
+    Resolution order:
+      1. ``OPENWATER_APP_CONFIG`` env var (explicit override).
+      2. From-source mode  → repo config.
+      3. ``OPENWATER_EXE`` env var → its sibling ``_internal/config``.
+      4. Latest installed exe via the same glob set as conftest's
+         ``_find_exe``  → its sibling ``_internal/config``.
+      5. Fall back to the repo config (tests that don't run an exe
+         still need somewhere to read/write).
+    """
+    explicit = os.environ.get("OPENWATER_APP_CONFIG", "")
+    if explicit and Path(explicit).exists():
+        return Path(explicit)
+    if _from_source_mode():
+        return _REPO_APP_CONFIG_PATH
+    candidates: list[str] = []
+    env_exe = os.environ.get("OPENWATER_EXE", "")
+    if env_exe and os.path.exists(env_exe):
+        candidates.append(env_exe)
+    else:
+        import glob as _glob
+        for pattern in (
+            r"C:\Users\*\Documents\OpenMotion\**\OpenWaterApp.exe",
+            r"C:\Users\*\Desktop\**\OpenWaterApp.exe",
+            r"C:\Program Files\**\OpenWaterApp.exe",
+            r"C:\Program Files (x86)\**\OpenWaterApp.exe",
+        ):
+            candidates.extend(_glob.glob(pattern, recursive=True))
+    if candidates:
+        latest = max(candidates, key=os.path.getmtime)
+        bundled = Path(latest).parent / "_internal" / "config" / "app_config.json"
+        if bundled.exists():
+            return bundled
+    return _REPO_APP_CONFIG_PATH
 
 
 # ─────────────────────────────────────────────
@@ -153,7 +205,7 @@ def read_app_config_value(key: str, default: Any = None) -> Any:
     """Return the value of ``key`` in app_config.json, or ``default``
     if the key is absent or the file is missing/unreadable."""
     try:
-        with _APP_CONFIG_PATH.open(encoding="utf-8") as fh:
+        with _resolve_app_config_path().open(encoding="utf-8") as fh:
             return json.load(fh).get(key, default)
     except Exception:
         return default
@@ -163,14 +215,15 @@ def write_app_config_value(key: str, value: Any) -> None:
     """Persist ``key=value`` to app_config.json. Logs a warning on
     failure rather than raising — config IO shouldn't take a test
     down."""
+    path = _resolve_app_config_path()
     try:
-        with _APP_CONFIG_PATH.open(encoding="utf-8") as fh:
+        with path.open(encoding="utf-8") as fh:
             cfg = json.load(fh)
         cfg[key] = value
-        with _APP_CONFIG_PATH.open("w", encoding="utf-8") as fh:
+        with path.open("w", encoding="utf-8") as fh:
             json.dump(cfg, fh, indent=2)
     except Exception as e:
-        log.warning(f"  Failed to persist {key}={value}: {e}")
+        log.warning(f"  Failed to persist {key}={value} at {path}: {e}")
 
 
 def force_app_config_value(key: str, value: Any) -> Any:
@@ -954,3 +1007,87 @@ def dismiss_signal_quality_modal() -> bool:
         f"  Modal detected via {detected_via} but Dismiss button not found"
     )
     return False
+
+
+# ─────────────────────────────────────────────
+# Raw histogram CSV payload validation
+# ─────────────────────────────────────────────
+#
+# The SDK ships ``data-processing/check_csv.py`` which scans a raw
+# histogram CSV for three integrity violations:
+#   * ``bad_sum`` - any row whose ``sum`` column != EXPECTED_SUM
+#     (2,457,606 = 1024 bins × 2400 photons/bin baseline)
+#   * ``frame_id_skipped`` - non-monotonic frame_id sequencing modulo 256
+#   * ``bad_frame_cam_count`` - frames missing one or more camera rows
+#
+# The SDK module's directory has a dash (``data-processing``), so it
+# isn't importable as a package; load it by file path. The function
+# itself prints results and returns ``None``, so we capture stdout and
+# look for the literal ``[PASS]`` it emits on success. We surface the
+# captured output on failure so the operator sees exactly which row(s)
+# tripped which check.
+
+_SDK_CHECK_CSV_PATH = Path(
+    os.environ.get(
+        "OPENWATER_CHECK_CSV",
+        Path(__file__).resolve().parent.parent.parent
+        / "openmotion-sdk" / "data-processing" / "check_csv.py",
+    )
+)
+
+
+_CHECK_CSV_COUNT_RE = re.compile(
+    r"^\s+(bad_sum|frame_id_skipped|bad_frame_cam_count):\s+(\d+)\s*$",
+    re.MULTILINE,
+)
+
+
+def validate_raw_csv_payload(csv_path: Path) -> tuple[dict[str, int], str]:
+    """Run the SDK's ``check_csv_integrity`` against ``csv_path``.
+
+    Returns ``(counts, captured_stdout)`` where ``counts`` is the
+    per-error-class tally the SDK printed:
+
+        {"bad_sum": int, "frame_id_skipped": int, "bad_frame_cam_count": int}
+
+    The caller decides what's a hard fail vs an acceptable artifact —
+    e.g. ``bad_frame_cam_count == 1`` is normal at the truncation
+    boundary (SDK closes the raw CSV mid-frame, leaving one partial
+    frame with fewer cam rows), so the *raw-CSV* test treats that as
+    OK while still demanding ``bad_sum == 0`` and
+    ``frame_id_skipped == 0``. Setup/IO failures surface as
+    ``counts == {}`` with the failure message in the second slot.
+    """
+    import importlib.util
+    import io
+    import contextlib
+
+    if not _SDK_CHECK_CSV_PATH.exists():
+        return {}, (
+            f"SDK check_csv.py not found at {_SDK_CHECK_CSV_PATH}. "
+            f"Set OPENWATER_CHECK_CSV to its absolute path, or check the "
+            f"openmotion-sdk repo is alongside openmotion-bloodflow-app."
+        )
+
+    spec = importlib.util.spec_from_file_location(
+        "openwater_sdk_check_csv", str(_SDK_CHECK_CSV_PATH)
+    )
+    if spec is None or spec.loader is None:
+        return {}, f"Could not load module spec from {_SDK_CHECK_CSV_PATH}"
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    if not hasattr(mod, "check_csv_integrity"):
+        return {}, (
+            f"{_SDK_CHECK_CSV_PATH} loaded but has no "
+            f"``check_csv_integrity`` symbol — SDK API changed?"
+        )
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        try:
+            mod.check_csv_integrity(str(csv_path))
+        except Exception as e:
+            return {}, f"{type(e).__name__}: {e}\n{buf.getvalue()}"
+    out = buf.getvalue()
+    counts = {m.group(1): int(m.group(2)) for m in _CHECK_CSV_COUNT_RE.finditer(out)}
+    return counts, out
