@@ -22,19 +22,22 @@ Lifecycle
      (so the Scan Settings panel button is visible).
   4. Launch the app, calibrate panel buttons, wait for CONNECTED.
   5. Open Settings, scroll to the Developer section, toggle
-     ``Save raw CSV`` ON via the UI, type ``120`` into
+     ``Save raw CSV`` ON via the UI, type ``30`` into
      ``Raw CSV duration``, escape out.
-  6. Open Scan Settings, set duration to 3 minutes, escape out.
+  6. Open Scan Settings, set duration to 1 minute, escape out.
   7. Click Start, wait for the auto-opened Session Notes modal
      (signals scan completion).
   8. Diff the data directory before/after the scan to find the
      three new CSVs (canonical + left/right raw). Assert:
-       - canonical CSV's ``timestamp_s`` column spans ~180 s ± tol
-       - both ``*_raw.csv`` files span ~120 s ± tol
+       - canonical CSV's ``timestamp_s`` column spans ~60 s ± tol
+       - both ``*_raw.csv`` files span ~30 s ± tol
+       - both ``*_raw.csv`` files pass the SDK
+         ``check_csv_integrity`` payload check (per-row sum,
+         frame_id sequencing, equal cam count per frame)
   9. Always (in ``finally``): restore the original config values
      and relaunch so the bench is clean for whatever runs next.
 
-Marked ``release``: ~7 min wall-clock total (3 min scan + camera
+Marked ``release``: ~3-4 min wall-clock total (1 min scan + camera
 config + setup/teardown). Don't run in the dev-tier HIL set.
 """
 
@@ -68,6 +71,7 @@ from hil_helpers import (
     find_app_log,
     read_app_config_value,
     recalibrate_panel_buttons,
+    validate_raw_csv_payload,
     wait_for_pattern,
     write_app_config_value,
 )
@@ -79,12 +83,12 @@ pytestmark = pytest.mark.release
 
 # Wall-clock budgets
 APP_CONNECT_TIMEOUT = 60
-SESSION_NOTES_TIMEOUT = 360  # camera config (~75s) + 3-min scan + buffer
+SESSION_NOTES_TIMEOUT = 200  # camera config (~75s) + 1-min scan + buffer
 
 # Test parameters (also baked into the assertions below)
-SCAN_DURATION_SEC      = 180   # 3 min, set in Scan Settings
-RAW_CSV_DURATION_SEC   = 120   # 2 min, typed into Settings → Developer
-DURATION_TOLERANCE_SEC = 12    # how far off the timestamps can drift
+SCAN_DURATION_SEC      = 60    # 1 min, set in Scan Settings
+RAW_CSV_DURATION_SEC   = 30    # 30 s, typed into Settings → Developer
+DURATION_TOLERANCE_SEC = 8     # how far off the timestamps can drift
 
 # Column name in both raw and canonical CSVs.
 _TIMESTAMP_COL = "timestamp_s"
@@ -508,11 +512,56 @@ def require_focus_via_ensure_visible() -> None:
         pytest.fail("App window not visible — cannot type into duration fields")
 
 
+# When the scan workflow completes, motion_connector logs:
+#   "Saved scan notes to <path>"
+# at the same moment the Session Notes modal auto-opens. The modal is
+# the visible signal to the operator; the log line is the structured
+# signal we trust here, since UIA window walks fail intermittently
+# under the bench's display configuration ("UIA window not found"
+# warnings during multi-minute waits) and would let scan completion
+# slip past detection. Belt-and-suspenders: also poll UIA so a
+# non-default app build that doesn't emit that exact log line still
+# gets caught.
+_SCAN_COMPLETE_RE = re.compile(r"Saved scan notes to ", re.IGNORECASE)
+
+
 def _wait_for_session_notes_modal(timeout: int) -> bool:
-    """Poll UIA for a 'Session Notes' string. The modal auto-opens
-    when the SDK fires the scan-complete callback."""
+    """Return True once the scan workflow signals completion.
+
+    Two parallel signals; whichever fires first wins:
+      - app log carries "Saved scan notes to <path>" — emitted by
+        motion_connector at scan completion, simultaneous with the
+        Session Notes modal opening.
+      - UIA descendants surface a "Session Notes" text — works when
+        Qt's a11y bridge is cooperating.
+
+    The log path is captured up-front (before Start was clicked) so we
+    only consider lines written during this scan, not a stale entry
+    from a prior session.
+    """
+    log_path = find_app_log()
+    log_offset = log_path.stat().st_size if log_path else 0
+    if log_path is not None:
+        log.info(
+            f"  scan-complete watch: tailing {log_path.name} "
+            f"from byte {log_offset}"
+        )
+
     deadline = time.time() + timeout
     while time.time() < deadline:
+        # Log signal — cheap, deterministic, no UIA round-trips.
+        if log_path is not None and log_path.exists():
+            try:
+                with log_path.open("r", encoding="utf-8", errors="replace") as fh:
+                    fh.seek(log_offset)
+                    chunk = fh.read()
+                    log_offset += len(chunk.encode("utf-8", errors="replace"))
+                    if _SCAN_COMPLETE_RE.search(chunk):
+                        log.info("  scan complete via app-log 'Saved scan notes to'")
+                        return True
+            except Exception as e:
+                log.warning(f"  log tail failed: {e}")
+        # UIA signal — secondary, in case the log line ever changes.
         try:
             win = uia_window()
             for elem in win.descendants():
@@ -521,10 +570,11 @@ def _wait_for_session_notes_modal(timeout: int) -> bool:
                 except Exception:
                     continue
                 if "session notes" in txt:
+                    log.info("  scan complete via UIA 'Session Notes' text")
                     return True
         except Exception:
             pass
-        time.sleep(2)
+        time.sleep(1)
     return False
 
 
@@ -797,17 +847,65 @@ class TestRawCsvSave:
             # protects against a build where the truncation didn't fire
             # at all and all three CSVs ran to full scan duration but
             # within the absolute tolerance happened to look OK.
-            assert left_span  < canonical_span - 30, (
+            assert left_span  < canonical_span - 15, (
                 f"Left raw CSV span ({left_span:.1f} s) should be at "
-                f"least 30 s shorter than canonical ({canonical_span:.1f} s); "
+                f"least 15 s shorter than canonical ({canonical_span:.1f} s); "
                 f"raw truncation likely didn't fire."
             )
-            assert right_span < canonical_span - 30, (
+            assert right_span < canonical_span - 15, (
                 f"Right raw CSV span ({right_span:.1f} s) should be at "
-                f"least 30 s shorter than canonical ({canonical_span:.1f} s); "
+                f"least 15 s shorter than canonical ({canonical_span:.1f} s); "
                 f"raw truncation likely didn't fire."
             )
             log.info("  PASS: all three CSVs span their expected durations")
+
+            # ─── Payload integrity (per-row sum + frame sequencing + cam count)
+            #
+            # We assert tightly on the two checks that SHOULD always be
+            # zero on a healthy scan:
+            #   * bad_sum:           every row's histogram sums to the
+            #                        configured photon-count constant.
+            #   * frame_id_skipped:  no dropped frames (mod-256 rollover
+            #                        is normal and not flagged).
+            #
+            # We allow ``bad_frame_cam_count <= 1`` because the SDK
+            # closes raw CSVs mid-frame at the truncation boundary,
+            # leaving exactly one partial frame with fewer cam rows.
+            # Anything beyond that points at real frame loss during
+            # the scan.
+            for label in ("left_raw", "right_raw"):
+                path = scan_files[label]
+                log.info(f"  validating payload of {path.name}")
+                counts, output = validate_raw_csv_payload(path)
+                assert counts, (
+                    f"{path.name}: SDK check_csv setup failed.\n"
+                    f"{output.strip()}"
+                )
+                bad_sum     = counts.get("bad_sum", -1)
+                fid_skipped = counts.get("frame_id_skipped", -1)
+                bad_cams    = counts.get("bad_frame_cam_count", -1)
+                assert bad_sum == 0, (
+                    f"{path.name}: {bad_sum} row(s) failed the "
+                    f"per-row histogram sum check.\n"
+                    f"--- check_csv output ---\n{output.strip()}"
+                )
+                assert fid_skipped == 0, (
+                    f"{path.name}: {fid_skipped} frame_id(s) dropped "
+                    f"during the scan.\n"
+                    f"--- check_csv output ---\n{output.strip()}"
+                )
+                assert bad_cams <= 1, (
+                    f"{path.name}: {bad_cams} frame(s) had a wrong "
+                    f"cam_id count. Up to 1 partial frame is expected "
+                    f"at the truncation boundary; this run shows more, "
+                    f"which suggests real frame loss.\n"
+                    f"--- check_csv output ---\n{output.strip()}"
+                )
+                log.info(
+                    f"    {path.name}: PASS "
+                    f"(bad_sum={bad_sum}, frame_id_skipped={fid_skipped}, "
+                    f"bad_frame_cam_count={bad_cams})"
+                )
 
         finally:
             # ─── Step 9 (cleanup): restore original config on disk ───
