@@ -3,13 +3,13 @@
   "advancedSensors": true,
   "forceLaserFail": false,
   "cameraTempAlertThresholdC": 90,
-  "sensorDebugLogging": true,
+  "sensorDebugLogging": false,
   "cameraFakeData": false,
   "histoThrottle": false,
   "histoCmp": false,
   "powerOffUnusedCameras": false,
-  "commVerbose": true,
-  "verboseCommandHandling": true,
+  "commVerbose": false,
+  "verboseCommandHandling": false,
   "eol_min_mean_per_camera": [40, 80, 80, 80, 80, 80, 80, 40],
   "eol_min_contrast_per_camera": [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25]
 }
