@@ -277,63 +277,79 @@ def _find_run_calibration_button():
     return None
 
 
-def _select_target(target_label: str) -> None:
-    """Open the target combo and click the matching item.
+def _find_calibration_target_combo():
+    """Locate the calibration target ComboBox in the Settings modal.
 
-    The combo lives immediately to the right of the Run Calibration
-    button in the same RowLayout, with no UIA-accessible label of its
-    own — find it by offset from the button's bounding rectangle.
+    Identified by content: it is the only combo in the app whose
+    currentText is one of ``"Both"`` / ``"Left"`` / ``"Right"``.
+    """
+    win = uia_window()
+    for cb in win.descendants(control_type="ComboBox"):
+        try:
+            text = (cb.window_text() or "").strip()
+        except Exception:
+            continue
+        if text in ("Both", "Left", "Right"):
+            return cb
+    return None
+
+
+def _select_target(target_label: str) -> None:
+    """Drive the calibration target combo by SetFocus + arrow keys.
+
+    Earlier coord-based attempts to click the dropdown items missed —
+    the dropdown popup's UIA rectangle is unreliable when the Settings
+    ScrollView has clipped the parent card, and the popup itself opens
+    above/below depending on screen-edge proximity. SetFocus is
+    coord-free (UIA pattern), and arrow keys on a focused QtQuick.Controls
+    ComboBox change the currentIndex synchronously without needing the
+    popup to be open at all.
     """
     if target_label not in ("Both", "Left", "Right"):
         raise ValueError(f"unknown target label {target_label!r}")
 
-    btn = _find_run_calibration_button()
-    if btn is None:
+    combo = _find_calibration_target_combo()
+    if combo is None:
         raise RuntimeError(
-            "could not find Run Calibration button to anchor the target combo "
-            "(Settings modal not open or Calibration card not in viewport)"
+            "calibration target combo not found — expected a ComboBox "
+            "whose value is one of Both/Left/Right"
         )
+    log.info(f"  found target combo; current value: {combo.window_text()!r}")
 
-    rect = btn.rectangle()
-    # Combo center: button.right + spacing(12) + combo_width/2(55).
-    cx = rect.right + _COMBO_X_OFFSET_FROM_BTN_RIGHT
-    cy = (rect.top + rect.bottom) // 2
-    log.info(f"  clicking calibration target combo at ({cx}, {cy})")
-    pyautogui.click(cx, cy)
-    time.sleep(0.5)
+    # Focus via UIA — no screen coords involved.
+    try:
+        combo.set_focus()
+    except Exception as e:
+        log.warning(f"  combo.set_focus() raised: {e}")
+    time.sleep(0.2)
 
-    # The dropdown is a popup of ListItem (or Text) descendants. Click
-    # the one matching the requested label.
-    win = uia_window()
-    found = False
-    for ct in ("ListItem", "Text", "MenuItem"):
-        try:
-            elem = win.child_window(title=target_label, control_type=ct)
-            if elem.exists(timeout=2):
-                elem.click_input()
-                found = True
-                break
-        except Exception:
-            continue
-    if not found:
-        # Fallback: walk descendants
-        for elem in win.descendants():
-            try:
-                if (elem.window_text() or "").strip() == target_label:
-                    elem.click_input()
-                    found = True
-                    break
-            except Exception:
-                continue
+    # Reset to index 0 (Both): Up presses past the top are no-ops, so
+    # 5 presses guarantee we're at the top regardless of the prior
+    # selection. Then Down N times to land on the target.
+    target_idx = {"Both": 0, "Left": 1, "Right": 2}[target_label]
+    for _ in range(5):
+        pyautogui.press("up")
+    time.sleep(0.1)
+    for _ in range(target_idx):
+        pyautogui.press("down")
+    time.sleep(0.2)
 
-    if not found:
-        # Best-effort: close the popup before raising so the rest of
-        # the test (including teardown) doesn't get stuck behind it.
+    # If the dropdown popup is open, the highlighted item still needs
+    # an Enter to commit on some Qt versions. Read currentText; if it
+    # already matches, skip Enter (which would otherwise re-trigger
+    # actionable focus). Otherwise press Enter and re-check.
+    new_text = (combo.window_text() or "").strip()
+    if new_text != target_label:
+        pyautogui.press("enter")
+        time.sleep(0.3)
+        new_text = (combo.window_text() or "").strip()
+    if new_text != target_label:
+        # Close any popup before raising so teardown isn't blocked
         pyautogui.press("escape")
         raise RuntimeError(
-            f"could not click '{target_label}' in the calibration target combo"
+            f"failed to select target {target_label!r}; "
+            f"combo currentText is {new_text!r}"
         )
-    time.sleep(0.3)
     log.info(f"  selected calibration target = {target_label}")
 
 
