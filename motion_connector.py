@@ -246,6 +246,10 @@ class MOTIONConnector(QObject):
     contactQualityCheckStarted = pyqtSignal(int)  # expected duration in seconds
     contactQualityCheckFinished = pyqtSignal(bool, str, 'QVariantList')  # ok, error, warnings
     contactQualityWarning = pyqtSignal(str, str, str, float)  # camera, typeKey, typeText, value
+    # Mid-scan CQ state change (active=True on activation, False on clear).
+    # BloodFlow.qml's ``onContactQualityIssueStateChanged`` consumes the
+    # ``False`` edge to clear an entry from the live modal.
+    contactQualityIssueStateChanged = pyqtSignal(str, str, str, float, bool)
     contactQualityScanInProgress = pyqtSignal(bool)
     scanBviCorrectedSampled = pyqtSignal(
         str, int, float, float
@@ -1738,6 +1742,51 @@ class MOTIONConnector(QObject):
             # developerMode so the SDK skips creating the file
             # entirely. ScanRequest defaults to True for back-compat.
             write_telemetry_csv=self._app_config.get("developerMode", False),
+            # Live CQ monitor needs the SDK to compute the rolling
+            # average over the last N uncorrected light samples and
+            # emit one Sample per-window via ``on_rolling_avg_fn``.
+            # See _make_contact_quality_callbacks docstring above.
+            rolling_avg_enabled=True,
+            rolling_avg_window=int(
+                (self._app_config or {}).get(
+                    "cq_rolling_avg_window",
+                    _CQ_DEFAULT_ROLLING_WINDOW,
+                )
+            ),
+        )
+
+        # Live CQ wiring (restored from regression in 2abbad3 — see
+        # _make_contact_quality_callbacks above for the full story).
+        dark_thresholds = (self._app_config or {}).get("cq_dark_threshold_per_camera")
+        light_thresholds = (self._app_config or {}).get("cq_light_threshold_per_camera")
+
+        def _on_cq_warning(
+            side: str, cam_id: int, type_key: str, value: float, active: bool
+        ):
+            label = self._camera_label(side, cam_id)
+            type_text = self._warning_text(type_key)
+            try:
+                if active:
+                    self.contactQualityWarning.emit(
+                        label,
+                        type_key,
+                        type_text,
+                        float(value),
+                    )
+                self.contactQualityIssueStateChanged.emit(
+                    label,
+                    type_key,
+                    type_text,
+                    float(value),
+                    bool(active),
+                )
+            except Exception as exc:
+                logger.warning("contact-quality callback error: %s", exc)
+
+        on_dark_frame_fn, on_rolling_avg_fn = self._make_contact_quality_callbacks(
+            dark_thresholds=dark_thresholds,
+            light_thresholds=light_thresholds,
+            warning_sink=_on_cq_warning,
         )
 
         def _on_trigger_state(state: str):
@@ -1763,6 +1812,8 @@ class MOTIONConnector(QObject):
             on_trigger_state_fn=_on_trigger_state,
             on_uncorrected_fn=_on_uncorrected,
             on_corrected_batch_fn=None if self._uncorrected_only else _on_corrected_batch,
+            on_dark_frame_fn=on_dark_frame_fn,
+            on_rolling_avg_fn=on_rolling_avg_fn,
             on_error_fn=lambda e: self.captureLog.emit(f"Capture error: {e}"),
             on_side_stream_fn=lambda side, filepath: self.captureLog.emit(
                 f"[{side.upper()}] Streaming to: {os.path.basename(filepath)}"
@@ -2302,6 +2353,136 @@ class MOTIONConnector(QObject):
         if workflow is not None and getattr(workflow, "running", False):
             return "Scan already running"
         return None
+
+    # ──────────────────────────────────────────────────────────────────
+    # Live (mid-scan) contact-quality monitor
+    # ──────────────────────────────────────────────────────────────────
+    # Regression notice — restored on 2026-05-06 after the live monitor
+    # was inadvertently disabled.
+    #
+    # What broke and when
+    # -------------------
+    # Commit 2abbad3 ("feat: migrate to MotionInterface stable-handle
+    # API", 2026-04-21) carried out the SDK API migration that paired
+    # with openmotion-sdk's connection-redesign. As collateral damage,
+    # that commit removed the entire mid-scan CQ wiring while leaving
+    # all the surrounding scaffolding in place. Specifically:
+    #   - The ``contactQualityIssueStateChanged`` signal definition was
+    #     deleted (5-arg variant).
+    #   - The ``_make_contact_quality_callbacks(...)`` helper that built
+    #     ``on_dark_frame_fn`` / ``on_rolling_avg_fn`` callbacks (which
+    #     drive ``_ContactQualityState.process_dark`` /
+    #     ``process_rolling`` and emit transition signals) was deleted.
+    #   - The hookup inside ``startCapture`` that passed those callbacks
+    #     to ``self._interface.start_scan(...)`` and set
+    #     ``rolling_avg_enabled=True`` on the ``ScanRequest`` was
+    #     deleted.
+    #   - Both ``contactQualityWarning.emit(...)`` and
+    #     ``contactQualityIssueStateChanged.emit(...)`` call sites in the
+    #     CQ warning sink were deleted.
+    #
+    # What was left behind, all of it dead code from 2026-04-21 until
+    # this restoration:
+    #   - ``_ContactQualityState`` class (class definition still here,
+    #     instances were never built).
+    #   - ``process_dark`` / ``process_rolling`` methods (defined,
+    #     never called).
+    #   - ``contactQualityWarning`` signal declaration (declared,
+    #     ``.emit()`` never called).
+    #   - ``BloodFlow.qml``'s ``onContactQualityWarning`` and
+    #     ``onContactQualityIssueStateChanged`` Connections handlers —
+    #     listening on signals that never fired. The QML log line
+    #     ``QML Connections: Detected function "onContactQualityIssueStateChanged"
+    #     in Connections element. This is probably intended to be a
+    #     signal handler but no signal of the target matches the name``
+    #     was the only outward symptom.
+    #
+    # What this restoration does
+    # --------------------------
+    #   - Re-adds the 5-arg ``contactQualityIssueStateChanged`` signal.
+    #   - Re-adds ``_make_contact_quality_callbacks`` (this method),
+    #     adapted to the new SDK ``Sample`` shape (still uses
+    #     ``getattr(sample, "side"|"cam_id"|"mean", ...)``).
+    #   - Re-wires ``startCapture`` to construct the warning sink, build
+    #     the callbacks, set ``rolling_avg_enabled=True`` plus
+    #     ``rolling_avg_window`` on the ``ScanRequest``, and pass
+    #     ``on_dark_frame_fn`` / ``on_rolling_avg_fn`` into
+    #     ``self._interface.start_scan(...)``.
+    #
+    # The state machine resets between scans automatically because
+    # ``_make_contact_quality_callbacks`` instantiates a fresh
+    # ``_ContactQualityState`` each call.
+    def _make_contact_quality_callbacks(
+        self,
+        *,
+        dark_thresholds,
+        light_thresholds,
+        warning_sink,
+    ) -> tuple[callable, callable]:
+        """Build dark/rolling callback pair for live CQ warning evaluation.
+
+        ``warning_sink`` is invoked as
+        ``warning_sink(side, cam_id, type_key, value, active)`` whenever
+        the ``_ContactQualityState`` machine transitions a per-camera
+        warning between activated and cleared. ``type_key`` is
+        ``"ambient_light"`` (dark frame above pedestal) or
+        ``"poor_contact"`` (rolling-average light frame below threshold).
+        """
+        state = _ContactQualityState()
+
+        def _on_dark_frame(sample):
+            side = str(getattr(sample, "side", ""))
+            cam_id = int(getattr(sample, "cam_id", -1))
+            dark_mean = float(getattr(sample, "mean", 0.0))
+            threshold = self._threshold_for(
+                dark_thresholds, cam_id, _CQ_DEFAULT_DARK_THRESHOLD_DN
+            )
+            transition = state.process_dark(
+                side=side,
+                cam_id=cam_id,
+                bg_sub_mean=dark_mean,
+                threshold_dn=threshold,
+            )
+            if self._cq_quick_running or transition != "none":
+                logger.info(
+                    "CQ compare DARK %s: dark_mean=%.2f DN (bg-sub), threshold=%.2f DN -> %s",
+                    self._camera_label(side, cam_id),
+                    dark_mean,
+                    threshold,
+                    "WARN" if transition == "activated" else ("CLEAR" if transition == "cleared" else "OK"),
+                )
+            if transition == "activated":
+                warning_sink(side, cam_id, "ambient_light", dark_mean, True)
+            elif transition == "cleared":
+                warning_sink(side, cam_id, "ambient_light", dark_mean, False)
+
+        def _on_rolling_avg(sample):
+            side = str(getattr(sample, "side", ""))
+            cam_id = int(getattr(sample, "cam_id", -1))
+            avg_light_mean = float(getattr(sample, "mean", 0.0))
+            threshold = self._threshold_for(
+                light_thresholds, cam_id, _CQ_DEFAULT_LIGHT_THRESHOLD_DN
+            )
+            transition = state.process_rolling(
+                side=side,
+                cam_id=cam_id,
+                bg_sub_mean=avg_light_mean,
+                threshold_dn=threshold,
+            )
+            if self._cq_quick_running or transition != "none":
+                logger.info(
+                    "CQ compare LIGHT_AVG %s: avg_light_mean=%.2f DN (bg-sub), threshold=%.2f DN -> %s",
+                    self._camera_label(side, cam_id),
+                    avg_light_mean,
+                    threshold,
+                    "WARN" if transition == "activated" else ("CLEAR" if transition == "cleared" else "OK"),
+                )
+            if transition == "activated":
+                warning_sink(side, cam_id, "poor_contact", avg_light_mean, True)
+            elif transition == "cleared":
+                warning_sink(side, cam_id, "poor_contact", avg_light_mean, False)
+
+        return _on_dark_frame, _on_rolling_avg
 
     @pyqtSlot()
     def runContactQualityCheck(self):
