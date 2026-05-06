@@ -682,6 +682,64 @@ Item {
                     }
                 }
 
+                // ── BFI / BVI Calibration ────────────────────────────────────
+                SectionCard {
+                    title: "BFI / BVI Calibration"
+
+                    Text {
+                        text: "Place a static phantom on the target side(s), then press Calibrate to measure and store the reference bounds."
+                        color: root.colTextMuted
+                        font.pixelSize: 11
+                        font.italic: true
+                        wrapMode: Text.WordWrap
+                        Layout.fillWidth: true
+                        Layout.bottomMargin: 4
+                    }
+
+                    FieldRow {
+                        label: "Target"
+
+                        StyledCombo {
+                            id: calibrationTargetCombo
+                            Layout.preferredWidth: 110
+                            model: ["Both", "Left", "Right"]
+                            currentIndex: 0
+                        }
+
+                        ActionButton {
+                            id: calibrateBtn
+                            text: "Calibrate"
+                            Layout.preferredWidth: 90
+                            onClicked: {
+                                var target = calibrationTargetCombo.currentText.toLowerCase()
+                                calibrateBtn.text    = "Running…"
+                                calibrateBtn.enabled = false
+                                calibStatusText.text  = ""
+                                MOTIONInterface.runBfiCalibration(target)
+                            }
+                        }
+
+                        Text {
+                            id: calibStatusText
+                            text: ""
+                            color: root.colTextMuted
+                            font.pixelSize: 12
+                            wrapMode: Text.WordWrap
+                            Layout.fillWidth: true
+                        }
+                    }
+
+                    Connections {
+                        target: MOTIONInterface
+                        function onCalibrationFinished(success, message) {
+                            calibrateBtn.text    = "Calibrate"
+                            calibrateBtn.enabled = true
+                            calibStatusText.text  = message
+                            calibStatusText.color = success ? theme.statusGreen : theme.accentRed
+                        }
+                    }
+                }
+
                 // ── Appearance ───────────────────────────────────────────────
                 SectionCard {
                     title: "Appearance"

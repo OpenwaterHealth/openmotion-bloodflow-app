@@ -81,6 +81,11 @@ _CQ_DEFAULT_LIGHT_THRESHOLD_DN = 15.0
 _CQ_AMBIENT_CLEAR_FRAMES = 6
 _CQ_DEFAULT_ROLLING_WINDOW = 10
 
+# BFI/BVI calibration defaults
+_CALIBRATION_SCAN_DURATION_SEC = 5       # Duration of the phantom calibration scan
+_MIN_CALIBRATION_CONTRAST = 0.01        # Floor for C_max to keep denominators positive
+_MIN_CALIBRATION_INTENSITY = 1.0        # Floor for I_max to keep denominators positive
+
 
 class _ContactQualityState:
     """Per-camera latch state for dark and rolling-average callbacks."""
@@ -230,6 +235,10 @@ class MOTIONConnector(QObject):
     contactQualityIssueStateChanged = pyqtSignal(str, str, str, float, bool)
     contactQualityScanInProgress = pyqtSignal(bool)
 
+    # BFI/BVI calibration signals
+    calibrationStarted = pyqtSignal(str)        # target: "left", "right", or "both"
+    calibrationFinished = pyqtSignal(bool, str) # (success, message)
+
     @staticmethod
     def _camera_label(side: str, cam_id: int) -> str:
         prefix = "L" if side == "left" else "R"
@@ -259,6 +268,8 @@ class MOTIONConnector(QObject):
             return "Scan already running"
         if self._config_running:
             return "Camera configuration already in progress"
+        if getattr(self, "_calibration_running", False):
+            return "Calibration already in progress"
         workflow = self._scan_workflow
         if workflow is not None and getattr(workflow, "running", False):
             return "Scan already running"
@@ -380,6 +391,12 @@ class MOTIONConnector(QObject):
         self._scan_workflow.set_realtime_calibration(
             _BFI_C_MIN, _BFI_C_MAX, _BFI_I_MIN, _BFI_I_MAX
         )
+        # Per-instance copies of calibration arrays (updated by runBfiCalibration)
+        self._bfi_c_min = _BFI_C_MIN.copy()
+        self._bfi_c_max = _BFI_C_MAX.copy()
+        self._bfi_i_min = _BFI_I_MIN.copy()
+        self._bfi_i_max = _BFI_I_MAX.copy()
+        self._calibration_running = False
         self.connect_signals()
         self._viz_thread = None
         self._viz_worker = None
@@ -1188,6 +1205,174 @@ class MOTIONConnector(QObject):
             self._cq_quick_running = False
             self.contactQualityScanInProgress.emit(False)
             self.contactQualityCheckFinished.emit(False, "Failed to start scan", [])
+
+    # ── BFI/BVI calibration ─────────────────────────────────────────────────
+
+    @pyqtSlot(str)
+    def runBfiCalibration(self, target: str) -> None:
+        """Run a BFI/BVI calibration scan on a static phantom for the specified target.
+
+        Args:
+            target: ``"left"``, ``"right"``, or ``"both"``
+
+        Emits :attr:`calibrationStarted` when the scan begins and
+        :attr:`calibrationFinished` ``(success, message)`` when done.
+        """
+        target = (target or "").lower().strip()
+        if target not in ("left", "right", "both"):
+            self.calibrationFinished.emit(
+                False,
+                f"Invalid calibration target '{target}'. Must be 'left', 'right', or 'both'.",
+            )
+            return
+
+        err = self._ensure_idle()
+        if err is not None:
+            self.calibrationFinished.emit(False, err)
+            return
+
+        # Determine which sides are needed and whether they are connected
+        need_left = target in ("left", "both")
+        need_right = target in ("right", "both")
+
+        if need_left and not self._leftSensorConnected:
+            self.calibrationFinished.emit(False, "Left sensor not connected")
+            return
+        if need_right and not self._rightSensorConnected:
+            self.calibrationFinished.emit(False, "Right sensor not connected")
+            return
+
+        left_mask = 0xFF if need_left else 0x00
+        right_mask = 0xFF if need_right else 0x00
+
+        data_dir = os.path.join(self._output_base, "calibration")
+        try:
+            os.makedirs(data_dir, exist_ok=True)
+        except Exception as exc:
+            self.calibrationFinished.emit(False, f"Failed to create calibration dir: {exc}")
+            return
+
+        self._calibration_running = True
+        self.calibrationStarted.emit(target)
+        logger.info("Starting BFI/BVI calibration scan — target: %s", target)
+
+        req = ScanRequest(
+            subject_id="bfi_calibration",
+            duration_sec=_CALIBRATION_SCAN_DURATION_SEC,
+            left_camera_mask=left_mask,
+            right_camera_mask=right_mask,
+            data_dir=data_dir,
+            disable_laser=False,
+            write_raw_csv=False,
+            raw_csv_duration_sec=0.0,
+            reduced_mode=False,
+            rolling_avg_enabled=False,
+            rolling_avg_window=1,
+        )
+
+        def _on_calibration_complete(result):
+            self._calibration_running = False
+            ok = bool(getattr(result, "ok", False))
+            if not ok:
+                msg = str(getattr(result, "error", "") or "Calibration scan failed")
+                logger.error("BFI calibration scan did not complete: %s", msg)
+                self.calibrationFinished.emit(False, msg)
+                return
+            try:
+                self._update_calibration_from_scan(
+                    target=target,
+                    left_path=result.left_path,
+                    right_path=result.right_path,
+                )
+                logger.info("BFI/BVI calibration updated — target: %s", target)
+                self.calibrationFinished.emit(True, f"Calibration complete ({target})")
+            except Exception as exc:
+                logger.exception("Failed to update BFI/BVI calibration")
+                self.calibrationFinished.emit(False, f"Calibration failed: {exc}")
+
+        started = self._interface.start_scan(
+            req,
+            on_complete_fn=_on_calibration_complete,
+            on_error_fn=lambda e: logger.error("BFI calibration scan error: %s", e),
+            on_log_fn=lambda msg: logger.debug("BFI cal scan: %s", msg),
+        )
+        if not started:
+            self._calibration_running = False
+            self.calibrationFinished.emit(False, "Failed to start calibration scan")
+
+    def _update_calibration_from_scan(
+        self,
+        *,
+        target: str,
+        left_path: str,
+        right_path: str,
+    ) -> None:
+        """Compute per-camera calibration bounds from a phantom scan and apply them.
+
+        Only the module(s) matching *target* are updated; the other module retains
+        its existing calibration values.
+
+        Args:
+            target:     ``"left"``, ``"right"``, or ``"both"``
+            left_path:  Path to the left-sensor CSV (or raw file); may be empty.
+            right_path: Path to the right-sensor CSV (or raw file); may be empty.
+        """
+        # Normalise paths
+        left_path = (left_path or "").strip()
+        right_path = (right_path or "").strip()
+        if left_path.lower().endswith(".raw"):
+            left_path = left_path[:-4] + ".csv"
+        if right_path.lower().endswith(".raw"):
+            right_path = right_path[:-4] + ".csv"
+        if left_path and not Path(left_path).exists():
+            left_path = ""
+        if right_path and not Path(right_path).exists():
+            right_path = ""
+
+        if not left_path and not right_path:
+            raise ValueError("No calibration scan data files found")
+
+        viz = VisualizeBloodflow(left_path or "", right_path or "")
+        viz.compute()
+        _, _, camera_inds, contrast, mean = viz.get_results()
+        sides = getattr(viz, "_sides", None)
+
+        new_c_max = self._bfi_c_max.copy()
+        new_i_max = self._bfi_i_max.copy()
+
+        for idx, cam_id in enumerate(camera_inds):
+            cam_pos = int(cam_id) % 8
+            side = str(sides[idx]) if sides is not None and idx < len(sides) else "left"
+            module_idx = 0 if side == "left" else 1
+
+            # Only update the module(s) indicated by target
+            if target == "left" and module_idx != 0:
+                continue
+            if target == "right" and module_idx != 1:
+                continue
+            # "both" updates all modules
+
+            if cam_pos < new_c_max.shape[1] and module_idx < new_c_max.shape[0]:
+                avg_c = float(np.mean(contrast[idx, :]))
+                avg_i = float(np.mean(mean[idx, :]))
+                # Clamp to a sensible minimum so the denominator stays positive
+                new_c_max[module_idx, cam_pos] = max(avg_c, _MIN_CALIBRATION_CONTRAST)
+                new_i_max[module_idx, cam_pos] = max(avg_i, _MIN_CALIBRATION_INTENSITY)
+
+        self._bfi_c_max = new_c_max
+        self._bfi_i_max = new_i_max
+
+        # Push updated calibration to the real-time scan workflow
+        self._scan_workflow.set_realtime_calibration(
+            self._bfi_c_min, self._bfi_c_max, self._bfi_i_min, self._bfi_i_max
+        )
+
+        logger.info(
+            "Applied BFI/BVI calibration for target '%s': C_max=%s  I_max=%s",
+            target,
+            new_c_max,
+            new_i_max,
+        )
 
     @pyqtSlot()
     def _on_dropout_check(self):
