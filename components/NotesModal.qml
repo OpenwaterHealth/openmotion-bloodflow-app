@@ -11,6 +11,9 @@ Item {
 
     AppTheme { id: theme }
 
+    // Modal interface — see HistoryModal.qml for rationale.
+    readonly property string label: "Session Notes"
+
     function open() {
         notesArea.text = MOTIONInterface.scanNotes
         root.visible = true
@@ -26,7 +29,7 @@ Item {
     Rectangle {
         anchors.fill: parent
         color: "#000000AA"
-        MouseArea { anchors.fill: parent; onClicked: {} }
+        MouseArea { anchors.fill: parent; onClicked: root.close() }
     }
 
     Rectangle {
@@ -37,6 +40,10 @@ Item {
         border.color: theme.borderSubtle
         border.width: 2
         anchors.centerIn: parent
+
+        // Absorb empty-space clicks inside the modal so they don't
+        // propagate to the backdrop and close the modal (issue #106).
+        MouseArea { anchors.fill: parent }
 
         // X close button
         Rectangle {
@@ -60,7 +67,7 @@ Item {
             spacing: 16
 
             Text {
-                text: "Session Notes"
+                text: root.label
                 color: theme.textPrimary
                 font.pixelSize: 20
                 font.weight: Font.Bold

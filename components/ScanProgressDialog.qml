@@ -10,6 +10,12 @@ Item {
 
     AppTheme { id: theme }
 
+    // Modal interface — see HistoryModal.qml for rationale. The
+    // visible title (``message`` below) tracks the live scan stage
+    // ("Scanning…" → "Aborting…" → "Capture complete"); ``label`` is
+    // the stable identifier consumers use.
+    readonly property string label: "Scan Progress"
+
     // API
     signal cancelRequested()
     property alias message: titleLabel.text
@@ -48,6 +54,10 @@ Item {
         border.width: 2
         anchors.centerIn: parent
         focus: true
+
+        // Absorb empty-space clicks inside the dialog so they don't
+        // propagate to the backdrop and close it (issue #106).
+        MouseArea { anchors.fill: parent }
 
         ColumnLayout {
             anchors.fill: parent

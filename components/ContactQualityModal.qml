@@ -48,6 +48,24 @@ Item {
     property bool preScanMode: false
     // Live-scan modal is only dismissable when no CQ issues remain active.
     property bool liveScanDismissable: false
+    // ModalManager opt-out: don't allow click-outside / icon-bar clicks to
+    // close this modal while a check is in flight, while it is gating a
+    // pre-scan Start, or while a live scan is running. The user must use
+    // the in-modal buttons (Start Scan / Dismiss / Stop scan) so the
+    // associated scan / runner state is unwound correctly.
+    readonly property bool dismissable: state_ !== "checking"
+                                        && !preScanMode
+                                        && !liveScan
+
+    // Modal interface — see HistoryModal.qml for rationale. Derived
+    // from state_ since this modal's title shifts with the check
+    // outcome; the title Text below binds to this.
+    readonly property string label: {
+        if (state_ === "checking") return "Checking contact quality…"
+        if (state_ === "ok")       return "Good signal quality"
+        if (state_ === "error")    return "Contact check failed"
+        return "Contact Quality Notification"
+    }
     // Require an all-clear holdoff before enabling Continue.
     property int clearHoldoffMs: 2000
     // Active camera masks for current scan selection (used in live-scan mode).
@@ -236,7 +254,13 @@ Item {
     Rectangle {
         anchors.fill: parent
         color: "#000000AA"
-        MouseArea { anchors.fill: parent; onClicked: {} }
+        // Click-outside dismisses, but only when the modal opted in via
+        // the `dismissable` property (false during checking / pre-scan
+        // gating / live-scan warnings — see `dismissable` binding above).
+        MouseArea {
+            anchors.fill: parent
+            onClicked: { if (root.dismissable) root.close() }
+        }
     }
 
     // ── dialog panel ─────────────────────────────────────────────────────
@@ -268,12 +292,7 @@ Item {
                 font.bold: true
                 color: theme.textPrimary
                 wrapMode: Text.WordWrap
-                text: {
-                    if (root.state_ === "checking") return "Checking contact quality…"
-                    if (root.state_ === "ok")       return "Good signal quality"
-                    if (root.state_ === "error")    return "Contact check failed"
-                    return "Contact Quality Notification"
-                }
+                text: root.label
             }
 
             // Spinner for "checking" state

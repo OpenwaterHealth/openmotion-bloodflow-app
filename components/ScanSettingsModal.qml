@@ -11,6 +11,9 @@ Item {
 
     AppTheme { id: theme }
 
+    // Modal interface — see HistoryModal.qml for rationale.
+    readonly property string label: "Scan Settings"
+
     // Camera selection
     signal selectionChanged(int leftMask, int rightMask)
 
@@ -91,9 +94,30 @@ Item {
         var h = parseInt(hoursField.text);   if (isNaN(h)) h = 0
         var m = parseInt(minutesField.text); if (isNaN(m)) m = 0
         var s = parseInt(secondsField.text); if (isNaN(s)) s = 0
-        root.hours   = Math.max(0, Math.min(99, h))
-        root.minutes = Math.max(0, Math.min(59, m))
-        root.seconds = Math.max(0, Math.min(59, s))
+        h = Math.max(0, Math.min(99, h))
+        m = Math.max(0, Math.min(59, m))
+        s = Math.max(0, Math.min(59, s))
+
+        // Reject 0:00:00 — a zero-second scan can't acquire any data.
+        // Reset to 1 minute and fire a warning toast so the user sees
+        // why their input was overridden. (Issue #82.) The 'tag'
+        // dedupes repeated rejections into a single visible toast.
+        if (!root.freeRun && h === 0 && m === 0 && s === 0) {
+            h = 0; m = 1; s = 0
+            MOTIONInterface.notify(
+                "Scan duration cannot be 0 seconds — reset to 1 minute.",
+                "warning", 5000, true, "scan-duration-zero"
+            )
+        }
+
+        root.hours   = h
+        root.minutes = m
+        root.seconds = s
+        // Sync field text back so the modal reflects the saved value
+        // (otherwise the rejected 00:00:00 would still show on next open).
+        hoursField.text   = String(h)
+        minutesField.text = String(m).padStart(2, '0')
+        secondsField.text = String(s).padStart(2, '0')
     }
 
     function setInitialSelection(leftArr, rightArr) {
@@ -111,7 +135,7 @@ Item {
     Rectangle {
         anchors.fill: parent
         color: "#000000AA"
-        MouseArea { anchors.fill: parent; onClicked: {} }
+        MouseArea { anchors.fill: parent; onClicked: root.close() }
     }
 
     Rectangle {
@@ -122,6 +146,13 @@ Item {
         border.color: theme.borderSubtle
         border.width: 2
         anchors.centerIn: parent
+
+        // Absorb empty-space clicks inside the modal so they don't
+        // propagate to the backdrop and close the modal (issue #106).
+        // Declared first → lowest in declaration z-order, so the X
+        // close button and every other interactive child still gets
+        // its events first.
+        MouseArea { anchors.fill: parent }
 
         // X close button
         Rectangle {
@@ -146,7 +177,7 @@ Item {
 
             // Title
             Text {
-                text: "Scan Settings"
+                text: root.label
                 color: theme.textPrimary
                 font.pixelSize: 20
                 font.weight: Font.Bold
@@ -167,8 +198,16 @@ Item {
                 Layout.fillWidth: true
                 spacing: 10
 
-                Text {
+                // Read-only TextField (not Text) so the label surfaces in
+                // the Windows UIA tree — test_scan_settings.test_03 polls
+                // for this string.
+                TextField {
                     text: "User Label:"
+                    readOnly: true
+                    selectByMouse: false
+                    activeFocusOnTab: false
+                    background: null
+                    padding: 0
                     color: theme.textSecondary
                     font.pixelSize: 14
                     Layout.alignment: Qt.AlignVCenter

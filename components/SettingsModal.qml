@@ -12,6 +12,9 @@ Item {
 
     AppTheme { id: theme }
 
+    // Modal interface — see HistoryModal.qml for rationale.
+    readonly property string label: "Settings"
+
     // ── Settings values — initialised from live config on creation ──────────
     property int    defaultLeftMaskIndex:  4
     property int    defaultRightMaskIndex: 4
@@ -319,7 +322,7 @@ Item {
     Rectangle {
         anchors.fill: parent
         color: "#000000B0"
-        MouseArea { anchors.fill: parent; onClicked: {} }
+        MouseArea { anchors.fill: parent; onClicked: root.close() }
     }
 
     // ── Modal panel ─────────────────────────────────────────────────────────
@@ -332,6 +335,10 @@ Item {
         border.color: root.colBorder
         border.width: 1
         anchors.centerIn: parent
+
+        // Absorb empty-space clicks inside the modal so they don't
+        // propagate to the backdrop and close the modal (issue #106).
+        MouseArea { anchors.fill: parent }
 
         // Title bar
         Rectangle {
@@ -346,7 +353,7 @@ Item {
                 anchors.left: parent.left
                 anchors.leftMargin: 24
                 anchors.verticalCenter: parent.verticalCenter
-                text: "Settings"
+                text: root.label
                 color: root.colTextPri
                 font.pixelSize: 20
                 font.weight: Font.DemiBold
@@ -712,7 +719,7 @@ Item {
                             text: "Soft Reset"
                             Layout.preferredWidth: 110
                             hoverColor: "#E67E22"
-                            onClicked: MOTIONInterface.softResetSensor("CONSOLE")
+                            onClicked: MOTIONInterface.softResetSensor("console")
                         }
                         Item { Layout.fillWidth: true }
                     }
@@ -763,6 +770,105 @@ Item {
                     }
                 }
 
+                // ── Calibration ──────────────────────────────────────────────
+                SectionCard {
+                    title: "Calibration"
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 12
+
+                        ActionButton {
+                            id: runCalibrationButton
+                            text: "Run Calibration"
+                            Layout.preferredWidth: 160
+                            Layout.preferredHeight: 40
+                            enabled: MOTIONInterface.consoleConnected && !MOTIONInterface.calibrationRunning
+                            onClicked: MOTIONInterface.runCalibration(calibrationTargetCombo.currentText.toLowerCase())
+                        }
+
+                        // Issue #117: test stations don't always have two
+                        // static phantoms — let the operator calibrate one
+                        // side at a time. "Both" preserves the prior default.
+                        StyledCombo {
+                            id: calibrationTargetCombo
+                            Layout.preferredWidth: 110
+                            model: ["Both", "Left", "Right"]
+                            currentIndex: 0
+                            enabled: !MOTIONInterface.calibrationRunning
+                        }
+
+                        // Indicator light
+                        Rectangle {
+                            id: calibLight
+                            width: 14
+                            height: 14
+                            radius: 7
+                            border.width: 1
+                            border.color: root.colBorderSoft
+                            color: {
+                                switch (MOTIONInterface.calibrationStatus) {
+                                case "running": return "#2196F3"  // blue
+                                case "passed":  return "#4CAF50"  // green
+                                case "failed":  return "#F44336"  // red
+                                case "aborted": return "#FF9800"  // orange
+                                default:        return "#9E9E9E"  // gray
+                                }
+                            }
+                        }
+
+                        // Read-only TextField (not Text/Label) so the
+                        // status surfaces in the Windows UIA tree —
+                        // test_calibration_ui polls for this string.
+                        TextField {
+                            id: calibStatusLabel
+                            readOnly: true
+                            selectByMouse: false
+                            activeFocusOnTab: false
+                            background: null
+                            padding: 0
+                            color: root.colTextPri
+                            font.pixelSize: 13
+                            text: {
+                                switch (MOTIONInterface.calibrationStatus) {
+                                case "running":
+                                    return "Calibrating... (" + calibTimer.elapsedSec
+                                           + "s / " + MOTIONInterface.maxCalibrationTimeSec + "s)"
+                                case "passed":  return "Calibration Passed"
+                                case "failed":
+                                    var reason = MOTIONInterface.calibrationFailureReason
+                                    return reason
+                                        ? "Calibration Failed — " + reason
+                                        : "Calibration Failed"
+                                case "aborted": return "Calibration Aborted"
+                                default:        return ""
+                                }
+                            }
+                        }
+
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    // 1 Hz tick driving the elapsed counter while running.
+                    Timer {
+                        id: calibTimer
+                        property int elapsedSec: 0
+                        interval: 1000
+                        repeat: true
+                        running: MOTIONInterface.calibrationRunning
+                        onTriggered: elapsedSec += 1
+                    }
+
+                    Connections {
+                        target: MOTIONInterface
+                        function onCalibrationStateChanged() {
+                            if (MOTIONInterface.calibrationStatus === "running") {
+                                calibTimer.elapsedSec = 0
+                            }
+                        }
+                    }
+                }
+
                 // ── Version Info ─────────────────────────────────────────────
                 SectionCard {
                     title: "About"
@@ -777,8 +883,13 @@ Item {
                         Text { text: MOTIONInterface.get_sdk_version(); color: root.colTextPri; font.pixelSize: 13; font.family: "Consolas" }
                         Item { Layout.fillWidth: true }
                     }
+                    // Updates row is hidden in reduced (clinical) mode —
+                    // clinical users shouldn't see update prompts. The
+                    // auto-check banner is gated separately in
+                    // UpdateBanner.qml. Issue #96.
                     FieldRow {
                         label: "Updates"
+                        visible: !root.reducedMode
                         ActionButton {
                             id: updateCheckBtn
                             text: "Check for Updates"
@@ -800,6 +911,7 @@ Item {
 
                     Connections {
                         target: MOTIONInterface
+                        enabled: !root.reducedMode
                         function onUpdateAvailable(version, url) {
                             updateCheckBtn.text = "Check for Updates"
                             updateCheckBtn.enabled = true

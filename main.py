@@ -1,19 +1,34 @@
 import sys
 import os
-import asyncio
 import json
 import warnings
 import logging
 import datetime
 
+
+# PyInstaller --windowed/--noconsole builds set sys.stdout and sys.stderr
+# to None because there's no console attached. Any code that does
+# `sys.stdout.write(...)` (including logging.StreamHandler) raises
+# AttributeError: 'NoneType' object has no attribute 'write' on the
+# first call. The SDK's shutdown path logs from a finally-block, so a
+# crash there propagates as a CRITICAL "Unhandled Python exception" and
+# terminates the bloodflow process mid-test.
+#
+# Fix: redirect None streams to a safe sink BEFORE any logging is set up.
+# This must happen before any other import that might attach a logger.
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8", buffering=1)
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8", buffering=1)
+
+
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtQml import QQmlApplicationEngine, qmlRegisterSingletonInstance
 from PyQt6.QtCore import qInstallMessageHandler, QtMsgType
-from qasync import QEventLoop
 
 from motion_connector import MOTIONConnector
-from omotion.Interface import MOTIONInterface
+from omotion import MotionInterface
 from utils.single_instance import check_single_instance, cleanup_single_instance
 from version import get_version
 from utils.resource_path import resource_path
@@ -31,8 +46,12 @@ warnings.simplefilter("ignore", DeprecationWarning)
 
 # Wire up the things that get logged out of QT app to the proper logs
 def qt_message_handler(msg_type, context, message):
-    """Custom Qt message handler to forward QML console.log() messages to the run log."""
-    # Map Qt message types to logging levels
+    """Forward QML messages to the SDK log at the matching severity.
+
+    `console.log()` in QML is `QtDebugMsg` and is filtered out by default.
+    Use `console.warn()` / `console.error()` from QML for things that
+    should always reach the run log.
+    """
     log_level_map = {
         QtMsgType.QtDebugMsg: logging.DEBUG,
         QtMsgType.QtInfoMsg: logging.INFO,
@@ -40,15 +59,9 @@ def qt_message_handler(msg_type, context, message):
         QtMsgType.QtCriticalMsg: logging.ERROR,
         QtMsgType.QtFatalMsg: logging.CRITICAL,
     }
-
-    # Get the logging level (default to INFO for console.log)
     log_level = log_level_map.get(msg_type, logging.INFO)
-
-    qml_message = f"QML: {message}"
-
-    logger = logging.getLogger("openmotion.bloodflow-app.qml-console")
-    logger.setLevel(logging.INFO)  # or INFO depending on what you want to see
-    logger.info(qml_message)
+    qml_logger = logging.getLogger("openmotion.bloodflow-app.qml-console")
+    qml_logger.log(log_level, "QML: %s", message)
 
 
 def _load_app_config() -> dict:
@@ -64,8 +77,15 @@ def _load_app_config() -> dict:
         "powerOffUnusedCameras": False,
         "commVerbose": False,  # Enable cmd id and "." prints from MCU
         "verboseCommandHandling": False,  # Enable printf in MCU command handlers
-        "eol_min_mean_per_camera": [0] * 8,
-        "eol_min_contrast_per_camera": [0] * 8,
+        "ft_min_mean_per_camera": [0] * 8,
+        "ft_min_contrast_per_camera": [0] * 8,
+        "ft_min_bfi_per_camera": [0.0] * 8,
+        "ft_max_bfi_per_camera": None,
+        "ft_min_bvi_per_camera": [0.0] * 8,
+        "ft_max_bvi_per_camera": None,
+        "max_calibration_time_sec": 600,
+        "calibration_scan_duration_sec": 5,
+        "calibration_scan_delay_sec": 1,
         "leftMask": 0x66,   # 0b01100110 — cameras 2,3,6,7 (Middle pattern)
         "rightMask": 0x66,
         "uncorrectedOnly": False,
@@ -98,6 +118,14 @@ def _load_app_config() -> dict:
         "bviClampLow": 0.0,
         "bviClampHigh": 10.0,
         "darkMode": True,
+        "cq_check_duration_sec": 1.0,
+        "cq_rolling_avg_window": 10,
+        "cq_dark_threshold_per_camera": [3.0] * 8,
+        "cq_light_threshold_per_camera": [15.0] * 8,
+        # Optional override for the SDK's DEFAULT_TRIGGER_CONFIG. Keys
+        # specified here shallow-merge over the SDK default at
+        # MotionInterface construction time. Absent → use SDK default.
+        "triggerConfig": None,
     }
     config_path = resource_path("config", "app_config.json")
     if not config_path.exists():
@@ -187,8 +215,14 @@ def main():
     sdk_logger.addHandler(file_handler)
     sdk_logger.propagate = False  # Don't propagate to root, use our handlers
 
-    # Construct the MOTIONInterface here and inject it into the connector below
-    motion_interface = MOTIONInterface()
+    # Construct the MotionInterface here and inject it into the connector
+    # below. The optional ``triggerConfig`` key in app_config.json is
+    # passed as ``default_trigger_config`` so app-level tweaks layer on
+    # top of the SDK defaults at construction time. Workflows resolve
+    # to (interface default ⊕ per-request override) thereafter.
+    motion_interface = MotionInterface(
+        default_trigger_config=app_config.get("triggerConfig") or None,
+    )
     motion_interface.log_system_info()
 
     qInstallMessageHandler(qt_message_handler)
@@ -227,54 +261,30 @@ def main():
         logger.error("Error: Failed to load QML file")
         sys.exit(-1)
 
-    loop = QEventLoop(app)
-    asyncio.set_event_loop(loop)
-
-    async def main_async():
-        logger.info("Starting MOTION monitoring...")
-        await connector._interface.start_monitoring()
-
-    async def shutdown():
-        logger.info("Shutting down MOTION monitoring...")
-        connector._interface.stop_monitoring()
-
-        pending_tasks = [t for t in asyncio.all_tasks() if not t.done()]
-        if pending_tasks:
-            logger.info(f"Cancelling {len(pending_tasks)} pending tasks...")
-            for task in pending_tasks:
-                task.cancel()
-            await asyncio.gather(*pending_tasks, return_exceptions=True)
-
-        logger.info("LIFU monitoring stopped. Application shutting down.")
+    # Start the SDK's connection monitor synchronously — it owns its own
+    # daemon thread, so the app's Qt event loop runs unblocked.
+    logger.info("Starting MOTION monitoring...")
+    motion_interface.start(wait=True, wait_timeout=2.0)
 
     def handle_exit():
         logger.info("Application closing...")
-        # Cease scan, stop console trigger, turn off camera modules before monitoring stops
         try:
             connector.shutdown()
         except Exception as e:
             logger.warning("Error during connector shutdown: %s", e)
-        asyncio.ensure_future(shutdown()).add_done_callback(lambda _: loop.stop())
-        engine.deleteLater()  # Ensure QML engine is destroyed
-        cleanup_single_instance()  # Clean up single-instance lock
+        try:
+            motion_interface.stop()
+        except Exception as e:
+            logger.warning("Error stopping MotionInterface: %s", e)
+        engine.deleteLater()
+        cleanup_single_instance()
 
     app.aboutToQuit.connect(handle_exit)
 
     try:
-        with loop:
-            loop.run_until_complete(main_async())
-            loop.run_forever()
-    except RuntimeError as e:
-        if "Event loop stopped before Future completed" in str(e):
-            logger.warning(
-                "App closed while a Future was still running (safe to ignore)"
-            )
-        else:
-            logger.error(f"Runtime error: {e}")
+        sys.exit(app.exec())
     except KeyboardInterrupt:
         logger.info("Application interrupted by user.")
-    finally:
-        loop.close()
 
 
 if __name__ == "__main__":

@@ -12,6 +12,12 @@ Item {
 
     AppTheme { id: theme }
 
+    // Modal interface: the user-visible label for this modal. Single
+    // source of truth — the title Text below binds to this, and the
+    // ModalManager / close-while-busy handler can read it without
+    // hardcoding the string.
+    readonly property string label: "Scan History"
+
     property var scans: []
     property var selected: ({})
     property bool visualizing: false
@@ -66,7 +72,7 @@ Item {
     Rectangle {
         anchors.fill: parent
         color: "#000000AA"
-        MouseArea { anchors.fill: parent; onClicked: {} }
+        MouseArea { anchors.fill: parent; onClicked: root.close() }
     }
 
     Rectangle {
@@ -77,6 +83,10 @@ Item {
         border.color: theme.borderSubtle
         border.width: 2
         anchors.centerIn: parent
+
+        // Absorb empty-space clicks inside the modal so they don't
+        // propagate to the backdrop and close the modal (issue #106).
+        MouseArea { anchors.fill: parent }
 
         // X close button
         Rectangle {
@@ -105,7 +115,7 @@ Item {
                 spacing: 12
 
                 Text {
-                    text: "Scan History"
+                    text: root.label
                     font.pixelSize: 20
                     font.weight: Font.Bold
                     color: theme.textPrimary
@@ -377,6 +387,14 @@ Item {
                 BusyIndicator { running: root.visualizing; width: 48; height: 48 }
                 Text { text: "Processing..."; color: theme.textPrimary; font.pixelSize: 14 }
             }
+        }
+
+        // Match the other modals (SettingsModal, ScanSettingsModal):
+        // Escape closes. Without this, ``pyautogui.press('escape')`` is
+        // a no-op for History, which left the modal stuck open between
+        // tests and broke test_history.test_02 in confusing ways.
+        Keys.onReleased: function(event) {
+            if (event.key === Qt.Key_Escape) { root.close(); event.accepted = true }
         }
     }
 

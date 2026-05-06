@@ -1,0 +1,274 @@
+"""
+test_notes.py — Session Notes textarea regression suite.
+
+Marker: ``dev`` (~3 min, runs on every push to ``next``).
+
+What it covers
+--------------
+The Notes modal opened via the sidebar's Notes button, exercising the
+QML TextArea end to end:
+
+  - Open / auto-focus on first paint.
+  - Type / persist across modal close + reopen.
+  - Append, clear, multi-line, long text, numeric+punctuation.
+  - Clipboard ops: cut, paste, undo (Ctrl+X / Ctrl+V / Ctrl+Z).
+  - Sidebar toggle (clicking Notes a second time closes the modal).
+  - Rapid open/close cycles.
+
+Preconditions
+-------------
+- App is launched (handled by the session-scoped ``app`` fixture).
+- No hardware required — these tests don't touch the console / sensors.
+- Runner clipboard is sometimes polluted on self-hosted boxes (a
+  ``gh auth login`` setup string was bleeding into clipboard reads).
+  The ``_clear_clipboard`` helper wipes it before every copy → read.
+
+Failure modes the tests guard against
+-------------------------------------
+- TextArea losing focus across modal close/reopen.
+- Ctrl+A → Ctrl+C silently failing when focus is racy (retried 3×).
+- Stale clipboard contents appearing as if they were the typed note.
+- Multi-line content collapsing on round-trip.
+"""
+
+import time
+from datetime import datetime
+
+import pyautogui
+import pytest
+
+from conftest import SLEEP, ensure_visible, get_clipboard, log, require_focus
+from hil_helpers import click_panel, move_window_on_screen
+
+pytestmark = pytest.mark.dev
+
+
+def _open_notes():
+    move_window_on_screen()
+    click_panel("Notes")
+
+
+def _close_notes():
+    require_focus()
+    pyautogui.press("escape")
+    time.sleep(SLEEP)
+
+
+def _clear_textarea():
+    require_focus()
+    pyautogui.hotkey("ctrl", "a")
+    time.sleep(0.2)
+    pyautogui.press("delete")
+    time.sleep(0.3)
+
+
+def _type_note(text: str):
+    require_focus()
+    log.info(f"  type: {text!r}")
+    for line in text.split("\n"):
+        if line:
+            pyautogui.typewrite(line, interval=0.04)
+        pyautogui.press("enter")
+    time.sleep(SLEEP)
+
+
+def _clear_clipboard() -> None:
+    """Empty the system clipboard via PowerShell.
+
+    Self-hosted runners often have a polluted clipboard (e.g. a
+    `gh auth login` setup command from session bringup), and reading
+    that contents back as if it were a copied note made tests
+    flake. Always clear before copy → read.
+    """
+    try:
+        import subprocess
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command", "Set-Clipboard -Value ''"],
+            check=False, timeout=5,
+        )
+    except Exception as e:
+        log.warning(f"  _clear_clipboard failed: {e}")
+
+
+def _copy_all_and_read() -> str:
+    """Select all, copy, return clipboard text. Clears the clipboard
+    first so a polluted host clipboard can't masquerade as the note's
+    contents when Ctrl+C silently fails.
+
+    Retries the copy if the clipboard reads back empty — focus on the
+    Notes textarea sometimes hasn't settled when Ctrl+A is sent on the
+    self-hosted runner, which then selects nothing and copies nothing.
+    """
+    require_focus()
+    for attempt in (1, 2, 3):
+        _clear_clipboard()
+        time.sleep(0.1)
+        pyautogui.hotkey("ctrl", "a")
+        time.sleep(0.3)
+        pyautogui.hotkey("ctrl", "c")
+        time.sleep(0.5)
+        clip = get_clipboard()
+        if clip:
+            if attempt > 1:
+                log.info(f"  _copy_all_and_read succeeded on attempt {attempt}")
+            return clip
+        log.warning(
+            f"  _copy_all_and_read attempt {attempt}/3 returned empty "
+            f"clipboard — retrying"
+        )
+        time.sleep(0.5)
+    return ""
+
+
+@pytest.mark.incremental
+class TestNotes:
+    """Session Notes modal -- typing, persistence, clipboard operations."""
+
+    def test_01_open(self, app):
+        ensure_visible()
+        _open_notes()
+
+    def test_02_auto_focus(self, app):
+        """TextArea receives forceActiveFocus() on open — typing
+        immediately should land in the field without an explicit click.
+        Probes by typing a sentinel, copying it back, and asserting
+        the round-trip succeeds. Cleans up so test_03 starts blank."""
+        require_focus()
+        sentinel = "AutoFocusProbe"
+        pyautogui.typewrite(sentinel, interval=0.04)
+        time.sleep(0.5)
+        clip = _copy_all_and_read()
+        assert sentinel in clip, (
+            f"TextArea did not auto-focus: typed {sentinel!r} but the "
+            f"select-all-copy round-trip reads {clip[:40]!r}"
+        )
+        _clear_textarea()
+
+    def test_03_type_note(self, app):
+        self.__class__.unique_note = f"AutoTest_{datetime.now():%H%M%S}"
+        _type_note(self.unique_note)
+
+    def test_04_close_x(self, app):
+        _close_notes()
+
+    def test_05_persist_after_reopen(self, app):
+        _open_notes()
+        clip = _copy_all_and_read()
+        assert self.unique_note in clip, (
+            f"Expected '{self.unique_note}' in clipboard, got: '{clip[:60]}'"
+        )
+
+    def test_06_append(self, app):
+        require_focus()
+        pyautogui.hotkey("ctrl", "end")
+        time.sleep(0.2)
+        pyautogui.typewrite(" -- appended", interval=0.04)
+        time.sleep(SLEEP)
+
+    def test_07_clear(self, app):
+        _clear_textarea()
+        time.sleep(SLEEP)
+
+    def test_08_multi_line(self, app):
+        _type_note("Line one\nLine two\nLine three")
+
+    def test_09_close_escape(self, app):
+        _close_notes()
+
+    def test_10_multiline_persists(self, app):
+        _open_notes()
+        clip = _copy_all_and_read()
+        assert "Line one" in clip and "Line three" in clip, (
+            f"Multi-line text not preserved: '{clip[:80]}'"
+        )
+
+    def test_13_long_text(self, app):
+        """500-char single-line text (word-wrap stress test)."""
+        long_text = "LongNote_" + "X" * 500
+        _type_note(long_text)
+        _close_notes()
+        _open_notes()
+        clip = _copy_all_and_read()
+        assert long_text[:20] in clip, (
+            f"500-char text not persisted: '{clip[:40]}'"
+        )
+
+    def test_14_numeric_punctuation(self, app):
+        _clear_textarea()
+        num_note = "ID: 12345 HR: 72bpm BP: 120/80"
+        _type_note(num_note)
+        _close_notes()
+        _open_notes()
+        clip = _copy_all_and_read()
+        assert "12345" in clip and "72bpm" in clip, (
+            f"Numeric/punct not persisted: '{clip[:60]}'"
+        )
+
+    def test_15_cut(self, app):
+        require_focus()
+        pyautogui.hotkey("ctrl", "a")
+        time.sleep(0.2)
+        pyautogui.hotkey("ctrl", "x")
+        time.sleep(0.5)
+        clip = get_clipboard()
+        assert len(clip) > 0, "Ctrl+X did not put text in clipboard"
+
+    def test_16_paste(self, app):
+        require_focus()
+        pyautogui.hotkey("ctrl", "v")
+        time.sleep(SLEEP)
+        clip = _copy_all_and_read()
+        assert len(clip) > 0, "Ctrl+V did not restore text"
+
+    def test_17_undo(self, app):
+        _clear_textarea()
+        require_focus()
+        pyautogui.typewrite("UndoTarget", interval=0.04)
+        time.sleep(0.5)
+        pyautogui.hotkey("ctrl", "a")
+        time.sleep(0.2)
+        pyautogui.press("delete")
+        time.sleep(0.3)
+        pyautogui.hotkey("ctrl", "z")  # undo the delete
+        time.sleep(0.5)
+        clip = _copy_all_and_read()
+        assert "UndoTarget" in clip, (
+            f"Ctrl+Z did not restore text: '{clip[:60]}'"
+        )
+
+    def test_18_sidebar_toggle(self, app):
+        _clear_textarea()
+        _close_notes()
+        _open_notes()
+        click_panel("Notes")  # toggle close
+        _open_notes()  # reopen for remaining tests
+
+    def test_19_large_note(self, app):
+        """10-line note persistence test."""
+        _clear_textarea()
+        large_note = "\n".join(
+            f"Line {i:02d}: data point {i * 10}" for i in range(1, 11)
+        )
+        _type_note(large_note)
+        _close_notes()
+        _open_notes()
+        clip = _copy_all_and_read()
+        assert "Line 01" in clip and "Line 10" in clip, (
+            f"10-line note not persisted: first='{clip[:25]}'"
+        )
+
+    def test_20_rapid_cycle(self, app):
+        """Text survives 3 rapid open/close cycles."""
+        _clear_textarea()
+        cycle_text = f"CycleTest_{datetime.now():%H%M%S}"
+        _type_note(cycle_text)
+        for _ in range(3):
+            _close_notes()
+            _open_notes()
+        clip = _copy_all_and_read()
+        assert cycle_text in clip, (
+            f"Text lost after 3 cycles: '{clip[:60]}'"
+        )
+        # Clean up
+        _clear_textarea()
+        _close_notes()

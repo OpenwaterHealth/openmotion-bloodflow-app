@@ -11,7 +11,12 @@ Rectangle {
     id: banner
     width: parent.width
     height: visible ? 36 : 0
-    visible: false
+    // Imperative latch: set true when an update is detected, false on
+    // dismiss. Visibility is the AND of "has been shown" and "not
+    // reduced mode" so a runtime flip of reducedMode hides the banner
+    // even after it was already shown. Issue #96 follow-up.
+    property bool shown: false
+    visible: shown && !_reducedMode
     clip: true
 
     AppTheme { id: theme }
@@ -84,24 +89,34 @@ Rectangle {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: banner.visible = false
+                onClicked: banner.shown = false
             }
         }
     }
 
+    // Reduced (clinical) mode: clinical users shouldn't see update
+    // prompts. Skip the auto-check on launch and refuse to show the
+    // banner even if MOTIONInterface.checkForUpdates() is somehow
+    // triggered (e.g. via developer-mode-only Settings row that
+    // shouldn't be reachable in reduced mode anyway). Issue #96.
+    readonly property bool _reducedMode: MOTIONInterface.appConfig.reducedMode === true
+
     Connections {
         target: MOTIONInterface
         function onUpdateAvailable(version, url) {
+            if (banner._reducedMode) return
             banner.latestVersion = version
             banner.downloadUrl = url
-            banner.visible = true
+            banner.shown = true
         }
     }
 
-    // Auto-check on creation (after a brief delay to let the app settle)
+    // Auto-check on creation (after a brief delay to let the app settle).
+    // Disabled in reduced mode so clinical sessions don't make outbound
+    // GitHub API calls or surface upgrade prompts.
     Timer {
         interval: 3000
-        running: true
+        running: !banner._reducedMode
         repeat: false
         onTriggered: MOTIONInterface.checkForUpdates()
     }

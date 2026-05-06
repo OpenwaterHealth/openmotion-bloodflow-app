@@ -5,8 +5,9 @@ on:
   push:
     branches: [main, next]
     tags:
-      - "[0-9]+.[0-9]+.[0-9]+"
-      - "pre-[0-9]+.[0-9]+.[0-9]+"
+      - "[0-9]+.[0-9]+.[0-9]+"             # production release (cut from main)       — SDK from PyPI
+      - "[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+"   # release candidate (cut from next)        — SDK from PyPI
+      - "[0-9]+.[0-9]+.[0-9]+-dev.[0-9]+"  # dev pre-release   (cut from next)        — SDK from @next source
 permissions:
   contents: write
 
@@ -36,26 +37,42 @@ jobs:
           conda activate omotion
           python -m pip install --upgrade pip
 
-          # Fetch latest openmotion-sdk wheel from GitHub Releases
-          WHL_URL=$(python -c "
-          import json, urllib.request, sys
-          url = 'https://api.github.com/repos/OpenwaterHealth/openmotion-sdk/releases/latest'
-          try:
-              data = json.load(urllib.request.urlopen(url))
-              for a in data.get('assets', []):
-                  if a['name'].endswith('.whl'):
-                      print(a['browser_download_url']); sys.exit(0)
-          except Exception:
-              pass
-          sys.exit(1)
-          ")
-
-          if [ -n "$WHL_URL" ]; then
-            echo "Installing pylib wheel: $WHL_URL"
-            pip install "$WHL_URL"
+          # SDK selection:
+          #   * X.Y.Z-dev.N tag → source-install from openmotion-sdk@next so
+          #     the dev pre-release ships against the matching dev SDK.
+          #   * refs/heads/next push → same, source-install from
+          #     openmotion-sdk@next. The bloodflow next branch tracks SDK
+          #     API drift before any release, so it must always pair with
+          #     SDK next; PyPI's latest stable can be API-behind.
+          #   * X.Y.Z      tag → install latest openmotion-sdk from PyPI.
+          #     Production releases ship against the fully-released SDK.
+          #   * X.Y.Z-rc.N tag → install latest openmotion-sdk from PyPI.
+          #     RCs are a hardening pass on a fully-released SDK, so PyPI too.
+          #   * Anything else (refs/heads/main push, manual dispatch) →
+          #     fetch the latest published openmotion-sdk wheel from
+          #     GitHub Releases, with a source-install of main as the
+          #     fallback.
+          if [[ "$GITHUB_REF" == refs/tags/*-dev.* ]] || [[ "$GITHUB_REF" == refs/heads/next ]]; then
+            echo "Dev/next-branch ($GITHUB_REF) — installing SDK from openmotion-sdk@next"
+            pip install "git+https://github.com/OpenwaterHealth/openmotion-sdk.git@next"
+          elif [[ "$GITHUB_REF" =~ ^refs/tags/[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+            echo "Production/RC tag detected ($GITHUB_REF) — installing latest openmotion-sdk from PyPI"
+            pip install --upgrade openmotion-sdk
           else
-            echo "No wheel found – falling back to source install"
-            pip install git+https://github.com/OpenwaterHealth/openmotion-sdk.git
+            # Fetch the latest openmotion-sdk wheel from GitHub Releases.
+            # Kept as a one-liner so the YAML indent (12 spaces inside the
+            # else block) doesn't get treated as Python module-level
+            # whitespace — multiline `python -c` here would fail with
+            # IndentationError: unexpected indent.
+            WHL_URL=$(python -c "import json,urllib.request as ur,sys; d=json.load(ur.urlopen('https://api.github.com/repos/OpenwaterHealth/openmotion-sdk/releases/latest')); w=[a['browser_download_url'] for a in d.get('assets',[]) if a['name'].endswith('.whl')]; print(w[0] if w else '')" 2>/dev/null || true)
+
+            if [ -n "$WHL_URL" ]; then
+              echo "Installing pylib wheel: $WHL_URL"
+              pip install "$WHL_URL"
+            else
+              echo "No wheel found – falling back to source install"
+              pip install git+https://github.com/OpenwaterHealth/openmotion-sdk.git
+            fi
           fi
 
           pip install -r requirements.txt
@@ -66,7 +83,7 @@ jobs:
         run: |
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             TAG="${GITHUB_REF#refs/tags/}"
-            # Strip leading 'v' only; keep 'pre-' for pre-release versions
+            # Strip leading 'v' only; '-dev.N' suffixes stay (semver pre-release).
             VER="${TAG#v}"
           else
             VER=$(git describe --tags --dirty --always --long 2>/dev/null || echo "dev-${GITHUB_SHA::8}")
@@ -95,8 +112,9 @@ jobs:
           echo "ARTIFACT_NAME=OpenMotion-Bloodflow-${TAG}" >> "$GITHUB_OUTPUT"
           echo "ARTIFACT_ZIP=OpenMotion-Bloodflow-${TAG}.zip" >> "$GITHUB_OUTPUT"
 
-          # pre-release flag
-          if [[ "$TAG" == pre-* ]]; then
+          # pre-release flag — X.Y.Z-dev.N (dev) and X.Y.Z-rc.N (release
+          # candidate) tags both mark prerelease in the GitHub release UI.
+          if [[ "$TAG" == *-dev.* ]] || [[ "$TAG" == *-rc.* ]]; then
             echo "PRERELEASE=true" >> "$GITHUB_OUTPUT"
           else
             echo "PRERELEASE=false" >> "$GITHUB_OUTPUT"

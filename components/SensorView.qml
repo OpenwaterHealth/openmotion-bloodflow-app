@@ -160,13 +160,13 @@ Rectangle {
         resetCamerasWhenDisconnected()
     }
     
-    // Update fan status when connection changes
-    Connections {
-        target: connector
-        function onConnectionStatusChanged() {
-            updateFanStatus()
-            resetCamerasWhenDisconnected()
-        }
+    // Update fan status only when THIS side's connected flag actually
+    // toggles. Listening to the connector's connectionStatusChanged
+    // would fire on every state transition of every handle, causing
+    // each SensorView to re-poll its fan whenever the OTHER side moved.
+    onSensorConnectedChanged: {
+        updateFanStatus()
+        resetCamerasWhenDisconnected()
     }
     
     // Helper function to update fan status
