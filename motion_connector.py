@@ -2367,6 +2367,7 @@ class MOTIONConnector(QObject):
             reduced_mode=False,
             rolling_avg_enabled=True,
             rolling_avg_window=max(1, rolling_window),
+            write_telemetry_csv=self._app_config.get("developerMode", False),
         )
 
         def _on_complete(result):
