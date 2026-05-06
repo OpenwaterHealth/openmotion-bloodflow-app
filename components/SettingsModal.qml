@@ -778,12 +778,23 @@ Item {
                         Layout.fillWidth: true
                         spacing: 12
 
+                        // Issue #117: test stations don't always have two
+                        // static phantoms — let the operator calibrate one
+                        // side at a time. "both" preserves the prior default.
+                        StyledCombo {
+                            id: calibrationTargetCombo
+                            Layout.preferredWidth: 110
+                            model: ["both", "left", "right"]
+                            currentIndex: 0
+                            enabled: !MOTIONInterface.calibrationRunning
+                        }
+
                         ActionButton {
                             id: runCalibrationButton
                             text: "Run Calibration"
                             Layout.preferredWidth: 160
                             enabled: MOTIONInterface.consoleConnected && !MOTIONInterface.calibrationRunning
-                            onClicked: MOTIONInterface.runCalibration()
+                            onClicked: MOTIONInterface.runCalibration(calibrationTargetCombo.currentText)
                         }
 
                         // Indicator light

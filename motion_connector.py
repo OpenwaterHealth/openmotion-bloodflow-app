@@ -3143,10 +3143,17 @@ class MOTIONConnector(QObject):
         self._calibrationCompleteSignal.connect(self._on_calibration_complete)
 
     @pyqtSlot()
-    def runCalibration(self):
+    @pyqtSlot(str)
+    def runCalibration(self, target: str = "both"):
         """Kick off the SDK calibration procedure. Idempotent if already
         running. Marshals the worker-thread completion back onto the Qt
         event loop via _calibrationCompleteSignal.
+
+        ``target`` selects which side(s) to calibrate: ``"left"``,
+        ``"right"``, or ``"both"`` (default). Issue #117 — test stations
+        with only one static phantom need to calibrate one side at a time.
+        Camera mask is still ``0xFF`` per side (every camera on the chosen
+        sensor); the app config's leftMask/rightMask still don't apply.
         """
         from omotion import CalibrationRequest, CalibrationThresholds
 
@@ -3157,13 +3164,24 @@ class MOTIONConnector(QObject):
             self.captureLog.emit("⚠️ Cannot calibrate: console not connected.")
             return
 
-        # Always exercise every camera on every connected sensor — calibration
-        # is a per-camera health check, not a user-tunable scan. The app
-        # config's leftMask/rightMask intentionally do NOT apply here.
-        left_mask  = 0xFF if self._leftSensorConnected  else 0x00
-        right_mask = 0xFF if self._rightSensorConnected else 0x00
+        target = (target or "both").lower().strip()
+        if target not in ("left", "right", "both"):
+            self.captureLog.emit(
+                f"⚠️ Cannot calibrate: invalid target '{target}'."
+            )
+            return
+
+        want_left  = target in ("left", "both")
+        want_right = target in ("right", "both")
+        left_mask  = 0xFF if (want_left  and self._leftSensorConnected)  else 0x00
+        right_mask = 0xFF if (want_right and self._rightSensorConnected) else 0x00
         if (left_mask | right_mask) == 0:
-            self.captureLog.emit("⚠️ Cannot calibrate: no sensors connected.")
+            if target == "left" and not self._leftSensorConnected:
+                self.captureLog.emit("⚠️ Cannot calibrate: left sensor not connected.")
+            elif target == "right" and not self._rightSensorConnected:
+                self.captureLog.emit("⚠️ Cannot calibrate: right sensor not connected.")
+            else:
+                self.captureLog.emit("⚠️ Cannot calibrate: no sensors connected.")
             return
 
         thresholds = CalibrationThresholds(
