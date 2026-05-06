@@ -15,7 +15,7 @@ For style guidance on writing or editing tests, see
 
 ## Test inventory
 
-127 tests across 10 files, split into two run-tier markers.
+128 tests across 11 files, split into two run-tier markers.
 
 ### `dev` tier — fires on every push to `next` (~5 min total)
 
@@ -36,6 +36,7 @@ For style guidance on writing or editing tests, see
 | `test_scan_auto_stop_bug_abbreviated.py` | 5 | Same repro logic with 2-min Far/Far scans for fast iteration. | ~25 min |
 | `test_usb_disconnect_freeze.py` | 1 | USB disconnect during scan trigger; 3 iterations without restarting console; verify app does not enter Win32 hung-window state via `IsHungAppWindow()`. | ~12 min |
 | `test_force_laser_fail.py` | 1 | Toggle `forceLaserFail=true`, restart app, fire laser, assert persistent safety toast appears, restore + power-cycle to clean state. | ~3 min |
+| `test_calibration_target_isolation.py` | 1 | Issue #117 — calibration target dropdown isolation. Calibrate Both → Left → Right; between iterations close the app, open a fresh `MotionInterface` in-process to read the console EEPROM JSON, and assert (a) every dump is numerically valid (`C_max > C_min`, `I_max > I_min`, finite), and (b) the un-targeted module's row is byte-identical to the previous dump. Confirms a Left calibration cannot clobber the Right module's stored values, and vice versa. | ~7 min |
 
 Everything in the `release` tier requires a connected console and at
 least one sensor. Tests that cycle power additionally require

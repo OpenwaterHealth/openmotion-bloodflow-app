@@ -782,8 +782,20 @@ Item {
                             id: runCalibrationButton
                             text: "Run Calibration"
                             Layout.preferredWidth: 160
+                            Layout.preferredHeight: 40
                             enabled: MOTIONInterface.consoleConnected && !MOTIONInterface.calibrationRunning
-                            onClicked: MOTIONInterface.runCalibration()
+                            onClicked: MOTIONInterface.runCalibration(calibrationTargetCombo.currentText.toLowerCase())
+                        }
+
+                        // Issue #117: test stations don't always have two
+                        // static phantoms — let the operator calibrate one
+                        // side at a time. "Both" preserves the prior default.
+                        StyledCombo {
+                            id: calibrationTargetCombo
+                            Layout.preferredWidth: 110
+                            model: ["Both", "Left", "Right"]
+                            currentIndex: 0
+                            enabled: !MOTIONInterface.calibrationRunning
                         }
 
                         // Indicator light
