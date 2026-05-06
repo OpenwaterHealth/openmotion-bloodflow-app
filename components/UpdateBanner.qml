@@ -11,7 +11,12 @@ Rectangle {
     id: banner
     width: parent.width
     height: visible ? 36 : 0
-    visible: false
+    // Imperative latch: set true when an update is detected, false on
+    // dismiss. Visibility is the AND of "has been shown" and "not
+    // reduced mode" so a runtime flip of reducedMode hides the banner
+    // even after it was already shown. Issue #96 follow-up.
+    property bool shown: false
+    visible: shown && !_reducedMode
     clip: true
 
     AppTheme { id: theme }
@@ -84,7 +89,7 @@ Rectangle {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: banner.visible = false
+                onClicked: banner.shown = false
             }
         }
     }
@@ -102,7 +107,7 @@ Rectangle {
             if (banner._reducedMode) return
             banner.latestVersion = version
             banner.downloadUrl = url
-            banner.visible = true
+            banner.shown = true
         }
     }
 
