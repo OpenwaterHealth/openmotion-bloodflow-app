@@ -731,10 +731,17 @@ def _calibrate_panel_buttons() -> dict[str, tuple[int, int]]:
     # label UIA didn't find. These are the same coordinates the other
     # UI test scripts use directly via click_sidebar(), so the
     # calibration cache and the direct-click path agree on positions.
+    #
+    # Reduced mode hides Scan\nSettings + Check and slides Notes up
+    # into the former Scan Settings slot — pick the right Notes coord
+    # based on the current ``reducedMode`` config value, matching how
+    # ``panel_button_screen_pos`` handles the same case.
+    reduced = bool(read_app_config_value("reducedMode", False))
+    notes_pos = SIDEBAR_NOTES_REDUCED if reduced else SIDEBAR_NOTES
     label_to_sidebar = {
         "Start":          SIDEBAR_START,
         "Scan\nSettings": SIDEBAR_SCAN_SETTINGS,
-        "Notes":          SIDEBAR_NOTES,
+        "Notes":          notes_pos,
         "Check":          SIDEBAR_CHECK,
         "History":        SIDEBAR_HISTORY,
         "Settings":       SIDEBAR_SETTINGS,
