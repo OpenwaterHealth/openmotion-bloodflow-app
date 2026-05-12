@@ -3507,13 +3507,20 @@ class MOTIONConnector(QObject):
             self._calibration_status = "failed"
             if self._app_config.get("developerMode", False):
                 tests = (("mean", "mean_test"), ("contrast", "contrast_test"),
-                         ("bfi", "bfi_test"), ("bvi", "bvi_test"))
-                self._calibration_failure_reason = "; ".join(
+                         ("bfi", "bfi_test"), ("bvi", "bvi_test"),
+                         ("ambient", "dark_test"))
+                breakdown = "; ".join(
                     f"{'L' if r.side == 'left' else 'R'}{r.cam_id + 1}:"
                     f"{','.join(n for n, a in tests if getattr(r, a) == 'FAIL')}"
                     for r in result.rows
                     if any(getattr(r, a) == "FAIL" for _, a in tests)
                 )
+                # #122: dev-mode message must explicitly call out ambient-
+                # light failures so operators don't misread an "ambient"
+                # tag in the breakdown as a generic test name.
+                if any(r.dark_test == "FAIL" for r in result.rows):
+                    breakdown = f"too much ambient light — {breakdown}"
+                self._calibration_failure_reason = breakdown
             self.captureLog.emit(
                 f"❌ Calibration: FAIL  (CSV: {result.csv_path})"
             )
