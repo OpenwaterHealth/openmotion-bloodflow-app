@@ -413,6 +413,12 @@ class MOTIONConnector(QObject):
         self._ft_max_bfi_per_camera = list(ft_bfi_max) if isinstance(ft_bfi_max, (list, tuple)) else None
         self._ft_min_bvi_per_camera = list(ft_bvi)     if isinstance(ft_bvi,     (list, tuple)) else None
         self._ft_max_bvi_per_camera = list(ft_bvi_max) if isinstance(ft_bvi_max, (list, tuple)) else None
+        # #122: per-camera max dark-frame mean — gates FT calibration on
+        # ambient light leaking into the validation scan's dark frames.
+        ft_dark_max = cfg.get("ft_max_dark_per_camera")
+        self._ft_max_dark_per_camera = (
+            list(ft_dark_max) if isinstance(ft_dark_max, (list, tuple)) else None
+        )
         self._max_calibration_time_sec     = int(cfg.get("max_calibration_time_sec", 600))
         self._calibration_scan_duration_sec = int(cfg.get("calibration_scan_duration_sec", 5))
         self._calibration_scan_delay_sec    = int(cfg.get("calibration_scan_delay_sec", 1))
@@ -3410,6 +3416,10 @@ class MOTIONConnector(QObject):
             max_bvi_per_camera=(
                 list(self._ft_max_bvi_per_camera)
                 if self._ft_max_bvi_per_camera is not None else None
+            ),
+            max_dark_per_camera=(
+                list(self._ft_max_dark_per_camera)
+                if self._ft_max_dark_per_camera is not None else None
             ),
         )
         output_dir = os.path.join(self._directory, "calibrations")
