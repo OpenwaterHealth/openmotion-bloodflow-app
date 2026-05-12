@@ -467,17 +467,13 @@ Item {
         }
     }
 
-    Connections {
-        target: MOTIONInterface
-        function onConnectionStatusChanged() {
-            if (!MOTIONInterface.leftSensorConnected) {
-                leftSelector.currentIndex = 0
-                leftSensorView.resetCamerasWhenDisconnected()
-            }
-            if (!MOTIONInterface.rightSensorConnected) {
-                rightSelector.currentIndex = 0
-                rightSensorView.resetCamerasWhenDisconnected()
-            }
-        }
-    }
+    // Connection status is reflected purely by the selectors' ``enabled:``
+    // bindings (greyed out at 0.4 opacity when the side is disconnected).
+    // The modal does NOT reset its internal selection on disconnect:
+    // issue #40 — a transient USB drop while the modal is open used to
+    // zero out leftSelector/rightSelector here, which then propagated to
+    // bloodFlow.leftMask/rightMask via close() → selectionChanged → the
+    // EmbeddedRealtimePlot ended up with seriesOrder=[] and rendered the
+    // "Press Start to begin scanning" placeholder instead of the live
+    // plot. Preserving the selection lets it ride through the reconnect.
 }
