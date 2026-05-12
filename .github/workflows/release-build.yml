@@ -171,6 +171,8 @@ jobs:
           name: ${{ steps.meta.outputs.TAG }}
           body_path: notes.md
           prerelease: ${{ steps.meta.outputs.PRERELEASE == 'true' }}
-          files: ${{ steps.meta.outputs.ARTIFACT_ZIP }}
+          files: |
+            ${{ steps.meta.outputs.ARTIFACT_ZIP }}
+            resources/OpenMotionDriver-x64.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
