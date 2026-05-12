@@ -78,6 +78,33 @@ RUNNING = 4
 _CQ_DEFAULT_DARK_THRESHOLD_DN = 3.0
 _CQ_DEFAULT_LIGHT_THRESHOLD_DN = 15.0
 _CQ_AMBIENT_CLEAR_FRAMES = 1  # one clean dark frame is enough to clear the latched ambient warning
+
+# Issue #119: a single ``safety_known=False`` poll can be a transient I2C
+# miss during a USB disconnect cascade rather than a real safety-chip
+# fault. Require a streak before firing the persistent toast. Telemetry
+# polls at ~1 Hz, so 3 polls ≈ 3 s — well under the time a user takes to
+# reach Check, preserving the #107 contract (latched chip fault must
+# surface before the laser can be fired).
+SAFETY_UNKNOWN_STREAK_THRESHOLD = 3
+
+
+def _safety_unknown_streak_decision(snap, prev_streak, threshold=SAFETY_UNKNOWN_STREAK_THRESHOLD):
+    """Update the safety-unknown streak counter and decide whether to fire.
+
+    Returns ``(new_streak, should_fire)``.
+
+    - ``safety_known=False`` (chip unresponsive on this poll): increment
+      the streak and report ``should_fire=True`` once it reaches the
+      threshold. The connector's outer ``if not self._safetyFailure``
+      guard prevents the toast from re-firing on every subsequent poll.
+    - ``safety_known=True`` (or missing, for backward compat with legacy
+      SDK snapshots): reset the streak; the caller handles the
+      ``safety_ok`` branch separately.
+    """
+    if not getattr(snap, "safety_known", True):
+        new_streak = prev_streak + 1
+        return new_streak, new_streak >= threshold
+    return 0, False
 _CQ_DEFAULT_ROLLING_WINDOW = 10
 
 
@@ -361,6 +388,7 @@ class MOTIONConnector(QObject):
         self._config_running = False
         self._laserOn = False
         self._safetyFailure = False
+        self._safety_unknown_streak = 0  # see SAFETY_UNKNOWN_STREAK_THRESHOLD
         self._running = False
         self._trigger_state = "OFF"
         self._state = DISCONNECTED
@@ -2079,17 +2107,22 @@ class MOTIONConnector(QObject):
         try:
             # If the safety interlock chip didn't respond on this poll,
             # ``safety_ok`` is the dataclass default ``True`` — not a
-            # verified clear signal. Treat the inability to verify
-            # safety as a safety failure itself: trip on the FIRST
-            # unknown poll, no streak required (issue #107). Telemetry
-            # polls at ~1 Hz, so a genuinely-clean chip will respond
-            # well before the user can issue a Check; a stuck chip
-            # surfaces immediately.
+            # verified clear signal. Earlier #107 fix tripped on the
+            # first unresponsive poll, but #119 showed that a single
+            # missed I2C read can be a transient during a USB
+            # disconnect cascade rather than a real chip fault. Require
+            # a streak (~3 s at 1 Hz) before firing; still well under
+            # the time a user takes to reach Check.
             #
             # Backward compat: snapshots from older SDK builds without
             # ``safety_known`` keep the existing (less safe) behavior
             # of trusting the default ``True``.
+            self._safety_unknown_streak, should_fire_unknown = (
+                _safety_unknown_streak_decision(snap, self._safety_unknown_streak)
+            )
             if not getattr(snap, "safety_known", True):
+                if not should_fire_unknown:
+                    return  # transient miss; wait for streak to confirm
                 if not self._safetyFailure:
                     fault_detail = (
                         "safety interlock chip unresponsive — cannot "
