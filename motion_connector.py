@@ -413,6 +413,12 @@ class MOTIONConnector(QObject):
         self._ft_max_bfi_per_camera = list(ft_bfi_max) if isinstance(ft_bfi_max, (list, tuple)) else None
         self._ft_min_bvi_per_camera = list(ft_bvi)     if isinstance(ft_bvi,     (list, tuple)) else None
         self._ft_max_bvi_per_camera = list(ft_bvi_max) if isinstance(ft_bvi_max, (list, tuple)) else None
+        # #122: per-camera max dark-frame mean — gates FT calibration on
+        # ambient light leaking into the validation scan's dark frames.
+        ft_dark_max = cfg.get("ft_max_dark_per_camera")
+        self._ft_max_dark_per_camera = (
+            list(ft_dark_max) if isinstance(ft_dark_max, (list, tuple)) else None
+        )
         self._max_calibration_time_sec     = int(cfg.get("max_calibration_time_sec", 600))
         self._calibration_scan_duration_sec = int(cfg.get("calibration_scan_duration_sec", 5))
         self._calibration_scan_delay_sec    = int(cfg.get("calibration_scan_delay_sec", 1))
@@ -3411,6 +3417,10 @@ class MOTIONConnector(QObject):
                 list(self._ft_max_bvi_per_camera)
                 if self._ft_max_bvi_per_camera is not None else None
             ),
+            max_dark_per_camera=(
+                list(self._ft_max_dark_per_camera)
+                if self._ft_max_dark_per_camera is not None else None
+            ),
         )
         output_dir = os.path.join(self._directory, "calibrations")
         os.makedirs(output_dir, exist_ok=True)
@@ -3497,13 +3507,20 @@ class MOTIONConnector(QObject):
             self._calibration_status = "failed"
             if self._app_config.get("developerMode", False):
                 tests = (("mean", "mean_test"), ("contrast", "contrast_test"),
-                         ("bfi", "bfi_test"), ("bvi", "bvi_test"))
-                self._calibration_failure_reason = "; ".join(
+                         ("bfi", "bfi_test"), ("bvi", "bvi_test"),
+                         ("ambient", "dark_test"))
+                breakdown = "; ".join(
                     f"{'L' if r.side == 'left' else 'R'}{r.cam_id + 1}:"
                     f"{','.join(n for n, a in tests if getattr(r, a) == 'FAIL')}"
                     for r in result.rows
                     if any(getattr(r, a) == "FAIL" for _, a in tests)
                 )
+                # #122: dev-mode message must explicitly call out ambient-
+                # light failures so operators don't misread an "ambient"
+                # tag in the breakdown as a generic test name.
+                if any(r.dark_test == "FAIL" for r in result.rows):
+                    breakdown = f"too much ambient light — {breakdown}"
+                self._calibration_failure_reason = breakdown
             self.captureLog.emit(
                 f"❌ Calibration: FAIL  (CSV: {result.csv_path})"
             )
