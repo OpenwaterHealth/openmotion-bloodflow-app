@@ -111,6 +111,8 @@ jobs:
           echo "TAG=${TAG}" >> "$GITHUB_OUTPUT"
           echo "ARTIFACT_NAME=OpenMotion-Bloodflow-${TAG}" >> "$GITHUB_OUTPUT"
           echo "ARTIFACT_ZIP=OpenMotion-Bloodflow-${TAG}.zip" >> "$GITHUB_OUTPUT"
+          echo "ARTIFACT_NAME_RUO=OpenMotion-Bloodflow-${TAG}_RUO" >> "$GITHUB_OUTPUT"
+          echo "ARTIFACT_ZIP_RUO=OpenMotion-Bloodflow-${TAG}_RUO.zip" >> "$GITHUB_OUTPUT"
 
           # pre-release flag — X.Y.Z-dev.N (dev) and X.Y.Z-rc.N (release
           # candidate) tags both mark prerelease in the GitHub release UI.
@@ -127,12 +129,38 @@ jobs:
         run: |
           Compress-Archive -Path dist\* -DestinationPath "${{ steps.meta.outputs.ARTIFACT_ZIP }}"
 
+      # ── RUO variant: same bits with reducedMode flipped to false ─
+      - name: Zip RUO build output
+        shell: pwsh
+        run: |
+          $configPath = "dist\OpenWaterApp\_internal\config\app_config.json"
+          if (-not (Test-Path $configPath)) {
+              throw "RUO build failed: bundled config not found at $configPath."
+          }
+          $orig = Get-Content -Raw $configPath
+          $ruo = $orig -replace '"reducedMode"\s*:\s*true', '"reducedMode": false'
+          if ($ruo -eq $orig) {
+              throw "RUO build failed: did not find 'reducedMode: true' in $configPath to flip."
+          }
+          Set-Content -Path $configPath -Value $ruo -Encoding UTF8 -NoNewline
+          try {
+              Compress-Archive -Path dist\* -DestinationPath "${{ steps.meta.outputs.ARTIFACT_ZIP_RUO }}"
+          } finally {
+              Set-Content -Path $configPath -Value $orig -Encoding UTF8 -NoNewline
+          }
+
       # ── always upload workflow artifact ──────────────────────────
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.meta.outputs.ARTIFACT_NAME }}
           path: ${{ steps.meta.outputs.ARTIFACT_ZIP }}
+
+      - name: Upload RUO workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.ARTIFACT_NAME_RUO }}
+          path: ${{ steps.meta.outputs.ARTIFACT_ZIP_RUO }}
 
       # ── build release notes ───────────────────────────────────────
       - name: Build release notes
@@ -173,6 +201,7 @@ jobs:
           prerelease: ${{ steps.meta.outputs.PRERELEASE == 'true' }}
           files: |
             ${{ steps.meta.outputs.ARTIFACT_ZIP }}
+            ${{ steps.meta.outputs.ARTIFACT_ZIP_RUO }}
             resources/OpenMotionDriver-x64.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
