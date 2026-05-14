@@ -393,6 +393,8 @@ class MOTIONConnector(QObject):
         self._trigger_state = "OFF"
         self._state = DISCONNECTED
         self._last_fan_status: dict[str, bool | None] = {"left": None, "right": None}
+        # Track console connection time for safety grace period (issue #107 follow-up)
+        self._console_connected_at: float | None = None
 
         self.laser_params = load_laser_params(config_dir, force_fault=self._force_laser_fail)
         self._tec_voltage_default = load_tec_params(config_dir)
@@ -941,6 +943,8 @@ class MOTIONConnector(QObject):
         if name == "console":
             self._consoleConnected = is_now_connected
             if is_now_connected:
+                # Record connection time for safety grace period
+                self._console_connected_at = time.monotonic()
                 # Race-guard: by the time this slot fires we observe
                 # CONNECTED, but the console can disconnect again before
                 # any of these calls return — particularly during the
@@ -968,6 +972,9 @@ class MOTIONConnector(QObject):
                         f"Console connect-time setup interrupted "
                         f"(probably mid-flight disconnect): {e}"
                     )
+            elif is_now_lost:
+                # Clear connection timestamp on disconnect
+                self._console_connected_at = None
         elif name == "left":
             if is_now_connected:
                 self._leftSensorConnected = True
@@ -2120,6 +2127,14 @@ class MOTIONConnector(QObject):
             # a streak (~3 s at 1 Hz) before firing; still well under
             # the time a user takes to reach Check.
             #
+            # **GRACE PERIOD**: During the first 5 seconds after console
+            # connection (power-on or reconnect), allow transient
+            # unresponsiveness without triggering a safety failure. This
+            # prevents spurious warnings during rapid power cycles where
+            # the safety chip may not respond immediately while hardware
+            # initializes. After the grace period, any unresponsiveness
+            # is treated as a persistent fault.
+            #
             # Backward compat: snapshots from older SDK builds without
             # ``safety_known`` keep the existing (less safe) behavior
             # of trusting the default ``True``.
@@ -2127,6 +2142,16 @@ class MOTIONConnector(QObject):
                 _safety_unknown_streak_decision(snap, self._safety_unknown_streak)
             )
             if not getattr(snap, "safety_known", True):
+                # Grace period: suppress all trips during first 5 s after connect
+                if self._console_connected_at is not None:
+                    time_since_connect = time.monotonic() - self._console_connected_at
+                    if time_since_connect < 5.0:
+                        logger.debug(
+                            f"readSafetyStatus: safety chip unresponsive "
+                            f"{time_since_connect:.1f}s after connect (within grace period)"
+                        )
+                        return
+                # After grace period: require streak before firing
                 if not should_fire_unknown:
                     return  # transient miss; wait for streak to confirm
                 if not self._safetyFailure:
