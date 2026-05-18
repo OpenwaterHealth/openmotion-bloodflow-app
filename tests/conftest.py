@@ -1030,6 +1030,17 @@ def _write_hil_report() -> None:
     log_dir.mkdir(exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+    # Which test scripts ran this session (sorted, deduplicated).
+    test_modules = sorted({r["test_module"] for r in results if r["test_module"]})
+    # Filename slug: single script → that script's name; multiple → a
+    # generic 'suite_<N>scripts' tag so the file name stays readable.
+    if len(test_modules) == 1:
+        module_slug = test_modules[0]
+    elif len(test_modules) > 1:
+        module_slug = f"suite_{len(test_modules)}scripts"
+    else:
+        module_slug = "unknown"
+
     env = _report_get_environment()
     duration = (
         (datetime.now() - _REPORT_SESSION_START).total_seconds()
@@ -1048,6 +1059,7 @@ def _write_hil_report() -> None:
         "report_title": "Open-Motion — HIL Test Session Report",
         "purpose":      "Verification & validation evidence for the HIL "
                         "test suite.",
+        "test_scripts":  test_modules,
         "session_start": _REPORT_SESSION_START.isoformat(timespec="seconds")
                          if _REPORT_SESSION_START else "",
         "session_end":   datetime.now().isoformat(timespec="seconds"),
@@ -1056,7 +1068,7 @@ def _write_hil_report() -> None:
         "summary":       summary,
         "test_results":  results,
     }
-    json_path = log_dir / f"HIL_Report_{ts}.json"
+    json_path = log_dir / f"HIL_Report_{module_slug}_{ts}.json"
     json_path.write_text(json.dumps(report_data, indent=2), encoding="utf-8")
 
     # ── Markdown ──
@@ -1064,6 +1076,16 @@ def _write_hil_report() -> None:
         f"# {report_data['report_title']}",
         "",
         f"**Purpose:** {report_data['purpose']}",
+        "",
+        "## Test Scripts",
+        "",
+    ]
+    if test_modules:
+        for mod in test_modules:
+            lines.append(f"- `{mod}.py`")
+    else:
+        lines.append("- _n/a_")
+    lines += [
         "",
         "## Session",
         "",
@@ -1128,7 +1150,7 @@ def _write_hil_report() -> None:
         f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}_",
         "",
     ]
-    md_path = log_dir / f"HIL_Report_{ts}.md"
+    md_path = log_dir / f"HIL_Report_{module_slug}_{ts}.md"
     md_path.write_text("\n".join(lines), encoding="utf-8")
 
     log.info("HIL report written:")
