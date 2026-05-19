@@ -99,7 +99,14 @@ QtObject {
         }
         onProgress: function(pct) { runner.progressUpdate(pct) }
         onLog: function(line) { runner.messageOut(line) }
+        // Guard against late-fire (issue #124): a connector signal that was
+        // pending when an earlier cycle's ``_finish`` ran can still arrive
+        // and propagate ``finished`` here. Without the guard, the handler
+        // mutates ``_stage`` and re-enters ``_finish``, which then bails on
+        // ``_done`` — leaving the runner wedged in a non-idle stage so the
+        // next ``start()`` is silently rejected.
         onFinished: function(ok, err) {
+            if (runner._done) return
             runner.flashWatchdog.stop()
             if (!ok) { runner._finish(false, err, "", ""); return }
             runner.setTriggerLaserTask.run()
@@ -121,6 +128,7 @@ QtObject {
         onProgress: function(pct) { runner.progressUpdate(pct) }
         onLog: function(line) { runner.messageOut(line) }
         onFinished: function(ok, err) {
+            if (runner._done) return
             runner.setTriggerWatchdog.stop()
             if (!ok) { runner._finish(false, err, "", ""); return }
             if (runner.mode === "check") {
@@ -149,6 +157,7 @@ QtObject {
         onProgress: function(pct) { runner.progressUpdate(pct) }
         onLog: function(line) { runner.messageOut(line) }
         onFinished: function(ok, err) {
+            if (runner._done) return
             if (!ok) { runner._finish(false, err, "", ""); return }
             runner._stage = "post"
             runner.stageUpdate("Scan complete")
@@ -169,6 +178,7 @@ QtObject {
         onProgress: function(pct) { runner.progressUpdate(pct) }
         onLog: function(line) { runner.messageOut(line) }
         onFinished: function(ok, err) {
+            if (runner._done) return
             runner.checkWatchdog.stop()
             runner._finish(ok, err, "", "")
         }

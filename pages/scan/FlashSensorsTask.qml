@@ -17,6 +17,13 @@ QtObject {
     property var _onProg: null
     property var _onDone: null
 
+    function _disconnectHandlers() {
+        // See CaptureDataTask._disconnectHandlers — same rationale (issue #124).
+        if (_onLog)  { try { connector.configLog.disconnect(_onLog)   } catch(e) {} _onLog  = null }
+        if (_onProg) { try { connector.configProgress.disconnect(_onProg) } catch(e) {} _onProg = null }
+        if (_onDone) { try { connector.configFinished.disconnect(_onDone) } catch(e) {} _onDone = null }
+    }
+
     function run() {
         if (!connector || !connector.startConfigureCameraSensors) {
             console.log("FlashSensorsTask: connector missing startConfigureCameraSensors()")
@@ -24,6 +31,7 @@ QtObject {
             return
         }
 
+        _disconnectHandlers()
         started()
         progress(5)
         log("Configuring sensors/FPGA… (mask=0x" + leftCameraMask.toString(16).toUpperCase() + ")")

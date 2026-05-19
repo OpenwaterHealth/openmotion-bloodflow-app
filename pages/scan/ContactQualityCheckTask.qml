@@ -18,11 +18,20 @@ QtObject {
 
     property var _onDone: null
 
+    function _disconnectHandlers() {
+        // See CaptureDataTask._disconnectHandlers — same rationale (issue #124).
+        if (_onDone) {
+            try { connector.contactQualityCheckFinished.disconnect(_onDone) } catch(e) {}
+            _onDone = null
+        }
+    }
+
     function run() {
         if (!connector || !connector.runContactQualityCheck) {
             finished(false, "Connector missing runContactQualityCheck()")
             return
         }
+        _disconnectHandlers()
         started()
         progress(50)
         log("Running contact quality check…")
