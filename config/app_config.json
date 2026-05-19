@@ -99,6 +99,8 @@
   "dataDirectory": null,
   "writeRawCsv": false,
   "rawCsvDurationSec": 60.0,
+  "scanDbEnabled": false,
+  "scanDbWriteRaw": false,
   "autoScale": false,
   "autoScalePerPlot": false,
   "reducedMode": true,

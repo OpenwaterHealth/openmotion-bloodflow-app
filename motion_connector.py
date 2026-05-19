@@ -369,6 +369,10 @@ class MOTIONConnector(QObject):
         self._write_raw_csv               = bool(cfg.get("writeRawCsv", True))
         raw_csv                           = cfg.get("rawCsvDurationSec")
         self._raw_csv_duration_sec        = float(raw_csv) if raw_csv is not None else None
+        # Issue #92: ScanRequest.write_raw_to_db. The DB endpoint itself is
+        # enabled at SDK construction (scanDbEnabled in app_config); this
+        # is just the per-scan raw-frame toggle on top of that.
+        self._scan_db_write_raw           = bool(cfg.get("scanDbWriteRaw", False))
         self._uncorrected_only            = bool(cfg.get("uncorrectedOnly", False))
 
         # Configure logging with the provided level
@@ -1436,6 +1440,21 @@ class MOTIONConnector(QObject):
         self.appConfigChanged.emit()
         logger.debug(f"[Connector] rawCsvDurationSec set to {self._raw_csv_duration_sec}")
 
+    @pyqtSlot(bool)
+    def setScanDbWriteRaw(self, enabled: bool) -> None:
+        """Update scanDbWriteRaw in both the runtime cache and persisted config.
+
+        Issue #92: per-scan opt-in to persist raw histogram frames into the
+        scan DB. Only effective when the SDK was constructed with a db_path
+        (scanDbEnabled at app startup); otherwise this flag is a no-op
+        because no sink is built.
+        """
+        self._scan_db_write_raw = bool(enabled)
+        self._app_config["scanDbWriteRaw"] = self._scan_db_write_raw
+        self._save_app_config()
+        self.appConfigChanged.emit()
+        logger.debug(f"[Connector] scanDbWriteRaw set to {self._scan_db_write_raw}")
+
     @pyqtProperty(str, notify=scanNotesChanged)  # <-- add notify
     def scanNotes(self):
         return self._scan_notes
@@ -1777,6 +1796,9 @@ class MOTIONConnector(QObject):
             disable_laser=disable_laser,
             write_raw_csv=self._write_raw_csv,
             raw_csv_duration_sec=self._raw_csv_duration_sec,
+            # Issue #92: per-scan raw-frame opt-in for the DB sink. No-op
+            # unless the SDK was constructed with a db_path (scanDbEnabled).
+            write_raw_to_db=self._scan_db_write_raw,
             reduced_mode=self._app_config.get("reducedMode", False),
             # Issue #43: clinical users don't need the per-scan
             # _telemetry.csv with TCM/TCL/PDC samples — gate it on

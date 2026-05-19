@@ -38,6 +38,9 @@ Item {
     property real   contrastMax: 1.0
     property bool   writeRawCsv:       false
     property var    rawCsvDurationSec: 60
+    // Issue #92: per-scan opt-in to persist raw histogram frames into the
+    // scan DB (only effective when scanDbEnabled is true at app startup).
+    property bool   scanDbWriteRaw:    false
 
     // ── Theme tokens (aliased from AppTheme) ──────────────────────────────
     readonly property color colBgPanel:    theme.bgContainer
@@ -76,6 +79,7 @@ Item {
         contrastMax  = cfg.contrastMax  !== undefined ? cfg.contrastMax  : 1.0
         writeRawCsv       = cfg.writeRawCsv       !== undefined ? cfg.writeRawCsv       : false
         rawCsvDurationSec = cfg.rawCsvDurationSec !== undefined ? cfg.rawCsvDurationSec : null
+        scanDbWriteRaw    = cfg.scanDbWriteRaw    !== undefined ? cfg.scanDbWriteRaw    : false
         if (darkModeSwitch) darkModeSwitch.checked = cfg.darkMode !== false
     }
 
@@ -124,6 +128,7 @@ Item {
         })
         MOTIONInterface.setWriteRawCsv(writeRawCsv)
         MOTIONInterface.setRawCsvDurationSec(rawCsvDurationSec)
+        MOTIONInterface.setScanDbWriteRaw(scanDbWriteRaw)
         settingsChanged()
         root.visible = false
     }
@@ -765,6 +770,35 @@ Item {
                             text: "seconds  (blank = full scan)"
                             color: root.colTextMuted
                             font.pixelSize: 11
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    // Issue #92: raw histogram frames into the scan SQLite DB.
+                    // Only effective when scanDbEnabled is true in
+                    // app_config.json (a startup-only flag — flipping it at
+                    // runtime requires an app restart). Grey out the row
+                    // when the DB itself is disabled so it's clear the
+                    // toggle won't do anything.
+                    FieldRow {
+                        label: "Save raw to DB"
+                        opacity: (MOTIONInterface.appConfig.scanDbEnabled ? 1.0 : 0.4)
+                        PillSwitch {
+                            checked: root.scanDbWriteRaw
+                            onCheckedChanged: root.scanDbWriteRaw = checked
+                            enabled: MOTIONInterface.appConfig.scanDbEnabled === true
+                        }
+                        Text {
+                            text: root.scanDbWriteRaw ? "On" : "Off"
+                            color: root.scanDbWriteRaw ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Text {
+                            visible: !MOTIONInterface.appConfig.scanDbEnabled
+                            text: "(set scanDbEnabled in app_config.json and restart)"
+                            color: root.colTextMuted
+                            font.pixelSize: 11
+                            font.italic: true
                         }
                         Item { Layout.fillWidth: true }
                     }

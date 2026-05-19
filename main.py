@@ -221,9 +221,23 @@ def main():
     # passed as ``default_trigger_config`` so app-level tweaks layer on
     # top of the SDK defaults at construction time. Workflows resolve
     # to (interface default ⊕ per-request override) thereafter.
+    #
+    # Issue #92: opt into the SQLite scan-data sink when scanDbEnabled is
+    # set in app_config.json. The path is fixed at SDK construction; flipping
+    # the flag at runtime requires an app restart to take effect. Raw frames
+    # in the DB are a separate per-scan toggle (scanDbWriteRaw) wired through
+    # the connector / SettingsModal.
+    _scan_db_path = (
+        os.path.join(output_base, "scan_data", "scans.db")
+        if app_config.get("scanDbEnabled", False)
+        else None
+    )
     motion_interface = MotionInterface(
         default_trigger_config=app_config.get("triggerConfig") or None,
+        db_path=_scan_db_path,
     )
+    if _scan_db_path:
+        logger.info(f"Scan DB sink enabled, writing to {_scan_db_path}")
     motion_interface.log_system_info()
 
     qInstallMessageHandler(qt_message_handler)
