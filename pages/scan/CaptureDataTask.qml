@@ -23,11 +23,26 @@ QtObject {
     property var _onProg: null
     property var _onDone: null
 
+    function _disconnectHandlers() {
+        // Tear down any handlers left connected by a previous ``run()``.
+        // Without this, a previous run's ``_onDone`` stays wired to
+        // ``connector.captureFinished`` if the user clicks Stop+Start before
+        // the SDK's ``_on_complete`` fires; when that late signal finally
+        // arrives it re-emits ``finished`` on this task and re-enters the
+        // ScanRunner state machine after it has already torn down (issue
+        // #124). The ScanRunner ``_done`` guard catches the late re-entry,
+        // but disconnecting at the source avoids the cycle entirely.
+        if (_onLog)  { try { connector.captureLog.disconnect(_onLog)   } catch(e) {} _onLog  = null }
+        if (_onProg) { try { connector.captureProgress.disconnect(_onProg) } catch(e) {} _onProg = null }
+        if (_onDone) { try { connector.captureFinished.disconnect(_onDone) } catch(e) {} _onDone = null }
+    }
+
     function run() {
         if (!connector || !connector.startCapture) {
             finished(false, "Connector missing startCapture()")
             return
         }
+        _disconnectHandlers()
         started()
         progress(25)
         log("Preparing capture…")
