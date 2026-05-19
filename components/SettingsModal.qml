@@ -817,16 +817,22 @@ Item {
                             }
                         }
 
-                        // Read-only TextField (not Text/Label) so the
+                        // Read-only TextArea (not Text/Label) so the
                         // status surfaces in the Windows UIA tree —
                         // test_calibration_ui polls for this string.
-                        TextField {
+                        // TextArea over TextField so a long failure
+                        // breakdown ("too much ambient light — L1:…; L2:…")
+                        // wraps inside the section card instead of running
+                        // off the right edge.
+                        TextArea {
                             id: calibStatusLabel
+                            Layout.fillWidth: true
                             readOnly: true
                             selectByMouse: false
                             activeFocusOnTab: false
                             background: null
                             padding: 0
+                            wrapMode: TextEdit.Wrap
                             color: root.colTextPri
                             font.pixelSize: 13
                             text: {
@@ -845,8 +851,6 @@ Item {
                                 }
                             }
                         }
-
-                        Item { Layout.fillWidth: true }
                     }
 
                     // 1 Hz tick driving the elapsed counter while running.
