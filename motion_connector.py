@@ -265,9 +265,6 @@ class MOTIONConnector(QObject):
     scanBviSampled = pyqtSignal(
         str, int, int, float, float
     )  # side, cam_id, frame_id, timestamp_s, bvi
-    scanBfiCorrectedSampled = pyqtSignal(
-        str, int, float, float
-    )  # side, cam_id, timestamp_s, bfi  (kept for backward compat)
 
     # Contact-quality quick-check signals.
     contactQualityCheckStarted = pyqtSignal(int)  # expected duration in seconds
@@ -278,9 +275,6 @@ class MOTIONConnector(QObject):
     # ``False`` edge to clear an entry from the live modal.
     contactQualityIssueStateChanged = pyqtSignal(str, str, str, float, bool)
     contactQualityScanInProgress = pyqtSignal(bool)
-    scanBviCorrectedSampled = pyqtSignal(
-        str, int, float, float
-    )  # side, cam_id, timestamp_s, bvi  (kept for backward compat)
     scanCorrectedBatch = pyqtSignal('QVariantList')  # list of {side,camId,frameId,ts,bfi,bvi}
     scanCameraTemperature = pyqtSignal(str, int, float)  # side, cam_id, temperature_c
     cameraDropoutDetected = pyqtSignal(str, int, str)  # side ("left"/"right"), cam_id (0-7), elapsed HH:MM:SS
@@ -1441,8 +1435,8 @@ class MOTIONConnector(QObject):
             "notesPath": str(notes_path),
             "notes": notes,
             # Issue #92 — DB-sourced provenance. Empty dict (and None
-            # duration) when no DB row exists for this scan, which is
-            # the legacy / DB-off path.
+            # duration) when no DB row exists for this scan (i.e. the
+            # ``scanDbEnabled=false`` path).
             "dbSessionId": db_session.get("id"),
             "dbMeta": db_meta,
             "dbScanDurationS": scan_duration_s,
@@ -1941,8 +1935,7 @@ class MOTIONConnector(QObject):
             # Issue #43: clinical users don't need the per-scan
             # _telemetry.csv with TCM/TCL/PDC samples — gate it on
             # developerMode so the SDK skips creating the file
-            # entirely. ScanRequest defaults to True for back-compat.
-            # csvEnabled=False also suppresses it.
+            # entirely. csvEnabled=False also suppresses it.
             write_telemetry_csv=(
                 self._csv_enabled
                 and self._app_config.get("developerMode", False)
