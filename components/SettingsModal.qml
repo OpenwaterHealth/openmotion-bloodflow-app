@@ -36,11 +36,11 @@ Item {
     property real   meanMax:     500.0
     property real   contrastMin: 0.0
     property real   contrastMax: 1.0
-    property bool   writeRawCsv:       false
-    property var    rawCsvDurationSec: 60
-    // Issue #92: per-scan opt-in to persist raw histogram frames into the
-    // scan DB (only effective when scanDbEnabled is true at app startup).
-    property bool   scanDbWriteRaw:    false
+    // Master "persist raw histograms" toggle and duration cap. Apply to
+    // both the raw-CSV writer and the scan-DB sink (issue #92); the DB
+    // target is gated by scanDbEnabled at app startup.
+    property bool   writeRawData:            false
+    property var    writeRawDataDurationSec: 60
 
     // ── Theme tokens (aliased from AppTheme) ──────────────────────────────
     readonly property color colBgPanel:    theme.bgContainer
@@ -77,9 +77,13 @@ Item {
         meanMax      = cfg.meanMax      !== undefined ? cfg.meanMax      : 500.0
         contrastMin  = cfg.contrastMin  !== undefined ? cfg.contrastMin  : 0.0
         contrastMax  = cfg.contrastMax  !== undefined ? cfg.contrastMax  : 1.0
-        writeRawCsv       = cfg.writeRawCsv       !== undefined ? cfg.writeRawCsv       : false
-        rawCsvDurationSec = cfg.rawCsvDurationSec !== undefined ? cfg.rawCsvDurationSec : null
-        scanDbWriteRaw    = cfg.scanDbWriteRaw    !== undefined ? cfg.scanDbWriteRaw    : false
+        // Legacy fallback: pre-#92 configs used writeRawCsv / rawCsvDurationSec.
+        writeRawData            = cfg.writeRawData            !== undefined ? cfg.writeRawData
+                                : cfg.writeRawCsv             !== undefined ? cfg.writeRawCsv
+                                                                            : false
+        writeRawDataDurationSec = cfg.writeRawDataDurationSec !== undefined ? cfg.writeRawDataDurationSec
+                                : cfg.rawCsvDurationSec       !== undefined ? cfg.rawCsvDurationSec
+                                                                            : null
         if (darkModeSwitch) darkModeSwitch.checked = cfg.darkMode !== false
     }
 
@@ -126,9 +130,8 @@ Item {
             "contrastMin": contrastMin,
             "contrastMax": contrastMax
         })
-        MOTIONInterface.setWriteRawCsv(writeRawCsv)
-        MOTIONInterface.setRawCsvDurationSec(rawCsvDurationSec)
-        MOTIONInterface.setScanDbWriteRaw(scanDbWriteRaw)
+        MOTIONInterface.setWriteRawData(writeRawData)
+        MOTIONInterface.setWriteRawDataDurationSec(writeRawDataDurationSec)
         settingsChanged()
         root.visible = false
     }
@@ -729,76 +732,58 @@ Item {
                         Item { Layout.fillWidth: true }
                     }
 
+                    // Issue #92: master raw-histogram persistence switch.
+                    // The same flag drives the raw-CSV writer (always
+                    // available) and the scan-DB raw-frame sink (active
+                    // only when scanDbEnabled was true at app startup).
                     FieldRow {
-                        label: "Save raw CSV"
+                        label: "Save raw data"
                         PillSwitch {
-                            checked: root.writeRawCsv
-                            onCheckedChanged: root.writeRawCsv = checked
+                            checked: root.writeRawData
+                            onCheckedChanged: root.writeRawData = checked
                         }
                         Text {
-                            text: root.writeRawCsv ? "On" : "Off"
-                            color: root.writeRawCsv ? root.colAccent : root.colTextMuted
+                            text: root.writeRawData ? "On" : "Off"
+                            color: root.writeRawData ? root.colAccent : root.colTextMuted
                             font.pixelSize: 12
+                        }
+                        Text {
+                            text: MOTIONInterface.appConfig.scanDbEnabled
+                                  ? "(CSV + scan DB)" : "(CSV only)"
+                            color: root.colTextMuted
+                            font.pixelSize: 11
+                            font.italic: true
                         }
                         Item { Layout.fillWidth: true }
                     }
 
                     FieldRow {
-                        label: "Raw CSV duration"
-                        opacity: root.writeRawCsv ? 1.0 : 0.4
+                        label: "Raw data duration"
+                        opacity: root.writeRawData ? 1.0 : 0.4
                         TextField {
-                            id: rawCsvDurationField
+                            id: rawDataDurationField
                             Layout.preferredWidth: 80
                             Layout.preferredHeight: 32
-                            enabled: root.writeRawCsv
-                            text: root.rawCsvDurationSec !== null && root.rawCsvDurationSec !== undefined
-                                  ? root.rawCsvDurationSec.toString() : ""
+                            enabled: root.writeRawData
+                            text: root.writeRawDataDurationSec !== null && root.writeRawDataDurationSec !== undefined
+                                  ? root.writeRawDataDurationSec.toString() : ""
                             placeholderText: "unlimited"
                             inputMethodHints: Qt.ImhDigitsOnly
                             color: root.colTextPri
                             background: Rectangle {
                                 color: root.colBgInput
-                                border.color: rawCsvDurationField.activeFocus ? root.colAccent : root.colBorderSoft
+                                border.color: rawDataDurationField.activeFocus ? root.colAccent : root.colBorderSoft
                                 radius: 4
                             }
                             onEditingFinished: {
                                 var v = parseInt(text, 10)
-                                root.rawCsvDurationSec = (text === "" || isNaN(v) || v <= 0) ? null : v
+                                root.writeRawDataDurationSec = (text === "" || isNaN(v) || v <= 0) ? null : v
                             }
                         }
                         Text {
                             text: "seconds  (blank = full scan)"
                             color: root.colTextMuted
                             font.pixelSize: 11
-                        }
-                        Item { Layout.fillWidth: true }
-                    }
-
-                    // Issue #92: raw histogram frames into the scan SQLite DB.
-                    // Only effective when scanDbEnabled is true in
-                    // app_config.json (a startup-only flag — flipping it at
-                    // runtime requires an app restart). Grey out the row
-                    // when the DB itself is disabled so it's clear the
-                    // toggle won't do anything.
-                    FieldRow {
-                        label: "Save raw to DB"
-                        opacity: (MOTIONInterface.appConfig.scanDbEnabled ? 1.0 : 0.4)
-                        PillSwitch {
-                            checked: root.scanDbWriteRaw
-                            onCheckedChanged: root.scanDbWriteRaw = checked
-                            enabled: MOTIONInterface.appConfig.scanDbEnabled === true
-                        }
-                        Text {
-                            text: root.scanDbWriteRaw ? "On" : "Off"
-                            color: root.scanDbWriteRaw ? root.colAccent : root.colTextMuted
-                            font.pixelSize: 12
-                        }
-                        Text {
-                            visible: !MOTIONInterface.appConfig.scanDbEnabled
-                            text: "(set scanDbEnabled in app_config.json and restart)"
-                            color: root.colTextMuted
-                            font.pixelSize: 11
-                            font.italic: true
                         }
                         Item { Layout.fillWidth: true }
                     }

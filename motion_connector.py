@@ -366,13 +366,21 @@ class MOTIONConnector(QObject):
         self._verbose_command_handling    = bool(cfg.get("verboseCommandHandling", False))
         self._output_base                 = output_path or cfg.get("output_path") or self._default_output_base()
         self._power_off_unused_cameras    = bool(cfg.get("powerOffUnusedCameras", False))
-        self._write_raw_csv               = bool(cfg.get("writeRawCsv", True))
-        raw_csv                           = cfg.get("rawCsvDurationSec")
-        self._raw_csv_duration_sec        = float(raw_csv) if raw_csv is not None else None
-        # Issue #92: ScanRequest.write_raw_to_db. The DB endpoint itself is
-        # enabled at SDK construction (scanDbEnabled in app_config); this
-        # is just the per-scan raw-frame toggle on top of that.
-        self._scan_db_write_raw           = bool(cfg.get("scanDbWriteRaw", False))
+        # ``writeRawData`` is the master "persist raw histogram frames"
+        # switch. It fans out to both raw-CSV writing (always available)
+        # and raw-DB writing (active only when scanDbEnabled was true at
+        # SDK construction, i.e. self._interface was built with a db_path).
+        # ``writeRawDataDurationSec`` caps how long raw data is recorded;
+        # the same cap applies to whichever target(s) are enabled.
+        # Legacy keys ``writeRawCsv`` / ``rawCsvDurationSec`` are honored
+        # as a fallback so configs persisted by earlier builds still load.
+        self._write_raw_data              = bool(
+            cfg.get("writeRawData", cfg.get("writeRawCsv", True))
+        )
+        raw_dur                           = cfg.get(
+            "writeRawDataDurationSec", cfg.get("rawCsvDurationSec")
+        )
+        self._write_raw_data_duration_sec = float(raw_dur) if raw_dur is not None else None
         self._uncorrected_only            = bool(cfg.get("uncorrectedOnly", False))
 
         # Configure logging with the provided level
@@ -1414,46 +1422,42 @@ class MOTIONConnector(QObject):
         logger.debug(f"[Connector] Config saved: {sorted(configs.keys())}")
 
     @pyqtSlot(bool)
-    def setWriteRawCsv(self, enabled: bool) -> None:
-        """Update writeRawCsv in both the runtime cache and persisted config."""
-        self._write_raw_csv = bool(enabled)
-        self._app_config["writeRawCsv"] = self._write_raw_csv
+    def setWriteRawData(self, enabled: bool) -> None:
+        """Update writeRawData in both the runtime cache and persisted config.
+
+        Master switch for raw histogram persistence. When True the connector
+        passes the flag through to ScanRequest as both ``write_raw_csv`` and
+        ``write_raw_to_db`` so raw frames land in any output target the user
+        currently has enabled (CSV is always available; DB is active only
+        when scanDbEnabled was true at SDK construction).
+        """
+        self._write_raw_data = bool(enabled)
+        self._app_config["writeRawData"] = self._write_raw_data
         self._save_app_config()
         self.appConfigChanged.emit()
-        logger.debug(f"[Connector] writeRawCsv set to {self._write_raw_csv}")
+        logger.debug(f"[Connector] writeRawData set to {self._write_raw_data}")
 
     @pyqtSlot('QVariant')
-    def setRawCsvDurationSec(self, value) -> None:
-        """Update rawCsvDurationSec in both the runtime cache and persisted config.
+    def setWriteRawDataDurationSec(self, value) -> None:
+        """Update writeRawDataDurationSec in both runtime cache and persisted config.
 
-        Pass ``None`` / ``null`` / empty string to disable the limit (full scan duration).
+        Caps how long raw data is recorded; applies to whichever raw target(s)
+        are active (CSV and/or DB). Pass ``None`` / ``null`` / empty string to
+        disable the limit (full scan duration).
         """
         if value is None or str(value).strip() in ("", "null", "undefined"):
-            self._raw_csv_duration_sec = None
+            self._write_raw_data_duration_sec = None
         else:
             try:
-                self._raw_csv_duration_sec = float(value)
+                self._write_raw_data_duration_sec = float(value)
             except (TypeError, ValueError):
-                self._raw_csv_duration_sec = None
-        self._app_config["rawCsvDurationSec"] = self._raw_csv_duration_sec
+                self._write_raw_data_duration_sec = None
+        self._app_config["writeRawDataDurationSec"] = self._write_raw_data_duration_sec
         self._save_app_config()
         self.appConfigChanged.emit()
-        logger.debug(f"[Connector] rawCsvDurationSec set to {self._raw_csv_duration_sec}")
-
-    @pyqtSlot(bool)
-    def setScanDbWriteRaw(self, enabled: bool) -> None:
-        """Update scanDbWriteRaw in both the runtime cache and persisted config.
-
-        Issue #92: per-scan opt-in to persist raw histogram frames into the
-        scan DB. Only effective when the SDK was constructed with a db_path
-        (scanDbEnabled at app startup); otherwise this flag is a no-op
-        because no sink is built.
-        """
-        self._scan_db_write_raw = bool(enabled)
-        self._app_config["scanDbWriteRaw"] = self._scan_db_write_raw
-        self._save_app_config()
-        self.appConfigChanged.emit()
-        logger.debug(f"[Connector] scanDbWriteRaw set to {self._scan_db_write_raw}")
+        logger.debug(
+            f"[Connector] writeRawDataDurationSec set to {self._write_raw_data_duration_sec}"
+        )
 
     @pyqtProperty(str, notify=scanNotesChanged)  # <-- add notify
     def scanNotes(self):
@@ -1794,11 +1798,13 @@ class MOTIONConnector(QObject):
             right_camera_mask=right_camera_mask,
             data_dir=data_dir,
             disable_laser=disable_laser,
-            write_raw_csv=self._write_raw_csv,
-            raw_csv_duration_sec=self._raw_csv_duration_sec,
-            # Issue #92: per-scan raw-frame opt-in for the DB sink. No-op
-            # unless the SDK was constructed with a db_path (scanDbEnabled).
-            write_raw_to_db=self._scan_db_write_raw,
+            # writeRawData fans into both targets: the CSV writer (always
+            # available) and the DB sink (active only when scanDbEnabled
+            # was true at SDK construction). The duration cap applies to
+            # whichever target(s) are running.
+            write_raw_csv=self._write_raw_data,
+            raw_csv_duration_sec=self._write_raw_data_duration_sec,
+            write_raw_to_db=self._write_raw_data,
             reduced_mode=self._app_config.get("reducedMode", False),
             # Issue #43: clinical users don't need the per-scan
             # _telemetry.csv with TCM/TCL/PDC samples — gate it on
