@@ -457,6 +457,11 @@ class MOTIONConnector(QObject):
         self._capture_right_path = ""
         self._scan_notes = ""
         self._scan_notes_path = ""  # path to current scan's notes file on disk
+        # Issue #92: when scanDbEnabled is on, ScanDBSink's create_session
+        # returns the DB session id; we stash it here so later notes
+        # edits can update session_notes in the DB. Reset to None when
+        # a new scan starts.
+        self._scan_session_id = None
         self.connect_signals()
         self._viz_thread = None
         self._viz_worker = None
@@ -1454,21 +1459,28 @@ class MOTIONConnector(QObject):
             if m:
                 right_mask = m.group(1)
 
+        # Notes resolution (#92): when a DB session exists, treat
+        # session_notes as canonical (the bloodflow-app writes back to
+        # it on every edit + at scan completion). The .txt file is
+        # the fallback for legacy CSV-only sessions where no DB row
+        # exists.
         notes = ""
-        try:
-            notes = notes_path.read_text(encoding="utf-8")
-        except Exception:
-            pass
+        db_notes = (db_session.get("session_notes") or "") if db_session else ""
+        if db_notes:
+            notes = db_notes
+        else:
+            try:
+                notes = notes_path.read_text(encoding="utf-8")
+            except Exception:
+                pass
 
-        # If the DB has provenance for this session, prefer its values
-        # for the human-readable masks and use session_notes as a fallback
-        # when no notes file exists on disk.
+        # DB-sourced mask values win over what we sniffed from the CSV
+        # filenames — they're the post-active-cam-resolution values
+        # ScanDBSink saved into session_meta.
         if isinstance(db_meta.get("left_camera_mask"), int):
             left_mask = format(db_meta["left_camera_mask"], "X")
         if isinstance(db_meta.get("right_camera_mask"), int):
             right_mask = format(db_meta["right_camera_mask"], "X")
-        if not notes and db_session.get("session_notes"):
-            notes = db_session["session_notes"]
 
         scan_duration_s = None
         if db_session.get("session_end") is not None and db_session.get("session_start") is not None:
@@ -1598,15 +1610,37 @@ class MOTIONConnector(QObject):
         if value != self._scan_notes:
             self._scan_notes = value
             self.scanNotesChanged.emit()
-        # Always persist to disk when a notes file path exists, even if the
-        # in-memory value didn't change (covers the first save after capture).
-        if self._scan_notes_path:
+        # File: only when csvEnabled. DB-only mode skips the .txt and
+        # treats session_notes as the canonical store. (Issue #92.)
+        if self._scan_notes_path and self._csv_enabled:
             try:
                 with open(self._scan_notes_path, "w", encoding="utf-8") as nf:
                     nf.write(self._scan_notes.strip() + "\n")
                 logger.info(f"Notes saved to disk: {self._scan_notes_path}")
             except Exception as e:
                 logger.error(f"Failed to update scan notes on disk: {e}")
+        # DB: write whenever a recorded session is active, regardless of
+        # csvEnabled — the file is the optional mirror, DB is canonical.
+        self._update_db_session_notes()
+
+    def _update_db_session_notes(self) -> None:
+        """Push ``self._scan_notes`` into ``sessions.session_notes`` for
+        the currently active or just-completed scan. Issue #92."""
+        sid = self._scan_session_id
+        if sid is None:
+            return
+        db_path = self._scan_db_path()
+        if not db_path:
+            return
+        try:
+            from omotion import ScanDatabase
+            db = ScanDatabase(db_path=db_path)
+            try:
+                db.update_session(sid, session_notes=self._scan_notes)
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"Could not update session_notes for sid={sid}: {e}")
 
     @pyqtSlot(str, result=int)
     @pyqtSlot(str, str, result=int)
@@ -1729,6 +1763,7 @@ class MOTIONConnector(QObject):
         # Each new scan starts with a fresh notes buffer
         self._scan_notes = ""
         self._scan_notes_path = ""
+        self._scan_session_id = None
         self.scanNotesChanged.emit()
         self._capture_running = True
         self._capture_start_time = time.time()
@@ -1890,19 +1925,36 @@ class MOTIONConnector(QObject):
             self._scan_notes = (self._scan_notes.strip() + duration_line)
             self.scanNotesChanged.emit()
 
-            # Always write the notes file so that the scan is discoverable in
-            # the history viewer regardless of whether data CSVs were produced.
+            # Capture the DB session id (set by ScanDBSink at scan
+            # start) so post-scan notes edits and the duration line can
+            # land in session_notes. Cleared at the next scan start.
             try:
-                notes_filename = (
-                    f"{result.scan_timestamp}_{subject_id}_notes.txt"
-                )
-                notes_path = os.path.join(data_dir, notes_filename)
-                with open(notes_path, "w", encoding="utf-8") as nf:
-                    nf.write(self._scan_notes.strip() + "\n")
-                self._scan_notes_path = notes_path
-                logger.info(f"Saved scan notes to {notes_path}")
-            except Exception as e:
-                logger.error(f"Failed to save scan notes: {e}")
+                self._scan_session_id = self._interface.active_db_session_id
+            except Exception:
+                self._scan_session_id = None
+
+            # Notes file mirrors csvEnabled: in DB-only mode the
+            # session_notes column is canonical and no .txt is written.
+            if self._csv_enabled:
+                try:
+                    notes_filename = (
+                        f"{result.scan_timestamp}_{subject_id}_notes.txt"
+                    )
+                    notes_path = os.path.join(data_dir, notes_filename)
+                    with open(notes_path, "w", encoding="utf-8") as nf:
+                        nf.write(self._scan_notes.strip() + "\n")
+                    self._scan_notes_path = notes_path
+                    logger.info(f"Saved scan notes to {notes_path}")
+                except Exception as e:
+                    logger.error(f"Failed to save scan notes: {e}")
+            else:
+                # DB-only path — clear the file pointer so the setter
+                # doesn't try to touch a stale .txt on later edits.
+                self._scan_notes_path = ""
+
+            # Push the post-scan notes (including duration line) into
+            # session_notes so the DB row is the authoritative copy.
+            self._update_db_session_notes()
 
             if result.ok:
                 try:
@@ -1938,6 +1990,10 @@ class MOTIONConnector(QObject):
             write_raw_csv=self._csv_enabled and self._write_raw_data,
             raw_csv_duration_sec=self._write_raw_data_duration_sec,
             write_raw_to_db=self._write_raw_data,
+            # Hand the pre-scan notes to ScanDBSink so the new sessions
+            # row has them on first commit; post-scan edits push further
+            # updates via _update_db_session_notes.
+            notes=self._scan_notes,
             reduced_mode=self._app_config.get("reducedMode", False),
             # Issue #43: clinical users don't need the per-scan
             # _telemetry.csv with TCM/TCL/PDC samples — gate it on
