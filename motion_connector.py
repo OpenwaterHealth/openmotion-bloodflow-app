@@ -3390,37 +3390,51 @@ class MOTIONConnector(QObject):
         return self._launch_correct_viz(corrected_csv, mode="signal")
 
     @pyqtSlot(int, str, result=bool)
-    def visualize_db_session(self, session_id: int, mode: str) -> bool:
-        """Materialize a corrected CSV from the scan DB and plot it.
+    def export_session_csv(self, session_id: int, output_path: str) -> bool:
+        """Export a DB session's corrected stream as a CSV at ``output_path``.
 
-        Used by the History modal's Visualize buttons for sessions that
-        were recorded with ``csvEnabled=false`` — no on-disk CSV exists,
-        but ``session_data`` carries the corrected stream. Issue #92
-        Step D: the SDK's ``materialize_corrected_csv`` rebuilds the
-        CSV value-equivalent to what CsvSink would have written live,
-        then we route it through the existing visualizer.
+        Wraps the SDK's ``materialize_corrected_csv`` (issue #92 Step D);
+        the History modal exposes this through an "Export CSV" button so
+        users on the DB-only workflow can hand off a session to any
+        CSV-based tool (analysis scripts, the SDK's plot_corrected_scan,
+        Excel, etc.) without rerunning the scan.
+
+        The History modal's *Visualize* buttons stay tied to in-app
+        plotting which will be upgraded to read from the DB directly —
+        this export path is the public escape hatch, not a visualization
+        shortcut.
         """
         db_path = self._scan_db_path()
         if not db_path:
-            self.errorOccurred.emit("Scan DB not configured for this session.")
+            self.errorOccurred.emit("Scan DB not configured.")
             return False
+
+        output_path = (output_path or "").strip()
+        if not output_path:
+            self.errorOccurred.emit("No output path provided for CSV export.")
+            return False
+
         try:
             from omotion import materialize_corrected_csv
         except ImportError as e:
             self.errorOccurred.emit(f"SDK playback unavailable: {e}")
             return False
 
-        out_dir = Path(db_path).parent
-        out_path = out_dir / f".playback_sid{session_id}.csv"
         try:
             materialize_corrected_csv(
-                db_path, session_id=int(session_id), output_path=str(out_path),
+                db_path, session_id=int(session_id), output_path=output_path,
             )
+        except RuntimeError as e:
+            # Pre-#92 Step F sessions can't be rebuilt from the DB.
+            self.errorOccurred.emit(str(e))
+            return False
         except Exception as e:
             logger.exception("materialize_corrected_csv failed")
-            self.errorOccurred.emit(f"Could not rebuild CSV from DB session:\n{e}")
+            self.errorOccurred.emit(f"CSV export failed:\n{e}")
             return False
-        return self._launch_correct_viz(str(out_path), mode=mode)
+
+        logger.info(f"Exported session_id={session_id} → {output_path}")
+        return True
 
     def _launch_correct_viz(self, corrected_csv: str, mode: str) -> bool:
         corrected_csv = (corrected_csv or "").strip()

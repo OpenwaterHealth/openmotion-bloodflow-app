@@ -390,10 +390,7 @@ Item {
                         Button {
                             text: "Visualize BFI/BVI"
                             Layout.fillWidth: true; Layout.preferredHeight: 36
-                            // Issue #92 Step D: enable for DB-only sessions
-                            // too. The connector materializes a CSV from the
-                            // session_data table on demand.
-                            enabled: !!(selected.correctedPath) || (selected.dbSessionId !== undefined && selected.dbSessionId !== null)
+                            enabled: !!(selected.correctedPath)
                             hoverEnabled: enabled
                             contentItem: Text {
                                 text: parent.text; font.pixelSize: 13
@@ -406,11 +403,7 @@ Item {
                             }
                             onClicked: {
                                 root.visualizing = true
-                                if (selected.correctedPath) {
-                                    MOTIONInterface.visualize_corrected(selected.correctedPath)
-                                } else {
-                                    MOTIONInterface.visualize_db_session(selected.dbSessionId, "bfi")
-                                }
+                                MOTIONInterface.visualize_corrected(selected.correctedPath || "")
                             }
                         }
 
@@ -418,7 +411,7 @@ Item {
                             text: "Visualize Contrast/Mean"
                             visible: MOTIONInterface.appConfig.reducedMode !== true
                             Layout.fillWidth: true; Layout.preferredHeight: 36
-                            enabled: !!(selected.correctedPath) || (selected.dbSessionId !== undefined && selected.dbSessionId !== null)
+                            enabled: !!(selected.correctedPath)
                             hoverEnabled: enabled
                             contentItem: Text {
                                 text: parent.text; font.pixelSize: 13
@@ -431,11 +424,41 @@ Item {
                             }
                             onClicked: {
                                 root.visualizing = true
-                                if (selected.correctedPath) {
-                                    MOTIONInterface.visualize_corrected_signal(selected.correctedPath)
-                                } else {
-                                    MOTIONInterface.visualize_db_session(selected.dbSessionId, "signal")
-                                }
+                                MOTIONInterface.visualize_corrected_signal(selected.correctedPath || "")
+                            }
+                        }
+
+                        // Issue #92 Step D: export the DB session as a
+                        // corrected CSV the user can hand to any CSV tool
+                        // (plot_corrected_scan.py, Excel, analysis scripts).
+                        // Enabled for any selected session that's in the DB —
+                        // works for both csv-only and db-only recordings;
+                        // the SDK refuses to export pre-Step-F sessions
+                        // (where frame_id wasn't recorded) and surfaces
+                        // a clear error.
+                        Button {
+                            text: "Export CSV"
+                            Layout.fillWidth: true; Layout.preferredHeight: 36
+                            enabled: selected.dbSessionId !== undefined && selected.dbSessionId !== null
+                            hoverEnabled: enabled
+                            contentItem: Text {
+                                text: parent.text; font.pixelSize: 13
+                                color: parent.enabled ? theme.textSecondary : theme.textTertiary
+                                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                            }
+                            background: Rectangle {
+                                color: !parent.enabled ? theme.bgInput : parent.hovered ? theme.accentBlue : theme.bgInput
+                                border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
+                            }
+                            onClicked: {
+                                exportCsvDialog.sessionId = selected.dbSessionId
+                                const dataDir = (MOTIONInterface.appConfig.dataDirectory || "")
+                                                  .replace(/\\/g, "/")
+                                const fileBase = scanPicker.currentText
+                                    || ("sid" + selected.dbSessionId)
+                                exportCsvDialog.currentFile = "file:///" + dataDir
+                                    + "/" + fileBase + ".csv"
+                                exportCsvDialog.open()
                             }
                         }
 
@@ -471,6 +494,30 @@ Item {
         id: histErrDialog
         title: "Visualization Error"
         text: ""
+    }
+
+    // Issue #92 Step D: "Export CSV" save-as dialog. Holds the
+    // session_id for the currently selected History row (set by the
+    // Export CSV button onClicked); fires
+    // ``MOTIONInterface.export_session_csv`` on accept.
+    Dialogs.FileDialog {
+        id: exportCsvDialog
+        title: "Export session as CSV"
+        fileMode: Dialogs.FileDialog.SaveFile
+        nameFilters: ["CSV files (*.csv)", "All files (*)"]
+        defaultSuffix: "csv"
+        property int sessionId: -1
+        onAccepted: {
+            const p = selectedFile.toString().replace(/^file:\/\/\//, "")
+            const ok = MOTIONInterface.export_session_csv(sessionId, p)
+            if (ok) {
+                histErrDialog.title = "Export complete"
+                histErrDialog.text = "Wrote CSV:\n" + p
+                histErrDialog.visible = true
+            }
+            // On failure, motion_connector emits errorOccurred which the
+            // Connections block below routes into histErrDialog already.
+        }
     }
 
     Connections {
