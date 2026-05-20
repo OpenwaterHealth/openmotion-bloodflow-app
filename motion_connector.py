@@ -3390,6 +3390,41 @@ class MOTIONConnector(QObject):
         return self._launch_correct_viz(corrected_csv, mode="signal")
 
     @pyqtSlot(int, str, result=bool)
+    def visualize_db_session(self, session_id: int, mode: str) -> bool:
+        """Materialize a session's corrected stream to a tmpdir CSV and
+        hand it to the existing matplotlib visualizer.
+
+        Stopgap until embedded History plots land. The CSV is written to
+        the OS temp dir (not ``scan_data/``) so the user's data
+        directory doesn't accumulate ``.playback_*.csv`` artifacts —
+        OS-level temp cleanup eventually reaps them.
+        """
+        import tempfile
+        db_path = self._scan_db_path()
+        if not db_path:
+            self.errorOccurred.emit("Scan DB not configured.")
+            return False
+        try:
+            from omotion import materialize_corrected_csv
+        except ImportError as e:
+            self.errorOccurred.emit(f"SDK playback unavailable: {e}")
+            return False
+
+        tmp_path = Path(tempfile.gettempdir()) / f"openmotion_sid{session_id}_playback.csv"
+        try:
+            materialize_corrected_csv(
+                db_path, session_id=int(session_id), output_path=str(tmp_path),
+            )
+        except RuntimeError as e:
+            self.errorOccurred.emit(str(e))
+            return False
+        except Exception as e:
+            logger.exception("materialize_corrected_csv failed")
+            self.errorOccurred.emit(f"Could not rebuild CSV from DB session:\n{e}")
+            return False
+        return self._launch_correct_viz(str(tmp_path), mode=mode)
+
+    @pyqtSlot(int, str, result=bool)
     def export_session_csv(self, session_id: int, output_path: str) -> bool:
         """Export a DB session's corrected stream as a CSV at ``output_path``.
 

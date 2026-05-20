@@ -390,7 +390,13 @@ Item {
                         Button {
                             text: "Visualize BFI/BVI"
                             Layout.fillWidth: true; Layout.preferredHeight: 36
-                            enabled: !!(selected.correctedPath)
+                            // Enabled when an on-disk CSV exists OR the
+                            // session lives in the DB — the connector
+                            // materializes a tmpdir CSV for DB-only
+                            // sessions and routes through the same
+                            // visualizer. Stopgap until embedded plots
+                            // land.
+                            enabled: !!(selected.correctedPath) || (selected.dbSessionId !== undefined && selected.dbSessionId !== null)
                             hoverEnabled: enabled
                             contentItem: Text {
                                 text: parent.text; font.pixelSize: 13
@@ -403,7 +409,11 @@ Item {
                             }
                             onClicked: {
                                 root.visualizing = true
-                                MOTIONInterface.visualize_corrected(selected.correctedPath || "")
+                                if (selected.correctedPath) {
+                                    MOTIONInterface.visualize_corrected(selected.correctedPath)
+                                } else {
+                                    MOTIONInterface.visualize_db_session(selected.dbSessionId, "bfi")
+                                }
                             }
                         }
 
@@ -411,7 +421,7 @@ Item {
                             text: "Visualize Contrast/Mean"
                             visible: MOTIONInterface.appConfig.reducedMode !== true
                             Layout.fillWidth: true; Layout.preferredHeight: 36
-                            enabled: !!(selected.correctedPath)
+                            enabled: !!(selected.correctedPath) || (selected.dbSessionId !== undefined && selected.dbSessionId !== null)
                             hoverEnabled: enabled
                             contentItem: Text {
                                 text: parent.text; font.pixelSize: 13
@@ -424,7 +434,11 @@ Item {
                             }
                             onClicked: {
                                 root.visualizing = true
-                                MOTIONInterface.visualize_corrected_signal(selected.correctedPath || "")
+                                if (selected.correctedPath) {
+                                    MOTIONInterface.visualize_corrected_signal(selected.correctedPath)
+                                } else {
+                                    MOTIONInterface.visualize_db_session(selected.dbSessionId, "signal")
+                                }
                             }
                         }
 
