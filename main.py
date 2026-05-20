@@ -104,6 +104,18 @@ def _load_app_config() -> dict:
         "dataDirectory": None,
         "writeRawCsv": True,
         "rawCsvDurationSec": None,
+        # Issue #92: master raw-data toggle (replaces writeRawCsv) and its
+        # duration cap. Drives both raw-CSV writes and raw-DB writes.
+        # writeRawCsv / rawCsvDurationSec retained above as backward-compat
+        # fallback keys for configs persisted by earlier builds.
+        "writeRawData": False,
+        "writeRawDataDurationSec": None,
+        # Issue #92: opt into the scan-DB sink at MotionInterface
+        # construction. When True, every scan writes corrected (and
+        # optionally raw) histogram data to <output_base>/scan_data/scans.db
+        # in addition to the existing CSVs. Startup-only — flipping at
+        # runtime requires an app restart.
+        "scanDbEnabled": False,
         "autoScale": False,
         "autoScalePerPlot": False,
         "reducedMode": False,
