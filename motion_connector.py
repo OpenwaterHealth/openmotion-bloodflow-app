@@ -381,6 +381,11 @@ class MOTIONConnector(QObject):
             "writeRawDataDurationSec", cfg.get("rawCsvDurationSec")
         )
         self._write_raw_data_duration_sec = float(raw_dur) if raw_dur is not None else None
+        # Issue #92: master CSV toggle. When False, every CSV writer
+        # (corrected + raw + telemetry) is suppressed for the scan — used
+        # to exercise the DB-only path (combine with scanDbEnabled=True).
+        # Default True preserves legacy behavior.
+        self._csv_enabled                 = bool(cfg.get("csvEnabled", True))
         self._uncorrected_only            = bool(cfg.get("uncorrectedOnly", False))
 
         # Configure logging with the provided level
@@ -1925,8 +1930,12 @@ class MOTIONConnector(QObject):
             # writeRawData fans into both targets: the CSV writer (always
             # available) and the DB sink (active only when scanDbEnabled
             # was true at SDK construction). The duration cap applies to
-            # whichever target(s) are running.
-            write_raw_csv=self._write_raw_data,
+            # whichever target(s) are running. When csvEnabled is False
+            # the raw-CSV write is suppressed regardless of writeRawData
+            # — DB still gets the raw frames so a "DB-only" config can
+            # capture them.
+            write_corrected_csv=self._csv_enabled,
+            write_raw_csv=self._csv_enabled and self._write_raw_data,
             raw_csv_duration_sec=self._write_raw_data_duration_sec,
             write_raw_to_db=self._write_raw_data,
             reduced_mode=self._app_config.get("reducedMode", False),
@@ -1934,7 +1943,11 @@ class MOTIONConnector(QObject):
             # _telemetry.csv with TCM/TCL/PDC samples — gate it on
             # developerMode so the SDK skips creating the file
             # entirely. ScanRequest defaults to True for back-compat.
-            write_telemetry_csv=self._app_config.get("developerMode", False),
+            # csvEnabled=False also suppresses it.
+            write_telemetry_csv=(
+                self._csv_enabled
+                and self._app_config.get("developerMode", False)
+            ),
             # Live CQ monitor needs the SDK to compute the rolling
             # average over the last N uncorrected light samples and
             # emit one Sample per-window via ``on_rolling_avg_fn``.

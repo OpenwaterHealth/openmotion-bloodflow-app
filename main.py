@@ -116,6 +116,11 @@ def _load_app_config() -> dict:
         # in addition to the existing CSVs. Startup-only — flipping at
         # runtime requires an app restart.
         "scanDbEnabled": False,
+        # Issue #92: when False, skip writing CSVs (corrected + raw +
+        # telemetry) for every scan. Combine with scanDbEnabled=True for
+        # a DB-only configuration. Defaults True to preserve the legacy
+        # always-write-CSV behavior.
+        "csvEnabled": True,
         "autoScale": False,
         "autoScalePerPlot": False,
         "reducedMode": False,
