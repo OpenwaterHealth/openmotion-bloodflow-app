@@ -77,13 +77,8 @@ Item {
         meanMax      = cfg.meanMax      !== undefined ? cfg.meanMax      : 500.0
         contrastMin  = cfg.contrastMin  !== undefined ? cfg.contrastMin  : 0.0
         contrastMax  = cfg.contrastMax  !== undefined ? cfg.contrastMax  : 1.0
-        // Legacy fallback: pre-#92 configs used writeRawCsv / rawCsvDurationSec.
-        writeRawData            = cfg.writeRawData            !== undefined ? cfg.writeRawData
-                                : cfg.writeRawCsv             !== undefined ? cfg.writeRawCsv
-                                                                            : false
-        writeRawDataDurationSec = cfg.writeRawDataDurationSec !== undefined ? cfg.writeRawDataDurationSec
-                                : cfg.rawCsvDurationSec       !== undefined ? cfg.rawCsvDurationSec
-                                                                            : null
+        writeRawData            = cfg.writeRawData            !== undefined ? cfg.writeRawData            : false
+        writeRawDataDurationSec = cfg.writeRawDataDurationSec !== undefined ? cfg.writeRawDataDurationSec : null
         if (darkModeSwitch) darkModeSwitch.checked = cfg.darkMode !== false
     }
 

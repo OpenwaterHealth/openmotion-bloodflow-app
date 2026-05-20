@@ -102,12 +102,9 @@ def _load_app_config() -> dict:
         "contrastMin": 0.0,
         "contrastMax": 1.0,
         "dataDirectory": None,
-        "writeRawCsv": True,
-        "rawCsvDurationSec": None,
-        # Issue #92: master raw-data toggle (replaces writeRawCsv) and its
-        # duration cap. Drives both raw-CSV writes and raw-DB writes.
-        # writeRawCsv / rawCsvDurationSec retained above as backward-compat
-        # fallback keys for configs persisted by earlier builds.
+        # Master raw-data toggle (#92) — drives both raw-CSV writes and
+        # raw-DB writes. Duration cap applies to whichever target(s) are
+        # active.
         "writeRawData": False,
         "writeRawDataDurationSec": None,
         # Issue #92: opt into the scan-DB sink at MotionInterface

@@ -346,48 +346,6 @@ Item {
                         Text { text: "Actions"; color: theme.textPrimary; font.pixelSize: 15 }
 
                         Button {
-                            text: "Visualize BFI/BVI (legacy)"
-                            visible: MOTIONInterface.appConfig.developerMode ? true : false
-                            Layout.fillWidth: true; Layout.preferredHeight: 36
-                            enabled: !!(selected.leftPath || selected.rightPath)
-                            hoverEnabled: enabled
-                            contentItem: Text {
-                                text: parent.text; font.pixelSize: 13
-                                color: parent.enabled ? theme.textSecondary : theme.textTertiary
-                                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-                            }
-                            background: Rectangle {
-                                color: !parent.enabled ? theme.bgInput : parent.hovered ? theme.accentBlue : theme.bgInput
-                                border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
-                            }
-                            onClicked: {
-                                root.visualizing = true
-                                MOTIONInterface.visualize_bloodflow(selected.leftPath || "", selected.rightPath || "", 0.0, 0.0, false)
-                            }
-                        }
-
-                        Button {
-                            text: "Visualize Contrast/Mean (legacy)"
-                            visible: MOTIONInterface.appConfig.developerMode ? true : false
-                            Layout.fillWidth: true; Layout.preferredHeight: 36
-                            enabled: !!(selected.leftPath || selected.rightPath)
-                            hoverEnabled: enabled
-                            contentItem: Text {
-                                text: parent.text; font.pixelSize: 13
-                                color: parent.enabled ? theme.textSecondary : theme.textTertiary
-                                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-                            }
-                            background: Rectangle {
-                                color: !parent.enabled ? theme.bgInput : parent.hovered ? theme.accentBlue : theme.bgInput
-                                border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
-                            }
-                            onClicked: {
-                                root.visualizing = true
-                                MOTIONInterface.visualize_bloodflow(selected.leftPath || "", selected.rightPath || "", 0.0, 0.0, true)
-                            }
-                        }
-
-                        Button {
                             text: "Visualize BFI/BVI"
                             Layout.fillWidth: true; Layout.preferredHeight: 36
                             // Enabled when an on-disk CSV exists OR the
