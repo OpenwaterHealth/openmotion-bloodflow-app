@@ -3389,6 +3389,39 @@ class MOTIONConnector(QObject):
         """Plot contrast/mean from a _corrected.csv using plot_corrected_scan from the SDK."""
         return self._launch_correct_viz(corrected_csv, mode="signal")
 
+    @pyqtSlot(int, str, result=bool)
+    def visualize_db_session(self, session_id: int, mode: str) -> bool:
+        """Materialize a corrected CSV from the scan DB and plot it.
+
+        Used by the History modal's Visualize buttons for sessions that
+        were recorded with ``csvEnabled=false`` — no on-disk CSV exists,
+        but ``session_data`` carries the corrected stream. Issue #92
+        Step D: the SDK's ``materialize_corrected_csv`` rebuilds the
+        CSV value-equivalent to what CsvSink would have written live,
+        then we route it through the existing visualizer.
+        """
+        db_path = self._scan_db_path()
+        if not db_path:
+            self.errorOccurred.emit("Scan DB not configured for this session.")
+            return False
+        try:
+            from omotion import materialize_corrected_csv
+        except ImportError as e:
+            self.errorOccurred.emit(f"SDK playback unavailable: {e}")
+            return False
+
+        out_dir = Path(db_path).parent
+        out_path = out_dir / f".playback_sid{session_id}.csv"
+        try:
+            materialize_corrected_csv(
+                db_path, session_id=int(session_id), output_path=str(out_path),
+            )
+        except Exception as e:
+            logger.exception("materialize_corrected_csv failed")
+            self.errorOccurred.emit(f"Could not rebuild CSV from DB session:\n{e}")
+            return False
+        return self._launch_correct_viz(str(out_path), mode=mode)
+
     def _launch_correct_viz(self, corrected_csv: str, mode: str) -> bool:
         corrected_csv = (corrected_csv or "").strip()
         if not corrected_csv:
