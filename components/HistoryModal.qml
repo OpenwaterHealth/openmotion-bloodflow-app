@@ -466,12 +466,22 @@ Item {
                             }
                             onClicked: {
                                 exportCsvDialog.sessionId = selected.dbSessionId
+                                // Qt6's Dialogs.FileDialog wants
+                                // ``currentFolder`` for the initial dir
+                                // (a file URL) and ``selectedFile`` for
+                                // the suggested filename. Setting
+                                // ``currentFile`` doesn't apply on Qt6 —
+                                // that was the bug that landed the
+                                // user's first export in the project cwd.
                                 const dataDir = (MOTIONInterface.appConfig.dataDirectory || "")
                                                   .replace(/\\/g, "/")
+                                                  .replace(/\/$/, "")
                                 const fileBase = scanPicker.currentText
                                     || ("sid" + selected.dbSessionId)
-                                exportCsvDialog.currentFile = "file:///" + dataDir
-                                    + "/" + fileBase + ".csv"
+                                if (dataDir) {
+                                    exportCsvDialog.currentFolder = "file:///" + dataDir
+                                    exportCsvDialog.selectedFile   = "file:///" + dataDir + "/" + fileBase + ".csv"
+                                }
                                 exportCsvDialog.open()
                             }
                         }
