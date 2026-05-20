@@ -1242,15 +1242,67 @@ class MOTIONConnector(QObject):
         r")$"
     )
 
+    def _scan_db_path(self):
+        """Path the SDK is writing the scan DB to, or None if disabled.
+
+        Issue #92: the History modal lists DB sessions when scanDbEnabled
+        was true at app startup. Read directly from the SDK handle
+        (the interface stashes its constructor arg there).
+        """
+        return getattr(self._interface, "_db_path", None)
+
+    def _scan_db(self):
+        """Open a ScanDatabase against the configured path if it exists.
+
+        Returns None if scanDbEnabled is off, the file doesn't exist yet
+        (no scans ever written), or the import / open fails. Caller is
+        responsible for closing.
+        """
+        db_path = self._scan_db_path()
+        if not db_path or not os.path.exists(db_path):
+            return None
+        try:
+            from omotion import ScanDatabase
+            return ScanDatabase(db_path=db_path)
+        except Exception as e:
+            logger.warning(f"[Connector] Could not open scan DB at {db_path}: {e}")
+            return None
+
     @pyqtSlot(result=list)
     def get_scan_list(self):
-        """Return sorted list of scan IDs.
+        """Return sorted list of scan IDs (newest first).
+
+        Issue #92: when the SDK has a db_path set, list sessions from the
+        scan DB by session_label. Falls back to the CSV directory walk
+        below when no DB exists (legacy mode, or DB hasn't been created
+        yet because no scan has run since scanDbEnabled was flipped on).
 
         Supports three filename formats for the canonical scan CSV:
           New (post-#44): {YYYYMMDD_HHMMSS}_{sessionId}.csv
           Mid:            {YYYYMMDD_HHMMSS}_{sessionId}_corrected.csv
           Legacy:         scan_{sessionId}_{YYYYMMDD_HHMMSS}_corrected.csv
         """
+        # DB-first path: enumerate sessions from the scan DB when available.
+        db = self._scan_db()
+        if db is not None:
+            try:
+                labels = [s["session_label"] for s in db.iter_sessions()]
+            except Exception as e:
+                logger.warning(f"[Connector] iter_sessions failed: {e}")
+                labels = []
+            finally:
+                try:
+                    db.close()
+                except Exception:
+                    pass
+            # Newest-first, same key as the CSV path uses below.
+            def _ts_key(s):
+                if re.match(r'^\d{8}_\d{6}', s):
+                    return s[:15]
+                parts = s.split("_", 1)
+                return parts[1] if len(parts) == 2 else s
+            return sorted(labels, key=_ts_key, reverse=True)
+
         base_path = Path(self._directory)
         if not base_path.exists():
             return []
@@ -1302,7 +1354,57 @@ class MOTIONConnector(QObject):
         And the raw histo CSVs across two generations:
           New:    {scan_id}_(left|right)_mask*_raw.csv
           Legacy: {scan_id}_(left|right)_mask*.csv
+
+        Issue #92: when the scan DB has a row for this label, we attach
+        the richer provenance ``session_meta`` (subject_id, masks,
+        active cams, fw versions, hw IDs, sdk version, sdk flags),
+        actual scan duration (``session_end - session_start``), and the
+        DB-side ``session_data`` / ``session_raw`` row counts. The
+        existing CSV-derived fields stay populated alongside so the
+        Visualize buttons continue to work even for sessions that
+        predate the DB.
         """
+        db_session: dict = {}
+        db_meta: dict = {}
+        db_counts: dict = {}
+        db = self._scan_db()
+        if db is not None:
+            try:
+                # session_label == scan_id by construction (Task 7 wrapper
+                # builds the label as "{ts}_{subject_id}").
+                for s in db.iter_sessions():
+                    if s.get("session_label") == scan_id:
+                        db_session = dict(s)
+                        meta = db_session.get("session_meta") or {}
+                        if isinstance(meta, dict):
+                            db_meta = meta
+                        sid = db_session.get("id")
+                        if sid is not None:
+                            try:
+                                conn = db._connection()
+                                data_n = conn.execute(
+                                    "SELECT COUNT(*) FROM session_data WHERE session_id=?",
+                                    (sid,),
+                                ).fetchone()[0]
+                                raw_n = conn.execute(
+                                    "SELECT COUNT(*) FROM session_raw WHERE session_id=?",
+                                    (sid,),
+                                ).fetchone()[0]
+                                db_counts = {
+                                    "sessionDataRows": int(data_n),
+                                    "sessionRawRows": int(raw_n),
+                                }
+                            except Exception:
+                                pass
+                        break
+            except Exception as e:
+                logger.warning(f"[Connector] DB session lookup failed: {e}")
+            finally:
+                try:
+                    db.close()
+                except Exception:
+                    pass
+
         base = Path(self._directory)
 
         # Detect format by checking if it starts with a date
@@ -1353,7 +1455,21 @@ class MOTIONConnector(QObject):
         except Exception:
             pass
 
-        return {
+        # If the DB has provenance for this session, prefer its values
+        # for the human-readable masks and use session_notes as a fallback
+        # when no notes file exists on disk.
+        if isinstance(db_meta.get("left_camera_mask"), int):
+            left_mask = format(db_meta["left_camera_mask"], "X")
+        if isinstance(db_meta.get("right_camera_mask"), int):
+            right_mask = format(db_meta["right_camera_mask"], "X")
+        if not notes and db_session.get("session_notes"):
+            notes = db_session["session_notes"]
+
+        scan_duration_s = None
+        if db_session.get("session_end") is not None and db_session.get("session_start") is not None:
+            scan_duration_s = float(db_session["session_end"]) - float(db_session["session_start"])
+
+        out = {
             "userLabel": subject,
             "sessionId": f"{ts}_{subject}",
             "timestamp": ts,
@@ -1364,7 +1480,15 @@ class MOTIONConnector(QObject):
             "correctedPath": str(corrected) if corrected else "",
             "notesPath": str(notes_path),
             "notes": notes,
+            # Issue #92 — DB-sourced provenance. Empty dict (and None
+            # duration) when no DB row exists for this scan, which is
+            # the legacy / DB-off path.
+            "dbSessionId": db_session.get("id"),
+            "dbMeta": db_meta,
+            "dbScanDurationS": scan_duration_s,
+            **db_counts,
         }
+        return out
 
     @pyqtProperty(str, notify=directoryChanged)
     def directory(self):

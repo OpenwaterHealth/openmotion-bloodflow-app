@@ -267,6 +267,64 @@ Item {
                             Text { text: ""; } Text { text: ""; }
                         }
 
+                        // Issue #92: DB-sourced provenance. Only rendered when
+                        // the selected scan exists in scans.db (i.e., it was
+                        // captured with scanDbEnabled on at app startup).
+                        Rectangle {
+                            visible: selected.dbSessionId !== undefined && selected.dbSessionId !== null
+                            Layout.fillWidth: true; height: 1; color: theme.borderSubtle
+                        }
+                        GridLayout {
+                            visible: selected.dbSessionId !== undefined && selected.dbSessionId !== null
+                            columns: 4; columnSpacing: 16; rowSpacing: 6; Layout.fillWidth: true
+
+                            Text { text: "Duration:"; color: theme.textSecondary; font.pixelSize: 13 }
+                            Text {
+                                text: selected.dbScanDurationS !== undefined && selected.dbScanDurationS !== null
+                                      ? Number(selected.dbScanDurationS).toFixed(2) + " s" : "-"
+                                color: theme.textPrimary; font.pixelSize: 13
+                            }
+                            Text { text: "DB session id:"; color: theme.textSecondary; font.pixelSize: 13 }
+                            Text { text: selected.dbSessionId !== undefined ? String(selected.dbSessionId) : "-"; color: theme.textPrimary; font.pixelSize: 13 }
+
+                            Text { text: "SDK / Console FW:"; color: theme.textSecondary; font.pixelSize: 13 }
+                            Text {
+                                text: (selected.dbMeta && selected.dbMeta.sdk_version
+                                       ? String(selected.dbMeta.sdk_version) : "-")
+                                      + "  /  "
+                                      + (selected.dbMeta && selected.dbMeta.console_fw_version
+                                         ? String(selected.dbMeta.console_fw_version) : "-")
+                                color: theme.textPrimary; font.pixelSize: 13
+                                elide: Text.ElideRight; Layout.fillWidth: true
+                            }
+                            Text { text: "Sensor FW (L / R):"; color: theme.textSecondary; font.pixelSize: 13 }
+                            Text {
+                                text: (selected.dbMeta && selected.dbMeta.left_fw_version
+                                       ? String(selected.dbMeta.left_fw_version) : "-")
+                                      + "  /  "
+                                      + (selected.dbMeta && selected.dbMeta.right_fw_version
+                                         ? String(selected.dbMeta.right_fw_version) : "-")
+                                color: theme.textPrimary; font.pixelSize: 13
+                            }
+
+                            Text { text: "Active cams (L / R):"; color: theme.textSecondary; font.pixelSize: 13 }
+                            Text {
+                                text: (selected.dbMeta && selected.dbMeta.active_left_cams
+                                       ? JSON.stringify(selected.dbMeta.active_left_cams) : "-")
+                                      + "  /  "
+                                      + (selected.dbMeta && selected.dbMeta.active_right_cams
+                                         ? JSON.stringify(selected.dbMeta.active_right_cams) : "-")
+                                color: theme.textPrimary; font.pixelSize: 13
+                            }
+                            Text { text: "DB rows (data / raw):"; color: theme.textSecondary; font.pixelSize: 13 }
+                            Text {
+                                text: (selected.sessionDataRows !== undefined ? String(selected.sessionDataRows) : "-")
+                                      + "  /  "
+                                      + (selected.sessionRawRows !== undefined ? String(selected.sessionRawRows) : "-")
+                                color: theme.textPrimary; font.pixelSize: 13
+                            }
+                        }
+
                         Text { text: "Notes:"; color: theme.textSecondary; font.pixelSize: 13 }
                         Rectangle {
                             Layout.fillWidth: true; Layout.fillHeight: true
