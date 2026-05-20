@@ -178,7 +178,10 @@ Rectangle {
                 scanDialog.close()
                 if (bloodFlow.reducedMode) reducedPlot.stopScan()
                 else                   embeddedPlot.stopScan()
-                notesModal.open()
+                // Notes modal opens via MOTIONInterface.scanNotesReady
+                // after the SDK actually unwinds and the duration line
+                // has been appended to scanNotes. Opening it here would
+                // race the append and pop an empty modal.
             } else {
                 if (bloodFlow.reducedMode) {
                     reducedStartPending = true
@@ -309,6 +312,18 @@ Rectangle {
         id: notesModal
     }
 
+    // Open the notes modal exactly when the connector signals that
+    // scanNotes has been finalized for the just-completed scan (duration
+    // line appended, notes.txt written). This is the only path that
+    // guarantees notesArea.text snapshots the post-scan content; opening
+    // the modal from onStartStopClicked or scanFinished races the
+    // append because scanRunner.scanFinished fires synchronously from
+    // cancel(), before the SDK has unwound and _on_complete has run.
+    Connections {
+        target: MOTIONInterface
+        function onScanNotesReady() { notesModal.open() }
+    }
+
     HistoryModal {
         id: historyModal
     }
@@ -409,7 +424,7 @@ Rectangle {
             if (err === "Canceled") {
                 scanDialog.close()
                 if (bloodFlow.reducedMode) reducedPlot.stopScan(); else embeddedPlot.stopScan()
-                notesModal.open()
+                // Notes modal opens via MOTIONInterface.scanNotesReady.
                 return
             }
 
@@ -425,7 +440,7 @@ Rectangle {
             scanDialog.progress = 100
             scanDialog.done = true
             if (bloodFlow.reducedMode) reducedPlot.stopScan(); else embeddedPlot.stopScan()
-            notesModal.open()
+            // Notes modal opens via MOTIONInterface.scanNotesReady.
         }
     }
 
