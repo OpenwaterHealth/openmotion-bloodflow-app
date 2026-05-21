@@ -80,7 +80,8 @@
     3.0
   ],
   "max_calibration_time_sec": 600,
-  "calibration_scan_duration_sec": 5,
+  "calibration_scan_duration_sec": 15,
+  "test_scan_duration_sec": 5,
   "calibration_scan_delay_sec": 1,
   "leftMask": 102,
   "rightMask": 102,
