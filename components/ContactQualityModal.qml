@@ -474,6 +474,52 @@ Item {
                 }
             }
 
+            // Per-camera dot color legend (#128). Developer mode only —
+            // RUO operators just see a single orange and don't need this.
+            RowLayout {
+                visible: root.developerMode
+                         && (root.state_ === "ok" || root.state_ === "warnings")
+                Layout.alignment: Qt.AlignHCenter
+                spacing: 18
+
+                RowLayout {
+                    spacing: 6
+                    Rectangle { width: 10; height: 10; radius: 5
+                        color: theme.accentOrangeAmbient
+                        border.color: "black"; border.width: 1 }
+                    Text { text: "ambient"; color: theme.textSecondary; font.pixelSize: 11 }
+                }
+                RowLayout {
+                    spacing: 6
+                    Rectangle { width: 10; height: 10; radius: 5
+                        color: theme.accentOrangeContact
+                        border.color: "black"; border.width: 1 }
+                    Text { text: "contact"; color: theme.textSecondary; font.pixelSize: 11 }
+                }
+                RowLayout {
+                    spacing: 6
+                    Item {
+                        width: 10; height: 10
+                        Rectangle {
+                            anchors.fill: parent
+                            radius: 5
+                            border.color: "black"; border.width: 1
+                            color: "transparent"
+                            clip: true
+                            Rectangle { x: 1; y: 1
+                                width: (parent.width - 2) / 2
+                                height: parent.height - 2
+                                color: theme.accentOrangeAmbient }
+                            Rectangle { x: parent.width / 2; y: 1
+                                width: (parent.width - 2) / 2
+                                height: parent.height - 2
+                                color: theme.accentOrangeContact }
+                        }
+                    }
+                    Text { text: "both"; color: theme.textSecondary; font.pixelSize: 11 }
+                }
+            }
+
             Item {
                 Layout.fillHeight: true
                 Layout.fillWidth: true
