@@ -36,8 +36,11 @@ Item {
     property real   meanMax:     500.0
     property real   contrastMin: 0.0
     property real   contrastMax: 1.0
-    property bool   writeRawCsv:       false
-    property var    rawCsvDurationSec: 60
+    // Master "persist raw histograms" toggle and duration cap. Apply to
+    // both the raw-CSV writer and the scan-DB sink (issue #92); the DB
+    // target is gated by scanDbEnabled at app startup.
+    property bool   writeRawData:            false
+    property var    writeRawDataDurationSec: 60
 
     // ── Theme tokens (aliased from AppTheme) ──────────────────────────────
     readonly property color colBgPanel:    theme.bgContainer
@@ -74,8 +77,8 @@ Item {
         meanMax      = cfg.meanMax      !== undefined ? cfg.meanMax      : 500.0
         contrastMin  = cfg.contrastMin  !== undefined ? cfg.contrastMin  : 0.0
         contrastMax  = cfg.contrastMax  !== undefined ? cfg.contrastMax  : 1.0
-        writeRawCsv       = cfg.writeRawCsv       !== undefined ? cfg.writeRawCsv       : false
-        rawCsvDurationSec = cfg.rawCsvDurationSec !== undefined ? cfg.rawCsvDurationSec : null
+        writeRawData            = cfg.writeRawData            !== undefined ? cfg.writeRawData            : false
+        writeRawDataDurationSec = cfg.writeRawDataDurationSec !== undefined ? cfg.writeRawDataDurationSec : null
         if (darkModeSwitch) darkModeSwitch.checked = cfg.darkMode !== false
     }
 
@@ -122,8 +125,8 @@ Item {
             "contrastMin": contrastMin,
             "contrastMax": contrastMax
         })
-        MOTIONInterface.setWriteRawCsv(writeRawCsv)
-        MOTIONInterface.setRawCsvDurationSec(rawCsvDurationSec)
+        MOTIONInterface.setWriteRawData(writeRawData)
+        MOTIONInterface.setWriteRawDataDurationSec(writeRawDataDurationSec)
         settingsChanged()
         root.visible = false
     }
@@ -724,41 +727,52 @@ Item {
                         Item { Layout.fillWidth: true }
                     }
 
+                    // Issue #92: master raw-histogram persistence switch.
+                    // The same flag drives the raw-CSV writer (always
+                    // available) and the scan-DB raw-frame sink (active
+                    // only when scanDbEnabled was true at app startup).
                     FieldRow {
-                        label: "Save raw CSV"
+                        label: "Save raw data"
                         PillSwitch {
-                            checked: root.writeRawCsv
-                            onCheckedChanged: root.writeRawCsv = checked
+                            checked: root.writeRawData
+                            onCheckedChanged: root.writeRawData = checked
                         }
                         Text {
-                            text: root.writeRawCsv ? "On" : "Off"
-                            color: root.writeRawCsv ? root.colAccent : root.colTextMuted
+                            text: root.writeRawData ? "On" : "Off"
+                            color: root.writeRawData ? root.colAccent : root.colTextMuted
                             font.pixelSize: 12
+                        }
+                        Text {
+                            text: MOTIONInterface.appConfig.scanDbEnabled
+                                  ? "(CSV + scan DB)" : "(CSV only)"
+                            color: root.colTextMuted
+                            font.pixelSize: 11
+                            font.italic: true
                         }
                         Item { Layout.fillWidth: true }
                     }
 
                     FieldRow {
-                        label: "Raw CSV duration"
-                        opacity: root.writeRawCsv ? 1.0 : 0.4
+                        label: "Raw data duration"
+                        opacity: root.writeRawData ? 1.0 : 0.4
                         TextField {
-                            id: rawCsvDurationField
+                            id: rawDataDurationField
                             Layout.preferredWidth: 80
                             Layout.preferredHeight: 32
-                            enabled: root.writeRawCsv
-                            text: root.rawCsvDurationSec !== null && root.rawCsvDurationSec !== undefined
-                                  ? root.rawCsvDurationSec.toString() : ""
+                            enabled: root.writeRawData
+                            text: root.writeRawDataDurationSec !== null && root.writeRawDataDurationSec !== undefined
+                                  ? root.writeRawDataDurationSec.toString() : ""
                             placeholderText: "unlimited"
                             inputMethodHints: Qt.ImhDigitsOnly
                             color: root.colTextPri
                             background: Rectangle {
                                 color: root.colBgInput
-                                border.color: rawCsvDurationField.activeFocus ? root.colAccent : root.colBorderSoft
+                                border.color: rawDataDurationField.activeFocus ? root.colAccent : root.colBorderSoft
                                 radius: 4
                             }
                             onEditingFinished: {
                                 var v = parseInt(text, 10)
-                                root.rawCsvDurationSec = (text === "" || isNaN(v) || v <= 0) ? null : v
+                                root.writeRawDataDurationSec = (text === "" || isNaN(v) || v <= 0) ? null : v
                             }
                         }
                         Text {
