@@ -44,8 +44,8 @@ The existing `_build_result_rows_from_samples` helper (`CalibrationWorkflow.py:3
 | R7 | The Test Results window has a **Close** button (plus the standard window-close X). Closing it does not cancel an in-progress Test scan; the scan completes and the window simply doesn't auto-reopen. Conversely, starting a new Test scan while the window is open updates the table in place (clear → "running" placeholder → result table). |
 | R8 | While a Test scan is running, the Test button is disabled, the Calibrate button is disabled, and the calibration target combo is disabled — same lock-out behavior as today's Calibration flow. The aggregate `_anyInProgress` state machine (`main.qml`) gains a new contributor so the close-while-busy guard fires on a mid-flight Test scan. |
 | R9 | If a Test scan fails to start (no sensors, console disconnected, another scan running), the app emits a `captureLog` entry just like today's calibration failures, and the Test Results window does not open. |
-| R10 | `app_config.json`'s default `calibration_scan_duration_sec` changes from `5` to `15`. `calibration_scan_delay_sec` stays at `1`. |
-| R11 | The connector exposes the new state via existing-shape pyqtProperties: `testScanRunning`, `testScanStatus`, `testScanRows` (list of dicts for the QML model), `testScanFailureReason`. The signal `testScanStateChanged` notifies on transitions between idle / running / done / aborted / failed. |
+| R10 | `app_config.json`: bump default `calibration_scan_duration_sec` from `5` to `15`. Add new key `test_scan_duration_sec` defaulting to `5` (separate, shorter duration for Test diagnostic scans). `calibration_scan_delay_sec` stays at `1`. |
+| R11 | The connector exposes the new state via existing-shape pyqtProperties: `testScanRunning`, `testScanStatus`, `testScanRows` (list of dicts for the QML model), `testScanFailureReason`. The signal `testScanStateChanged` notifies on transitions between idle / running / done / aborted / failed. The connector also reads the new `test_scan_duration_sec` config key into `self._test_scan_duration_sec` (alongside the existing `self._calibration_scan_duration_sec`). |
 | R12 | The SDK gains either (a) a new `start_test_scan` method on `CalibrationWorkflow` that runs phase 1 only and emits a `TestScanResult` containing `rows` + scan paths + the same `started_timestamp`, or (b) a `mode: "calibrate" \| "test"` parameter on `start_calibration` plus a discriminator on `CalibrationResult`. (Recommended: (a) — see "Architecture" for rationale.) The Test path writes the same per-camera CSV + JSON manifest the Calibrate path writes, distinguished by a `test-{ts}.csv` / `test-{ts}.json` filename prefix and a `mode: "test"` field in the JSON. |
 | R13 | The Test flow does not invoke the laser-power-from-config step gated by `set_laser_power_from_config` (issue #108 path) any differently than the Calibrate flow does — it applies the same laser params before kicking the SDK, for the same cold-start reason. |
 | R14 | The Test flow honors the same `max_calibration_time_sec` watchdog as Calibrate. |
@@ -56,13 +56,14 @@ The existing `_build_result_rows_from_samples` helper (`CalibrationWorkflow.py:3
 
 ### `config/app_config.json`
 
-Change the default duration:
+Change the default duration and add the new Test-specific key:
 
 ```json
 "calibration_scan_duration_sec": 15,
+"test_scan_duration_sec": 5,
 ```
 
-No other config changes. The Test button reuses every existing `ft_*_per_camera` threshold and `calibration_*_sec` key.
+`calibration_scan_duration_sec` bumps from `5` to `15` (used by the Calibrate flow for phase 1 and, as a side effect, phase 4 — see Trade-off note below). `test_scan_duration_sec` is a new key defaulting to `5`; the connector reads it into `self._test_scan_duration_sec` and `runTestScan` passes it as `duration_sec` in the `CalibrationRequest`. All other keys (`calibration_scan_delay_sec`, `ft_*_per_camera`, `max_calibration_time_sec`) are unchanged and shared between both flows.
 
 ### SDK — `openmotion-sdk/omotion/CalibrationWorkflow.py`
 
@@ -216,11 +217,12 @@ def testScanRows(self) -> list:
 self._testScanCompleteSignal.connect(self._on_test_scan_complete)
 ```
 
-**New slot — `runTestScan(target)`.** Structurally identical to `runCalibration` (motion_connector.py:3399), with the following differences:
+**New slot — `runTestScan(target)`.** Structurally identical to `runCalibration` (motion_connector.py:3399), with the following differences (key difference highlighted for OQ8 override):
+
 
 - Skip if `_test_scan_status == "running"` **OR** `_calibration_status == "running"` (mutual exclusion).
 - Build the same `CalibrationThresholds` from the same `_ft_*` fields.
-- Build a `CalibrationRequest` with the same masks + thresholds + durations + `max_duration_sec`. The connector does *not* pass `average_full_scan=True`; the SDK's `start_test_scan` forces it on internally (single source of truth).
+- Build a `CalibrationRequest` with the same masks + thresholds + `max_duration_sec`, but with **`duration_sec=self._test_scan_duration_sec`** (NOT `self._calibration_scan_duration_sec`). This is the OQ8 override: Test stays short (default 5 s) while Calibrate's phase 1 goes to 15 s. The connector does *not* pass `average_full_scan=True`; the SDK's `start_test_scan` forces it on internally (single source of truth).
 - `output_dir` reuses the existing `calibrations/` subdirectory — Test CSVs and Calibrate CSVs cohabit (distinguished by the `test-` vs `calibration-` filename prefix that the SDK writes).
 - Call `set_laser_power_from_config(self._interface)` the same way `runCalibration` does (#108).
 - Call `self._interface.start_test_scan(req, ...)`.
@@ -491,6 +493,10 @@ TestResultsWindow {
 
 (Instantiating it inside `SettingsModal.qml` would mean the window's lifetime is bound to whether the Settings modal has been opened. Putting it at the top of `main.qml` lets the connector's signal-driven `show()` call work whether or not Settings has ever been opened during the session.)
 
+### Trade-off: `calibration_scan_duration_sec` bump also affects phase 4
+
+Bumping `calibration_scan_duration_sec` from `5` to `15` affects both Calibrate phases that share `request.duration_sec` — phase 1 (calibration scan) **and** phase 4 (validation scan). There is currently no separate `validation_scan_duration_sec` key; both phases are built from the same `CalibrationRequest.duration_sec`. Adding a second key would be correct but expands scope, so the decision (OQ8) is to accept this side effect: phase 4 also runs 15 s after this change. This is conservative (longer validation gives more samples) and not a regression. If a future requirement needs a shorter validation scan, introduce a `validation_scan_duration_sec` key at that point.
+
 ### `MOTIONInterface.copyToClipboard(text)` helper
 
 Add a tiny `@pyqtSlot(str)` to `motion_connector.py`:
@@ -552,7 +558,7 @@ motion_connector.py.runTestScan
   ├─ guard: testScanRunning or calibrationRunning? return silently
   ├─ resolve target → left_mask + right_mask (same logic as runCalibration)
   ├─ build CalibrationThresholds from self._ft_* (same as runCalibration)
-  ├─ build CalibrationRequest (duration_sec=15, scan_delay_sec=1, …)
+  ├─ build CalibrationRequest (duration_sec=self._test_scan_duration_sec, scan_delay_sec=1, …)
   │     ※ average_full_scan flag is not set here — SDK forces it inside
   │       start_test_scan, so the connector code path stays simple.
   ├─ self._test_scan_status = "running"; testScanStateChanged.emit()
@@ -703,3 +709,27 @@ Each of these is an assumption the spec made without operator/PM confirmation. S
 13. **`developerMode` failure breakdown propagates to the Test results.** Spec reuses the same `"too much ambient light — L1:ambient; …"` formatting for Test failures when dev mode is on. Confirm — or keep dev-mode failure breakdowns calibrate-only, in which case strip the breakdown code from `_on_test_scan_complete`.
 14. **No `notes` field or per-test operator metadata.** The Test JSON manifest will inherit `request.notes = ""`. If a Test run wants a note field in the popup, add a `TextField` and route it through `request.notes`. Spec defers.
 15. **Watchdog uses the same `max_calibration_time_sec` (default 600 s) as Calibrate.** For a 15 s Test scan this is wildly generous, but it's also the right ceiling for a stuck-firmware fall-back. Confirm — or add a separate `max_test_scan_time_sec`. Spec reuses.
+
+---
+
+## Decisions
+
+Resolved 2026-05-21 after user review of the Open Questions above. Open Questions are preserved intact above as an audit trail.
+
+| OQ | Resolution |
+|----|------------|
+| 1 | Accepted: test scan = phase 1 calibration scan. |
+| 2 | Accepted: drop only the trailing `frame_window_count` window; keep `skip_leading_frames`. |
+| 3 | Accepted: include the Overall column (PASS only if Mean + Contrast + Dark all PASS); hide BFI/BVI columns. |
+| 4 | Accepted: separate top-level Qt `Window` for Test Results (not an in-canvas Popup). |
+| 5 | Accepted: closing the Test Results window mid-scan does NOT cancel the scan. |
+| 6 | Accepted: single Test Results window instance, replaced on rerun. |
+| 7 | Accepted: cohabit `calibrations/` folder with `test-{ts}.` filename prefix. |
+| **8** | **OVERRIDE.** Calibrate phase 1 goes 15 s (`calibration_scan_duration_sec: 5 → 15`); Test stays SHORT — add a NEW config key `test_scan_duration_sec` defaulting to `5`. Implication: Calibrate phase 4 (validation) also picks up 15 s since both phases share `request.duration_sec` — accepted as a known trade-off (see Architecture → Trade-off note). |
+| 9 | Accepted: rename "Run Calibration" → "Calibrate" so the two buttons read as a pair. |
+| 10 | Accepted: force `average_full_scan=True` for Test even though Test stays at 5 s — Test mirrors Calibrate's averaging semantics so its output approximates what Calibrate would compute (just on less data). |
+| 11 | Accepted: phase 4 (validation) keeps its current windowed averaging (no change to validation phase behavior). |
+| 12 | Accepted: Copy button emits TSV with header row (Excel/Sheets paste friendly). |
+| 13 | Accepted: dev-mode "too much ambient light" breakdown propagates to Test failures too. |
+| 14 | Accepted: no notes field on Test runs. |
+| 15 | Accepted: same `max_calibration_time_sec=600 s` watchdog covers Test scans. |

@@ -1107,6 +1107,16 @@ In the same file, find the line `self._calibration_status = ""` (around line 434
         self._test_scan_rows: list[dict] = []
 ```
 
+Also find where `self._calibration_scan_duration_sec` is read from config (search for `calibration_scan_duration_sec` in `__init__` — likely near the other `calibration_*` config reads, around line 434-450). Immediately after that line, add a sibling read for the new key:
+
+```python
+        self._test_scan_duration_sec = int(
+            cfg.get("test_scan_duration_sec", 5)
+        )
+```
+
+This ensures `runTestScan` can reference `self._test_scan_duration_sec` when building its `CalibrationRequest` (OQ8 override: Test stays at 5 s while Calibrate's phase 1 goes to 15 s).
+
 - [ ] **Step 5: Add the new pyqtProperty declarations**
 
 Find the existing calibration-property block (around lines 904-918, starts with `@pyqtProperty(bool, notify=calibrationStateChanged)` for `calibrationRunning`). After the closing of `maxCalibrationTimeSec` (around line 918), insert:
@@ -1370,7 +1380,7 @@ Open `motion_connector.py`. Find `runCalibration` (around line 3399-3520). Inser
             left_camera_mask=left_mask,
             right_camera_mask=right_mask,
             thresholds=thresholds,
-            duration_sec=self._calibration_scan_duration_sec,
+            duration_sec=self._test_scan_duration_sec,   # OQ8: Test uses shorter duration (default 5s), NOT _calibration_scan_duration_sec (15s)
             scan_delay_sec=self._calibration_scan_delay_sec,
             max_duration_sec=self._max_calibration_time_sec,
         )
@@ -1945,12 +1955,25 @@ git commit -m "feat(bloodflow-app): split Calibrate / Test buttons; wire results
 - Modify: `C:/Users/ethan/Projects/openmotion-bloodflow-app/config/app_config.json`
 - Modify (if it has a defaults dict): `C:/Users/ethan/Projects/openmotion-bloodflow-app/main.py`
 
-- [ ] **Step 1: Update the config**
+- [ ] **Step 1: Update the config — bump Calibrate duration and add Test duration key**
 
 Open `config/app_config.json`. Find the line `"calibration_scan_duration_sec": 5,` (around line 83). Change `5` to `15`:
 
 ```json
 "calibration_scan_duration_sec": 15,
+```
+
+Then, on the very next line after `"calibration_scan_duration_sec"`, insert the new Test key:
+
+```json
+"test_scan_duration_sec": 5,
+```
+
+The two lines together should read:
+
+```json
+"calibration_scan_duration_sec": 15,
+"test_scan_duration_sec": 5,
 ```
 
 - [ ] **Step 2: Update the defaults dict in `main.py` if one exists**
@@ -1970,21 +1993,21 @@ python -c "import json; json.load(open(r'C:\Users\ethan\Projects\openmotion-bloo
 
 Expected: `OK`.
 
-- [ ] **Step 4: Confirm the connector reads the new value**
+- [ ] **Step 4: Confirm both keys parse correctly**
 
 ```powershell
 cd C:\Users\ethan\Projects\openmotion-bloodflow-app
-python -c "import json; print(json.load(open('config/app_config.json'))['calibration_scan_duration_sec'])"
+python -c "import json; cfg = json.load(open('config/app_config.json')); print('calibration:', cfg['calibration_scan_duration_sec'], 'test:', cfg['test_scan_duration_sec'])"
 ```
 
-Expected: `15`.
+Expected: `calibration: 15 test: 5`
 
 - [ ] **Step 5: Commit**
 
 ```bash
 cd C:/Users/ethan/Projects/openmotion-bloodflow-app
 git add config/app_config.json main.py
-git commit -m "config(bloodflow-app): default calibration scan duration 5s -> 15s (#132)"
+git commit -m "config(bloodflow-app): bump calibration to 15s, add test_scan_duration_sec (#132)"
 ```
 
 (If `main.py` had no relevant default to update, drop it from the `git add`.)
@@ -2134,8 +2157,8 @@ Spec coverage:
 - R7 — Tasks 9 + 10 (Close button; closing does not cancel; state-change signal reopens on rerun).
 - R8 — Tasks 7 + 10 (buttons disabled while running; main.qml busy state extended).
 - R9 — Task 8 (runTestScan emits captureLog on refusal).
-- R10 — Task 11 (config bump to 15 s).
-- R11 — Task 7 (testScanRunning / testScanStatus / testScanRows / testScanFailureReason).
+- R10 — Task 11 (config bump `calibration_scan_duration_sec` to 15 s; add `test_scan_duration_sec: 5`).
+- R11 — Task 7 (testScanRunning / testScanStatus / testScanRows / testScanFailureReason; `_test_scan_duration_sec` read from config).
 - R12 — Tasks 3 + 4 (TestScanResult + start_test_scan).
 - R13 — Task 8 (set_laser_power_from_config call same as runCalibration).
 - R14 — Task 4 (max_calibration_time_sec watchdog reused).
