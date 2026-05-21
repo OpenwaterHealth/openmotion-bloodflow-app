@@ -253,6 +253,13 @@ class MOTIONConnector(QObject):
     calibrationStateChanged = pyqtSignal()  # any of running/passed/failed/aborted/idle
     _calibrationCompleteSignal = pyqtSignal(object)  # private worker→main marshalling
     scanNotesChanged = pyqtSignal()
+    # Fires once at the end of _on_complete (after the duration line has
+    # been appended to _scan_notes and notes.txt has been written) for any
+    # scan that finished normally or was canceled by the user. The UI uses
+    # this to auto-open the notes modal at the only moment when scanNotes
+    # is guaranteed to reflect the just-completed scan. Not emitted on
+    # hard errors — those keep the scan dialog visible with the error.
+    scanNotesReady = pyqtSignal()
     scanMeanSampled = pyqtSignal(
         str, int, float, float
     )  # side, cam_id, timestamp_s, mean
@@ -1767,6 +1774,8 @@ class MOTIONConnector(QObject):
                 bool(result.ok), result.error or "", result.left_path, result.right_path
             )
             self._stop_runlog()
+            if result.ok or result.canceled:
+                self.scanNotesReady.emit()
 
         req = ScanRequest(
             subject_id=subject_id,
