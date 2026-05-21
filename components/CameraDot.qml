@@ -14,7 +14,9 @@ import QtQuick.Controls as Controls
  *      modal      : the ContactQualityModal root (required — used to
  *                   call cameraStatus / cameraWarningTypes / cameraTooltip
  *                   and to read developerMode)
- *      size       : pixel size of the dot (default 18)
+ *      size       : pixel size of the dot (default 18). Must be even —
+ *                   the split-render geometry assumes an even width so
+ *                   the two halves meet exactly at the centerline.
  */
 Item {
     id: root
@@ -43,8 +45,9 @@ Item {
         if (status === "inactive") return "#666666"
         // status === "bad" past this point
         if (!modal.developerMode)  return "#E67E22"
-        if (hasAmbient && !isSplit) return theme.accentOrangeAmbient
-        if (hasContact && !isSplit) return theme.accentOrangeContact
+        if (isSplit)                return theme.accentOrangeAmbient  // unused at render time (splitFrame handles it); kept so singleColor is never undefined
+        if (hasAmbient)             return theme.accentOrangeAmbient
+        if (hasContact)             return theme.accentOrangeContact
         // Unknown / future typeKey — fall back to dark orange.
         return theme.accentOrangeAmbient
     }
