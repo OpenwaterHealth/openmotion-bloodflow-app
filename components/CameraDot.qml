@@ -48,7 +48,8 @@ Item {
         if (isSplit)                return theme.accentOrangeAmbient  // unused at render time (splitFrame handles it); kept so singleColor is never undefined
         if (hasAmbient)             return theme.accentOrangeAmbient
         if (hasContact)             return theme.accentOrangeContact
-        // Unknown / future typeKey — fall back to dark orange.
+        // Unknown / future typeKey — fall back to dark orange and warn.
+        console.warn("CameraDot: unknown typeKey(s)", types, "for", side, camIndex1)
         return theme.accentOrangeAmbient
     }
 
