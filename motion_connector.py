@@ -265,6 +265,9 @@ class MOTIONConnector(QObject):
     scanBviSampled = pyqtSignal(
         str, int, int, float, float
     )  # side, cam_id, frame_id, timestamp_s, bvi
+    scanBfiCorrectedSampled = pyqtSignal(
+        str, int, float, float
+    )  # side, cam_id, timestamp_s, bfi  (kept for backward compat)
 
     # Contact-quality quick-check signals.
     contactQualityCheckStarted = pyqtSignal(int)  # expected duration in seconds
@@ -275,6 +278,9 @@ class MOTIONConnector(QObject):
     # ``False`` edge to clear an entry from the live modal.
     contactQualityIssueStateChanged = pyqtSignal(str, str, str, float, bool)
     contactQualityScanInProgress = pyqtSignal(bool)
+    scanBviCorrectedSampled = pyqtSignal(
+        str, int, float, float
+    )  # side, cam_id, timestamp_s, bvi  (kept for backward compat)
     scanCorrectedBatch = pyqtSignal('QVariantList')  # list of {side,camId,frameId,ts,bfi,bvi}
     scanCameraTemperature = pyqtSignal(str, int, float)  # side, cam_id, temperature_c
     cameraDropoutDetected = pyqtSignal(str, int, str)  # side ("left"/"right"), cam_id (0-7), elapsed HH:MM:SS
@@ -360,25 +366,9 @@ class MOTIONConnector(QObject):
         self._verbose_command_handling    = bool(cfg.get("verboseCommandHandling", False))
         self._output_base                 = output_path or cfg.get("output_path") or self._default_output_base()
         self._power_off_unused_cameras    = bool(cfg.get("powerOffUnusedCameras", False))
-        # ``writeRawData`` is the master "persist raw histogram frames"
-        # switch. It fans out to both raw-CSV writing (always available)
-        # and raw-DB writing (active only when scanDbEnabled was true at
-        # SDK construction, i.e. self._interface was built with a db_path).
-        # ``writeRawDataDurationSec`` caps how long raw data is recorded;
-        # the same cap applies to whichever target(s) are enabled.
-        self._write_raw_data              = bool(cfg.get("writeRawData", True))
-        raw_dur                           = cfg.get("writeRawDataDurationSec")
-        self._write_raw_data_duration_sec = float(raw_dur) if raw_dur is not None else None
-        # Issue #92: master CSV toggle. When False, every CSV writer
-        # (corrected + raw + telemetry) is suppressed for the scan — used
-        # to exercise the DB-only path (combine with scanDbEnabled=True).
-        # Default True preserves legacy behavior.
-        self._csv_enabled                 = bool(cfg.get("csvEnabled", True))
-        # Live BFI/BVI plots subscribe to the SDK's real-time corrected
-        # stream when this is True (default). When False, the live plots
-        # keep showing the uncorrected stream and BFI/BVI only appear
-        # via the post-scan corrected CSV / batched callback as before.
-        self._realtime_dark_correction    = bool(cfg.get("realtimeDarkCorrection", True))
+        self._write_raw_csv               = bool(cfg.get("writeRawCsv", True))
+        raw_csv                           = cfg.get("rawCsvDurationSec")
+        self._raw_csv_duration_sec        = float(raw_csv) if raw_csv is not None else None
         self._uncorrected_only            = bool(cfg.get("uncorrectedOnly", False))
 
         # Configure logging with the provided level
@@ -450,12 +440,9 @@ class MOTIONConnector(QObject):
         self._capture_right_path = ""
         self._scan_notes = ""
         self._scan_notes_path = ""  # path to current scan's notes file on disk
-        # Issue #92: when scanDbEnabled is on, ScanDBSink's create_session
-        # returns the DB session id; we stash it here so later notes
-        # edits can update session_notes in the DB. Reset to None when
-        # a new scan starts.
-        self._scan_session_id = None
         self.connect_signals()
+        self._viz_thread = None
+        self._viz_worker = None
 
         self._tec_voltage = 0.0
         self._tec_temp = 0.0
@@ -1238,66 +1225,20 @@ class MOTIONConnector(QObject):
     # patterns first so an aux file isn't mistaken for canonical.
     _AUX_CSV_RE = re.compile(
         r"_("
-        r"telemetry"                                # _telemetry.csv
-        r"|(?:left|right)_mask[0-9A-Fa-f]+_raw"     # _(left|right)_maskXX_raw.csv
+        r"telemetry"                                  # _telemetry.csv
+        r"|(?:left|right)_mask[0-9A-Fa-f]+(?:_raw)?"  # raw histo, new + legacy
         r")$"
     )
 
-    def _scan_db_path(self):
-        """Path the SDK is writing the scan DB to, or None if disabled.
-
-        Issue #92: the History modal lists DB sessions when scanDbEnabled
-        was true at app startup. Read directly from the SDK handle
-        (the interface stashes its constructor arg there).
-        """
-        return getattr(self._interface, "_db_path", None)
-
-    def _scan_db(self):
-        """Open a ScanDatabase against the configured path if it exists.
-
-        Returns None if scanDbEnabled is off, the file doesn't exist yet
-        (no scans ever written), or the import / open fails. Caller is
-        responsible for closing.
-        """
-        db_path = self._scan_db_path()
-        if not db_path or not os.path.exists(db_path):
-            return None
-        try:
-            from omotion import ScanDatabase
-            return ScanDatabase(db_path=db_path)
-        except Exception as e:
-            logger.warning(f"[Connector] Could not open scan DB at {db_path}: {e}")
-            return None
-
     @pyqtSlot(result=list)
     def get_scan_list(self):
-        """Return sorted list of scan IDs (newest first).
+        """Return sorted list of scan IDs.
 
-        Issue #92: when the SDK has a db_path set, list sessions from the
-        scan DB by session_label. Falls back to the CSV directory walk
-        below when no DB exists (CSV-only mode, or DB hasn't been
-        created yet because no scan has run since scanDbEnabled was
-        flipped on).
-
-        Filename layout (#44): ``{YYYYMMDD_HHMMSS}_{sessionId}.csv``
-        for the corrected stream, ``..._left_mask{XX}_raw.csv`` /
-        ``..._right_mask{XX}_raw.csv`` for the per-side raw streams.
+        Supports three filename formats for the canonical scan CSV:
+          New (post-#44): {YYYYMMDD_HHMMSS}_{sessionId}.csv
+          Mid:            {YYYYMMDD_HHMMSS}_{sessionId}_corrected.csv
+          Legacy:         scan_{sessionId}_{YYYYMMDD_HHMMSS}_corrected.csv
         """
-        # DB-first path: enumerate sessions from the scan DB when available.
-        db = self._scan_db()
-        if db is not None:
-            try:
-                labels = [s["session_label"] for s in db.iter_sessions()]
-            except Exception as e:
-                logger.warning(f"[Connector] iter_sessions failed: {e}")
-                labels = []
-            finally:
-                try:
-                    db.close()
-                except Exception:
-                    pass
-            return sorted(labels, key=lambda s: s[:15], reverse=True)
-
         base_path = Path(self._directory)
         if not base_path.exists():
             return []
@@ -1311,84 +1252,77 @@ class MOTIONConnector(QObject):
             # Skip per-scan auxiliary files (raw histo, telemetry).
             if self._AUX_CSV_RE.search(stem):
                 continue
+            # Mid format: strip the ``_corrected`` suffix to get the
+            # canonical scan id.
+            if stem.endswith("_corrected"):
+                stem = stem[:-10]
+            # Legacy format: ``scan_{sessionId}_{ts}`` — strip the
+            # ``scan_`` prefix.
+            if stem.startswith("scan_"):
+                stem = stem[5:]
             if stem in seen:
                 continue
             seen.add(stem)
             ids.append(stem)
 
-        return sorted(ids, key=lambda s: s[:15], reverse=True)
+        def ts_key(s):
+            # New / mid format starts with YYYYMMDD (8 digits)
+            if re.match(r'^\d{8}_\d{6}', s):
+                return s[:15]       # YYYYMMDD_HHMMSS
+            # Legacy format: sessionId_YYYYMMDD_HHMMSS
+            parts = s.split("_", 1)
+            return parts[1] if len(parts) == 2 else s
+
+        return sorted(ids, key=ts_key, reverse=True)
 
     @pyqtSlot(str, result=QVariant)
     def get_scan_details(self, scan_id: str):
         """
-        scan_id is the canonical scan label
-        ``YYYYMMDD_HHMMSS_userLabel``. Resolves the on-disk paths for
-        the per-side raw CSVs (``{scan_id}_(left|right)_mask*_raw.csv``),
-        the corrected CSV (``{scan_id}.csv``), and the notes file
-        (``{scan_id}_notes.txt``).
+        scan_id is either:
+          New / mid format: 'YYYYMMDD_HHMMSS_userLabel'
+          Legacy format:    'userLabel_YYYYMMDD_HHMMSS'
 
-        Issue #92: when the scan DB has a row for this label, attaches
-        the richer provenance ``session_meta`` (subject_id, masks,
-        active cams, fw versions, hw IDs, sdk version, sdk flags),
-        actual scan duration (``session_end - session_start``), and the
-        DB-side ``session_data`` / ``session_raw`` row counts. CSV
-        fields stay populated alongside so the Visualize buttons in
-        History continue to work for CSV-only scans.
+        For each format we try to resolve the canonical CSV across
+        all naming generations (#44):
+          New:    {scan_id}.csv
+          Mid:    {scan_id}_corrected.csv
+          Legacy: scan_{scan_id}_corrected.csv
+        And the raw histo CSVs across two generations:
+          New:    {scan_id}_(left|right)_mask*_raw.csv
+          Legacy: {scan_id}_(left|right)_mask*.csv
         """
-        db_session: dict = {}
-        db_meta: dict = {}
-        db_counts: dict = {}
-        db = self._scan_db()
-        if db is not None:
-            try:
-                # session_label == scan_id by construction (Task 7 wrapper
-                # builds the label as "{ts}_{subject_id}").
-                for s in db.iter_sessions():
-                    if s.get("session_label") == scan_id:
-                        db_session = dict(s)
-                        meta = db_session.get("session_meta") or {}
-                        if isinstance(meta, dict):
-                            db_meta = meta
-                        sid = db_session.get("id")
-                        if sid is not None:
-                            try:
-                                conn = db._connection()
-                                data_n = conn.execute(
-                                    "SELECT COUNT(*) FROM session_data WHERE session_id=?",
-                                    (sid,),
-                                ).fetchone()[0]
-                                raw_n = conn.execute(
-                                    "SELECT COUNT(*) FROM session_raw WHERE session_id=?",
-                                    (sid,),
-                                ).fetchone()[0]
-                                db_counts = {
-                                    "sessionDataRows": int(data_n),
-                                    "sessionRawRows": int(raw_n),
-                                }
-                            except Exception:
-                                pass
-                        break
-            except Exception as e:
-                logger.warning(f"[Connector] DB session lookup failed: {e}")
-            finally:
-                try:
-                    db.close()
-                except Exception:
-                    pass
-
         base = Path(self._directory)
 
-        # Scan-id format: YYYYMMDD_HHMMSS_userLabel.
-        parts = scan_id.split("_", 2)
-        ts = parts[0] + "_" + parts[1] if len(parts) >= 2 else ""
-        subject = parts[2] if len(parts) > 2 else ""
-        notes_path = base / f"{scan_id}_notes.txt"
-        left      = next(base.glob(f"{scan_id}_left_mask*_raw.csv"),  None)
-        right     = next(base.glob(f"{scan_id}_right_mask*_raw.csv"), None)
-        corrected = next(
-            (p for p in base.glob(f"{scan_id}.csv") if p.is_file()),
-            None,
-        )
+        # Detect format by checking if it starts with a date
+        if re.match(r'^\d{8}_\d{6}_', scan_id):
+            # New / mid: YYYYMMDD_HHMMSS_userLabel
+            parts = scan_id.split("_", 2)
+            ts = parts[0] + "_" + parts[1]
+            subject = parts[2] if len(parts) > 2 else ""
+            notes_path = base / f"{scan_id}_notes.txt"
+            left      = (next(base.glob(f"{scan_id}_left_mask*_raw.csv"), None)
+                         or next(base.glob(f"{scan_id}_left_mask*.csv"), None))
+            right     = (next(base.glob(f"{scan_id}_right_mask*_raw.csv"), None)
+                         or next(base.glob(f"{scan_id}_right_mask*.csv"), None))
+            # Prefer new naming (no suffix); fall back to mid format
+            # (_corrected). Filter out files that match the raw
+            # mask pattern so they aren't picked up as the canonical
+            # CSV.
+            corrected = next(
+                (p for p in base.glob(f"{scan_id}.csv") if p.is_file()),
+                None,
+            )
+            if corrected is None:
+                corrected = next(base.glob(f"{scan_id}_corrected.csv"), None)
+        else:
+            # Legacy: userLabel_YYYYMMDD_HHMMSS
+            parts = scan_id.split("_", 1)
+            subject = parts[0]
+            ts = parts[1] if len(parts) > 1 else ""
+            notes_path = base / f"scan_{scan_id}_notes.txt"
+            left      = next(base.glob(f"scan_{scan_id}_left_mask*.csv"), None)
+            right     = next(base.glob(f"scan_{scan_id}_right_mask*.csv"), None)
+            corrected = next(base.glob(f"scan_{scan_id}_corrected.csv"), None)
 
         left_mask = ""
         right_mask = ""
@@ -1401,34 +1335,13 @@ class MOTIONConnector(QObject):
             if m:
                 right_mask = m.group(1)
 
-        # Notes resolution (#92): when a DB session exists, treat
-        # session_notes as canonical (the bloodflow-app writes back to
-        # it on every edit + at scan completion). The .txt file is
-        # the fallback for legacy CSV-only sessions where no DB row
-        # exists.
         notes = ""
-        db_notes = (db_session.get("session_notes") or "") if db_session else ""
-        if db_notes:
-            notes = db_notes
-        else:
-            try:
-                notes = notes_path.read_text(encoding="utf-8")
-            except Exception:
-                pass
+        try:
+            notes = notes_path.read_text(encoding="utf-8")
+        except Exception:
+            pass
 
-        # DB-sourced mask values win over what we sniffed from the CSV
-        # filenames — they're the post-active-cam-resolution values
-        # ScanDBSink saved into session_meta.
-        if isinstance(db_meta.get("left_camera_mask"), int):
-            left_mask = format(db_meta["left_camera_mask"], "X")
-        if isinstance(db_meta.get("right_camera_mask"), int):
-            right_mask = format(db_meta["right_camera_mask"], "X")
-
-        scan_duration_s = None
-        if db_session.get("session_end") is not None and db_session.get("session_start") is not None:
-            scan_duration_s = float(db_session["session_end"]) - float(db_session["session_start"])
-
-        out = {
+        return {
             "userLabel": subject,
             "sessionId": f"{ts}_{subject}",
             "timestamp": ts,
@@ -1439,15 +1352,7 @@ class MOTIONConnector(QObject):
             "correctedPath": str(corrected) if corrected else "",
             "notesPath": str(notes_path),
             "notes": notes,
-            # Issue #92 — DB-sourced provenance. Empty dict (and None
-            # duration) when no DB row exists for this scan (i.e. the
-            # ``scanDbEnabled=false`` path).
-            "dbSessionId": db_session.get("id"),
-            "dbMeta": db_meta,
-            "dbScanDurationS": scan_duration_s,
-            **db_counts,
         }
-        return out
 
     @pyqtProperty(str, notify=directoryChanged)
     def directory(self):
@@ -1505,42 +1410,31 @@ class MOTIONConnector(QObject):
         logger.debug(f"[Connector] Config saved: {sorted(configs.keys())}")
 
     @pyqtSlot(bool)
-    def setWriteRawData(self, enabled: bool) -> None:
-        """Update writeRawData in both the runtime cache and persisted config.
-
-        Master switch for raw histogram persistence. When True the connector
-        passes the flag through to ScanRequest as both ``write_raw_csv`` and
-        ``write_raw_to_db`` so raw frames land in any output target the user
-        currently has enabled (CSV is always available; DB is active only
-        when scanDbEnabled was true at SDK construction).
-        """
-        self._write_raw_data = bool(enabled)
-        self._app_config["writeRawData"] = self._write_raw_data
+    def setWriteRawCsv(self, enabled: bool) -> None:
+        """Update writeRawCsv in both the runtime cache and persisted config."""
+        self._write_raw_csv = bool(enabled)
+        self._app_config["writeRawCsv"] = self._write_raw_csv
         self._save_app_config()
         self.appConfigChanged.emit()
-        logger.debug(f"[Connector] writeRawData set to {self._write_raw_data}")
+        logger.debug(f"[Connector] writeRawCsv set to {self._write_raw_csv}")
 
     @pyqtSlot('QVariant')
-    def setWriteRawDataDurationSec(self, value) -> None:
-        """Update writeRawDataDurationSec in both runtime cache and persisted config.
+    def setRawCsvDurationSec(self, value) -> None:
+        """Update rawCsvDurationSec in both the runtime cache and persisted config.
 
-        Caps how long raw data is recorded; applies to whichever raw target(s)
-        are active (CSV and/or DB). Pass ``None`` / ``null`` / empty string to
-        disable the limit (full scan duration).
+        Pass ``None`` / ``null`` / empty string to disable the limit (full scan duration).
         """
         if value is None or str(value).strip() in ("", "null", "undefined"):
-            self._write_raw_data_duration_sec = None
+            self._raw_csv_duration_sec = None
         else:
             try:
-                self._write_raw_data_duration_sec = float(value)
+                self._raw_csv_duration_sec = float(value)
             except (TypeError, ValueError):
-                self._write_raw_data_duration_sec = None
-        self._app_config["writeRawDataDurationSec"] = self._write_raw_data_duration_sec
+                self._raw_csv_duration_sec = None
+        self._app_config["rawCsvDurationSec"] = self._raw_csv_duration_sec
         self._save_app_config()
         self.appConfigChanged.emit()
-        logger.debug(
-            f"[Connector] writeRawDataDurationSec set to {self._write_raw_data_duration_sec}"
-        )
+        logger.debug(f"[Connector] rawCsvDurationSec set to {self._raw_csv_duration_sec}")
 
     @pyqtProperty(str, notify=scanNotesChanged)  # <-- add notify
     def scanNotes(self):
@@ -1552,37 +1446,15 @@ class MOTIONConnector(QObject):
         if value != self._scan_notes:
             self._scan_notes = value
             self.scanNotesChanged.emit()
-        # File: only when csvEnabled. DB-only mode skips the .txt and
-        # treats session_notes as the canonical store. (Issue #92.)
-        if self._scan_notes_path and self._csv_enabled:
+        # Always persist to disk when a notes file path exists, even if the
+        # in-memory value didn't change (covers the first save after capture).
+        if self._scan_notes_path:
             try:
                 with open(self._scan_notes_path, "w", encoding="utf-8") as nf:
                     nf.write(self._scan_notes.strip() + "\n")
                 logger.info(f"Notes saved to disk: {self._scan_notes_path}")
             except Exception as e:
                 logger.error(f"Failed to update scan notes on disk: {e}")
-        # DB: write whenever a recorded session is active, regardless of
-        # csvEnabled — the file is the optional mirror, DB is canonical.
-        self._update_db_session_notes()
-
-    def _update_db_session_notes(self) -> None:
-        """Push ``self._scan_notes`` into ``sessions.session_notes`` for
-        the currently active or just-completed scan. Issue #92."""
-        sid = self._scan_session_id
-        if sid is None:
-            return
-        db_path = self._scan_db_path()
-        if not db_path:
-            return
-        try:
-            from omotion import ScanDatabase
-            db = ScanDatabase(db_path=db_path)
-            try:
-                db.update_session(sid, session_notes=self._scan_notes)
-            finally:
-                db.close()
-        except Exception as e:
-            logger.warning(f"Could not update session_notes for sid={sid}: {e}")
 
     @pyqtSlot(str, result=int)
     @pyqtSlot(str, str, result=int)
@@ -1705,7 +1577,6 @@ class MOTIONConnector(QObject):
         # Each new scan starts with a fresh notes buffer
         self._scan_notes = ""
         self._scan_notes_path = ""
-        self._scan_session_id = None
         self.scanNotesChanged.emit()
         self._capture_running = True
         self._capture_start_time = time.time()
@@ -1791,56 +1662,6 @@ class MOTIONConnector(QObject):
                 float(sample.contrast),
             )
 
-            # BFI/BVI from the uncorrected stream are ~0 (no dark
-            # subtraction applied). When realtimeDarkCorrection is on,
-            # the _on_realtime_corrected handler below emits the real
-            # values instead; suppressing here avoids double-emit /
-            # value-flapping in the live plot.
-            if not self._realtime_dark_correction:
-                self.scanBfiSampled.emit(
-                    sample.side,
-                    int(sample.cam_id),
-                    int(sample.absolute_frame_id),
-                    plot_ts,
-                    float(sample.bfi),
-                )
-                self.scanBviSampled.emit(
-                    sample.side,
-                    int(sample.cam_id),
-                    int(sample.absolute_frame_id),
-                    plot_ts,
-                    float(sample.bvi),
-                )
-            self.scanCameraTemperature.emit(
-                sample.side,
-                int(sample.cam_id),
-                float(sample.temperature_c),
-            )
-
-        def _on_realtime_corrected(sample):
-            """Fires per non-dark frame ~15 s into the scan onward, with
-            dark-corrected BFI/BVI computed from predicted darks. Wired
-            up only when ``realtimeDarkCorrection`` is True. See
-            openmotion-sdk dark-drift-study/online_estimators.md for the
-            predictor design.
-
-            We re-emit only the BFI/BVI signals here — mean/contrast/
-            temperature stay sourced from the uncorrected stream, so the
-            live plots have continuous mean/contrast data from frame 0
-            and BFI/BVI jumps from ~0 to real corrected values once the
-            predictor warms up.
-            """
-            should_emit, recovery_msg = _check_dropped_camera_emit(
-                sample.side, int(sample.cam_id),
-                self._camera_dropped,
-                self._camera_dropped_recovery_logged,
-            )
-            if recovery_msg is not None:
-                logger.warning(recovery_msg)
-                run_logger.warning(recovery_msg)
-            if not should_emit:
-                return
-            plot_ts = time.monotonic() - plot_t0
             self.scanBfiSampled.emit(
                 sample.side,
                 int(sample.cam_id),
@@ -1854,6 +1675,11 @@ class MOTIONConnector(QObject):
                 int(sample.absolute_frame_id),
                 plot_ts,
                 float(sample.bvi),
+            )
+            self.scanCameraTemperature.emit(
+                sample.side,
+                int(sample.cam_id),
+                float(sample.temperature_c),
             )
 
         def _on_corrected_batch(batch):
@@ -1912,36 +1738,19 @@ class MOTIONConnector(QObject):
             self._scan_notes = (self._scan_notes.strip() + duration_line)
             self.scanNotesChanged.emit()
 
-            # Capture the DB session id (set by ScanDBSink at scan
-            # start) so post-scan notes edits and the duration line can
-            # land in session_notes. Cleared at the next scan start.
+            # Always write the notes file so that the scan is discoverable in
+            # the history viewer regardless of whether data CSVs were produced.
             try:
-                self._scan_session_id = self._interface.active_db_session_id
-            except Exception:
-                self._scan_session_id = None
-
-            # Notes file mirrors csvEnabled: in DB-only mode the
-            # session_notes column is canonical and no .txt is written.
-            if self._csv_enabled:
-                try:
-                    notes_filename = (
-                        f"{result.scan_timestamp}_{subject_id}_notes.txt"
-                    )
-                    notes_path = os.path.join(data_dir, notes_filename)
-                    with open(notes_path, "w", encoding="utf-8") as nf:
-                        nf.write(self._scan_notes.strip() + "\n")
-                    self._scan_notes_path = notes_path
-                    logger.info(f"Saved scan notes to {notes_path}")
-                except Exception as e:
-                    logger.error(f"Failed to save scan notes: {e}")
-            else:
-                # DB-only path — clear the file pointer so the setter
-                # doesn't try to touch a stale .txt on later edits.
-                self._scan_notes_path = ""
-
-            # Push the post-scan notes (including duration line) into
-            # session_notes so the DB row is the authoritative copy.
-            self._update_db_session_notes()
+                notes_filename = (
+                    f"{result.scan_timestamp}_{subject_id}_notes.txt"
+                )
+                notes_path = os.path.join(data_dir, notes_filename)
+                with open(notes_path, "w", encoding="utf-8") as nf:
+                    nf.write(self._scan_notes.strip() + "\n")
+                self._scan_notes_path = notes_path
+                logger.info(f"Saved scan notes to {notes_path}")
+            except Exception as e:
+                logger.error(f"Failed to save scan notes: {e}")
 
             if result.ok:
                 try:
@@ -1966,30 +1775,14 @@ class MOTIONConnector(QObject):
             right_camera_mask=right_camera_mask,
             data_dir=data_dir,
             disable_laser=disable_laser,
-            # writeRawData fans into both targets: the CSV writer (always
-            # available) and the DB sink (active only when scanDbEnabled
-            # was true at SDK construction). The duration cap applies to
-            # whichever target(s) are running. When csvEnabled is False
-            # the raw-CSV write is suppressed regardless of writeRawData
-            # — DB still gets the raw frames so a "DB-only" config can
-            # capture them.
-            write_corrected_csv=self._csv_enabled,
-            write_raw_csv=self._csv_enabled and self._write_raw_data,
-            raw_csv_duration_sec=self._write_raw_data_duration_sec,
-            write_raw_to_db=self._write_raw_data,
-            # Hand the pre-scan notes to ScanDBSink so the new sessions
-            # row has them on first commit; post-scan edits push further
-            # updates via _update_db_session_notes.
-            notes=self._scan_notes,
+            write_raw_csv=self._write_raw_csv,
+            raw_csv_duration_sec=self._raw_csv_duration_sec,
             reduced_mode=self._app_config.get("reducedMode", False),
             # Issue #43: clinical users don't need the per-scan
             # _telemetry.csv with TCM/TCL/PDC samples — gate it on
             # developerMode so the SDK skips creating the file
-            # entirely. csvEnabled=False also suppresses it.
-            write_telemetry_csv=(
-                self._csv_enabled
-                and self._app_config.get("developerMode", False)
-            ),
+            # entirely. ScanRequest defaults to True for back-compat.
+            write_telemetry_csv=self._app_config.get("developerMode", False),
             # Live CQ monitor needs the SDK to compute the rolling
             # average over the last N uncorrected light samples and
             # emit one Sample per-window via ``on_rolling_avg_fn``.
@@ -2060,9 +1853,6 @@ class MOTIONConnector(QObject):
             on_trigger_state_fn=_on_trigger_state,
             on_uncorrected_fn=_on_uncorrected,
             on_corrected_batch_fn=None if self._uncorrected_only else _on_corrected_batch,
-            on_realtime_corrected_fn=(
-                _on_realtime_corrected if self._realtime_dark_correction else None
-            ),
             on_dark_frame_fn=on_dark_frame_fn,
             on_rolling_avg_fn=on_rolling_avg_fn,
             on_error_fn=lambda e: self.captureLog.emit(f"Capture error: {e}"),
@@ -3312,6 +3102,118 @@ class MOTIONConnector(QObject):
             return False
 
     # --- BLOODFLOW VISUALIZATION / POST-PROCESSING METHODS ---
+    @pyqtSlot(str, str, float, float, bool, result=bool)
+    def visualize_bloodflow(
+        self,
+        left_csv: str,
+        right_csv: str,
+        t1: float = 0.0,
+        t2: float = 120.0,
+        plot_contrast: bool = False,
+    ) -> bool:
+        left_csv = (left_csv or "").strip()
+        right_csv = (right_csv or "").strip()
+        if left_csv.lower().endswith(".raw"):
+            left_csv = left_csv[:-4] + ".csv"
+        if right_csv.lower().endswith(".raw"):
+            right_csv = right_csv[:-4] + ".csv"
+
+        if not left_csv and not right_csv:
+            self.errorOccurred.emit(
+                "No files selected. Please pick a left and/or right CSV."
+            )
+            return False
+
+        missing = []
+        if left_csv and not Path(left_csv).exists():
+            missing.append(f"Left file not found:\n{left_csv}")
+        if right_csv and not Path(right_csv).exists():
+            missing.append(f"Right file not found:\n{right_csv}")
+        if missing:
+            self.errorOccurred.emit("\n\n".join(missing))
+            return False
+
+        logger.info(
+            f"Visualizing bloodflow: left_csv={left_csv}, right_csv={right_csv}, t1={t1}, t2={t2}, plot_contrast={plot_contrast}"
+        )
+
+        # start spinner
+        self.visualizingChanged.emit(True)
+
+        # start worker thread (compute only)
+        self._viz_thread = QThread(self)
+        self._viz_worker = _VizWorker(left_csv, right_csv, t1, t2, plot_contrast)
+        self._viz_worker.moveToThread(self._viz_thread)
+
+        # --- connections when starting the worker ---
+        self._viz_thread.started.connect(self._viz_worker.run)
+        self._viz_worker.resultsReady.connect(self._onVizResults)  # will pass 1 arg
+        self._viz_worker.error.connect(self._onVizError)
+        self._viz_worker.finished.connect(self._viz_thread.quit)
+        self._viz_worker.finished.connect(self._viz_worker.deleteLater)
+        self._viz_thread.finished.connect(self._viz_thread.deleteLater)
+        self._viz_thread.start()
+        return True
+
+    @pyqtSlot(object)
+    def _onVizResults(self, payload: dict):
+        try:
+            import matplotlib.pyplot as plt
+            from processing.visualize_bloodflow import VisualizeBloodflow
+
+            # Close any existing matplotlib figures to prevent multiple windows from old scans
+            plt.close("all")
+
+            bfi = payload["bfi"]
+            bvi = payload["bvi"]
+            camera_inds = payload["camera_inds"]
+            contrast = payload["contrast"]
+            mean = payload["mean"]
+            nmodules = payload["nmodules"]
+            t1 = payload["t1"]
+            t2 = payload["t2"]
+
+            viz = VisualizeBloodflow(left_csv="", right_csv="", t1=t1, t2=t2)
+            viz._BFI = bfi
+            viz._BVI = bvi
+            viz._contrast = contrast
+            viz._mean = mean
+            viz._camera_inds = camera_inds
+            viz._nmodules = nmodules
+            viz._sides = payload.get("sides", [])
+            plot_contrast = payload.get("plot_contrast", False)
+
+            if plot_contrast:
+                fig = viz.plot(("contrast", "mean"))
+            else:
+                fig = viz.plot(("BFI", "BVI"))
+            plt.show(block=False)
+        except Exception as e:
+            logger.exception("Visualization display failed")
+            self.errorOccurred.emit(f"Visualization display failed:\n{e}")
+        finally:
+            self.visualizingChanged.emit(False)
+            self.vizFinished.emit()
+
+    @pyqtSlot(str)
+    def _onVizError(self, msg: str):
+        self.visualizingChanged.emit(False)
+        self.errorOccurred.emit(f"Visualization failed:\n{msg}")
+
+    @pyqtSlot()
+    def _onVizFinished(self):
+        # Show the figure on the main thread
+        try:
+            import matplotlib.pyplot as plt
+
+            plt.show(block=False)
+        except Exception as e:
+            logger.exception("Visualization display failed")
+            self.errorOccurred.emit(f"Visualization display failed:\n{e}")
+        finally:
+            self.visualizingChanged.emit(False)
+            self.vizFinished.emit()
+
     @pyqtSlot(str, result=bool)
     def visualize_corrected(self, corrected_csv: str) -> bool:
         """Plot BFI/BVI from a _corrected.csv using plot_corrected_scan from the SDK."""
@@ -3321,88 +3223,6 @@ class MOTIONConnector(QObject):
     def visualize_corrected_signal(self, corrected_csv: str) -> bool:
         """Plot contrast/mean from a _corrected.csv using plot_corrected_scan from the SDK."""
         return self._launch_correct_viz(corrected_csv, mode="signal")
-
-    @pyqtSlot(int, str, result=bool)
-    def visualize_db_session(self, session_id: int, mode: str) -> bool:
-        """Materialize a session's corrected stream to a tmpdir CSV and
-        hand it to the existing matplotlib visualizer.
-
-        Stopgap until embedded History plots land. The CSV is written to
-        the OS temp dir (not ``scan_data/``) so the user's data
-        directory doesn't accumulate ``.playback_*.csv`` artifacts —
-        OS-level temp cleanup eventually reaps them.
-        """
-        import tempfile
-        db_path = self._scan_db_path()
-        if not db_path:
-            self.errorOccurred.emit("Scan DB not configured.")
-            return False
-        try:
-            from omotion import materialize_corrected_csv
-        except ImportError as e:
-            self.errorOccurred.emit(f"SDK playback unavailable: {e}")
-            return False
-
-        tmp_path = Path(tempfile.gettempdir()) / f"openmotion_sid{session_id}_playback.csv"
-        try:
-            materialize_corrected_csv(
-                db_path, session_id=int(session_id), output_path=str(tmp_path),
-            )
-        except RuntimeError as e:
-            self.errorOccurred.emit(str(e))
-            return False
-        except Exception as e:
-            logger.exception("materialize_corrected_csv failed")
-            self.errorOccurred.emit(f"Could not rebuild CSV from DB session:\n{e}")
-            return False
-        return self._launch_correct_viz(str(tmp_path), mode=mode)
-
-    @pyqtSlot(int, str, result=bool)
-    def export_session_csv(self, session_id: int, output_path: str) -> bool:
-        """Export a DB session's corrected stream as a CSV at ``output_path``.
-
-        Wraps the SDK's ``materialize_corrected_csv`` (issue #92 Step D);
-        the History modal exposes this through an "Export CSV" button so
-        users on the DB-only workflow can hand off a session to any
-        CSV-based tool (analysis scripts, the SDK's plot_corrected_scan,
-        Excel, etc.) without rerunning the scan.
-
-        The History modal's *Visualize* buttons stay tied to in-app
-        plotting which will be upgraded to read from the DB directly —
-        this export path is the public escape hatch, not a visualization
-        shortcut.
-        """
-        db_path = self._scan_db_path()
-        if not db_path:
-            self.errorOccurred.emit("Scan DB not configured.")
-            return False
-
-        output_path = (output_path or "").strip()
-        if not output_path:
-            self.errorOccurred.emit("No output path provided for CSV export.")
-            return False
-
-        try:
-            from omotion import materialize_corrected_csv
-        except ImportError as e:
-            self.errorOccurred.emit(f"SDK playback unavailable: {e}")
-            return False
-
-        try:
-            materialize_corrected_csv(
-                db_path, session_id=int(session_id), output_path=output_path,
-            )
-        except RuntimeError as e:
-            # Pre-#92 Step F sessions can't be rebuilt from the DB.
-            self.errorOccurred.emit(str(e))
-            return False
-        except Exception as e:
-            logger.exception("materialize_corrected_csv failed")
-            self.errorOccurred.emit(f"CSV export failed:\n{e}")
-            return False
-
-        logger.info(f"Exported session_id={session_id} → {output_path}")
-        return True
 
     def _launch_correct_viz(self, corrected_csv: str, mode: str) -> bool:
         corrected_csv = (corrected_csv or "").strip()
@@ -3904,5 +3724,69 @@ class _CorrectVizWorker(QObject):
             self.error.emit(str(e))
         finally:
             self.finished.emit()
+
+
+# --- worker to run visualiztion ---
+class _VizWorker(QObject):
+    finished = pyqtSignal()
+    error = pyqtSignal(str)
+    resultsReady = pyqtSignal(object)  # emits a dict with arrays/metadata
+
+    def __init__(self, left_csv, right_csv, t1, t2, plot_contrast=False):
+        super().__init__()
+        self.left_csv = left_csv
+        self.right_csv = right_csv
+        self.t1 = t1
+        self.t2 = t2
+        self.plot_contrast = plot_contrast
+
+    @pyqtSlot()
+    def run(self):
+        try:
+            from processing.visualize_bloodflow import VisualizeBloodflow
+
+            # Convert empty strings to None for optional right_csv, but ensure left_csv is valid
+            left_path = self.left_csv if self.left_csv else None
+            right_path = self.right_csv if self.right_csv else None
+
+            if not left_path and not right_path:
+                self.error.emit("No valid CSV file provided for visualization")
+                self.finished.emit()
+                return
+
+            viz = VisualizeBloodflow(left_path, right_path, t1=self.t1, t2=self.t2)
+            viz.compute()
+
+            # Save results CSV based on left_csv or right_csv naming rule
+            if self.left_csv:
+                new_file_name = re.sub(
+                    r"_left.*\.csv$", "_bfi_results.csv", self.left_csv
+                )
+            else:
+                new_file_name = re.sub(
+                    r"_right.*\.csv$", "_bfi_results.csv", self.right_csv
+                )
+            viz.save_results_csv(new_file_name)
+            logger.info(f"Results CSV saved to: {new_file_name}")
+
+            bfi, bvi, cam_inds, contrast, mean = viz.get_results()
+            payload = {
+                "bfi": bfi,
+                "bvi": bvi,
+                "camera_inds": cam_inds,
+                "contrast": contrast,
+                "mean": mean,
+                "nmodules": 2 if self.right_csv else 1,
+                "sides": viz._sides,
+                "freq": viz.frequency_hz,
+                "t1": viz.t1,
+                "t2": viz.t2,
+                "plot_contrast": self.plot_contrast,
+            }
+            self.resultsReady.emit(payload)
+            self.finished.emit()
+        except Exception as e:
+            logger.exception("VisualizeBloodflow worker failed")
+            self.error.emit(str(e))
 
 

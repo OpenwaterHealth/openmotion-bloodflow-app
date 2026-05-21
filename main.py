@@ -102,29 +102,8 @@ def _load_app_config() -> dict:
         "contrastMin": 0.0,
         "contrastMax": 1.0,
         "dataDirectory": None,
-        # Master raw-data toggle (#92) — drives both raw-CSV writes and
-        # raw-DB writes. Duration cap applies to whichever target(s) are
-        # active.
-        "writeRawData": False,
-        "writeRawDataDurationSec": None,
-        # Issue #92: opt into the scan-DB sink at MotionInterface
-        # construction. When True, every scan writes corrected (and
-        # optionally raw) histogram data to <output_base>/scan_data/scans.db
-        # in addition to the existing CSVs. Startup-only — flipping at
-        # runtime requires an app restart.
-        "scanDbEnabled": False,
-        # Issue #92: when False, skip writing CSVs (corrected + raw +
-        # telemetry) for every scan. Combine with scanDbEnabled=True for
-        # a DB-only configuration. Defaults True to preserve the legacy
-        # always-write-CSV behavior.
-        "csvEnabled": True,
-        # data-pipeline-tweaks: subscribe to the SDK's on_realtime_
-        # corrected_fn callback so the live BFI/BVI plots show dark-
-        # corrected values immediately (after a ~15 s predictor warmup)
-        # instead of waiting for the batched corrected stream that only
-        # fires once per dark interval. See dark-drift-study/
-        # online_estimators.md for the predictor design.
-        "realtimeDarkCorrection": True,
+        "writeRawCsv": True,
+        "rawCsvDurationSec": None,
         "autoScale": False,
         "autoScalePerPlot": False,
         "reducedMode": False,
@@ -242,23 +221,9 @@ def main():
     # passed as ``default_trigger_config`` so app-level tweaks layer on
     # top of the SDK defaults at construction time. Workflows resolve
     # to (interface default ⊕ per-request override) thereafter.
-    #
-    # Issue #92: opt into the SQLite scan-data sink when scanDbEnabled is
-    # set in app_config.json. The path is fixed at SDK construction; flipping
-    # the flag at runtime requires an app restart to take effect. Raw frames
-    # in the DB are a separate per-scan toggle (scanDbWriteRaw) wired through
-    # the connector / SettingsModal.
-    _scan_db_path = (
-        os.path.join(output_base, "scan_data", "scans.db")
-        if app_config.get("scanDbEnabled", False)
-        else None
-    )
     motion_interface = MotionInterface(
         default_trigger_config=app_config.get("triggerConfig") or None,
-        db_path=_scan_db_path,
     )
-    if _scan_db_path:
-        logger.info(f"Scan DB sink enabled, writing to {_scan_db_path}")
     motion_interface.log_system_info()
 
     qInstallMessageHandler(qt_message_handler)

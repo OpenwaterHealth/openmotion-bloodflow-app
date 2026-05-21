@@ -267,64 +267,6 @@ Item {
                             Text { text: ""; } Text { text: ""; }
                         }
 
-                        // Issue #92: DB-sourced provenance. Only rendered when
-                        // the selected scan exists in scans.db (i.e., it was
-                        // captured with scanDbEnabled on at app startup).
-                        Rectangle {
-                            visible: selected.dbSessionId !== undefined && selected.dbSessionId !== null
-                            Layout.fillWidth: true; height: 1; color: theme.borderSubtle
-                        }
-                        GridLayout {
-                            visible: selected.dbSessionId !== undefined && selected.dbSessionId !== null
-                            columns: 4; columnSpacing: 16; rowSpacing: 6; Layout.fillWidth: true
-
-                            Text { text: "Duration:"; color: theme.textSecondary; font.pixelSize: 13 }
-                            Text {
-                                text: selected.dbScanDurationS !== undefined && selected.dbScanDurationS !== null
-                                      ? Number(selected.dbScanDurationS).toFixed(2) + " s" : "-"
-                                color: theme.textPrimary; font.pixelSize: 13
-                            }
-                            Text { text: "DB session id:"; color: theme.textSecondary; font.pixelSize: 13 }
-                            Text { text: selected.dbSessionId !== undefined ? String(selected.dbSessionId) : "-"; color: theme.textPrimary; font.pixelSize: 13 }
-
-                            Text { text: "SDK / Console FW:"; color: theme.textSecondary; font.pixelSize: 13 }
-                            Text {
-                                text: (selected.dbMeta && selected.dbMeta.sdk_version
-                                       ? String(selected.dbMeta.sdk_version) : "-")
-                                      + "  /  "
-                                      + (selected.dbMeta && selected.dbMeta.console_fw_version
-                                         ? String(selected.dbMeta.console_fw_version) : "-")
-                                color: theme.textPrimary; font.pixelSize: 13
-                                elide: Text.ElideRight; Layout.fillWidth: true
-                            }
-                            Text { text: "Sensor FW (L / R):"; color: theme.textSecondary; font.pixelSize: 13 }
-                            Text {
-                                text: (selected.dbMeta && selected.dbMeta.left_fw_version
-                                       ? String(selected.dbMeta.left_fw_version) : "-")
-                                      + "  /  "
-                                      + (selected.dbMeta && selected.dbMeta.right_fw_version
-                                         ? String(selected.dbMeta.right_fw_version) : "-")
-                                color: theme.textPrimary; font.pixelSize: 13
-                            }
-
-                            Text { text: "Active cams (L / R):"; color: theme.textSecondary; font.pixelSize: 13 }
-                            Text {
-                                text: (selected.dbMeta && selected.dbMeta.active_left_cams
-                                       ? JSON.stringify(selected.dbMeta.active_left_cams) : "-")
-                                      + "  /  "
-                                      + (selected.dbMeta && selected.dbMeta.active_right_cams
-                                         ? JSON.stringify(selected.dbMeta.active_right_cams) : "-")
-                                color: theme.textPrimary; font.pixelSize: 13
-                            }
-                            Text { text: "DB rows (data / raw):"; color: theme.textSecondary; font.pixelSize: 13 }
-                            Text {
-                                text: (selected.sessionDataRows !== undefined ? String(selected.sessionDataRows) : "-")
-                                      + "  /  "
-                                      + (selected.sessionRawRows !== undefined ? String(selected.sessionRawRows) : "-")
-                                color: theme.textPrimary; font.pixelSize: 13
-                            }
-                        }
-
                         Text { text: "Notes:"; color: theme.textSecondary; font.pixelSize: 13 }
                         Rectangle {
                             Layout.fillWidth: true; Layout.fillHeight: true
@@ -346,15 +288,10 @@ Item {
                         Text { text: "Actions"; color: theme.textPrimary; font.pixelSize: 15 }
 
                         Button {
-                            text: "Visualize BFI/BVI"
+                            text: "Visualize BFI/BVI (legacy)"
+                            visible: MOTIONInterface.appConfig.developerMode ? true : false
                             Layout.fillWidth: true; Layout.preferredHeight: 36
-                            // Enabled when an on-disk CSV exists OR the
-                            // session lives in the DB — the connector
-                            // materializes a tmpdir CSV for DB-only
-                            // sessions and routes through the same
-                            // visualizer. Stopgap until embedded plots
-                            // land.
-                            enabled: !!(selected.correctedPath) || (selected.dbSessionId !== undefined && selected.dbSessionId !== null)
+                            enabled: !!(selected.leftPath || selected.rightPath)
                             hoverEnabled: enabled
                             contentItem: Text {
                                 text: parent.text; font.pixelSize: 13
@@ -367,11 +304,48 @@ Item {
                             }
                             onClicked: {
                                 root.visualizing = true
-                                if (selected.correctedPath) {
-                                    MOTIONInterface.visualize_corrected(selected.correctedPath)
-                                } else {
-                                    MOTIONInterface.visualize_db_session(selected.dbSessionId, "bfi")
-                                }
+                                MOTIONInterface.visualize_bloodflow(selected.leftPath || "", selected.rightPath || "", 0.0, 0.0, false)
+                            }
+                        }
+
+                        Button {
+                            text: "Visualize Contrast/Mean (legacy)"
+                            visible: MOTIONInterface.appConfig.developerMode ? true : false
+                            Layout.fillWidth: true; Layout.preferredHeight: 36
+                            enabled: !!(selected.leftPath || selected.rightPath)
+                            hoverEnabled: enabled
+                            contentItem: Text {
+                                text: parent.text; font.pixelSize: 13
+                                color: parent.enabled ? theme.textSecondary : theme.textTertiary
+                                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                            }
+                            background: Rectangle {
+                                color: !parent.enabled ? theme.bgInput : parent.hovered ? theme.accentBlue : theme.bgInput
+                                border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
+                            }
+                            onClicked: {
+                                root.visualizing = true
+                                MOTIONInterface.visualize_bloodflow(selected.leftPath || "", selected.rightPath || "", 0.0, 0.0, true)
+                            }
+                        }
+
+                        Button {
+                            text: "Visualize BFI/BVI"
+                            Layout.fillWidth: true; Layout.preferredHeight: 36
+                            enabled: !!(selected.correctedPath)
+                            hoverEnabled: enabled
+                            contentItem: Text {
+                                text: parent.text; font.pixelSize: 13
+                                color: parent.enabled ? theme.textSecondary : theme.textTertiary
+                                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                            }
+                            background: Rectangle {
+                                color: !parent.enabled ? theme.bgInput : parent.hovered ? theme.accentBlue : theme.bgInput
+                                border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
+                            }
+                            onClicked: {
+                                root.visualizing = true
+                                MOTIONInterface.visualize_corrected(selected.correctedPath || "")
                             }
                         }
 
@@ -379,7 +353,7 @@ Item {
                             text: "Visualize Contrast/Mean"
                             visible: MOTIONInterface.appConfig.reducedMode !== true
                             Layout.fillWidth: true; Layout.preferredHeight: 36
-                            enabled: !!(selected.correctedPath) || (selected.dbSessionId !== undefined && selected.dbSessionId !== null)
+                            enabled: !!(selected.correctedPath)
                             hoverEnabled: enabled
                             contentItem: Text {
                                 text: parent.text; font.pixelSize: 13
@@ -392,55 +366,7 @@ Item {
                             }
                             onClicked: {
                                 root.visualizing = true
-                                if (selected.correctedPath) {
-                                    MOTIONInterface.visualize_corrected_signal(selected.correctedPath)
-                                } else {
-                                    MOTIONInterface.visualize_db_session(selected.dbSessionId, "signal")
-                                }
-                            }
-                        }
-
-                        // Issue #92 Step D: export the DB session as a
-                        // corrected CSV the user can hand to any CSV tool
-                        // (plot_corrected_scan.py, Excel, analysis scripts).
-                        // Enabled for any selected session that's in the DB —
-                        // works for both csv-only and db-only recordings;
-                        // the SDK refuses to export pre-Step-F sessions
-                        // (where frame_id wasn't recorded) and surfaces
-                        // a clear error.
-                        Button {
-                            text: "Export CSV"
-                            Layout.fillWidth: true; Layout.preferredHeight: 36
-                            enabled: selected.dbSessionId !== undefined && selected.dbSessionId !== null
-                            hoverEnabled: enabled
-                            contentItem: Text {
-                                text: parent.text; font.pixelSize: 13
-                                color: parent.enabled ? theme.textSecondary : theme.textTertiary
-                                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-                            }
-                            background: Rectangle {
-                                color: !parent.enabled ? theme.bgInput : parent.hovered ? theme.accentBlue : theme.bgInput
-                                border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
-                            }
-                            onClicked: {
-                                exportCsvDialog.sessionId = selected.dbSessionId
-                                // Qt6's Dialogs.FileDialog wants
-                                // ``currentFolder`` for the initial dir
-                                // (a file URL) and ``selectedFile`` for
-                                // the suggested filename. Setting
-                                // ``currentFile`` doesn't apply on Qt6 —
-                                // that was the bug that landed the
-                                // user's first export in the project cwd.
-                                const dataDir = (MOTIONInterface.appConfig.dataDirectory || "")
-                                                  .replace(/\\/g, "/")
-                                                  .replace(/\/$/, "")
-                                const fileBase = scanPicker.currentText
-                                    || ("sid" + selected.dbSessionId)
-                                if (dataDir) {
-                                    exportCsvDialog.currentFolder = "file:///" + dataDir
-                                    exportCsvDialog.selectedFile   = "file:///" + dataDir + "/" + fileBase + ".csv"
-                                }
-                                exportCsvDialog.open()
+                                MOTIONInterface.visualize_corrected_signal(selected.correctedPath || "")
                             }
                         }
 
@@ -476,30 +402,6 @@ Item {
         id: histErrDialog
         title: "Visualization Error"
         text: ""
-    }
-
-    // Issue #92 Step D: "Export CSV" save-as dialog. Holds the
-    // session_id for the currently selected History row (set by the
-    // Export CSV button onClicked); fires
-    // ``MOTIONInterface.export_session_csv`` on accept.
-    Dialogs.FileDialog {
-        id: exportCsvDialog
-        title: "Export session as CSV"
-        fileMode: Dialogs.FileDialog.SaveFile
-        nameFilters: ["CSV files (*.csv)", "All files (*)"]
-        defaultSuffix: "csv"
-        property int sessionId: -1
-        onAccepted: {
-            const p = selectedFile.toString().replace(/^file:\/\/\//, "")
-            const ok = MOTIONInterface.export_session_csv(sessionId, p)
-            if (ok) {
-                histErrDialog.title = "Export complete"
-                histErrDialog.text = "Wrote CSV:\n" + p
-                histErrDialog.visible = true
-            }
-            // On failure, motion_connector emits errorOccurred which the
-            // Connections block below routes into histErrDialog already.
-        }
     }
 
     Connections {
