@@ -845,12 +845,14 @@ Item {
                         TextArea {
                             id: calibStatusLabel
                             Layout.fillWidth: true
+                            Layout.alignment: Qt.AlignVCenter
                             readOnly: true
                             selectByMouse: false
                             activeFocusOnTab: false
                             background: null
                             padding: 0
                             wrapMode: TextEdit.Wrap
+                            verticalAlignment: TextEdit.AlignVCenter
                             color: root.colTextPri
                             font.pixelSize: 13
                             text: {
