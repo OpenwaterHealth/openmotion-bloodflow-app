@@ -134,12 +134,17 @@ Window {
 
         // Table body
         ScrollView {
+            id: tableScroll
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
 
             Column {
-                width: parent.width
+                // Bind to availableWidth (not parent.width) so the layout
+                // re-evaluates correctly when the model changes on a re-run.
+                // parent.width on ScrollView's contentItem doesn't always
+                // refresh on second-show, leaving rows bunched in a corner.
+                width: tableScroll.availableWidth
                 spacing: 0
                 Repeater {
                     model: testWin.rows
