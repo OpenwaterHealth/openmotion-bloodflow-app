@@ -252,6 +252,8 @@ class MOTIONConnector(QObject):
     # Calibration procedure signals
     calibrationStateChanged = pyqtSignal()  # any of running/passed/failed/aborted/idle
     _calibrationCompleteSignal = pyqtSignal(object)  # private worker→main marshalling
+    testScanStateChanged = pyqtSignal()                # any of running/done/aborted/failed/idle
+    _testScanCompleteSignal = pyqtSignal(object)       # private worker→main marshalling
     scanNotesChanged = pyqtSignal()
     # Fires once at the end of _on_complete (after the duration line has
     # been appended to _scan_notes and notes.txt has been written) for any
@@ -431,8 +433,14 @@ class MOTIONConnector(QObject):
         self._max_calibration_time_sec     = int(cfg.get("max_calibration_time_sec", 600))
         self._calibration_scan_duration_sec = int(cfg.get("calibration_scan_duration_sec", 5))
         self._calibration_scan_delay_sec    = int(cfg.get("calibration_scan_delay_sec", 1))
+        self._test_scan_duration_sec = int(
+            cfg.get("test_scan_duration_sec", 5)
+        )
         self._calibration_status = ""  # "", "running", "passed", "failed", "aborted"
         self._calibration_failure_reason = ""  # populated only on FAIL in dev mode
+        self._test_scan_status = ""              # "", "running", "done", "aborted", "failed"
+        self._test_scan_failure_reason = ""
+        self._test_scan_rows: list[dict] = []
 
         self._post_thread = None
         self._post_cancel = threading.Event()
@@ -916,6 +924,22 @@ class MOTIONConnector(QObject):
     @pyqtProperty(int, notify=calibrationStateChanged)
     def maxCalibrationTimeSec(self) -> int:
         return self._max_calibration_time_sec
+
+    @pyqtProperty(bool, notify=testScanStateChanged)
+    def testScanRunning(self) -> bool:
+        return self._test_scan_status == "running"
+
+    @pyqtProperty(str, notify=testScanStateChanged)
+    def testScanStatus(self) -> str:
+        return self._test_scan_status
+
+    @pyqtProperty(str, notify=testScanStateChanged)
+    def testScanFailureReason(self) -> str:
+        return self._test_scan_failure_reason
+
+    @pyqtProperty('QVariantList', notify=testScanStateChanged)
+    def testScanRows(self) -> list:
+        return self._test_scan_rows
 
     # --- DEVICE CONNECTION / DISCONNECTION / STATE MANAGEMENT METHODS ---
     def _on_handle_state_changed(self, handle, old, new, reason):
@@ -3382,6 +3406,16 @@ class MOTIONConnector(QObject):
     def get_sdk_version(self):
         return self._interface.get_sdk_version()
 
+    @pyqtSlot(str)
+    def copyToClipboard(self, text: str) -> None:
+        """Push a string to the system clipboard via Qt — used by the
+        Test Results window's Copy button. Centralised here so QML
+        doesn't need a direct dependency on PyQt6.QtGui."""
+        from PyQt6.QtGui import QGuiApplication
+        cb = QGuiApplication.clipboard()
+        if cb is not None:
+            cb.setText(text)
+
     def connect_signals(self):
         """Subscribe to per-handle state changes on the SDK interface."""
         for handle in (
@@ -3395,6 +3429,7 @@ class MOTIONConnector(QObject):
         )
         # Worker → Qt main thread for the calibration completion callback.
         self._calibrationCompleteSignal.connect(self._on_calibration_complete)
+        self._testScanCompleteSignal.connect(self._on_test_scan_complete)
 
     @pyqtSlot()
     @pyqtSlot(str)
@@ -3517,6 +3552,11 @@ class MOTIONConnector(QObject):
             self._calibration_status = ""
             self.calibrationStateChanged.emit()
             self.captureLog.emit("⚠️ Calibration failed to start.")
+
+    @pyqtSlot(object)
+    def _on_test_scan_complete(self, result):
+        """Placeholder — replaced with full implementation in Task 8."""
+        pass
 
     @pyqtSlot(object)
     def _on_calibration_complete(self, result):
