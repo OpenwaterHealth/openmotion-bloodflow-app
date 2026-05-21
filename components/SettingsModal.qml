@@ -845,7 +845,9 @@ Item {
                         TextArea {
                             id: calibStatusLabel
                             Layout.fillWidth: true
-                            Layout.alignment: Qt.AlignVCenter
+                            // Match the buttons' 40px height for single-line
+                            // statuses; grow for multi-line failure breakdown.
+                            Layout.preferredHeight: Math.max(40, implicitHeight)
                             readOnly: true
                             selectByMouse: false
                             activeFocusOnTab: false
