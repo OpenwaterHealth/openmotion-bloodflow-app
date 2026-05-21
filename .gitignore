@@ -89,6 +89,7 @@ OpenWaterApp*.zip
 /run-logs/
 
 .claude/
+.superpowers/
 tests/scan_data/*
 tests/run-logs/*
 tests/test_logs/*
