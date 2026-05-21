@@ -50,3 +50,90 @@ def test_initial_test_scan_state_is_idle(connector):
     assert connector.testScanStatus == ""
     assert connector.testScanFailureReason == ""
     assert connector.testScanRows == []
+
+
+def test_run_test_scan_refused_when_console_disconnected(connector):
+    connector._consoleConnected = False
+    seen = []
+    connector.captureLog.connect(lambda m: seen.append(m))
+    connector.runTestScan("both")
+    assert connector._test_scan_status == ""  # unchanged
+    assert any("console not connected" in m for m in seen)
+
+
+def test_run_test_scan_refused_when_calibration_running(connector):
+    connector._calibration_status = "running"
+    seen = []
+    connector.captureLog.connect(lambda m: seen.append(m))
+    connector.runTestScan("both")
+    assert connector._test_scan_status == ""
+
+
+def test_run_test_scan_starts_workflow(connector):
+    connector.runTestScan("both")
+    assert connector._test_scan_status == "running"
+    connector._interface.start_test_scan.assert_called_once()
+
+
+def test_on_test_scan_complete_passes_builds_rows(connector):
+    """Synthesise a passing TestScanResult and confirm row dicts + status."""
+    from omotion.CalibrationWorkflow import (
+        CalibrationResultRow,
+        TestScanResult,
+    )
+
+    rows = [
+        CalibrationResultRow(
+            camera_index=0, side="left", cam_id=0,
+            mean=120.0, avg_contrast=0.30, bfi=0.0, bvi=4.5,
+            dark=1.0, mean_test="PASS", contrast_test="PASS",
+            bfi_test="PASS", bvi_test="PASS", dark_test="PASS",
+            security_id="", hwid="",
+        ),
+    ]
+    res = TestScanResult(
+        ok=True, passed=True, canceled=False, error="",
+        csv_path="/tmp/x.csv", json_path="/tmp/x.json",
+        rows=rows, test_scan_left_path="", test_scan_right_path="",
+        started_timestamp="20260521_000000",
+    )
+    connector._on_test_scan_complete(res)
+    assert connector._test_scan_status == "done"
+    assert len(connector._test_scan_rows) == 1
+    row = connector._test_scan_rows[0]
+    assert row["side"] == "left"
+    assert row["cam"] == 1
+    assert row["light_mean"] == 120.0
+    assert row["mean_pf"] == "PASS"
+    assert row["dark_pf"] == "PASS"
+    assert row["overall"] == "PASS"
+
+
+def test_on_test_scan_complete_dev_mode_failure_reason(connector):
+    from omotion.CalibrationWorkflow import (
+        CalibrationResultRow,
+        TestScanResult,
+    )
+
+    connector._app_config["developerMode"] = True
+    rows = [
+        CalibrationResultRow(
+            camera_index=0, side="left", cam_id=0,
+            mean=120.0, avg_contrast=0.30, bfi=0.0, bvi=4.5,
+            dark=10.0,
+            mean_test="PASS", contrast_test="PASS",
+            bfi_test="PASS", bvi_test="PASS",
+            dark_test="FAIL",
+            security_id="", hwid="",
+        ),
+    ]
+    res = TestScanResult(
+        ok=True, passed=False, canceled=False, error="",
+        csv_path="/tmp/x.csv", json_path="/tmp/x.json",
+        rows=rows, test_scan_left_path="", test_scan_right_path="",
+        started_timestamp="20260521_000000",
+    )
+    connector._on_test_scan_complete(res)
+    assert connector._test_scan_status == "failed"
+    assert connector._test_scan_rows[0]["overall"] == "FAIL"
+    assert connector._test_scan_failure_reason.startswith("too much ambient light")
