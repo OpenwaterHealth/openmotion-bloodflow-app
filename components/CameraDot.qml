@@ -14,9 +14,7 @@ import QtQuick.Controls as Controls
  *      modal      : the ContactQualityModal root (required — used to
  *                   call cameraStatus / cameraWarningTypes / cameraTooltip
  *                   and to read developerMode)
- *      size       : pixel size of the dot (default 18). Must be even —
- *                   the split-render geometry assumes an even width so
- *                   the two halves meet exactly at the centerline.
+ *      size       : pixel size of the dot (default 18).
  */
 Item {
     id: root
@@ -63,10 +61,11 @@ Item {
         border.width: 1
     }
 
-    // Split case — two clipped half-rects inset 1px on every edge so
-    // they don't overdraw the outer Rectangle's 1px border. The outer
-    // Rectangle owns the rounded border and clips its children to the
-    // circular shape.
+    // Split case — horizontal sharp-transition gradient. Qt 6's
+    // Rectangle.gradient respects radius, so the fill is naturally
+    // clipped to the circular shape. (Two clipped child rects don't
+    // work — Rectangle's clip:true uses rectangular bounds, not the
+    // rounded outline.)
     Rectangle {
         id: splitFrame
         anchors.fill: parent
@@ -74,21 +73,12 @@ Item {
         radius: parent.width / 2
         border.color: "black"
         border.width: 1
-        color: "transparent"
-        clip: true
-
-        Rectangle {
-            x: 1; y: 1
-            width: (parent.width - 2) / 2
-            height: parent.height - 2
-            color: theme.accentOrangeAmbient
-        }
-        Rectangle {
-            x: parent.width / 2
-            y: 1
-            width: (parent.width - 2) / 2
-            height: parent.height - 2
-            color: theme.accentOrangeContact
+        gradient: Gradient {
+            orientation: Gradient.Horizontal
+            GradientStop { position: 0.0;    color: theme.accentOrangeAmbient }
+            GradientStop { position: 0.4999; color: theme.accentOrangeAmbient }
+            GradientStop { position: 0.5001; color: theme.accentOrangeContact }
+            GradientStop { position: 1.0;    color: theme.accentOrangeContact }
         }
     }
 

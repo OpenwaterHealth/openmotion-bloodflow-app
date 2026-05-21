@@ -498,22 +498,15 @@ Item {
                 }
                 RowLayout {
                     spacing: 6
-                    Item {
-                        width: 10; height: 10
-                        Rectangle {
-                            anchors.fill: parent
-                            radius: 5
-                            border.color: "black"; border.width: 1
-                            color: "transparent"
-                            clip: true
-                            Rectangle { x: 1; y: 1
-                                width: (parent.width - 2) / 2
-                                height: parent.height - 2
-                                color: theme.accentOrangeAmbient }
-                            Rectangle { x: parent.width / 2; y: 1
-                                width: (parent.width - 2) / 2
-                                height: parent.height - 2
-                                color: theme.accentOrangeContact }
+                    Rectangle {
+                        width: 10; height: 10; radius: 5
+                        border.color: "black"; border.width: 1
+                        gradient: Gradient {
+                            orientation: Gradient.Horizontal
+                            GradientStop { position: 0.0;    color: theme.accentOrangeAmbient }
+                            GradientStop { position: 0.4999; color: theme.accentOrangeAmbient }
+                            GradientStop { position: 0.5001; color: theme.accentOrangeContact }
+                            GradientStop { position: 1.0;    color: theme.accentOrangeContact }
                         }
                     }
                     Text { text: "both"; color: theme.textSecondary; font.pixelSize: 11 }
