@@ -191,6 +191,21 @@ Item {
         return "good"
     }
 
+    // Returns the deduped typeKey array for a camera's active warnings.
+    // Empty when the camera has no warnings. Used by CameraDot (#128)
+    // to decide between single-color and split rendering in dev mode.
+    function cameraWarningTypes(side, camIndex1) {
+        var prefix = (side === "left") ? "L" : "R"
+        var label = prefix + camIndex1
+        var types = []
+        for (var i = 0; i < entries.length; ++i) {
+            if (entries[i].camera === label
+                    && types.indexOf(entries[i].typeKey) === -1)
+                types.push(entries[i].typeKey)
+        }
+        return types
+    }
+
     function cameraTooltip(side, camIndex1) {
         var prefix = (side === "left") ? "L" : "R"
         var label = prefix + camIndex1
