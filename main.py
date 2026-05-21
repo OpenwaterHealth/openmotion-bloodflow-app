@@ -118,6 +118,13 @@ def _load_app_config() -> dict:
         # a DB-only configuration. Defaults True to preserve the legacy
         # always-write-CSV behavior.
         "csvEnabled": True,
+        # data-pipeline-tweaks: subscribe to the SDK's on_realtime_
+        # corrected_fn callback so the live BFI/BVI plots show dark-
+        # corrected values immediately (after a ~15 s predictor warmup)
+        # instead of waiting for the batched corrected stream that only
+        # fires once per dark interval. See dark-drift-study/
+        # online_estimators.md for the predictor design.
+        "realtimeDarkCorrection": True,
         "autoScale": False,
         "autoScalePerPlot": False,
         "reducedMode": False,

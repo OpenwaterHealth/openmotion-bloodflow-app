@@ -374,6 +374,11 @@ class MOTIONConnector(QObject):
         # to exercise the DB-only path (combine with scanDbEnabled=True).
         # Default True preserves legacy behavior.
         self._csv_enabled                 = bool(cfg.get("csvEnabled", True))
+        # Live BFI/BVI plots subscribe to the SDK's real-time corrected
+        # stream when this is True (default). When False, the live plots
+        # keep showing the uncorrected stream and BFI/BVI only appear
+        # via the post-scan corrected CSV / batched callback as before.
+        self._realtime_dark_correction    = bool(cfg.get("realtimeDarkCorrection", True))
         self._uncorrected_only            = bool(cfg.get("uncorrectedOnly", False))
 
         # Configure logging with the provided level
@@ -1786,6 +1791,56 @@ class MOTIONConnector(QObject):
                 float(sample.contrast),
             )
 
+            # BFI/BVI from the uncorrected stream are ~0 (no dark
+            # subtraction applied). When realtimeDarkCorrection is on,
+            # the _on_realtime_corrected handler below emits the real
+            # values instead; suppressing here avoids double-emit /
+            # value-flapping in the live plot.
+            if not self._realtime_dark_correction:
+                self.scanBfiSampled.emit(
+                    sample.side,
+                    int(sample.cam_id),
+                    int(sample.absolute_frame_id),
+                    plot_ts,
+                    float(sample.bfi),
+                )
+                self.scanBviSampled.emit(
+                    sample.side,
+                    int(sample.cam_id),
+                    int(sample.absolute_frame_id),
+                    plot_ts,
+                    float(sample.bvi),
+                )
+            self.scanCameraTemperature.emit(
+                sample.side,
+                int(sample.cam_id),
+                float(sample.temperature_c),
+            )
+
+        def _on_realtime_corrected(sample):
+            """Fires per non-dark frame ~15 s into the scan onward, with
+            dark-corrected BFI/BVI computed from predicted darks. Wired
+            up only when ``realtimeDarkCorrection`` is True. See
+            openmotion-sdk dark-drift-study/online_estimators.md for the
+            predictor design.
+
+            We re-emit only the BFI/BVI signals here — mean/contrast/
+            temperature stay sourced from the uncorrected stream, so the
+            live plots have continuous mean/contrast data from frame 0
+            and BFI/BVI jumps from ~0 to real corrected values once the
+            predictor warms up.
+            """
+            should_emit, recovery_msg = _check_dropped_camera_emit(
+                sample.side, int(sample.cam_id),
+                self._camera_dropped,
+                self._camera_dropped_recovery_logged,
+            )
+            if recovery_msg is not None:
+                logger.warning(recovery_msg)
+                run_logger.warning(recovery_msg)
+            if not should_emit:
+                return
+            plot_ts = time.monotonic() - plot_t0
             self.scanBfiSampled.emit(
                 sample.side,
                 int(sample.cam_id),
@@ -1799,11 +1854,6 @@ class MOTIONConnector(QObject):
                 int(sample.absolute_frame_id),
                 plot_ts,
                 float(sample.bvi),
-            )
-            self.scanCameraTemperature.emit(
-                sample.side,
-                int(sample.cam_id),
-                float(sample.temperature_c),
             )
 
         def _on_corrected_batch(batch):
@@ -2010,6 +2060,9 @@ class MOTIONConnector(QObject):
             on_trigger_state_fn=_on_trigger_state,
             on_uncorrected_fn=_on_uncorrected,
             on_corrected_batch_fn=None if self._uncorrected_only else _on_corrected_batch,
+            on_realtime_corrected_fn=(
+                _on_realtime_corrected if self._realtime_dark_correction else None
+            ),
             on_dark_frame_fn=on_dark_frame_fn,
             on_rolling_avg_fn=on_rolling_avg_fn,
             on_error_fn=lambda e: self.captureLog.emit(f"Capture error: {e}"),
