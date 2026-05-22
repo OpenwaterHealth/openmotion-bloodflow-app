@@ -43,6 +43,14 @@ Rectangle {
     property int leftMask: 0x99   // default "Outer"
     property int rightMask: 0x00
 
+    // Track whether the cfg-default mask has been applied this session, per
+    // side. Once true, sensor reconnects (e.g. console power cycle) leave
+    // the current mask alone instead of clobbering the user's Scan Settings
+    // choice with cfg.leftMask / cfg.rightMask (issue #127). Set true when
+    // defaults are applied OR the user picks a mask in ScanSettingsModal.
+    property bool _leftMaskInitialApplied: false
+    property bool _rightMaskInitialApplied: false
+
     property string sessionId: MOTIONInterface.userLabel || ""
 
     // Duration from scan time modal
@@ -88,8 +96,14 @@ Rectangle {
         var cfg      = MOTIONInterface.appConfig;
         var defLeft  = reducedMode ? (cfg.reducedModeLeftMask  !== undefined ? cfg.reducedModeLeftMask  : 0xC3) : (cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99);
         var defRight = reducedMode ? (cfg.reducedModeRightMask !== undefined ? cfg.reducedModeRightMask : 0xC3) : (cfg.rightMask !== undefined ? cfg.rightMask : 0x99);
-        if (MOTIONInterface.leftSensorConnected)  leftMask  = defLeft;
-        if (MOTIONInterface.rightSensorConnected) rightMask = defRight;
+        if (MOTIONInterface.leftSensorConnected && !_leftMaskInitialApplied) {
+            leftMask = defLeft;
+            _leftMaskInitialApplied = true;
+        }
+        if (MOTIONInterface.rightSensorConnected && !_rightMaskInitialApplied) {
+            rightMask = defRight;
+            _rightMaskInitialApplied = true;
+        }
         if (cfg.autoConfigureOnStartup !== false &&
                 (MOTIONInterface.leftSensorConnected || MOTIONInterface.rightSensorConnected)) {
             flashDefaultCameras();
@@ -164,7 +178,10 @@ Rectangle {
                 scanDialog.close()
                 if (bloodFlow.reducedMode) reducedPlot.stopScan()
                 else                   embeddedPlot.stopScan()
-                notesModal.open()
+                // Notes modal opens via MOTIONInterface.scanNotesReady
+                // after the SDK actually unwinds and the duration line
+                // has been appended to scanNotes. Opening it here would
+                // race the append and pop an empty modal.
             } else {
                 if (bloodFlow.reducedMode) {
                     reducedStartPending = true
@@ -282,11 +299,29 @@ Rectangle {
             bloodFlow.durationSec = dur
             bloodFlow.leftMask = newLeftMask
             bloodFlow.rightMask = newRightMask
+            // A user-driven selection counts as "initial applied" so that
+            // a later sensor reconnect cannot overwrite it with the cfg
+            // default (issue #127). Covers the edge case where the user
+            // edits Scan Settings before sensors first enumerate.
+            bloodFlow._leftMaskInitialApplied = true
+            bloodFlow._rightMaskInitialApplied = true
         }
     }
 
     NotesModal {
         id: notesModal
+    }
+
+    // Open the notes modal exactly when the connector signals that
+    // scanNotes has been finalized for the just-completed scan (duration
+    // line appended, notes.txt written). This is the only path that
+    // guarantees notesArea.text snapshots the post-scan content; opening
+    // the modal from onStartStopClicked or scanFinished races the
+    // append because scanRunner.scanFinished fires synchronously from
+    // cancel(), before the SDK has unwound and _on_complete has run.
+    Connections {
+        target: MOTIONInterface
+        function onScanNotesReady() { notesModal.open() }
     }
 
     HistoryModal {
@@ -389,7 +424,7 @@ Rectangle {
             if (err === "Canceled") {
                 scanDialog.close()
                 if (bloodFlow.reducedMode) reducedPlot.stopScan(); else embeddedPlot.stopScan()
-                notesModal.open()
+                // Notes modal opens via MOTIONInterface.scanNotesReady.
                 return
             }
 
@@ -405,7 +440,7 @@ Rectangle {
             scanDialog.progress = 100
             scanDialog.done = true
             if (bloodFlow.reducedMode) reducedPlot.stopScan(); else embeddedPlot.stopScan()
-            notesModal.open()
+            // Notes modal opens via MOTIONInterface.scanNotesReady.
         }
     }
 
@@ -455,8 +490,21 @@ Rectangle {
                         var cfg      = MOTIONInterface.appConfig;
                         var defLeft  = bloodFlow.reducedMode ? (cfg.reducedModeLeftMask  !== undefined ? cfg.reducedModeLeftMask  : 0xC3) : (cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99);
                         var defRight = bloodFlow.reducedMode ? (cfg.reducedModeRightMask !== undefined ? cfg.reducedModeRightMask : 0xC3) : (cfg.rightMask !== undefined ? cfg.rightMask : 0x99);
-                        if (MOTIONInterface.leftSensorConnected)  bloodFlow.leftMask  = defLeft;
-                        if (MOTIONInterface.rightSensorConnected) bloodFlow.rightMask = defRight;
+                        // First connect this session per side: apply cfg
+                        // default. Subsequent reconnects (e.g. console power
+                        // cycle) preserve whatever's already in *Mask —
+                        // either the cfg default already adopted earlier or
+                        // the user's Scan Settings choice (issue #127). The
+                        // re-flash below still runs because the FPGA loses
+                        // its camera-enable state on power cycle.
+                        if (MOTIONInterface.leftSensorConnected && !bloodFlow._leftMaskInitialApplied) {
+                            bloodFlow.leftMask  = defLeft;
+                            bloodFlow._leftMaskInitialApplied = true;
+                        }
+                        if (MOTIONInterface.rightSensorConnected && !bloodFlow._rightMaskInitialApplied) {
+                            bloodFlow.rightMask = defRight;
+                            bloodFlow._rightMaskInitialApplied = true;
+                        }
                         if (cfg.autoConfigureOnStartup !== false)
                             flashDefaultCameras()
                     }

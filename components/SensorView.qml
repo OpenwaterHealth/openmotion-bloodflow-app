@@ -157,31 +157,30 @@ Rectangle {
     // Initialize fan status when component loads
     Component.onCompleted: {
         updateFanStatus()
-        resetCamerasWhenDisconnected()
     }
-    
+
     // Update fan status only when THIS side's connected flag actually
     // toggles. Listening to the connector's connectionStatusChanged
     // would fire on every state transition of every handle, causing
     // each SensorView to re-poll its fan whenever the OTHER side moved.
+    //
+    // Do NOT zero ``sensorActive`` on disconnect — the per-circle color
+    // bindings above already AND with ``root.sensorConnected``, so the
+    // circles gray themselves out automatically while disconnected. The
+    // old reset destroyed the source-of-truth pattern, and since no one
+    // restores it on reconnect, the circles stayed gray forever after
+    // a console power cycle even though the dropdown still showed the
+    // selected pattern (issue #127).
     onSensorConnectedChanged: {
         updateFanStatus()
-        resetCamerasWhenDisconnected()
     }
-    
+
     // Helper function to update fan status
     function updateFanStatus() {
         if (connector && sensorConnected) {
             root.fanOn = connector.getFanControlStatus(root.sensorSide)
         } else {
             root.fanOn = false
-        }
-    }
-    
-    // Helper function to reset cameras when sensor disconnects
-    function resetCamerasWhenDisconnected() {
-        if (!sensorConnected) {
-            root.sensorActive = [false, false, false, false, false, false, false, false]
         }
     }
 }

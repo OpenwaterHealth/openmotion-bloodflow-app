@@ -78,6 +78,33 @@ RUNNING = 4
 _CQ_DEFAULT_DARK_THRESHOLD_DN = 3.0
 _CQ_DEFAULT_LIGHT_THRESHOLD_DN = 15.0
 _CQ_AMBIENT_CLEAR_FRAMES = 1  # one clean dark frame is enough to clear the latched ambient warning
+
+# Issue #119: a single ``safety_known=False`` poll can be a transient I2C
+# miss during a USB disconnect cascade rather than a real safety-chip
+# fault. Require a streak before firing the persistent toast. Telemetry
+# polls at ~1 Hz, so 3 polls ≈ 3 s — well under the time a user takes to
+# reach Check, preserving the #107 contract (latched chip fault must
+# surface before the laser can be fired).
+SAFETY_UNKNOWN_STREAK_THRESHOLD = 3
+
+
+def _safety_unknown_streak_decision(snap, prev_streak, threshold=SAFETY_UNKNOWN_STREAK_THRESHOLD):
+    """Update the safety-unknown streak counter and decide whether to fire.
+
+    Returns ``(new_streak, should_fire)``.
+
+    - ``safety_known=False`` (chip unresponsive on this poll): increment
+      the streak and report ``should_fire=True`` once it reaches the
+      threshold. The connector's outer ``if not self._safetyFailure``
+      guard prevents the toast from re-firing on every subsequent poll.
+    - ``safety_known=True`` (or missing, for backward compat with legacy
+      SDK snapshots): reset the streak; the caller handles the
+      ``safety_ok`` branch separately.
+    """
+    if not getattr(snap, "safety_known", True):
+        new_streak = prev_streak + 1
+        return new_streak, new_streak >= threshold
+    return 0, False
 _CQ_DEFAULT_ROLLING_WINDOW = 10
 
 
@@ -226,6 +253,13 @@ class MOTIONConnector(QObject):
     calibrationStateChanged = pyqtSignal()  # any of running/passed/failed/aborted/idle
     _calibrationCompleteSignal = pyqtSignal(object)  # private worker→main marshalling
     scanNotesChanged = pyqtSignal()
+    # Fires once at the end of _on_complete (after the duration line has
+    # been appended to _scan_notes and notes.txt has been written) for any
+    # scan that finished normally or was canceled by the user. The UI uses
+    # this to auto-open the notes modal at the only moment when scanNotes
+    # is guaranteed to reflect the just-completed scan. Not emitted on
+    # hard errors — those keep the scan dialog visible with the error.
+    scanNotesReady = pyqtSignal()
     scanMeanSampled = pyqtSignal(
         str, int, float, float
     )  # side, cam_id, timestamp_s, mean
@@ -361,10 +395,13 @@ class MOTIONConnector(QObject):
         self._config_running = False
         self._laserOn = False
         self._safetyFailure = False
+        self._safety_unknown_streak = 0  # see SAFETY_UNKNOWN_STREAK_THRESHOLD
         self._running = False
         self._trigger_state = "OFF"
         self._state = DISCONNECTED
         self._last_fan_status: dict[str, bool | None] = {"left": None, "right": None}
+        # Track console connection time for safety grace period (issue #107 follow-up)
+        self._console_connected_at: float | None = None
 
         self.laser_params = load_laser_params(config_dir, force_fault=self._force_laser_fail)
         self._tec_voltage_default = load_tec_params(config_dir)
@@ -385,6 +422,12 @@ class MOTIONConnector(QObject):
         self._ft_max_bfi_per_camera = list(ft_bfi_max) if isinstance(ft_bfi_max, (list, tuple)) else None
         self._ft_min_bvi_per_camera = list(ft_bvi)     if isinstance(ft_bvi,     (list, tuple)) else None
         self._ft_max_bvi_per_camera = list(ft_bvi_max) if isinstance(ft_bvi_max, (list, tuple)) else None
+        # #122: per-camera max dark-frame mean — gates FT calibration on
+        # ambient light leaking into the validation scan's dark frames.
+        ft_dark_max = cfg.get("ft_max_dark_per_camera")
+        self._ft_max_dark_per_camera = (
+            list(ft_dark_max) if isinstance(ft_dark_max, (list, tuple)) else None
+        )
         self._max_calibration_time_sec     = int(cfg.get("max_calibration_time_sec", 600))
         self._calibration_scan_duration_sec = int(cfg.get("calibration_scan_duration_sec", 5))
         self._calibration_scan_delay_sec    = int(cfg.get("calibration_scan_delay_sec", 1))
@@ -907,6 +950,8 @@ class MOTIONConnector(QObject):
         if name == "console":
             self._consoleConnected = is_now_connected
             if is_now_connected:
+                # Record connection time for safety grace period
+                self._console_connected_at = time.monotonic()
                 # Race-guard: by the time this slot fires we observe
                 # CONNECTED, but the console can disconnect again before
                 # any of these calls return — particularly during the
@@ -934,6 +979,9 @@ class MOTIONConnector(QObject):
                         f"Console connect-time setup interrupted "
                         f"(probably mid-flight disconnect): {e}"
                     )
+            elif is_now_lost:
+                # Clear connection timestamp on disconnect
+                self._console_connected_at = None
         elif name == "left":
             if is_now_connected:
                 self._leftSensorConnected = True
@@ -1726,6 +1774,8 @@ class MOTIONConnector(QObject):
                 bool(result.ok), result.error or "", result.left_path, result.right_path
             )
             self._stop_runlog()
+            if result.ok or result.canceled:
+                self.scanNotesReady.emit()
 
         req = ScanRequest(
             subject_id=subject_id,
@@ -2079,17 +2129,40 @@ class MOTIONConnector(QObject):
         try:
             # If the safety interlock chip didn't respond on this poll,
             # ``safety_ok`` is the dataclass default ``True`` — not a
-            # verified clear signal. Treat the inability to verify
-            # safety as a safety failure itself: trip on the FIRST
-            # unknown poll, no streak required (issue #107). Telemetry
-            # polls at ~1 Hz, so a genuinely-clean chip will respond
-            # well before the user can issue a Check; a stuck chip
-            # surfaces immediately.
+            # verified clear signal. Earlier #107 fix tripped on the
+            # first unresponsive poll, but #119 showed that a single
+            # missed I2C read can be a transient during a USB
+            # disconnect cascade rather than a real chip fault. Require
+            # a streak (~3 s at 1 Hz) before firing; still well under
+            # the time a user takes to reach Check.
+            #
+            # **GRACE PERIOD**: During the first 5 seconds after console
+            # connection (power-on or reconnect), allow transient
+            # unresponsiveness without triggering a safety failure. This
+            # prevents spurious warnings during rapid power cycles where
+            # the safety chip may not respond immediately while hardware
+            # initializes. After the grace period, any unresponsiveness
+            # is treated as a persistent fault.
             #
             # Backward compat: snapshots from older SDK builds without
             # ``safety_known`` keep the existing (less safe) behavior
             # of trusting the default ``True``.
+            self._safety_unknown_streak, should_fire_unknown = (
+                _safety_unknown_streak_decision(snap, self._safety_unknown_streak)
+            )
             if not getattr(snap, "safety_known", True):
+                # Grace period: suppress all trips during first 5 s after connect
+                if self._console_connected_at is not None:
+                    time_since_connect = time.monotonic() - self._console_connected_at
+                    if time_since_connect < 5.0:
+                        logger.debug(
+                            f"readSafetyStatus: safety chip unresponsive "
+                            f"{time_since_connect:.1f}s after connect (within grace period)"
+                        )
+                        return
+                # After grace period: require streak before firing
+                if not should_fire_unknown:
+                    return  # transient miss; wait for streak to confirm
                 if not self._safetyFailure:
                     fault_detail = (
                         "safety interlock chip unresponsive — cannot "
@@ -3378,6 +3451,10 @@ class MOTIONConnector(QObject):
                 list(self._ft_max_bvi_per_camera)
                 if self._ft_max_bvi_per_camera is not None else None
             ),
+            max_dark_per_camera=(
+                list(self._ft_max_dark_per_camera)
+                if self._ft_max_dark_per_camera is not None else None
+            ),
         )
         output_dir = os.path.join(self._directory, "calibrations")
         os.makedirs(output_dir, exist_ok=True)
@@ -3464,13 +3541,20 @@ class MOTIONConnector(QObject):
             self._calibration_status = "failed"
             if self._app_config.get("developerMode", False):
                 tests = (("mean", "mean_test"), ("contrast", "contrast_test"),
-                         ("bfi", "bfi_test"), ("bvi", "bvi_test"))
-                self._calibration_failure_reason = "; ".join(
+                         ("bfi", "bfi_test"), ("bvi", "bvi_test"),
+                         ("ambient", "dark_test"))
+                breakdown = "; ".join(
                     f"{'L' if r.side == 'left' else 'R'}{r.cam_id + 1}:"
                     f"{','.join(n for n, a in tests if getattr(r, a) == 'FAIL')}"
                     for r in result.rows
                     if any(getattr(r, a) == "FAIL" for _, a in tests)
                 )
+                # #122: dev-mode message must explicitly call out ambient-
+                # light failures so operators don't misread an "ambient"
+                # tag in the breakdown as a generic test name.
+                if any(r.dark_test == "FAIL" for r in result.rows):
+                    breakdown = f"too much ambient light — {breakdown}"
+                self._calibration_failure_reason = breakdown
             self.captureLog.emit(
                 f"❌ Calibration: FAIL  (CSV: {result.csv_path})"
             )

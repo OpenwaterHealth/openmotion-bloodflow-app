@@ -79,8 +79,29 @@ $ZipName = "$AppName-$GitVersion.zip"
 Write-Host "=== Creating zip: $ZipName ===" -ForegroundColor Cyan
 Compress-Archive -Path "dist\$AppName\*" -DestinationPath $ZipName -Force
 
+# Build a second artifact with reducedMode flipped to false, for RUO distribution
+$RuoZipName = "$AppName-${GitVersion}_RUO.zip"
+$configPath = "dist\$AppName\_internal\config\app_config.json"
+if (-not (Test-Path $configPath)) {
+    throw "RUO build failed: bundled config not found at $configPath."
+}
+
+Write-Host "=== Creating RUO zip: $RuoZipName ===" -ForegroundColor Cyan
+$origConfig = Get-Content -Raw $configPath
+$ruoConfig = $origConfig -replace '"reducedMode"\s*:\s*true', '"reducedMode": false'
+if ($ruoConfig -eq $origConfig) {
+    throw "RUO build failed: did not find 'reducedMode: true' in $configPath to flip."
+}
+Set-Content -Path $configPath -Value $ruoConfig -Encoding UTF8 -NoNewline
+try {
+    Compress-Archive -Path "dist\$AppName\*" -DestinationPath $RuoZipName -Force
+} finally {
+    Set-Content -Path $configPath -Value $origConfig -Encoding UTF8 -NoNewline
+}
+
 Write-Host "=== Build complete ===" -ForegroundColor Green
 Write-Host "ZIP file: $ZipName" -ForegroundColor Green
+Write-Host "RUO ZIP file: $RuoZipName" -ForegroundColor Green
 
 if ($OpenFolder) {
     Start-Process explorer.exe "/select,$(Resolve-Path $ZipName)"

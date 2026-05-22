@@ -83,6 +83,7 @@ def _load_app_config() -> dict:
         "ft_max_bfi_per_camera": None,
         "ft_min_bvi_per_camera": [0.0] * 8,
         "ft_max_bvi_per_camera": None,
+        "ft_max_dark_per_camera": [3.0] * 8,
         "max_calibration_time_sec": 600,
         "calibration_scan_duration_sec": 5,
         "calibration_scan_delay_sec": 1,
