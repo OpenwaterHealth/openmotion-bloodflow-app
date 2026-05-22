@@ -252,6 +252,8 @@ class MOTIONConnector(QObject):
     # Calibration procedure signals
     calibrationStateChanged = pyqtSignal()  # any of running/passed/failed/aborted/idle
     _calibrationCompleteSignal = pyqtSignal(object)  # private worker→main marshalling
+    testScanStateChanged = pyqtSignal()                # any of running/done/aborted/failed/idle
+    _testScanCompleteSignal = pyqtSignal(object)       # private worker→main marshalling
     scanNotesChanged = pyqtSignal()
     # Fires once at the end of _on_complete (after the duration line has
     # been appended to _scan_notes and notes.txt has been written) for any
@@ -431,8 +433,14 @@ class MOTIONConnector(QObject):
         self._max_calibration_time_sec     = int(cfg.get("max_calibration_time_sec", 600))
         self._calibration_scan_duration_sec = int(cfg.get("calibration_scan_duration_sec", 5))
         self._calibration_scan_delay_sec    = int(cfg.get("calibration_scan_delay_sec", 1))
+        self._test_scan_duration_sec = int(
+            cfg.get("test_scan_duration_sec", 5)
+        )
         self._calibration_status = ""  # "", "running", "passed", "failed", "aborted"
         self._calibration_failure_reason = ""  # populated only on FAIL in dev mode
+        self._test_scan_status = ""              # "", "running", "done", "aborted", "failed"
+        self._test_scan_failure_reason = ""
+        self._test_scan_rows: list[dict] = []
 
         self._post_thread = None
         self._post_cancel = threading.Event()
@@ -916,6 +924,22 @@ class MOTIONConnector(QObject):
     @pyqtProperty(int, notify=calibrationStateChanged)
     def maxCalibrationTimeSec(self) -> int:
         return self._max_calibration_time_sec
+
+    @pyqtProperty(bool, notify=testScanStateChanged)
+    def testScanRunning(self) -> bool:
+        return self._test_scan_status == "running"
+
+    @pyqtProperty(str, notify=testScanStateChanged)
+    def testScanStatus(self) -> str:
+        return self._test_scan_status
+
+    @pyqtProperty(str, notify=testScanStateChanged)
+    def testScanFailureReason(self) -> str:
+        return self._test_scan_failure_reason
+
+    @pyqtProperty('QVariantList', notify=testScanStateChanged)
+    def testScanRows(self) -> list:
+        return self._test_scan_rows
 
     # --- DEVICE CONNECTION / DISCONNECTION / STATE MANAGEMENT METHODS ---
     def _on_handle_state_changed(self, handle, old, new, reason):
@@ -3382,6 +3406,16 @@ class MOTIONConnector(QObject):
     def get_sdk_version(self):
         return self._interface.get_sdk_version()
 
+    @pyqtSlot(str)
+    def copyToClipboard(self, text: str) -> None:
+        """Push a string to the system clipboard via Qt — used by the
+        Test Results window's Copy button. Centralised here so QML
+        doesn't need a direct dependency on PyQt6.QtGui."""
+        from PyQt6.QtGui import QGuiApplication
+        cb = QGuiApplication.clipboard()
+        if cb is not None:
+            cb.setText(text)
+
     def connect_signals(self):
         """Subscribe to per-handle state changes on the SDK interface."""
         for handle in (
@@ -3395,6 +3429,7 @@ class MOTIONConnector(QObject):
         )
         # Worker → Qt main thread for the calibration completion callback.
         self._calibrationCompleteSignal.connect(self._on_calibration_complete)
+        self._testScanCompleteSignal.connect(self._on_test_scan_complete)
 
     @pyqtSlot()
     @pyqtSlot(str)
@@ -3517,6 +3552,201 @@ class MOTIONConnector(QObject):
             self._calibration_status = ""
             self.calibrationStateChanged.emit()
             self.captureLog.emit("⚠️ Calibration failed to start.")
+
+    @pyqtSlot()
+    @pyqtSlot(str)
+    def runTestScan(self, target: str = "both"):
+        """Run just the calibration scan (phase 1) as a Test diagnostic.
+        Mirrors runCalibration but does NOT write calibration to the
+        console EEPROM and does NOT run a validation scan. Idempotent
+        if a calibration or test scan is already in flight.
+
+        ``target`` selects which side(s) to test: ``"left"``,
+        ``"right"``, or ``"both"`` (default). Issue #117 — test stations
+        with only one static phantom need to test one side at a time.
+        """
+        from omotion import CalibrationRequest, CalibrationThresholds
+
+        # Mutual exclusion with the Calibrate flow.
+        if self._test_scan_status == "running":
+            return
+        if self._calibration_status == "running":
+            self.captureLog.emit(
+                "⚠️ Cannot run Test scan: calibration in progress."
+            )
+            return
+
+        if not self._consoleConnected:
+            self.captureLog.emit(
+                "⚠️ Cannot run Test scan: console not connected."
+            )
+            return
+
+        target = (target or "both").lower().strip()
+        if target not in ("left", "right", "both"):
+            self.captureLog.emit(
+                f"⚠️ Cannot run Test scan: invalid target '{target}'."
+            )
+            return
+
+        want_left  = target in ("left", "both")
+        want_right = target in ("right", "both")
+        left_mask  = 0xFF if (want_left  and self._leftSensorConnected)  else 0x00
+        right_mask = 0xFF if (want_right and self._rightSensorConnected) else 0x00
+        if (left_mask | right_mask) == 0:
+            if target == "left" and not self._leftSensorConnected:
+                self.captureLog.emit("⚠️ Cannot run Test scan: left sensor not connected.")
+            elif target == "right" and not self._rightSensorConnected:
+                self.captureLog.emit("⚠️ Cannot run Test scan: right sensor not connected.")
+            else:
+                self.captureLog.emit("⚠️ Cannot run Test scan: no sensors connected.")
+            return
+
+        thresholds = CalibrationThresholds(
+            min_mean_per_camera=list(self._ft_min_mean_per_camera or [0.0]*8),
+            min_contrast_per_camera=list(self._ft_min_contrast_per_camera or [0.0]*8),
+            min_bfi_per_camera=list(self._ft_min_bfi_per_camera or [0.0]*8),
+            min_bvi_per_camera=list(self._ft_min_bvi_per_camera or [0.0]*8),
+            max_bfi_per_camera=(
+                list(self._ft_max_bfi_per_camera)
+                if self._ft_max_bfi_per_camera is not None else None
+            ),
+            max_bvi_per_camera=(
+                list(self._ft_max_bvi_per_camera)
+                if self._ft_max_bvi_per_camera is not None else None
+            ),
+            max_dark_per_camera=(
+                list(self._ft_max_dark_per_camera)
+                if self._ft_max_dark_per_camera is not None else None
+            ),
+        )
+        output_dir = os.path.join(self._directory, "calibrations")
+        os.makedirs(output_dir, exist_ok=True)
+        req = CalibrationRequest(
+            operator_id="bloodflow-app",
+            output_dir=output_dir,
+            left_camera_mask=left_mask,
+            right_camera_mask=right_mask,
+            thresholds=thresholds,
+            duration_sec=self._test_scan_duration_sec,   # OQ8: Test uses shorter duration (default 5s), NOT _calibration_scan_duration_sec (15s)
+            scan_delay_sec=self._calibration_scan_delay_sec,
+            max_duration_sec=self._max_calibration_time_sec,
+        )
+
+        self._test_scan_status = "running"
+        self._test_scan_rows = []
+        self._test_scan_failure_reason = ""
+        self.testScanStateChanged.emit()
+        self.captureLog.emit("Test scan: starting…")
+
+        # Same #108 laser-power cold-start guard the Calibrate path uses.
+        try:
+            ok = self.set_laser_power_from_config(self._interface)
+            if not ok:
+                logger.warning(
+                    "runTestScan: set_laser_power_from_config returned "
+                    "False — proceeding anyway, but the test scan will "
+                    "likely abort with 'zero or negative aggregate' if "
+                    "this is a cold start. See issue #108."
+                )
+            else:
+                logger.info("runTestScan: laser params applied")
+        except Exception as e:
+            logger.error(
+                "runTestScan: applying laser params raised: %s — "
+                "proceeding anyway", e
+            )
+
+        started = self._interface.start_test_scan(
+            req,
+            on_log_fn=lambda msg: self.captureLog.emit(msg),
+            on_complete_fn=self._testScanCompleteSignal.emit,
+        )
+        if not started:
+            self._test_scan_status = ""
+            self.testScanStateChanged.emit()
+            self.captureLog.emit("⚠️ Test scan failed to start.")
+
+    @pyqtSlot(object)
+    def _on_test_scan_complete(self, result):
+        """Runs on the Qt main thread (queued from the SDK worker via
+        _testScanCompleteSignal). Translates a TestScanResult into the
+        QML-friendly _test_scan_rows model and updates _test_scan_status.
+        """
+        self._test_scan_failure_reason = ""
+        if result.canceled:
+            self._test_scan_status = "aborted"
+            self.captureLog.emit(
+                f"⚠️ Test scan aborted: {result.error or 'canceled'}"
+            )
+        elif not result.ok:
+            self._test_scan_status = "aborted"
+            self.captureLog.emit(
+                f"⚠️ Test scan aborted: {result.error or 'unknown error'}"
+            )
+        elif result.passed:
+            self._test_scan_status = "done"
+            self.captureLog.emit(
+                f"✅ Test scan: PASS  (CSV: {result.csv_path})"
+            )
+        else:
+            self._test_scan_status = "failed"
+            if self._app_config.get("developerMode", False):
+                tests = (("mean", "mean_test"), ("contrast", "contrast_test"),
+                         ("ambient", "dark_test"))
+                breakdown = "; ".join(
+                    f"{'L' if r.side == 'left' else 'R'}{r.cam_id + 1}:"
+                    f"{','.join(n for n, a in tests if getattr(r, a) == 'FAIL')}"
+                    for r in result.rows
+                    if any(getattr(r, a) == "FAIL" for _, a in tests)
+                )
+                if any(r.dark_test == "FAIL" for r in result.rows):
+                    breakdown = f"too much ambient light — {breakdown}"
+                self._test_scan_failure_reason = breakdown
+            self.captureLog.emit(
+                f"❌ Test scan: FAIL  (CSV: {result.csv_path})"
+            )
+
+        # Build the QML-friendly row dicts.
+        self._test_scan_rows = [
+            {
+                "side": r.side,
+                "cam": r.cam_id + 1,
+                "light_mean": r.mean,
+                "min_mean": (
+                    self._ft_min_mean_per_camera[r.cam_id]
+                    if self._ft_min_mean_per_camera
+                    and r.cam_id < len(self._ft_min_mean_per_camera)
+                    else None
+                ),
+                "mean_pf": r.mean_test,
+                "dark_mean": r.dark,
+                "max_dark": (
+                    self._ft_max_dark_per_camera[r.cam_id]
+                    if self._ft_max_dark_per_camera
+                    and r.cam_id < len(self._ft_max_dark_per_camera)
+                    else None
+                ),
+                "dark_pf": r.dark_test,
+                "contrast": r.avg_contrast,
+                "min_contrast": (
+                    self._ft_min_contrast_per_camera[r.cam_id]
+                    if self._ft_min_contrast_per_camera
+                    and r.cam_id < len(self._ft_min_contrast_per_camera)
+                    else None
+                ),
+                "contrast_pf": r.contrast_test,
+                "overall": (
+                    "PASS"
+                    if r.mean_test == "PASS"
+                    and r.contrast_test == "PASS"
+                    and r.dark_test != "FAIL"
+                    else "FAIL"
+                ),
+            }
+            for r in result.rows
+        ]
+        self.testScanStateChanged.emit()
 
     @pyqtSlot(object)
     def _on_calibration_complete(self, result):

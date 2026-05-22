@@ -780,11 +780,28 @@ Item {
 
                         ActionButton {
                             id: runCalibrationButton
-                            text: "Run Calibration"
-                            Layout.preferredWidth: 160
+                            text: "Calibrate"
+                            Layout.preferredWidth: 110
                             Layout.preferredHeight: 40
-                            enabled: MOTIONInterface.consoleConnected && !MOTIONInterface.calibrationRunning
-                            onClicked: MOTIONInterface.runCalibration(calibrationTargetCombo.currentText.toLowerCase())
+                            enabled: MOTIONInterface.consoleConnected
+                                  && !MOTIONInterface.calibrationRunning
+                                  && !MOTIONInterface.testScanRunning
+                            onClicked: MOTIONInterface.runCalibration(
+                                calibrationTargetCombo.currentText.toLowerCase()
+                            )
+                        }
+
+                        ActionButton {
+                            id: runTestButton
+                            text: "Test"
+                            Layout.preferredWidth: 110
+                            Layout.preferredHeight: 40
+                            enabled: MOTIONInterface.consoleConnected
+                                  && !MOTIONInterface.calibrationRunning
+                                  && !MOTIONInterface.testScanRunning
+                            onClicked: MOTIONInterface.runTestScan(
+                                calibrationTargetCombo.currentText.toLowerCase()
+                            )
                         }
 
                         // Issue #117: test stations don't always have two
@@ -796,6 +813,7 @@ Item {
                             model: ["Both", "Left", "Right"]
                             currentIndex: 0
                             enabled: !MOTIONInterface.calibrationRunning
+                                  && !MOTIONInterface.testScanRunning
                         }
 
                         // Indicator light
@@ -808,11 +826,11 @@ Item {
                             border.color: root.colBorderSoft
                             color: {
                                 switch (MOTIONInterface.calibrationStatus) {
-                                case "running": return "#2196F3"  // blue
-                                case "passed":  return "#4CAF50"  // green
-                                case "failed":  return "#F44336"  // red
-                                case "aborted": return "#FF9800"  // orange
-                                default:        return "#9E9E9E"  // gray
+                                case "running": return "#2196F3"
+                                case "passed":  return "#4CAF50"
+                                case "failed":  return "#F44336"
+                                case "aborted": return "#FF9800"
+                                default:        return "#9E9E9E"
                                 }
                             }
                         }
@@ -827,12 +845,16 @@ Item {
                         TextArea {
                             id: calibStatusLabel
                             Layout.fillWidth: true
+                            // Match the buttons' 40px height for single-line
+                            // statuses; grow for multi-line failure breakdown.
+                            Layout.preferredHeight: Math.max(40, implicitHeight)
                             readOnly: true
                             selectByMouse: false
                             activeFocusOnTab: false
                             background: null
                             padding: 0
                             wrapMode: TextEdit.Wrap
+                            verticalAlignment: TextEdit.AlignVCenter
                             color: root.colTextPri
                             font.pixelSize: 13
                             text: {
@@ -868,6 +890,19 @@ Item {
                         function onCalibrationStateChanged() {
                             if (MOTIONInterface.calibrationStatus === "running") {
                                 calibTimer.elapsedSec = 0
+                            }
+                        }
+                    }
+
+                    Connections {
+                        target: MOTIONInterface
+                        function onTestScanStateChanged() {
+                            var s = MOTIONInterface.testScanStatus
+                            if (s === "running" || s === "done"
+                                || s === "failed" || s === "aborted") {
+                                testResultsWindow.show()
+                                testResultsWindow.raise()
+                                testResultsWindow.requestActivate()
                             }
                         }
                     }
