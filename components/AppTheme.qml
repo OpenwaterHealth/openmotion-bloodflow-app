@@ -39,11 +39,13 @@ QtObject {
     readonly property color textLink:      dark ? "#4A90E2" : "#2060C0"
 
     // ── accent colours (same in both modes) ───────────────────────
-    readonly property color accentBlue:   "#4A90E2"
-    readonly property color accentGreen:  "#2ECC71"
-    readonly property color accentRed:    "#E74C3C"
-    readonly property color accentYellow: "#F1C40F"
-    readonly property color accentOrange: "#E67E22"
+    readonly property color accentBlue:          "#4A90E2"
+    readonly property color accentGreen:         "#2ECC71"
+    readonly property color accentRed:           "#E74C3C"
+    readonly property color accentYellow:        "#F1C40F"
+    readonly property color accentOrange:        "#E67E22"
+    readonly property color accentOrangeAmbient: "#9A4012"
+    readonly property color accentOrangeContact: "#F4A460"
 
     // ── status / indicators ───────────────────────────────────────
     readonly property color statusGreen:  "#2ECC71"

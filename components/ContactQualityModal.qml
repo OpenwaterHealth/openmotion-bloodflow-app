@@ -191,6 +191,21 @@ Item {
         return "good"
     }
 
+    // Returns the deduped typeKey array for a camera's active warnings.
+    // Empty when the camera has no warnings. Used by CameraDot (#128)
+    // to decide between single-color and split rendering in dev mode.
+    function cameraWarningTypes(side, camIndex1) {
+        var prefix = (side === "left") ? "L" : "R"
+        var label = prefix + camIndex1
+        var types = []
+        for (var i = 0; i < entries.length; ++i) {
+            if (entries[i].camera === label
+                    && types.indexOf(entries[i].typeKey) === -1)
+                types.push(entries[i].typeKey)
+        }
+        return types
+    }
+
     function cameraTooltip(side, camIndex1) {
         var prefix = (side === "left") ? "L" : "R"
         var label = prefix + camIndex1
@@ -207,14 +222,6 @@ Item {
                            : entries[i].typeText)
         }
         return lines.join("\n")
-    }
-
-    function cameraColor(side, camIndex1) {
-        var st = cameraStatus(side, camIndex1)
-        if (st === "good")     return "#A3E4A1"  // pale green
-        if (st === "bad")      return "#E67E22"  // strong orange
-        if (st === "checking") return "#666666"
-        return "#666666"
     }
 
     function cameraEnabled(side, camIndex1) {
@@ -396,45 +403,21 @@ Item {
                             Layout.alignment: Qt.AlignHCenter
                             property int cs: 18
 
-                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
-                                color: cameraColor("left", 1); border.color: "black"; border.width: 1
-                                MouseArea { id: lh1; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
-                                Controls.ToolTip.visible: lh1.containsMouse; Controls.ToolTip.text: cameraTooltip("left", 1) }
+                            CameraDot { side: "left"; camIndex1: 1; modal: root; size: parent.cs }
                             Item {}
-                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
-                                color: cameraColor("left", 8); border.color: "black"; border.width: 1
-                                MouseArea { id: lh2; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
-                                Controls.ToolTip.visible: lh2.containsMouse; Controls.ToolTip.text: cameraTooltip("left", 8) }
+                            CameraDot { side: "left"; camIndex1: 8; modal: root; size: parent.cs }
 
-                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
-                                color: cameraColor("left", 2); border.color: "black"; border.width: 1
-                                MouseArea { id: lh3; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
-                                Controls.ToolTip.visible: lh3.containsMouse; Controls.ToolTip.text: cameraTooltip("left", 2) }
+                            CameraDot { side: "left"; camIndex1: 2; modal: root; size: parent.cs }
                             Item {}
-                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
-                                color: cameraColor("left", 7); border.color: "black"; border.width: 1
-                                MouseArea { id: lh4; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
-                                Controls.ToolTip.visible: lh4.containsMouse; Controls.ToolTip.text: cameraTooltip("left", 7) }
+                            CameraDot { side: "left"; camIndex1: 7; modal: root; size: parent.cs }
 
-                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
-                                color: cameraColor("left", 3); border.color: "black"; border.width: 1
-                                MouseArea { id: lh5; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
-                                Controls.ToolTip.visible: lh5.containsMouse; Controls.ToolTip.text: cameraTooltip("left", 3) }
+                            CameraDot { side: "left"; camIndex1: 3; modal: root; size: parent.cs }
                             Item {}
-                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
-                                color: cameraColor("left", 6); border.color: "black"; border.width: 1
-                                MouseArea { id: lh6; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
-                                Controls.ToolTip.visible: lh6.containsMouse; Controls.ToolTip.text: cameraTooltip("left", 6) }
+                            CameraDot { side: "left"; camIndex1: 6; modal: root; size: parent.cs }
 
-                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
-                                color: cameraColor("left", 4); border.color: "black"; border.width: 1
-                                MouseArea { id: lh7; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
-                                Controls.ToolTip.visible: lh7.containsMouse; Controls.ToolTip.text: cameraTooltip("left", 4) }
+                            CameraDot { side: "left"; camIndex1: 4; modal: root; size: parent.cs }
                             Item {}
-                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
-                                color: cameraColor("left", 5); border.color: "black"; border.width: 1
-                                MouseArea { id: lh8; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
-                                Controls.ToolTip.visible: lh8.containsMouse; Controls.ToolTip.text: cameraTooltip("left", 5) }
+                            CameraDot { side: "left"; camIndex1: 5; modal: root; size: parent.cs }
 
                             Item {}
                             Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
@@ -466,45 +449,21 @@ Item {
                             Layout.alignment: Qt.AlignHCenter
                             property int cs: 18
 
-                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
-                                color: cameraColor("right", 1); border.color: "black"; border.width: 1
-                                MouseArea { id: rh1; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
-                                Controls.ToolTip.visible: rh1.containsMouse; Controls.ToolTip.text: cameraTooltip("right", 1) }
+                            CameraDot { side: "right"; camIndex1: 1; modal: root; size: parent.cs }
                             Item {}
-                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
-                                color: cameraColor("right", 8); border.color: "black"; border.width: 1
-                                MouseArea { id: rh2; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
-                                Controls.ToolTip.visible: rh2.containsMouse; Controls.ToolTip.text: cameraTooltip("right", 8) }
+                            CameraDot { side: "right"; camIndex1: 8; modal: root; size: parent.cs }
 
-                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
-                                color: cameraColor("right", 2); border.color: "black"; border.width: 1
-                                MouseArea { id: rh3; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
-                                Controls.ToolTip.visible: rh3.containsMouse; Controls.ToolTip.text: cameraTooltip("right", 2) }
+                            CameraDot { side: "right"; camIndex1: 2; modal: root; size: parent.cs }
                             Item {}
-                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
-                                color: cameraColor("right", 7); border.color: "black"; border.width: 1
-                                MouseArea { id: rh4; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
-                                Controls.ToolTip.visible: rh4.containsMouse; Controls.ToolTip.text: cameraTooltip("right", 7) }
+                            CameraDot { side: "right"; camIndex1: 7; modal: root; size: parent.cs }
 
-                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
-                                color: cameraColor("right", 3); border.color: "black"; border.width: 1
-                                MouseArea { id: rh5; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
-                                Controls.ToolTip.visible: rh5.containsMouse; Controls.ToolTip.text: cameraTooltip("right", 3) }
+                            CameraDot { side: "right"; camIndex1: 3; modal: root; size: parent.cs }
                             Item {}
-                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
-                                color: cameraColor("right", 6); border.color: "black"; border.width: 1
-                                MouseArea { id: rh6; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
-                                Controls.ToolTip.visible: rh6.containsMouse; Controls.ToolTip.text: cameraTooltip("right", 6) }
+                            CameraDot { side: "right"; camIndex1: 6; modal: root; size: parent.cs }
 
-                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
-                                color: cameraColor("right", 4); border.color: "black"; border.width: 1
-                                MouseArea { id: rh7; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
-                                Controls.ToolTip.visible: rh7.containsMouse; Controls.ToolTip.text: cameraTooltip("right", 4) }
+                            CameraDot { side: "right"; camIndex1: 4; modal: root; size: parent.cs }
                             Item {}
-                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
-                                color: cameraColor("right", 5); border.color: "black"; border.width: 1
-                                MouseArea { id: rh8; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
-                                Controls.ToolTip.visible: rh8.containsMouse; Controls.ToolTip.text: cameraTooltip("right", 5) }
+                            CameraDot { side: "right"; camIndex1: 5; modal: root; size: parent.cs }
 
                             Item {}
                             Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
@@ -512,6 +471,45 @@ Item {
                             Item {}
                         }
                     }
+                }
+            }
+
+            // Per-camera dot color legend (#128). Developer mode only —
+            // RUO operators just see a single orange and don't need this.
+            RowLayout {
+                visible: root.developerMode
+                         && (root.state_ === "ok" || root.state_ === "warnings")
+                Layout.alignment: Qt.AlignHCenter
+                spacing: 18
+
+                RowLayout {
+                    spacing: 6
+                    Rectangle { width: 10; height: 10; radius: 5
+                        color: theme.accentOrangeAmbient
+                        border.color: "black"; border.width: 1 }
+                    Text { text: "ambient"; color: theme.textSecondary; font.pixelSize: 11 }
+                }
+                RowLayout {
+                    spacing: 6
+                    Rectangle { width: 10; height: 10; radius: 5
+                        color: theme.accentOrangeContact
+                        border.color: "black"; border.width: 1 }
+                    Text { text: "contact"; color: theme.textSecondary; font.pixelSize: 11 }
+                }
+                RowLayout {
+                    spacing: 6
+                    Rectangle {
+                        width: 10; height: 10; radius: 5
+                        border.color: "black"; border.width: 1
+                        gradient: Gradient {
+                            orientation: Gradient.Horizontal
+                            GradientStop { position: 0.0;    color: theme.accentOrangeAmbient }
+                            GradientStop { position: 0.4999; color: theme.accentOrangeAmbient }
+                            GradientStop { position: 0.5001; color: theme.accentOrangeContact }
+                            GradientStop { position: 1.0;    color: theme.accentOrangeContact }
+                        }
+                    }
+                    Text { text: "both"; color: theme.textSecondary; font.pixelSize: 11 }
                 }
             }
 
