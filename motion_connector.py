@@ -2486,48 +2486,51 @@ class MOTIONConnector(QObject):
                     light_thresholds[cam_id] if cam_id < len(light_thresholds)
                     else _CQ_DEFAULT_LIGHT_THRESHOLD_DN
                 )
-                avg_bfi = cam_res.avg_bfi
+                light_avg_dn = cam_res.light_avg_dn
+                dark_max_dn = cam_res.dark_max_dn
                 reason = cam_res.reason
                 warn_tags = []
 
-                if reason == "above_light":
+                if reason == "ambient_light":
                     warnings_by_key[(camera, "ambient_light")] = {
                         "camera": camera,
                         "typeKey": "ambient_light",
                         "typeText": self._warning_text("ambient_light"),
-                        "value": float(avg_bfi) if avg_bfi == avg_bfi else 0.0,
+                        "value": float(dark_max_dn) if dark_max_dn == dark_max_dn else 0.0,
                     }
                     warn_tags.append("ambient_light")
-                elif reason in ("below_dark", "no_signal"):
+                elif reason in ("poor_contact", "no_signal"):
                     warnings_by_key[(camera, "poor_contact")] = {
                         "camera": camera,
                         "typeKey": "poor_contact",
                         "typeText": self._warning_text("poor_contact"),
-                        "value": float(avg_bfi) if avg_bfi == avg_bfi else 0.0,
+                        "value": float(light_avg_dn) if light_avg_dn == light_avg_dn else 0.0,
                     }
                     warn_tags.append("poor_contact")
 
                 table_rows.append({
                     "camera": camera,
-                    "avg_bfi": f"{avg_bfi:.3f}" if avg_bfi == avg_bfi else "n/a",
+                    "light_avg_dn": f"{light_avg_dn:.2f}" if light_avg_dn == light_avg_dn else "n/a",
+                    "dark_max_dn":  f"{dark_max_dn:.2f}"  if dark_max_dn  == dark_max_dn  else "n/a",
                     "dark_threshold": dark_threshold,
                     "light_threshold": light_threshold,
                     "reason": reason,
                     "warnings": ",".join(warn_tags) if warn_tags else "-",
                 })
 
-        logger.info("CQ Final Compare (BFI rolling-avg):")
+        logger.info("CQ Final Compare (DN, pedestal-subtracted; rolling-avg light, max dark):")
         logger.info(
-            "| Camera | AvgBFI | DarkThr | LightThr | Reason   | Warnings |"
+            "| Camera | LightAvg | DarkMax | DarkThr | LightThr | Reason         | Warnings |"
         )
         logger.info(
-            "|--------|--------|---------|----------|----------|----------|"
+            "|--------|----------|---------|---------|----------|----------------|----------|"
         )
         for row in table_rows:
             logger.info(
-                "| %-6s | %6s | %7.2f | %8.2f | %-8s | %-8s |",
+                "| %-6s | %8s | %7s | %7.2f | %8.2f | %-14s | %-8s |",
                 row["camera"],
-                row["avg_bfi"],
+                row["light_avg_dn"],
+                row["dark_max_dn"],
                 row["dark_threshold"],
                 row["light_threshold"],
                 row["reason"],
