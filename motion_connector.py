@@ -48,15 +48,12 @@ import pandas as pd
 # constants for calculations
 SCALE_V = 0.0909
 SCALE_I = 0.25
-V_REF = 2.459  # Should be 2.5V but empirical measurements don't match
-R_1 = 18000  # (R221)
-R_2 = 8160  # (R224)
-R_3 = 49900  # (R225)
 R230 = 300e3
 R234 = 300e3
-R_s = 0.020  # (R217)
 TEC_VOLTAGE_DEFAULT = -0.07  # volts (DVT1a=-0.07, EVT2=1.16)
 DATA_ACQ_INTERVAL = 1.0
+# TEC ADC conversion constants + RT lookup moved to omotion.console_telemetry_conversions
+# (V_REF / R_1 / R_2 / R_3 / R_s / 10K3CG_R-T.csv).
 
 # Contact-quality quick-check defaults (overridable via app_config keys
 # cq_dark_threshold_per_camera / cq_light_threshold_per_camera /
@@ -292,6 +289,50 @@ class _FinalBatchSink:
             })
         if payload:
             connector.scanCorrectedBatch.emit(payload)
+
+    def on_complete(self) -> None:
+        pass
+
+
+class _TriggerStateSink:
+    """Listens for TriggerStateEvent on the diagnostics channel and updates
+    the connector's _trigger_on_mono / _trigger_cumulative_s so
+    _scan_elapsed_str (and scan-notes duration) reports actual trigger-ON
+    time instead of wall-clock duration.
+
+    Restores the trigger-time tracking that lived as on_trigger_state_fn
+    on legacy start_scan before the Phase E sink cutover.
+    """
+
+    channels: set = frozenset({"diagnostics"})
+
+    def __init__(self, connector: "MOTIONConnector"):
+        self._connector = connector
+
+    def on_scan_start(self, meta) -> None:
+        # Reset is already done in startCapture before the sink list is
+        # constructed; nothing to do here.
+        pass
+
+    def consume(self, channel: str, payload) -> None:
+        if channel != "diagnostics":
+            return
+        # Lazy-import the event type so this module doesn't fail if the
+        # SDK version pre-dates TriggerStateEvent.
+        try:
+            from omotion.pipeline.batch import TriggerStateEvent
+        except Exception:
+            return
+        if not isinstance(payload, TriggerStateEvent):
+            return
+        c = self._connector
+        if payload.state == "ON" and c._trigger_on_mono is None:
+            c._trigger_on_mono = time.monotonic()
+            c.triggerStateChanged.emit()
+        elif payload.state == "OFF" and c._trigger_on_mono is not None:
+            c._trigger_cumulative_s += time.monotonic() - c._trigger_on_mono
+            c._trigger_on_mono = None
+            c.triggerStateChanged.emit()
 
     def on_complete(self) -> None:
         pass
@@ -637,27 +678,8 @@ class MOTIONConnector(QObject):
     def _configure_logging(self, log_level):
 
         run_logger.propagate = True
-        # --- Load RT model (10K3CG_R-T.CSV) for TEC lookup ---
-        try:
-            # Look for file in the repository's models directory next to this file
-            base_dir = os.path.dirname(__file__)
-            candidate = os.path.join(base_dir, "models", "10K3CG_R-T.CSV")
-            if not os.path.exists(candidate):
-                # try lower-case extension variant
-                candidate = os.path.join(base_dir, "models", "10K3CG_R-T.csv")
-
-            if os.path.exists(candidate):
-                df = pd.read_csv(candidate)
-                self._data_RT = np.array(df)
-                logger.info(
-                    f"Loaded RT model from {candidate} shape={self._data_RT.shape}"
-                )
-            else:
-                self._data_RT = None
-                logger.warning(f"RT model file not found at {candidate}")
-        except Exception as e:
-            self._data_RT = None
-            logger.error(f"Failed to load RT model: {e}")
+        # TEC RT lookup now lives in omotion.console_telemetry_conversions
+        # (lazy-loaded from the SDK wheel's omotion/models/10K3CG_R-T.csv).
 
     def _compute_sensor_debug_flags(self) -> int:
         """Compute sensor debug flag bitfield from current config booleans."""
@@ -1757,17 +1779,29 @@ class MOTIONConnector(QObject):
             else:
                 self.captureLog.emit("Capture session complete.")
 
-            # Scan duration: fall back to wall-clock since trigger-state
-            # callbacks are no longer wired (legacy kwargs discarded by the
-            # new SDK).  The UI countdown is driven by the trigger-active
-            # period which we can't observe here without a dedicated sink.
-            elapsed = time.time() - self._capture_start_time
+            # Trigger-ON duration sourced from _TriggerStateSink so notes
+            # report the actual laser-on time, not wall-clock (which includes
+            # pre-scan setup + post-scan USB drain). Falls back to wall-clock
+            # if the sink never saw a TriggerStateEvent (e.g. cancel before
+            # trigger fired).
+            trigger_elapsed = self._trigger_cumulative_s
+            if self._trigger_on_mono is not None:
+                trigger_elapsed += time.monotonic() - self._trigger_on_mono
+            if trigger_elapsed > 0:
+                elapsed = trigger_elapsed
+                duration_source = "trigger"
+            else:
+                elapsed = time.time() - self._capture_start_time
+                duration_source = "wall-clock"
             hours = int(elapsed // 3600)
             minutes = int((elapsed % 3600) // 60)
             seconds = int(elapsed % 60)
             duration_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
             status = "stopped" if canceled else "completed"
-            duration_line = f"\n---\nScan {status} — duration: {duration_str}"
+            duration_line = (
+                f"\n---\nScan {status} — duration: {duration_str} "
+                f"({duration_source})"
+            )
             self._scan_notes = (self._scan_notes.strip() + duration_line)
             self.scanNotesChanged.emit()
 
@@ -1817,6 +1851,7 @@ class MOTIONConnector(QObject):
             sinks=[
                 _LivePlotSink(connector=self, plot_t0=plot_t0),
                 _FinalBatchSink(connector=self, plot_t0=plot_t0),
+                _TriggerStateSink(connector=self),
                 _CompletionSink(connector=self, on_complete_cb=_on_pipeline_complete),
             ] + (
                 [TelemetrySink(output_path=os.path.join(
@@ -2033,30 +2068,21 @@ class MOTIONConnector(QObject):
         if snap is None or not snap.read_ok:
             return False
 
-        v, i, p, t, ok = (
-            snap.tec_v_raw, snap.tec_set_raw,
-            snap.tec_curr_raw, snap.tec_volt_raw, snap.tec_good,
+        from omotion.console_telemetry_conversions import (
+            tec_thermistor_voltage_to_celsius,
+            tec_current_to_amps,
+            tec_voltage_to_volts,
         )
 
-        R_TH = (
-            1 / ((float(v) / (V_REF / 2 * R_3)) - 1 / R_3 + 1 / R_1) - R_2
+        self._tec_voltage = round(
+            tec_thermistor_voltage_to_celsius(snap.tec_v_raw), 2
         )
-        Thermistor_Temp = np.interp(
-            R_TH, self._data_RT[:, 1][::-1], self._data_RT[:, 0][::-1]
+        self._tec_temp = round(
+            tec_thermistor_voltage_to_celsius(snap.tec_set_raw), 2
         )
-
-        R_SET = (
-            1 / ((float(i) / (V_REF / 2 * R_3)) - 1 / R_3 + 1 / R_1) - R_2
-        )
-        SET_Temp = np.interp(
-            R_SET, self._data_RT[:, 1][::-1], self._data_RT[:, 0][::-1]
-        )
-
-        self._tec_voltage = round(float(Thermistor_Temp), 2)
-        self._tec_temp = round(float(SET_Temp), 2)
-        self._tec_monC = round((float(p) - 0.5 * V_REF) / (25 * R_s), 3)
-        self._tec_monV = round((float(t) - 0.5 * V_REF) * 4, 3)
-        self._tec_good = bool(ok)
+        self._tec_monC = round(tec_current_to_amps(snap.tec_curr_raw), 3)
+        self._tec_monV = round(tec_voltage_to_volts(snap.tec_volt_raw), 3)
+        self._tec_good = bool(snap.tec_good)
 
         self.tecStatusChanged.emit()
         return True
