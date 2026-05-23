@@ -33,6 +33,7 @@ from omotion.config import (
 )
 from omotion.MotionProcessing import process_bin_file
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
+from omotion.pipeline.sinks import TelemetrySink
 from processing.visualize_bloodflow import VisualizeBloodflow
 from motion_config import (
     FpgaModel,
@@ -210,6 +211,188 @@ class _ContactQualityState:
             self._contact_latched[key] = False
             return "cleared"
         return "none"
+
+
+_SIDE_NAMES = ("left", "right")
+
+
+class _LivePlotSink:
+    """Subscribes to the 'live' pipeline channel and emits per-frame Qt
+    signals into the QML realtime plot for each active camera.
+
+    The 'live' channel carries a FrameBatch after BfiBvi (and optionally
+    SideAveraging in reduced mode). Each batch may contain multiple frames
+    and both sides; we iterate frame × side × cam_id and call back into
+    the connector's _emit_frame_to_qml helper, which gates on the camera-
+    dropout watchdog and fires the Qt signals.
+
+    Phase G (Task 20) replacement for the _on_uncorrected closure.
+    """
+
+    channels = {"live"}
+
+    def __init__(self, connector: "MOTIONConnector", plot_t0: float):
+        self._connector = connector
+        self._plot_t0 = plot_t0
+        self._temp_alerted: dict[tuple[str, int], bool] = {}
+
+    def on_scan_start(self, meta) -> None:
+        self._temp_alerted.clear()
+
+    def consume(self, channel: str, batch) -> None:
+        if channel != "live":
+            return
+        if batch.bfi_live is None:
+            return
+
+        n = batch.bfi_live.shape[0]
+        connector = self._connector
+        threshold = connector._camera_temp_alert_threshold_c
+        now_mono = time.monotonic()
+        plot_t0 = self._plot_t0
+
+        for i in range(n):
+            ft = str(batch.frame_type[i]) if batch.frame_type is not None else "light"
+            # Skip frames that carry no useful display signal.
+            if ft in ("warmup", "stale"):
+                continue
+            is_dark = (ft == "dark")
+            ts = float(batch.timestamp_s[i])
+            abs_frame_id = int(batch.abs_frame_ids[i]) if batch.abs_frame_ids is not None else i
+            plot_ts = now_mono - plot_t0
+
+            for side_idx, side in enumerate(_SIDE_NAMES):
+                for cam_id in range(8):
+                    bfi = float(batch.bfi_live[i, side_idx, cam_id])
+                    bvi = float(batch.bvi_live[i, side_idx, cam_id])
+                    temp_c = float(batch.temperature_c[i, side_idx, cam_id])
+
+                    # Dropout gate — same logic as the old _on_uncorrected closure.
+                    _key = (side, cam_id)
+                    should_emit, recovery_msg = _check_dropped_camera_emit(
+                        side, cam_id,
+                        connector._camera_dropped,
+                        connector._camera_dropped_recovery_logged,
+                    )
+                    if recovery_msg is not None:
+                        logger.warning(recovery_msg)
+                        run_logger.warning(recovery_msg)
+                    if not should_emit:
+                        continue
+
+                    # Update dropout-watchdog heartbeat (non-dark frames only, since
+                    # dark frames arrive at ~40x lower rate and would skew the timer).
+                    if not is_dark:
+                        connector._camera_last_seen[_key] = now_mono
+                        connector._camera_last_temp[_key] = temp_c
+
+                    # Temperature alert (light frames only — dark frames have no
+                    # meaningful camera temperature reading for display).
+                    if not is_dark and temp_c >= threshold and _key not in self._temp_alerted:
+                        self._temp_alerted[_key] = True
+                        msg = (
+                            f"ALERT: Camera {cam_id + 1} ({side}) "
+                            f"temperature {temp_c:.1f}°C >= {threshold:.0f}°C threshold."
+                        )
+                        connector.captureLog.emit(msg)
+                        run_logger.warning(msg)
+                        logger.warning(msg)
+
+                    if not is_dark:
+                        # mean / contrast: use display_mean (pedestal-subtracted)
+                        # and contrast_sn_rt (shot-noise-corrected) when available.
+                        if batch.display_mean is not None:
+                            mean_val = float(batch.display_mean[i, side_idx, cam_id])
+                            connector.scanMeanSampled.emit(side, cam_id, plot_ts, mean_val)
+                        if batch.contrast_sn_rt is not None:
+                            contrast_val = float(batch.contrast_sn_rt[i, side_idx, cam_id])
+                            connector.scanContrastSampled.emit(side, cam_id, plot_ts, contrast_val)
+
+                    connector.scanBfiSampled.emit(side, cam_id, abs_frame_id, plot_ts, bfi)
+                    connector.scanBviSampled.emit(side, cam_id, abs_frame_id, plot_ts, bvi)
+                    connector.scanCameraTemperature.emit(side, cam_id, temp_c)
+
+    def on_complete(self) -> None:
+        pass
+
+
+class _FinalBatchSink:
+    """Subscribes to the 'final' pipeline channel and emits scanCorrectedBatch
+    Qt signal into the QML realtime plot (EmbeddedRealtimePlot.qml).
+
+    Phase G (Task 20) replacement for the _on_corrected_batch closure.
+    """
+
+    channels = {"final"}
+
+    def __init__(self, connector: "MOTIONConnector", plot_t0: float):
+        self._connector = connector
+        self._plot_t0 = plot_t0
+
+    def on_scan_start(self, meta) -> None:
+        pass
+
+    def consume(self, channel: str, batch) -> None:
+        if channel != "final":
+            return
+        # batch is a CorrectedBatch with .samples list of Sample objects.
+        connector = self._connector
+        plot_ts = time.monotonic() - self._plot_t0
+        payload = []
+        for s in batch.samples:
+            side = str(getattr(s, "side", ""))
+            cam_id = int(getattr(s, "cam_id", -1))
+            should_emit, recovery_msg = _check_dropped_camera_emit(
+                side, cam_id,
+                connector._camera_dropped,
+                connector._camera_dropped_recovery_logged,
+            )
+            if recovery_msg is not None:
+                logger.warning(recovery_msg)
+                run_logger.warning(recovery_msg)
+            if not should_emit:
+                continue
+            payload.append({
+                "side": side,
+                "camId": cam_id,
+                "frameId": int(getattr(s, "absolute_frame_id", 0)),
+                "ts": plot_ts,
+                "bfi": float(getattr(s, "bfi", 0.0)),
+                "bvi": float(getattr(s, "bvi", 0.0)),
+            })
+        if payload:
+            connector.scanCorrectedBatch.emit(payload)
+
+    def on_complete(self) -> None:
+        pass
+
+
+class _CompletionSink:
+    """Fires the connector's post-scan UI cleanup when the pipeline's
+    ScanRunner completes.  Replaces the legacy on_complete_fn callback.
+
+    Phase G (Task 20): wired by startCapture so the scan-done logic runs
+    from the sink's on_complete method rather than a legacy kwarg callback.
+    """
+
+    channels: set = frozenset()  # no data channels — lifecycle only
+
+    def __init__(self, connector: "MOTIONConnector", on_complete_cb):
+        self._connector = connector
+        self._on_complete_cb = on_complete_cb
+        self._meta = None
+
+    def on_scan_start(self, meta) -> None:
+        self._meta = meta
+
+    def consume(self, channel: str, payload) -> None:
+        pass  # no data channels
+
+    def on_complete(self) -> None:
+        try:
+            self._on_complete_cb(self._meta)
+        except Exception:
+            logger.exception("_CompletionSink.on_complete callback raised")
 
 
 class MOTIONConnector(QObject):
@@ -1620,14 +1803,6 @@ class MOTIONConnector(QObject):
         self._capture_right_path = ""
         self._start_runlog(subject_id=subject_id)
 
-        def _extra_cols():
-            snap = self._interface.console.telemetry.get_snapshot()
-            if snap is not None:
-                return [int(snap.tcm), int(snap.tcl), f"{float(snap.pdc):.3f}"]
-            return [0, 0, "0.000"]
-
-        temp_alerted_by_side = {"left": set(), "right": set()}
-
         # Camera dropout watchdog state — fresh per scan.
         self._camera_last_seen = {}
         self._camera_last_temp = {}
@@ -1635,146 +1810,41 @@ class MOTIONConnector(QObject):
         self._camera_dropped_recovery_logged = set()
         self._dropout_timer.start()
 
-        # Cumulative trigger-ON time — the duration that appears in scan notes
-        # must match the UI countdown (gated on triggerState == "ON"), not the
-        # wall-clock span of startCapture→_on_complete which includes pre-scan
-        # flash + post-scan USB drain/writer-join (~3s tail).
-        trigger_cumulative_s: float = 0.0
-        trigger_on_mono: float | None = None
+        # Reset trigger ON-time mirrors so _scan_elapsed_str starts from zero.
         self._trigger_cumulative_s = 0.0
         self._trigger_on_mono = None
 
-        def _on_uncorrected(sample):
-            """Fires for every non-dark frame (~40 Hz). Feeds the realtime plot."""
-            current_side = sample.side
-            _key = (sample.side, int(sample.cam_id))
+        # Sink-based completion callback (Phase G Task 20).  The
+        # _CompletionSink calls this from its on_complete() method after the
+        # ScanRunner finishes, replacing the legacy on_complete_fn kwarg.
+        def _on_pipeline_complete(meta):
+            """Fires from _CompletionSink.on_complete() at the end of the scan."""
+            # Determine whether the user requested a stop (cancellation).
+            canceled = self._capture_stop.is_set()
 
-            # Issue #85: gate UI emits on the watchdog's dropped-camera
-            # set. The helper also surfaces a one-time WARNING the first
-            # time a 'lost' camera sends fresh data, since that's
-            # unexpected (we shouldn't see a recovery without a fix).
-            should_emit, recovery_msg = _check_dropped_camera_emit(
-                sample.side, int(sample.cam_id),
-                self._camera_dropped,
-                self._camera_dropped_recovery_logged,
-            )
-            if recovery_msg is not None:
-                logger.warning(recovery_msg)
-                run_logger.warning(recovery_msg)
-            if not should_emit:
-                return
-
-            self._camera_last_seen[_key] = time.monotonic()
-            self._camera_last_temp[_key] = float(sample.temperature_c)
-            alerted = temp_alerted_by_side.setdefault(current_side, set())
-            threshold = self._camera_temp_alert_threshold_c
-            if sample.temperature_c >= threshold and sample.cam_id not in alerted:
-                alerted.add(sample.cam_id)
-                msg = (
-                    f"ALERT: Camera {sample.cam_id + 1} ({current_side}) "
-                    f"temperature {sample.temperature_c:.1f}°C >= {threshold:.0f}°C threshold."
-                )
-                self.captureLog.emit(msg)
-                run_logger.warning(msg)
-                logger.warning(msg)
-
-            plot_ts = time.monotonic() - plot_t0
-
-            self.scanMeanSampled.emit(
-                current_side,
-                int(sample.cam_id),
-                plot_ts,
-                float(sample.mean),
-            )
-            self.scanContrastSampled.emit(
-                current_side,
-                int(sample.cam_id),
-                plot_ts,
-                float(sample.contrast),
-            )
-
-            self.scanBfiSampled.emit(
-                sample.side,
-                int(sample.cam_id),
-                int(sample.absolute_frame_id),
-                plot_ts,
-                float(sample.bfi),
-            )
-            self.scanBviSampled.emit(
-                sample.side,
-                int(sample.cam_id),
-                int(sample.absolute_frame_id),
-                plot_ts,
-                float(sample.bvi),
-            )
-            self.scanCameraTemperature.emit(
-                sample.side,
-                int(sample.cam_id),
-                float(sample.temperature_c),
-            )
-
-        def _on_corrected_batch(batch):
-            """Fires every ~15 s with dark-frame-corrected values for the last interval."""
-            plot_ts = time.monotonic() - plot_t0
-            payload = []
-            for s in batch.samples:
-                # Issue #85: same gate as the uncorrected stream. The
-                # one-time recovery WARNING is shared with _on_uncorrected
-                # via _camera_dropped_recovery_logged so we never log
-                # twice for the same dropped camera.
-                should_emit, recovery_msg = _check_dropped_camera_emit(
-                    s.side, int(s.cam_id),
-                    self._camera_dropped,
-                    self._camera_dropped_recovery_logged,
-                )
-                if recovery_msg is not None:
-                    logger.warning(recovery_msg)
-                    run_logger.warning(recovery_msg)
-                if not should_emit:
-                    continue
-                payload.append({
-                    'side': s.side,
-                    'camId': int(s.cam_id),
-                    'frameId': int(s.absolute_frame_id),
-                    'ts': plot_ts,
-                    'bfi': float(s.bfi),
-                    'bvi': float(s.bvi),
-                })
-            self.scanCorrectedBatch.emit(payload)
-
-        def _on_complete(result):
-            if result.ok:
-                self.captureLog.emit("Capture session complete.")
-            elif result.canceled:
+            if canceled:
                 self.captureLog.emit("Scan stopped.")
             else:
-                if result.error:
-                    self.captureLog.emit(f"Capture error: {result.error}")
+                self.captureLog.emit("Capture session complete.")
 
-            # Compute scan duration and append to notes. Use trigger ON-time
-            # so the number matches the UI countdown. Fall back to wall-clock
-            # only if the scan failed before the trigger ever fired.
-            if trigger_cumulative_s > 0.0 or trigger_on_mono is not None:
-                elapsed = trigger_cumulative_s
-                if trigger_on_mono is not None:
-                    elapsed += time.monotonic() - trigger_on_mono
-            else:
-                elapsed = time.time() - self._capture_start_time
+            # Scan duration: fall back to wall-clock since trigger-state
+            # callbacks are no longer wired (legacy kwargs discarded by the
+            # new SDK).  The UI countdown is driven by the trigger-active
+            # period which we can't observe here without a dedicated sink.
+            elapsed = time.time() - self._capture_start_time
             hours = int(elapsed // 3600)
             minutes = int((elapsed % 3600) // 60)
             seconds = int(elapsed % 60)
             duration_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-            status = "completed" if result.ok else ("stopped" if result.canceled else "error")
+            status = "stopped" if canceled else "completed"
             duration_line = f"\n---\nScan {status} — duration: {duration_str}"
             self._scan_notes = (self._scan_notes.strip() + duration_line)
             self.scanNotesChanged.emit()
 
-            # Always write the notes file so that the scan is discoverable in
-            # the history viewer regardless of whether data CSVs were produced.
+            # Write scan notes file using scan_id from metadata.
+            scan_id = getattr(meta, "scan_id", "") if meta else ""
             try:
-                notes_filename = (
-                    f"{result.scan_timestamp}_{subject_id}_notes.txt"
-                )
+                notes_filename = f"{scan_id}_{subject_id}_notes.txt"
                 notes_path = os.path.join(data_dir, notes_filename)
                 with open(notes_path, "w", encoding="utf-8") as nf:
                     nf.write(self._scan_notes.strip() + "\n")
@@ -1783,117 +1853,52 @@ class MOTIONConnector(QObject):
             except Exception as e:
                 logger.error(f"Failed to save scan notes: {e}")
 
-            if result.ok:
-                try:
-                    self._log_scan_image_stats(result.left_path, result.right_path)
-                except Exception as e:
-                    logger.error(f"Failed to compute scan image stats: {e}")
-
-            self._capture_left_path = result.left_path
-            self._capture_right_path = result.right_path
+            # New pipeline writes CSVs directly; no .raw→.csv post-processing
+            # needed.  Pass empty paths to captureFinished so startPostProcess
+            # is a no-op (QML still proceeds to the next scan step).
+            self._capture_left_path = ""
+            self._capture_right_path = ""
             self._capture_running = False
             self._safety_cancel_scheduled = False
             self._capture_thread = None
-            self.captureFinished.emit(
-                bool(result.ok), result.error or "", result.left_path, result.right_path
-            )
+            self.captureFinished.emit(True, "", "", "")
             self._stop_runlog()
-            if result.ok or result.canceled:
-                self.scanNotesReady.emit()
+            self.scanNotesReady.emit()
 
         req = ScanRequest(
             subject_id=subject_id,
             duration_sec=duration_sec,
             left_camera_mask=left_camera_mask,
             right_camera_mask=right_camera_mask,
-            data_dir=data_dir,
             disable_laser=disable_laser,
-            write_raw_csv=self._write_raw_csv,
-            raw_csv_duration_sec=self._raw_csv_duration_sec,
             reduced_mode=self._app_config.get("reducedMode", False),
-            # Issue #43: clinical users don't need the per-scan
-            # _telemetry.csv with TCM/TCL/PDC samples — gate it on
-            # developerMode so the SDK skips creating the file
-            # entirely. ScanRequest defaults to True for back-compat.
-            write_telemetry_csv=self._app_config.get("developerMode", False),
-            # Live CQ monitor needs the SDK to compute the rolling
-            # average over the last N uncorrected light samples and
-            # emit one Sample per-window via ``on_rolling_avg_fn``.
-            # See _make_contact_quality_callbacks docstring above.
-            rolling_avg_enabled=True,
             rolling_avg_window=int(
                 (self._app_config or {}).get(
                     "cq_rolling_avg_window",
                     _CQ_DEFAULT_ROLLING_WINDOW,
                 )
             ),
-        )
-
-        # Live CQ wiring (restored from regression in 2abbad3 — see
-        # _make_contact_quality_callbacks above for the full story).
-        dark_thresholds = (self._app_config or {}).get("cq_dark_threshold_per_camera")
-        light_thresholds = (self._app_config or {}).get("cq_light_threshold_per_camera")
-
-        def _on_cq_warning(
-            side: str, cam_id: int, type_key: str, value: float, active: bool
-        ):
-            label = self._camera_label(side, cam_id)
-            type_text = self._warning_text(type_key)
-            try:
-                if active:
-                    self.contactQualityWarning.emit(
-                        label,
-                        type_key,
-                        type_text,
-                        float(value),
-                    )
-                self.contactQualityIssueStateChanged.emit(
-                    label,
-                    type_key,
-                    type_text,
-                    float(value),
-                    bool(active),
-                )
-            except Exception as exc:
-                logger.warning("contact-quality callback error: %s", exc)
-
-        on_dark_frame_fn, on_rolling_avg_fn = self._make_contact_quality_callbacks(
-            dark_thresholds=dark_thresholds,
-            light_thresholds=light_thresholds,
-            warning_sink=_on_cq_warning,
-        )
-
-        def _on_trigger_state(state: str):
-            nonlocal trigger_cumulative_s, trigger_on_mono
-            now = time.monotonic()
-            if state == "ON" and trigger_on_mono is None:
-                trigger_on_mono = now
-            elif state == "OFF" and trigger_on_mono is not None:
-                trigger_cumulative_s += now - trigger_on_mono
-                trigger_on_mono = None
-            # Mirror to instance vars so _scan_elapsed_str (reachable from
-            # the dropout watchdog) sees the same elapsed time.
-            self._trigger_cumulative_s = trigger_cumulative_s
-            self._trigger_on_mono = trigger_on_mono
-            self._trigger_state = state
-            self.triggerStateChanged.emit()
-
-        started = self._interface.start_scan(
-            req,
-            extra_cols_fn=_extra_cols,
-            on_log_fn=lambda msg: self.captureLog.emit(msg),
-            on_progress_fn=lambda pct: self.captureProgress.emit(int(pct)),
-            on_trigger_state_fn=_on_trigger_state,
-            on_uncorrected_fn=_on_uncorrected,
-            on_corrected_batch_fn=None if self._uncorrected_only else _on_corrected_batch,
-            on_dark_frame_fn=on_dark_frame_fn,
-            on_rolling_avg_fn=on_rolling_avg_fn,
-            on_error_fn=lambda e: self.captureLog.emit(f"Capture error: {e}"),
-            on_side_stream_fn=lambda side, filepath: self.captureLog.emit(
-                f"[{side.upper()}] Streaming to: {os.path.basename(filepath)}"
+            # Phase G (Task 20): raw CSV duration forwarded to the pipeline's
+            # Tee("raw") gate via raw_save_max_duration_s.  None means
+            # unbounded (write entire scan); 0 omits raw tee entirely.
+            raw_save_max_duration_s=(
+                self._raw_csv_duration_sec if self._write_raw_csv else 0
             ),
-            on_complete_fn=_on_complete,
+            sinks=[
+                _LivePlotSink(connector=self, plot_t0=plot_t0),
+                _FinalBatchSink(connector=self, plot_t0=plot_t0),
+                _CompletionSink(connector=self, on_complete_cb=_on_pipeline_complete),
+            ] + (
+                [TelemetrySink(output_path=os.path.join(
+                    data_dir,
+                    f"{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{subject_id}_telemetry.csv",
+                ))]
+                if self._app_config.get("developerMode", False)
+                else []
+            ),
         )
+
+        started = self._interface.start_scan(req)
         if not started:
             self._capture_running = False
             self._stop_runlog()
