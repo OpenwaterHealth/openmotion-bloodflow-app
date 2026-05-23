@@ -222,8 +222,18 @@ def main():
     # passed as ``default_trigger_config`` so app-level tweaks layer on
     # top of the SDK defaults at construction time. Workflows resolve
     # to (interface default ⊕ per-request override) thereafter.
+    #
+    # Task 19 (Phase G pipeline cutover): pass SDK-level output config so
+    # the new pipeline's default CsvSink and ScanDBSink can write to the
+    # same directory the connector has always used.
+    _data_dir = app_config.get("dataDirectory") or os.path.join(output_base, "scan_data")
+    os.makedirs(_data_dir, exist_ok=True)
+    _scan_db_path = os.path.join(_data_dir, "scans.db")
     motion_interface = MotionInterface(
         default_trigger_config=app_config.get("triggerConfig") or None,
+        data_dir=_data_dir,
+        scan_db_path=_scan_db_path,
+        operator_id="bloodflow-app",
     )
     motion_interface.log_system_info()
 
