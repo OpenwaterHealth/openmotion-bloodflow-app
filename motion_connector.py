@@ -33,7 +33,6 @@ from omotion.config import (
 )
 from omotion.MotionProcessing import process_bin_file
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
-from omotion.pipeline.sinks import TelemetrySink
 from processing.visualize_bloodflow import VisualizeBloodflow
 from motion_config import (
     FpgaModel,
@@ -189,7 +188,6 @@ class _LivePlotSink:
         connector = self._connector
         threshold = connector._camera_temp_alert_threshold_c
         now_mono = time.monotonic()
-        plot_t0 = self._plot_t0
 
         for i in range(n):
             ft = str(batch.frame_type[i]) if batch.frame_type is not None else "light"
@@ -199,58 +197,72 @@ class _LivePlotSink:
             is_dark = (ft == "dark")
             ts = float(batch.timestamp_s[i])
             abs_frame_id = int(batch.abs_frame_ids[i]) if batch.abs_frame_ids is not None else i
-            plot_ts = now_mono - plot_t0
+            plot_ts = ts
 
-            for side_idx, side in enumerate(_SIDE_NAMES):
-                for cam_id in range(8):
-                    bfi = float(batch.bfi_live[i, side_idx, cam_id])
-                    bvi = float(batch.bvi_live[i, side_idx, cam_id])
-                    temp_c = float(batch.temperature_c[i, side_idx, cam_id])
+            side_ids = getattr(batch, "side_ids", None)
+            cam_ids = getattr(batch, "cam_ids", None)
+            if side_ids is not None and cam_ids is not None:
+                side_idx = int(side_ids[i])
+                cam_id = int(cam_ids[i])
+                if side_idx < 0 or side_idx >= len(_SIDE_NAMES) or cam_id < 0 or cam_id >= 8:
+                    continue
+                side_cam_iter = [(side_idx, _SIDE_NAMES[side_idx], cam_id)]
+            else:
+                side_cam_iter = [
+                    (side_idx, side, cam_id)
+                    for side_idx, side in enumerate(_SIDE_NAMES)
+                    for cam_id in range(8)
+                ]
 
-                    # Dropout gate — same logic as the old _on_uncorrected closure.
-                    _key = (side, cam_id)
-                    should_emit, recovery_msg = _check_dropped_camera_emit(
-                        side, cam_id,
-                        connector._camera_dropped,
-                        connector._camera_dropped_recovery_logged,
+            for side_idx, side, cam_id in side_cam_iter:
+                bfi = float(batch.bfi_live[i, side_idx, cam_id])
+                bvi = float(batch.bvi_live[i, side_idx, cam_id])
+                temp_c = float(batch.temperature_c[i, side_idx, cam_id])
+
+                # Dropout gate — same logic as the old _on_uncorrected closure.
+                _key = (side, cam_id)
+                should_emit, recovery_msg = _check_dropped_camera_emit(
+                    side, cam_id,
+                    connector._camera_dropped,
+                    connector._camera_dropped_recovery_logged,
+                )
+                if recovery_msg is not None:
+                    logger.warning(recovery_msg)
+                    run_logger.warning(recovery_msg)
+                if not should_emit:
+                    continue
+
+                # Update dropout-watchdog heartbeat (non-dark frames only, since
+                # dark frames arrive at ~40x lower rate and would skew the timer).
+                if not is_dark:
+                    connector._camera_last_seen[_key] = now_mono
+                    connector._camera_last_temp[_key] = temp_c
+
+                # Temperature alert (light frames only — dark frames have no
+                # meaningful camera temperature reading for display).
+                if not is_dark and temp_c >= threshold and _key not in self._temp_alerted:
+                    self._temp_alerted[_key] = True
+                    msg = (
+                        f"ALERT: Camera {cam_id + 1} ({side}) "
+                        f"temperature {temp_c:.1f}°C >= {threshold:.0f}°C threshold."
                     )
-                    if recovery_msg is not None:
-                        logger.warning(recovery_msg)
-                        run_logger.warning(recovery_msg)
-                    if not should_emit:
-                        continue
+                    connector.captureLog.emit(msg)
+                    run_logger.warning(msg)
+                    logger.warning(msg)
 
-                    # Update dropout-watchdog heartbeat (non-dark frames only, since
-                    # dark frames arrive at ~40x lower rate and would skew the timer).
-                    if not is_dark:
-                        connector._camera_last_seen[_key] = now_mono
-                        connector._camera_last_temp[_key] = temp_c
+                if not is_dark:
+                    # mean / contrast: use display_mean (pedestal-subtracted)
+                    # and contrast_sn_rt (shot-noise-corrected) when available.
+                    if batch.display_mean is not None:
+                        mean_val = float(batch.display_mean[i, side_idx, cam_id])
+                        connector.scanMeanSampled.emit(side, cam_id, plot_ts, mean_val)
+                    if batch.contrast_sn_rt is not None:
+                        contrast_val = float(batch.contrast_sn_rt[i, side_idx, cam_id])
+                        connector.scanContrastSampled.emit(side, cam_id, plot_ts, contrast_val)
 
-                    # Temperature alert (light frames only — dark frames have no
-                    # meaningful camera temperature reading for display).
-                    if not is_dark and temp_c >= threshold and _key not in self._temp_alerted:
-                        self._temp_alerted[_key] = True
-                        msg = (
-                            f"ALERT: Camera {cam_id + 1} ({side}) "
-                            f"temperature {temp_c:.1f}°C >= {threshold:.0f}°C threshold."
-                        )
-                        connector.captureLog.emit(msg)
-                        run_logger.warning(msg)
-                        logger.warning(msg)
-
-                    if not is_dark:
-                        # mean / contrast: use display_mean (pedestal-subtracted)
-                        # and contrast_sn_rt (shot-noise-corrected) when available.
-                        if batch.display_mean is not None:
-                            mean_val = float(batch.display_mean[i, side_idx, cam_id])
-                            connector.scanMeanSampled.emit(side, cam_id, plot_ts, mean_val)
-                        if batch.contrast_sn_rt is not None:
-                            contrast_val = float(batch.contrast_sn_rt[i, side_idx, cam_id])
-                            connector.scanContrastSampled.emit(side, cam_id, plot_ts, contrast_val)
-
-                    connector.scanBfiSampled.emit(side, cam_id, abs_frame_id, plot_ts, bfi)
-                    connector.scanBviSampled.emit(side, cam_id, abs_frame_id, plot_ts, bvi)
-                    connector.scanCameraTemperature.emit(side, cam_id, temp_c)
+                connector.scanBfiSampled.emit(side, cam_id, abs_frame_id, plot_ts, bfi)
+                connector.scanBviSampled.emit(side, cam_id, abs_frame_id, plot_ts, bvi)
+                connector.scanCameraTemperature.emit(side, cam_id, temp_c)
 
     def on_complete(self) -> None:
         pass
@@ -275,11 +287,15 @@ class _FinalBatchSink:
     def consume(self, channel: str, batch) -> None:
         if channel != "final":
             return
-        # batch is a CorrectedBatch with .samples list of Sample objects.
+        # Current SDK final payloads are EnrichedCorrectedInterval objects with
+        # .frames; keep .samples fallback for older corrected-batch shims.
         connector = self._connector
         plot_ts = time.monotonic() - self._plot_t0
         payload = []
-        for s in batch.samples:
+        samples = getattr(batch, "frames", None)
+        if samples is None:
+            samples = getattr(batch, "samples", ())
+        for s in samples:
             side = str(getattr(s, "side", ""))
             cam_id = int(getattr(s, "cam_id", -1))
             should_emit, recovery_msg = _check_dropped_camera_emit(
@@ -295,7 +311,7 @@ class _FinalBatchSink:
             payload.append({
                 "side": side,
                 "camId": cam_id,
-                "frameId": int(getattr(s, "absolute_frame_id", 0)),
+                "frameId": int(getattr(s, "abs_frame_id", getattr(s, "absolute_frame_id", 0))),
                 "ts": plot_ts,
                 "bfi": float(getattr(s, "bfi", 0.0)),
                 "bvi": float(getattr(s, "bvi", 0.0)),
@@ -308,13 +324,22 @@ class _FinalBatchSink:
 
 
 class _TriggerStateSink:
-    """Listens for TriggerStateEvent on the diagnostics channel and updates
-    the connector's _trigger_on_mono / _trigger_cumulative_s so
-    _scan_elapsed_str (and scan-notes duration) reports actual trigger-ON
-    time instead of wall-clock duration.
+    """Listens for TriggerStateEvent on the diagnostics channel and mirrors
+    the laser-trigger state into the connector so:
 
-    Restores the trigger-time tracking that lived as on_trigger_state_fn
-    on legacy start_scan before the Phase E sink cutover.
+      * ``_trigger_state`` ("ON" / "OFF") drives the QML ``triggerState``
+        property — which gates the scanTimer's `running:` binding on
+        BloodFlow.qml, the per-scan camera-dropout watchdog, and any
+        other QML element keyed on trigger status during a scan.
+      * ``_trigger_on_mono`` / ``_trigger_cumulative_s`` give
+        ``_scan_elapsed_str`` and the scan-notes "duration" line a real
+        trigger-ON measurement rather than wall-clock.
+
+    Restores the trigger-time + trigger-state tracking that lived as
+    ``on_trigger_state_fn`` on legacy start_scan before the Phase E
+    sink cutover. Without this sink, scan-time start_trigger() goes
+    straight to the firmware via ScanWorkflow without touching the
+    connector's ``_trigger_state``, so the timer never ticks.
     """
 
     channels: set = frozenset({"diagnostics"})
@@ -339,12 +364,16 @@ class _TriggerStateSink:
         if not isinstance(payload, TriggerStateEvent):
             return
         c = self._connector
-        if payload.state == "ON" and c._trigger_on_mono is None:
-            c._trigger_on_mono = time.monotonic()
+        if payload.state == "ON":
+            c._trigger_state = "ON"
+            if c._trigger_on_mono is None:
+                c._trigger_on_mono = time.monotonic()
             c.triggerStateChanged.emit()
-        elif payload.state == "OFF" and c._trigger_on_mono is not None:
-            c._trigger_cumulative_s += time.monotonic() - c._trigger_on_mono
-            c._trigger_on_mono = None
+        elif payload.state == "OFF":
+            c._trigger_state = "OFF"
+            if c._trigger_on_mono is not None:
+                c._trigger_cumulative_s += time.monotonic() - c._trigger_on_mono
+                c._trigger_on_mono = None
             c.triggerStateChanged.emit()
 
     def on_complete(self) -> None:
@@ -1802,6 +1831,12 @@ class MOTIONConnector(QObject):
             )
             return False
 
+        err = self._ensure_idle()
+        if err is not None:
+            logger.warning("startCapture refused: %s", err)
+            self.captureLog.emit(err)
+            return False
+
         try:
             os.makedirs(data_dir, exist_ok=True)
         except Exception as e:
@@ -1922,14 +1957,7 @@ class MOTIONConnector(QObject):
                 _FinalBatchSink(connector=self, plot_t0=plot_t0),
                 _TriggerStateSink(connector=self),
                 _CompletionSink(connector=self, on_complete_cb=_on_pipeline_complete),
-            ] + (
-                [TelemetrySink(output_path=os.path.join(
-                    data_dir,
-                    f"{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{subject_id}_telemetry.csv",
-                ))]
-                if self._app_config.get("developerMode", False)
-                else []
-            ),
+            ],
         )
 
         started = self._interface.start_scan(req)
@@ -2479,6 +2507,8 @@ class MOTIONConnector(QObject):
         workflow = getattr(self, "_scan_workflow", None)
         if workflow is not None and getattr(workflow, "running", False):
             return "Scan already running"
+        if workflow is not None and getattr(workflow, "config_running", False):
+            return "Camera configuration already in progress"
         return None
 
     # ──────────────────────────────────────────────────────────────────
@@ -2782,12 +2812,14 @@ class MOTIONConnector(QObject):
             if self._runlog_active:
                 run_logger.error(f"Error reading camera UIDs: {e}")
 
-    @pyqtSlot(int, int)
+    @pyqtSlot(int, int, result=bool)
     def startConfigureCameraSensors(
         self, left_camera_mask: int, right_camera_mask: int
-    ):
-        if self._config_running:
-            return
+    ) -> bool:
+        err = self._ensure_idle()
+        if err is not None:
+            self.configFinished.emit(False, err)
+            return False
         self._config_running = True
         req = ConfigureRequest(
             left_camera_mask=left_camera_mask,
@@ -2803,6 +2835,7 @@ class MOTIONConnector(QObject):
         if not started:
             self._config_running = False
             self.configFinished.emit(False, "Configuration could not start")
+        return bool(started)
 
     @pyqtSlot()
     def cancelConfigureCameraSensors(self):
@@ -3900,5 +3933,3 @@ class _VizWorker(QObject):
         except Exception as e:
             logger.exception("VisualizeBloodflow worker failed")
             self.error.emit(str(e))
-
-
