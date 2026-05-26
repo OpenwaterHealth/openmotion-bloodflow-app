@@ -10,6 +10,7 @@ from dark_correction import histogram_moments
 from dark_correction import absolute_frame_ids, dark_anchor_mask, interpolate_dark_histograms
 from dark_correction import correct_histogram, CorrectionDiagnostics
 from dark_correction import convolve_histograms, deconvolve_histogram
+from dark_correction import MetricSummary, summarize_series, temperature_correlation, boundary_jumps
 
 pytestmark = pytest.mark.unit
 
@@ -124,3 +125,27 @@ def test_correct_histogram_supports_deconvolution_method():
     assert corrected is not None
     assert diagnostics.method == "deconv_fft"
     assert int(np.argmax(corrected)) == 2
+
+
+def test_summarize_series_reports_stability_stats():
+    values = np.array([10.0, 11.0, 9.0, 10.0])
+
+    summary = summarize_series(values)
+
+    assert isinstance(summary, MetricSummary)
+    assert summary.mean == pytest.approx(10.0)
+    assert summary.std == pytest.approx(np.std(values))
+    assert summary.mad == pytest.approx(0.5)
+
+
+def test_temperature_correlation_returns_zero_for_constant_series():
+    assert temperature_correlation(np.array([1, 2, 3]), np.array([5, 5, 5])) == 0.0
+
+
+def test_boundary_jumps_measures_pre_post_difference():
+    frames = np.arange(10)
+    values = np.array([1, 1, 1, 1, 10, 11, 11, 11, 11, 11], dtype=float)
+
+    jumps = boundary_jumps(frames, values, dark_frames=np.array([4]), window=2)
+
+    assert jumps[0] == pytest.approx(10.0)

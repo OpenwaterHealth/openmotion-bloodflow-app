@@ -211,3 +211,51 @@ def correct_histogram(light_hist: np.ndarray, dark_hist: np.ndarray, method: str
         return corrected, _diagnostics_from_hist(method, light, dark, corrected, clipped_mass=0.0)
 
     raise ValueError(f"unknown correction method: {method}")
+
+
+@dataclass(frozen=True)
+class MetricSummary:
+    mean: float
+    std: float
+    mad: float
+    derivative_std: float
+    coefficient_of_variation: float
+
+
+def summarize_series(values: np.ndarray) -> MetricSummary:
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        return MetricSummary(mean=0.0, std=0.0, mad=0.0, derivative_std=0.0, coefficient_of_variation=0.0)
+    mean = float(np.mean(arr))
+    std = float(np.std(arr))
+    median = float(np.median(arr))
+    mad = float(np.median(np.abs(arr - median)))
+    derivative_std = float(np.std(np.diff(arr))) if arr.size > 1 else 0.0
+    cv = float(std / abs(mean)) if mean != 0 else 0.0
+    return MetricSummary(mean=mean, std=std, mad=mad, derivative_std=derivative_std, coefficient_of_variation=cv)
+
+
+def temperature_correlation(temperature: np.ndarray, values: np.ndarray) -> float:
+    temp = np.asarray(temperature, dtype=float)
+    vals = np.asarray(values, dtype=float)
+    mask = np.isfinite(temp) & np.isfinite(vals)
+    if mask.sum() < 3:
+        return 0.0
+    temp = temp[mask]
+    vals = vals[mask]
+    if np.std(temp) == 0 or np.std(vals) == 0:
+        return 0.0
+    return float(np.corrcoef(temp, vals)[0, 1])
+
+
+def boundary_jumps(frames: np.ndarray, values: np.ndarray, dark_frames: np.ndarray, window: int = 5) -> list[float]:
+    frame_arr = np.asarray(frames, dtype=int)
+    value_arr = np.asarray(values, dtype=float)
+    jumps: list[float] = []
+    for dark_frame in np.asarray(dark_frames, dtype=int):
+        pre = value_arr[(frame_arr >= dark_frame - window) & (frame_arr < dark_frame)]
+        post = value_arr[(frame_arr > dark_frame) & (frame_arr <= dark_frame + window)]
+        if pre.size and post.size:
+            jumps.append(float(np.median(post) - np.median(pre)))
+    return jumps
