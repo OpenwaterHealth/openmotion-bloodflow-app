@@ -165,8 +165,6 @@ class _LivePlotSink:
     and both sides; we iterate frame × side × cam_id and call back into
     the connector's _emit_frame_to_qml helper, which gates on the camera-
     dropout watchdog and fires the Qt signals.
-
-    Phase G (Task 20) replacement for the _on_uncorrected closure.
     """
 
     channels = {"live"}
@@ -279,10 +277,11 @@ class _LivePlotSink:
 
 
 class _FinalBatchSink:
-    """Subscribes to the 'final' pipeline channel and emits scanCorrectedBatch
-    Qt signal into the QML realtime plot (EmbeddedRealtimePlot.qml).
-
-    Phase G (Task 20) replacement for the _on_corrected_batch closure.
+    """Subscribes to the 'final' pipeline channel and emits the
+    scanCorrectedBatch Qt signal into the QML realtime plot
+    (EmbeddedRealtimePlot.qml). Each batch corresponds to one closed
+    dark interval; the QML side overwrites the previously-plotted
+    realtime values with these more-accurate values, keyed by frame_id.
     """
 
     channels = {"final"}
@@ -345,11 +344,9 @@ class _TriggerStateSink:
         ``_scan_elapsed_str`` and the scan-notes "duration" line a real
         trigger-ON measurement rather than wall-clock.
 
-    Restores the trigger-time + trigger-state tracking that lived as
-    ``on_trigger_state_fn`` on legacy start_scan before the Phase E
-    sink cutover. Without this sink, scan-time start_trigger() goes
-    straight to the firmware via ScanWorkflow without touching the
-    connector's ``_trigger_state``, so the timer never ticks.
+    Without this sink, scan-time start_trigger() goes straight to the
+    firmware via ScanWorkflow without touching the connector's
+    ``_trigger_state``, so the timer never ticks.
     """
 
     channels: set = frozenset({"diagnostics"})
@@ -394,8 +391,8 @@ class _CompletionSink:
     """Fires the connector's post-scan UI cleanup when the pipeline's
     ScanRunner completes.  Replaces the legacy on_complete_fn callback.
 
-    Phase G (Task 20): wired by startCapture so the scan-done logic runs
-    from the sink's on_complete method rather than a legacy kwarg callback.
+    Wired by startCapture; the scan-done logic runs from the sink's
+    on_complete() method.
     """
 
     channels: set = frozenset()  # no data channels — lifecycle only
@@ -1880,9 +1877,8 @@ class MOTIONConnector(QObject):
         self._trigger_cumulative_s = 0.0
         self._trigger_on_mono = None
 
-        # Sink-based completion callback (Phase G Task 20).  The
-        # _CompletionSink calls this from its on_complete() method after the
-        # ScanRunner finishes, replacing the legacy on_complete_fn kwarg.
+        # _CompletionSink calls this from its on_complete() method once the
+        # ScanRunner finishes.
         def _on_pipeline_complete(meta):
             """Fires from _CompletionSink.on_complete() at the end of the scan."""
             # Determine whether the user requested a stop (cancellation).
@@ -1956,9 +1952,9 @@ class MOTIONConnector(QObject):
                     _CQ_DEFAULT_ROLLING_WINDOW,
                 )
             ),
-            # Phase G (Task 20): raw CSV duration forwarded to the pipeline's
-            # Tee("raw") gate via raw_save_max_duration_s.  None means
-            # unbounded (write entire scan); 0 omits raw tee entirely.
+            # Raw CSV duration forwarded to the pipeline's Tee("raw") gate
+            # via raw_save_max_duration_s. None means unbounded (write entire
+            # scan); 0 omits raw tee entirely.
             raw_save_max_duration_s=(
                 self._raw_csv_duration_sec if self._write_raw_csv else 0
             ),
@@ -2526,10 +2522,11 @@ class MOTIONConnector(QObject):
     def runContactQualityCheck(self):
         """Run the contact-quality check via the SDK's ContactQualityWorkflow.
 
-        Phase G (Task 21): delegates to interface.contact_quality_workflow.check()
-        which runs a short scan internally and returns a ContactQualityResult with
-        per-camera BFI statistics. The SDK call is synchronous/blocking, so we
-        run it in a background thread and marshal results back via a private signal.
+        Delegates to interface.contact_quality_workflow.check(), which runs
+        a short scan internally and returns a ContactQualityResult with
+        per-camera BFI statistics. The SDK call is synchronous/blocking, so
+        we run it in a background thread and marshal results back via a
+        private signal.
         """
         err = self._ensure_idle()
         if err is not None:
@@ -3344,7 +3341,7 @@ class MOTIONConnector(QObject):
         # Worker → Qt main thread for the calibration completion callback.
         self._calibrationCompleteSignal.connect(self._on_calibration_complete)
         self._testScanCompleteSignal.connect(self._on_test_scan_complete)
-        # Worker → Qt main thread for the CQ workflow result (Task 21).
+        # Worker → Qt main thread for the CQ workflow result.
         self._cq_result_signal.connect(self._on_cq_result_ready)
 
     @pyqtSlot()
