@@ -108,6 +108,69 @@ def ringing_score(hist: np.ndarray) -> float:
     return float(np.mean(np.abs(second_diff)) / max(np.mean(counts), 1.0))
 
 
+def convolve_histograms(signal_hist: np.ndarray, dark_hist: np.ndarray, output_size: int | None = None) -> np.ndarray:
+    signal = np.asarray(signal_hist, dtype=float)
+    dark = np.asarray(dark_hist, dtype=float)
+    full = np.convolve(signal, dark)
+    if output_size is None:
+        return full
+    if output_size <= 0:
+        raise ValueError("output_size must be positive")
+    if full.size >= output_size:
+        return full[:output_size]
+    return np.pad(full, (0, output_size - full.size))
+
+
+def _normalize_pdf(hist: np.ndarray) -> tuple[np.ndarray, float]:
+    counts = np.asarray(hist, dtype=float)
+    total = float(counts.sum())
+    if total <= 0:
+        return np.zeros_like(counts, dtype=float), 0.0
+    return counts / total, total
+
+
+def deconvolve_histogram(
+    observed_hist: np.ndarray,
+    dark_hist: np.ndarray,
+    method: str = "fft",
+    regularization: float = 1e-3,
+    iterations: int = 20,
+) -> np.ndarray:
+    observed_pdf, observed_total = _normalize_pdf(observed_hist)
+    dark_pdf, _ = _normalize_pdf(dark_hist)
+    if observed_total <= 0:
+        return np.zeros_like(observed_pdf)
+    if dark_pdf.sum() <= 0:
+        return np.asarray(observed_hist, dtype=float).copy()
+
+    if method == "fft":
+        n = observed_pdf.size
+        obs_fft = np.fft.rfft(observed_pdf, n=n)
+        dark_fft = np.fft.rfft(dark_pdf, n=n)
+        denom = np.abs(dark_fft) ** 2 + regularization
+        recovered_fft = obs_fft * np.conj(dark_fft) / denom
+        recovered_pdf = np.fft.irfft(recovered_fft, n=n)
+        recovered_pdf = np.clip(recovered_pdf, 0.0, None)
+        pdf_sum = recovered_pdf.sum()
+        if pdf_sum > 0:
+            recovered_pdf = recovered_pdf / pdf_sum
+        return recovered_pdf * observed_total
+
+    if method == "richardson_lucy":
+        estimate = np.full_like(observed_pdf, 1.0 / observed_pdf.size)
+        dark_rev = dark_pdf[::-1]
+        for _ in range(max(iterations, 1)):
+            blurred = convolve_histograms(estimate, dark_pdf, output_size=observed_pdf.size)
+            ratio = observed_pdf / np.clip(blurred, 1e-12, None)
+            estimate *= convolve_histograms(ratio, dark_rev, output_size=observed_pdf.size)
+            estimate = np.clip(estimate, 0.0, None)
+            if estimate.sum() > 0:
+                estimate /= estimate.sum()
+        return estimate * observed_total
+
+    raise ValueError(f"unknown deconvolution method: {method}")
+
+
 def correct_histogram(light_hist: np.ndarray, dark_hist: np.ndarray, method: str) -> tuple[np.ndarray | None, CorrectionDiagnostics]:
     light = np.asarray(light_hist, dtype=float)
     dark = np.asarray(dark_hist, dtype=float)
@@ -142,5 +205,9 @@ def correct_histogram(light_hist: np.ndarray, dark_hist: np.ndarray, method: str
         clipped_mass = float(np.abs(raw[raw < 0]).sum())
         corrected = np.clip(raw, 0.0, None)
         return corrected, _diagnostics_from_hist(method, light, dark, corrected, clipped_mass=clipped_mass)
+
+    if method == "deconv_fft":
+        corrected = deconvolve_histogram(light, dark, method="fft", regularization=1e-3)
+        return corrected, _diagnostics_from_hist(method, light, dark, corrected, clipped_mass=0.0)
 
     raise ValueError(f"unknown correction method: {method}")
