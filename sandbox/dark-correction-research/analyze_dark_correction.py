@@ -12,6 +12,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from dark_correction import (
+    FRAME_ID_MAX,
     absolute_frame_ids,
     boundary_jumps,
     correct_histogram,
@@ -25,6 +26,17 @@ from dark_correction import (
 METHODS = ["raw", "current", "bin_subtract", "deconv_fft"]
 
 
+def _empty_camera_state() -> dict:
+    return {
+        "last_frame_id": None,
+        "rollovers": 0,
+        "light_seen": 0,
+        "light_rows": [],
+        "dark_rows": [],
+        "rng": np.random.default_rng(0),
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Compare dark histogram correction methods.")
     parser.add_argument("--csv", required=True, help="Raw histogram CSV path.")
@@ -36,16 +48,54 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def read_selected_rows(csv_path: Path, cameras: set[int], histogram_bins: int) -> pd.DataFrame:
+def read_selected_rows(
+    csv_path: Path,
+    cameras: set[int],
+    histogram_bins: int,
+    dark_interval: int = 600,
+    max_light_frames_per_camera: int = 5000,
+    chunksize: int = 25000,
+) -> pd.DataFrame:
     usecols = ["cam_id", "frame_id", "timestamp_s", *[str(i) for i in range(histogram_bins)], "temperature", "sum"]
-    chunks = []
-    for chunk in pd.read_csv(csv_path, usecols=usecols, chunksize=25000):
+    states = {cam_id: _empty_camera_state() for cam_id in cameras}
+    found_rows = False
+    for chunk in pd.read_csv(csv_path, usecols=usecols, chunksize=chunksize):
         chunk = chunk[chunk["cam_id"].isin(cameras)]
-        if not chunk.empty:
-            chunks.append(chunk)
-    if not chunks:
+        if chunk.empty:
+            continue
+        found_rows = True
+        for row in chunk.to_dict("records"):
+            cam_id = int(row["cam_id"])
+            state = states[cam_id]
+            frame_id = int(row["frame_id"])
+            last_frame_id = state["last_frame_id"]
+            if last_frame_id is not None and frame_id < last_frame_id:
+                state["rollovers"] += 1
+            state["last_frame_id"] = frame_id
+            row["absolute_frame"] = (state["rollovers"] * FRAME_ID_MAX) + frame_id
+            row["is_dark_anchor"] = (row["absolute_frame"] % dark_interval) == 0
+            if row["is_dark_anchor"]:
+                state["dark_rows"].append(row)
+                continue
+
+            state["light_seen"] += 1
+            if len(state["light_rows"]) < max_light_frames_per_camera:
+                state["light_rows"].append(row)
+                continue
+
+            replacement_index = int(state["rng"].integers(0, state["light_seen"]))
+            if replacement_index < max_light_frames_per_camera:
+                state["light_rows"][replacement_index] = row
+    if not found_rows:
         raise ValueError(f"no rows found for cameras {sorted(cameras)}")
-    return pd.concat(chunks, ignore_index=True)
+    selected_rows = []
+    for cam_id in sorted(states):
+        selected_rows.extend(states[cam_id]["dark_rows"])
+        selected_rows.extend(states[cam_id]["light_rows"])
+    if not selected_rows:
+        raise ValueError(f"no sampled rows found for cameras {sorted(cameras)}")
+    selected = pd.DataFrame(selected_rows)
+    return selected.sort_values(["cam_id", "absolute_frame"]).reset_index(drop=True)
 
 
 def analyze_camera(
@@ -56,12 +106,16 @@ def analyze_camera(
     max_light_frames: int,
 ) -> tuple[list[dict], pd.DataFrame]:
     cam = df[df["cam_id"] == cam_id].copy()
-    cam["absolute_frame"] = absolute_frame_ids(cam["frame_id"].to_numpy(dtype=int))
+    if "absolute_frame" not in cam.columns:
+        cam["absolute_frame"] = absolute_frame_ids(cam["frame_id"].to_numpy(dtype=int))
     hist_cols = [str(i) for i in range(histogram_bins)]
     hists = cam[hist_cols].to_numpy(dtype=float)
     frames = cam["absolute_frame"].to_numpy(dtype=int)
     temperatures = cam["temperature"].to_numpy(dtype=float)
-    dark_mask = dark_anchor_mask(frames, dark_interval=dark_interval)
+    if "is_dark_anchor" in cam.columns:
+        dark_mask = cam["is_dark_anchor"].to_numpy(dtype=bool)
+    else:
+        dark_mask = dark_anchor_mask(frames, dark_interval=dark_interval)
     if dark_mask.sum() < 1:
         raise ValueError(f"camera {cam_id} has no dark anchors")
     dark_frames = frames[dark_mask]
@@ -69,7 +123,8 @@ def analyze_camera(
     light_mask = ~dark_mask
     light_indices = np.flatnonzero(light_mask)
     if light_indices.size > max_light_frames:
-        light_indices = np.linspace(light_indices[0], light_indices[-1], max_light_frames, dtype=int)
+        sample_positions = np.linspace(0, light_indices.size - 1, max_light_frames, dtype=int)
+        light_indices = light_indices[sample_positions]
     light_frames = frames[light_indices]
     interpolated_dark = interpolate_dark_histograms(dark_frames, dark_hists, light_frames)
 
@@ -178,7 +233,13 @@ def main() -> int:
     args = parse_args()
     csv_path = Path(args.csv)
     output_dir = Path(args.output_dir)
-    df = read_selected_rows(csv_path, set(args.cameras), args.histogram_bins)
+    df = read_selected_rows(
+        csv_path,
+        set(args.cameras),
+        args.histogram_bins,
+        args.dark_interval,
+        args.max_light_frames_per_camera,
+    )
     all_metrics = []
     all_frames = []
     for cam_id in args.cameras:

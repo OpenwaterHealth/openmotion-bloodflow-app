@@ -12,6 +12,7 @@ from dark_correction import absolute_frame_ids, dark_anchor_mask, interpolate_da
 from dark_correction import correct_histogram, CorrectionDiagnostics
 from dark_correction import convolve_histograms, deconvolve_histogram
 from dark_correction import MetricSummary, summarize_series, temperature_correlation, boundary_jumps
+from analyze_dark_correction import analyze_camera, read_selected_rows
 
 pytestmark = pytest.mark.unit
 
@@ -150,6 +151,69 @@ def test_boundary_jumps_measures_pre_post_difference():
     jumps = boundary_jumps(frames, values, dark_frames=np.array([4]), window=2)
 
     assert jumps[0] == pytest.approx(10.0)
+
+
+def test_analyze_camera_capped_sampling_excludes_dark_anchor_rows():
+    import pandas as pd
+
+    rows = []
+    for frame in range(10):
+        rows.append(
+            {
+                "cam_id": 7,
+                "frame_id": frame,
+                "timestamp_s": frame / 10.0,
+                "0": 10 if frame % 3 == 0 else 0,
+                "1": 0,
+                "2": 10 if frame % 3 != 0 else 0,
+                "3": 0,
+                "temperature": 30.0 + frame / 10.0,
+                "sum": 10,
+            }
+        )
+    df = pd.DataFrame(rows)
+
+    _, frame_metrics = analyze_camera(
+        df,
+        cam_id=7,
+        dark_interval=3,
+        histogram_bins=4,
+        max_light_frames=4,
+    )
+
+    sampled_frames = set(frame_metrics["absolute_frame"].unique())
+    assert sampled_frames <= {1, 2, 4, 5, 7, 8}
+    assert sampled_frames.isdisjoint({0, 3, 6, 9})
+    assert len(sampled_frames) == 4
+
+
+def test_read_selected_rows_bounds_light_rows_to_sample_cap(tmp_path):
+    csv_path = tmp_path / "many_light_rows.csv"
+    bins = [str(i) for i in range(4)]
+    header = ["cam_id", "frame_id", "timestamp_s", *bins, "temperature", "sum"]
+    rows = []
+    for frame in range(20):
+        rows.append([7, frame, frame / 10.0, 10 if frame % 5 == 0 else 0, 0, 10, 0, 30.0, 10])
+    csv_path.write_text(
+        ",".join(header) + "\n" + "\n".join(",".join(str(value) for value in row) for row in rows),
+        encoding="utf-8",
+    )
+
+    selected = read_selected_rows(
+        csv_path,
+        cameras={7},
+        histogram_bins=4,
+        dark_interval=5,
+        max_light_frames_per_camera=3,
+        chunksize=6,
+    )
+
+    dark_frames = set(selected.loc[selected["is_dark_anchor"], "absolute_frame"])
+    light_frames = set(selected.loc[~selected["is_dark_anchor"], "absolute_frame"])
+    assert dark_frames == {0, 5, 10, 15}
+    assert len(light_frames) == 3
+    assert light_frames.isdisjoint(dark_frames)
+    assert len(selected) == len(dark_frames) + 3
 
 
 def test_cli_writes_report_for_tiny_csv(tmp_path):
