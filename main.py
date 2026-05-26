@@ -71,7 +71,6 @@ def _load_app_config() -> dict:
         "cameraTempAlertThresholdC": 105,
         "sensorDebugLogging": False,
         "cameraFakeData": False,
-        "output_path": None,  # None = use cwd; str = base directory for scan_data, app-logs, run-logs
         "histoThrottle": False,
         "histoCmp": False,
         "powerOffUnusedCameras": False,
@@ -124,10 +123,6 @@ def _load_app_config() -> dict:
         "cq_rolling_avg_window": 10,
         "cq_dark_threshold_per_camera": [3.0] * 8,
         "cq_light_threshold_per_camera": [15.0] * 8,
-        # Optional override for the SDK's DEFAULT_TRIGGER_CONFIG. Keys
-        # specified here shallow-merge over the SDK default at
-        # MotionInterface construction time. Absent → use SDK default.
-        "triggerConfig": None,
     }
     config_path = resource_path("config", "app_config.json")
     if not config_path.exists():
@@ -138,7 +133,7 @@ def _load_app_config() -> dict:
             loaded = json.load(f)
         out = {
             **defaults,
-            **{k: v for k, v in loaded.items() if k in defaults or k == "output_path"},
+            **{k: v for k, v in loaded.items() if k in defaults},
         }
         # Ensure mask fields are always integers (guard against float drift from JSON)
         for key in ("leftMask", "rightMask", "reducedModeLeftMask", "reducedModeRightMask"):
@@ -186,18 +181,21 @@ def main():
 
     # Configure file logging
     app_config = _load_app_config()
-    output_base = app_config.get("output_path")
-    if not output_base:
-        # Default to cwd, but fall back to ~/Documents/OpenWater Bloodflow
-        # if cwd is not writable (e.g. launched from Finder where cwd is "/")
+    # Single output root: dataDirectory. app-logs/, run-logs/, scan files,
+    # scans.db, ft-test-csvs/ all land under this directory. Falls back to
+    # cwd (when writable) or ~/Documents/OpenWater Bloodflow (e.g. macOS
+    # Finder launch where cwd is "/").
+    _data_dir = app_config.get("dataDirectory")
+    if not _data_dir:
         candidate = os.getcwd()
         if os.access(candidate, os.W_OK):
-            output_base = candidate
+            _data_dir = candidate
         else:
-            output_base = os.path.join(
+            _data_dir = os.path.join(
                 os.path.expanduser("~"), "Documents", "OpenWater Bloodflow"
             )
-    run_dir = os.path.join(output_base, "app-logs")
+    os.makedirs(_data_dir, exist_ok=True)
+    run_dir = os.path.join(_data_dir, "app-logs")
     os.makedirs(run_dir, exist_ok=True)
     ts = datetime.datetime.now().strftime(
         "%Y%m%d_%H%M%S"
@@ -217,20 +215,11 @@ def main():
     sdk_logger.addHandler(file_handler)
     sdk_logger.propagate = False  # Don't propagate to root, use our handlers
 
-    # Construct the MotionInterface here and inject it into the connector
-    # below. The optional ``triggerConfig`` key in app_config.json is
-    # passed as ``default_trigger_config`` so app-level tweaks layer on
-    # top of the SDK defaults at construction time. Workflows resolve
-    # to (interface default ⊕ per-request override) thereafter.
-    #
-    # Task 19 (Phase G pipeline cutover): pass SDK-level output config so
-    # the new pipeline's default CsvSink and ScanDBSink can write to the
-    # same directory the connector has always used.
-    _data_dir = app_config.get("dataDirectory") or os.path.join(output_base, "scan_data")
-    os.makedirs(_data_dir, exist_ok=True)
+    # Construct the MotionInterface and inject into the connector below.
+    # data_dir + scan_db_path point the new pipeline's default CsvSink and
+    # ScanDBSink at the same directory the connector uses.
     _scan_db_path = os.path.join(_data_dir, "scans.db")
     motion_interface = MotionInterface(
-        default_trigger_config=app_config.get("triggerConfig") or None,
         data_dir=_data_dir,
         scan_db_path=_scan_db_path,
         operator_id="bloodflow-app",
@@ -262,7 +251,7 @@ def main():
 
     engine = QQmlApplicationEngine()
 
-    connector = MOTIONConnector(motion_interface, app_config=app_config, output_path=output_base)
+    connector = MOTIONConnector(motion_interface, app_config=app_config, data_dir=_data_dir)
     qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MOTIONInterface", connector)
     engine.rootContext().setContextProperty("appVersion", APP_VERSION)
 

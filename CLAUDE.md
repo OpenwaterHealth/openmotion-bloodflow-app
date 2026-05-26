@@ -1,0 +1,104 @@
+# openmotion-bloodflow-app — Claude guide
+
+PyQt6 + QML clinical desktop app for blood flow / volume monitoring. Consumes the `omotion` package from `openmotion-sdk` (installed editable from `../openmotion-sdk`).
+
+Cross-repo context: [../CLAUDE.md](../CLAUDE.md). SDK details: [../openmotion-sdk/CLAUDE.md](../openmotion-sdk/CLAUDE.md).
+
+## Run / build
+
+```powershell
+# Dev setup — SDK is installed editable from the sibling repo
+pip install -r requirements.txt
+pip install -e ../openmotion-sdk
+
+python main.py                          # run the app
+
+python -m PyInstaller -y openwater.spec # package .exe → dist/OpenWaterApp/
+.\build_and_zip.ps1                     # CI packaging wrapper
+```
+
+- Tested on **Python 3.13.5**; `requirements.txt` pins PyQt6 6.8.0, qasync 0.27.1, pandas, numpy, matplotlib, pyusb, libusb1, PyInstaller 6.11.1, flake8 7.1.1.
+- No `pyproject.toml`; pure `requirements.txt`.
+- QML does **not** hot-reload — restart the app to pick up `.qml` changes.
+
+## Layout
+
+| Path | What lives here |
+|---|---|
+| `main.py` | Entry point. PyQt app, QML engine, logging. Registers `MOTIONInterface` as a QML singleton. |
+| `motion_connector.py` | **4031 lines.** Single `MOTIONConnector` QObject — all UI⇄hardware glue, 135 signals/slots. State machine constants at lines 72–76; transitions at 1076–1084. |
+| `motion_config.py` | FPGA model + laser-parameter helpers (extracted in May 2025 for reuse). |
+| `pages/BloodFlow.qml` | Main scan page: patient info, sensor config, trigger. |
+| `pages/DataAnalysis.qml` | Post-processing + BFI/BVI visualization. |
+| `pages/Settings.qml` | Settings overlay. |
+| `pages/scan/` | `ScanRunner.qml` plus task QMLs: `CaptureDataTask`, `ContactQualityCheckTask`, `FlashSensorsTask`, `PostProcessTask`, `SetTriggerLaserTask`. Newer orchestration suite. |
+| `components/` | 26 reusable QML components — `SettingsModal`, `ContactQualityModal`, `CameraDot`, `TestResultsWindow`, etc. |
+| `processing/visualize_bloodflow.py` | BFI/BVI computation from CSV histograms. |
+| `config/app_config.json` | 141 feature flags / thresholds (see below). |
+| `config/laser_params.json` | 18 laser I2C register sets (TA / SEED / EE / OPT variants). **Not user-tunable calibration data** — init/baseline commands for the laser driver chips. |
+| `openwater.spec` | PyInstaller spec. Custom logic mirrors vendored libusb binaries into `_internal\_vendor` so the runtime hook can find them. |
+| `tests/` | Hardware-in-loop pytest suite, ~23 files. Markers: `@pytest.mark.dev` (~1–2 min, runs on every push to `next`), `@pytest.mark.release` (~6–8 min, runs on release tags). |
+
+**Note:** the old `motion_singleton.py` no longer exists — connector logic was consolidated into `motion_connector.py` and registered as a QML singleton in `main.py`.
+
+## State machine (motion_connector.py:72)
+
+```
+DISCONNECTED (0) → SENSOR_CONNECTED (1) → CONSOLE_CONNECTED (2) → READY (3) → RUNNING (4)
+```
+
+No FSM class — integer enum + conditional branches on `self._state`. Transitions in `motion_connector.py` around line 1076.
+
+QML↔Python wiring: `main.py:256` registers the connector as a QML singleton (`qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MOTIONInterface", connector)`). QML calls `MOTIONInterface.slotName()`; Python emits signals QML connects to with `onSignalNameChanged`.
+
+## Working without hardware
+
+Flip these in `config/app_config.json`:
+
+- `cameraFakeData: true` — generate synthetic histograms; app runs without USB devices attached.
+- `developerMode: true` — show per-camera CQ dots, test buttons, debug telemetry.
+- `commVerbose: true` + `verboseCommandHandling: true` — SDK logs all UART packets + MCU printf output.
+
+## Notable config flags (`config/app_config.json`)
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `developerMode` | `true` | Show debug telemetry, per-camera CQ dots, test buttons. |
+| `reducedMode` | `true` | Clinical UI: hide settings, large BFI/BVI panels. |
+| `forceLaserFail` | `false` | Debug: simulate a laser safety trip. |
+| `cameraFakeData` | `false` | Mock mode (no hardware). |
+| `histoThrottle` | `false` | Drop histograms to reduce log spam. |
+| `histoCmp` | `true` | Compare received vs expected histogram frame counts. |
+| `ft_min_mean_per_camera` | `[40,40,…]` | Calibration pass threshold — min pixel mean per camera (8-element array). |
+| `calibration_scan_duration_sec` | `15` | Calibration runtime. |
+| `test_scan_duration_sec` | `5` | "Test" scan runtime (feature #132). |
+| `cq_dark_threshold_per_camera` | `[3.0,…]` | Contact-quality dark threshold. |
+| `bfiClampLow` / `bfiClampHigh` | `0.0` / `10.0` | Display clamps (values outside show `--`). |
+| `bviLowPassEnabled` | `true` | 1-pole LPF on BVI (cutoff 40 Hz). |
+| `dataDirectory` | `C:\Users\ethan\Projects\scan_data` | Single output root — scan CSVs/DB, `app-logs/`, `run-logs/`, `app-logs/ft-test-csvs/` all land under here. |
+
+## Gotchas
+
+- **`motion_connector.py` is 4031 lines** — the file is doing too much. Don't add to it without considering extraction; recent precedent is `motion_config.py` (May 2025).
+- **Cross-thread signals:** 135+ signals; several (e.g. `_calibrationCompleteSignal`, `safetyTripDuringCaptureRequested`) fire from USB I/O / scanner worker threads. Use `Qt.QueuedConnection` or you'll race QML.
+- **PyInstaller libusb mirror** (`openwater.spec` lines 61–95): if bundled app fails USB enumeration, the runtime hook can't find vendored libusb DLLs. Check the spec's mirror step.
+- **`laser_params.json` is not "tunable":** editing values risks laser-off, wrong pulse widths, safety failures. Treat as locked baseline.
+- **SDK is editable, not pinned to a wheel here** (unlike `openmotion-test-app`). Bumping the SDK requires no action; bugs in either repo are visible immediately.
+
+## Branching and releases
+
+- Default branch: `main`; daily work on `next`. PR feature → `next`, `next` → `main` for release.
+- Releases triggered by semver tags (e.g. `1.1.2`, `1.1.2-dev.0`, `1.1.2-rc.1`) — see [../CLAUDE.md](../CLAUDE.md) for tag format.
+- CI workflows: `.github/workflows/release-build.yml` (Windows runner, builds .exe + zip on tags / manual dispatch) and `hil-tests.yml` (self-hosted Windows runner with Shelly IoT outlet power control, runs after the release build completes).
+
+## "Start here" by task
+
+| Task | First files |
+|---|---|
+| Add or change a QML page | `pages/BloodFlow.qml` → `components/` → wire to `motion_connector.py` slot. |
+| Hook a new SDK feature into the UI | Add `@pyqtSlot`/`@pyqtSignal` in `motion_connector.py`; bind in the relevant QML page. |
+| Modify scan orchestration | `pages/scan/ScanRunner.qml` + the task QMLs. |
+| Tune a clinical threshold | `config/app_config.json` (check the table above first — most knobs live here). |
+| Reproduce a bug without hardware | Set `cameraFakeData: true` in `app_config.json`, then `python main.py`. |
+| Touch laser register defaults | `config/laser_params.json` — but loop in firmware/SDK owners first; this is locked baseline data. |
+| Diagnose USB enumeration in the packaged exe | `openwater.spec` libusb mirror + `rthook_libusb_paths.py`. |

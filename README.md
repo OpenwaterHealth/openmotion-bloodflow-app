@@ -86,10 +86,11 @@ The application creates the following directories for output:
 
 **Where these are created:**
 
-1. If `output_path` is set in `config/app_config.json`, that path is used
-2. Otherwise, the current working directory is used (when writable)
-3. If the cwd is not writable (e.g. when launched from Finder on macOS), falls back to:
-   `~/Documents/OpenWater Bloodflow/`
+All three directories live under a single root, chosen in this order:
+
+1. `dataDirectory` from `config/app_config.json` (also settable from the UI directory picker)
+2. The current working directory, when writable
+3. `~/Documents/OpenWater Bloodflow/` as a last-resort fallback (e.g. when the .app is launched from Finder on macOS and cwd is `/`)
 
 ## Configuration
 
@@ -97,8 +98,7 @@ Edit `config/app_config.json` to customize behavior:
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `output_path` | `null` | Base directory for logs and data (null = auto-detect) |
-| `dataDirectory` | `null` | Override for scan data output (null = `<output_path>/scan_data`) |
+| `dataDirectory` | `null` | Root directory for scan data, app-logs, and run-logs (null = auto-detect) |
 | `developerMode` | `false` | Enable developer UI features |
 | `reducedMode` | `false` | Simplified clinical UI: forces far camera config + free run, hides scan settings, shows large left/right BFI/BVI panels |
 | `leftMask` / `rightMask` | `0x66` | Camera bitmask for left/right sensor modules |
