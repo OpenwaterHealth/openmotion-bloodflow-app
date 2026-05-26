@@ -36,7 +36,10 @@ def _empty_camera_state() -> dict:
         "light_seen": 0,
         "dark_seen": 0,
         "light_rows": [],
-        "dark_rows": [],
+        "first_dark_row": None,
+        "latest_dark_row": None,
+        "internal_dark_seen": 0,
+        "internal_dark_rows": [],
         "replacement_candidate_rows": [],
         "rng": np.random.default_rng(0),
     }
@@ -63,6 +66,42 @@ def production_cleanup_histograms(hists: np.ndarray, noisy_bin_min: int = 10) ->
     return cleaned
 
 
+def production_interval_interpolate(
+    anchor_frames: np.ndarray,
+    anchor_values: np.ndarray,
+    target_frames: np.ndarray,
+) -> np.ndarray:
+    anchors = np.asarray(anchor_frames, dtype=float)
+    values = np.asarray(anchor_values, dtype=float)
+    targets = np.asarray(target_frames, dtype=float)
+    if anchors.ndim != 1:
+        raise ValueError("anchor_frames must be 1-D")
+    if values.shape[0] != anchors.size:
+        raise ValueError("anchor_values row count must match anchor_frames")
+    if anchors.size == 0:
+        raise ValueError("at least one dark anchor is required")
+    if np.any(np.diff(anchors) < 0):
+        raise ValueError("anchor_frames must be sorted")
+    if anchors.size == 1:
+        return np.repeat(values[:1], targets.size, axis=0)
+
+    output = np.empty((targets.size, *values.shape[1:]), dtype=float)
+    interval_indices = np.searchsorted(anchors, targets, side="right") - 1
+    for output_idx, interval_idx in enumerate(interval_indices):
+        if interval_idx < 0:
+            output[output_idx] = values[0]
+            continue
+        if interval_idx >= anchors.size - 1:
+            output[output_idx] = values[-1]
+            continue
+        start_frame = anchors[interval_idx]
+        next_frame = anchors[interval_idx + 1]
+        denominator = max(next_frame - start_frame - 1.0, 1.0)
+        weight = float(np.clip((targets[output_idx] - start_frame) / denominator, 0.0, 1.0))
+        output[output_idx] = values[interval_idx] + (values[interval_idx + 1] - values[interval_idx]) * weight
+    return output
+
+
 def read_selected_rows(
     csv_path: Path,
     cameras: set[int],
@@ -72,8 +111,11 @@ def read_selected_rows(
     max_dark_anchors_per_camera: int = 5000,
     chunksize: int = 25000,
 ) -> pd.DataFrame:
+    if max_dark_anchors_per_camera < 2:
+        raise ValueError("max_dark_anchors_per_camera must be at least 2 to preserve structural dark anchors")
     usecols = ["cam_id", "frame_id", "timestamp_s", *[str(i) for i in range(histogram_bins)], "temperature", "sum"]
     states = {cam_id: _empty_camera_state() for cam_id in cameras}
+    max_internal_dark_anchors = max_dark_anchors_per_camera - 2
     found_rows = False
     for chunk in pd.read_csv(csv_path, usecols=usecols, chunksize=chunksize):
         chunk = chunk[chunk["cam_id"].isin(cameras)]
@@ -95,17 +137,28 @@ def read_selected_rows(
             state["last_frame_id"] = frame_id
             row["absolute_frame"] = (state["rollovers"] * FRAME_ID_MAX) + frame_id - 1
             row["is_dark_anchor"] = (row["absolute_frame"] % dark_interval) == 0
-            if 0 < row["absolute_frame"] <= 9:
+            if 0 < row["absolute_frame"] <= 9 and not row["is_dark_anchor"]:
                 state["replacement_candidate_rows"].append(row.copy())
             if row["is_dark_anchor"]:
                 state["dark_seen"] += 1
-                if len(state["dark_rows"]) < max_dark_anchors_per_camera:
-                    state["dark_rows"].append(row)
+                if state["first_dark_row"] is None:
+                    state["first_dark_row"] = row
+                    state["latest_dark_row"] = row
                     continue
 
-                replacement_index = int(state["rng"].integers(0, state["dark_seen"]))
-                if replacement_index < max_dark_anchors_per_camera:
-                    state["dark_rows"][replacement_index] = row
+                previous_latest = state["latest_dark_row"]
+                if (
+                    previous_latest is not None
+                    and previous_latest["absolute_frame"] != state["first_dark_row"]["absolute_frame"]
+                ):
+                    state["internal_dark_seen"] += 1
+                    if len(state["internal_dark_rows"]) < max_internal_dark_anchors:
+                        state["internal_dark_rows"].append(previous_latest)
+                    elif max_internal_dark_anchors:
+                        replacement_index = int(state["rng"].integers(0, state["internal_dark_seen"]))
+                        if replacement_index < max_internal_dark_anchors:
+                            state["internal_dark_rows"][replacement_index] = previous_latest
+                state["latest_dark_row"] = row
                 continue
 
             state["light_seen"] += 1
@@ -120,7 +173,17 @@ def read_selected_rows(
         raise ValueError(f"no rows found for cameras {sorted(cameras)}")
     selected_rows = []
     for cam_id in sorted(states):
-        selected_rows.extend(states[cam_id]["dark_rows"])
+        first_dark_row = states[cam_id]["first_dark_row"]
+        latest_dark_row = states[cam_id]["latest_dark_row"]
+        if first_dark_row is not None:
+            selected_rows.append(first_dark_row)
+        selected_rows.extend(states[cam_id]["internal_dark_rows"])
+        if (
+            latest_dark_row is not None
+            and first_dark_row is not None
+            and latest_dark_row["absolute_frame"] != first_dark_row["absolute_frame"]
+        ):
+            selected_rows.append(latest_dark_row)
         selected_rows.extend(states[cam_id]["light_rows"])
         selected_rows.extend(states[cam_id]["replacement_candidate_rows"])
     if not selected_rows:
@@ -179,9 +242,21 @@ def analyze_camera(
     light_frames = frames[light_indices]
     interpolated_dark = interpolate_dark_histograms(dark_frames, dark_hists, light_frames)
     dark_moments = [histogram_moments(dark_hist) for dark_hist in dark_hists]
-    interpolated_dark_means = np.interp(light_frames, dark_frames, [moment.mean for moment in dark_moments])
-    interpolated_dark_variances = np.interp(light_frames, dark_frames, [moment.variance for moment in dark_moments])
-    interpolated_dark_totals = np.interp(light_frames, dark_frames, [moment.total for moment in dark_moments])
+    interpolated_dark_means = production_interval_interpolate(
+        dark_frames,
+        np.array([moment.mean for moment in dark_moments], dtype=float),
+        light_frames,
+    )
+    interpolated_dark_variances = production_interval_interpolate(
+        dark_frames,
+        np.array([moment.variance for moment in dark_moments], dtype=float),
+        light_frames,
+    )
+    interpolated_dark_totals = production_interval_interpolate(
+        dark_frames,
+        np.array([moment.total for moment in dark_moments], dtype=float),
+        light_frames,
+    )
 
     metric_rows = []
     frame_rows = []

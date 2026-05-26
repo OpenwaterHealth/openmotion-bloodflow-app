@@ -12,7 +12,12 @@ from dark_correction import absolute_frame_ids, dark_anchor_mask, interpolate_da
 from dark_correction import correct_histogram, CorrectionDiagnostics
 from dark_correction import convolve_histograms, deconvolve_histogram
 from dark_correction import MetricSummary, summarize_series, temperature_correlation, boundary_jumps
-from analyze_dark_correction import analyze_camera, production_cleanup_histograms, read_selected_rows
+from analyze_dark_correction import (
+    analyze_camera,
+    production_cleanup_histograms,
+    production_interval_interpolate,
+    read_selected_rows,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -128,6 +133,17 @@ def test_interpolate_dark_histograms_linearly_between_anchor_frames():
         [0.0, 0.0, 10.0],
     ])
     np.testing.assert_allclose(interpolated, expected)
+
+
+def test_production_interval_interpolate_uses_interval_index_ramp_not_np_interp():
+    anchor_frames = np.array([0, 4])
+    anchor_values = np.array([10.0, 20.0])
+    target_frames = np.array([2])
+
+    interpolated = production_interval_interpolate(anchor_frames, anchor_values, target_frames)
+
+    assert interpolated[0] == pytest.approx(10.0 + (20.0 - 10.0) * (2.0 / 3.0))
+    assert interpolated[0] != pytest.approx(np.interp(target_frames, anchor_frames, anchor_values)[0])
 
 
 def test_raw_method_returns_observed_histogram_moments():
@@ -305,8 +321,8 @@ def test_analyze_camera_current_uses_interpolated_dark_moments_not_histogram_mom
     )[0]
     _, old_diagnostics = correct_histogram(np.array(light, dtype=float), old_interpolated_dark, method="current")
 
-    assert current_frame_10["corrected_mean"] == pytest.approx(5.0)
-    assert current_frame_10["corrected_contrast"] == pytest.approx(2.0)
+    assert current_frame_10["corrected_mean"] == pytest.approx(12.0 - (2.0 + 10.0 * (10.0 / 19.0)))
+    assert current_frame_10["corrected_contrast"] == pytest.approx(10.0 / current_frame_10["corrected_mean"])
     assert current_frame_10["corrected_contrast"] != pytest.approx(old_diagnostics.corrected_contrast)
 
 
@@ -378,7 +394,7 @@ def test_analyze_camera_replaces_first_dark_anchor_with_first_good_frame_baselin
     current_frame_1 = frame_metrics[
         (frame_metrics["method"] == "current") & (frame_metrics["absolute_frame"] == 1)
     ].iloc[0]
-    assert current_frame_1["corrected_mean"] == pytest.approx(2.6)
+    assert current_frame_1["corrected_mean"] == pytest.approx(2.5)
     assert metrics[0]["first_dark_replacement_target"] == 4
     assert metrics[0]["first_dark_replacement_frame"] == 4
     assert metrics[0]["first_dark_replacement_exact"] is True
@@ -414,6 +430,35 @@ def test_read_selected_rows_bounds_light_and_dark_rows_to_sample_caps(tmp_path):
     assert len(light_frames) >= 3
     assert light_frames.isdisjoint(dark_frames)
     assert {1, 2, 3, 4, 6, 7, 8, 9} & light_frames
+
+
+def test_read_selected_rows_preserves_structural_dark_anchors_when_capped(tmp_path):
+    csv_path = tmp_path / "many_dark_rows.csv"
+    bins = [str(i) for i in range(4)]
+    header = ["cam_id", "frame_id", "timestamp_s", *bins, "temperature", "sum"]
+    rows = []
+    for frame in range(1, 32):
+        absolute_frame = frame - 1
+        rows.append([7, frame, frame / 10.0, 10 if absolute_frame % 5 == 0 else 0, 0, 10, 0, 30.0, 10])
+    csv_path.write_text(
+        ",".join(header) + "\n" + "\n".join(",".join(str(value) for value in row) for row in rows),
+        encoding="utf-8",
+    )
+
+    selected = read_selected_rows(
+        csv_path,
+        cameras={7},
+        histogram_bins=4,
+        dark_interval=5,
+        max_light_frames_per_camera=5,
+        max_dark_anchors_per_camera=3,
+        chunksize=7,
+    )
+
+    dark_frames = set(selected.loc[selected["is_dark_anchor"], "absolute_frame"])
+    assert len(dark_frames) == 3
+    assert 0 in dark_frames
+    assert 30 in dark_frames
 
 
 def test_cli_writes_report_for_tiny_csv(tmp_path):
