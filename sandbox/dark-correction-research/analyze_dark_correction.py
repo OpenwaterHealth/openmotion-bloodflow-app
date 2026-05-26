@@ -12,11 +12,13 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from dark_correction import (
+    CorrectionDiagnostics,
     FRAME_ID_MAX,
     absolute_frame_ids,
     boundary_jumps,
     correct_histogram,
     dark_anchor_mask,
+    histogram_moments,
     interpolate_dark_histograms,
     summarize_series,
     temperature_correlation,
@@ -168,13 +170,18 @@ def analyze_camera(
         dark_hists[0] = hists[replacement_idx]
         first_dark_replacement_frame = int(frames[replacement_idx])
         first_dark_replacement_exact = first_dark_replacement_frame == first_dark_replacement_target
-    light_mask = ~dark_mask
+    max_dark_frame = int(dark_frames.max())
+    light_mask = (~dark_mask) & (frames <= max_dark_frame)
     light_indices = np.flatnonzero(light_mask)
     if light_indices.size > max_light_frames:
         sample_positions = np.linspace(0, light_indices.size - 1, max_light_frames, dtype=int)
         light_indices = light_indices[sample_positions]
     light_frames = frames[light_indices]
     interpolated_dark = interpolate_dark_histograms(dark_frames, dark_hists, light_frames)
+    dark_moments = [histogram_moments(dark_hist) for dark_hist in dark_hists]
+    interpolated_dark_means = np.interp(light_frames, dark_frames, [moment.mean for moment in dark_moments])
+    interpolated_dark_variances = np.interp(light_frames, dark_frames, [moment.variance for moment in dark_moments])
+    interpolated_dark_totals = np.interp(light_frames, dark_frames, [moment.total for moment in dark_moments])
 
     metric_rows = []
     frame_rows = []
@@ -184,12 +191,39 @@ def analyze_camera(
         clipped = []
         ringing = []
         start = time.perf_counter()
-        for row_idx, dark_hist in zip(light_indices, interpolated_dark):
-            _, diagnostics = correct_histogram(hists[row_idx], dark_hist, method=method)
-            means.append(diagnostics.corrected_mean)
-            contrasts.append(diagnostics.corrected_contrast)
-            clipped.append(diagnostics.clipped_mass)
-            ringing.append(diagnostics.ringing_score)
+        if method == "current":
+            for row_idx, dark_mean, dark_variance, dark_total in zip(
+                light_indices,
+                interpolated_dark_means,
+                interpolated_dark_variances,
+                interpolated_dark_totals,
+            ):
+                light_moment = histogram_moments(hists[row_idx])
+                corrected_mean = light_moment.mean - float(dark_mean)
+                corrected_variance = max(light_moment.variance - float(dark_variance), 0.0)
+                corrected_std = float(np.sqrt(corrected_variance))
+                corrected_contrast = corrected_std / corrected_mean if corrected_mean > 0 else 0.0
+                diagnostics = CorrectionDiagnostics(
+                    method=method,
+                    input_mass=light_moment.total,
+                    dark_mass=float(dark_total),
+                    output_mass=light_moment.total,
+                    clipped_mass=0.0,
+                    corrected_mean=float(corrected_mean),
+                    corrected_variance=float(corrected_variance),
+                    corrected_contrast=float(corrected_contrast),
+                )
+                means.append(diagnostics.corrected_mean)
+                contrasts.append(diagnostics.corrected_contrast)
+                clipped.append(diagnostics.clipped_mass)
+                ringing.append(diagnostics.ringing_score)
+        else:
+            for row_idx, dark_hist in zip(light_indices, interpolated_dark):
+                _, diagnostics = correct_histogram(hists[row_idx], dark_hist, method=method)
+                means.append(diagnostics.corrected_mean)
+                contrasts.append(diagnostics.corrected_contrast)
+                clipped.append(diagnostics.clipped_mass)
+                ringing.append(diagnostics.ringing_score)
         elapsed = time.perf_counter() - start
         means_arr = np.asarray(means, dtype=float)
         contrast_arr = np.asarray(contrasts, dtype=float)

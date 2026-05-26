@@ -255,6 +255,96 @@ def test_analyze_camera_capped_sampling_excludes_dark_anchor_rows():
     assert len(sampled_frames) == 4
 
 
+def test_analyze_camera_current_uses_interpolated_dark_moments_not_histogram_moments():
+    import pandas as pd
+
+    def row(frame, hist, is_dark_anchor=False):
+        return {
+            "cam_id": 7,
+            "frame_id": frame + 1,
+            "absolute_frame": frame,
+            "is_dark_anchor": is_dark_anchor,
+            "timestamp_s": frame / 10.0,
+            **{str(idx): value for idx, value in enumerate(hist)},
+            "temperature": 30.0 + frame / 10.0,
+            "sum": sum(hist),
+        }
+
+    dark_a = [0] * 24
+    dark_a[2] = 100
+    light = [0] * 24
+    light[2] = 50
+    light[22] = 50
+    dark_b = [0] * 24
+    dark_b[12] = 100
+    df = pd.DataFrame(
+        [
+            row(0, dark_b, is_dark_anchor=True),
+            row(9, dark_a),
+            row(10, light),
+            row(20, dark_b, is_dark_anchor=True),
+        ]
+    )
+
+    _, frame_metrics = analyze_camera(
+        df,
+        cam_id=7,
+        dark_interval=20,
+        histogram_bins=24,
+        max_light_frames=10,
+        noisy_bin_min=0,
+    )
+
+    current_frame_10 = frame_metrics[
+        (frame_metrics["method"] == "current") & (frame_metrics["absolute_frame"] == 10)
+    ].iloc[0]
+    old_interpolated_dark = interpolate_dark_histograms(
+        np.array([0, 20]),
+        np.array([dark_a, dark_b], dtype=float),
+        np.array([10]),
+    )[0]
+    _, old_diagnostics = correct_histogram(np.array(light, dtype=float), old_interpolated_dark, method="current")
+
+    assert current_frame_10["corrected_mean"] == pytest.approx(5.0)
+    assert current_frame_10["corrected_contrast"] == pytest.approx(2.0)
+    assert current_frame_10["corrected_contrast"] != pytest.approx(old_diagnostics.corrected_contrast)
+
+
+def test_analyze_camera_excludes_light_frames_after_last_dark_anchor():
+    import pandas as pd
+
+    rows = []
+    for frame in [0, 1, 2, 5, 6, 7]:
+        hist = [0] * 8
+        hist[frame % 8] = 100
+        rows.append(
+            {
+                "cam_id": 7,
+                "frame_id": frame + 1,
+                "absolute_frame": frame,
+                "is_dark_anchor": frame in {0, 5},
+                "timestamp_s": frame / 10.0,
+                **{str(idx): value for idx, value in enumerate(hist)},
+                "temperature": 30.0 + frame / 10.0,
+                "sum": 100,
+            }
+        )
+    df = pd.DataFrame(rows)
+
+    _, frame_metrics = analyze_camera(
+        df,
+        cam_id=7,
+        dark_interval=5,
+        histogram_bins=8,
+        max_light_frames=10,
+        noisy_bin_min=0,
+    )
+
+    sampled_frames = set(frame_metrics["absolute_frame"].unique())
+    assert sampled_frames == {1, 2}
+    assert sampled_frames.isdisjoint({6, 7})
+
+
 def test_analyze_camera_replaces_first_dark_anchor_with_first_good_frame_baseline():
     import pandas as pd
 
