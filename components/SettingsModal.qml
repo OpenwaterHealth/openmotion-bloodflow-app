@@ -488,7 +488,7 @@ Item {
                         visible: !root.reducedMode
                         label: "Display mode"
                         Text {
-                            text: "Mean / C"
+                            text: "Mean / Contrast"
                             color: !root.showBfiBvi ? root.colAccent : root.colTextSec
                             font.pixelSize: 13
                             font.weight: !root.showBfiBvi ? Font.DemiBold : Font.Normal
