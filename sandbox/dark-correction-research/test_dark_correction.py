@@ -187,7 +187,7 @@ def test_analyze_camera_capped_sampling_excludes_dark_anchor_rows():
     assert len(sampled_frames) == 4
 
 
-def test_read_selected_rows_bounds_light_rows_to_sample_cap(tmp_path):
+def test_read_selected_rows_bounds_light_and_dark_rows_to_sample_caps(tmp_path):
     csv_path = tmp_path / "many_light_rows.csv"
     bins = [str(i) for i in range(4)]
     header = ["cam_id", "frame_id", "timestamp_s", *bins, "temperature", "sum"]
@@ -205,12 +205,14 @@ def test_read_selected_rows_bounds_light_rows_to_sample_cap(tmp_path):
         histogram_bins=4,
         dark_interval=5,
         max_light_frames_per_camera=3,
+        max_dark_anchors_per_camera=2,
         chunksize=6,
     )
 
     dark_frames = set(selected.loc[selected["is_dark_anchor"], "absolute_frame"])
     light_frames = set(selected.loc[~selected["is_dark_anchor"], "absolute_frame"])
-    assert dark_frames == {0, 5, 10, 15}
+    assert len(dark_frames) <= 2
+    assert dark_frames <= {0, 5, 10, 15}
     assert len(light_frames) == 3
     assert light_frames.isdisjoint(dark_frames)
     assert len(selected) == len(dark_frames) + 3

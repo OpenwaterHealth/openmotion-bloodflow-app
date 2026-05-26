@@ -31,6 +31,7 @@ def _empty_camera_state() -> dict:
         "last_frame_id": None,
         "rollovers": 0,
         "light_seen": 0,
+        "dark_seen": 0,
         "light_rows": [],
         "dark_rows": [],
         "rng": np.random.default_rng(0),
@@ -45,6 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--histogram-bins", type=int, default=1024)
     parser.add_argument("--max-light-frames-per-camera", type=int, default=5000)
+    parser.add_argument("--max-dark-anchors-per-camera", type=int, default=5000)
     return parser.parse_args()
 
 
@@ -54,6 +56,7 @@ def read_selected_rows(
     histogram_bins: int,
     dark_interval: int = 600,
     max_light_frames_per_camera: int = 5000,
+    max_dark_anchors_per_camera: int = 5000,
     chunksize: int = 25000,
 ) -> pd.DataFrame:
     usecols = ["cam_id", "frame_id", "timestamp_s", *[str(i) for i in range(histogram_bins)], "temperature", "sum"]
@@ -75,7 +78,14 @@ def read_selected_rows(
             row["absolute_frame"] = (state["rollovers"] * FRAME_ID_MAX) + frame_id
             row["is_dark_anchor"] = (row["absolute_frame"] % dark_interval) == 0
             if row["is_dark_anchor"]:
-                state["dark_rows"].append(row)
+                state["dark_seen"] += 1
+                if len(state["dark_rows"]) < max_dark_anchors_per_camera:
+                    state["dark_rows"].append(row)
+                    continue
+
+                replacement_index = int(state["rng"].integers(0, state["dark_seen"]))
+                if replacement_index < max_dark_anchors_per_camera:
+                    state["dark_rows"][replacement_index] = row
                 continue
 
             state["light_seen"] += 1
@@ -239,6 +249,7 @@ def main() -> int:
         args.histogram_bins,
         args.dark_interval,
         args.max_light_frames_per_camera,
+        args.max_dark_anchors_per_camera,
     )
     all_metrics = []
     all_frames = []
