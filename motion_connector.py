@@ -529,8 +529,8 @@ class MOTIONConnector(QObject):
     updateCheckFailed = pyqtSignal(str)      # error message
 
     @staticmethod
-    def _default_output_base() -> str:
-        """Return a writable base directory for logs and scan data.
+    def _default_data_dir() -> str:
+        """Return a writable directory for logs and scan data.
 
         Uses the current working directory when it is writable (typical
         for development runs).  When cwd is read-only — e.g. ``/`` on
@@ -548,7 +548,7 @@ class MOTIONConnector(QObject):
         self,
         interface: MotionInterface,
         app_config=None,
-        output_path=None,
+        data_dir=None,
         config_dir="config",
         parent=None,
         log_level=logging.INFO,
@@ -591,7 +591,11 @@ class MOTIONConnector(QObject):
         self._histo_cmp                   = bool(cfg.get("histoCmp", False))
         self._comm_verbose                = bool(cfg.get("commVerbose", False))
         self._verbose_command_handling    = bool(cfg.get("verboseCommandHandling", False))
-        self._output_base                 = output_path or cfg.get("output_path") or self._default_output_base()
+        # Single output root: caller-supplied (from main.py) wins, else
+        # dataDirectory from app config, else default (cwd or ~/Documents).
+        # All sub-paths (app-logs, run-logs, scan files, scans.db,
+        # ft-test-csvs) live under self._directory.
+        resolved_dir = data_dir or cfg.get("dataDirectory") or self._default_data_dir()
         self._power_off_unused_cameras    = bool(cfg.get("powerOffUnusedCameras", False))
         self._write_raw_csv               = bool(cfg.get("writeRawCsv", True))
         raw_csv                           = cfg.get("rawCsvDurationSec")
@@ -702,14 +706,8 @@ class MOTIONConnector(QObject):
         self._runlog_csv_writer = None  # csv.writer or None
         self._runlog_csv_lock = threading.Lock()
 
-        configured_data_dir = cfg.get("dataDirectory")
-        if configured_data_dir:
-            os.makedirs(configured_data_dir, exist_ok=True)
-            self._directory = configured_data_dir
-        else:
-            default_dir = os.path.join(self._output_base, "scan_data")
-            os.makedirs(default_dir, exist_ok=True)
-            self._directory = default_dir
+        os.makedirs(resolved_dir, exist_ok=True)
+        self._directory = resolved_dir
         logger.info(f"[Connector] Directory initialized to: {self._directory}")
 
         self._user_label = self.generate_user_label()
@@ -848,7 +846,7 @@ class MOTIONConnector(QObject):
             return
 
         # Directory for individual trigger runs
-        run_dir = os.path.join(self._output_base, "run-logs")
+        run_dir = os.path.join(self._directory, "run-logs")
         os.makedirs(run_dir, exist_ok=True)
 
         # Timestamped filename for this specific trigger session
@@ -1913,19 +1911,14 @@ class MOTIONConnector(QObject):
                 trigger_elapsed += time.monotonic() - self._trigger_on_mono
             if trigger_elapsed > 0:
                 elapsed = trigger_elapsed
-                duration_source = "trigger"
             else:
                 elapsed = time.time() - self._capture_start_time
-                duration_source = "wall-clock"
             hours = int(elapsed // 3600)
             minutes = int((elapsed % 3600) // 60)
             seconds = int(elapsed % 60)
             duration_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
             status = "stopped" if canceled else "completed"
-            duration_line = (
-                f"\n---\nScan {status} — duration: {duration_str} "
-                f"({duration_source})"
-            )
+            duration_line = f"\n---\nScan {status} — duration: {duration_str}"
             self._scan_notes = (self._scan_notes.strip() + duration_line)
             self.scanNotesChanged.emit()
 
@@ -1960,12 +1953,6 @@ class MOTIONConnector(QObject):
             right_camera_mask=right_camera_mask,
             disable_laser=disable_laser,
             reduced_mode=self._app_config.get("reducedMode", False),
-            rolling_avg_window=int(
-                (self._app_config or {}).get(
-                    "cq_rolling_avg_window",
-                    _CQ_DEFAULT_ROLLING_WINDOW,
-                )
-            ),
             # Raw CSV duration forwarded to the pipeline's Tee("raw") gate
             # via raw_save_max_duration_s. None means unbounded (write entire
             # scan); 0 omits raw tee entirely.
@@ -2129,7 +2116,7 @@ class MOTIONConnector(QObject):
 
         # Write CSV to app-logs/ft-test-csvs
         try:
-            ft_dir = os.path.join(self._output_base, "app-logs", "ft-test-csvs")
+            ft_dir = os.path.join(self._directory, "app-logs", "ft-test-csvs")
             os.makedirs(ft_dir, exist_ok=True)
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             ft_path = os.path.join(ft_dir, f"ft-test-{ts}.csv")

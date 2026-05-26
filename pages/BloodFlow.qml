@@ -394,10 +394,8 @@ Rectangle {
         laserPower: 50
         // triggerConfig left at the SetTriggerLaserTask default ({}) so
         // the connector's setTrigger merges only TriggerStatus over the
-        // SDK-resolved default trigger config. Local overrides go in
-        // app_config.json's triggerConfig key (passed through to
-        // MotionInterface(default_trigger_config=...) at startup).
-        triggerConfig: (typeof appTriggerConfig !== "undefined") ? appTriggerConfig : ({})
+        // SDK-resolved DEFAULT_TRIGGER_CONFIG.
+        triggerConfig: ({})
 
         onStageUpdate: function(txt) {
             scanDialog.stageText = txt
@@ -458,7 +456,7 @@ Rectangle {
         laserOn: true
         laserPower: 50
         // See note on the scanRunner triggerConfig above — same here.
-        triggerConfig: (typeof appTriggerConfig !== "undefined") ? appTriggerConfig : ({})
+        triggerConfig: ({})
 
         onStageUpdate: function(txt) {
             console.log("ContactQuality: " + txt)
