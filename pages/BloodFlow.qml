@@ -548,21 +548,21 @@ Rectangle {
                 // user can explicitly Continue into the main scan.
                 contactQualityModal.liveScan = true
             }
+            if (warnings.length > 0) {
+                for (var i = 0; i < warnings.length; ++i) {
+                    var w = warnings[i]
+                    contactQualityModal.addWarning(w.camera, w.typeKey, w.typeText, w.value)
+                }
+                return
+            }
             if (!ok) {
                 var msg = (error && error.length > 0) ? error : "Quick check failed"
                 contactQualityModal.showError(msg)
                 return
             }
-            if (warnings.length === 0) {
-                contactQualityModal.showOk()
-                if (bloodFlow.reducedStartPending)
-                    contactQualityModal.liveScanDismissable = true
-                return
-            }
-            for (var i = 0; i < warnings.length; ++i) {
-                var w = warnings[i]
-                contactQualityModal.addWarning(w.camera, w.typeKey, w.typeText, w.value)
-            }
+            contactQualityModal.showOk()
+            if (bloodFlow.reducedStartPending)
+                contactQualityModal.liveScanDismissable = true
         }
         // Live-scan warnings (ContactQualityMonitor via SciencePipeline)
         function onContactQualityWarning(camera, typeKey, typeText, value) {
