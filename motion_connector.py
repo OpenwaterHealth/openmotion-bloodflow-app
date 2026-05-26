@@ -259,14 +259,26 @@ class _LivePlotSink:
                     logger.warning(msg)
 
                 if not is_dark:
-                    # mean / contrast: use display_mean (pedestal-subtracted)
-                    # and contrast_sn_rt (shot-noise-corrected) when available.
-                    if batch.display_mean is not None:
-                        mean_val = float(batch.display_mean[i, side_idx, cam_id])
-                        connector.scanMeanSampled.emit(side, cam_id, plot_ts, mean_val)
+                    # Two-pass refinement matches the BFI/BVI pattern: emit
+                    # the realtime dark-corrected mean (mean_dc_rt) and
+                    # shot-noise-corrected contrast (contrast_sn_rt) here;
+                    # _FinalBatchSink overwrites both by frame_id once a
+                    # dark interval closes (using the more-accurate
+                    # linearly-interpolated baseline). Skip NaN samples —
+                    # early light frames before the first dark observation
+                    # have NaN mean_dc_rt and shouldn't poison the plot.
+                    if batch.mean_dc_rt is not None:
+                        mean_val = float(batch.mean_dc_rt[i, side_idx, cam_id])
+                        if math.isfinite(mean_val):
+                            connector.scanMeanSampled.emit(
+                                side, cam_id, abs_frame_id, plot_ts, mean_val
+                            )
                     if batch.contrast_sn_rt is not None:
                         contrast_val = float(batch.contrast_sn_rt[i, side_idx, cam_id])
-                        connector.scanContrastSampled.emit(side, cam_id, plot_ts, contrast_val)
+                        if math.isfinite(contrast_val):
+                            connector.scanContrastSampled.emit(
+                                side, cam_id, abs_frame_id, plot_ts, contrast_val
+                            )
 
                 connector.scanBfiSampled.emit(side, cam_id, abs_frame_id, plot_ts, bfi)
                 connector.scanBviSampled.emit(side, cam_id, abs_frame_id, plot_ts, bvi)
@@ -324,6 +336,8 @@ class _FinalBatchSink:
                 "ts": plot_ts,
                 "bfi": float(getattr(s, "bfi", 0.0)),
                 "bvi": float(getattr(s, "bvi", 0.0)),
+                "mean": float(getattr(s, "mean", 0.0)),
+                "contrast": float(getattr(s, "contrast", 0.0)),
             })
         if payload:
             connector.scanCorrectedBatch.emit(payload)
@@ -466,11 +480,11 @@ class MOTIONConnector(QObject):
     # hard errors — those keep the scan dialog visible with the error.
     scanNotesReady = pyqtSignal()
     scanMeanSampled = pyqtSignal(
-        str, int, float, float
-    )  # side, cam_id, timestamp_s, mean
+        str, int, int, float, float
+    )  # side, cam_id, frame_id, timestamp_s, mean
     scanContrastSampled = pyqtSignal(
-        str, int, float, float
-    )  # side, cam_id, timestamp_s, contrast
+        str, int, int, float, float
+    )  # side, cam_id, frame_id, timestamp_s, contrast
     scanBfiSampled = pyqtSignal(
         str, int, int, float, float
     )  # side, cam_id, frame_id, timestamp_s, bfi

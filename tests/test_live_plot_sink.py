@@ -39,7 +39,7 @@ def test_live_plot_sink_emits_only_source_camera_for_each_row():
     batch = SimpleNamespace(
         bfi_live=np.zeros((2, 2, 8), dtype=np.float32),
         bvi_live=np.zeros((2, 2, 8), dtype=np.float32),
-        display_mean=np.zeros((2, 2, 8), dtype=np.float32),
+        mean_dc_rt=np.zeros((2, 2, 8), dtype=np.float32),
         contrast_sn_rt=np.full((2, 2, 8), -999.0, dtype=np.float32),
         temperature_c=np.full((2, 2, 8), 35.0, dtype=np.float32),
         frame_type=np.array(["light", "light"], dtype="<U8"),
@@ -52,16 +52,17 @@ def test_live_plot_sink_emits_only_source_camera_for_each_row():
     batch.bfi_live[1, 1, 2] = 8.0
     batch.bvi_live[0, 0, 0] = 4.0
     batch.bvi_live[1, 1, 2] = 5.0
-    batch.display_mean[0, 0, 0] = 120.0
-    batch.display_mean[1, 1, 2] = 130.0
+    batch.mean_dc_rt[0, 0, 0] = 120.0
+    batch.mean_dc_rt[1, 1, 2] = 130.0
     batch.contrast_sn_rt[0, 0, 0] = 0.22
     batch.contrast_sn_rt[1, 1, 2] = 0.24
 
     sink.consume("live", batch)
 
-    assert conn.scanContrastSampled.calls == [
-        ("left", 0, conn.scanContrastSampled.calls[0][2], np.float32(0.22)),
-        ("right", 2, conn.scanContrastSampled.calls[1][2], np.float32(0.24)),
+    # Signal shape: (side, cam_id, frame_id, timestamp_s, value)
+    assert [(c[0], c[1], c[2], c[4]) for c in conn.scanContrastSampled.calls] == [
+        ("left", 0, 10, np.float32(0.22)),
+        ("right", 2, 11, np.float32(0.24)),
     ]
     assert [(c[0], c[1]) for c in conn.scanBfiSampled.calls] == [
         ("left", 0),
@@ -75,7 +76,7 @@ def test_live_plot_sink_uses_per_frame_sdk_timestamps():
     batch = SimpleNamespace(
         bfi_live=np.zeros((2, 2, 8), dtype=np.float32),
         bvi_live=np.zeros((2, 2, 8), dtype=np.float32),
-        display_mean=np.zeros((2, 2, 8), dtype=np.float32),
+        mean_dc_rt=np.zeros((2, 2, 8), dtype=np.float32),
         contrast_sn_rt=np.zeros((2, 2, 8), dtype=np.float32),
         temperature_c=np.full((2, 2, 8), 35.0, dtype=np.float32),
         frame_type=np.array(["light", "light"], dtype="<U8"),
@@ -87,8 +88,9 @@ def test_live_plot_sink_uses_per_frame_sdk_timestamps():
 
     sink.consume("live", batch)
 
-    assert [call[2] for call in conn.scanMeanSampled.calls] == [1.25, 1.275]
-    assert [call[2] for call in conn.scanContrastSampled.calls] == [1.25, 1.275]
+    # Signal shape: (side, cam_id, frame_id, timestamp_s, value); ts is at [3]
+    assert [call[3] for call in conn.scanMeanSampled.calls] == [1.25, 1.275]
+    assert [call[3] for call in conn.scanContrastSampled.calls] == [1.25, 1.275]
     assert [call[3] for call in conn.scanBfiSampled.calls] == [1.25, 1.275]
     assert [call[3] for call in conn.scanBviSampled.calls] == [1.25, 1.275]
 
@@ -104,6 +106,8 @@ def test_final_batch_sink_accepts_enriched_interval_frames():
                 abs_frame_id=42,
                 bfi=2.5,
                 bvi=6.5,
+                mean=125.0,
+                contrast=0.31,
             ),
             SimpleNamespace(
                 side="right",
@@ -111,6 +115,8 @@ def test_final_batch_sink_accepts_enriched_interval_frames():
                 abs_frame_id=43,
                 bfi=3.5,
                 bvi=7.5,
+                mean=140.0,
+                contrast=0.29,
             ),
         ]
     )
@@ -119,7 +125,7 @@ def test_final_batch_sink_accepts_enriched_interval_frames():
 
     assert len(conn.scanCorrectedBatch.calls) == 1
     payload = conn.scanCorrectedBatch.calls[0][0]
-    assert [(p["side"], p["camId"], p["frameId"], p["bfi"], p["bvi"]) for p in payload] == [
-        ("left", 1, 42, 2.5, 6.5),
-        ("right", 6, 43, 3.5, 7.5),
+    assert [(p["side"], p["camId"], p["frameId"], p["bfi"], p["bvi"], p["mean"], p["contrast"]) for p in payload] == [
+        ("left", 1, 42, 2.5, 6.5, 125.0, 0.31),
+        ("right", 6, 43, 3.5, 7.5, 140.0, 0.29),
     ]
