@@ -10,6 +10,7 @@ from PyQt6.QtCore import (
 )
 from pathlib import Path
 import logging
+import math
 import base58
 import threading
 import json
@@ -218,6 +219,15 @@ class _LivePlotSink:
                 bfi = float(batch.bfi_live[i, side_idx, cam_id])
                 bvi = float(batch.bvi_live[i, side_idx, cam_id])
                 temp_c = float(batch.temperature_c[i, side_idx, cam_id])
+
+                # Skip NaN samples — Qt plot would otherwise render them as
+                # a spike from baseline to wherever NaN happens to land in
+                # the y-mapping. Common cause: the first dark frame, which
+                # the dark stage emits with mean_dc_rt=NaN (no prior light
+                # to hold over). NaN now propagates cleanly through the
+                # pipeline; skip it here for the plot.
+                if not (math.isfinite(bfi) and math.isfinite(bvi)):
+                    continue
 
                 # Dropout gate — same logic as the old _on_uncorrected closure.
                 _key = (side, cam_id)
