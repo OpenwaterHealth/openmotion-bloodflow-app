@@ -1,3 +1,4 @@
+import subprocess
 import sys
 from pathlib import Path
 
@@ -149,3 +150,44 @@ def test_boundary_jumps_measures_pre_post_difference():
     jumps = boundary_jumps(frames, values, dark_frames=np.array([4]), window=2)
 
     assert jumps[0] == pytest.approx(10.0)
+
+
+def test_cli_writes_report_for_tiny_csv(tmp_path):
+    csv_path = tmp_path / "tiny_raw.csv"
+    bins = [str(i) for i in range(8)]
+    header = ["cam_id", "frame_id", "timestamp_s", *bins, "temperature", "sum", "tcm", "tcl", "pdc"]
+    rows = [
+        [7, 0, 0.0, 10, 0, 0, 0, 0, 0, 0, 0, 30.0, 10, 1, 1, 1],
+        [7, 1, 0.1, 0, 0, 5, 5, 0, 0, 0, 0, 30.1, 10, 1, 1, 1],
+        [7, 2, 0.2, 0, 0, 4, 6, 0, 0, 0, 0, 30.2, 10, 1, 1, 1],
+        [7, 3, 0.3, 0, 10, 0, 0, 0, 0, 0, 0, 30.3, 10, 1, 1, 1],
+    ]
+    csv_path.write_text(
+        ",".join(header) + "\n" + "\n".join(",".join(str(v) for v in row) for row in rows),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "out"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).resolve().parent / "analyze_dark_correction.py"),
+            "--csv",
+            str(csv_path),
+            "--cameras",
+            "7",
+            "--dark-interval",
+            "3",
+            "--output-dir",
+            str(output_dir),
+            "--histogram-bins",
+            "8",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (output_dir / "report.md").exists()
+    assert (output_dir / "metrics_summary.csv").exists()
