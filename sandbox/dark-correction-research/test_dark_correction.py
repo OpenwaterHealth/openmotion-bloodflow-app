@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from dark_correction import histogram_moments
 from dark_correction import absolute_frame_ids, dark_anchor_mask, interpolate_dark_histograms
+from dark_correction import correct_histogram, CorrectionDiagnostics
 
 pytestmark = pytest.mark.unit
 
@@ -55,3 +56,37 @@ def test_interpolate_dark_histograms_linearly_between_anchor_frames():
         [0.0, 0.0, 10.0],
     ])
     np.testing.assert_allclose(interpolated, expected)
+
+
+def test_raw_method_returns_observed_histogram_moments():
+    light = np.array([0, 0, 10, 0], dtype=float)
+    dark = np.array([10, 0, 0, 0], dtype=float)
+
+    corrected, diagnostics = correct_histogram(light, dark, method="raw")
+
+    np.testing.assert_allclose(corrected, light)
+    assert diagnostics.method == "raw"
+    assert diagnostics.clipped_mass == 0.0
+
+
+def test_current_method_subtracts_dark_mean_and_variance_in_moment_space():
+    light = np.array([0, 0, 0, 10, 0], dtype=float)
+    dark = np.array([0, 10, 0, 0, 0], dtype=float)
+
+    corrected, diagnostics = correct_histogram(light, dark, method="current")
+
+    assert corrected is None
+    assert diagnostics.method == "current"
+    assert diagnostics.corrected_mean == pytest.approx(2.0)
+    assert diagnostics.corrected_variance == pytest.approx(0.0)
+
+
+def test_bin_subtract_clips_negative_bins_and_reports_clipped_mass():
+    light = np.array([1, 5, 0], dtype=float)
+    dark = np.array([3, 2, 0], dtype=float)
+
+    corrected, diagnostics = correct_histogram(light, dark, method="bin_subtract")
+
+    np.testing.assert_allclose(corrected, np.array([0, 3, 0], dtype=float))
+    assert diagnostics.clipped_mass == pytest.approx(2.0)
+    assert diagnostics.output_mass == pytest.approx(3.0)

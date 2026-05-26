@@ -70,3 +70,77 @@ def interpolate_dark_histograms(
     for bin_idx in range(hists.shape[1]):
         output[:, bin_idx] = np.interp(targets, anchors, hists[:, bin_idx])
     return output
+
+
+@dataclass(frozen=True)
+class CorrectionDiagnostics:
+    method: str
+    input_mass: float
+    dark_mass: float
+    output_mass: float
+    clipped_mass: float
+    corrected_mean: float
+    corrected_variance: float
+    corrected_contrast: float
+    ringing_score: float = 0.0
+
+
+def _diagnostics_from_hist(method: str, light: np.ndarray, dark: np.ndarray, corrected: np.ndarray, clipped_mass: float) -> CorrectionDiagnostics:
+    moments = histogram_moments(corrected)
+    return CorrectionDiagnostics(
+        method=method,
+        input_mass=float(np.asarray(light, dtype=float).sum()),
+        dark_mass=float(np.asarray(dark, dtype=float).sum()),
+        output_mass=float(corrected.sum()),
+        clipped_mass=float(clipped_mass),
+        corrected_mean=moments.mean,
+        corrected_variance=moments.variance,
+        corrected_contrast=moments.contrast,
+        ringing_score=ringing_score(corrected),
+    )
+
+
+def ringing_score(hist: np.ndarray) -> float:
+    counts = np.asarray(hist, dtype=float)
+    if counts.size < 3 or counts.sum() <= 0:
+        return 0.0
+    second_diff = np.diff(counts, n=2)
+    return float(np.mean(np.abs(second_diff)) / max(np.mean(counts), 1.0))
+
+
+def correct_histogram(light_hist: np.ndarray, dark_hist: np.ndarray, method: str) -> tuple[np.ndarray | None, CorrectionDiagnostics]:
+    light = np.asarray(light_hist, dtype=float)
+    dark = np.asarray(dark_hist, dtype=float)
+    if light.shape != dark.shape:
+        raise ValueError(f"light and dark histograms must have same shape, got {light.shape} and {dark.shape}")
+
+    if method == "raw":
+        corrected = light.copy()
+        return corrected, _diagnostics_from_hist(method, light, dark, corrected, clipped_mass=0.0)
+
+    if method == "current":
+        light_m = histogram_moments(light)
+        dark_m = histogram_moments(dark)
+        corrected_mean = light_m.mean - dark_m.mean
+        corrected_variance = max(light_m.variance - dark_m.variance, 0.0)
+        corrected_std = float(np.sqrt(corrected_variance))
+        corrected_contrast = corrected_std / corrected_mean if corrected_mean > 0 else 0.0
+        diagnostics = CorrectionDiagnostics(
+            method=method,
+            input_mass=light_m.total,
+            dark_mass=dark_m.total,
+            output_mass=light_m.total,
+            clipped_mass=0.0,
+            corrected_mean=float(corrected_mean),
+            corrected_variance=float(corrected_variance),
+            corrected_contrast=float(corrected_contrast),
+        )
+        return None, diagnostics
+
+    if method == "bin_subtract":
+        raw = light - dark
+        clipped_mass = float(np.abs(raw[raw < 0]).sum())
+        corrected = np.clip(raw, 0.0, None)
+        return corrected, _diagnostics_from_hist(method, light, dark, corrected, clipped_mass=clipped_mass)
+
+    raise ValueError(f"unknown correction method: {method}")
