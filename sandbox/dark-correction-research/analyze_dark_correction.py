@@ -28,12 +28,14 @@ METHODS = ["raw", "current", "bin_subtract", "deconv_fft"]
 
 def _empty_camera_state() -> dict:
     return {
+        "started": False,
         "last_frame_id": None,
         "rollovers": 0,
         "light_seen": 0,
         "dark_seen": 0,
         "light_rows": [],
         "dark_rows": [],
+        "replacement_candidate_rows": [],
         "rng": np.random.default_rng(0),
     }
 
@@ -45,9 +47,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dark-interval", type=int, default=600)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--histogram-bins", type=int, default=1024)
+    parser.add_argument("--noisy-bin-min", type=int, default=10)
     parser.add_argument("--max-light-frames-per-camera", type=int, default=5000)
     parser.add_argument("--max-dark-anchors-per-camera", type=int, default=5000)
     return parser.parse_args()
+
+
+def production_cleanup_histograms(hists: np.ndarray, noisy_bin_min: int = 10) -> np.ndarray:
+    cleaned = np.asarray(hists, dtype=float).copy()
+    if cleaned.shape[-1] > 0:
+        cleaned[..., 0] -= 6
+    cleaned[cleaned < noisy_bin_min] = 0
+    return cleaned
 
 
 def read_selected_rows(
@@ -71,12 +82,19 @@ def read_selected_rows(
             cam_id = int(row["cam_id"])
             state = states[cam_id]
             frame_id = int(row["frame_id"])
+            if not state["started"]:
+                if frame_id != 1:
+                    continue
+                state["started"] = True
+
             last_frame_id = state["last_frame_id"]
             if last_frame_id is not None and frame_id < last_frame_id:
                 state["rollovers"] += 1
             state["last_frame_id"] = frame_id
-            row["absolute_frame"] = (state["rollovers"] * FRAME_ID_MAX) + frame_id
+            row["absolute_frame"] = (state["rollovers"] * FRAME_ID_MAX) + frame_id - 1
             row["is_dark_anchor"] = (row["absolute_frame"] % dark_interval) == 0
+            if 0 < row["absolute_frame"] <= 9:
+                state["replacement_candidate_rows"].append(row.copy())
             if row["is_dark_anchor"]:
                 state["dark_seen"] += 1
                 if len(state["dark_rows"]) < max_dark_anchors_per_camera:
@@ -102,9 +120,11 @@ def read_selected_rows(
     for cam_id in sorted(states):
         selected_rows.extend(states[cam_id]["dark_rows"])
         selected_rows.extend(states[cam_id]["light_rows"])
+        selected_rows.extend(states[cam_id]["replacement_candidate_rows"])
     if not selected_rows:
         raise ValueError(f"no sampled rows found for cameras {sorted(cameras)}")
     selected = pd.DataFrame(selected_rows)
+    selected = selected.drop_duplicates(subset=["cam_id", "absolute_frame"], keep="first")
     return selected.sort_values(["cam_id", "absolute_frame"]).reset_index(drop=True)
 
 
@@ -114,12 +134,18 @@ def analyze_camera(
     dark_interval: int,
     histogram_bins: int,
     max_light_frames: int,
+    noisy_bin_min: int = 10,
 ) -> tuple[list[dict], pd.DataFrame]:
     cam = df[df["cam_id"] == cam_id].copy()
     if "absolute_frame" not in cam.columns:
-        cam["absolute_frame"] = absolute_frame_ids(cam["frame_id"].to_numpy(dtype=int))
+        frame_ids = cam["frame_id"].to_numpy(dtype=int)
+        start_positions = np.flatnonzero(frame_ids == 1)
+        if start_positions.size == 0:
+            raise ValueError(f"camera {cam_id} has no frame_id 1 start row")
+        cam = cam.iloc[int(start_positions[0]) :].copy()
+        cam["absolute_frame"] = absolute_frame_ids(cam["frame_id"].to_numpy(dtype=int)) - 1
     hist_cols = [str(i) for i in range(histogram_bins)]
-    hists = cam[hist_cols].to_numpy(dtype=float)
+    hists = production_cleanup_histograms(cam[hist_cols].to_numpy(dtype=float), noisy_bin_min=noisy_bin_min)
     frames = cam["absolute_frame"].to_numpy(dtype=int)
     temperatures = cam["temperature"].to_numpy(dtype=float)
     if "is_dark_anchor" in cam.columns:
@@ -130,6 +156,18 @@ def analyze_camera(
         raise ValueError(f"camera {cam_id} has no dark anchors")
     dark_frames = frames[dark_mask]
     dark_hists = hists[dark_mask]
+    max_frame = int(frames.max())
+    first_dark_replacement_target = int(min(9, max(max_frame - 1, 0)))
+    first_dark_replacement_frame = int(dark_frames[0])
+    first_dark_replacement_exact = False
+    replacement_candidates = np.arange(frames.size)
+    if replacement_candidates.size:
+        nearest_pos = int(np.argmin(np.abs(frames[replacement_candidates] - first_dark_replacement_target)))
+        replacement_idx = int(replacement_candidates[nearest_pos])
+        dark_hists = dark_hists.copy()
+        dark_hists[0] = hists[replacement_idx]
+        first_dark_replacement_frame = int(frames[replacement_idx])
+        first_dark_replacement_exact = first_dark_replacement_frame == first_dark_replacement_target
     light_mask = ~dark_mask
     light_indices = np.flatnonzero(light_mask)
     if light_indices.size > max_light_frames:
@@ -174,6 +212,9 @@ def analyze_camera(
                 "mean_clipped_mass": float(np.mean(clipped)) if clipped else 0.0,
                 "mean_ringing_score": float(np.mean(ringing)) if ringing else 0.0,
                 "ms_per_frame": (elapsed / max(len(light_indices), 1)) * 1000.0,
+                "first_dark_replacement_target": first_dark_replacement_target,
+                "first_dark_replacement_frame": first_dark_replacement_frame,
+                "first_dark_replacement_exact": first_dark_replacement_exact,
             }
         )
         frame_rows.extend(
@@ -260,6 +301,7 @@ def main() -> int:
             args.dark_interval,
             args.histogram_bins,
             args.max_light_frames_per_camera,
+            args.noisy_bin_min,
         )
         all_metrics.extend(rows)
         all_frames.append(frame_df)
