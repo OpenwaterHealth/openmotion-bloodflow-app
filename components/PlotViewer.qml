@@ -7,6 +7,7 @@ import OpenMotion 1.0
 // GridLayout with per-camera cells + toolbar + scrubber.
 Rectangle {
     id: viewer
+    anchors.fill: parent
     color: "#0E0E0E"
     radius: 8
     border.color: "#2A2A2A"
