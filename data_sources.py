@@ -224,21 +224,26 @@ class ScanDataSource(QObject):
         samples are available (too noisy to autoscale meaningfully).
 
         Matches legacy EmbeddedRealtimePlot._boundsFromArray semantics."""
-        values: list[float] = []
+        # Stay in numpy throughout — building a Python list from
+        # `.tolist()` was the dominant cost of this slot at 1 Hz over
+        # 8 cams × 2 metrics × growing buffers.
+        chunks: list[np.ndarray] = []
         for (_side, _cam_id, m), buf in self.buffers.items():
             if m != metric or buf.n == 0:
                 continue
             slice_v = buf.v[: buf.n]
             finite_mask = np.isfinite(slice_v)
             if finite_mask.any():
-                values.extend(slice_v[finite_mask].tolist())
+                chunks.append(slice_v[finite_mask])
 
-        if len(values) < 4:
+        if not chunks:
+            return {"yMin": 0.0, "yMax": 1.0}
+        combined = np.concatenate(chunks)
+        if combined.size < 4:
             return {"yMin": 0.0, "yMax": 1.0}
 
-        arr = np.asarray(values, dtype=np.float64)
-        lo = float(np.percentile(arr, percentile_lo))
-        hi = float(np.percentile(arr, percentile_hi))
+        lo = float(np.percentile(combined, percentile_lo))
+        hi = float(np.percentile(combined, percentile_hi))
 
         if lo == hi:
             lo -= 0.5

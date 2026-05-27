@@ -159,7 +159,11 @@ Rectangle {
 
     Timer {
         id: paintThrottle
-        interval: 33
+        // 50 ms = 20 Hz — gives Qt's scene graph headroom under load.
+        // Visually smooth: each pan/scroll frame still moves the trace
+        // by ~2 px in a 200 px cell. Lower than 20 Hz starts to look
+        // jerky; higher overloads under 8-cell × 2-metric paint cost.
+        interval: 50
         running: viewer.scanSource !== null
         repeat: true
         onTriggered: {

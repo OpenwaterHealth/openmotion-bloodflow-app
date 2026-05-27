@@ -129,7 +129,9 @@ Item {
             var dt = tHi - tLo
             if (dt <= 0) return
 
-            var maxPts = Math.max(50, Math.floor(width * 2))
+            // 1 sample per pixel is plenty for a smooth trace and halves
+            // the per-paint Python→QML data volume vs the spec's 2×.
+            var maxPts = Math.max(50, Math.floor(width))
 
             cell._drawTrace(ctx, cell.metric, cell.traceColor,
                             cell.yMin, cell.yMax,
