@@ -21,11 +21,20 @@ Rectangle {
     property bool reducedMode: false   // honored in Phase 2b-ii
 
     // ── State (owned here; pushed to every cell) ───────────────────────
-    property string metric: "bvi"
-    property real windowSeconds: 15
-    property real yMin: 0.0
-    property real yMax: 10.0
+    // displayMode: "bfi_bvi" overlays BFI+BVI on each cell;
+    // "mean_contrast" overlays Mean+Contrast. Each metric has its own
+    // y-axis mapping (primary*/secondary*) so the two traces don't
+    // squash each other when their ranges differ wildly.
+    property string displayMode: "bfi_bvi"
+    property int windowSeconds: 15
     property bool autoScale: true
+
+    // Independent y-axis bounds per metric — kept here so every cell
+    // shares the same scale.
+    property real primaryYMin: 0.0
+    property real primaryYMax: 10.0
+    property real secondaryYMin: 0.0
+    property real secondaryYMax: 10.0
 
     // ── Source subscription ────────────────────────────────────────────
     readonly property var scanSource: MOTIONInterface.currentScanSource
@@ -74,9 +83,18 @@ Rectangle {
         return theme.statusBlue
     }
 
-    // Autoscale tick — 1 Hz. Calls into the source's compute_bounds_for_metric
-    // (Phase 2b-i Task 1) and pushes the result into the viewer's yMin/yMax,
-    // which propagates to every cell via property binding.
+    // ── Display-mode pair resolution ───────────────────────────────────
+    // Maps the displayMode toggle to the primary/secondary metric pair
+    // pushed to every cell.
+    readonly property var _displayPair: {
+        if (viewer.displayMode === "mean_contrast")
+            return { primary: "mean", secondary: "contrast" }
+        return { primary: "bfi", secondary: "bvi" }
+    }
+
+    // Autoscale tick — 1 Hz. Computes bounds for both metrics in the
+    // current display pair and pushes them into the viewer's per-metric
+    // ranges, which propagate to every cell via property bindings.
     Timer {
         interval: 1000
         running: viewer.autoScale && viewer.scanSource !== null
@@ -84,10 +102,15 @@ Rectangle {
         triggeredOnStart: true
         onTriggered: {
             if (!viewer.scanSource) return
-            var b = viewer.scanSource.compute_bounds_for_metric(viewer.metric)
-            if (b && typeof b.yMin === "number" && typeof b.yMax === "number") {
-                viewer.yMin = b.yMin
-                viewer.yMax = b.yMax
+            var bp = viewer.scanSource.compute_bounds_for_metric(viewer._displayPair.primary)
+            if (bp && typeof bp.yMin === "number" && typeof bp.yMax === "number") {
+                viewer.primaryYMin = bp.yMin
+                viewer.primaryYMax = bp.yMax
+            }
+            var bs = viewer.scanSource.compute_bounds_for_metric(viewer._displayPair.secondary)
+            if (bs && typeof bs.yMin === "number" && typeof bs.yMax === "number") {
+                viewer.secondaryYMin = bs.yMin
+                viewer.secondaryYMax = bs.yMax
             }
         }
     }
@@ -100,11 +123,11 @@ Rectangle {
         PlotToolbar {
             Layout.fillWidth: true
             scanSource: viewer.scanSource
-            metric: viewer.metric
+            displayMode: viewer.displayMode
             windowSeconds: viewer.windowSeconds
             autoScale: viewer.autoScale
 
-            onMetricRequested: function(m) { viewer.metric = m }
+            onDisplayModeRequested: function(mode) { viewer.displayMode = mode }
             onWindowSecondsRequested: function(s) { viewer.windowSeconds = s }
             onAutoScaleToggled: function(enabled) { viewer.autoScale = enabled }
         }
@@ -127,11 +150,15 @@ Rectangle {
                     source: viewer.scanSource
                     side: modelData.side
                     camId: modelData.camId
-                    metric: viewer.metric
                     windowSeconds: viewer.windowSeconds
-                    yMin: viewer.yMin
-                    yMax: viewer.yMax
-                    traceColor: viewer._traceColorForMetric(viewer.metric)
+                    metric: viewer._displayPair.primary
+                    yMin: viewer.primaryYMin
+                    yMax: viewer.primaryYMax
+                    traceColor: viewer._traceColorForMetric(viewer._displayPair.primary)
+                    secondaryMetric: viewer._displayPair.secondary
+                    secondaryYMin: viewer.secondaryYMin
+                    secondaryYMax: viewer.secondaryYMax
+                    secondaryColor: viewer._traceColorForMetric(viewer._displayPair.secondary)
                 }
             }
         }

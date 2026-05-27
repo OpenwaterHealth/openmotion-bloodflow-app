@@ -12,16 +12,23 @@ Item {
     property var source: null            // ScanDataSource (Python QObject) or null
     property string side: "left"
     property int    camId: 0
-    property string metric: "bfi"
     property real   windowSeconds: 15
 
-    // Display bounds — Phase 2a uses fixed [yMin, yMax]; Phase 2b adds
-    // autoscale / per-cell fit.
+    // Primary trace
+    property string metric: "bfi"
     property real yMin: 0.0
     property real yMax: 10.0
+    property color traceColor: theme.statusBlue
+
+    // Secondary trace (optional) — set secondaryMetric to a non-empty
+    // string to render a second overlaid trace with its own y-mapping.
+    // Used for BFI+BVI / Mean+Contrast paired display modes.
+    property string secondaryMetric: ""
+    property real secondaryYMin: 0.0
+    property real secondaryYMax: 10.0
+    property color secondaryColor: theme.statusBlue
 
     // Visual — defaults pulled from AppTheme; can be overridden per-cell.
-    property color traceColor: theme.statusBlue
     property color frameColor: theme.borderSubtle
     property color bgColor: theme.bgPanel
 
@@ -39,9 +46,37 @@ Item {
         target: cell.source
         ignoreUnknownSignals: true
         function onSamplesAppended(s, c, m, n) {
-            if (s === cell.side && c === cell.camId && m === cell.metric)
+            if (s !== cell.side || c !== cell.camId) return
+            if (m === cell.metric || m === cell.secondaryMetric)
                 traceCanvas.requestPaint()
         }
+    }
+
+    // Render one trace inside the current Canvas context using the given
+    // metric/color/yMin/yMax. Defined as a JS function on the cell so
+    // both primary and secondary draws share it.
+    function _drawTrace(ctx, metricName, color, yMinVal, yMaxVal,
+                       tLo, tHi, dt, maxPts, w, h) {
+        if (!metricName || metricName.length === 0) return
+        var pts = cell.source.points_for_window(
+            cell.side, cell.camId, metricName, tLo, tHi, maxPts
+        )
+        if (pts.length < 2) return
+        var dy = yMaxVal - yMinVal
+        if (dy <= 0) return
+        ctx.beginPath()
+        ctx.lineWidth = 1.5
+        ctx.strokeStyle = color
+        for (var i = 0; i < pts.length; i++) {
+            var t = pts[i][0]
+            var v = pts[i][1]
+            if (!isFinite(v)) continue
+            var x = ((t - tLo) / dt) * w
+            var y = h - ((v - yMinVal) / dy) * h
+            if (i === 0) ctx.moveTo(x, y)
+            else ctx.lineTo(x, y)
+        }
+        ctx.stroke()
     }
 
     Rectangle {
@@ -83,61 +118,44 @@ Item {
             if (dt <= 0) return
 
             var maxPts = Math.max(50, Math.floor(width * 2))
-            var pts = cell.source.points_for_window(
-                cell.side, cell.camId, cell.metric,
-                tLo, tHi, maxPts
-            )
-            if (pts.length < 2) return
 
-            var dy = cell.yMax - cell.yMin
-            if (dy <= 0) return
-
-            ctx.beginPath()
-            ctx.lineWidth = 1.5
-            ctx.strokeStyle = cell.traceColor
-            for (var i = 0; i < pts.length; i++) {
-                var t = pts[i][0]
-                var v = pts[i][1]
-                if (!isFinite(v)) continue
-                var x = ((t - tLo) / dt) * width
-                var y = height - ((v - cell.yMin) / dy) * height
-                if (i === 0) ctx.moveTo(x, y)
-                else ctx.lineTo(x, y)
-            }
-            ctx.stroke()
+            cell._drawTrace(ctx, cell.metric, cell.traceColor,
+                            cell.yMin, cell.yMax,
+                            tLo, tHi, dt, maxPts, width, height)
+            cell._drawTrace(ctx, cell.secondaryMetric, cell.secondaryColor,
+                            cell.secondaryYMin, cell.secondaryYMax,
+                            tLo, tHi, dt, maxPts, width, height)
         }
     }
 
-    // Cell label — top-left, identifies which (side, cam, metric) this is.
-    Text {
+    // Cell label — top-left, camera identity plus per-metric range labels
+    // colored to match each trace. When secondaryMetric is empty, only
+    // the primary metric row is shown.
+    Column {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.margins: 8
-        text: cell.side.toUpperCase() + " " + (cell.camId + 1) + " · " + cell.metric.toUpperCase()
-        color: theme.textSecondary
-        font.pixelSize: 11
-        font.family: "Roboto Mono"
-    }
+        spacing: 1
 
-    // Y-axis bound labels — hidden when cell is too narrow to fit them.
-    Text {
-        visible: cell.width >= 80
-        anchors.top: parent.top
-        anchors.right: parent.right
-        anchors.margins: 8
-        text: cell.yMax.toFixed(2)
-        color: theme.textTertiary
-        font.pixelSize: 10
-        font.family: "Roboto Mono"
-    }
-    Text {
-        visible: cell.width >= 80
-        anchors.bottom: parent.bottom
-        anchors.right: parent.right
-        anchors.margins: 8
-        text: cell.yMin.toFixed(2)
-        color: theme.textTertiary
-        font.pixelSize: 10
-        font.family: "Roboto Mono"
+        Text {
+            text: cell.side.toUpperCase() + " " + (cell.camId + 1)
+            color: theme.textSecondary
+            font.pixelSize: 11
+            font.family: "Roboto Mono"
+        }
+        Text {
+            visible: cell.width >= 80
+            text: cell.metric.toUpperCase() + "  " + cell.yMin.toFixed(2) + " – " + cell.yMax.toFixed(2)
+            color: cell.traceColor
+            font.pixelSize: 10
+            font.family: "Roboto Mono"
+        }
+        Text {
+            visible: cell.width >= 80 && cell.secondaryMetric.length > 0
+            text: cell.secondaryMetric.toUpperCase() + "  " + cell.secondaryYMin.toFixed(2) + " – " + cell.secondaryYMax.toFixed(2)
+            color: cell.secondaryColor
+            font.pixelSize: 10
+            font.family: "Roboto Mono"
+        }
     }
 }

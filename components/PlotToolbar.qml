@@ -13,20 +13,21 @@ Item {
 
     // ── Inputs ─────────────────────────────────────────────────────────
     property var scanSource: null
-    property string metric: "bvi"
+    // displayMode pairs metrics: "bfi_bvi" overlays BFI + BVI on each
+    // cell; "mean_contrast" overlays Mean + Contrast. Matches the
+    // legacy plot's showBfiBvi toggle.
+    property string displayMode: "bfi_bvi"
     property int windowSeconds: 15
     property bool autoScale: true
 
     // ── Outputs ────────────────────────────────────────────────────────
-    signal metricRequested(string m)
+    signal displayModeRequested(string mode)
     signal windowSecondsRequested(int s)
     signal autoScaleToggled(bool enabled)
 
-    readonly property var _metricOptions: [
-        { value: "bfi",      label: "BFI" },
-        { value: "bvi",      label: "BVI" },
-        { value: "mean",     label: "Mean" },
-        { value: "contrast", label: "Contrast" }
+    readonly property var _displayModeOptions: [
+        { value: "bfi_bvi",       label: "BFI / BVI" },
+        { value: "mean_contrast", label: "Mean / Contrast" }
     ]
     readonly property var _windowOptions: [
         { value: 5,  label: "5 s" },
@@ -53,23 +54,23 @@ Item {
         }
 
         Text {
-            text: "Metric:"
+            text: "Show:"
             color: theme.textTertiary
             font.pixelSize: 11
         }
         ComboBox {
-            id: metricCombo
-            Layout.preferredWidth: 110
-            model: toolbar._metricOptions
+            id: displayModeCombo
+            Layout.preferredWidth: 160
+            model: toolbar._displayModeOptions
             textRole: "label"
             valueRole: "value"
             currentIndex: {
-                for (var i = 0; i < toolbar._metricOptions.length; i++) {
-                    if (toolbar._metricOptions[i].value === toolbar.metric) return i
+                for (var i = 0; i < toolbar._displayModeOptions.length; i++) {
+                    if (toolbar._displayModeOptions[i].value === toolbar.displayMode) return i
                 }
-                return 1  // default BVI
+                return 0  // default BFI/BVI
             }
-            onActivated: toolbar.metricRequested(toolbar._metricOptions[currentIndex].value)
+            onActivated: toolbar.displayModeRequested(toolbar._displayModeOptions[currentIndex].value)
         }
 
         Text {
