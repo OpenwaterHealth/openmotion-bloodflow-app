@@ -75,7 +75,7 @@ Flip these in `config/app_config.json`:
 | `cq_dark_threshold_per_camera` | `[3.0,…]` | Contact-quality dark threshold. |
 | `bfiClampLow` / `bfiClampHigh` | `0.0` / `10.0` | Display clamps (values outside show `--`). |
 | `bviLowPassEnabled` | `true` | 1-pole LPF on BVI (cutoff 40 Hz). |
-| `dataDirectory` | `C:\Users\ethan\Projects\scan_data` | Single output root — scan CSVs/DB, `app-logs/`, `run-logs/`, `app-logs/ft-test-csvs/` all land under here. |
+| `dataDirectory` | `C:\Users\ethan\Projects\scan_data` | Single output root — scan CSVs/DB, `app-logs/`, `app-logs/ft-test-csvs/` all land under here. |
 
 ## Reading the app log
 
@@ -100,7 +100,6 @@ Get-ChildItem C:\Users\ethan\Projects\scan_data\app-logs\ow-bloodflowapp-*.log |
 The `dataDirectory` config key controls the root (defaults to cwd if unset — falls back to `~/Documents/OpenWater Bloodflow` on macOS). Sibling output directories under the same root:
 - `app-logs/` — app log files (one per launch)
 - `app-logs/ft-test-csvs/` — factory-test CSVs
-- `run-logs/` — per-scan run logs (one per trigger session: `run-<subject>_<ts>.log`)
 - `calibrations/` — saved calibration JSONs (also written here)
 - The scan output files (raw / corrected / notes / telemetry CSV + `scans.db`) land directly in the root
 

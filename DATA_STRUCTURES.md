@@ -135,7 +135,6 @@ CSVIntegrityChecker
 - `ConsoleStatusThread` starts when the console connects, stops on disconnect or shutdown.
 - Capture writer threads are created per `startCapture()` call and joined when capture completes or is canceled.
 - `_VizWorker` and `_ConfigureWorker` are ephemeral QThread workers created on demand and destroyed on completion.
-- Per-run log files and CSV telemetry logs are opened at trigger start (`_start_runlog`) and closed at trigger stop (`_stop_runlog`).
 
 ---
 
@@ -349,13 +348,12 @@ _pdu_vals = [float] * 16  # scaled voltage values
 
 ### Concurrency Concerns
 - **`_telemetry_lock`**: Protects `_tcm`, `_tcl`, `_pdc` shared between `ConsoleStatusThread` and writer threads. Minimal contention (read-heavy in writers, write-only by status thread).
-- **`_runlog_csv_lock`**: Protects CSV telemetry log writes. Low frequency (~1 Hz), no real contention risk.
 - **No lock on `_capture_running`/`_capture_thread`**: These boolean/thread guards are set/checked across threads without synchronization. Race condition possible if `startCapture` is called rapidly, though the QML UI practically prevents this.
 - **Qt signal/slot across threads**: `scanMeanSampled`, `scanBfiSampled` etc. are emitted from writer threads. Qt's queued connection mechanism handles cross-thread delivery, but high-frequency emission (640 signals/sec) may saturate the event loop.
 
 ### Data Growth
 - **Scan data**: ~20 MB CSV per minute per camera on disk. Extended sessions or many subjects will fill local storage.
-- **Run logs**: Modest (KB per session), but accumulate indefinitely in `run-logs/` and `app-logs/` directories. No automatic cleanup or rotation.
+- **App logs**: Modest (KB per session), but accumulate indefinitely in the `app-logs/` directory. No automatic cleanup or rotation.
 - **No data lifecycle management**: Old scans, logs, and results persist until manually deleted.
 
 ### Assumptions Made
