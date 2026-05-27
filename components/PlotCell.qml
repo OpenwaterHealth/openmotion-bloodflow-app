@@ -297,4 +297,43 @@ Item {
             wheel.accepted = true
         }
     }
+
+    // ── Touch pinch-zoom ───────────────────────────────────────────────
+    // Mouse wheel is mouse-only — touch devices (Surface, etc.) need a
+    // pinch handler. Single-finger drag still flows through the
+    // MouseArea above (Qt auto-translates one touch to mouse events).
+    // The handler snapshots windowSeconds and the anchor at pinch
+    // start, then computes newSec = baseSec / scale so the pinch
+    // gesture's cumulative scale maps smoothly to the visible window.
+    PinchHandler {
+        id: pinchZoom
+        target: null  // we drive the viewer manually via setWindow
+
+        property real _baseWindowSeconds: 0
+        property real _baseTLo: 0
+        property real _anchorRatio: 0.5
+
+        onActiveChanged: {
+            if (active && cell.width > 0) {
+                _baseWindowSeconds = cell.windowSeconds
+                _baseTLo = panZoomArea._currentTHi() - cell.windowSeconds
+                _anchorRatio = Math.max(0, Math.min(1, centroid.position.x / cell.width))
+                // Keyboard focus back to viewer on any touch interaction.
+                if (cell.panZoomTarget) cell.panZoomTarget.forceActiveFocus()
+            }
+        }
+
+        onScaleChanged: {
+            if (!active || !cell.panZoomTarget || cell.width <= 0) return
+            // Pinch out (scale > 1) = zoom in (smaller window); pinch
+            // in (scale < 1) = zoom out. Matches platform conventions.
+            var newSec = pinchZoom._baseWindowSeconds / scale
+            var anchorT = pinchZoom._baseTLo
+                          + pinchZoom._anchorRatio * pinchZoom._baseWindowSeconds
+            cell.panZoomTarget.setWindow(
+                anchorT - pinchZoom._anchorRatio * newSec,
+                newSec
+            )
+        }
+    }
 }
