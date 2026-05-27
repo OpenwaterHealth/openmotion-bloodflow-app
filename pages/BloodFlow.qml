@@ -33,6 +33,11 @@ Rectangle {
     // FDA mode (read from app config). Forces Far camera pattern + free run,
     // hides scan-settings button, and swaps in the FDA plot view.
     property bool reducedMode: MOTIONInterface.appConfig.reducedMode === true
+    // Phase 2a: useNewPlotViewer flag selects between the new (foundation-only)
+    // PlotViewer and the legacy EmbeddedRealtimePlot / ReducedPlotView pair.
+    // Flag default is false (legacy renders). Flip locally via app_config.json
+    // to dev-test the new viewer.
+    readonly property bool _useNewViewer: MOTIONInterface.appConfig.useNewPlotViewer === true
     // In reduced mode, Start first runs a contact-quality preflight check.
     property bool reducedStartPending: false
     // Prevent late CQ callbacks from re-opening the modal while a stop/cancel
@@ -228,10 +233,27 @@ Rectangle {
                  settingsModal, contactQualityModal, scanDialog]
     }
 
-    // Data viewer — fills remaining space to the right of ButtonPanel
+    // Data viewer — fills remaining space to the right of ButtonPanel.
+    // Phase 2a: useNewPlotViewer mounts the new PlotViewer via Loader when
+    // true; otherwise the legacy plots below render unchanged.
+    Loader {
+        id: newPlotLoader
+        active: bloodFlow._useNewViewer
+        visible: bloodFlow._useNewViewer
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.left: buttonPanel.right
+        anchors.right: parent.right
+        anchors.margins: 8
+        anchors.leftMargin: 16
+        sourceComponent: PlotViewer {
+            reducedMode: bloodFlow.reducedMode
+        }
+    }
+
     EmbeddedRealtimePlot {
         id: embeddedPlot
-        visible: !bloodFlow.reducedMode
+        visible: !bloodFlow._useNewViewer && !bloodFlow.reducedMode
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         anchors.left: buttonPanel.right
@@ -266,7 +288,7 @@ Rectangle {
     // FDA-mode data viewer — two big aggregated plots
     ReducedPlotView {
         id: reducedPlot
-        visible: bloodFlow.reducedMode
+        visible: !bloodFlow._useNewViewer && bloodFlow.reducedMode
         windowSeconds: settingsModal.plotWindowSec
         bfiColor: settingsModal.bfiColor
         bviColor: settingsModal.bviColor
