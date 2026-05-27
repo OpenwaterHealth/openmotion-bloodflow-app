@@ -166,7 +166,20 @@ Rectangle {
         interval: 33
         running: viewer.scanSource !== null
         repeat: true
+        // [LAG-DIAG] Capture inter-tick gap; if the main event loop is
+        // blocked by anything (paint, slot, GC), the next Timer fire
+        // arrives late and we'll see a >50 ms gap printed.
+        property real _lastTickMs: 0
         onTriggered: {
+            var nowMs = Date.now()
+            if (paintThrottle._lastTickMs > 0) {
+                var gap = nowMs - paintThrottle._lastTickMs
+                if (gap > 50) {
+                    console.warn("[LAG-DIAG] paintThrottle gap=" + gap +
+                                 " ms (expected ~33 ms)")
+                }
+            }
+            paintThrottle._lastTickMs = nowMs
             if (viewer._dirty) {
                 viewer._dirty = false
                 viewer.liveEdgeSnapshot = viewer.scanSource ? viewer.scanSource.liveEdge : 0
@@ -194,6 +207,9 @@ Rectangle {
         triggeredOnStart: true
         onTriggered: {
             if (!viewer.scanSource) return
+            // [LAG-DIAG] Time the full autoscale tick (two metrics' worth
+            // of compute_bounds_for_metric + property writes).
+            var _t0 = Date.now()
             var bp = viewer.scanSource.compute_bounds_for_metric(viewer._displayPair.primary)
             if (bp && typeof bp.yMin === "number" && typeof bp.yMax === "number") {
                 viewer.primaryYMin = bp.yMin
@@ -205,6 +221,10 @@ Rectangle {
                 viewer.secondaryYMax = bs.yMax
             }
             viewer._dirty = true
+            var _ms = Date.now() - _t0
+            if (_ms > 15) {
+                console.warn("[LAG-DIAG] autoscale tick took " + _ms + " ms")
+            }
         }
     }
 

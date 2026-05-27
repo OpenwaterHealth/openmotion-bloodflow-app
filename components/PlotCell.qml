@@ -101,6 +101,9 @@ Item {
         anchors.margins: 4
 
         onPaint: {
+            // [LAG-DIAG] Time the per-cell paint. Log when > 15 ms;
+            // 8 active cells × >15 ms each would blow the 33 ms tick budget.
+            var _paintT0 = Date.now()
             var ctx = getContext("2d")
             ctx.clearRect(0, 0, width, height)
 
@@ -143,6 +146,12 @@ Item {
             cell._drawTrace(ctx, cell.secondaryMetric, cell.secondaryColor,
                             cell.secondaryYMin, cell.secondaryYMax,
                             tLo, tHi, dt, maxPts, width, height)
+
+            var _paintMs = Date.now() - _paintT0
+            if (_paintMs > 15) {
+                console.warn("[LAG-DIAG] PlotCell paint took " + _paintMs +
+                             " ms (" + cell.side + "/cam" + cell.camId + ")")
+            }
         }
     }
 
