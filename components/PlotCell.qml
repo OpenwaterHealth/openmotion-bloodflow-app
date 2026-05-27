@@ -248,6 +248,10 @@ Item {
         onPressed: function(mouse) {
             panZoomArea._dragStartX = mouse.x
             panZoomArea._dragStartWindowStartT = panZoomArea._currentTHi() - cell.windowSeconds
+            // Pull keyboard focus back to the viewer — if the user just
+            // clicked into a text input elsewhere, this restores the
+            // shortcut bindings on the next click into the plot grid.
+            if (cell.panZoomTarget) cell.panZoomTarget.forceActiveFocus()
         }
 
         onPositionChanged: function(mouse) {

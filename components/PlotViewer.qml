@@ -15,6 +15,50 @@ Rectangle {
     border.color: theme.borderSoft
     border.width: 1
 
+    // Keyboard focus — viewer starts focused so spec keys (← → +/- 0
+    // Home End Esc) work without a prior click. Click on a cell or
+    // the scrubber re-focuses; Esc clears focus so text inputs (notes
+    // editor, subject ID) take precedence afterward.
+    focus: true
+    activeFocusOnTab: true
+
+    Keys.onPressed: function(event) {
+        if (event.key === Qt.Key_Left) {
+            var dt = (event.modifiers & Qt.ShiftModifier)
+                ? -viewer.windowSeconds : -1
+            viewer._kbPan(dt)
+            event.accepted = true
+        } else if (event.key === Qt.Key_Right) {
+            var dt2 = (event.modifiers & Qt.ShiftModifier)
+                ? viewer.windowSeconds : 1
+            viewer._kbPan(dt2)
+            event.accepted = true
+        } else if (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal
+                   || event.key === Qt.Key_Up) {
+            // Equal key shares the physical key with Plus on US layouts
+            // — accept it so the user doesn't need to hold Shift. ↑/↓
+            // mirror mouse-wheel direction: wheel-up zooms in.
+            viewer._kbZoom(0.8)
+            event.accepted = true
+        } else if (event.key === Qt.Key_Minus || event.key === Qt.Key_Underscore
+                   || event.key === Qt.Key_Down) {
+            viewer._kbZoom(1.25)
+            event.accepted = true
+        } else if (event.key === Qt.Key_0) {
+            viewer._kbReset()
+            event.accepted = true
+        } else if (event.key === Qt.Key_Home) {
+            viewer.setWindow(0, viewer.windowSeconds)
+            event.accepted = true
+        } else if (event.key === Qt.Key_End) {
+            viewer._kbEnd()
+            event.accepted = true
+        } else if (event.key === Qt.Key_Escape) {
+            viewer.focus = false
+            event.accepted = true
+        }
+    }
+
     AppTheme { id: theme }
 
     // ── Inputs ─────────────────────────────────────────────────────────
@@ -147,6 +191,44 @@ Rectangle {
     function backToLive() {
         viewer.followLive = true
         viewer._dirty = true
+    }
+
+    // ── Keyboard shortcut helpers ──────────────────────────────────────
+    // Default windowSeconds matches PlotToolbar's "15 s" combo entry —
+    // the `0` shortcut resets to this canonical value.
+    readonly property real _defaultWindowSeconds: 15
+
+    function _kbPan(seconds) {
+        _ensureFrozen()
+        setWindow(viewer.windowStartT + seconds, viewer.windowSeconds)
+    }
+
+    function _kbZoom(factor) {
+        _ensureFrozen()
+        // Zoom around the center of the currently-visible window so the
+        // operator's mental anchor stays put on the screen.
+        var center = viewer.windowStartT + viewer.windowSeconds / 2
+        var newSec = viewer.windowSeconds * factor
+        setWindow(center - newSec / 2, newSec)
+    }
+
+    function _kbEnd() {
+        // Past mode: pin window so the rightmost data sits at the right
+        // edge. Live mode: resume followLive (snaps to liveEdge AND
+        // keeps tracking new samples as they arrive).
+        if (viewer.scanSource && viewer.scanSource.live) {
+            backToLive()
+        } else {
+            setWindow(
+                Math.max(0, viewer.liveEdgeSnapshot - viewer.windowSeconds),
+                viewer.windowSeconds
+            )
+        }
+    }
+
+    function _kbReset() {
+        viewer.windowSeconds = _defaultWindowSeconds
+        backToLive()
     }
 
     // ── Hover crosshair ────────────────────────────────────────────────
@@ -361,6 +443,7 @@ Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 28
             visible: viewer.scanSource !== null
+            focusTarget: viewer
             fullScanDuration: viewer.liveEdgeSnapshot
             // When followLive, project the visible window onto the live
             // edge so the inset stays glued to the right; when paused

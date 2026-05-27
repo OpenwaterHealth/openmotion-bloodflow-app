@@ -18,6 +18,10 @@ Item {
     property real windowStartT: 0
     property real windowSeconds: 15
     property bool followLive: true
+    // Item that should regain keyboard focus when the scrubber is
+    // clicked — set to the PlotViewer root so keyboard shortcuts
+    // resume after the user has clicked into another widget.
+    property var focusTarget: null
 
     // ── Output ─────────────────────────────────────────────────────────
     signal panRequested(real startT)
@@ -80,6 +84,9 @@ Item {
         property real _dragStartWindowT: 0
 
         onPressed: function(mouse) {
+            // Restore keyboard focus to the viewer so shortcuts resume
+            // working after the user clicked into a text field.
+            if (scrubber.focusTarget) scrubber.focusTarget.forceActiveFocus()
             var insetLeft = scrubber._insetX
             var insetRight = insetLeft + scrubber._insetW
             if (mouse.x >= insetLeft && mouse.x <= insetRight) {
