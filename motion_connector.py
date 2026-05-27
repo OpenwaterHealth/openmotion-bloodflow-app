@@ -298,21 +298,25 @@ class _LivePlotSink:
             # SDK's SideAveragingStage is enabled. Append under
             # cam_id=-1 so the new viewer's reduced-mode layout can
             # pick them up without colliding with the per-cam buffers.
+            # Append even when bfi/bvi are NaN: the renderer's
+            # `_drawTrace` skips non-finite points per-segment, and
+            # filtering here drops legitimate timestamps that would
+            # otherwise leave the buffer empty if a single cam's
+            # per-frame value is NaN (np.mean propagates NaN).
             bfi_side_arr = getattr(batch, "bfi_live_side", None)
             bvi_side_arr = getattr(batch, "bvi_live_side", None)
             if bfi_side_arr is not None and bvi_side_arr is not None and not is_dark:
                 for sa_side_idx, sa_side in enumerate(_SIDE_NAMES):
                     bfi_s = float(bfi_side_arr[i, sa_side_idx])
                     bvi_s = float(bvi_side_arr[i, sa_side_idx])
-                    if math.isfinite(bfi_s) and math.isfinite(bvi_s):
-                        self._live_source.append_uncorrected(
-                            side=sa_side,
-                            cam_id=-1,
-                            frame_id=abs_frame_id,
-                            t=plot_ts,
-                            bfi=bfi_s,
-                            bvi=bvi_s,
-                        )
+                    self._live_source.append_uncorrected(
+                        side=sa_side,
+                        cam_id=-1,
+                        frame_id=abs_frame_id,
+                        t=plot_ts,
+                        bfi=bfi_s,
+                        bvi=bvi_s,
+                    )
 
     def on_complete(self) -> None:
         pass
