@@ -325,6 +325,26 @@ Rectangle {
                 font.family: "Roboto Mono"
             }
         }
+
+        PlotScrubber {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 28
+            visible: viewer.scanSource !== null
+            fullScanDuration: viewer.liveEdgeSnapshot
+            // When followLive, project the visible window onto the live
+            // edge so the inset stays glued to the right; when paused
+            // (panned/zoomed), reflect the user-set windowStartT.
+            windowStartT: viewer.followLive
+                ? Math.max(0, viewer.liveEdgeSnapshot - viewer.windowSeconds)
+                : viewer.windowStartT
+            windowSeconds: viewer.windowSeconds
+            followLive: viewer.followLive
+
+            onPanRequested: function(startT) {
+                viewer.setWindow(startT, viewer.windowSeconds)
+                console.info("[Plot] scrubber pan → " + startT.toFixed(2) + " s")
+            }
+        }
     }
 
     // ── Hover tooltip ──────────────────────────────────────────────────
