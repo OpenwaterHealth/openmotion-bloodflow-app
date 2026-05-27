@@ -22,8 +22,15 @@ import numpy as np
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot, pyqtProperty
 
 
-_INITIAL_CAPACITY = 4096    # ≈ 100 s @ 40 Hz; doubles on overflow.
 _MAX_CAPACITY = 72000       # ≈ 30 min @ 40 Hz; ring-trim above this.
+_INITIAL_CAPACITY = _MAX_CAPACITY
+# Pre-allocate at the cap. Mid-scan grow events (np.resize → alloc +
+# copy) at the 7-min and 14-min doublings stressed Python's allocator
+# hard enough to stall the SDK parser thread — the data_queue would
+# overflow, USB chunks got dropped, and the parser never recovered
+# (eventually surfaced as CRC mismatches on misaligned reads). At
+# ~1.44 MB per buffer × ~32 active buffers ≈ 46 MB the static
+# allocation cost is fine and consistent across the scan.
 
 
 class _CameraBuffer:
