@@ -132,13 +132,12 @@ Item {
             var dt = tHi - tLo
             if (dt <= 0) return
 
-            // Cap at ~3× cell pixel width. A typical 15 s window at 40 Hz
-            // is 600 samples; for any reasonable cell width × 3 stays
-            // above that, so decimation never kicks in for the common
-            // case and every raw sample is drawn — smoothest possible.
-            // Decimation (with mean-binning) only engages for very long
-            // windows where some smoothing is acceptable anyway.
-            var maxPts = Math.max(50, Math.floor(width * 3))
+            // 1 sample per pixel. Source-side smoothing (overlap-mean
+            // with 3-stride kernel) handles the anti-aliasing, so we
+            // don't need the headroom of × 3 to dodge decimation. Cuts
+            // per-paint Python→QML data volume 3× → restores 30 Hz
+            // paint cadence.
+            var maxPts = Math.max(50, Math.floor(width))
 
             cell._drawTrace(ctx, cell.metric, cell.traceColor,
                             cell.yMin, cell.yMax,

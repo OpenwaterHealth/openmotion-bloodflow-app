@@ -603,30 +603,40 @@ def test_camera_buffer_window_decimated_strides_when_over_max():
     for i in range(400):
         buf.append(t=i * 0.025, v=float(i), frame_id=i)
     # Whole window (10 s), max_points=100 → stride = ceil(400/100) = 4.
-    # Mean-binned: each output value = mean of `stride` adjacent samples.
-    # Bin 0 averages [0,1,2,3] → 1.5; bin 1 averages [4,5,6,7] → 5.5; etc.
+    # Overlap-smoothing with kernel width stride*3 = 12 → half = 6 → each
+    # output is the mean of 2*half+1 = 13 samples centred on the index.
+    # Linspace puts outputs at indices [0, 4, 8, 12, 16, ...]. Edge bins
+    # at low indices average fewer samples (clipped at 0).
     t_dec, v_dec = buf.window_decimated(t_lo=0.0, t_hi=10.0, max_points=100)
     assert len(t_dec) == 100
+    # idx=0:  samples [0..6]    → mean 21/7   = 3.0
+    # idx=4:  samples [0..10]   → mean 55/11  = 5.0
+    # idx=8:  samples [2..14]   → mean 104/13 = 8.0
+    # idx=12: samples [6..18]   → mean 156/13 = 12.0
+    # idx=16: samples [10..22]  → mean 208/13 = 16.0
     assert list(v_dec[:5]) == [
-        np.float32(1.5), np.float32(5.5), np.float32(9.5),
-        np.float32(13.5), np.float32(17.5),
+        np.float32(3.0), np.float32(5.0), np.float32(8.0),
+        np.float32(12.0), np.float32(16.0),
     ]
 
 
-def test_camera_buffer_window_decimated_mean_binning_smooths_alternation():
-    """The whole reason we mean-bin instead of stride-subsample: at
-    stride=2 a plain subsample shows odd-or-even samples depending on
-    which paint catches the window-scroll boundary, producing visible
-    flicker. With mean-binning the per-bin value is the mean of both
-    samples — no alternating-phase aliasing."""
+def test_camera_buffer_window_decimated_smoothing_kills_alternation():
+    """At stride=2 a plain subsample alternates between odd-index and
+    even-index samples as the window scrolls, producing per-paint
+    flicker on noisy data. Overlap-smoothing (kernel wider than stride)
+    pulls each output toward the local mean so alternation can't
+    surface."""
     buf = _CameraBuffer(initial_capacity=1024)
     # Strong noise pattern: alternating 0 and 10.
     for i in range(400):
         buf.append(t=i * 0.025, v=10.0 if (i % 2) else 0.0, frame_id=i)
     t_dec, v_dec = buf.window_decimated(t_lo=0.0, t_hi=10.0, max_points=200)
-    # stride = 2 → each bin averages one 0 and one 10 → 5.0
     assert len(t_dec) == 200
-    assert all(v == np.float32(5.0) for v in v_dec)
+    # Each output averages a 7-sample window (stride=2 → kernel=6 → 13
+    # samples centred). On alternating 0/10 the per-output mean is
+    # always within (4.0, 6.0) — pulled tight around the true mean 5.
+    for v in v_dec:
+        assert 4.0 < float(v) < 6.0
 
 
 def test_camera_buffer_window_decimated_empty_window_returns_empty_arrays():
@@ -688,13 +698,14 @@ def test_scan_data_source_points_for_window_decimates_when_over_max():
         buf.append(t=i * 0.025, v=float(i), frame_id=i)
 
     pts = src.points_for_window("right", 3, "mean", 0.0, 5.0, max_points=50)
-    # 200 samples, max=50 → stride=4. Mean-binned: each output's v is the
-    # mean of 4 consecutive samples, t is the mean of their t values.
+    # 200 samples, max=50 → stride=4. Overlap-smoothed: each output's v
+    # is the mean of a 13-sample window centred on a linspace index; t
+    # is the actual sample t at the centre.
     assert len(pts) == 50
-    # Bin 0: mean of indices 0,1,2,3 → t=0.0375, v=1.5
-    assert pts[0] == pytest.approx([0.0375, 1.5])
-    # Bin 1: mean of indices 4,5,6,7 → t=0.1375, v=5.5
-    assert pts[1] == pytest.approx([0.1375, 5.5])
+    # idx=0: window [0..6] (edge-clipped), mean = 21/7 = 3.0, t = 0.0
+    assert pts[0] == pytest.approx([0.0, 3.0])
+    # idx=4: window [0..10], mean = 55/11 = 5.0, t = 0.1
+    assert pts[1] == pytest.approx([0.1, 5.0])
 
 
 # ─────────────────────────────────────────────────────────────────────────────

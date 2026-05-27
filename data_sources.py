@@ -168,16 +168,42 @@ class _CameraBuffer:
         if n_window <= max_points:
             return self.t[i_lo:i_hi], self.v[i_lo:i_hi]
 
+        # Smooth-then-decimate. A moving-average kernel of width
+        # `stride * 3` is applied across the visible samples, then we
+        # pick `max_points` evenly-spaced points from the smoothed
+        # signal. The overlap (each output averages 3 strides' worth)
+        # means consecutive paints differ in each output by ~1/(3*stride)
+        # of the underlying noise — no visible per-paint flicker even
+        # when the window scrolls one sample at a time. Cost is
+        # O(n_window) cumsum + O(max_points) sample, fully vectorised.
         stride = -(-n_window // max_points)  # ceil division
-        n_full = (n_window // stride) * stride  # truncate to clean reshape
-        end = i_lo + n_full
-        t_block = self.t[i_lo:end].reshape(-1, stride)
-        v_block = self.v[i_lo:end].reshape(-1, stride)
-        # nanmean: bins with all-NaN values produce NaN (renderer skips).
-        # Suppress the warning np raises on all-NaN slices — the NaN
-        # output is the documented contract.
-        with np.errstate(invalid="ignore"):
-            return t_block.mean(axis=1), np.nanmean(v_block, axis=1)
+        smooth_w = max(3, stride * 3)
+        half = smooth_w // 2
+
+        v_slice = self.v[i_lo:i_hi]
+        finite = np.isfinite(v_slice)
+        v_clean = np.where(finite, v_slice, 0.0).astype(np.float64)
+        # Cumulative sums with a leading 0 so window means are
+        # (cum[hi+1] - cum[lo]) / (n[hi+1] - n[lo]) for any [lo, hi].
+        v_cum = np.empty(n_window + 1, dtype=np.float64)
+        v_cum[0] = 0.0
+        np.cumsum(v_clean, out=v_cum[1:])
+        n_cum = np.empty(n_window + 1, dtype=np.int64)
+        n_cum[0] = 0
+        np.cumsum(finite, out=n_cum[1:], dtype=np.int64)
+
+        # Evenly-spaced output centres across the visible window.
+        idxs = np.linspace(0, n_window - 1, max_points).astype(np.int64)
+        lo_i = np.clip(idxs - half, 0, n_window)
+        hi_i = np.clip(idxs + half + 1, 0, n_window)
+        counts = n_cum[hi_i] - n_cum[lo_i]
+        sums = v_cum[hi_i] - v_cum[lo_i]
+        with np.errstate(invalid="ignore", divide="ignore"):
+            v_out = np.where(counts > 0, sums / np.maximum(counts, 1), np.nan)
+        # Output t is the actual sample t at the centre index — keeps
+        # the time axis exact even with the smoothing kernel offset.
+        t_out = self.t[i_lo:i_hi][idxs]
+        return t_out, v_out.astype(np.float32)
 
     def mark_dropped(self, t: float) -> None:
         """Record the first dropout timestamp for this stream. Idempotent —
