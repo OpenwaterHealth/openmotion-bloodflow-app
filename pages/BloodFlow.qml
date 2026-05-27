@@ -213,7 +213,6 @@ Rectangle {
         }
         onNotesClicked:    modalManager.toggle(notesModal)
         onHistoryClicked:  modalManager.toggle(historyModal)
-        onLogClicked:      modalManager.toggle(scanDialog)
         onSettingsClicked: modalManager.toggle(settingsModal)
     }
 
