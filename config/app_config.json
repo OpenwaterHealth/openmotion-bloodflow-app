@@ -1,4 +1,5 @@
 {
+  "useNewPlotViewer": false,
   "forceLaserFail": false,
   "cameraTempAlertThresholdC": 110,
   "sensorDebugLogging": false,
