@@ -170,3 +170,80 @@ class ScanDataSource(QObject):
         self._pending = {}
         for (side, cam_id, metric), count in pending.items():
             self.samplesAppended.emit(side, cam_id, metric, count)
+
+
+class LiveScanSource(ScanDataSource):
+    """ScanDataSource fed by the in-flight pipeline. Constructed at scan
+    start; lives as long as the connector holds a reference."""
+
+    def __init__(self, plot_t0: float, parent: Optional[QObject] = None) -> None:
+        super().__init__(plot_t0=plot_t0, parent=parent)
+        self.live = True
+
+    def append_uncorrected(
+        self,
+        side: str,
+        cam_id: int,
+        frame_id: int,
+        t: float,
+        bfi: float,
+        bvi: float,
+        mean: Optional[float] = None,
+        contrast: Optional[float] = None,
+    ) -> None:
+        """Append one frame's worth of uncorrected metrics.
+
+        bfi and bvi are always appended (NaN included — the source stores
+        what arrives). mean/contrast are appended only when non-None;
+        the existing _LivePlotSink passes None for samples where the
+        SDK reported a non-finite mean_dc_rt / contrast_sn_rt."""
+        self._append_one(side, cam_id, "bfi", frame_id, t, bfi)
+        self._append_one(side, cam_id, "bvi", frame_id, t, bvi)
+        if mean is not None:
+            self._append_one(side, cam_id, "mean", frame_id, t, mean)
+        if contrast is not None:
+            self._append_one(side, cam_id, "contrast", frame_id, t, contrast)
+
+    def apply_corrected_batch(self, batch: list) -> None:
+        """Overwrite in place at matching frame_ids across all 4 metrics.
+
+        Payload shape matches scanCorrectedBatch.emit: list[dict] with
+        keys side, camId, frameId, bfi, bvi, mean, contrast (ts is
+        ignored — t is set at live-append time, not at correction time)."""
+        for sample in batch:
+            side = str(sample["side"])
+            cam_id = int(sample["camId"])
+            frame_id = int(sample["frameId"])
+            for metric_key, payload_key in (
+                ("bfi", "bfi"),
+                ("bvi", "bvi"),
+                ("mean", "mean"),
+                ("contrast", "contrast"),
+            ):
+                buf = self.buffers.get((side, cam_id, metric_key))
+                if buf is None:
+                    continue
+                buf.apply_corrected(frame_id=frame_id, value=float(sample[payload_key]))
+
+    def mark_dropped(self, side: str, cam_id: int, t: float) -> None:
+        """Record a dropout timestamp on every existing metric buffer for
+        this (side, cam). Idempotent per _CameraBuffer.mark_dropped."""
+        for metric in ("bfi", "bvi", "mean", "contrast"):
+            buf = self.buffers.get((side, int(cam_id), metric))
+            if buf is not None:
+                buf.mark_dropped(t)
+
+    # ── internal ──────────────────────────────────────────────────────────
+
+    def _append_one(
+        self,
+        side: str,
+        cam_id: int,
+        metric: str,
+        frame_id: int,
+        t: float,
+        v: float,
+    ) -> None:
+        buf = self.get_or_create_buffer(side, cam_id, metric)
+        buf.append(t=t, v=v, frame_id=frame_id)
+        self.note_dirty(side, cam_id, metric, added=1)

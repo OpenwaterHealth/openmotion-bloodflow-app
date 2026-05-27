@@ -163,3 +163,137 @@ def test_scan_data_source_flush_clears_pending():
     src._flush()
     src._flush()  # nothing pending now
     assert received == [("left", 0, "bfi", 1)]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LiveScanSource
+# ─────────────────────────────────────────────────────────────────────────────
+
+from data_sources import LiveScanSource
+
+
+def test_live_scan_source_live_flag_true():
+    src = LiveScanSource(plot_t0=0.0)
+    assert src.live is True
+
+
+def test_live_scan_source_append_uncorrected_populates_all_metrics():
+    src = LiveScanSource(plot_t0=0.0)
+    src.append_uncorrected(
+        side="left", cam_id=2, frame_id=42, t=0.025,
+        bfi=4.5, bvi=3.1, mean=120.0, contrast=0.31,
+    )
+    assert src.buffers[("left", 2, "bfi")].v[0] == np.float32(4.5)
+    assert src.buffers[("left", 2, "bvi")].v[0] == np.float32(3.1)
+    assert src.buffers[("left", 2, "mean")].v[0] == np.float32(120.0)
+    assert src.buffers[("left", 2, "contrast")].v[0] == np.float32(0.31)
+    for metric in ("bfi", "bvi", "mean", "contrast"):
+        assert src.buffers[("left", 2, metric)].n == 1
+        assert src.buffers[("left", 2, metric)].t[0] == 0.025
+        assert src.buffers[("left", 2, metric)].frame_id[0] == 42
+
+
+def test_live_scan_source_skips_none_mean_or_contrast():
+    """mean/contrast are optional — None means 'this sample's value wasn't
+    available' and the buffer for that metric is not appended to."""
+    src = LiveScanSource(plot_t0=0.0)
+    src.append_uncorrected(
+        side="left", cam_id=0, frame_id=1, t=0.0,
+        bfi=4.0, bvi=3.0, mean=None, contrast=None,
+    )
+    assert src.buffers[("left", 0, "bfi")].n == 1
+    assert src.buffers[("left", 0, "bvi")].n == 1
+    assert ("left", 0, "mean") not in src.buffers
+    assert ("left", 0, "contrast") not in src.buffers
+
+
+def test_live_scan_source_stores_nan_values():
+    """NaN survives. The renderer filters non-finite, not the source."""
+    src = LiveScanSource(plot_t0=0.0)
+    src.append_uncorrected(
+        side="left", cam_id=0, frame_id=1, t=0.0,
+        bfi=float("nan"), bvi=3.0,
+    )
+    assert math.isnan(float(src.buffers[("left", 0, "bfi")].v[0]))
+    assert src.buffers[("left", 0, "bfi")].n == 1
+
+
+def test_live_scan_source_append_uncorrected_notes_dirty():
+    src = LiveScanSource(plot_t0=0.0)
+    received: list = []
+    src.samplesAppended.connect(lambda s, c, m, n: received.append((s, c, m, n)))
+
+    src.append_uncorrected(
+        side="left", cam_id=0, frame_id=1, t=0.0,
+        bfi=4.0, bvi=3.0, mean=120.0, contrast=0.3,
+    )
+    src.append_uncorrected(
+        side="left", cam_id=0, frame_id=2, t=0.025,
+        bfi=4.2, bvi=3.1, mean=121.0, contrast=0.31,
+    )
+    src._flush()
+
+    # One emit per (side, cam, metric), with added=2 each
+    assert sorted(received) == [
+        ("left", 0, "bfi", 2),
+        ("left", 0, "bvi", 2),
+        ("left", 0, "contrast", 2),
+        ("left", 0, "mean", 2),
+    ]
+
+
+def test_live_scan_source_apply_corrected_batch_overwrites_in_place():
+    src = LiveScanSource(plot_t0=0.0)
+    # Seed live samples for frame_ids 100, 101, 102.
+    for i, fid in enumerate((100, 101, 102)):
+        src.append_uncorrected(
+            side="left", cam_id=0, frame_id=fid, t=i * 0.025,
+            bfi=1.0 + i, bvi=10.0 + i, mean=100.0 + i, contrast=0.30 + i * 0.01,
+        )
+    src._flush()  # drain seed dirty state
+
+    batch = [
+        {"side": "left", "camId": 0, "frameId": 101, "ts": 0.025,
+         "bfi": 99.0, "bvi": 88.0, "mean": 77.0, "contrast": 0.66},
+    ]
+    src.apply_corrected_batch(batch)
+
+    bfi_buf = src.buffers[("left", 0, "bfi")]
+    bvi_buf = src.buffers[("left", 0, "bvi")]
+    mean_buf = src.buffers[("left", 0, "mean")]
+    contrast_buf = src.buffers[("left", 0, "contrast")]
+
+    assert bfi_buf.v[1] == np.float32(99.0)   # overwritten
+    assert bfi_buf.v[0] == np.float32(1.0)    # untouched
+    assert bfi_buf.v[2] == np.float32(3.0)    # untouched
+    assert bvi_buf.v[1] == np.float32(88.0)
+    assert mean_buf.v[1] == np.float32(77.0)
+    assert contrast_buf.v[1] == np.float32(0.66)
+
+
+def test_live_scan_source_apply_corrected_batch_unknown_frame_silently_skipped():
+    src = LiveScanSource(plot_t0=0.0)
+    src.append_uncorrected(
+        side="left", cam_id=0, frame_id=100, t=0.0,
+        bfi=1.0, bvi=10.0,
+    )
+    # frame_id 999 was never seen on the live path (race window)
+    src.apply_corrected_batch([
+        {"side": "left", "camId": 0, "frameId": 999, "ts": 0.0,
+         "bfi": 99.0, "bvi": 88.0, "mean": 77.0, "contrast": 0.66},
+    ])
+    assert src.buffers[("left", 0, "bfi")].v[0] == np.float32(1.0)
+    assert ("left", 0, "mean") not in src.buffers
+
+
+def test_live_scan_source_mark_dropped_sets_buffer_dropped_at():
+    src = LiveScanSource(plot_t0=0.0)
+    src.append_uncorrected(
+        side="right", cam_id=5, frame_id=1, t=0.0,
+        bfi=4.0, bvi=3.0, mean=120.0, contrast=0.3,
+    )
+    src.mark_dropped(side="right", cam_id=5, t=2.5)
+    # All 4 metrics share the dropped_at — the marker is per-(side, cam),
+    # not per-metric, so we set it on every existing metric buffer.
+    for metric in ("bfi", "bvi", "mean", "contrast"):
+        assert src.buffers[("right", 5, metric)].dropped_at == 2.5
