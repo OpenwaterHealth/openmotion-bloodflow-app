@@ -19,11 +19,13 @@ Item {
     property string displayMode: "bfi_bvi"
     property int windowSeconds: 15
     property bool autoScale: true
+    property bool followLive: true
 
     // ── Outputs ────────────────────────────────────────────────────────
     signal displayModeRequested(string mode)
     signal windowSecondsRequested(int s)
     signal autoScaleToggled(bool enabled)
+    signal backToLiveRequested()
 
     readonly property var _displayModeOptions: [
         { value: "bfi_bvi",       label: "BFI / BVI" },
@@ -51,6 +53,16 @@ Item {
             font.pixelSize: 12
             font.family: "Roboto Mono"
             Layout.preferredWidth: 260
+        }
+
+        Button {
+            id: backToLiveBtn
+            visible: !toolbar.followLive
+            text: "● Back to live"
+            // Material-style accent — uses the same red as BFI traces for
+            // visual urgency: "you're not seeing live data right now".
+            palette.buttonText: theme.accentRed
+            onClicked: toolbar.backToLiveRequested()
         }
 
         Text {

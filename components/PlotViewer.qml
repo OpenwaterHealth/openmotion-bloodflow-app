@@ -201,10 +201,12 @@ Rectangle {
             displayMode: viewer.displayMode
             windowSeconds: viewer.windowSeconds
             autoScale: viewer.autoScale
+            followLive: viewer.followLive
 
             onDisplayModeRequested: function(mode) { viewer.displayMode = mode }
-            onWindowSecondsRequested: function(s) { viewer.windowSeconds = s }
+            onWindowSecondsRequested: function(s) { viewer.windowSeconds = s; viewer._dirty = true }
             onAutoScaleToggled: function(enabled) { viewer.autoScale = enabled }
+            onBackToLiveRequested: viewer.backToLive()
         }
 
         GridLayout {
