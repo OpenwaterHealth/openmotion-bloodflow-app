@@ -661,3 +661,86 @@ def test_scan_data_source_points_for_window_decimates_when_over_max():
     assert pts[0] == pytest.approx([0.0, 0.0])
     # Subsequent pairs at stride=4
     assert pts[1] == pytest.approx([0.1, 4.0])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ScanDataSource.compute_bounds_for_metric (Phase 2b-i autoscale)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_compute_bounds_neutral_fallback_when_no_buffers():
+    src = ScanDataSource(plot_t0=0.0)
+    b = src.compute_bounds_for_metric("bfi")
+    assert b == {"yMin": 0.0, "yMax": 1.0}
+
+
+def test_compute_bounds_neutral_fallback_when_under_4_samples():
+    src = ScanDataSource(plot_t0=0.0)
+    buf = src.get_or_create_buffer("left", 0, "bfi")
+    for i in range(3):
+        buf.append(t=i * 0.025, v=float(i), frame_id=i)
+    b = src.compute_bounds_for_metric("bfi")
+    assert b == {"yMin": 0.0, "yMax": 1.0}
+
+
+def test_compute_bounds_pads_by_25_percent_each_side():
+    src = ScanDataSource(plot_t0=0.0)
+    buf = src.get_or_create_buffer("left", 0, "bfi")
+    # Values 0..99 — percentile 2 = ~2, percentile 98 = ~97. Pad = 0.25 * (97 - 2) = 23.75
+    for i in range(100):
+        buf.append(t=i * 0.025, v=float(i), frame_id=i)
+    b = src.compute_bounds_for_metric("bfi", percentile_lo=2.0, percentile_hi=98.0, pad_frac=0.25)
+    # Approx: yMin ≈ 2 - 23.75 = -21.75; yMax ≈ 97 + 23.75 = 120.75
+    assert b["yMin"] == pytest.approx(-21.75, abs=1.0)
+    assert b["yMax"] == pytest.approx(120.75, abs=1.0)
+
+
+def test_compute_bounds_aggregates_across_cameras():
+    src = ScanDataSource(plot_t0=0.0)
+    # cam 0 covers 0..49, cam 1 covers 50..99
+    buf0 = src.get_or_create_buffer("left", 0, "bvi")
+    buf1 = src.get_or_create_buffer("left", 1, "bvi")
+    for i in range(50):
+        buf0.append(t=i * 0.025, v=float(i), frame_id=i)
+    for i in range(50):
+        buf1.append(t=i * 0.025, v=50.0 + i, frame_id=100 + i)
+    b = src.compute_bounds_for_metric("bvi")
+    # Aggregated range is 0..99 ; percentile bounds + padding
+    assert b["yMin"] < 0
+    assert b["yMax"] > 100
+
+
+def test_compute_bounds_ignores_other_metrics():
+    src = ScanDataSource(plot_t0=0.0)
+    bfi_buf = src.get_or_create_buffer("left", 0, "bfi")
+    bvi_buf = src.get_or_create_buffer("left", 0, "bvi")
+    for i in range(10):
+        bfi_buf.append(t=i * 0.025, v=float(i), frame_id=i)
+        bvi_buf.append(t=i * 0.025, v=float(i) * 100.0, frame_id=i)
+    b = src.compute_bounds_for_metric("bfi")
+    # Should only consider bfi samples (0..9), not bvi (0..900)
+    assert b["yMax"] < 50  # bvi would give yMax > 1000
+
+
+def test_compute_bounds_skips_non_finite():
+    src = ScanDataSource(plot_t0=0.0)
+    buf = src.get_or_create_buffer("left", 0, "bfi")
+    for i in range(10):
+        buf.append(t=i * 0.025, v=float(i), frame_id=i)
+    buf.append(t=0.25, v=float("nan"), frame_id=10)
+    buf.append(t=0.275, v=float("inf"), frame_id=11)
+    # Should not crash and should produce finite bounds
+    b = src.compute_bounds_for_metric("bfi")
+    assert math.isfinite(b["yMin"])
+    assert math.isfinite(b["yMax"])
+
+
+def test_compute_bounds_expands_when_lo_equals_hi():
+    src = ScanDataSource(plot_t0=0.0)
+    buf = src.get_or_create_buffer("left", 0, "bfi")
+    for i in range(10):
+        buf.append(t=i * 0.025, v=5.0, frame_id=i)  # all the same value
+    b = src.compute_bounds_for_metric("bfi", pad_frac=0.0)
+    # When lo == hi, expand by ±0.5; with pad_frac=0 the result is [4.5, 5.5]
+    assert b["yMin"] == pytest.approx(4.5)
+    assert b["yMax"] == pytest.approx(5.5)

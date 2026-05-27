@@ -208,6 +208,45 @@ class ScanDataSource(QObject):
         t_arr, v_arr = buf.window_decimated(t_lo, t_hi, int(max_points))
         return [[float(t), float(v)] for t, v in zip(t_arr, v_arr)]
 
+    @pyqtSlot(str, result="QVariantMap")
+    @pyqtSlot(str, float, float, float, result="QVariantMap")
+    def compute_bounds_for_metric(
+        self,
+        metric: str,
+        percentile_lo: float = 2.0,
+        percentile_hi: float = 98.0,
+        pad_frac: float = 0.25,
+    ) -> dict:
+        """Aggregate finite values across every (side, cam_id) buffer for
+        `metric`, return padded percentile bounds as {"yMin": ..., "yMax": ...}.
+
+        Neutral fallback {"yMin": 0.0, "yMax": 1.0} when fewer than 4 valid
+        samples are available (too noisy to autoscale meaningfully).
+
+        Matches legacy EmbeddedRealtimePlot._boundsFromArray semantics."""
+        values: list[float] = []
+        for (_side, _cam_id, m), buf in self.buffers.items():
+            if m != metric or buf.n == 0:
+                continue
+            slice_v = buf.v[: buf.n]
+            finite_mask = np.isfinite(slice_v)
+            if finite_mask.any():
+                values.extend(slice_v[finite_mask].tolist())
+
+        if len(values) < 4:
+            return {"yMin": 0.0, "yMax": 1.0}
+
+        arr = np.asarray(values, dtype=np.float64)
+        lo = float(np.percentile(arr, percentile_lo))
+        hi = float(np.percentile(arr, percentile_hi))
+
+        if lo == hi:
+            lo -= 0.5
+            hi += 0.5
+
+        pad = (hi - lo) * pad_frac
+        return {"yMin": lo - pad, "yMax": hi + pad}
+
     def note_dirty(self, side: str, cam_id: int, metric: str, added: int) -> None:
         """Record that `added` new samples landed in (side, cam, metric).
         Coalesces with any previous note since the last flush."""
