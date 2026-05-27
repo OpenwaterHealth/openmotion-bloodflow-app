@@ -1565,9 +1565,10 @@ class MotionConnector(QObject):
     ) -> bool:
         """Start capture asynchronously; returns True if kicked off."""
         logger.info(
-            f"startCapture(subject_id={subject_id}, dur={duration_sec}s, "
-            f"left_mask=0x{left_camera_mask:02X}, right_mask=0x{right_camera_mask:02X}, "
-            f"dir={data_dir}, disable_laser={disable_laser})"
+            "=== BLOODFLOW SCAN started (subject=%s, dur=%ss, "
+            "left_mask=0x%02X, right_mask=0x%02X, dir=%s, disable_laser=%s) ===",
+            subject_id, duration_sec, left_camera_mask, right_camera_mask,
+            data_dir, disable_laser,
         )
 
         if duration_sec <= 0:
@@ -1676,6 +1677,10 @@ class MotionConnector(QObject):
             self._safety_cancel_scheduled = False
             self._capture_thread = None
             self.captureFinished.emit(True, "", "", "")
+            logger.info(
+                "=== BLOODFLOW SCAN %s (duration=%s) ===",
+                "stopped" if canceled else "complete", duration_str,
+            )
             self.scanNotesReady.emit()
 
         req = ScanRequest(
@@ -2245,6 +2250,7 @@ class MotionConnector(QObject):
         we run it in a background thread and marshal results back via a
         private signal.
         """
+        logger.info("=== CONTACT-QUALITY CHECK started ===")
         err = self._ensure_idle()
         if err is not None:
             self.contactQualityCheckFinished.emit(False, err, [])
@@ -2312,6 +2318,7 @@ class MotionConnector(QObject):
         self.contactQualityScanInProgress.emit(False)
 
         if result is None:
+            logger.info("=== CONTACT-QUALITY CHECK failed ===")
             self.contactQualityCheckFinished.emit(False, "CQ check failed", [])
             return
 
@@ -2389,6 +2396,10 @@ class MotionConnector(QObject):
         warning_list = list(warnings_by_key.values())
         ok = result.passed
         err_msg = "" if ok else "Contact quality check failed"
+        logger.info(
+            "=== CONTACT-QUALITY CHECK complete (passed=%s, warnings=%d) ===",
+            ok, len(warning_list),
+        )
         self.contactQualityCheckFinished.emit(ok, err_msg, warning_list)
 
     @pyqtSlot()
@@ -3060,6 +3071,8 @@ class MotionConnector(QObject):
         if self._calibration_status == "running":
             return
 
+        logger.info("=== CALIBRATION started (target=%s) ===", target)
+
         if not self._consoleConnected:
             self.captureLog.emit("⚠️ Cannot calibrate: console not connected.")
             return
@@ -3146,6 +3159,7 @@ class MotionConnector(QObject):
         ``"right"``, or ``"both"`` (default). Issue #117 — test stations
         with only one static phantom need to test one side at a time.
         """
+        logger.info("=== TEST SCAN started (target=%s) ===", target)
         from omotion import CalibrationRequest, CalibrationThresholds
 
         # Mutual exclusion with the Calibrate flow.
@@ -3237,6 +3251,10 @@ class MotionConnector(QObject):
         QML-friendly _test_scan_rows model and updates _test_scan_status.
         """
         self._test_scan_failure_reason = ""
+        logger.info(
+            "=== TEST SCAN complete (canceled=%s, ok=%s, passed=%s) ===",
+            result.canceled, result.ok, result.passed,
+        )
         if result.canceled:
             self._test_scan_status = "aborted"
             self.captureLog.emit(
@@ -3315,6 +3333,10 @@ class MotionConnector(QObject):
     def _on_calibration_complete(self, result):
         """Runs on the Qt main thread (queued from worker via signal)."""
         self._calibration_failure_reason = ""  # reset each run
+        logger.info(
+            "=== CALIBRATION complete (canceled=%s, ok=%s, passed=%s) ===",
+            result.canceled, result.ok, result.passed,
+        )
         if result.canceled:
             self._calibration_status = "aborted"
             self.captureLog.emit(
