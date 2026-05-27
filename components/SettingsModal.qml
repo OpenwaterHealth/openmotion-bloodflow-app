@@ -18,7 +18,7 @@ Item {
     // ── Settings values — initialised from live config on creation ──────────
     property int    defaultLeftMaskIndex:  4
     property int    defaultRightMaskIndex: 4
-    property string dataOutputPath: MOTIONInterface.directory
+    property string dataOutputPath: MotionInterface.directory
     property bool   showBfiBvi:        true
     property bool   autoScale:         false
     property bool   autoScalePerPlot:  false
@@ -54,7 +54,7 @@ Item {
 
     // ── Lifecycle ───────────────────────────────────────────────────────────
     function _loadFromConfig() {
-        var cfg = MOTIONInterface.appConfig
+        var cfg = MotionInterface.appConfig
         defaultLeftMaskIndex  = maskToIndex(cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99)
         defaultRightMaskIndex = maskToIndex(cfg.rightMask !== undefined ? cfg.rightMask : 0x99)
         reducedMode        = cfg.reducedMode        !== undefined ? cfg.reducedMode        : false
@@ -94,14 +94,14 @@ Item {
 
     function open() {
         _loadFromConfig()
-        dataPathField.text = MOTIONInterface.directory
+        dataPathField.text = MotionInterface.directory
         root.visible = true
     }
     function close() {
         // Commit any in-progress text field edit before saving
         panel.forceActiveFocus()
-        MOTIONInterface.directory = dataPathField.text
-        MOTIONInterface.saveConfigs({
+        MotionInterface.directory = dataPathField.text
+        MotionInterface.saveConfigs({
             "leftMask":           maskFromIndex(defaultLeftMaskIndex),
             "rightMask":          maskFromIndex(defaultRightMaskIndex),
             "showBfiBvi":         showBfiBvi,
@@ -122,8 +122,8 @@ Item {
             "contrastMin": contrastMin,
             "contrastMax": contrastMax
         })
-        MOTIONInterface.setWriteRawCsv(writeRawCsv)
-        MOTIONInterface.setRawCsvDurationSec(rawCsvDurationSec)
+        MotionInterface.setWriteRawCsv(writeRawCsv)
+        MotionInterface.setRawCsvDurationSec(rawCsvDurationSec)
         settingsChanged()
         root.visible = false
     }
@@ -555,7 +555,7 @@ Item {
                     }
 
                     FieldRow {
-                        visible: MOTIONInterface.appConfig.developerMode ? true : false
+                        visible: MotionInterface.appConfig.developerMode ? true : false
                         label: "Trace colors"
                         Rectangle {
                             width: 26; height: 26; radius: 4
@@ -699,9 +699,9 @@ Item {
                             label: "Dark Mode"
                             PillSwitch {
                                 id: darkModeSwitch
-                                checked: MOTIONInterface.appConfig.darkMode !== false
+                                checked: MotionInterface.appConfig.darkMode !== false
                                 onToggled: {
-                                    MOTIONInterface.setConfig("darkMode", checked)
+                                    MotionInterface.setConfig("darkMode", checked)
                                 }
                             }
                         }
@@ -711,7 +711,7 @@ Item {
                 // ── Developer ────────────────────────────────────────────────
                 SectionCard {
                     title: "Developer"
-                    visible: MOTIONInterface.appConfig.developerMode ? true : false
+                    visible: MotionInterface.appConfig.developerMode ? true : false
 
                     FieldRow {
                         label: "Console"
@@ -719,7 +719,7 @@ Item {
                             text: "Soft Reset"
                             Layout.preferredWidth: 110
                             hoverColor: "#E67E22"
-                            onClicked: MOTIONInterface.softResetSensor("console")
+                            onClicked: MotionInterface.softResetSensor("console")
                         }
                         Item { Layout.fillWidth: true }
                     }
@@ -783,10 +783,10 @@ Item {
                             text: "Calibrate"
                             Layout.preferredWidth: 110
                             Layout.preferredHeight: 40
-                            enabled: MOTIONInterface.consoleConnected
-                                  && !MOTIONInterface.calibrationRunning
-                                  && !MOTIONInterface.testScanRunning
-                            onClicked: MOTIONInterface.runCalibration(
+                            enabled: MotionInterface.consoleConnected
+                                  && !MotionInterface.calibrationRunning
+                                  && !MotionInterface.testScanRunning
+                            onClicked: MotionInterface.runCalibration(
                                 calibrationTargetCombo.currentText.toLowerCase()
                             )
                         }
@@ -796,10 +796,10 @@ Item {
                             text: "Test"
                             Layout.preferredWidth: 110
                             Layout.preferredHeight: 40
-                            enabled: MOTIONInterface.consoleConnected
-                                  && !MOTIONInterface.calibrationRunning
-                                  && !MOTIONInterface.testScanRunning
-                            onClicked: MOTIONInterface.runTestScan(
+                            enabled: MotionInterface.consoleConnected
+                                  && !MotionInterface.calibrationRunning
+                                  && !MotionInterface.testScanRunning
+                            onClicked: MotionInterface.runTestScan(
                                 calibrationTargetCombo.currentText.toLowerCase()
                             )
                         }
@@ -812,8 +812,8 @@ Item {
                             Layout.preferredWidth: 110
                             model: ["Both", "Left", "Right"]
                             currentIndex: 0
-                            enabled: !MOTIONInterface.calibrationRunning
-                                  && !MOTIONInterface.testScanRunning
+                            enabled: !MotionInterface.calibrationRunning
+                                  && !MotionInterface.testScanRunning
                         }
 
                         // Indicator light
@@ -825,7 +825,7 @@ Item {
                             border.width: 1
                             border.color: root.colBorderSoft
                             color: {
-                                switch (MOTIONInterface.calibrationStatus) {
+                                switch (MotionInterface.calibrationStatus) {
                                 case "running": return "#2196F3"
                                 case "passed":  return "#4CAF50"
                                 case "failed":  return "#F44336"
@@ -858,13 +858,13 @@ Item {
                             color: root.colTextPri
                             font.pixelSize: 13
                             text: {
-                                switch (MOTIONInterface.calibrationStatus) {
+                                switch (MotionInterface.calibrationStatus) {
                                 case "running":
                                     return "Calibrating... (" + calibTimer.elapsedSec
-                                           + "s / " + MOTIONInterface.maxCalibrationTimeSec + "s)"
+                                           + "s / " + MotionInterface.maxCalibrationTimeSec + "s)"
                                 case "passed":  return "Calibration Passed"
                                 case "failed":
-                                    var reason = MOTIONInterface.calibrationFailureReason
+                                    var reason = MotionInterface.calibrationFailureReason
                                     return reason
                                         ? "Calibration Failed — " + reason
                                         : "Calibration Failed"
@@ -881,23 +881,23 @@ Item {
                         property int elapsedSec: 0
                         interval: 1000
                         repeat: true
-                        running: MOTIONInterface.calibrationRunning
+                        running: MotionInterface.calibrationRunning
                         onTriggered: elapsedSec += 1
                     }
 
                     Connections {
-                        target: MOTIONInterface
+                        target: MotionInterface
                         function onCalibrationStateChanged() {
-                            if (MOTIONInterface.calibrationStatus === "running") {
+                            if (MotionInterface.calibrationStatus === "running") {
                                 calibTimer.elapsedSec = 0
                             }
                         }
                     }
 
                     Connections {
-                        target: MOTIONInterface
+                        target: MotionInterface
                         function onTestScanStateChanged() {
-                            var s = MOTIONInterface.testScanStatus
+                            var s = MotionInterface.testScanStatus
                             if (s === "running" || s === "done"
                                 || s === "failed" || s === "aborted") {
                                 testResultsWindow.show()
@@ -919,7 +919,7 @@ Item {
                     }
                     FieldRow {
                         label: "SDK"
-                        Text { text: MOTIONInterface.get_sdk_version(); color: root.colTextPri; font.pixelSize: 13; font.family: "Consolas" }
+                        Text { text: MotionInterface.get_sdk_version(); color: root.colTextPri; font.pixelSize: 13; font.family: "Consolas" }
                         Item { Layout.fillWidth: true }
                     }
                     // Updates row is hidden in reduced (clinical) mode —
@@ -936,7 +936,7 @@ Item {
                             onClicked: {
                                 updateCheckBtn.text = "Checking..."
                                 updateCheckBtn.enabled = false
-                                MOTIONInterface.checkForUpdates()
+                                MotionInterface.checkForUpdates()
                             }
                         }
                         Text {
@@ -949,7 +949,7 @@ Item {
                     }
 
                     Connections {
-                        target: MOTIONInterface
+                        target: MotionInterface
                         enabled: !root.reducedMode
                         function onUpdateAvailable(version, url) {
                             updateCheckBtn.text = "Check for Updates"

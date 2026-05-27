@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from motion_connector import MOTIONConnector
+from motion_connector import MotionConnector
 
 pytestmark = pytest.mark.unit
 
@@ -20,7 +20,7 @@ def connector(tmp_path):
     iface.start_configure_camera_sensors.return_value = True
     iface.start_scan.return_value = True
 
-    c = MOTIONConnector(
+    c = MotionConnector(
         interface=iface,
         app_config={"developerMode": False},
         data_dir=str(tmp_path),

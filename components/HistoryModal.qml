@@ -32,10 +32,10 @@ Item {
 
     function refreshScans() {
         try {
-            scans = MOTIONInterface.get_scan_list() || []
+            scans = MotionInterface.get_scan_list() || []
             if (scans.length > 0) {
                 scanPicker.currentIndex = 0
-                selected = MOTIONInterface.get_scan_details(scans[0]) || {}
+                selected = MotionInterface.get_scan_details(scans[0]) || {}
             } else {
                 selected = {}
             }
@@ -135,7 +135,7 @@ Item {
                         color: parent.hovered ? theme.accentBlue : theme.bgInput
                         border.color: parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
                     }
-                    onClicked: Qt.openUrlExternally("file:///" + MOTIONInterface.directory)
+                    onClicked: Qt.openUrlExternally("file:///" + MotionInterface.directory)
                 }
 
                 Button {
@@ -159,7 +159,7 @@ Item {
             RowLayout {
                 Layout.fillWidth: true; spacing: 8
                 Text { text: "Data Directory:"; color: theme.textSecondary; font.pixelSize: 13 }
-                Text { text: MOTIONInterface.directory; color: theme.textPrimary; font.pixelSize: 13; elide: Text.ElideRight; Layout.fillWidth: true }
+                Text { text: MotionInterface.directory; color: theme.textPrimary; font.pixelSize: 13; elide: Text.ElideRight; Layout.fillWidth: true }
             }
 
             // Scan selector
@@ -228,7 +228,7 @@ Item {
                     }
                     onCurrentIndexChanged: {
                         if (currentIndex >= 0 && currentIndex < scans.length) {
-                            try { selected = MOTIONInterface.get_scan_details(scans[currentIndex]) || {} }
+                            try { selected = MotionInterface.get_scan_details(scans[currentIndex]) || {} }
                             catch (e) { selected = {} }
                         } else { selected = {} }
                     }
@@ -289,7 +289,7 @@ Item {
 
                         Button {
                             text: "Visualize BFI/BVI (legacy)"
-                            visible: MOTIONInterface.appConfig.developerMode ? true : false
+                            visible: MotionInterface.appConfig.developerMode ? true : false
                             Layout.fillWidth: true; Layout.preferredHeight: 36
                             enabled: !!(selected.leftPath || selected.rightPath)
                             hoverEnabled: enabled
@@ -304,13 +304,13 @@ Item {
                             }
                             onClicked: {
                                 root.visualizing = true
-                                MOTIONInterface.visualize_bloodflow(selected.leftPath || "", selected.rightPath || "", 0.0, 0.0, false)
+                                MotionInterface.visualize_bloodflow(selected.leftPath || "", selected.rightPath || "", 0.0, 0.0, false)
                             }
                         }
 
                         Button {
                             text: "Visualize Contrast/Mean (legacy)"
-                            visible: MOTIONInterface.appConfig.developerMode ? true : false
+                            visible: MotionInterface.appConfig.developerMode ? true : false
                             Layout.fillWidth: true; Layout.preferredHeight: 36
                             enabled: !!(selected.leftPath || selected.rightPath)
                             hoverEnabled: enabled
@@ -325,7 +325,7 @@ Item {
                             }
                             onClicked: {
                                 root.visualizing = true
-                                MOTIONInterface.visualize_bloodflow(selected.leftPath || "", selected.rightPath || "", 0.0, 0.0, true)
+                                MotionInterface.visualize_bloodflow(selected.leftPath || "", selected.rightPath || "", 0.0, 0.0, true)
                             }
                         }
 
@@ -345,13 +345,13 @@ Item {
                             }
                             onClicked: {
                                 root.visualizing = true
-                                MOTIONInterface.visualize_corrected(selected.correctedPath || "")
+                                MotionInterface.visualize_corrected(selected.correctedPath || "")
                             }
                         }
 
                         Button {
                             text: "Visualize Contrast/Mean"
-                            visible: MOTIONInterface.appConfig.reducedMode !== true
+                            visible: MotionInterface.appConfig.reducedMode !== true
                             Layout.fillWidth: true; Layout.preferredHeight: 36
                             enabled: !!(selected.correctedPath)
                             hoverEnabled: enabled
@@ -366,7 +366,7 @@ Item {
                             }
                             onClicked: {
                                 root.visualizing = true
-                                MOTIONInterface.visualize_corrected_signal(selected.correctedPath || "")
+                                MotionInterface.visualize_corrected_signal(selected.correctedPath || "")
                             }
                         }
 
@@ -405,7 +405,7 @@ Item {
     }
 
     Connections {
-        target: MOTIONInterface
+        target: MotionInterface
         function onVizFinished() { root.visualizing = false }
         function onVisualizingChanged(b) { root.visualizing = b }
         function onDirectoryChanged() { if (root.visible) refreshScans() }

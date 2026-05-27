@@ -25,8 +25,8 @@ python -m PyInstaller -y openwater.spec # package .exe → dist/OpenWaterApp/
 
 | Path | What lives here |
 |---|---|
-| `main.py` | Entry point. PyQt app, QML engine, logging. Registers `MOTIONInterface` as a QML singleton. |
-| `motion_connector.py` | **4031 lines.** Single `MOTIONConnector` QObject — all UI⇄hardware glue, 135 signals/slots. State machine constants at lines 72–76; transitions at 1076–1084. |
+| `main.py` | Entry point. PyQt app, QML engine, logging. Registers `MotionInterface` as a QML singleton. |
+| `motion_connector.py` | **4031 lines.** Single `MotionConnector` QObject — all UI⇄hardware glue, 135 signals/slots. State machine constants at lines 72–76; transitions at 1076–1084. |
 | `motion_config.py` | FPGA model + laser-parameter helpers (extracted in May 2025 for reuse). |
 | `pages/BloodFlow.qml` | Main scan page: patient info, sensor config, trigger. |
 | `pages/DataAnalysis.qml` | Post-processing + BFI/BVI visualization. |
@@ -49,7 +49,7 @@ DISCONNECTED (0) → SENSOR_CONNECTED (1) → CONSOLE_CONNECTED (2) → READY (3
 
 No FSM class — integer enum + conditional branches on `self._state`. Transitions in `motion_connector.py` around line 1076.
 
-QML↔Python wiring: `main.py:256` registers the connector as a QML singleton (`qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MOTIONInterface", connector)`). QML calls `MOTIONInterface.slotName()`; Python emits signals QML connects to with `onSignalNameChanged`.
+QML↔Python wiring: `main.py:256` registers the connector as a QML singleton (`qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MotionInterface", connector)`). QML calls `MotionInterface.slotName()`; Python emits signals QML connects to with `onSignalNameChanged`.
 
 ## Working without hardware
 

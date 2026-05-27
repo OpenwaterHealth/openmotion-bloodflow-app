@@ -182,7 +182,7 @@ Rectangle {
     }
 
     Connections {
-        target: MOTIONInterface
+        target: MotionInterface
         function onScanBfiSampled(side, camId, frameId, timestampSec, bfiVal) {
             root.handleBfi(side, camId, frameId, timestampSec, bfiVal)
         }

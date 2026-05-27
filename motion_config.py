@@ -213,7 +213,7 @@ class FpgaModel:
 def load_laser_params(config_dir: str, force_fault: bool = False) -> list:
     """Load `laser_params.json` from the given config directory.
 
-    Mirrors the previous `_load_laser_params` behavior on MOTIONConnector.
+    Mirrors the previous `_load_laser_params` behavior on MotionConnector.
     Returns a list of parameter dicts, or an empty list on any error.
 
     When ``force_fault`` is True, loads ``laser_params_fault.json`` instead

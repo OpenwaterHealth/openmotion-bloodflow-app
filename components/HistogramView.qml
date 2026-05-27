@@ -40,7 +40,7 @@ Item {
                     buttonText: "Export CSV"
                     onClicked: {
                         if (histogramWidget.histogramData.length > 0) {
-                            MOTIONConnector.saveHistogramToCSV(histogramWidget.histogramData)
+                            MotionConnector.saveHistogramToCSV(histogramWidget.histogramData)
                         }
                     }
                 }
