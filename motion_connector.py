@@ -174,11 +174,6 @@ class _LivePlotSink:
         if batch.bfi_live is None:
             return
 
-        # [LAG-DIAG] Time the per-batch live processing. Log if it spikes
-        # past 10 ms — anything that high is delaying samples reaching
-        # the new viewer's source.
-        _lag_t0 = time.perf_counter()
-
         n = batch.bfi_live.shape[0]
         connector = self._connector
         threshold = connector._camera_temp_alert_threshold_c
@@ -299,15 +294,6 @@ class _LivePlotSink:
                     contrast=contrast_for_source,
                 )
 
-        # [LAG-DIAG] Per-batch live processing time. 10 ms threshold so
-        # normal batches stay quiet and only outliers print.
-        _lag_ms = (time.perf_counter() - _lag_t0) * 1000.0
-        if _lag_ms > 10.0:
-            logger.warning(
-                "[LAG-DIAG] _LivePlotSink.consume took %.1f ms (n_frames=%d)",
-                _lag_ms, n,
-            )
-
     def on_complete(self) -> None:
         pass
 
@@ -334,10 +320,6 @@ class _FinalBatchSink:
     def consume(self, channel: str, batch) -> None:
         if channel != "final":
             return
-        # [LAG-DIAG] Time the corrected-batch processing end-to-end —
-        # this fires once per dark-interval close and is the suspected
-        # source of the user-observed "dark-frame stutter".
-        _lag_t0 = time.perf_counter()
         # Current SDK final payloads are EnrichedCorrectedInterval objects with
         # .frames; keep .samples fallback for older corrected-batch shims.
         connector = self._connector
@@ -346,7 +328,6 @@ class _FinalBatchSink:
         samples = getattr(batch, "frames", None)
         if samples is None:
             samples = getattr(batch, "samples", ())
-        _lag_n_samples = len(samples) if hasattr(samples, "__len__") else -1
         for s in samples:
             side = str(getattr(s, "side", ""))
             cam_id = int(getattr(s, "cam_id", -1))
@@ -371,12 +352,7 @@ class _FinalBatchSink:
                 "contrast": float(getattr(s, "contrast", 0.0)),
             })
         if payload:
-            # [LAG-DIAG] Sub-time the legacy Qt emit (which fans out to
-            # EmbeddedRealtimePlot's slot — still connected even when the
-            # plot is hidden behind the new viewer flag).
-            _emit_t0 = time.perf_counter()
             connector.scanCorrectedBatch.emit(payload)
-            _emit_ms = (time.perf_counter() - _emit_t0) * 1000.0
             # New viewer intentionally NOT fed corrected values for now —
             # the in-place buffer rewrite at every dark-interval close
             # caused visible mid-scan disruption ("data jumping between
@@ -384,18 +360,6 @@ class _FinalBatchSink:
             # corrections via scanCorrectedBatch.emit above. Re-enable
             # `self._live_source.apply_corrected_batch(payload)` when we
             # have a smoother handoff (e.g. dual-buffer overlay).
-        else:
-            _emit_ms = 0.0
-
-        # [LAG-DIAG] Always log — dark-interval closes are rare events
-        # so the line volume is low and per-event timing is what we
-        # actually care about for the user-observed stutter.
-        _lag_total_ms = (time.perf_counter() - _lag_t0) * 1000.0
-        logger.warning(
-            "[LAG-DIAG] _FinalBatchSink.consume total=%.1f ms "
-            "(emit=%.1f ms, n_samples=%d, payload=%d)",
-            _lag_total_ms, _emit_ms, _lag_n_samples, len(payload),
-        )
 
     def on_complete(self) -> None:
         pass

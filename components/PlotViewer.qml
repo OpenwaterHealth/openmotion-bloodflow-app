@@ -175,27 +175,13 @@ Rectangle {
 
     Timer {
         id: paintThrottle
-        // 33 ms = 30 Hz — restored from the 50 ms throttle once the
-        // mean-binning fix dropped per-paint data volume back to width × 1
-        // samples. Each tick moves the trace ~1 sample at the data rate
-        // (40 Hz), so the scroll feels continuous instead of stepwise.
+        // 33 ms = 30 Hz. Each tick moves the trace ~1 sample at the
+        // data rate (40 Hz), so the scroll feels continuous instead
+        // of stepwise.
         interval: 33
         running: viewer.scanSource !== null
         repeat: true
-        // [LAG-DIAG] Capture inter-tick gap; if the main event loop is
-        // blocked by anything (paint, slot, GC), the next Timer fire
-        // arrives late and we'll see a >50 ms gap printed.
-        property real _lastTickMs: 0
         onTriggered: {
-            var nowMs = Date.now()
-            if (paintThrottle._lastTickMs > 0) {
-                var gap = nowMs - paintThrottle._lastTickMs
-                if (gap > 50) {
-                    console.warn("[LAG-DIAG] paintThrottle gap=" + gap +
-                                 " ms (expected ~33 ms)")
-                }
-            }
-            paintThrottle._lastTickMs = nowMs
             if (viewer._dirty) {
                 viewer._dirty = false
                 viewer.liveEdgeSnapshot = viewer.scanSource ? viewer.scanSource.liveEdge : 0
@@ -221,16 +207,7 @@ Rectangle {
         running: viewer.autoScale && viewer.scanSource !== null
         repeat: true
         triggeredOnStart: true
-        onTriggered: {
-            // [LAG-DIAG] Time the full autoscale tick (two metrics' worth
-            // of compute_bounds_for_metric + property writes).
-            var _t0 = Date.now()
-            viewer._recomputeAutoscale()
-            var _ms = Date.now() - _t0
-            if (_ms > 15) {
-                console.warn("[LAG-DIAG] autoscale tick took " + _ms + " ms")
-            }
-        }
+        onTriggered: viewer._recomputeAutoscale()
     }
 
     ColumnLayout {

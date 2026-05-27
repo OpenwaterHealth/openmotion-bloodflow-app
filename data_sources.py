@@ -337,11 +337,6 @@ class ScanDataSource(QObject):
         samples are available (too noisy to autoscale meaningfully).
 
         Matches legacy EmbeddedRealtimePlot._boundsFromArray semantics."""
-        # [LAG-DIAG] Time the autoscale walk — scales with total samples
-        # across all buffers for this metric, so suspect when long scans
-        # start to lag.
-        import time as _time
-        _lag_t0 = _time.perf_counter()
         # Stay in numpy throughout — building a Python list from
         # `.tolist()` was the dominant cost of this slot at 1 Hz over
         # 8 cams × 2 metrics × growing buffers.
@@ -368,17 +363,6 @@ class ScanDataSource(QObject):
             hi += 0.5
 
         pad = (hi - lo) * pad_frac
-        # [LAG-DIAG] Log when this exceeds 20 ms — at 3 Hz a long autoscale
-        # call directly blocks the QML event loop and would manifest as
-        # a paint hiccup.
-        _lag_ms = (_time.perf_counter() - _lag_t0) * 1000.0
-        if _lag_ms > 20.0:
-            import logging as _logging
-            _logging.getLogger("openmotion.bloodflow-app.connector").warning(
-                "[LAG-DIAG] compute_bounds_for_metric(%s) took %.1f ms "
-                "(samples=%d, buffers=%d)",
-                metric, _lag_ms, combined.size, len(chunks),
-            )
         return {"yMin": lo - pad, "yMax": hi + pad}
 
     def note_dirty(self, side: str, cam_id: int, metric: str, added: int) -> None:
