@@ -14,6 +14,12 @@ Item {
     property int    camId: 0
     property real   windowSeconds: 15
 
+    // Time-axis state — when followLive=true, the cell tracks
+    // source.liveEdge for the window's right edge. When false, the
+    // window is pinned at [windowStartT, windowStartT + windowSeconds].
+    property bool followLive: true
+    property real windowStartT: 0.0
+
     // Primary trace
     property string metric: "bfi"
     property real yMin: 0.0
@@ -104,10 +110,14 @@ Item {
 
             if (!cell.source) return
 
-            // Read liveEdge fresh each paint — it has no notify signal so
-            // we can't cache it in a QML binding.
-            var tHi = cell.source.liveEdge
-            var tLo = Math.max(0, tHi - cell.windowSeconds)
+            // Window boundaries — followLive locks tHi to source.liveEdge
+            // (live edge advancing); otherwise the window stays pinned
+            // at the user-set [windowStartT, windowStartT + windowSeconds].
+            // liveEdge is read fresh each paint — it has no notify signal.
+            var tHi = cell.followLive
+                ? cell.source.liveEdge
+                : cell.windowStartT + cell.windowSeconds
+            var tLo = tHi - cell.windowSeconds
             var dt = tHi - tLo
             if (dt <= 0) return
 

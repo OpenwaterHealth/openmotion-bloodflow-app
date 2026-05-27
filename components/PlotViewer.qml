@@ -26,8 +26,18 @@ Rectangle {
     // y-axis mapping (primary*/secondary*) so the two traces don't
     // squash each other when their ranges differ wildly.
     property string displayMode: "bfi_bvi"
-    property int windowSeconds: 15
+    property real windowSeconds: 15
     property bool autoScale: true
+
+    // ── Time-axis state ────────────────────────────────────────────────
+    // followLive = true: cells render the last `windowSeconds` of data
+    // up to source.liveEdge (DVR "live" mode). False: the visible window
+    // is pinned at [windowStartT, windowStartT + windowSeconds] and any
+    // new samples scroll on without moving the view (DVR "paused" mode).
+    // Any pan/wheel-zoom interaction sets followLive=false; only the
+    // "Back to live" button restores it.
+    property bool followLive: true
+    property real windowStartT: 0.0
 
     // Independent y-axis bounds per metric — kept here so every cell
     // shares the same scale.
@@ -187,6 +197,8 @@ Rectangle {
                     side: modelData.side
                     camId: modelData.camId
                     windowSeconds: viewer.windowSeconds
+                    followLive: viewer.followLive
+                    windowStartT: viewer.windowStartT
                     metric: viewer._displayPair.primary
                     yMin: viewer.primaryYMin
                     yMax: viewer.primaryYMax
