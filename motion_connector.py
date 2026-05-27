@@ -602,6 +602,7 @@ class MOTIONConnector(QObject):
         self._dropout_timer = QTimer(self)
         self._dropout_timer.setInterval(1000)
         self._dropout_timer.timeout.connect(self._on_dropout_check)
+        self._plot_t0: float = 0.0  # set at scan start; consumed by _on_dropout_check
 
         # Trigger-ON elapsed mirrors — populated from start_capture locals so
         # _on_dropout_check / _scan_elapsed_str can read them off the instance.
@@ -1857,6 +1858,7 @@ class MOTIONConnector(QObject):
         # after a mid-scan unplug/replug, the two sides' clocks diverge and the
         # QML plot's shared `latestTimestamp` prunes the lagging side to empty.
         plot_t0 = time.monotonic()
+        self._plot_t0 = plot_t0  # used by _on_dropout_check to compute dropout-marker t
         # Real-time plot viewer: construct a fresh LiveScanSource for this scan
         # and install it on the connector. Phase 1 has no QML consumer yet —
         # the sinks (added in subsequent tasks) accumulate samples here in
@@ -2705,6 +2707,13 @@ class MOTIONConnector(QObject):
                 )
                 self._camera_dropped.add(key)
                 self.cameraDropoutDetected.emit(side, cam_id, elapsed_str)
+                # Also feed the new LiveScanSource so Phase 2+'s PlotViewer can
+                # render a dropout bar. Time is relative to plot_t0 to match the
+                # per-sample t axis (sample timestamps from the SDK use the same
+                # plot_t0-anchored monotonic origin).
+                src = self._current_scan_source
+                if src is not None and getattr(src, "live", False):
+                    src.mark_dropped(side=side, cam_id=cam_id, t=now - self._plot_t0)
 
     def _scan_elapsed_str(self) -> str:
         """Return current scan elapsed trigger-ON time as HH:MM:SS."""

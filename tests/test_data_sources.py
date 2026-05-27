@@ -534,3 +534,38 @@ def test_set_current_scan_source_dedupes_same_instance():
     holder._set_current_scan_source(src)
     holder._set_current_scan_source(src)  # no-op — same instance
     assert received == [src]
+
+
+def test_live_scan_source_mark_dropped_no_buffers_yet_is_noop():
+    """If a camera drops before any sample arrived, mark_dropped silently
+    does nothing — no buffer to mark. Phase 2's PlotViewer won't have a
+    cell for a camera with no samples anyway."""
+    src = LiveScanSource(plot_t0=0.0)
+    src.mark_dropped(side="left", cam_id=0, t=1.5)
+    assert src.buffers == {}  # nothing created
+
+
+def test_live_scan_source_mark_dropped_multiple_metric_buffers():
+    """When a camera has samples in all 4 metric buffers, mark_dropped
+    sets dropped_at on all 4 — the marker is per-(side, cam), per-metric
+    bookkeeping just mirrors it."""
+    src = LiveScanSource(plot_t0=0.0)
+    src.append_uncorrected(
+        side="left", cam_id=1, frame_id=10, t=0.0,
+        bfi=4.0, bvi=3.0, mean=120.0, contrast=0.3,
+    )
+    src.append_uncorrected(  # second sample without mean — only 3 metrics
+        side="left", cam_id=2, frame_id=11, t=0.025,
+        bfi=4.1, bvi=3.1, mean=None, contrast=0.31,
+    )
+
+    src.mark_dropped(side="left", cam_id=1, t=2.5)
+    src.mark_dropped(side="left", cam_id=2, t=2.7)
+
+    # cam 1: all 4 buffers exist, all marked at 2.5
+    for metric in ("bfi", "bvi", "mean", "contrast"):
+        assert src.buffers[("left", 1, metric)].dropped_at == 2.5
+    # cam 2: 3 buffers exist (no mean), all marked at 2.7
+    for metric in ("bfi", "bvi", "contrast"):
+        assert src.buffers[("left", 2, metric)].dropped_at == 2.7
+    assert ("left", 2, "mean") not in src.buffers
