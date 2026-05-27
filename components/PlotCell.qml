@@ -25,14 +25,13 @@ Item {
     property color frameColor: "#444444"
     property color bgColor: "#1A1A1A"
 
-    // ── Derived ────────────────────────────────────────────────────────
-    readonly property real tHi: source ? source.liveEdge : 0
-    readonly property real tLo: Math.max(0, tHi - windowSeconds)
-
     // ── Repaint plumbing ───────────────────────────────────────────────
-    onTHiChanged: traceCanvas.requestPaint()
+    // liveEdge is a plain Python @property with no notify signal — QML
+    // can't bind to it. Instead, samplesAppended drives the repaint,
+    // and onPaint reads source.liveEdge directly each time.
     onWidthChanged: traceCanvas.requestPaint()
     onHeightChanged: traceCanvas.requestPaint()
+    onSourceChanged: traceCanvas.requestPaint()
 
     Connections {
         target: cell.source
@@ -62,15 +61,20 @@ Item {
 
             if (!cell.source) return
 
+            // Read liveEdge fresh each paint — it has no notify signal so
+            // we can't cache it in a QML binding.
+            var tHi = cell.source.liveEdge
+            var tLo = Math.max(0, tHi - cell.windowSeconds)
+            var dt = tHi - tLo
+            if (dt <= 0) return
+
             var maxPts = Math.max(50, Math.floor(width * 2))
             var pts = cell.source.points_for_window(
                 cell.side, cell.camId, cell.metric,
-                cell.tLo, cell.tHi, maxPts
+                tLo, tHi, maxPts
             )
             if (pts.length < 2) return
 
-            var dt = cell.tHi - cell.tLo
-            if (dt <= 0) return
             var dy = cell.yMax - cell.yMin
             if (dy <= 0) return
 
@@ -81,7 +85,7 @@ Item {
                 var t = pts[i][0]
                 var v = pts[i][1]
                 if (!isFinite(v)) continue
-                var x = ((t - cell.tLo) / dt) * width
+                var x = ((t - tLo) / dt) * width
                 var y = height - ((v - cell.yMin) / dy) * height
                 if (i === 0) ctx.moveTo(x, y)
                 else ctx.lineTo(x, y)
