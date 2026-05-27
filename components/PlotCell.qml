@@ -38,6 +38,12 @@ Item {
     property color frameColor: theme.borderSubtle
     property color bgColor: theme.bgPanel
 
+    // DVR target — set to PlotViewer; cell calls .setWindow(startT, sec)
+    // on pan/zoom interactions. Cell itself owns no time-axis state;
+    // viewer is the single source of truth for windowStartT / followLive /
+    // windowSeconds across all cells.
+    property var panZoomTarget: null
+
     AppTheme { id: theme }
 
     // ── Repaint plumbing ───────────────────────────────────────────────
@@ -160,6 +166,64 @@ Item {
             color: cell.secondaryColor
             font.pixelSize: 10
             font.family: "Roboto Mono"
+        }
+    }
+
+    // ── Pan + wheel-zoom MouseArea ─────────────────────────────────────
+    // Top of z-order (last sibling) so it captures mouse events from
+    // the underlying Canvas + label children. Wheel zooms around the
+    // cursor x; click-drag pans the time axis. Both apply globally via
+    // panZoomTarget.setWindow(...) so every cell in the grid stays in
+    // sync. Sets followLive=false on any interaction.
+    MouseArea {
+        id: panZoomArea
+        anchors.fill: parent
+        acceptedButtons: Qt.LeftButton
+        cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+
+        // Drag snapshot — captured at press so the drag is computed
+        // against a fixed origin instead of accumulating per-move
+        // floating-point drift.
+        property real _dragStartX: 0
+        property real _dragStartWindowStartT: 0
+
+        function _currentTHi() {
+            if (cell.followLive)
+                return cell.source ? cell.source.liveEdge : 0
+            return cell.windowStartT + cell.windowSeconds
+        }
+
+        onPressed: function(mouse) {
+            panZoomArea._dragStartX = mouse.x
+            panZoomArea._dragStartWindowStartT = panZoomArea._currentTHi() - cell.windowSeconds
+        }
+
+        onPositionChanged: function(mouse) {
+            if (!pressed || !cell.panZoomTarget || cell.width <= 0) return
+            // Drag right = scroll back in time = windowStartT decreases.
+            var dx = mouse.x - panZoomArea._dragStartX
+            var dt = (dx / cell.width) * cell.windowSeconds
+            cell.panZoomTarget.setWindow(
+                panZoomArea._dragStartWindowStartT - dt,
+                cell.windowSeconds
+            )
+        }
+
+        onWheel: function(wheel) {
+            if (!cell.panZoomTarget || cell.width <= 0) {
+                wheel.accepted = false
+                return
+            }
+            // Up = zoom in (smaller window); down = zoom out.
+            var factor = wheel.angleDelta.y > 0 ? 0.8 : 1.25
+            var ratio = Math.max(0, Math.min(1, wheel.x / cell.width))
+            var tHiNow = panZoomArea._currentTHi()
+            var tLoNow = tHiNow - cell.windowSeconds
+            var anchorT = tLoNow + ratio * cell.windowSeconds
+            var newSec = cell.windowSeconds * factor
+            var newStart = anchorT - ratio * newSec
+            cell.panZoomTarget.setWindow(newStart, newSec)
+            wheel.accepted = true
         }
     }
 }

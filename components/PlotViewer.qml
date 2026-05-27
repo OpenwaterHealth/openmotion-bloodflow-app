@@ -84,6 +84,35 @@ Rectangle {
         return entries
     }
 
+    // ── DVR controls (called from PlotCell MouseArea) ─────────────────
+    // Window-bounds: hard floor at 0.5 s so wheel-zoom can't collapse
+    // the visible window to nothing; ceiling at 600 s to keep the
+    // decimation point count sane for very-long scans.
+    readonly property real _minWindowSeconds: 0.5
+    readonly property real _maxWindowSeconds: 600.0
+
+    function _ensureFrozen() {
+        // Capture the currently-visible window start so pan/zoom from
+        // followLive transitions smoothly (no visual jump). After this
+        // the caller mutates windowStartT/windowSeconds freely.
+        if (viewer.followLive && viewer.scanSource) {
+            viewer.windowStartT = Math.max(0, viewer.scanSource.liveEdge - viewer.windowSeconds)
+        }
+        viewer.followLive = false
+    }
+
+    function setWindow(startT, seconds) {
+        _ensureFrozen()
+        viewer.windowSeconds = Math.max(_minWindowSeconds, Math.min(_maxWindowSeconds, seconds))
+        viewer.windowStartT = Math.max(0, startT)
+        viewer._dirty = true
+    }
+
+    function backToLive() {
+        viewer.followLive = true
+        viewer._dirty = true
+    }
+
     // ── Trace color per metric ─────────────────────────────────────────
     function _traceColorForMetric(m) {
         if (m === "bfi")      return theme.accentRed
@@ -208,6 +237,7 @@ Rectangle {
                     secondaryYMax: viewer.secondaryYMax
                     secondaryColor: viewer._traceColorForMetric(viewer._displayPair.secondary)
                     paintTick: viewer.paintTick
+                    panZoomTarget: viewer
                 }
             }
         }
