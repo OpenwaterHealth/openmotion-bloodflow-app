@@ -50,11 +50,10 @@ Rectangle {
     readonly property var scanSource: MOTIONInterface.currentScanSource
 
     // ── Grid model ─────────────────────────────────────────────────────
-    // Only renders cells for active cameras (bits set in leftMask /
-    // rightMask). Layout: 4 columns max, left-side cams fill the top
-    // rows, right-side cams fill the rows below. No empty trailing
-    // cells unless a side's active count isn't a multiple of 4.
-    readonly property var _activeCellModel: {
+    // Dev mode (default) — one cell per active camera (bits set in
+    // leftMask / rightMask). 4 columns max; left-side cams fill the
+    // top rows, right-side cams fill the rows below.
+    readonly property var _devCellModel: {
         var lm = (MOTIONInterface.appConfig.leftMask  || 0) & 0xFF
         var rm = (MOTIONInterface.appConfig.rightMask || 0) & 0xFF
         var leftCams = []
@@ -83,6 +82,18 @@ Rectangle {
         }
         return entries
     }
+
+    // Reduced mode — 2 cells, one per side, each rendering the
+    // side-averaged stream (cam_id=-1, fed by SDK's SideAveragingStage
+    // via _LivePlotSink.consume). Stacked vertically in a single column.
+    readonly property var _reducedCellModel: [
+        { side: "left",  camId: -1, row: 0, col: 0 },
+        { side: "right", camId: -1, row: 1, col: 0 }
+    ]
+
+    readonly property var _activeCellModel: viewer.reducedMode
+        ? _reducedCellModel
+        : _devCellModel
 
     // ── Autoscale recompute (shared by Timer + displayMode change) ────
     function _recomputeAutoscale() {
@@ -264,7 +275,9 @@ Rectangle {
             id: grid
             Layout.fillWidth: true
             Layout.fillHeight: true
-            columns: 4
+            // Reduced mode: single column, 2 stacked cells. Dev mode:
+            // 4 columns, rows determined by active-cam count.
+            columns: viewer.reducedMode ? 1 : 4
             rowSpacing: 6
             columnSpacing: 6
 

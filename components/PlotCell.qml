@@ -189,7 +189,11 @@ Item {
         spacing: 1
 
         Text {
-            text: cell.side.toUpperCase() + " " + (cell.camId + 1)
+            // cam_id = -1 is the side-averaged stream fed by the SDK's
+            // SideAveragingStage in reduced mode. Label it as "AVG".
+            text: cell.camId === -1
+                ? cell.side.toUpperCase() + " AVG"
+                : cell.side.toUpperCase() + " " + (cell.camId + 1)
             color: theme.textSecondary
             font.pixelSize: 11
             font.family: "Roboto Mono"
