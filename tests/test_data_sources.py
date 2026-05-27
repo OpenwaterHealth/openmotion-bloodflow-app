@@ -107,3 +107,59 @@ def test_camera_buffer_mark_dropped_sets_timestamp_once():
     # Idempotent — second call doesn't overwrite the first dropout time
     buf.mark_dropped(t=2.7)
     assert buf.dropped_at == 1.5
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ScanDataSource (base)
+# ─────────────────────────────────────────────────────────────────────────────
+
+from data_sources import ScanDataSource
+
+
+def test_scan_data_source_starts_with_no_buffers():
+    src = ScanDataSource(plot_t0=100.0)
+    assert src.live is False  # base class default; LiveScanSource overrides
+    assert src.liveEdge == 0.0
+    assert src.plot_t0 == 100.0
+    assert src.buffers == {}
+
+
+def test_scan_data_source_get_or_create_buffer_returns_same_instance():
+    src = ScanDataSource(plot_t0=0.0)
+    b1 = src.get_or_create_buffer("left", 0, "bfi")
+    b2 = src.get_or_create_buffer("left", 0, "bfi")
+    assert b1 is b2
+
+
+def test_scan_data_source_live_edge_tracks_max_timestamp():
+    src = ScanDataSource(plot_t0=0.0)
+    b = src.get_or_create_buffer("left", 0, "bfi")
+    b.append(t=0.5, v=1.0, frame_id=1)
+    b.append(t=1.25, v=2.0, frame_id=2)
+    b2 = src.get_or_create_buffer("right", 3, "bvi")
+    b2.append(t=0.75, v=3.0, frame_id=3)
+    assert src.liveEdge == 1.25
+
+
+def test_scan_data_source_samples_appended_emits_after_flush():
+    src = ScanDataSource(plot_t0=0.0)
+    received: list = []
+    src.samplesAppended.connect(lambda s, c, m, n: received.append((s, c, m, n)))
+
+    src.note_dirty("left", 0, "bfi", added=3)
+    src.note_dirty("left", 0, "bfi", added=2)  # coalesces
+    src.note_dirty("right", 4, "bvi", added=1)
+    assert received == []  # not yet flushed
+
+    src._flush()
+    assert sorted(received) == [("left", 0, "bfi", 5), ("right", 4, "bvi", 1)]
+
+
+def test_scan_data_source_flush_clears_pending():
+    src = ScanDataSource(plot_t0=0.0)
+    received: list = []
+    src.samplesAppended.connect(lambda s, c, m, n: received.append((s, c, m, n)))
+    src.note_dirty("left", 0, "bfi", added=1)
+    src._flush()
+    src._flush()  # nothing pending now
+    assert received == [("left", 0, "bfi", 1)]

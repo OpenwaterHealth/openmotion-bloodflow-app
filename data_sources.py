@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Optional
 
 import numpy as np
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
 
 _INITIAL_CAPACITY = 4096  # ≈ 100 s @ 40 Hz; doubles on overflow.
@@ -98,3 +99,74 @@ class _CameraBuffer:
         later calls don't overwrite the earlier dropout."""
         if self.dropped_at is None:
             self.dropped_at = float(t)
+
+
+_FLUSH_INTERVAL_MS = 100  # spec §"Throttled UI notify"
+
+
+class ScanDataSource(QObject):
+    """Base for live and past scan sources. Owns per-(side, cam, metric)
+    _CameraBuffer instances and a throttled samplesAppended signal.
+
+    Subclasses populate buffers; the base handles bookkeeping (liveEdge
+    cache, flush timer, signal coalescing).
+    """
+
+    # (side, cam_id, metric, added_count) — coalesced across the flush window.
+    samplesAppended = pyqtSignal(str, int, str, int)
+
+    def __init__(self, plot_t0: float, parent: Optional[QObject] = None) -> None:
+        super().__init__(parent)
+        self.plot_t0 = float(plot_t0)
+        self.live: bool = False  # LiveScanSource overrides to True
+        self.buffers: dict[tuple[str, int, str], _CameraBuffer] = {}
+
+        # Pending dirty bookkeeping: (side, cam, metric) -> accumulated count.
+        self._pending: dict[tuple[str, int, str], int] = {}
+
+        # Throttle timer — fires every 100 ms while the source is alive.
+        # Tests can call _flush() directly and ignore the timer entirely.
+        self._flush_timer = QTimer(self)
+        self._flush_timer.setInterval(_FLUSH_INTERVAL_MS)
+        self._flush_timer.timeout.connect(self._flush)
+        self._flush_timer.start()
+
+    # ── public ────────────────────────────────────────────────────────────
+
+    @property
+    def liveEdge(self) -> float:
+        """The maximum timestamp across all buffers, or 0.0 if empty."""
+        edge = 0.0
+        for b in self.buffers.values():
+            if b.n > 0:
+                last_t = float(b.t[b.n - 1])
+                if last_t > edge:
+                    edge = last_t
+        return edge
+
+    def get_or_create_buffer(self, side: str, cam_id: int, metric: str) -> _CameraBuffer:
+        key = (side, int(cam_id), metric)
+        buf = self.buffers.get(key)
+        if buf is None:
+            buf = _CameraBuffer()
+            self.buffers[key] = buf
+        return buf
+
+    def note_dirty(self, side: str, cam_id: int, metric: str, added: int) -> None:
+        """Record that `added` new samples landed in (side, cam, metric).
+        Coalesces with any previous note since the last flush."""
+        if added <= 0:
+            return
+        key = (side, int(cam_id), metric)
+        self._pending[key] = self._pending.get(key, 0) + added
+
+    # ── internal ──────────────────────────────────────────────────────────
+
+    def _flush(self) -> None:
+        """Emit one samplesAppended per dirty buffer and clear pending."""
+        if not self._pending:
+            return
+        pending = self._pending
+        self._pending = {}
+        for (side, cam_id, metric), count in pending.items():
+            self.samplesAppended.emit(side, cam_id, metric, count)
