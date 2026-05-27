@@ -16,6 +16,22 @@ class _Signal:
         self.calls.append(args)
 
 
+class _RecorderLiveSource:
+    def __init__(self):
+        self.appended = []
+        self.dropped = []
+
+    def append_uncorrected(self, *, side, cam_id, frame_id, t, bfi, bvi,
+                           mean=None, contrast=None):
+        self.appended.append({
+            "side": side, "cam_id": cam_id, "frame_id": frame_id, "t": t,
+            "bfi": bfi, "bvi": bvi, "mean": mean, "contrast": contrast,
+        })
+
+    def mark_dropped(self, *, side, cam_id, t):
+        self.dropped.append({"side": side, "cam_id": cam_id, "t": t})
+
+
 def _connector():
     return SimpleNamespace(
         _camera_temp_alert_threshold_c=100.0,
@@ -33,9 +49,16 @@ def _connector():
     )
 
 
+def _make_sink(conn, live_source=None):
+    """Helper: build a _LivePlotSink with a stub live_source if not provided."""
+    if live_source is None:
+        live_source = _RecorderLiveSource()
+    return _LivePlotSink(connector=conn, plot_t0=0.0, live_source=live_source), live_source
+
+
 def test_live_plot_sink_emits_only_source_camera_for_each_row():
     conn = _connector()
-    sink = _LivePlotSink(connector=conn, plot_t0=0.0)
+    sink, _ = _make_sink(conn)
     batch = SimpleNamespace(
         bfi_live=np.zeros((2, 2, 8), dtype=np.float32),
         bvi_live=np.zeros((2, 2, 8), dtype=np.float32),
@@ -72,7 +95,7 @@ def test_live_plot_sink_emits_only_source_camera_for_each_row():
 
 def test_live_plot_sink_uses_per_frame_sdk_timestamps():
     conn = _connector()
-    sink = _LivePlotSink(connector=conn, plot_t0=0.0)
+    sink, _ = _make_sink(conn)
     batch = SimpleNamespace(
         bfi_live=np.zeros((2, 2, 8), dtype=np.float32),
         bvi_live=np.zeros((2, 2, 8), dtype=np.float32),
@@ -129,3 +152,36 @@ def test_final_batch_sink_accepts_enriched_interval_frames():
         ("left", 1, 42, 2.5, 6.5, 125.0, 0.31),
         ("right", 6, 43, 3.5, 7.5, 140.0, 0.29),
     ]
+
+
+def test_live_plot_sink_appends_to_live_source():
+    conn = _connector()
+    sink, src = _make_sink(conn)
+    batch = SimpleNamespace(
+        bfi_live=np.zeros((1, 2, 8), dtype=np.float32),
+        bvi_live=np.zeros((1, 2, 8), dtype=np.float32),
+        mean_dc_rt=np.zeros((1, 2, 8), dtype=np.float32),
+        contrast_sn_rt=np.full((1, 2, 8), 0.25, dtype=np.float32),
+        temperature_c=np.full((1, 2, 8), 35.0, dtype=np.float32),
+        frame_type=np.array(["light"], dtype="<U8"),
+        timestamp_s=np.array([1.5], dtype=np.float64),
+        abs_frame_ids=np.array([77], dtype=np.int64),
+        side_ids=np.array([1], dtype=np.int8),
+        cam_ids=np.array([4], dtype=np.int8),
+    )
+    batch.bfi_live[0, 1, 4] = 4.4
+    batch.bvi_live[0, 1, 4] = 3.3
+    batch.mean_dc_rt[0, 1, 4] = 125.0
+
+    sink.consume("live", batch)
+
+    assert len(src.appended) == 1
+    rec = src.appended[0]
+    assert rec["side"] == "right"
+    assert rec["cam_id"] == 4
+    assert rec["frame_id"] == 77
+    assert rec["t"] == 1.5
+    assert rec["bfi"] == pytest.approx(4.4)
+    assert rec["bvi"] == pytest.approx(3.3)
+    assert rec["mean"] == pytest.approx(125.0)
+    assert rec["contrast"] == pytest.approx(0.25)

@@ -9,6 +9,7 @@ from PyQt6.QtCore import (
     QRecursiveMutex,
 )
 from pathlib import Path
+from typing import Optional
 import logging
 import math
 import base58
@@ -157,9 +158,11 @@ class _LivePlotSink:
 
     channels = {"live"}
 
-    def __init__(self, connector: "MOTIONConnector", plot_t0: float):
+    def __init__(self, connector: "MOTIONConnector", plot_t0: float,
+                 live_source: "LiveScanSource"):
         self._connector = connector
         self._plot_t0 = plot_t0
+        self._live_source = live_source
         self._temp_alerted: dict[tuple[str, int], bool] = {}
 
     def on_scan_start(self, meta) -> None:
@@ -271,6 +274,32 @@ class _LivePlotSink:
                 connector.scanBfiSampled.emit(side, cam_id, abs_frame_id, plot_ts, bfi)
                 connector.scanBviSampled.emit(side, cam_id, abs_frame_id, plot_ts, bvi)
                 connector.scanCameraTemperature.emit(side, cam_id, temp_c)
+
+                # Also feed the LiveScanSource so the new PlotViewer (Phase 2+)
+                # has a parallel record. mean/contrast are None when the SDK
+                # reported a non-finite value (existing emit-time NaN guards
+                # above set the optional payload to None for that metric).
+                mean_for_source: Optional[float] = None
+                contrast_for_source: Optional[float] = None
+                if not is_dark:
+                    if batch.mean_dc_rt is not None:
+                        mv = float(batch.mean_dc_rt[i, side_idx, cam_id])
+                        if math.isfinite(mv):
+                            mean_for_source = mv
+                    if batch.contrast_sn_rt is not None:
+                        cv = float(batch.contrast_sn_rt[i, side_idx, cam_id])
+                        if math.isfinite(cv):
+                            contrast_for_source = cv
+                self._live_source.append_uncorrected(
+                    side=side,
+                    cam_id=cam_id,
+                    frame_id=abs_frame_id,
+                    t=plot_ts,
+                    bfi=bfi,
+                    bvi=bvi,
+                    mean=mean_for_source,
+                    contrast=contrast_for_source,
+                )
 
     def on_complete(self) -> None:
         pass
