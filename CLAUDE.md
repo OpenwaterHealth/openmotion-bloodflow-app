@@ -77,6 +77,35 @@ Flip these in `config/app_config.json`:
 | `bviLowPassEnabled` | `true` | 1-pole LPF on BVI (cutoff 40 Hz). |
 | `dataDirectory` | `C:\Users\ethan\Projects\scan_data` | Single output root — scan CSVs/DB, `app-logs/`, `run-logs/`, `app-logs/ft-test-csvs/` all land under here. |
 
+## Reading the app log
+
+Every launch writes a timestamped log to `<dataDirectory>/app-logs/ow-bloodflowapp-<YYYYMMDD_HHMMSS>.log`. Use it as the first stop when diagnosing scan / calibration / connect failures — it captures every SDK + connector log line, including pipeline-stage exceptions that are caught and silently swallowed by `ScanRunner._safe_consume`.
+
+```powershell
+# Latest log, full contents:
+Get-ChildItem C:\Users\ethan\Projects\scan_data\app-logs\ow-bloodflowapp-*.log |
+  Sort-Object LastWriteTime -Descending | Select-Object -First 1 | Get-Content
+
+# Filter the latest log for failure-shaped lines (most common starting point):
+Get-ChildItem C:\Users\ethan\Projects\scan_data\app-logs\ow-bloodflowapp-*.log |
+  Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
+  Get-Content | Select-String -Pattern "WARNING|ERROR|raised|exception|Traceback|FAIL|aborted" -Context 0,3
+
+# Just the calibration outcome:
+Get-ChildItem C:\Users\ethan\Projects\scan_data\app-logs\ow-bloodflowapp-*.log |
+  Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
+  Get-Content | Select-String -Pattern "Calibration phase|procedure complete|samples captured"
+```
+
+The `dataDirectory` config key controls the root (defaults to cwd if unset — falls back to `~/Documents/OpenWater Bloodflow` on macOS). Sibling output directories under the same root:
+- `app-logs/` — app log files (one per launch)
+- `app-logs/ft-test-csvs/` — factory-test CSVs
+- `run-logs/` — per-scan run logs (one per trigger session: `run-<subject>_<ts>.log`)
+- `calibrations/` — saved calibration JSONs (also written here)
+- The scan output files (raw / corrected / notes / telemetry CSV + `scans.db`) land directly in the root
+
+**Important:** the runner is fail-soft. `ScanRunner._safe_consume` catches sink exceptions and logs them as `sink %r raised on channel ...` at ERROR; `pipeline.process` exceptions log as `pipeline.process raised — resetting and continuing` at ERROR. **Neither aborts the scan**, so the app may report "complete" while every interval was actually broken. Always grep for `raised|exception` even on apparent successes when something downstream looks wrong.
+
 ## Gotchas
 
 - **`motion_connector.py` is 4031 lines** — the file is doing too much. Don't add to it without considering extraction; recent precedent is `motion_config.py` (May 2025).
