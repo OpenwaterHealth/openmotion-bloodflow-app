@@ -1147,23 +1147,11 @@ class MotionConnector(QObject):
 
     @pyqtSlot()
     def shutdown(self):
-        """Shutdown connector. Stops capture, stops monitoring, then disconnects all devices."""
+        """Shutdown connector. Stops capture; main.py calls
+        motion_interface.stop() after this returns to tear down the
+        monitor and device handles."""
         logger.info("Shutting down MotionConnector...")
         self.stopCapture()
-
-        try:
-            if self._interface:
-                self._interface.stop_monitoring()
-                logger.info("USB monitoring stopped.")
-        except Exception as e:
-            logger.warning("Error stopping monitoring: %s", e)
-
-        try:
-            if self._interface:
-                self._interface.disconnect()
-        except Exception as e:
-            logger.warning("Error disconnecting interface: %s", e)
-
         logger.info("MotionConnector shutdown complete.")
 
     # --- SCAN MANAGEMENT METHODS ---
