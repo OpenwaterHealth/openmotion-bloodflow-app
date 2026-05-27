@@ -148,7 +148,12 @@ def test_final_batch_sink_accepts_enriched_interval_frames():
     ]
 
 
-def test_final_batch_sink_forwards_payload_to_live_source():
+def test_final_batch_sink_does_not_forward_to_live_source():
+    """The new viewer is intentionally NOT fed corrected values — the
+    in-place buffer rewrite at every dark-interval close caused visible
+    mid-scan disruption. Legacy plot still gets the scanCorrectedBatch
+    Qt signal; the LiveScanSource is left at uncorrected live values.
+    Re-flip this test if/when corrected handoff is reintroduced."""
     conn = _connector()
     sink, src = _make_final_sink(conn)
     interval = SimpleNamespace(
@@ -158,10 +163,10 @@ def test_final_batch_sink_forwards_payload_to_live_source():
         ]
     )
     sink.consume("final", interval)
-    assert len(src.corrected_batches) == 1
-    payload = src.corrected_batches[0]
-    assert payload[0]["frameId"] == 42
-    assert payload[0]["bfi"] == 2.5
+    # Legacy emit still fires.
+    assert len(conn.scanCorrectedBatch.calls) == 1
+    # New viewer source not touched.
+    assert src.corrected_batches == []
 
 
 def test_final_batch_sink_skips_live_source_when_payload_empty():
