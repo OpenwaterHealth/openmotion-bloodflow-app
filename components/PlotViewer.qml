@@ -214,10 +214,16 @@ Rectangle {
     }
 
     // Source change forces an immediate paint without waiting for the
-    // first samplesAppended.
+    // first samplesAppended; also resets followLive so each new source
+    // (live or past) opens at its own latest window.
     onScanSourceChanged: {
         viewer.liveEdgeSnapshot = viewer.scanSource ? viewer.scanSource.liveEdge : 0
+        viewer.followLive = true
         viewer._dirty = true
+        // Re-fit y-axis to the new source's data immediately, otherwise
+        // a past scan loaded with very different value ranges would draw
+        // off-axis until the next autoscale tick.
+        viewer._recomputeAutoscale()
     }
 
     // Autoscale tick — every 3 s. compute_bounds_for_metric walks every
@@ -245,6 +251,7 @@ Rectangle {
             windowSeconds: viewer.windowSeconds
             autoScale: viewer.autoScale
             followLive: viewer.followLive
+            liveSourceAvailable: MOTIONInterface.liveSourceAvailable
 
             onDisplayModeRequested: function(mode) {
                 viewer.displayMode = mode
@@ -266,8 +273,17 @@ Rectangle {
                 console.info("[Plot] autoScale → " + enabled)
             }
             onBackToLiveRequested: {
-                viewer.backToLive()
-                console.info("[Plot] back-to-live (followLive → true)")
+                // When the viewer is on a past source, "Back to live"
+                // means switch back to the held LiveScanSource. When
+                // already live (just paused), it means resume follow.
+                if (viewer.scanSource && viewer.scanSource.live === false
+                        && MOTIONInterface.liveSourceAvailable) {
+                    MOTIONInterface.showLiveSource()
+                    console.info("[Plot] back-to-live (past → live source)")
+                } else {
+                    viewer.backToLive()
+                    console.info("[Plot] back-to-live (followLive → true)")
+                }
             }
         }
 

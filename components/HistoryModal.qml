@@ -370,6 +370,29 @@ Item {
                             }
                         }
 
+                        // New plot viewer — opens the past scan inside the
+                        // BloodFlow page's PlotViewer instead of a popout.
+                        Button {
+                            text: "View in plot →"
+                            visible: MOTIONInterface.appConfig.useNewPlotViewer === true
+                            Layout.fillWidth: true; Layout.preferredHeight: 36
+                            enabled: scans.length > 0 && currentIndex >= 0
+                            hoverEnabled: enabled
+                            contentItem: Text {
+                                text: parent.text; font.pixelSize: 13
+                                color: parent.enabled ? theme.textSecondary : theme.textTertiary
+                                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                            }
+                            background: Rectangle {
+                                color: !parent.enabled ? theme.bgInput : parent.hovered ? theme.accentBlue : theme.bgInput
+                                border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
+                            }
+                            onClicked: {
+                                MOTIONInterface.loadPastScan(scans[currentIndex] || "")
+                                root.close()
+                            }
+                        }
+
                         Item { Layout.fillHeight: true }
                     }
                 }

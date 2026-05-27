@@ -20,6 +20,13 @@ Item {
     property int windowSeconds: 15
     property bool autoScale: true
     property bool followLive: true
+    // True iff a LiveScanSource exists in MOTIONConnector — lets the
+    // Back-to-live button stay enabled when the viewer is showing a
+    // past scan so the user can return to the live edge in one click.
+    property bool liveSourceAvailable: false
+
+    readonly property bool _viewerOnPast: scanSource !== null
+                                          && scanSource.live === false
 
     // ── Outputs ────────────────────────────────────────────────────────
     signal displayModeRequested(string mode)
@@ -57,8 +64,14 @@ Item {
 
         Button {
             id: backToLiveBtn
-            visible: !toolbar.followLive
-            text: "● Back to live"
+            // Visible when:
+            //   - viewer is on a past source AND a live source is held
+            //     in the background (button switches sources), OR
+            //   - viewer is on the live source but the visible window
+            //     is pinned (button resumes tracking the live edge).
+            visible: (toolbar._viewerOnPast && toolbar.liveSourceAvailable)
+                     || (!toolbar._viewerOnPast && !toolbar.followLive)
+            text: toolbar._viewerOnPast ? "← Back to live scan" : "● Back to live"
             // Material-style accent — uses the same red as BFI traces for
             // visual urgency: "you're not seeing live data right now".
             palette.buttonText: theme.accentRed

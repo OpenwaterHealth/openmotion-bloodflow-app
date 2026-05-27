@@ -43,7 +43,7 @@ from motion_config import (
     load_tec_params,
 )
 from utils.resource_path import resource_path
-from data_sources import LiveScanSource, ScanDataSource
+from data_sources import LiveScanSource, PastScanSource, ScanDataSource
 import numpy as np
 import pandas as pd
 
@@ -498,6 +498,7 @@ class MOTIONConnector(QObject):
 
     # Real-time plot viewer source — see data_sources.py.
     currentScanSourceChanged = pyqtSignal()
+    liveSourceAvailableChanged = pyqtSignal()
 
     configProgress = pyqtSignal(int)
     configLog = pyqtSignal(str)
@@ -670,6 +671,10 @@ class MOTIONConnector(QObject):
         self._console_connected_at: float | None = None
         # Real-time plot viewer source — assigned at scan start by startCapture.
         self._current_scan_source: ScanDataSource | None = None
+        # The most-recent LiveScanSource is kept alive even after the user
+        # navigates to a past scan, so "Back to live" can reassign without
+        # reconstructing. None when no scan has run this session.
+        self._live_scan_source: LiveScanSource | None = None
 
         self.laser_params = load_laser_params(config_dir, force_fault=self._force_laser_fail)
         self._tec_voltage_default = load_tec_params(config_dir)
@@ -1730,9 +1735,17 @@ class MOTIONConnector(QObject):
 
     @pyqtProperty(QObject, notify=currentScanSourceChanged)
     def currentScanSource(self) -> ScanDataSource | None:
-        """Current ScanDataSource — fresh LiveScanSource at each scan start.
-        Phase 1 has no QML consumer; Phase 2's PlotViewer will bind to this."""
+        """Current ScanDataSource bound to the PlotViewer. Usually the
+        live source during a scan; can be a PastScanSource while the
+        user is reviewing history via loadPastScan."""
         return self._current_scan_source
+
+    @pyqtProperty(bool, notify=liveSourceAvailableChanged)
+    def liveSourceAvailable(self) -> bool:
+        """True when a LiveScanSource is held (i.e. at least one scan
+        has run this session). PlotToolbar uses this to decide whether
+        the "Back to live" button should switch sources back to live."""
+        return self._live_scan_source is not None
 
     def _set_current_scan_source(self, source: ScanDataSource | None) -> None:
         """Replace the active source. Dedupes identical-instance assignments
@@ -1741,6 +1754,49 @@ class MOTIONConnector(QObject):
             return
         self._current_scan_source = source
         self.currentScanSourceChanged.emit()
+
+    @pyqtSlot()
+    def showLiveSource(self) -> None:
+        """Switch the viewer back to the held live source, if any.
+        No-op when no LiveScanSource has been created this session."""
+        if self._live_scan_source is None:
+            return
+        self._set_current_scan_source(self._live_scan_source)
+        logger.info("[Plot] viewer switched back to live source")
+
+    @pyqtSlot(str)
+    def loadPastScan(self, session_label: str) -> None:
+        """Open the saved scan with the given session_label (the
+        YYYYMMDD_HHMMSS_userLabel string used elsewhere in the UI) and
+        display it in the PlotViewer. The held live source is left
+        intact so a subsequent showLiveSource() can return to it.
+
+        Synchronous load — for a typical 30-min scan the SQLite walk
+        completes in well under a second, but if this becomes too slow
+        on long scans we can move it onto a QThread."""
+        if not session_label:
+            logger.warning("loadPastScan: empty session_label")
+            return
+        try:
+            from omotion.ScanDatabase import ScanDatabase
+            db_path = getattr(self._interface, "scan_db_path", None)
+            if not db_path:
+                logger.warning("loadPastScan: scan_db_path unavailable on interface")
+                return
+            db = ScanDatabase(db_path)
+            session = db.get_session_by_label(session_label)
+            if not session:
+                logger.warning("loadPastScan: no session found for label %r", session_label)
+                return
+            session_id = int(session["id"])
+            past = PastScanSource(scan_db=db, session_id=session_id, parent=self)
+            self._set_current_scan_source(past)
+            logger.info(
+                "[Plot] loaded past scan %r (session_id=%d) into viewer",
+                session_label, session_id,
+            )
+        except Exception:
+            logger.exception("loadPastScan failed for label %r", session_label)
 
     @pyqtSlot(str, result=int)
     @pyqtSlot(str, str, result=int)
@@ -1883,6 +1939,13 @@ class MOTIONConnector(QObject):
         # the sinks (added in subsequent tasks) accumulate samples here in
         # parallel with the legacy Qt signal emissions.
         live_source = LiveScanSource(plot_t0=plot_t0, parent=self)
+        # Track the live source separately so the user can navigate
+        # to a past scan and return; emit so QML rebinds the
+        # PlotToolbar's "Back to live" visibility.
+        first_live = self._live_scan_source is None
+        self._live_scan_source = live_source
+        if first_live:
+            self.liveSourceAvailableChanged.emit()
         self._set_current_scan_source(live_source)
         self._capture_left_path = ""
         self._capture_right_path = ""
