@@ -129,13 +129,11 @@ Item {
             var dt = tHi - tLo
             if (dt <= 0) return
 
-            // Cap at ~3× cell pixel width so decimation only kicks in for
-            // very-long windows. Below this threshold every sample is
-            // drawn — avoids stride-aliasing flicker as the window scrolls
-            // one sample at a time. When decimation IS needed (long
-            // windows, e.g. 5 min × 40 fps = 12 000 samples), the source
-            // mean-bins instead of stride-subsampling.
-            var maxPts = Math.max(50, Math.floor(width * 3))
+            // 1 sample per pixel — mean-binning at the source smooths
+            // the scroll, so we don't need the headroom of × 2 / × 3 to
+            // avoid aliasing. Smaller maxPts = less Python→QML data per
+            // paint = snappier feel under load.
+            var maxPts = Math.max(50, Math.floor(width))
 
             cell._drawTrace(ctx, cell.metric, cell.traceColor,
                             cell.yMin, cell.yMax,
