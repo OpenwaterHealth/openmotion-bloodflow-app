@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Optional
 
 import numpy as np
-from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot
 
 
 _INITIAL_CAPACITY = 4096  # ≈ 100 s @ 40 Hz; doubles on overflow.
@@ -173,6 +173,30 @@ class ScanDataSource(QObject):
             buf = _CameraBuffer()
             self.buffers[key] = buf
         return buf
+
+    @pyqtSlot(str, int, str, float, float, int, result="QVariantList")
+    def points_for_window(
+        self,
+        side: str,
+        cam_id: int,
+        metric: str,
+        t_lo: float,
+        t_hi: float,
+        max_points: int,
+    ) -> list:
+        """QML-facing: return a list of [t, v] pairs for the requested
+        (side, cam_id, metric) buffer in the window [t_lo, t_hi], strided
+        to at most max_points. Returns [] when the buffer doesn't exist
+        or the window is empty.
+
+        Each pair is [float, float]. The list is a fresh allocation per
+        call — Phase 2b can optimize with typed-array passthrough if paint
+        cost becomes a bottleneck."""
+        buf = self.buffers.get((side, int(cam_id), metric))
+        if buf is None:
+            return []
+        t_arr, v_arr = buf.window_decimated(t_lo, t_hi, int(max_points))
+        return [[float(t), float(v)] for t, v in zip(t_arr, v_arr)]
 
     def note_dirty(self, side: str, cam_id: int, metric: str, added: int) -> None:
         """Record that `added` new samples landed in (side, cam, metric).

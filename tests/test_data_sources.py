@@ -621,3 +621,43 @@ def test_camera_buffer_window_decimated_partial_window():
     t_dec, v_dec = buf.window_decimated(t_lo=0.250, t_hi=0.500, max_points=100)
     assert len(t_dec) == 11  # indices 10..20 inclusive
     assert list(v_dec) == [np.float32(i) for i in range(10, 21)]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ScanDataSource.points_for_window (Phase 2a)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_scan_data_source_points_for_window_returns_pairs():
+    src = ScanDataSource(plot_t0=0.0)
+    buf = src.get_or_create_buffer("left", 0, "bfi")
+    for i in range(10):
+        buf.append(t=i * 0.025, v=4.0 + i * 0.1, frame_id=i)
+
+    pts = src.points_for_window("left", 0, "bfi", 0.0, 0.25, max_points=100)
+
+    # Window covers indices 0..10 (right-exclusive), so 10 pairs
+    assert len(pts) == 10
+    assert pts[0] == pytest.approx([0.0, 4.0])
+    assert pts[-1] == pytest.approx([0.225, 4.9])
+
+
+def test_scan_data_source_points_for_window_missing_buffer_returns_empty():
+    src = ScanDataSource(plot_t0=0.0)
+    pts = src.points_for_window("left", 7, "bvi", 0.0, 1.0, max_points=100)
+    assert pts == []
+
+
+def test_scan_data_source_points_for_window_decimates_when_over_max():
+    src = ScanDataSource(plot_t0=0.0)
+    buf = src.get_or_create_buffer("right", 3, "mean")
+    for i in range(200):
+        buf.append(t=i * 0.025, v=float(i), frame_id=i)
+
+    pts = src.points_for_window("right", 3, "mean", 0.0, 5.0, max_points=50)
+    # 200 samples, max=50 → stride=4 → 50 pairs
+    assert len(pts) == 50
+    # First pair is the first sample
+    assert pts[0] == pytest.approx([0.0, 0.0])
+    # Subsequent pairs at stride=4
+    assert pts[1] == pytest.approx([0.1, 4.0])
