@@ -353,7 +353,13 @@ class _FinalBatchSink:
             })
         if payload:
             connector.scanCorrectedBatch.emit(payload)
-            self._live_source.apply_corrected_batch(payload)
+            # New viewer intentionally NOT fed corrected values for now —
+            # the in-place buffer rewrite at every dark-interval close
+            # caused visible mid-scan disruption ("data jumping between
+            # two datasets"). Legacy EmbeddedRealtimePlot still receives
+            # corrections via scanCorrectedBatch.emit above. Re-enable
+            # `self._live_source.apply_corrected_batch(payload)` when we
+            # have a smoother handoff (e.g. dual-buffer overlay).
 
     def on_complete(self) -> None:
         pass
