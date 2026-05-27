@@ -20,6 +20,7 @@ class _RecorderLiveSource:
     def __init__(self):
         self.appended = []
         self.dropped = []
+        self.corrected_batches = []  # NEW
 
     def append_uncorrected(self, *, side, cam_id, frame_id, t, bfi, bvi,
                            mean=None, contrast=None):
@@ -30,6 +31,9 @@ class _RecorderLiveSource:
 
     def mark_dropped(self, *, side, cam_id, t):
         self.dropped.append({"side": side, "cam_id": cam_id, "t": t})
+
+    def apply_corrected_batch(self, payload):  # NEW
+        self.corrected_batches.append(payload)
 
 
 def _connector():
@@ -118,40 +122,64 @@ def test_live_plot_sink_uses_per_frame_sdk_timestamps():
     assert [call[3] for call in conn.scanBviSampled.calls] == [1.25, 1.275]
 
 
+def _make_final_sink(conn, live_source=None):
+    if live_source is None:
+        live_source = _RecorderLiveSource()
+    return _FinalBatchSink(connector=conn, plot_t0=0.0, live_source=live_source), live_source
+
+
 def test_final_batch_sink_accepts_enriched_interval_frames():
     conn = _connector()
-    sink = _FinalBatchSink(connector=conn, plot_t0=0.0)
+    sink, _src = _make_final_sink(conn)
     interval = SimpleNamespace(
         frames=[
-            SimpleNamespace(
-                side="left",
-                cam_id=1,
-                abs_frame_id=42,
-                bfi=2.5,
-                bvi=6.5,
-                mean=125.0,
-                contrast=0.31,
-            ),
-            SimpleNamespace(
-                side="right",
-                cam_id=6,
-                abs_frame_id=43,
-                bfi=3.5,
-                bvi=7.5,
-                mean=140.0,
-                contrast=0.29,
-            ),
+            SimpleNamespace(side="left",  cam_id=1, abs_frame_id=42,
+                            bfi=2.5, bvi=6.5, mean=125.0, contrast=0.31),
+            SimpleNamespace(side="right", cam_id=6, abs_frame_id=43,
+                            bfi=3.5, bvi=7.5, mean=140.0, contrast=0.29),
         ]
     )
-
     sink.consume("final", interval)
-
     assert len(conn.scanCorrectedBatch.calls) == 1
     payload = conn.scanCorrectedBatch.calls[0][0]
     assert [(p["side"], p["camId"], p["frameId"], p["bfi"], p["bvi"], p["mean"], p["contrast"]) for p in payload] == [
         ("left", 1, 42, 2.5, 6.5, 125.0, 0.31),
         ("right", 6, 43, 3.5, 7.5, 140.0, 0.29),
     ]
+
+
+def test_final_batch_sink_forwards_payload_to_live_source():
+    conn = _connector()
+    sink, src = _make_final_sink(conn)
+    interval = SimpleNamespace(
+        frames=[
+            SimpleNamespace(side="left", cam_id=1, abs_frame_id=42,
+                            bfi=2.5, bvi=6.5, mean=125.0, contrast=0.31),
+        ]
+    )
+    sink.consume("final", interval)
+    assert len(src.corrected_batches) == 1
+    payload = src.corrected_batches[0]
+    assert payload[0]["frameId"] == 42
+    assert payload[0]["bfi"] == 2.5
+
+
+def test_final_batch_sink_skips_live_source_when_payload_empty():
+    """Empty payload (no samples passed the dropout gate) shouldn't even
+    call apply_corrected_batch."""
+    conn = _connector()
+    # Pre-populate dropped set so the dropout gate filters everything.
+    conn._camera_dropped.add(("left", 1))
+    sink, src = _make_final_sink(conn)
+    interval = SimpleNamespace(
+        frames=[
+            SimpleNamespace(side="left", cam_id=1, abs_frame_id=42,
+                            bfi=2.5, bvi=6.5, mean=125.0, contrast=0.31),
+        ]
+    )
+    sink.consume("final", interval)
+    assert src.corrected_batches == []
+    assert conn.scanCorrectedBatch.calls == []
 
 
 def test_live_plot_sink_appends_to_live_source():

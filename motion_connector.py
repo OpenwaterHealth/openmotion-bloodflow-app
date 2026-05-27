@@ -315,9 +315,11 @@ class _FinalBatchSink:
 
     channels = {"final"}
 
-    def __init__(self, connector: "MOTIONConnector", plot_t0: float):
+    def __init__(self, connector: "MOTIONConnector", plot_t0: float,
+                 live_source: "LiveScanSource"):
         self._connector = connector
         self._plot_t0 = plot_t0
+        self._live_source = live_source
 
     def on_scan_start(self, meta) -> None:
         pass
@@ -358,6 +360,7 @@ class _FinalBatchSink:
             })
         if payload:
             connector.scanCorrectedBatch.emit(payload)
+            self._live_source.apply_corrected_batch(payload)
 
     def on_complete(self) -> None:
         pass
@@ -1946,8 +1949,8 @@ class MOTIONConnector(QObject):
                 self._raw_csv_duration_sec if self._write_raw_csv else 0
             ),
             sinks=[
-                _LivePlotSink(connector=self, plot_t0=plot_t0),
-                _FinalBatchSink(connector=self, plot_t0=plot_t0),
+                _LivePlotSink(connector=self, plot_t0=plot_t0, live_source=live_source),
+                _FinalBatchSink(connector=self, plot_t0=plot_t0, live_source=live_source),
                 _TriggerStateSink(connector=self),
                 _CompletionSink(connector=self, on_complete_cb=_on_pipeline_complete),
             ],
