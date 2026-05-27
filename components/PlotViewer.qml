@@ -24,6 +24,21 @@ Rectangle {
     // again when Phase 2b's loadPastScan installs a PastScanSource.
     readonly property var scanSource: MOTIONInterface.currentScanSource
 
+    // Phase 2a: show the first active camera from the user's mask config
+    // so the single cell renders SOMETHING regardless of mask choice.
+    // Phase 2b expands to a full per-camera grid driven by both masks.
+    readonly property var _firstActive: {
+        var lm = (MOTIONInterface.appConfig.leftMask  || 0) & 0xFF
+        var rm = (MOTIONInterface.appConfig.rightMask || 0) & 0xFF
+        for (var i = 0; i < 8; i++) {
+            if (lm & (1 << i)) return { side: "left",  cam: i }
+        }
+        for (var j = 0; j < 8; j++) {
+            if (rm & (1 << j)) return { side: "right", cam: j }
+        }
+        return { side: "left", cam: 0 }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 12
@@ -45,8 +60,8 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
             source: viewer.scanSource
-            side: "left"
-            camId: 0
+            side: viewer._firstActive.side
+            camId: viewer._firstActive.cam
             metric: "bfi"
             windowSeconds: 15
             yMin: 0.0
