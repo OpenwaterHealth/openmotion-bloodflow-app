@@ -31,18 +31,36 @@ Rectangle {
     readonly property var scanSource: MOTIONInterface.currentScanSource
 
     // ── Grid model ─────────────────────────────────────────────────────
-    // 16 entries in row-major order matching the layout grid:
-    //   row 0: L1 L2 L3 L4
-    //   row 1: L5 L6 L7 L8
-    //   row 2: R1 R2 R3 R4
-    //   row 3: R5 R6 R7 R8
-    readonly property var _cellModel: {
+    // Only renders cells for active cameras (bits set in leftMask /
+    // rightMask). Layout: 4 columns max, left-side cams fill the top
+    // rows, right-side cams fill the rows below. No empty trailing
+    // cells unless a side's active count isn't a multiple of 4.
+    readonly property var _activeCellModel: {
+        var lm = (MOTIONInterface.appConfig.leftMask  || 0) & 0xFF
+        var rm = (MOTIONInterface.appConfig.rightMask || 0) & 0xFF
+        var leftCams = []
+        var rightCams = []
+        for (var i = 0; i < 8; i++) {
+            if (lm & (1 << i)) leftCams.push(i)
+            if (rm & (1 << i)) rightCams.push(i)
+        }
         var entries = []
-        var sides = ["left", "right"]
-        for (var s = 0; s < sides.length; s++) {
-            for (var c = 0; c < 8; c++) {
-                entries.push({ side: sides[s], camId: c })
-            }
+        var leftRows = Math.ceil(leftCams.length / 4)
+        for (var li = 0; li < leftCams.length; li++) {
+            entries.push({
+                side: "left",
+                camId: leftCams[li],
+                row: Math.floor(li / 4),
+                col: li % 4
+            })
+        }
+        for (var ri = 0; ri < rightCams.length; ri++) {
+            entries.push({
+                side: "right",
+                camId: rightCams[ri],
+                row: leftRows + Math.floor(ri / 4),
+                col: ri % 4
+            })
         }
         return entries
     }
@@ -100,8 +118,10 @@ Rectangle {
             columnSpacing: 6
 
             Repeater {
-                model: viewer._cellModel
+                model: viewer._activeCellModel
                 delegate: PlotCell {
+                    Layout.row: modelData.row
+                    Layout.column: modelData.col
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     source: viewer.scanSource
@@ -113,6 +133,22 @@ Rectangle {
                     yMax: viewer.yMax
                     traceColor: viewer._traceColorForMetric(viewer.metric)
                 }
+            }
+        }
+
+        // Placeholder when no cameras are active (both masks 0). Lets the
+        // viewer still show its toolbar + scan-source state without an
+        // empty grid below it.
+        Item {
+            visible: viewer._activeCellModel.length === 0
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            Text {
+                anchors.centerIn: parent
+                text: "No active cameras selected"
+                color: theme.textTertiary
+                font.pixelSize: 14
+                font.family: "Roboto Mono"
             }
         }
     }
