@@ -236,6 +236,13 @@ Rectangle {
     // Data viewer — fills remaining space to the right of ButtonPanel.
     // Phase 2a: useNewPlotViewer mounts the new PlotViewer via Loader when
     // true; otherwise the legacy plots below render unchanged.
+    Component {
+        id: plotViewerComponent
+        PlotViewer {
+            reducedMode: bloodFlow.reducedMode
+        }
+    }
+
     Loader {
         id: newPlotLoader
         active: bloodFlow._useNewViewer
@@ -246,9 +253,7 @@ Rectangle {
         anchors.right: parent.right
         anchors.margins: 8
         anchors.leftMargin: 16
-        sourceComponent: PlotViewer {
-            reducedMode: bloodFlow.reducedMode
-        }
+        sourceComponent: plotViewerComponent
     }
 
     EmbeddedRealtimePlot {
