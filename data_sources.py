@@ -42,13 +42,19 @@ class _CameraBuffer:
         self._frame_id_to_index: dict[int, int] = {}
         self.dropped_at: Optional[float] = None
 
+    def _grow(self) -> None:
+        """Double the capacity of all three parallel arrays atomically.
+        All three must always stay the same length — this method is the
+        single chokepoint that enforces that invariant."""
+        new_cap = self.t.shape[0] * 2
+        self.t = np.resize(self.t, new_cap)
+        self.v = np.resize(self.v, new_cap)
+        self.frame_id = np.resize(self.frame_id, new_cap)
+
     def append(self, t: float, v: float, frame_id: int) -> None:
         """Append one sample. Grows capacity (doubling) on overflow."""
         if self.n >= self.t.shape[0]:
-            new_cap = self.t.shape[0] * 2
-            self.t = np.resize(self.t, new_cap)
-            self.v = np.resize(self.v, new_cap)
-            self.frame_id = np.resize(self.frame_id, new_cap)
+            self._grow()
         idx = self.n
         self.t[idx] = t
         self.v[idx] = v
@@ -62,7 +68,9 @@ class _CameraBuffer:
 
     def apply_corrected(self, frame_id: int, value: float) -> None:
         """Overwrite v at the row whose frame_id matches. Silent no-op if
-        no such frame_id was appended (race: final arrived before live)."""
+        no such frame_id was appended (race: final arrived before live).
+
+        Value is stored as float32; sub-float32 precision is lost on write."""
         if frame_id == -1:
             return
         idx = self._frame_id_to_index.get(int(frame_id))
@@ -72,7 +80,12 @@ class _CameraBuffer:
 
     def window_indices(self, t_lo: float, t_hi: float) -> tuple[int, int]:
         """Return (i_lo, i_hi) such that t[i_lo:i_hi] covers [t_lo, t_hi].
-        i_hi is right-exclusive. Binary search; O(log n)."""
+        i_hi is right-exclusive. Binary search; O(log n).
+
+        Precondition: t[0:n] is monotonically non-decreasing. The live pipeline
+        appends in timestamp order at 40 Hz; PastScanSource reads rows ordered
+        by timestamp_s ASC from the SDK query. Out-of-order append silently
+        returns wrong indices — np.searchsorted does not validate."""
         if self.n == 0:
             return 0, 0
         t_slice = self.t[: self.n]

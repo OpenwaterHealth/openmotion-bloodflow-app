@@ -54,7 +54,7 @@ def test_camera_buffer_window_indices_binary_search():
     buf = _CameraBuffer(initial_capacity=64)
     for i in range(40):
         buf.append(t=i * 0.025, v=float(i), frame_id=i)
-    # Window covering t in [0.250, 0.500] should give indices [10, 20] (right-exclusive)
+    # Window covering t in [0.250, 0.500] should give indices [10, 21) (right-exclusive)
     i_lo, i_hi = buf.window_indices(0.250, 0.500)
     assert i_lo == 10
     assert i_hi == 21  # searchsorted right-side gives one past the last match
