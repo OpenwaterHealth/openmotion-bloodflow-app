@@ -569,3 +569,55 @@ def test_live_scan_source_mark_dropped_multiple_metric_buffers():
     for metric in ("bfi", "bvi", "contrast"):
         assert src.buffers[("left", 2, metric)].dropped_at == 2.7
     assert ("left", 2, "mean") not in src.buffers
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# _CameraBuffer.window_decimated (Phase 2a)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_camera_buffer_window_decimated_returns_unstrided_when_under_max():
+    buf = _CameraBuffer(initial_capacity=64)
+    for i in range(20):
+        buf.append(t=i * 0.025, v=float(i), frame_id=i)
+    t_dec, v_dec = buf.window_decimated(t_lo=0.0, t_hi=0.5, max_points=100)
+    # 20 samples in window, max_points=100 → no decimation
+    assert len(t_dec) == 20
+    assert list(v_dec) == [np.float32(i) for i in range(20)]
+
+
+def test_camera_buffer_window_decimated_strides_when_over_max():
+    buf = _CameraBuffer(initial_capacity=1024)
+    for i in range(400):
+        buf.append(t=i * 0.025, v=float(i), frame_id=i)
+    # Whole window (10 s), max_points=100 → stride = ceil(400/100) = 4
+    t_dec, v_dec = buf.window_decimated(t_lo=0.0, t_hi=10.0, max_points=100)
+    assert len(t_dec) == 100
+    assert list(v_dec[:5]) == [np.float32(0), np.float32(4), np.float32(8), np.float32(12), np.float32(16)]
+
+
+def test_camera_buffer_window_decimated_empty_window_returns_empty_arrays():
+    buf = _CameraBuffer(initial_capacity=64)
+    for i in range(10):
+        buf.append(t=i * 0.025, v=float(i), frame_id=i)
+    # Window after the last sample
+    t_dec, v_dec = buf.window_decimated(t_lo=10.0, t_hi=11.0, max_points=100)
+    assert len(t_dec) == 0
+    assert len(v_dec) == 0
+
+
+def test_camera_buffer_window_decimated_empty_buffer_returns_empty_arrays():
+    buf = _CameraBuffer(initial_capacity=8)
+    t_dec, v_dec = buf.window_decimated(t_lo=0.0, t_hi=1.0, max_points=50)
+    assert len(t_dec) == 0
+    assert len(v_dec) == 0
+
+
+def test_camera_buffer_window_decimated_partial_window():
+    buf = _CameraBuffer(initial_capacity=64)
+    for i in range(40):
+        buf.append(t=i * 0.025, v=float(i), frame_id=i)
+    # Window covers indices [10, 21) per the existing window_indices test.
+    t_dec, v_dec = buf.window_decimated(t_lo=0.250, t_hi=0.500, max_points=100)
+    assert len(t_dec) == 11  # indices 10..20 inclusive
+    assert list(v_dec) == [np.float32(i) for i in range(10, 21)]

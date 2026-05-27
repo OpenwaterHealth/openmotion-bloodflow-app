@@ -94,6 +94,28 @@ class _CameraBuffer:
         i_hi = int(np.searchsorted(t_slice, t_hi, side="right"))
         return i_lo, i_hi
 
+    def window_decimated(
+        self,
+        t_lo: float,
+        t_hi: float,
+        max_points: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return (t, v) arrays covering [t_lo, t_hi], strided to at most
+        max_points samples. Caller must not mutate the returned arrays —
+        they are views into the underlying buffer.
+
+        Empty arrays returned when the window contains no samples or the
+        buffer is empty."""
+        i_lo, i_hi = self.window_indices(t_lo, t_hi)
+        n_window = i_hi - i_lo
+        if n_window <= 0:
+            return self.t[0:0], self.v[0:0]
+        if n_window <= max_points:
+            return self.t[i_lo:i_hi], self.v[i_lo:i_hi]
+        # Stride down to at most max_points by taking every Nth sample.
+        stride = -(-n_window // max_points)  # ceil division
+        return self.t[i_lo:i_hi:stride], self.v[i_lo:i_hi:stride]
+
     def mark_dropped(self, t: float) -> None:
         """Record the first dropout timestamp for this stream. Idempotent —
         later calls don't overwrite the earlier dropout."""
