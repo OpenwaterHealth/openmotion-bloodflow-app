@@ -297,3 +297,170 @@ def test_live_scan_source_mark_dropped_sets_buffer_dropped_at():
     # not per-metric, so we set it on every existing metric buffer.
     for metric in ("bfi", "bvi", "mean", "contrast"):
         assert src.buffers[("right", 5, metric)].dropped_at == 2.5
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PastScanSource
+# ─────────────────────────────────────────────────────────────────────────────
+
+from data_sources import PastScanSource
+
+
+# Schema mirrors openmotion-sdk/omotion/ScanDatabase.py:115-129.
+_SESSION_DATA_DDL = """
+    CREATE TABLE session_data (
+        id               INTEGER PRIMARY KEY,
+        session_id       INTEGER NOT NULL,
+        session_raw_id   INTEGER,
+        cam_id           INTEGER NOT NULL,
+        side             INTEGER NOT NULL CHECK(side IN (0, 1)),
+        frame_id         INTEGER NOT NULL DEFAULT -1,
+        timestamp_s      REAL    NOT NULL,
+        bfi              REAL,
+        bvi              REAL,
+        contrast         REAL,
+        mean             REAL
+    );
+"""
+
+
+class _FakeScanDatabase:
+    """Tiny stand-in for omotion.ScanDatabase that just yields session_data
+    rows for a given session_id from a synthetic sqlite DB. Matches the
+    real iter_session_data signature."""
+
+    def __init__(self, conn: sqlite3.Connection):
+        self._conn = conn
+        self._conn.row_factory = sqlite3.Row
+
+    def iter_session_data(self, session_id: int, side=None, cam_id=None):
+        sql = "SELECT * FROM session_data WHERE session_id = ?"
+        bindings = [session_id]
+        if side is not None:
+            sql += " AND side = ?"
+            bindings.append(side)
+        if cam_id is not None:
+            sql += " AND cam_id = ?"
+            bindings.append(cam_id)
+        sql += " ORDER BY timestamp_s ASC"
+        for row in self._conn.execute(sql, bindings):
+            yield dict(row)
+
+
+@pytest.fixture
+def session_data_db(tmp_path):
+    """Returns a (db, session_id) pair pre-populated with synthetic rows
+    spanning two sides × two cameras × 5 timestamps each."""
+    db_path = tmp_path / "scan.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(_SESSION_DATA_DDL)
+    session_id = 7
+
+    rows = []
+    for side_int, side_offset in ((0, 0), (1, 100)):  # left = 0, right = 1
+        for cam_id in (0, 3):
+            for i in range(5):
+                rows.append((
+                    session_id,
+                    None,        # session_raw_id
+                    cam_id,
+                    side_int,
+                    1000 + i,    # frame_id
+                    i * 0.025,   # timestamp_s
+                    1.0 + side_offset + cam_id + i * 0.1,  # bfi
+                    10.0 + side_offset + cam_id + i * 0.1, # bvi
+                    0.30 + i * 0.01,                       # contrast
+                    100.0 + side_offset + cam_id + i,      # mean
+                ))
+    conn.executemany(
+        "INSERT INTO session_data "
+        "(session_id, session_raw_id, cam_id, side, frame_id, timestamp_s, "
+        " bfi, bvi, contrast, mean) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+    return _FakeScanDatabase(conn), session_id
+
+
+def test_past_scan_source_live_flag_false(session_data_db):
+    db, sid = session_data_db
+    src = PastScanSource(scan_db=db, session_id=sid)
+    assert src.live is False
+
+
+def test_past_scan_source_bucketizes_rows_into_per_metric_buffers(session_data_db):
+    db, sid = session_data_db
+    src = PastScanSource(scan_db=db, session_id=sid)
+
+    # 4 (side, cam) combos × 4 metrics = 16 buffers expected
+    expected_keys = {
+        (side, cam, metric)
+        for side in ("left", "right")
+        for cam in (0, 3)
+        for metric in ("bfi", "bvi", "mean", "contrast")
+    }
+    assert set(src.buffers.keys()) == expected_keys
+
+    # Each buffer holds the 5 rows for its (side, cam)
+    for key, buf in src.buffers.items():
+        assert buf.n == 5
+
+
+def test_past_scan_source_normalizes_side_integer_to_string(session_data_db):
+    db, sid = session_data_db
+    src = PastScanSource(scan_db=db, session_id=sid)
+    # No integer-keyed entries; all side keys are strings.
+    for (side, _, _) in src.buffers.keys():
+        assert side in ("left", "right")
+
+
+def test_past_scan_source_preserves_frame_ids(session_data_db):
+    db, sid = session_data_db
+    src = PastScanSource(scan_db=db, session_id=sid)
+    buf = src.buffers[("left", 0, "bfi")]
+    # frame_ids 1000..1004 in input order
+    assert list(int(x) for x in buf.frame_id[:5]) == [1000, 1001, 1002, 1003, 1004]
+
+
+def test_past_scan_source_live_edge_is_max_timestamp(session_data_db):
+    db, sid = session_data_db
+    src = PastScanSource(scan_db=db, session_id=sid)
+    assert src.liveEdge == pytest.approx(0.025 * 4)  # last timestamp = 0.100
+
+
+def test_past_scan_source_empty_session_yields_empty_source(tmp_path):
+    db_path = tmp_path / "scan.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(_SESSION_DATA_DDL)
+    conn.commit()
+    db = _FakeScanDatabase(conn)
+
+    src = PastScanSource(scan_db=db, session_id=42)
+    assert src.buffers == {}
+    assert src.liveEdge == 0.0
+
+
+def test_past_scan_source_skips_null_metric_values(tmp_path):
+    """A row with NULL bfi/bvi/mean/contrast must not crash and must not
+    insert a NaN where the SQL was NULL — that metric just isn't recorded
+    for that frame."""
+    db_path = tmp_path / "scan.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(_SESSION_DATA_DDL)
+    # One row with all metrics NULL except bfi
+    conn.execute(
+        "INSERT INTO session_data "
+        "(session_id, cam_id, side, frame_id, timestamp_s, bfi, bvi, contrast, mean) "
+        "VALUES (1, 0, 0, 100, 0.5, 4.0, NULL, NULL, NULL)"
+    )
+    conn.commit()
+    db = _FakeScanDatabase(conn)
+
+    src = PastScanSource(scan_db=db, session_id=1)
+    assert src.buffers[("left", 0, "bfi")].n == 1
+    assert src.buffers[("left", 0, "bfi")].v[0] == np.float32(4.0)
+    # NULL metrics yield no buffer entry at all
+    assert ("left", 0, "bvi") not in src.buffers
+    assert ("left", 0, "mean") not in src.buffers
+    assert ("left", 0, "contrast") not in src.buffers

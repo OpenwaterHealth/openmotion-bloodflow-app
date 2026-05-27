@@ -247,3 +247,41 @@ class LiveScanSource(ScanDataSource):
         buf = self.get_or_create_buffer(side, cam_id, metric)
         buf.append(t=t, v=v, frame_id=frame_id)
         self.note_dirty(side, cam_id, metric, added=1)
+
+
+# session_data.side is stored as INTEGER (0 = left, 1 = right) but the
+# rest of the app uses string side names. Normalize on the way in.
+_SIDE_INT_TO_STR = {0: "left", 1: "right"}
+
+
+class PastScanSource(ScanDataSource):
+    """ScanDataSource constructed from an SDK ScanDatabase session_id.
+    Bucketizes session_data rows into per-(side, cam, metric) buffers
+    using the same layout as LiveScanSource."""
+
+    def __init__(
+        self,
+        scan_db,                # omotion.ScanDatabase — duck-typed for tests
+        session_id: int,
+        parent: Optional[QObject] = None,
+    ) -> None:
+        super().__init__(plot_t0=0.0, parent=parent)
+        self.live = False
+        self.session_id = int(session_id)
+
+        for row in scan_db.iter_session_data(self.session_id):
+            side_int = int(row["side"])
+            side = _SIDE_INT_TO_STR.get(side_int)
+            if side is None:
+                # Unknown side encoding — silently skip rather than crash on
+                # legacy / corrupted data; the load is best-effort.
+                continue
+            cam_id = int(row["cam_id"])
+            frame_id = int(row["frame_id"])
+            t = float(row["timestamp_s"])
+            for metric in ("bfi", "bvi", "mean", "contrast"):
+                value = row.get(metric)
+                if value is None:
+                    continue
+                buf = self.get_or_create_buffer(side, cam_id, metric)
+                buf.append(t=t, v=float(value), frame_id=frame_id)
