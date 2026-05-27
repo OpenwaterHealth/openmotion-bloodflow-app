@@ -182,12 +182,13 @@ Rectangle {
         viewer._dirty = true
     }
 
-    // Autoscale tick — 1 Hz. Computes bounds for both metrics in the
-    // current display pair and pushes them into the viewer's per-metric
-    // ranges. Setting _dirty afterward ensures cells repaint promptly
-    // with the new range.
+    // Autoscale tick — every 3 s. compute_bounds_for_metric walks every
+    // sample across all buffers, so the per-call cost scales with scan
+    // duration; 3 s amortizes that work without making the y-axis feel
+    // unresponsive (a 3-second delay between bound adjustments is hard
+    // to notice during live monitoring).
     Timer {
-        interval: 1000
+        interval: 3000
         running: viewer.autoScale && viewer.scanSource !== null
         repeat: true
         triggeredOnStart: true

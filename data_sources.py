@@ -22,25 +22,40 @@ import numpy as np
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot, pyqtProperty
 
 
-_INITIAL_CAPACITY = 4096  # ≈ 100 s @ 40 Hz; doubles on overflow.
+_INITIAL_CAPACITY = 4096    # ≈ 100 s @ 40 Hz; doubles on overflow.
+_MAX_CAPACITY = 72000       # ≈ 30 min @ 40 Hz; ring-trim above this.
 
 
 class _CameraBuffer:
     """Append-only growable buffer for one (side, cam_id, metric) stream.
 
-    Holds three parallel arrays (t, v, frame_id) plus a frame_id → index
-    lookup so corrected-batch overwrites can rewrite in place. NaN values
-    are stored; the renderer is responsible for skipping them on draw.
+    Holds three parallel arrays (t, v, frame_id). NaN values are stored;
+    the renderer is responsible for skipping them on draw.
+
+    Optional `track_frame_ids=True` enables a frame_id → array-index
+    lookup for in-place corrected-batch overwrites. Off by default
+    (the new viewer no longer applies corrections, and tracking the
+    dict added meaningful memory + GC pressure over long scans).
+
+    Above _MAX_CAPACITY samples, the oldest half is dropped on the
+    next overflow (drop-oldest ring behavior). Bounds memory for
+    multi-hour scans at the cost of pan-back history beyond ~30 min.
     """
 
     __slots__ = ("t", "v", "frame_id", "n", "_frame_id_to_index", "dropped_at")
 
-    def __init__(self, initial_capacity: int = _INITIAL_CAPACITY) -> None:
+    def __init__(
+        self,
+        initial_capacity: int = _INITIAL_CAPACITY,
+        track_frame_ids: bool = False,
+    ) -> None:
         self.t = np.empty(initial_capacity, dtype=np.float64)
         self.v = np.empty(initial_capacity, dtype=np.float32)
         self.frame_id = np.empty(initial_capacity, dtype=np.int64)
         self.n = 0
-        self._frame_id_to_index: dict[int, int] = {}
+        self._frame_id_to_index: Optional[dict[int, int]] = (
+            {} if track_frame_ids else None
+        )
         self.dropped_at: Optional[float] = None
 
     def _grow(self) -> None:
@@ -52,10 +67,28 @@ class _CameraBuffer:
         self.v = np.resize(self.v, new_cap)
         self.frame_id = np.resize(self.frame_id, new_cap)
 
+    def _ring_trim(self) -> None:
+        """At-cap: drop the oldest half of the buffer in-place so new
+        appends keep landing at index n without unbounded growth.
+        Called when capacity has already reached _MAX_CAPACITY."""
+        half = _MAX_CAPACITY // 2
+        self.t[:half] = self.t[half:]
+        self.v[:half] = self.v[half:]
+        self.frame_id[:half] = self.frame_id[half:]
+        self.n = half
+        # Frame-id lookup positions shift after the trim; safest to
+        # drop the mapping and rebuild lazily on subsequent appends.
+        if self._frame_id_to_index is not None:
+            self._frame_id_to_index.clear()
+
     def append(self, t: float, v: float, frame_id: int) -> None:
-        """Append one sample. Grows capacity (doubling) on overflow."""
+        """Append one sample. Grows capacity (doubling) on overflow up
+        to _MAX_CAPACITY; above that, ring-trims the oldest half."""
         if self.n >= self.t.shape[0]:
-            self._grow()
+            if self.t.shape[0] >= _MAX_CAPACITY:
+                self._ring_trim()
+            else:
+                self._grow()
         idx = self.n
         self.t[idx] = t
         self.v[idx] = v
@@ -63,16 +96,19 @@ class _CameraBuffer:
         # frame_id == -1 is the SDK's "unknown" sentinel; don't index it —
         # apply_corrected with frame_id=-1 must NOT silently rewrite the
         # most-recent unknown sample.
-        if frame_id != -1:
+        if self._frame_id_to_index is not None and frame_id != -1:
             self._frame_id_to_index[int(frame_id)] = idx
         self.n += 1
 
     def apply_corrected(self, frame_id: int, value: float) -> None:
-        """Overwrite v at the row whose frame_id matches. Silent no-op if
-        no such frame_id was appended (race: final arrived before live).
+        """Overwrite v at the row whose frame_id matches. Silent no-op
+        when frame-id tracking is disabled (the default), when
+        frame_id is the -1 sentinel, or when no matching frame_id was
+        appended (race: final arrived before live, or the row was
+        dropped by a ring-trim).
 
         Value is stored as float32; sub-float32 precision is lost on write."""
-        if frame_id == -1:
+        if self._frame_id_to_index is None or frame_id == -1:
             return
         idx = self._frame_id_to_index.get(int(frame_id))
         if idx is None:
@@ -157,11 +193,16 @@ class ScanDataSource(QObject):
     # (side, cam_id, metric, added_count) — coalesced across the flush window.
     samplesAppended = pyqtSignal(str, int, str, int)
 
-    def __init__(self, plot_t0: float, parent: Optional[QObject] = None) -> None:
+    def __init__(self, plot_t0: float, parent: Optional[QObject] = None,
+                 track_frame_ids: bool = False) -> None:
         super().__init__(parent)
         self.plot_t0 = float(plot_t0)
         self.live: bool = False  # LiveScanSource overrides to True
         self.buffers: dict[tuple[str, int, str], _CameraBuffer] = {}
+        # Default False — production no longer uses corrected-batch
+        # overwrites; saves a per-buffer frame_id dict that scales with
+        # scan duration. Tests opt in via the constructor flag.
+        self._track_frame_ids = track_frame_ids
 
         # Pending dirty bookkeeping: (side, cam, metric) -> accumulated count.
         self._pending: dict[tuple[str, int, str], int] = {}
@@ -200,7 +241,7 @@ class ScanDataSource(QObject):
         key = (side, int(cam_id), metric)
         buf = self.buffers.get(key)
         if buf is None:
-            buf = _CameraBuffer()
+            buf = _CameraBuffer(track_frame_ids=self._track_frame_ids)
             self.buffers[key] = buf
         return buf
 
@@ -296,8 +337,10 @@ class LiveScanSource(ScanDataSource):
     """ScanDataSource fed by the in-flight pipeline. Constructed at scan
     start; lives as long as the connector holds a reference."""
 
-    def __init__(self, plot_t0: float, parent: Optional[QObject] = None) -> None:
-        super().__init__(plot_t0=plot_t0, parent=parent)
+    def __init__(self, plot_t0: float, parent: Optional[QObject] = None,
+                 track_frame_ids: bool = False) -> None:
+        super().__init__(plot_t0=plot_t0, parent=parent,
+                         track_frame_ids=track_frame_ids)
         self.live = True
 
     def append_uncorrected(

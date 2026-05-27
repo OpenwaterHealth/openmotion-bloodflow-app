@@ -68,7 +68,8 @@ def test_camera_buffer_window_indices_empty_buffer():
 
 
 def test_camera_buffer_apply_corrected_overwrites_in_place():
-    buf = _CameraBuffer(initial_capacity=8)
+    # apply_corrected requires the frame-id index, which is opt-in.
+    buf = _CameraBuffer(initial_capacity=8, track_frame_ids=True)
     buf.append(t=0.0, v=1.0, frame_id=100)
     buf.append(t=0.025, v=2.0, frame_id=101)
     buf.append(t=0.050, v=3.0, frame_id=102)
@@ -81,7 +82,7 @@ def test_camera_buffer_apply_corrected_overwrites_in_place():
 
 
 def test_camera_buffer_apply_corrected_unknown_frame_is_noop():
-    buf = _CameraBuffer(initial_capacity=8)
+    buf = _CameraBuffer(initial_capacity=8, track_frame_ids=True)
     buf.append(t=0.0, v=1.0, frame_id=100)
     # frame_id 999 was never appended — must not raise, must not corrupt state
     buf.apply_corrected(frame_id=999, value=42.0)
@@ -92,12 +93,21 @@ def test_camera_buffer_apply_corrected_unknown_frame_is_noop():
 def test_camera_buffer_apply_corrected_skips_sentinel_frame_id():
     """frame_id=-1 means 'unknown'; we don't index it, so apply_corrected(-1, ...)
     must not silently overwrite the most-recent -1 sample."""
-    buf = _CameraBuffer(initial_capacity=8)
+    buf = _CameraBuffer(initial_capacity=8, track_frame_ids=True)
     buf.append(t=0.0, v=1.0, frame_id=-1)
     buf.append(t=0.025, v=2.0, frame_id=-1)
     buf.apply_corrected(frame_id=-1, value=99.9)
     assert buf.v[0] == np.float32(1.0)
     assert buf.v[1] == np.float32(2.0)
+
+
+def test_camera_buffer_apply_corrected_noop_without_tracking():
+    """Default is track_frame_ids=False — apply_corrected is a silent
+    no-op even for valid frame_ids."""
+    buf = _CameraBuffer(initial_capacity=8)  # default: no tracking
+    buf.append(t=0.0, v=1.0, frame_id=100)
+    buf.apply_corrected(frame_id=100, value=99.9)
+    assert buf.v[0] == np.float32(1.0)  # unchanged
 
 
 def test_camera_buffer_mark_dropped_sets_timestamp_once():
@@ -243,7 +253,9 @@ def test_live_scan_source_append_uncorrected_notes_dirty():
 
 
 def test_live_scan_source_apply_corrected_batch_overwrites_in_place():
-    src = LiveScanSource(plot_t0=0.0)
+    # apply_corrected_batch is currently no-op in production; opt-in via
+    # the constructor flag exercises the original overwrite semantics.
+    src = LiveScanSource(plot_t0=0.0, track_frame_ids=True)
     # Seed live samples for frame_ids 100, 101, 102.
     for i, fid in enumerate((100, 101, 102)):
         src.append_uncorrected(
