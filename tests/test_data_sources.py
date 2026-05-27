@@ -590,10 +590,31 @@ def test_camera_buffer_window_decimated_strides_when_over_max():
     buf = _CameraBuffer(initial_capacity=1024)
     for i in range(400):
         buf.append(t=i * 0.025, v=float(i), frame_id=i)
-    # Whole window (10 s), max_points=100 → stride = ceil(400/100) = 4
+    # Whole window (10 s), max_points=100 → stride = ceil(400/100) = 4.
+    # Mean-binned: each output value = mean of `stride` adjacent samples.
+    # Bin 0 averages [0,1,2,3] → 1.5; bin 1 averages [4,5,6,7] → 5.5; etc.
     t_dec, v_dec = buf.window_decimated(t_lo=0.0, t_hi=10.0, max_points=100)
     assert len(t_dec) == 100
-    assert list(v_dec[:5]) == [np.float32(0), np.float32(4), np.float32(8), np.float32(12), np.float32(16)]
+    assert list(v_dec[:5]) == [
+        np.float32(1.5), np.float32(5.5), np.float32(9.5),
+        np.float32(13.5), np.float32(17.5),
+    ]
+
+
+def test_camera_buffer_window_decimated_mean_binning_smooths_alternation():
+    """The whole reason we mean-bin instead of stride-subsample: at
+    stride=2 a plain subsample shows odd-or-even samples depending on
+    which paint catches the window-scroll boundary, producing visible
+    flicker. With mean-binning the per-bin value is the mean of both
+    samples — no alternating-phase aliasing."""
+    buf = _CameraBuffer(initial_capacity=1024)
+    # Strong noise pattern: alternating 0 and 10.
+    for i in range(400):
+        buf.append(t=i * 0.025, v=10.0 if (i % 2) else 0.0, frame_id=i)
+    t_dec, v_dec = buf.window_decimated(t_lo=0.0, t_hi=10.0, max_points=200)
+    # stride = 2 → each bin averages one 0 and one 10 → 5.0
+    assert len(t_dec) == 200
+    assert all(v == np.float32(5.0) for v in v_dec)
 
 
 def test_camera_buffer_window_decimated_empty_window_returns_empty_arrays():
@@ -655,12 +676,13 @@ def test_scan_data_source_points_for_window_decimates_when_over_max():
         buf.append(t=i * 0.025, v=float(i), frame_id=i)
 
     pts = src.points_for_window("right", 3, "mean", 0.0, 5.0, max_points=50)
-    # 200 samples, max=50 → stride=4 → 50 pairs
+    # 200 samples, max=50 → stride=4. Mean-binned: each output's v is the
+    # mean of 4 consecutive samples, t is the mean of their t values.
     assert len(pts) == 50
-    # First pair is the first sample
-    assert pts[0] == pytest.approx([0.0, 0.0])
-    # Subsequent pairs at stride=4
-    assert pts[1] == pytest.approx([0.1, 4.0])
+    # Bin 0: mean of indices 0,1,2,3 → t=0.0375, v=1.5
+    assert pts[0] == pytest.approx([0.0375, 1.5])
+    # Bin 1: mean of indices 4,5,6,7 → t=0.1375, v=5.5
+    assert pts[1] == pytest.approx([0.1375, 5.5])
 
 
 # ─────────────────────────────────────────────────────────────────────────────

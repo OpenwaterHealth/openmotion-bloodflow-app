@@ -100,21 +100,41 @@ class _CameraBuffer:
         t_hi: float,
         max_points: int,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Return (t, v) arrays covering [t_lo, t_hi], strided to at most
-        max_points samples. Caller must not mutate the returned arrays —
-        they are views into the underlying buffer.
+        """Return (t, v) arrays covering [t_lo, t_hi] at no more than
+        max_points samples. When decimation is required, samples are
+        mean-binned (each output value = mean of `stride` consecutive
+        input samples) rather than stride-subsampled.
 
-        Empty arrays returned when the window contains no samples or the
-        buffer is empty."""
+        Mean-binning matters: simple stride subsampling at e.g.
+        stride=2 causes the rendered trace to alternate between odd-
+        and even-indexed samples as the window scrolls one sample at a
+        time, producing a visible "jumping between two datasets"
+        aliasing. Mean-binning averages each pair/triple so the
+        per-bin value changes only fractionally as the window slides.
+
+        NaN samples within a bin are skipped via np.nanmean; a bin
+        whose samples are all non-finite returns NaN (the renderer's
+        existing isFinite guard skips it).
+
+        Empty arrays returned when the window contains no samples or
+        the buffer is empty."""
         i_lo, i_hi = self.window_indices(t_lo, t_hi)
         n_window = i_hi - i_lo
         if n_window <= 0:
             return self.t[0:0], self.v[0:0]
         if n_window <= max_points:
             return self.t[i_lo:i_hi], self.v[i_lo:i_hi]
-        # Stride down to at most max_points by taking every Nth sample.
+
         stride = -(-n_window // max_points)  # ceil division
-        return self.t[i_lo:i_hi:stride], self.v[i_lo:i_hi:stride]
+        n_full = (n_window // stride) * stride  # truncate to clean reshape
+        end = i_lo + n_full
+        t_block = self.t[i_lo:end].reshape(-1, stride)
+        v_block = self.v[i_lo:end].reshape(-1, stride)
+        # nanmean: bins with all-NaN values produce NaN (renderer skips).
+        # Suppress the warning np raises on all-NaN slices — the NaN
+        # output is the documented contract.
+        with np.errstate(invalid="ignore"):
+            return t_block.mean(axis=1), np.nanmean(v_block, axis=1)
 
     def mark_dropped(self, t: float) -> None:
         """Record the first dropout timestamp for this stream. Idempotent —
