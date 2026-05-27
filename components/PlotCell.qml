@@ -61,6 +61,18 @@ Item {
             var ctx = getContext("2d")
             ctx.clearRect(0, 0, width, height)
 
+            // Midline gridline — always drawn for visual reference, even
+            // when no source is bound. Skipped for very narrow cells.
+            if (width >= 60) {
+                ctx.strokeStyle = cell.frameColor
+                ctx.lineWidth = 1
+                ctx.beginPath()
+                var midY = Math.floor(height / 2) + 0.5  // crisp 1px line
+                ctx.moveTo(0, midY)
+                ctx.lineTo(width, midY)
+                ctx.stroke()
+            }
+
             if (!cell.source) return
 
             // Read liveEdge fresh each paint — it has no notify signal so
@@ -104,6 +116,28 @@ Item {
         text: cell.side.toUpperCase() + " " + (cell.camId + 1) + " · " + cell.metric.toUpperCase()
         color: theme.textSecondary
         font.pixelSize: 11
+        font.family: "Roboto Mono"
+    }
+
+    // Y-axis bound labels — hidden when cell is too narrow to fit them.
+    Text {
+        visible: cell.width >= 80
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.margins: 8
+        text: cell.yMax.toFixed(2)
+        color: theme.textTertiary
+        font.pixelSize: 10
+        font.family: "Roboto Mono"
+    }
+    Text {
+        visible: cell.width >= 80
+        anchors.bottom: parent.bottom
+        anchors.right: parent.right
+        anchors.margins: 8
+        text: cell.yMin.toFixed(2)
+        color: theme.textTertiary
+        font.pixelSize: 10
         font.family: "Roboto Mono"
     }
 }
