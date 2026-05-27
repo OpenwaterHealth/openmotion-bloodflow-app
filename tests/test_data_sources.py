@@ -588,14 +588,28 @@ def test_live_scan_source_mark_dropped_multiple_metric_buffers():
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_camera_buffer_window_decimated_returns_unstrided_when_under_max():
+def test_camera_buffer_window_decimated_smooths_even_when_under_max():
+    """Always-on smoothing: even when n_window < max_points the source
+    applies stride-aligned causal smoothing (min stride=2) so the
+    visual quality is consistent from t=0, with no jarring transition
+    when the window finally fills."""
     buf = _CameraBuffer(initial_capacity=64)
     for i in range(20):
         buf.append(t=i * 0.025, v=float(i), frame_id=i)
     t_dec, v_dec = buf.window_decimated(t_lo=0.0, t_hi=0.5, max_points=100)
-    # 20 samples in window, max_points=100 → no decimation
-    assert len(t_dec) == 20
-    assert list(v_dec) == [np.float32(i) for i in range(20)]
+    # 20 samples; stride=max(2, ceil(20/100))=2; window=6.
+    # abs_idxs = [0,2,4,...,18] → 10 outputs.
+    assert len(t_dec) == 10
+    # abs=0:  window [0..0]   → 0/1 = 0.0
+    # abs=2:  window [0..2]   → 3/3 = 1.0
+    # abs=4:  window [0..4]   → 10/5 = 2.0
+    # abs=6:  window [1..6]   → 21/6 = 3.5
+    # abs=8:  window [3..8]   → 33/6 = 5.5
+    expected_head = [
+        np.float32(0.0), np.float32(1.0), np.float32(2.0),
+        np.float32(3.5), np.float32(5.5),
+    ]
+    assert list(v_dec[:5]) == expected_head
 
 
 def test_camera_buffer_window_decimated_strides_when_over_max():
@@ -657,10 +671,20 @@ def test_camera_buffer_window_decimated_partial_window():
     buf = _CameraBuffer(initial_capacity=64)
     for i in range(40):
         buf.append(t=i * 0.025, v=float(i), frame_id=i)
-    # Window covers indices [10, 21) per the existing window_indices test.
+    # Window covers indices [10, 21). Stride=2, window=6. abs_idxs are
+    # stride-aligned indices in that range → [10, 12, 14, 16, 18, 20].
     t_dec, v_dec = buf.window_decimated(t_lo=0.250, t_hi=0.500, max_points=100)
-    assert len(t_dec) == 11  # indices 10..20 inclusive
-    assert list(v_dec) == [np.float32(i) for i in range(10, 21)]
+    assert len(t_dec) == 6
+    # abs=10: window [5..10]  → mean 45/6 = 7.5
+    # abs=12: window [7..12]  → mean 57/6 = 9.5
+    # abs=14: window [9..14]  → 69/6 = 11.5
+    # abs=16: window [11..16] → 81/6 = 13.5
+    # abs=18: window [13..18] → 93/6 = 15.5
+    # abs=20: window [15..20] → 105/6 = 17.5
+    assert list(v_dec) == [
+        np.float32(7.5), np.float32(9.5), np.float32(11.5),
+        np.float32(13.5), np.float32(15.5), np.float32(17.5),
+    ]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -676,10 +700,13 @@ def test_scan_data_source_points_for_window_returns_pairs():
 
     pts = src.points_for_window("left", 0, "bfi", 0.0, 0.25, max_points=100)
 
-    # Window covers indices 0..10 (right-exclusive), so 10 pairs
-    assert len(pts) == 10
+    # 10 samples in window; stride=2 (minimum), window=6. abs_idxs =
+    # [0, 2, 4, 6, 8] → 5 output pairs.
+    assert len(pts) == 5
+    # abs=0: window [v[0]] = [4.0]; mean = 4.0; t = 0.0
     assert pts[0] == pytest.approx([0.0, 4.0])
-    assert pts[-1] == pytest.approx([0.225, 4.9])
+    # abs=8: window [v[3..8]] = [4.3..4.8]; mean = 4.55; t = 0.2
+    assert pts[-1] == pytest.approx([0.2, 4.55])
 
 
 def test_scan_data_source_points_for_window_missing_buffer_returns_empty():

@@ -165,10 +165,14 @@ class _CameraBuffer:
         n_window = i_hi - i_lo
         if n_window <= 0:
             return self.t[0:0], self.v[0:0]
-        if n_window <= max_points:
-            return self.t[i_lo:i_hi], self.v[i_lo:i_hi]
 
-        # Stride-aligned causal smoothing.
+        # Stride-aligned causal smoothing — always applied, even when
+        # n_window <= max_points. Previously we returned raw samples in
+        # that case and only switched to smoothing once the window
+        # filled, which produced a visible "downsampled" appearance
+        # flip + a perf ramp during the first ~5 s of the scan. With a
+        # minimum stride of 2 the kernel is always wide enough to
+        # suppress aliasing without much loss of detail.
         #
         # Each output sits at an ABSOLUTE sample index that is a multiple
         # of `stride` — so the same absolute sample always maps to the
@@ -184,8 +188,8 @@ class _CameraBuffer:
         # morphing / sharpening as they scrolled left. With the new
         # design the visible trace simply translates — output values
         # are time-invariant once computed.
-        stride = max(1, -(-n_window // max_points))
-        window = max(3, stride * 3)
+        stride = max(2, -(-n_window // max_points))
+        window = stride * 3
 
         # Stride-aligned absolute indices that fall within [i_lo, i_hi).
         first_k = (i_lo + stride - 1) // stride

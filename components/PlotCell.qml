@@ -132,12 +132,13 @@ Item {
             var dt = tHi - tLo
             if (dt <= 0) return
 
-            // 1 sample per pixel. Source-side smoothing (overlap-mean
-            // with 3-stride kernel) handles the anti-aliasing, so we
-            // don't need the headroom of × 3 to dodge decimation. Cuts
-            // per-paint Python→QML data volume 3× → restores 30 Hz
-            // paint cadence.
-            var maxPts = Math.max(50, Math.floor(width))
+            // 0.5 samples per pixel. Source-side stride-aligned causal
+            // smoothing makes the visual quality robust to lower output
+            // counts. Halving maxPts (vs width × 1) lets decimation
+            // saturate at ~3 s of scan instead of ~6 s, cutting the
+            // ramp-up paint-throttle gap in half and giving us a lower
+            // steady-state per-paint marshalling cost.
+            var maxPts = Math.max(50, Math.floor(width * 0.5))
 
             cell._drawTrace(ctx, cell.metric, cell.traceColor,
                             cell.yMin, cell.yMax,
