@@ -62,11 +62,16 @@ Rectangle {
             source: viewer.scanSource
             side: viewer._firstActive.side
             camId: viewer._firstActive.cam
-            metric: "bfi"
+            // Phase 2a default: BVI. Healthy mid-range values around 5
+            // fit well in the [0, 10] axis. BFI tends to ride near zero
+            // in many scans and would clamp invisibly to the bottom of
+            // a fixed [0, 10] range. Phase 2b adds a metric switcher
+            // and autoscale so BFI / mean / contrast all render usefully.
+            metric: "bvi"
             windowSeconds: 15
             yMin: 0.0
             yMax: 10.0
-            traceColor: "#E74C3C"
+            traceColor: "#3498DB"
         }
     }
 }
