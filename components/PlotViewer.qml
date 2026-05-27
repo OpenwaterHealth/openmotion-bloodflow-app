@@ -8,10 +8,12 @@ import OpenMotion 1.0
 Rectangle {
     id: viewer
     anchors.fill: parent
-    color: "#0E0E0E"
+    color: theme.bgPlot
     radius: 8
-    border.color: "#2A2A2A"
+    border.color: theme.borderSoft
     border.width: 1
+
+    AppTheme { id: theme }
 
     // ── Inputs ─────────────────────────────────────────────────────────
     // Reduced mode is consumed by Phase 2b for layout selection. Stored
@@ -50,7 +52,7 @@ Rectangle {
             text: viewer.scanSource
                 ? "● Live · " + (viewer.scanSource.live ? "LiveScanSource" : "PastScanSource")
                 : "○ No active scan source"
-            color: "#CCCCCC"
+            color: theme.textSecondary
             font.pixelSize: 12
             font.family: "Roboto Mono"
         }
@@ -71,7 +73,7 @@ Rectangle {
             windowSeconds: 15
             yMin: 0.0
             yMax: 10.0
-            traceColor: "#3498DB"
+            traceColor: theme.statusBlue
         }
     }
 }

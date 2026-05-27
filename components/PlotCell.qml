@@ -20,10 +20,12 @@ Item {
     property real yMin: 0.0
     property real yMax: 10.0
 
-    // Visual — inline for Phase 2a, theme integration in Phase 2b.
-    property color traceColor: "#E74C3C"
-    property color frameColor: "#444444"
-    property color bgColor: "#1A1A1A"
+    // Visual — defaults pulled from AppTheme; can be overridden per-cell.
+    property color traceColor: theme.statusBlue
+    property color frameColor: theme.borderSubtle
+    property color bgColor: theme.bgPanel
+
+    AppTheme { id: theme }
 
     // ── Repaint plumbing ───────────────────────────────────────────────
     // liveEdge is a plain Python @property with no notify signal — QML
@@ -100,7 +102,7 @@ Item {
         anchors.left: parent.left
         anchors.margins: 8
         text: cell.side.toUpperCase() + " " + (cell.camId + 1) + " · " + cell.metric.toUpperCase()
-        color: "#CCCCCC"
+        color: theme.textSecondary
         font.pixelSize: 11
         font.family: "Roboto Mono"
     }
