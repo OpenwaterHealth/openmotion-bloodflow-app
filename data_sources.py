@@ -325,14 +325,23 @@ class ScanDataSource(QObject):
     def value_at(self, side: str, cam_id: int, metric: str, t: float) -> float:
         """Return the buffer's value for the sample nearest to time `t`.
         NaN if the buffer doesn't exist, is empty, or the nearest sample
-        is itself non-finite. Used by the viewer's hover tooltip."""
+        is itself non-finite. Used by the viewer's hover tooltip.
+
+        Concurrency: snapshots buf.n locally because the SDK pipeline
+        thread may call _CameraBuffer.append (incrementing n) between
+        our reads. Without the snapshot, a torn read of n caused
+        IndexErrors when the searchsorted-returned idx happened to
+        equal the captured slice size but failed the (stale-n) clamp."""
         buf = self.buffers.get((side, int(cam_id), metric))
-        if buf is None or buf.n == 0:
+        if buf is None:
             return float("nan")
-        t_slice = buf.t[: buf.n]
+        n = buf.n
+        if n == 0:
+            return float("nan")
+        t_slice = buf.t[:n]
         idx = int(np.searchsorted(t_slice, t, side="left"))
-        if idx >= buf.n:
-            idx = buf.n - 1
+        if idx >= n:
+            idx = n - 1
         elif idx > 0 and abs(t_slice[idx - 1] - t) < abs(t_slice[idx] - t):
             idx -= 1
         v = float(buf.v[idx])

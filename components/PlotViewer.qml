@@ -134,7 +134,13 @@ Rectangle {
     function setWindow(startT, seconds) {
         _ensureFrozen()
         viewer.windowSeconds = Math.max(_minWindowSeconds, Math.min(_maxWindowSeconds, seconds))
-        viewer.windowStartT = Math.max(0, startT)
+        // Cap startT so the window can't extend past the live edge —
+        // otherwise the scrubber inset slides off into empty future
+        // space when the user keeps dragging right. Lower bound 0
+        // (scan start); upper bound puts the rightmost data at the
+        // right edge of the visible plot.
+        var maxStart = Math.max(0, viewer.liveEdgeSnapshot - viewer.windowSeconds)
+        viewer.windowStartT = Math.max(0, Math.min(maxStart, startT))
         viewer._dirty = true
     }
 
@@ -264,7 +270,16 @@ Rectangle {
                 viewer._recomputeAutoscale()
             }
             onWindowSecondsRequested: function(s) {
-                viewer.windowSeconds = s
+                // Route through setWindow so the off-edge cap re-applies
+                // — expanding from 5 s to 60 s while paused near liveEdge
+                // would otherwise push the right edge past liveEdge.
+                // When followLive, setWindow's _ensureFrozen snapshots
+                // the current view first, preserving the visual position.
+                if (viewer.followLive) {
+                    viewer.windowSeconds = s
+                } else {
+                    viewer.setWindow(viewer.windowStartT, s)
+                }
                 viewer._dirty = true
                 console.info("[Plot] windowSeconds → " + s + " s")
             }
