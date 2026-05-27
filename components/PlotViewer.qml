@@ -92,9 +92,44 @@ Rectangle {
         return { primary: "bfi", secondary: "bvi" }
     }
 
+    // ── Viewer-driven paint throttle ───────────────────────────────────
+    // Single dirty flag set by ANY samplesAppended emission. A 33 ms
+    // Timer ticks paintTick (consumed by every PlotCell) whenever dirty.
+    // Caps total cell-paint rate to ~30 Hz regardless of how many
+    // samplesAppended signals fire in between, and renders all cells
+    // in one pass so they stay visually in lockstep.
+    property int paintTick: 0
+    property bool _dirty: true   // start true so cells paint at least once
+
+    Connections {
+        target: viewer.scanSource
+        ignoreUnknownSignals: true
+        function onSamplesAppended(s, c, m, n) {
+            viewer._dirty = true
+        }
+    }
+
+    Timer {
+        id: paintThrottle
+        interval: 33
+        running: viewer.scanSource !== null
+        repeat: true
+        onTriggered: {
+            if (viewer._dirty) {
+                viewer._dirty = false
+                viewer.paintTick++
+            }
+        }
+    }
+
+    // Source change forces an immediate paint without waiting for the
+    // first samplesAppended.
+    onScanSourceChanged: viewer._dirty = true
+
     // Autoscale tick — 1 Hz. Computes bounds for both metrics in the
     // current display pair and pushes them into the viewer's per-metric
-    // ranges, which propagate to every cell via property bindings.
+    // ranges. Setting _dirty afterward ensures cells repaint promptly
+    // with the new range.
     Timer {
         interval: 1000
         running: viewer.autoScale && viewer.scanSource !== null
@@ -112,6 +147,7 @@ Rectangle {
                 viewer.secondaryYMin = bs.yMin
                 viewer.secondaryYMax = bs.yMax
             }
+            viewer._dirty = true
         }
     }
 
@@ -159,6 +195,7 @@ Rectangle {
                     secondaryYMin: viewer.secondaryYMin
                     secondaryYMax: viewer.secondaryYMax
                     secondaryColor: viewer._traceColorForMetric(viewer._displayPair.secondary)
+                    paintTick: viewer.paintTick
                 }
             }
         }

@@ -35,22 +35,16 @@ Item {
     AppTheme { id: theme }
 
     // ── Repaint plumbing ───────────────────────────────────────────────
-    // liveEdge is a plain Python @property with no notify signal — QML
-    // can't bind to it. Instead, samplesAppended drives the repaint,
-    // and onPaint reads source.liveEdge directly each time.
+    // Repaints are throttled by the parent PlotViewer: it owns a 33 ms
+    // dirty-flagged Timer that ticks `paintTick` whenever any
+    // samplesAppended arrived. Binding paintTick here triggers exactly
+    // one repaint per parent tick — caps cell-paint rate to ~30 Hz and
+    // keeps all cells visually in lockstep.
+    property int paintTick: 0
+    onPaintTickChanged: traceCanvas.requestPaint()
     onWidthChanged: traceCanvas.requestPaint()
     onHeightChanged: traceCanvas.requestPaint()
     onSourceChanged: traceCanvas.requestPaint()
-
-    Connections {
-        target: cell.source
-        ignoreUnknownSignals: true
-        function onSamplesAppended(s, c, m, n) {
-            if (s !== cell.side || c !== cell.camId) return
-            if (m === cell.metric || m === cell.secondaryMetric)
-                traceCanvas.requestPaint()
-        }
-    }
 
     // Render one trace inside the current Canvas context using the given
     // metric/color/yMin/yMax. Defined as a JS function on the cell so
