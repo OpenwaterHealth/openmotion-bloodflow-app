@@ -791,7 +791,11 @@ class MotionConnector(QObject):
                     refresh_cache()  # fallback: fill cache without power cycle (may get zeros for off cameras)
         except Exception as e:
             logger.debug("Could not refresh sensor ID cache for %s: %s", side, e)
-        # self._interface.log_sensor_info(side)
+        # Log camera UIDs once per sensor at connect time. The ID cache
+        # was populated by refresh_id_cache() above, so this just formats
+        # and emits the cached values.
+        self._read_and_log_camera_uids(side=side)
+
         self.connectionStatusChanged.emit()
 
     # --- GETTERS/SETTERS FOR Qt PROPERTIES ---
@@ -975,6 +979,16 @@ class MotionConnector(QObject):
                         logger.info("Console fan speed set to 100%")
                     else:
                         logger.error("Failed to set console fan speed")
+                    # Program laser-driver registers from config once per
+                    # console connect. Removes the per-scan and per-
+                    # calibration set_laser_power_from_config calls; the
+                    # cold-start guard from issue #108 now lives here.
+                    if self.set_laser_power_from_config(self._interface):
+                        logger.info("Console laser params applied from config")
+                    else:
+                        logger.warning(
+                            "Console laser params apply returned False"
+                        )
                 except Exception as e:
                     logger.warning(
                         f"Console connect-time setup interrupted "
@@ -2176,15 +2190,6 @@ class MotionConnector(QObject):
             logger.error(f"Error getting Lsync count: {e}")
             return -1
 
-    @pyqtSlot(result=bool)
-    def setLaserPowerFromConfig(self) -> bool:
-        """Apply laser power parameters loaded at startup."""
-        try:
-            return self.set_laser_power_from_config(self._interface)
-        except Exception as e:
-            logger.error(f"setLaserPowerFromConfig error: {e}")
-            return False
-
     def set_laser_power_from_config(self, interface):
         return apply_laser_power_from_config(
             interface, self.laser_params, self._fpga, self._console_mutex
@@ -2440,25 +2445,29 @@ class MotionConnector(QObject):
         return f"{h:02d}:{m:02d}:{s:02d}"
 
     # --- SENSOR COMMUNICATION METHODS ---
-    def _read_and_log_camera_uids(self):
+    def _read_and_log_camera_uids(self, side: str = None):
         """
-        Read and log security UIDs for all connected cameras.
-        This is called at the beginning of a scan.
+        Read and log security UIDs for connected cameras.
+
+        Called from _run_sensor_init after each sensor's ID cache has been
+        populated, so the UIDs are logged once per sensor at connect time
+        rather than at the start of every scan. ``side`` ("left"/"right"),
+        when given, restricts the read to just that sensor; the default
+        (None) processes whatever is currently connected.
         """
         try:
-            logger.info("=== Reading camera security UIDs ===")
-
-            # Get all sensors (left and right) — handles are stable, gate
-            # on the per-handle connected flag.
             sensors = []
-            if self._leftSensorConnected:
+            sides_to_process = (side,) if side else ("left", "right")
+            if "left" in sides_to_process and self._leftSensorConnected:
                 sensors.append(("left", self._interface.left))
-            if self._rightSensorConnected:
+            if "right" in sides_to_process and self._rightSensorConnected:
                 sensors.append(("right", self._interface.right))
 
             if not sensors:
                 logger.warning("No sensors connected, cannot read camera UIDs")
                 return
+
+            logger.info("=== Reading camera security UIDs ===")
 
             # Read UIDs for all cameras (0-7) on each connected sensor.
             # Prefer cached values (populated at sensor init) to avoid polling at scan start.
@@ -3115,36 +3124,6 @@ class MotionConnector(QObject):
         self.calibrationStateChanged.emit()
         self.captureLog.emit("Calibration: starting…")
 
-        # Issue #108: apply laser-power params to the firmware before
-        # calibration runs. The normal scan chain does this via
-        # SetTriggerLaserTask in QML (after FlashSensorsTask, before
-        # the actual scan), but the calibration path goes directly
-        # from runCalibration → SDK CalibrationWorkflow and skips that
-        # chain entirely. On a cold start — when no scan or Check has
-        # programmed the laser channels yet — the calibration scan
-        # would fire its trigger over an unprogrammed laser, every
-        # camera would see only dark, and phase 1 would abort with
-        # 'zero or negative aggregate'. Applying the params here is
-        # idempotent; runs that already had a scan kick the same
-        # values back in without harm.
-        try:
-            ok = self.set_laser_power_from_config(self._interface)
-            if not ok:
-                logger.warning(
-                    "runCalibration: set_laser_power_from_config "
-                    "returned False — proceeding anyway, but the "
-                    "calibration scan will likely abort with "
-                    "'zero or negative aggregate' if this is a cold "
-                    "start. See issue #108."
-                )
-            else:
-                logger.info("runCalibration: laser params applied")
-        except Exception as e:
-            logger.error(
-                "runCalibration: applying laser params raised: %s — "
-                "proceeding anyway", e
-            )
-
         started = self._interface.start_calibration(
             req,
             on_log_fn=lambda msg: self.captureLog.emit(msg),
@@ -3240,24 +3219,6 @@ class MotionConnector(QObject):
         self._test_scan_failure_reason = ""
         self.testScanStateChanged.emit()
         self.captureLog.emit("Test scan: starting…")
-
-        # Same #108 laser-power cold-start guard the Calibrate path uses.
-        try:
-            ok = self.set_laser_power_from_config(self._interface)
-            if not ok:
-                logger.warning(
-                    "runTestScan: set_laser_power_from_config returned "
-                    "False — proceeding anyway, but the test scan will "
-                    "likely abort with 'zero or negative aggregate' if "
-                    "this is a cold start. See issue #108."
-                )
-            else:
-                logger.info("runTestScan: laser params applied")
-        except Exception as e:
-            logger.error(
-                "runTestScan: applying laser params raised: %s — "
-                "proceeding anyway", e
-            )
 
         started = self._interface.start_test_scan(
             req,
