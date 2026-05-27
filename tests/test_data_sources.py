@@ -602,41 +602,38 @@ def test_camera_buffer_window_decimated_strides_when_over_max():
     buf = _CameraBuffer(initial_capacity=1024)
     for i in range(400):
         buf.append(t=i * 0.025, v=float(i), frame_id=i)
-    # Whole window (10 s), max_points=100 → stride = ceil(400/100) = 4.
-    # Overlap-smoothing with kernel width stride*3 = 12 → half = 6 → each
-    # output is the mean of 2*half+1 = 13 samples centred on the index.
-    # Linspace puts outputs at indices [0, 4, 8, 12, 16, ...]. Edge bins
-    # at low indices average fewer samples (clipped at 0).
+    # Whole window (10 s), max_points=100 → stride = ceil(400/100) = 4,
+    # window = stride*3 = 12. Stride-aligned abs idxs [0, 4, 8, 12, 16, ...].
+    # Causal window per output: [abs_idx - window + 1, abs_idx], clipped at 0.
     t_dec, v_dec = buf.window_decimated(t_lo=0.0, t_hi=10.0, max_points=100)
     assert len(t_dec) == 100
-    # idx=0:  samples [0..6]    → mean 21/7   = 3.0
-    # idx=4:  samples [0..10]   → mean 55/11  = 5.0
-    # idx=8:  samples [2..14]   → mean 104/13 = 8.0
-    # idx=12: samples [6..18]   → mean 156/13 = 12.0
-    # idx=16: samples [10..22]  → mean 208/13 = 16.0
+    # abs=0:  window [0..0]   → mean 0/1   = 0.0
+    # abs=4:  window [0..4]   → mean 10/5  = 2.0
+    # abs=8:  window [0..8]   → mean 36/9  = 4.0
+    # abs=12: window [1..12]  → mean 78/12 = 6.5
+    # abs=16: window [5..16]  → mean 126/12 = 10.5
     assert list(v_dec[:5]) == [
-        np.float32(3.0), np.float32(5.0), np.float32(8.0),
-        np.float32(12.0), np.float32(16.0),
+        np.float32(0.0), np.float32(2.0), np.float32(4.0),
+        np.float32(6.5), np.float32(10.5),
     ]
 
 
 def test_camera_buffer_window_decimated_smoothing_kills_alternation():
     """At stride=2 a plain subsample alternates between odd-index and
     even-index samples as the window scrolls, producing per-paint
-    flicker on noisy data. Overlap-smoothing (kernel wider than stride)
-    pulls each output toward the local mean so alternation can't
-    surface."""
+    flicker on noisy data. Causal smoothing pulls each output toward
+    the local mean so alternation can't surface."""
     buf = _CameraBuffer(initial_capacity=1024)
     # Strong noise pattern: alternating 0 and 10.
     for i in range(400):
         buf.append(t=i * 0.025, v=10.0 if (i % 2) else 0.0, frame_id=i)
     t_dec, v_dec = buf.window_decimated(t_lo=0.0, t_hi=10.0, max_points=200)
     assert len(t_dec) == 200
-    # Each output averages a 7-sample window (stride=2 → kernel=6 → 13
-    # samples centred). On alternating 0/10 the per-output mean is
-    # always within (4.0, 6.0) — pulled tight around the true mean 5.
-    for v in v_dec:
-        assert 4.0 < float(v) < 6.0
+    # Stride=2 → kernel=6. Once the causal window has fully filled
+    # (abs_idx >= 5 → 3 outputs in) each 6-sample window over alternating
+    # 0/10 contains exactly 3 zeros + 3 tens → mean = 5.0 EXACTLY.
+    for v in v_dec[3:]:
+        assert v == np.float32(5.0)
 
 
 def test_camera_buffer_window_decimated_empty_window_returns_empty_arrays():
@@ -698,14 +695,13 @@ def test_scan_data_source_points_for_window_decimates_when_over_max():
         buf.append(t=i * 0.025, v=float(i), frame_id=i)
 
     pts = src.points_for_window("right", 3, "mean", 0.0, 5.0, max_points=50)
-    # 200 samples, max=50 → stride=4. Overlap-smoothed: each output's v
-    # is the mean of a 13-sample window centred on a linspace index; t
-    # is the actual sample t at the centre.
+    # 200 samples, max=50 → stride=4, window=12. Stride-aligned abs
+    # idxs [0, 4, 8, ...]. Causal window per output (clipped at 0).
     assert len(pts) == 50
-    # idx=0: window [0..6] (edge-clipped), mean = 21/7 = 3.0, t = 0.0
-    assert pts[0] == pytest.approx([0.0, 3.0])
-    # idx=4: window [0..10], mean = 55/11 = 5.0, t = 0.1
-    assert pts[1] == pytest.approx([0.1, 5.0])
+    # abs=0: window [0..0], mean = 0/1 = 0.0, t = 0.0
+    assert pts[0] == pytest.approx([0.0, 0.0])
+    # abs=4: window [0..4], mean = 10/5 = 2.0, t = 0.1
+    assert pts[1] == pytest.approx([0.1, 2.0])
 
 
 # ─────────────────────────────────────────────────────────────────────────────

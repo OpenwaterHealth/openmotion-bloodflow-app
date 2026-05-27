@@ -168,41 +168,56 @@ class _CameraBuffer:
         if n_window <= max_points:
             return self.t[i_lo:i_hi], self.v[i_lo:i_hi]
 
-        # Smooth-then-decimate. A moving-average kernel of width
-        # `stride * 3` is applied across the visible samples, then we
-        # pick `max_points` evenly-spaced points from the smoothed
-        # signal. The overlap (each output averages 3 strides' worth)
-        # means consecutive paints differ in each output by ~1/(3*stride)
-        # of the underlying noise — no visible per-paint flicker even
-        # when the window scrolls one sample at a time. Cost is
-        # O(n_window) cumsum + O(max_points) sample, fully vectorised.
-        stride = -(-n_window // max_points)  # ceil division
-        smooth_w = max(3, stride * 3)
-        half = smooth_w // 2
+        # Stride-aligned causal smoothing.
+        #
+        # Each output sits at an ABSOLUTE sample index that is a multiple
+        # of `stride` — so the same absolute sample always maps to the
+        # same output regardless of which paint we're on. And the
+        # smoothing is CAUSAL (window covers [N-w+1, N], only samples
+        # at or before N) — so once a sample is appended, the output at
+        # that absolute index has its final value and never changes.
+        #
+        # The previous linspace-relative-to-i_lo + symmetric smoothing
+        # made every output's underlying absolute sample drift one slot
+        # left per paint AND made edge values keep re-smoothing as more
+        # post-edge samples arrived. Combined this showed as peaks
+        # morphing / sharpening as they scrolled left. With the new
+        # design the visible trace simply translates — output values
+        # are time-invariant once computed.
+        stride = max(1, -(-n_window // max_points))
+        window = max(3, stride * 3)
 
-        v_slice = self.v[i_lo:i_hi]
-        finite = np.isfinite(v_slice)
-        v_clean = np.where(finite, v_slice, 0.0).astype(np.float64)
-        # Cumulative sums with a leading 0 so window means are
-        # (cum[hi+1] - cum[lo]) / (n[hi+1] - n[lo]) for any [lo, hi].
-        v_cum = np.empty(n_window + 1, dtype=np.float64)
+        # Stride-aligned absolute indices that fall within [i_lo, i_hi).
+        first_k = (i_lo + stride - 1) // stride
+        last_k = (i_hi - 1) // stride
+        if last_k < first_k:
+            return self.t[0:0], self.v[0:0]
+        abs_idxs = np.arange(first_k, last_k + 1) * stride
+
+        # Cumsum range covers the causal lookback for the leftmost output
+        # all the way through the rightmost output (inclusive).
+        cum_lo = max(0, int(abs_idxs[0]) - window + 1)
+        cum_hi = int(abs_idxs[-1]) + 1
+        v_block = self.v[cum_lo:cum_hi]
+        f_block = np.isfinite(v_block)
+        v_clean = np.where(f_block, v_block, 0.0).astype(np.float64)
+        v_cum = np.empty(v_block.size + 1, dtype=np.float64)
         v_cum[0] = 0.0
         np.cumsum(v_clean, out=v_cum[1:])
-        n_cum = np.empty(n_window + 1, dtype=np.int64)
+        n_cum = np.empty(v_block.size + 1, dtype=np.int64)
         n_cum[0] = 0
-        np.cumsum(finite, out=n_cum[1:], dtype=np.int64)
+        np.cumsum(f_block, out=n_cum[1:], dtype=np.int64)
 
-        # Evenly-spaced output centres across the visible window.
-        idxs = np.linspace(0, n_window - 1, max_points).astype(np.int64)
-        lo_i = np.clip(idxs - half, 0, n_window)
-        hi_i = np.clip(idxs + half + 1, 0, n_window)
-        counts = n_cum[hi_i] - n_cum[lo_i]
-        sums = v_cum[hi_i] - v_cum[lo_i]
+        # Per-output causal window = [abs_idx - window + 1, abs_idx],
+        # translated into v_block-local indices.
+        local = abs_idxs - cum_lo
+        lo_b = np.maximum(0, local - window + 1)
+        hi_b = local + 1
+        counts = n_cum[hi_b] - n_cum[lo_b]
+        sums = v_cum[hi_b] - v_cum[lo_b]
         with np.errstate(invalid="ignore", divide="ignore"):
             v_out = np.where(counts > 0, sums / np.maximum(counts, 1), np.nan)
-        # Output t is the actual sample t at the centre index — keeps
-        # the time axis exact even with the smoothing kernel offset.
-        t_out = self.t[i_lo:i_hi][idxs]
+        t_out = self.t[abs_idxs]
         return t_out, v_out.astype(np.float32)
 
     def mark_dropped(self, t: float) -> None:
