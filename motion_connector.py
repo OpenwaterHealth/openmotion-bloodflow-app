@@ -249,6 +249,8 @@ class _LivePlotSink:
                     run_logger.warning(msg)
                     logger.warning(msg)
 
+                mean_for_source: Optional[float] = None
+                contrast_for_source: Optional[float] = None
                 if not is_dark:
                     # Two-pass refinement matches the BFI/BVI pattern: emit
                     # the realtime dark-corrected mean (mean_dc_rt) and
@@ -261,12 +263,14 @@ class _LivePlotSink:
                     if batch.mean_dc_rt is not None:
                         mean_val = float(batch.mean_dc_rt[i, side_idx, cam_id])
                         if math.isfinite(mean_val):
+                            mean_for_source = mean_val
                             connector.scanMeanSampled.emit(
                                 side, cam_id, abs_frame_id, plot_ts, mean_val
                             )
                     if batch.contrast_sn_rt is not None:
                         contrast_val = float(batch.contrast_sn_rt[i, side_idx, cam_id])
                         if math.isfinite(contrast_val):
+                            contrast_for_source = contrast_val
                             connector.scanContrastSampled.emit(
                                 side, cam_id, abs_frame_id, plot_ts, contrast_val
                             )
@@ -276,20 +280,9 @@ class _LivePlotSink:
                 connector.scanCameraTemperature.emit(side, cam_id, temp_c)
 
                 # Also feed the LiveScanSource so the new PlotViewer (Phase 2+)
-                # has a parallel record. mean/contrast are None when the SDK
-                # reported a non-finite value (existing emit-time NaN guards
-                # above set the optional payload to None for that metric).
-                mean_for_source: Optional[float] = None
-                contrast_for_source: Optional[float] = None
-                if not is_dark:
-                    if batch.mean_dc_rt is not None:
-                        mv = float(batch.mean_dc_rt[i, side_idx, cam_id])
-                        if math.isfinite(mv):
-                            mean_for_source = mv
-                    if batch.contrast_sn_rt is not None:
-                        cv = float(batch.contrast_sn_rt[i, side_idx, cam_id])
-                        if math.isfinite(cv):
-                            contrast_for_source = cv
+                # has a parallel record. mean/contrast already filtered for
+                # is_dark / non-finite above; None here means "metric not
+                # available for this sample".
                 self._live_source.append_uncorrected(
                     side=side,
                     cam_id=cam_id,
@@ -1962,6 +1955,7 @@ class MOTIONConnector(QObject):
         if not started:
             self._capture_running = False
             self._stop_runlog()
+            self._set_current_scan_source(None)  # release the orphaned LiveScanSource — scan never started
             # Log at WARNING so this is visible in the run log file —
             # captureLog signal goes through QML console.log which is
             # filtered out by default.
