@@ -166,20 +166,13 @@ class _CameraBuffer:
         if n_window <= 0:
             return self.t[0:0], self.v[0:0]
 
-        # Stride-aligned causal smoothing — always applied, even when
-        # n_window <= max_points. Previously we returned raw samples in
-        # that case and only switched to smoothing once the window
-        # filled, which produced a visible "downsampled" appearance
-        # flip + a perf ramp during the first ~5 s of the scan. With a
-        # minimum stride of 2 the kernel is always wide enough to
-        # suppress aliasing without much loss of detail.
-        #
-        # Each output sits at an ABSOLUTE sample index that is a multiple
-        # of `stride` — so the same absolute sample always maps to the
-        # same output regardless of which paint we're on. And the
-        # smoothing is CAUSAL (window covers [N-w+1, N], only samples
-        # at or before N) — so once a sample is appended, the output at
-        # that absolute index has its final value and never changes.
+        # Stride-aligned causal smoothing. Each output sits at an
+        # ABSOLUTE sample index that is a multiple of `stride` — so the
+        # same absolute sample always maps to the same output regardless
+        # of which paint we're on. And the smoothing is CAUSAL (window
+        # covers [N-w+1, N], only samples at or before N) — so once a
+        # sample is appended, the output at that absolute index has its
+        # final value and never changes.
         #
         # Stride is derived from the TIME WINDOW (× nominal 40 Hz), not
         # from n_window. Keying on n_window meant stride crept up as
@@ -189,10 +182,25 @@ class _CameraBuffer:
         # with a new causal window — producing a visible "morph" of
         # the trace shape each time it ticked. Time-keyed stride is
         # invariant under data growth, so the trace stays put.
+        #
+        # window = stride (not stride*3) keeps the low-pass at the
+        # Nyquist-minimum — just enough to suppress aliasing across the
+        # stride-subsampled output, without smearing real detail.
+        # Earlier 3× kernel hid features even at the tightest 5 s zoom.
         nominal_hz = 40.0  # SDK histogram cadence
         expected_samples = max(1.0, (t_hi - t_lo) * nominal_hz)
-        stride = max(2, int(-(-expected_samples // max_points)))
-        window = stride * 3
+        stride = max(1, int(-(-expected_samples // max_points)))
+
+        # Zoomed-in tight enough that every sample fits — no decimation
+        # needed, return raw samples. (The earlier `max(2, ...)` floor
+        # always forced a 2-sample average even when not needed, which
+        # was the source of "looks filtered" at 5 s zoom.)
+        if stride == 1:
+            t_out = self.t[i_lo:i_hi]
+            v_out = self.v[i_lo:i_hi]
+            return t_out, v_out
+
+        window = stride
 
         # Stride-aligned absolute indices that fall within [i_lo, i_hi).
         first_k = (i_lo + stride - 1) // stride

@@ -588,65 +588,59 @@ def test_live_scan_source_mark_dropped_multiple_metric_buffers():
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_camera_buffer_window_decimated_smooths_even_when_under_max():
-    """Always-on smoothing: even when n_window < max_points the source
-    applies stride-aligned causal smoothing (min stride=2) so the
-    visual quality is consistent from t=0, with no jarring transition
-    when the window finally fills."""
+def test_camera_buffer_window_decimated_returns_raw_when_window_fits():
+    """When the time window times the nominal sample rate is ≤ max_points
+    (zoomed in tight enough that every sample fits), stride drops to 1
+    and we short-circuit to raw samples. Earlier code forced a minimum
+    stride of 2 + 6-sample causal smoothing, which over-filtered the
+    tightest zoom views and hid real signal detail."""
     buf = _CameraBuffer(initial_capacity=64)
     for i in range(20):
         buf.append(t=i * 0.025, v=float(i), frame_id=i)
+    # 0.5 s window × 40 Hz nominal = 20 expected samples ≤ max_points=100
+    # → stride=1 → raw return path.
     t_dec, v_dec = buf.window_decimated(t_lo=0.0, t_hi=0.5, max_points=100)
-    # 20 samples; stride=max(2, ceil(20/100))=2; window=6.
-    # abs_idxs = [0,2,4,...,18] → 10 outputs.
-    assert len(t_dec) == 10
-    # abs=0:  window [0..0]   → 0/1 = 0.0
-    # abs=2:  window [0..2]   → 3/3 = 1.0
-    # abs=4:  window [0..4]   → 10/5 = 2.0
-    # abs=6:  window [1..6]   → 21/6 = 3.5
-    # abs=8:  window [3..8]   → 33/6 = 5.5
-    expected_head = [
-        np.float32(0.0), np.float32(1.0), np.float32(2.0),
-        np.float32(3.5), np.float32(5.5),
-    ]
-    assert list(v_dec[:5]) == expected_head
+    assert len(t_dec) == 20
+    assert list(v_dec) == [np.float32(i) for i in range(20)]
 
 
 def test_camera_buffer_window_decimated_strides_when_over_max():
     buf = _CameraBuffer(initial_capacity=1024)
     for i in range(400):
         buf.append(t=i * 0.025, v=float(i), frame_id=i)
-    # Whole window (10 s), max_points=100 → stride = ceil(400/100) = 4,
-    # window = stride*3 = 12. Stride-aligned abs idxs [0, 4, 8, 12, 16, ...].
-    # Causal window per output: [abs_idx - window + 1, abs_idx], clipped at 0.
+    # Time-keyed stride: 10 s window × 40 Hz / max_points=100 = 4.
+    # window = stride = 4 (Nyquist-minimum). Stride-aligned abs idxs
+    # [0, 4, 8, 12, 16, ...]. Causal window per output:
+    # [abs_idx - stride + 1, abs_idx], clipped at 0.
     t_dec, v_dec = buf.window_decimated(t_lo=0.0, t_hi=10.0, max_points=100)
     assert len(t_dec) == 100
-    # abs=0:  window [0..0]   → mean 0/1   = 0.0
-    # abs=4:  window [0..4]   → mean 10/5  = 2.0
-    # abs=8:  window [0..8]   → mean 36/9  = 4.0
-    # abs=12: window [1..12]  → mean 78/12 = 6.5
-    # abs=16: window [5..16]  → mean 126/12 = 10.5
+    # abs=0:  window [0..0]   → mean v[0]                = 0.0
+    # abs=4:  window [1..4]   → mean(1,2,3,4)            = 2.5
+    # abs=8:  window [5..8]   → mean(5,6,7,8)            = 6.5
+    # abs=12: window [9..12]  → mean(9,10,11,12)         = 10.5
+    # abs=16: window [13..16] → mean(13,14,15,16)        = 14.5
     assert list(v_dec[:5]) == [
-        np.float32(0.0), np.float32(2.0), np.float32(4.0),
-        np.float32(6.5), np.float32(10.5),
+        np.float32(0.0), np.float32(2.5), np.float32(6.5),
+        np.float32(10.5), np.float32(14.5),
     ]
 
 
 def test_camera_buffer_window_decimated_smoothing_kills_alternation():
     """At stride=2 a plain subsample alternates between odd-index and
     even-index samples as the window scrolls, producing per-paint
-    flicker on noisy data. Causal smoothing pulls each output toward
-    the local mean so alternation can't surface."""
+    flicker on noisy data. The Nyquist-minimum causal smoothing
+    (window = stride) averages each pair so alternation collapses to
+    the local mean."""
     buf = _CameraBuffer(initial_capacity=1024)
     # Strong noise pattern: alternating 0 and 10.
     for i in range(400):
         buf.append(t=i * 0.025, v=10.0 if (i % 2) else 0.0, frame_id=i)
+    # 10 s × 40 Hz / max_points=200 → stride=2, window=2.
     t_dec, v_dec = buf.window_decimated(t_lo=0.0, t_hi=10.0, max_points=200)
     assert len(t_dec) == 200
-    # Stride=2 → kernel=6. Once the causal window has fully filled
-    # (abs_idx >= 5 → 3 outputs in) each 6-sample window over alternating
-    # 0/10 contains exactly 3 zeros + 3 tens → mean = 5.0 EXACTLY.
-    for v in v_dec[3:]:
+    # abs=0: window [0..0] = v[0] = 0  (edge — single-sample only)
+    # abs=2 onward: window [N-1, N] over alternating 10/0 → mean = 5.0
+    for v in v_dec[1:]:
         assert v == np.float32(5.0)
 
 
@@ -671,20 +665,13 @@ def test_camera_buffer_window_decimated_partial_window():
     buf = _CameraBuffer(initial_capacity=64)
     for i in range(40):
         buf.append(t=i * 0.025, v=float(i), frame_id=i)
-    # Window covers indices [10, 21). Stride=2, window=6. abs_idxs are
-    # stride-aligned indices in that range → [10, 12, 14, 16, 18, 20].
+    # Window time range = 0.25 s × 40 Hz nominal = 10 expected samples.
+    # max_points=100 → stride=1 → raw return path. window_indices for
+    # [0.25, 0.5] returns (10, 21) (searchsorted right at 0.5 includes
+    # samples up through index 20 at t=0.500). 11 raw samples 10..20.
     t_dec, v_dec = buf.window_decimated(t_lo=0.250, t_hi=0.500, max_points=100)
-    assert len(t_dec) == 6
-    # abs=10: window [5..10]  → mean 45/6 = 7.5
-    # abs=12: window [7..12]  → mean 57/6 = 9.5
-    # abs=14: window [9..14]  → 69/6 = 11.5
-    # abs=16: window [11..16] → 81/6 = 13.5
-    # abs=18: window [13..18] → 93/6 = 15.5
-    # abs=20: window [15..20] → 105/6 = 17.5
-    assert list(v_dec) == [
-        np.float32(7.5), np.float32(9.5), np.float32(11.5),
-        np.float32(13.5), np.float32(15.5), np.float32(17.5),
-    ]
+    assert len(t_dec) == 11
+    assert list(v_dec) == [np.float32(i) for i in range(10, 21)]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -700,13 +687,11 @@ def test_scan_data_source_points_for_window_returns_pairs():
 
     pts = src.points_for_window("left", 0, "bfi", 0.0, 0.25, max_points=100)
 
-    # 10 samples in window; stride=2 (minimum), window=6. abs_idxs =
-    # [0, 2, 4, 6, 8] → 5 output pairs.
-    assert len(pts) == 5
-    # abs=0: window [v[0]] = [4.0]; mean = 4.0; t = 0.0
+    # 0.25 s × 40 Hz = 10 expected samples ≤ max_points=100 → stride=1,
+    # raw return. All 10 samples pass through.
+    assert len(pts) == 10
     assert pts[0] == pytest.approx([0.0, 4.0])
-    # abs=8: window [v[3..8]] = [4.3..4.8]; mean = 4.55; t = 0.2
-    assert pts[-1] == pytest.approx([0.2, 4.55])
+    assert pts[-1] == pytest.approx([0.225, 4.9])
 
 
 def test_scan_data_source_points_for_window_missing_buffer_returns_empty():
@@ -722,13 +707,14 @@ def test_scan_data_source_points_for_window_decimates_when_over_max():
         buf.append(t=i * 0.025, v=float(i), frame_id=i)
 
     pts = src.points_for_window("right", 3, "mean", 0.0, 5.0, max_points=50)
-    # 200 samples, max=50 → stride=4, window=12. Stride-aligned abs
-    # idxs [0, 4, 8, ...]. Causal window per output (clipped at 0).
+    # Time-keyed stride: 5 s × 40 Hz / max=50 = 4. window = stride = 4.
+    # Stride-aligned abs idxs [0, 4, 8, ...]. Causal window per output:
+    # [abs_idx - stride + 1, abs_idx] clipped at 0.
     assert len(pts) == 50
-    # abs=0: window [0..0], mean = 0/1 = 0.0, t = 0.0
+    # abs=0: window [0..0]  → v[0]                = 0.0,  t = 0.0
     assert pts[0] == pytest.approx([0.0, 0.0])
-    # abs=4: window [0..4], mean = 10/5 = 2.0, t = 0.1
-    assert pts[1] == pytest.approx([0.1, 2.0])
+    # abs=4: window [1..4]  → mean(1,2,3,4)       = 2.5,  t = 0.1
+    assert pts[1] == pytest.approx([0.1, 2.5])
 
 
 # ─────────────────────────────────────────────────────────────────────────────

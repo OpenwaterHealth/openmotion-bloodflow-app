@@ -240,6 +240,28 @@ Rectangle {
         id: plotViewerComponent
         PlotViewer {
             reducedMode: bloodFlow.reducedMode
+            autoScale: settingsModal.autoScale
+            displayMode: settingsModal.showBfiBvi ? "bfi_bvi" : "mean_contrast"
+            // Manual y-axis bounds — applied when autoScale is off.
+            settingBfiMin:      settingsModal.bfiMin
+            settingBfiMax:      settingsModal.bfiMax
+            settingBviMin:      settingsModal.bviMin
+            settingBviMax:      settingsModal.bviMax
+            settingMeanMin:     settingsModal.meanMin
+            settingMeanMax:     settingsModal.meanMax
+            settingContrastMin: settingsModal.contrastMin
+            settingContrastMax: settingsModal.contrastMax
+            // Bottom-right settings popup writes back through these
+            // signals → settingsModal owns the persisted state and
+            // the Settings modal stays in sync with the viewer's quick
+            // toggles.
+            onAutoScaleToggleRequested: function(enabled) {
+                settingsModal.autoScale = enabled
+                settingsModal.autoScalePerPlot = enabled
+            }
+            onDisplayModeToggleRequested: function(bfiBviMode) {
+                settingsModal.showBfiBvi = bfiBviMode
+            }
         }
     }
 

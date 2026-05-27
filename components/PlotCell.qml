@@ -215,14 +215,31 @@ Item {
         }
         Text {
             visible: cell.width >= 80
-            text: cell.metric.toUpperCase() + "  " + cell.yMin.toFixed(2) + " – " + cell.yMax.toFixed(2)
+            // Show the most recent sample value rather than the
+            // autoscale-derived range — clinicians care about "what's
+            // it reading right now", not the y-axis extent. paintTick
+            // is a dependency so the text refreshes at the throttled
+            // rate.
+            text: {
+                void cell.paintTick  // dependency
+                if (!cell.source) return cell.metric.toUpperCase() + "  --"
+                var v = cell.source.value_at(cell.side, cell.camId, cell.metric, cell.liveEdgeSnapshot)
+                return cell.metric.toUpperCase() + "  "
+                       + (isFinite(v) ? v.toFixed(2) : "--")
+            }
             color: cell.traceColor
             font.pixelSize: 10
             font.family: "Roboto Mono"
         }
         Text {
             visible: cell.width >= 80 && cell.secondaryMetric.length > 0
-            text: cell.secondaryMetric.toUpperCase() + "  " + cell.secondaryYMin.toFixed(2) + " – " + cell.secondaryYMax.toFixed(2)
+            text: {
+                void cell.paintTick
+                if (!cell.source) return cell.secondaryMetric.toUpperCase() + "  --"
+                var v = cell.source.value_at(cell.side, cell.camId, cell.secondaryMetric, cell.liveEdgeSnapshot)
+                return cell.secondaryMetric.toUpperCase() + "  "
+                       + (isFinite(v) ? v.toFixed(2) : "--")
+            }
             color: cell.secondaryColor
             font.pixelSize: 10
             font.family: "Roboto Mono"

@@ -63,15 +63,28 @@ Rectangle {
 
     // ── Inputs ─────────────────────────────────────────────────────────
     property bool reducedMode: false   // honored in Phase 2b-ii
+    // displayMode pair selector — driven externally (BloodFlow.qml binds
+    // it from settingsModal.showBfiBvi). "bfi_bvi" overlays BFI+BVI on
+    // each cell; "mean_contrast" overlays Mean+Contrast.
+    property string displayMode: "bfi_bvi"
+    // autoScale — driven externally from Settings; when true, the 3 s
+    // _recomputeAutoscale timer below repins primary/secondary YMin/YMax
+    // to per-metric percentile bounds across the buffer.
+    property bool autoScale: true
 
     // ── State (owned here; pushed to every cell) ───────────────────────
-    // displayMode: "bfi_bvi" overlays BFI+BVI on each cell;
-    // "mean_contrast" overlays Mean+Contrast. Each metric has its own
-    // y-axis mapping (primary*/secondary*) so the two traces don't
-    // squash each other when their ranges differ wildly.
-    property string displayMode: "bfi_bvi"
+    // windowSeconds is internal — the bottom-right pill overlay edits it
+    // via _windowSecondsRequested. Each metric has its own y-axis mapping
+    // (primary*/secondary*) so the two traces don't squash each other
+    // when their ranges differ wildly.
     property real windowSeconds: 15
-    property bool autoScale: true
+
+    // When displayMode changes (e.g. from the Settings modal flipping
+    // BFI/BVI ↔ Mean/Contrast), the previously-fit y-bounds will be
+    // for the wrong pair — mean ~100 + contrast ~0.3 would render
+    // entirely off-axis until the next 3 s autoscale tick. Force an
+    // immediate recompute so the switch lands cleanly.
+    onDisplayModeChanged: viewer._recomputeAutoscale()
 
     // ── Time-axis state ────────────────────────────────────────────────
     // followLive = true: cells render the last `windowSeconds` of data
@@ -83,12 +96,47 @@ Rectangle {
     property bool followLive: true
     property real windowStartT: 0.0
 
-    // Independent y-axis bounds per metric — kept here so every cell
-    // shares the same scale.
-    property real primaryYMin: 0.0
-    property real primaryYMax: 10.0
-    property real secondaryYMin: 0.0
-    property real secondaryYMax: 10.0
+    // Y-axis bounds — when autoScale is true, _autoPrimaryYMin/Max are
+    // written by _recomputeAutoscale (every 3 s + on displayMode change)
+    // and primaryYMin/Max read them through the derived bindings below.
+    // When autoScale is false, primaryYMin/Max instead read the per-
+    // metric clamps from settingsModal (settingBfiMin/Max etc.) so the
+    // operator's preferred fixed scale applies.
+    property real _autoPrimaryYMin: 0.0
+    property real _autoPrimaryYMax: 10.0
+    property real _autoSecondaryYMin: 0.0
+    property real _autoSecondaryYMax: 10.0
+
+    // Manual-bound inputs — BloodFlow.qml binds these from settingsModal.
+    property real settingBfiMin: 0.0
+    property real settingBfiMax: 10.0
+    property real settingBviMin: 0.0
+    property real settingBviMax: 10.0
+    property real settingMeanMin: 0.0
+    property real settingMeanMax: 500.0
+    property real settingContrastMin: 0.0
+    property real settingContrastMax: 1.0
+
+    function _settingBound(metric, which) {
+        if (metric === "bfi")      return which === "min" ? settingBfiMin      : settingBfiMax
+        if (metric === "bvi")      return which === "min" ? settingBviMin      : settingBviMax
+        if (metric === "mean")     return which === "min" ? settingMeanMin     : settingMeanMax
+        if (metric === "contrast") return which === "min" ? settingContrastMin : settingContrastMax
+        return which === "min" ? 0.0 : 10.0
+    }
+
+    readonly property real primaryYMin: autoScale
+        ? _autoPrimaryYMin
+        : _settingBound(_displayPair.primary, "min")
+    readonly property real primaryYMax: autoScale
+        ? _autoPrimaryYMax
+        : _settingBound(_displayPair.primary, "max")
+    readonly property real secondaryYMin: autoScale
+        ? _autoSecondaryYMin
+        : _settingBound(_displayPair.secondary, "min")
+    readonly property real secondaryYMax: autoScale
+        ? _autoSecondaryYMax
+        : _settingBound(_displayPair.secondary, "max")
 
     // ── Source subscription ────────────────────────────────────────────
     readonly property var scanSource: MOTIONInterface.currentScanSource
@@ -140,17 +188,19 @@ Rectangle {
         : _devCellModel
 
     // ── Autoscale recompute (shared by Timer + displayMode change) ────
+    // Writes to _auto* — the derived primaryYMin/Max bindings above
+    // pick the _auto vs setting-bound value based on autoScale.
     function _recomputeAutoscale() {
         if (!viewer.scanSource) return
         var bp = viewer.scanSource.compute_bounds_for_metric(viewer._displayPair.primary)
         if (bp && typeof bp.yMin === "number" && typeof bp.yMax === "number") {
-            viewer.primaryYMin = bp.yMin
-            viewer.primaryYMax = bp.yMax
+            viewer._autoPrimaryYMin = bp.yMin
+            viewer._autoPrimaryYMax = bp.yMax
         }
         var bs = viewer.scanSource.compute_bounds_for_metric(viewer._displayPair.secondary)
         if (bs && typeof bs.yMin === "number" && typeof bs.yMax === "number") {
-            viewer.secondaryYMin = bs.yMin
-            viewer.secondaryYMax = bs.yMax
+            viewer._autoSecondaryYMin = bs.yMin
+            viewer._autoSecondaryYMax = bs.yMax
         }
         viewer._dirty = true
     }
@@ -244,12 +294,15 @@ Rectangle {
     }
 
     // ── Trace color per metric ─────────────────────────────────────────
+    // Hex values match the legacy EmbeddedRealtimePlot defaults so the
+    // visual identity carries across the viewer swap — clinicians don't
+    // suddenly see a different palette for the same metric.
     function _traceColorForMetric(m) {
-        if (m === "bfi")      return theme.accentRed
-        if (m === "bvi")      return theme.statusBlue
-        if (m === "mean")     return theme.accentOrange
-        if (m === "contrast") return theme.accentYellow
-        return theme.statusBlue
+        if (m === "bfi")      return "#E74C3C"  // red
+        if (m === "bvi")      return "#3498DB"  // blue
+        if (m === "mean")     return "#2ECC71"  // green
+        if (m === "contrast") return "#9B59B6"  // purple
+        return "#3498DB"
     }
 
     // ── Display-mode pair resolution ───────────────────────────────────
@@ -405,68 +458,54 @@ Rectangle {
         onTriggered: viewer._recomputeAutoscale()
     }
 
+    // Window-seconds options — duplicated here from the old PlotToolbar
+    // so the new bottom-right overlay can use the same list. Keeping
+    // the labels formatter symmetric (15 → "15 s", 300 → "5 min").
+    readonly property var _windowOptions: [
+        { value: 5,   label: "5 s" },
+        { value: 15,  label: "15 s" },
+        { value: 30,  label: "30 s" },
+        { value: 60,  label: "1 min" },
+        { value: 300, label: "5 min" }
+    ]
+
+    function _labelForWindowSeconds(s) {
+        for (var i = 0; i < viewer._windowOptions.length; i++) {
+            if (viewer._windowOptions[i].value === s)
+                return viewer._windowOptions[i].label
+        }
+        // Custom (wheel-zoomed) value — show as "<n>s" or "<m>m" tersely.
+        if (s >= 60) return Math.round(s / 60 * 10) / 10 + " min"
+        return Math.round(s * 10) / 10 + " s"
+    }
+
+    // Triggered by the bottom-right back-to-live overlay button.
+    function _backToLiveRequested() {
+        if (viewer.scanSource && viewer.scanSource.live === false
+                && MOTIONInterface.liveSourceAvailable) {
+            MOTIONInterface.showLiveSource()
+            console.info("[Plot] back-to-live (past → live source)")
+        } else {
+            viewer.backToLive()
+            console.info("[Plot] back-to-live (followLive → true)")
+        }
+    }
+
+    // Triggered by the bottom-right window-seconds menu.
+    function _windowSecondsRequested(s) {
+        if (viewer.followLive) {
+            viewer.windowSeconds = s
+        } else {
+            viewer.setWindow(viewer.windowStartT, s)
+        }
+        viewer._dirty = true
+        console.info("[Plot] windowSeconds → " + s + " s")
+    }
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 12
         spacing: 8
-
-        PlotToolbar {
-            Layout.fillWidth: true
-            scanSource: viewer.scanSource
-            displayMode: viewer.displayMode
-            windowSeconds: viewer.windowSeconds
-            autoScale: viewer.autoScale
-            followLive: viewer.followLive
-            liveSourceAvailable: MOTIONInterface.liveSourceAvailable
-            developerMode: MOTIONInterface.appConfig.developerMode === true
-            showProfiling: viewer.showProfiling
-
-            onDisplayModeRequested: function(mode) {
-                viewer.displayMode = mode
-                console.info("[Plot] displayMode → " + mode)
-                // Force an immediate autoscale recompute so the new pair
-                // of metrics renders into a sensible y-axis right away
-                // — without this the old (BFI/BVI-fit) bounds make
-                // mean (~100) and contrast (~0.3) draw entirely
-                // off-screen until the next autoscale tick.
-                viewer._recomputeAutoscale()
-            }
-            onWindowSecondsRequested: function(s) {
-                // Route through setWindow so the off-edge cap re-applies
-                // — expanding from 5 s to 60 s while paused near liveEdge
-                // would otherwise push the right edge past liveEdge.
-                // When followLive, setWindow's _ensureFrozen snapshots
-                // the current view first, preserving the visual position.
-                if (viewer.followLive) {
-                    viewer.windowSeconds = s
-                } else {
-                    viewer.setWindow(viewer.windowStartT, s)
-                }
-                viewer._dirty = true
-                console.info("[Plot] windowSeconds → " + s + " s")
-            }
-            onAutoScaleToggled: function(enabled) {
-                viewer.autoScale = enabled
-                console.info("[Plot] autoScale → " + enabled)
-            }
-            onShowProfilingToggled: function(enabled) {
-                viewer.showProfiling = enabled
-                console.info("[Plot] showProfiling → " + enabled)
-            }
-            onBackToLiveRequested: {
-                // When the viewer is on a past source, "Back to live"
-                // means switch back to the held LiveScanSource. When
-                // already live (just paused), it means resume follow.
-                if (viewer.scanSource && viewer.scanSource.live === false
-                        && MOTIONInterface.liveSourceAvailable) {
-                    MOTIONInterface.showLiveSource()
-                    console.info("[Plot] back-to-live (past → live source)")
-                } else {
-                    viewer.backToLive()
-                    console.info("[Plot] back-to-live (followLive → true)")
-                }
-            }
-        }
 
         GridLayout {
             id: grid
@@ -524,6 +563,7 @@ Rectangle {
         }
 
         PlotScrubber {
+            id: scrubber
             Layout.fillWidth: true
             Layout.preferredHeight: 28
             visible: viewer.scanSource !== null
@@ -557,8 +597,15 @@ Rectangle {
                   && viewer._activeCellModel.length > 0
         anchors.top: parent.top
         anchors.right: parent.right
-        anchors.topMargin: 56  // clear the toolbar
-        anchors.rightMargin: 16
+        // When the back-to-live pill is showing in the top-right corner,
+        // push the tooltip down past it (BTL height + same rim margin
+        // we use between the BTL pill and the plot rim) so the two
+        // don't overlap. Otherwise sit at the standard edge margin.
+        anchors.topMargin: viewer._overlayEdgeMarginPx
+                           + (viewer._showBackToLive
+                              ? backToLiveOverlay.height + viewer._overlayMarginPx
+                              : 0)
+        anchors.rightMargin: viewer._overlayEdgeMarginPx
         color: theme.bgElevated
         border.color: theme.borderSubtle
         border.width: 1
@@ -649,26 +696,279 @@ Rectangle {
         }
     }
 
-    // ── Profile HUD overlay ────────────────────────────────────────────
-    // Top-left of the plot grid; ports the legacy EmbeddedRealtimePlot
-    // counters forward per spec §248. Visible only when both
-    // developerMode AND showProfiling are true so clinical users never
-    // see it. The values are refreshed by the 1 Hz profHudTimer above
-    // (which also gates `running` on this overlay's visibility so the
-    // EWMA + division work doesn't run in production builds).
+    // ── Overlay margins ───────────────────────────────────────────────
+    // Plot grid lives inside a ColumnLayout that's anchored fill to the
+    // viewer with a 12 px outer margin. Visual rim margin we want
+    // between an overlay and the plot cell edge is another 12 px. So
+    // for the LEFT/RIGHT/TOP edges (anchored to viewer's edges) the
+    // total margin is outer-layout-margin + rim-margin. The BOTTOM
+    // edge is further inset by the scrubber area (scrubber height +
+    // ColumnLayout.spacing).
+    readonly property real _overlayMarginPx: 12      // rim margin (inside grid)
+    readonly property real _outerLayoutMarginPx: 12  // ColumnLayout.anchors.margins
+    readonly property real _scrubberAreaPx: 28 + 8   // scrubber height + Layout.spacing
+    // Convenience: full edge margin from viewer.{right,top,left}.
+    readonly property real _overlayEdgeMarginPx: _outerLayoutMarginPx + _overlayMarginPx
+    // Convenience: full bottom margin from viewer.bottom.
+    readonly property real _overlayBottomMarginPx: _outerLayoutMarginPx + _scrubberAreaPx + _overlayMarginPx
+
+    // Signals back to the host (BloodFlow.qml) for state that's owned by
+    // settingsModal — Autoscale and BFI/BVI ↔ Mean/Contrast persist in
+    // app config and are also reachable from the Settings modal, so the
+    // bottom-right popup switches just request changes; BloodFlow.qml
+    // applies them to settingsModal which then flows back into the
+    // viewer's `autoScale` / `displayMode` bindings.
+    signal autoScaleToggleRequested(bool enabled)
+    signal displayModeToggleRequested(bool bfiBviMode)
+
+    // ── Top-right overlay: back-to-live ───────────────────────────────
+    // Same spacing guidelines as bottom-right overlay group.
+    readonly property bool _showBackToLive:
+        viewer.scanSource !== null
+        && (
+            (viewer.scanSource.live === false && MOTIONInterface.liveSourceAvailable)
+            || (viewer.scanSource.live === true && !viewer.followLive)
+        )
+
+    Rectangle {
+        id: backToLiveOverlay
+        visible: viewer._showBackToLive
+        width: backToLiveText.implicitWidth + 28
+        height: 36
+        radius: 18
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.topMargin: viewer._overlayEdgeMarginPx
+        anchors.rightMargin: viewer._overlayEdgeMarginPx
+        z: 6
+        color: Qt.rgba(0.10, 0.10, 0.12, 0.82)
+        border.color: theme.accentRed
+        border.width: 1
+
+        Text {
+            id: backToLiveText
+            anchors.centerIn: parent
+            text: (viewer.scanSource !== null
+                   && viewer.scanSource.live === false
+                   && MOTIONInterface.liveSourceAvailable)
+                  ? "← Back to live scan"
+                  : "● Back to live"
+            color: theme.accentRed
+            font.pixelSize: 13
+            font.family: "Roboto Mono"
+        }
+
+        MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: viewer._backToLiveRequested()
+        }
+    }
+
+    // ── Bottom-right overlay: window-seconds pill + three-dot menu ────
+    // Window-seconds pill shows the current zoom and opens a dropdown
+    // menu of the canonical zoom options when clicked. The three-dot
+    // button to its right opens a popup with switches for display mode,
+    // autoscale, and (dev-only) profiler.
+    Row {
+        id: bottomRightOverlay
+        visible: viewer.scanSource !== null
+        spacing: 8
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.rightMargin: viewer._overlayEdgeMarginPx
+        anchors.bottomMargin: viewer._overlayBottomMarginPx
+        z: 6
+
+        Rectangle {
+            id: windowSecondsPill
+            width: windowSecondsText.implicitWidth + 38
+            height: 36
+            radius: 18
+            color: Qt.rgba(0.10, 0.10, 0.12, 0.82)
+            border.color: theme.borderSubtle
+            border.width: 1
+
+            Text {
+                id: windowSecondsText
+                anchors.left: parent.left
+                anchors.leftMargin: 14
+                anchors.verticalCenter: parent.verticalCenter
+                text: viewer._labelForWindowSeconds(viewer.windowSeconds)
+                color: theme.textPrimary
+                font.pixelSize: 13
+                font.family: "Roboto Mono"
+            }
+            Text {
+                anchors.right: parent.right
+                anchors.rightMargin: 12
+                anchors.verticalCenter: parent.verticalCenter
+                text: "▾"
+                color: theme.textTertiary
+                font.pixelSize: 12
+            }
+
+            MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: windowSecondsMenu.popup(windowSecondsPill, 0, windowSecondsPill.height + 4)
+            }
+
+            Menu {
+                id: windowSecondsMenu
+                // Match the bottom-right settings popup's visual style
+                // — same translucent dark card, subtle border, rounded
+                // corners — so the two corner overlays read as parts
+                // of the same control system. Keeping the default
+                // MenuItem contentItem (instead of overriding it) so
+                // implicitWidth resolves correctly; a custom Text
+                // contentItem leaves the menu zero-width and the items
+                // un-clickable.
+                padding: 6
+                implicitWidth: 120
+                background: Rectangle {
+                    color: Qt.rgba(0.12, 0.12, 0.14, 0.96)
+                    border.color: theme.borderSubtle
+                    border.width: 1
+                    radius: 8
+                }
+                Repeater {
+                    model: viewer._windowOptions
+                    MenuItem {
+                        text: modelData.label
+                        font.family: "Roboto Mono"
+                        font.pixelSize: 13
+                        onTriggered: viewer._windowSecondsRequested(modelData.value)
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            id: settingsMenuButton
+            width: 36
+            height: 36
+            radius: 18
+            color: settingsPopup.opened
+                   ? Qt.rgba(0.29, 0.56, 0.89, 0.85)
+                   : Qt.rgba(0.10, 0.10, 0.12, 0.82)
+            border.color: settingsPopup.opened ? "#4A90E2" : theme.borderSubtle
+            border.width: 1
+
+            Text {
+                anchors.centerIn: parent
+                text: "⋯"
+                color: settingsPopup.opened ? "white" : theme.textPrimary
+                font.pixelSize: 20
+                font.bold: true
+            }
+
+            MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: settingsPopup.opened ? settingsPopup.close() : settingsPopup.open()
+            }
+
+            // Popup opens UPWARD from the button so it doesn't cover
+            // the scrubber. Width tracks the longest switch row.
+            Popup {
+                id: settingsPopup
+                parent: settingsMenuButton
+                x: settingsMenuButton.width - width
+                y: -height - 6
+                padding: 0
+                width: popupColumn.implicitWidth + 24
+                height: popupColumn.implicitHeight + 16
+                modal: false
+                focus: true
+                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
+
+                background: Rectangle {
+                    color: Qt.rgba(0.12, 0.12, 0.14, 0.95)
+                    border.color: theme.borderSubtle
+                    border.width: 1
+                    radius: 8
+                }
+
+                contentItem: Column {
+                    id: popupColumn
+                    spacing: 6
+                    padding: 12
+
+                    Row {
+                        spacing: 8
+                        Switch {
+                            id: bfiBviSwitch
+                            checked: viewer.displayMode === "bfi_bvi"
+                            // Switch's `text` lives inside its indicator —
+                            // use a sibling Text for free placement.
+                            onToggled: viewer.displayModeToggleRequested(checked)
+                        }
+                        Text {
+                            anchors.verticalCenter: bfiBviSwitch.verticalCenter
+                            text: bfiBviSwitch.checked ? "BFI / BVI" : "Mean / Contrast"
+                            color: theme.textPrimary
+                            font.pixelSize: 12
+                            font.family: "Roboto Mono"
+                        }
+                    }
+                    Row {
+                        spacing: 8
+                        Switch {
+                            id: autoScaleSwitch
+                            checked: viewer.autoScale
+                            onToggled: viewer.autoScaleToggleRequested(checked)
+                        }
+                        Text {
+                            anchors.verticalCenter: autoScaleSwitch.verticalCenter
+                            text: "Autoscale"
+                            color: theme.textPrimary
+                            font.pixelSize: 12
+                            font.family: "Roboto Mono"
+                        }
+                    }
+                    Row {
+                        visible: MOTIONInterface.appConfig.developerMode === true
+                        spacing: 8
+                        Switch {
+                            id: profilerSwitch
+                            checked: viewer.showProfiling
+                            onToggled: viewer.showProfiling = checked
+                        }
+                        Text {
+                            anchors.verticalCenter: profilerSwitch.verticalCenter
+                            text: "Profiler"
+                            color: "#4A90E2"
+                            font.pixelSize: 12
+                            font.family: "Roboto Mono"
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Bottom-left overlay: profiler HUD ─────────────────────────────
+    // Developer-only HUD; toggled from the bottom-right settings menu's
+    // Profiler switch. Renders as a static overlay anchored at the
+    // bottom-left corner of the plot grid, with the same rim margin as
+    // the other overlays.
     Rectangle {
         id: profileHud
-        visible: viewer._hudVisible
-        anchors.top: parent.top
+        visible: MOTIONInterface.appConfig.developerMode === true
+                 && viewer.showProfiling
+                 && viewer.scanSource !== null
         anchors.left: parent.left
-        anchors.topMargin: 56
-        anchors.leftMargin: 16
-        color: theme.bgElevated
+        anchors.bottom: parent.bottom
+        anchors.leftMargin: viewer._overlayEdgeMarginPx
+        anchors.bottomMargin: viewer._overlayBottomMarginPx
+        z: 5
+        width: hudColumn.implicitWidth + 16
+        height: hudColumn.implicitHeight + 12
+        color: Qt.rgba(0.10, 0.10, 0.12, 0.85)
         border.color: "#4A90E2"
         border.width: 1
         radius: 4
-        width: hudColumn.implicitWidth + 16
-        height: hudColumn.implicitHeight + 12
 
         Column {
             id: hudColumn
