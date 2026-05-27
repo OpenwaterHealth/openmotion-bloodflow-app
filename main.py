@@ -127,6 +127,11 @@ def _load_app_config() -> dict:
         # legacy EmbeddedRealtimePlot / ReducedPlotView pair. Default false;
         # flip locally in app_config.json to try the new viewer.
         "useNewPlotViewer": False,
+        # Phase 2b: profile HUD overlay on the new PlotViewer — sample
+        # rate, paint-tick ms, avg canvas-paint ms, total points
+        # painted. Gated on `developerMode && showProfiling` so clinical
+        # users never see it.
+        "showProfiling": False,
     }
     config_path = resource_path("config", "app_config.json")
     if not config_path.exists():

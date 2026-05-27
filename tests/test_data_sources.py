@@ -904,6 +904,36 @@ def test_dropped_at_for_returns_nan_when_buffer_missing():
     assert math.isnan(src.dropped_at_for("left", 7))
 
 
+def test_window_decimated_stride_stable_as_buffer_grows():
+    """Regression: when zoomed out, the visible window's time extent
+    is constant but n_window grows by 1 each new sample. The old
+    n_window-keyed stride crept up (e.g. ceil(800/200)=4 → ceil(801/200)=5
+    on the 801st sample), relocating every output to a new absolute
+    index with a new causal window — visible as the trace shape
+    'morphing' every few frames. The fix keys stride on (t_hi - t_lo)
+    so it's invariant under sample growth at fixed zoom."""
+    buf = _CameraBuffer(initial_capacity=2048)
+    for i in range(800):
+        buf.append(t=i * 0.025, v=float(i), frame_id=i)  # 20 s of data
+
+    # Decimate a window that fully contains the data. Use a wide
+    # window (60 s) so the visible time range exceeds the data extent
+    # — matches the user-reported "zoom all the way out" scenario.
+    t_a, v_a = buf.window_decimated(-40.0, 20.0, max_points=200)
+
+    # Add one more sample (followLive advancing by one frame).
+    buf.append(t=20.0, v=800.0, frame_id=800)
+
+    # Re-decimate with the SAME window. The outputs that were already
+    # painted should not change — adding a sample at the right edge
+    # must not alter the decimation of the earlier samples.
+    t_b, v_b = buf.window_decimated(-40.0, 20.0, max_points=200)
+    n_shared = min(len(t_a), len(t_b))
+    assert n_shared > 0
+    np.testing.assert_array_equal(t_a[:n_shared], t_b[:n_shared])
+    np.testing.assert_array_equal(v_a[:n_shared], v_b[:n_shared])
+
+
 def test_dropped_at_for_finds_dropout_under_any_metric_key():
     """dropped_at_for walks all 4 metric buffers for (side, cam) and
     returns the first dropout it finds — so the marker still surfaces

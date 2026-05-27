@@ -181,14 +181,17 @@ class _CameraBuffer:
         # at or before N) — so once a sample is appended, the output at
         # that absolute index has its final value and never changes.
         #
-        # The previous linspace-relative-to-i_lo + symmetric smoothing
-        # made every output's underlying absolute sample drift one slot
-        # left per paint AND made edge values keep re-smoothing as more
-        # post-edge samples arrived. Combined this showed as peaks
-        # morphing / sharpening as they scrolled left. With the new
-        # design the visible trace simply translates — output values
-        # are time-invariant once computed.
-        stride = max(2, -(-n_window // max_points))
+        # Stride is derived from the TIME WINDOW (× nominal 40 Hz), not
+        # from n_window. Keying on n_window meant stride crept up as
+        # samples accumulated within a fixed zoom (e.g. 24 → 25 when
+        # n_window crossed 4800 at the same zoom level), and every
+        # stride change relocated every output to a new absolute index
+        # with a new causal window — producing a visible "morph" of
+        # the trace shape each time it ticked. Time-keyed stride is
+        # invariant under data growth, so the trace stays put.
+        nominal_hz = 40.0  # SDK histogram cadence
+        expected_samples = max(1.0, (t_hi - t_lo) * nominal_hz)
+        stride = max(2, int(-(-expected_samples // max_points)))
         window = stride * 3
 
         # Stride-aligned absolute indices that fall within [i_lo, i_hi).

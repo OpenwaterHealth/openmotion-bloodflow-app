@@ -24,6 +24,11 @@ Item {
     // Back-to-live button stay enabled when the viewer is showing a
     // past scan so the user can return to the live edge in one click.
     property bool liveSourceAvailable: false
+    // Profile-HUD toggle — the checkbox is hidden in non-developer
+    // builds so clinical users never see it. The viewer reads
+    // `showProfiling` for HUD visibility.
+    property bool developerMode: false
+    property bool showProfiling: false
 
     readonly property bool _viewerOnPast: scanSource !== null
                                           && scanSource.live === false
@@ -33,6 +38,7 @@ Item {
     signal windowSecondsRequested(int s)
     signal autoScaleToggled(bool enabled)
     signal backToLiveRequested()
+    signal showProfilingToggled(bool enabled)
 
     readonly property var _displayModeOptions: [
         { value: "bfi_bvi",       label: "BFI / BVI" },
@@ -123,6 +129,18 @@ Item {
             text: "Autoscale"
             checked: toolbar.autoScale
             onToggled: toolbar.autoScaleToggled(checked)
+        }
+
+        CheckBox {
+            id: profilingCheck
+            // Dev-only — clinical users never see the profiler toggle.
+            // The viewer additionally gates HUD visibility on
+            // developerMode, so toggling this in a non-dev build (e.g.
+            // via QML inspector) still leaves the HUD off.
+            visible: toolbar.developerMode
+            text: "Profiler"
+            checked: toolbar.showProfiling
+            onToggled: toolbar.showProfilingToggled(checked)
         }
 
         Item { Layout.fillWidth: true }  // pushes everything left

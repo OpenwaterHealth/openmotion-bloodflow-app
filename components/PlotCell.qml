@@ -70,16 +70,17 @@ Item {
 
     // Render one trace inside the current Canvas context using the given
     // metric/color/yMin/yMax. Defined as a JS function on the cell so
-    // both primary and secondary draws share it.
+    // both primary and secondary draws share it. Returns the number of
+    // points actually painted so the profile HUD can sum across cells.
     function _drawTrace(ctx, metricName, color, yMinVal, yMaxVal,
                        tLo, tHi, dt, maxPts, w, h) {
-        if (!metricName || metricName.length === 0) return
+        if (!metricName || metricName.length === 0) return 0
         var pts = cell.source.points_for_window(
             cell.side, cell.camId, metricName, tLo, tHi, maxPts
         )
-        if (pts.length < 2) return
+        if (pts.length < 2) return 0
         var dy = yMaxVal - yMinVal
-        if (dy <= 0) return
+        if (dy <= 0) return 0
         ctx.beginPath()
         ctx.lineWidth = 1.5
         ctx.strokeStyle = color
@@ -93,6 +94,7 @@ Item {
             else ctx.lineTo(x, y)
         }
         ctx.stroke()
+        return pts.length
     }
 
     Rectangle {
@@ -109,6 +111,14 @@ Item {
         anchors.margins: 4
 
         onPaint: {
+            // Profile-HUD timing: only sample wall-time when the HUD is
+            // visible to keep clinical-build paint hot path identical.
+            var profOn = cell.panZoomTarget
+                         && cell.panZoomTarget.recordCellPaint
+                         && cell.panZoomTarget._hudVisible
+            var profT0 = profOn ? Date.now() : 0
+            var profPts = 0
+
             var ctx = getContext("2d")
             ctx.clearRect(0, 0, width, height)
 
@@ -124,7 +134,10 @@ Item {
                 ctx.stroke()
             }
 
-            if (!cell.source) return
+            if (!cell.source) {
+                if (profOn) cell.panZoomTarget.recordCellPaint(Date.now() - profT0, 0)
+                return
+            }
 
             // Window boundaries — followLive locks tHi to the viewer's
             // per-tick snapshot (synced across every cell); otherwise the
@@ -145,10 +158,10 @@ Item {
             // steady-state per-paint marshalling cost.
             var maxPts = Math.max(50, Math.floor(width * 0.5))
 
-            cell._drawTrace(ctx, cell.metric, cell.traceColor,
+            profPts += cell._drawTrace(ctx, cell.metric, cell.traceColor,
                             cell.yMin, cell.yMax,
                             tLo, tHi, dt, maxPts, width, height)
-            cell._drawTrace(ctx, cell.secondaryMetric, cell.secondaryColor,
+            profPts += cell._drawTrace(ctx, cell.secondaryMetric, cell.secondaryColor,
                             cell.secondaryYMin, cell.secondaryYMax,
                             tLo, tHi, dt, maxPts, width, height)
 
@@ -176,6 +189,8 @@ Item {
                 ctx.lineTo(Math.floor(crossX) + 0.5, height)
                 ctx.stroke()
             }
+
+            if (profOn) cell.panZoomTarget.recordCellPaint(Date.now() - profT0, profPts)
         }
     }
 

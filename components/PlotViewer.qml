@@ -281,8 +281,79 @@ Rectangle {
         ignoreUnknownSignals: true
         function onSamplesAppended(s, c, m, n) {
             viewer._dirty = true
+            viewer._profSamplesAccum += n
         }
     }
+
+    // ── Profile HUD state ──────────────────────────────────────────────
+    // Hidden behind developerMode && showProfiling — clinical users
+    // never see this overlay. Counters accumulate per tick; the 1 Hz
+    // _profHudTimer below converts them to display values.
+    property int _profSamplesAccum: 0        // samples since last 1Hz roll-up
+    property real _profPaintTickMs: 0.0      // last tick's dispatch duration
+    property real _profCanvasMsSum: 0.0      // current-tick canvas-ms accumulator
+    property int _profCanvasCount: 0         // # cells that reported this tick
+    property int _profPointsAccum: 0         // points painted this tick
+    // Display values — read by the HUD overlay, refreshed at 1 Hz.
+    property real profSampleRateHz: 0.0
+    property real profPaintTickMsAvg: 0.0
+    property real profCanvasMsAvg: 0.0
+    property real profCanvasMsMax: 0.0
+    property int profPointsLastTick: 0
+    property real _profHudLastWall: 0
+
+    // PlotCell calls this from its onPaint with the wall-time it took
+    // and the points-painted count. We accumulate, the 1 Hz HUD timer
+    // computes the rolling average / max.
+    function recordCellPaint(ms, points) {
+        viewer._profCanvasMsSum += ms
+        viewer._profCanvasCount += 1
+        viewer._profPointsAccum += points
+        if (ms > viewer.profCanvasMsMax) viewer.profCanvasMsMax = ms
+    }
+
+    Timer {
+        id: profHudTimer
+        interval: 1000
+        repeat: true
+        // No need to run when the HUD isn't visible — saves the per-tick
+        // EWMA + division on every clinical-user session.
+        running: viewer._hudVisible
+        triggeredOnStart: true
+        onTriggered: {
+            var now = Date.now()
+            if (viewer._profHudLastWall > 0) {
+                var dtSec = (now - viewer._profHudLastWall) * 0.001
+                if (dtSec > 0) {
+                    var instantHz = viewer._profSamplesAccum / dtSec
+                    // EWMA α=0.15 matches the legacy plot's rate display.
+                    viewer.profSampleRateHz = (viewer.profSampleRateHz === 0)
+                        ? instantHz
+                        : 0.85 * viewer.profSampleRateHz + 0.15 * instantHz
+                }
+            }
+            viewer._profSamplesAccum = 0
+            viewer._profHudLastWall = now
+            // Snapshot per-tick canvas stats then reset for the next sec.
+            if (viewer._profCanvasCount > 0) {
+                viewer.profCanvasMsAvg = viewer._profCanvasMsSum / viewer._profCanvasCount
+            }
+            viewer.profPointsLastTick = viewer._profPointsAccum
+            viewer._profCanvasMsSum = 0
+            viewer._profCanvasCount = 0
+            viewer._profPointsAccum = 0
+            viewer.profCanvasMsMax = 0
+        }
+    }
+
+    // Runtime toggle — initialized from app_config.showProfiling but
+    // flippable from the PlotToolbar's Profiler checkbox at runtime.
+    // The toolbar checkbox itself is hidden outside developer mode,
+    // and _hudVisible further gates on developerMode so the HUD can't
+    // appear in clinical builds even if showProfiling is flipped.
+    property bool showProfiling: MOTIONInterface.appConfig.showProfiling === true
+    readonly property bool _hudVisible: MOTIONInterface.appConfig.developerMode === true
+                                        && viewer.showProfiling
 
     Timer {
         id: paintThrottle
@@ -294,9 +365,16 @@ Rectangle {
         repeat: true
         onTriggered: {
             if (viewer._dirty) {
+                var t0 = viewer._hudVisible ? Date.now() : 0
                 viewer._dirty = false
                 viewer.liveEdgeSnapshot = viewer.scanSource ? viewer.scanSource.liveEdge : 0
                 viewer.paintTick++
+                if (viewer._hudVisible) {
+                    var dt = Date.now() - t0
+                    viewer.profPaintTickMsAvg = (viewer.profPaintTickMsAvg === 0)
+                        ? dt
+                        : 0.85 * viewer.profPaintTickMsAvg + 0.15 * dt
+                }
             }
         }
     }
@@ -340,6 +418,8 @@ Rectangle {
             autoScale: viewer.autoScale
             followLive: viewer.followLive
             liveSourceAvailable: MOTIONInterface.liveSourceAvailable
+            developerMode: MOTIONInterface.appConfig.developerMode === true
+            showProfiling: viewer.showProfiling
 
             onDisplayModeRequested: function(mode) {
                 viewer.displayMode = mode
@@ -368,6 +448,10 @@ Rectangle {
             onAutoScaleToggled: function(enabled) {
                 viewer.autoScale = enabled
                 console.info("[Plot] autoScale → " + enabled)
+            }
+            onShowProfilingToggled: function(enabled) {
+                viewer.showProfiling = enabled
+                console.info("[Plot] showProfiling → " + enabled)
             }
             onBackToLiveRequested: {
                 // When the viewer is on a past source, "Back to live"
@@ -561,6 +645,68 @@ Rectangle {
                         font.family: "Roboto Mono"
                     }
                 }
+            }
+        }
+    }
+
+    // ── Profile HUD overlay ────────────────────────────────────────────
+    // Top-left of the plot grid; ports the legacy EmbeddedRealtimePlot
+    // counters forward per spec §248. Visible only when both
+    // developerMode AND showProfiling are true so clinical users never
+    // see it. The values are refreshed by the 1 Hz profHudTimer above
+    // (which also gates `running` on this overlay's visibility so the
+    // EWMA + division work doesn't run in production builds).
+    Rectangle {
+        id: profileHud
+        visible: viewer._hudVisible
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.topMargin: 56
+        anchors.leftMargin: 16
+        color: theme.bgElevated
+        border.color: "#4A90E2"
+        border.width: 1
+        radius: 4
+        width: hudColumn.implicitWidth + 16
+        height: hudColumn.implicitHeight + 12
+
+        Column {
+            id: hudColumn
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.margins: 8
+            spacing: 1
+
+            Text {
+                text: "PROFILE"
+                color: "#4A90E2"
+                font.pixelSize: 11
+                font.family: "Roboto Mono"
+                font.bold: true
+            }
+            Text {
+                text: "rate    " + viewer.profSampleRateHz.toFixed(1) + " Hz"
+                color: theme.textSecondary
+                font.pixelSize: 10
+                font.family: "Roboto Mono"
+            }
+            Text {
+                text: "tick    " + viewer.profPaintTickMsAvg.toFixed(2) + " ms"
+                color: theme.textSecondary
+                font.pixelSize: 10
+                font.family: "Roboto Mono"
+            }
+            Text {
+                text: "canvas  " + viewer.profCanvasMsAvg.toFixed(2) + " ms avg"
+                color: theme.textSecondary
+                font.pixelSize: 10
+                font.family: "Roboto Mono"
+            }
+            Text {
+                text: "points  " + viewer.profPointsLastTick
+                color: theme.textSecondary
+                font.pixelSize: 10
+                font.family: "Roboto Mono"
             }
         }
     }
