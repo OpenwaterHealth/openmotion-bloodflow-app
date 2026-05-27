@@ -321,6 +321,36 @@ class ScanDataSource(QObject):
         t_arr, v_arr = buf.window_decimated(t_lo, t_hi, int(max_points))
         return [[float(t), float(v)] for t, v in zip(t_arr, v_arr)]
 
+    @pyqtSlot(str, int, str, float, result=float)
+    def value_at(self, side: str, cam_id: int, metric: str, t: float) -> float:
+        """Return the buffer's value for the sample nearest to time `t`.
+        NaN if the buffer doesn't exist, is empty, or the nearest sample
+        is itself non-finite. Used by the viewer's hover tooltip."""
+        buf = self.buffers.get((side, int(cam_id), metric))
+        if buf is None or buf.n == 0:
+            return float("nan")
+        t_slice = buf.t[: buf.n]
+        idx = int(np.searchsorted(t_slice, t, side="left"))
+        if idx >= buf.n:
+            idx = buf.n - 1
+        elif idx > 0 and abs(t_slice[idx - 1] - t) < abs(t_slice[idx] - t):
+            idx -= 1
+        v = float(buf.v[idx])
+        return v if np.isfinite(v) else float("nan")
+
+    @pyqtSlot(str, int, result=float)
+    def dropped_at_for(self, side: str, cam_id: int) -> float:
+        """Return the dropout timestamp for (side, cam_id), or NaN if the
+        camera hasn't been flagged as dropped this scan. PlotCell uses
+        this to draw a vertical bar at the dropout time. The bar is
+        per-(side, cam) so any one of its metric buffers' dropped_at
+        suffices."""
+        for metric in ("bfi", "bvi", "mean", "contrast"):
+            buf = self.buffers.get((side, int(cam_id), metric))
+            if buf is not None and buf.dropped_at is not None:
+                return float(buf.dropped_at)
+        return float("nan")
+
     @pyqtSlot(str, result="QVariantMap")
     @pyqtSlot(str, float, float, float, result="QVariantMap")
     def compute_bounds_for_metric(

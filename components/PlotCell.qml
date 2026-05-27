@@ -46,6 +46,10 @@ Item {
     // windowSeconds across all cells.
     property var panZoomTarget: null
 
+    // Crosshair: NaN means hide. The viewer broadcasts the same value
+    // to every cell so the vertical line stays synced across the grid.
+    property real cursorT: NaN
+
     AppTheme { id: theme }
 
     // ── Repaint plumbing ───────────────────────────────────────────────
@@ -59,6 +63,10 @@ Item {
     onWidthChanged: traceCanvas.requestPaint()
     onHeightChanged: traceCanvas.requestPaint()
     onSourceChanged: traceCanvas.requestPaint()
+    // Note: cursorT changes do NOT trigger a direct repaint — that
+    // would spam paints on every mouse-move event. Instead the viewer
+    // sets _dirty on cursorAt() so the next paintThrottle tick
+    // (≤ 33 ms) repaints with the new crosshair position.
 
     // Render one trace inside the current Canvas context using the given
     // metric/color/yMin/yMax. Defined as a JS function on the cell so
@@ -143,6 +151,31 @@ Item {
             cell._drawTrace(ctx, cell.secondaryMetric, cell.secondaryColor,
                             cell.secondaryYMin, cell.secondaryYMax,
                             tLo, tHi, dt, maxPts, width, height)
+
+            // Dropout marker — vertical red bar at the recorded
+            // dropout time for this (side, cam).
+            var dropT = cell.source.dropped_at_for(cell.side, cell.camId)
+            if (isFinite(dropT) && dropT >= tLo && dropT <= tHi) {
+                var dropX = ((dropT - tLo) / dt) * width
+                ctx.strokeStyle = theme.accentRed
+                ctx.lineWidth = 2
+                ctx.beginPath()
+                ctx.moveTo(Math.floor(dropX) + 0.5, 0)
+                ctx.lineTo(Math.floor(dropX) + 0.5, height)
+                ctx.stroke()
+            }
+
+            // Crosshair — vertical line at cursorT (broadcast by the
+            // viewer so every cell stays in sync on hover).
+            if (isFinite(cell.cursorT) && cell.cursorT >= tLo && cell.cursorT <= tHi) {
+                var crossX = ((cell.cursorT - tLo) / dt) * width
+                ctx.strokeStyle = theme.textTertiary
+                ctx.lineWidth = 1
+                ctx.beginPath()
+                ctx.moveTo(Math.floor(crossX) + 0.5, 0)
+                ctx.lineTo(Math.floor(crossX) + 0.5, height)
+                ctx.stroke()
+            }
         }
     }
 
@@ -188,6 +221,7 @@ Item {
         anchors.fill: parent
         acceptedButtons: Qt.LeftButton
         cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+        hoverEnabled: true
 
         // Drag snapshot — captured at press so the drag is computed
         // against a fixed origin instead of accumulating per-move
@@ -201,20 +235,41 @@ Item {
             return cell.windowStartT + cell.windowSeconds
         }
 
+        function _cursorTFromMouseX(mx) {
+            var tHiNow = panZoomArea._currentTHi()
+            var tLoNow = tHiNow - cell.windowSeconds
+            return tLoNow + (mx / cell.width) * cell.windowSeconds
+        }
+
         onPressed: function(mouse) {
             panZoomArea._dragStartX = mouse.x
             panZoomArea._dragStartWindowStartT = panZoomArea._currentTHi() - cell.windowSeconds
         }
 
         onPositionChanged: function(mouse) {
-            if (!pressed || !cell.panZoomTarget || cell.width <= 0) return
-            // Drag right = scroll back in time = windowStartT decreases.
-            var dx = mouse.x - panZoomArea._dragStartX
-            var dt = (dx / cell.width) * cell.windowSeconds
-            cell.panZoomTarget.setWindow(
-                panZoomArea._dragStartWindowStartT - dt,
-                cell.windowSeconds
-            )
+            if (pressed) {
+                if (!cell.panZoomTarget || cell.width <= 0) return
+                // Drag right = scroll back in time = windowStartT decreases.
+                var dx = mouse.x - panZoomArea._dragStartX
+                var dt = (dx / cell.width) * cell.windowSeconds
+                cell.panZoomTarget.setWindow(
+                    panZoomArea._dragStartWindowStartT - dt,
+                    cell.windowSeconds
+                )
+            } else {
+                // Hover: broadcast cursor time to the viewer.
+                if (cell.panZoomTarget && cell.width > 0)
+                    cell.panZoomTarget.cursorAt(panZoomArea._cursorTFromMouseX(mouse.x))
+            }
+        }
+
+        onEntered: {
+            if (cell.panZoomTarget && cell.width > 0)
+                cell.panZoomTarget.cursorAt(panZoomArea._cursorTFromMouseX(mouseX))
+        }
+
+        onExited: {
+            if (cell.panZoomTarget) cell.panZoomTarget.cursorAt(NaN)
         }
 
         onWheel: function(wheel) {

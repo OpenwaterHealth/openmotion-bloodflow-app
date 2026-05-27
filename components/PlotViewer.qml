@@ -132,6 +132,18 @@ Rectangle {
         viewer._dirty = true
     }
 
+    // ── Hover crosshair ────────────────────────────────────────────────
+    // Cells broadcast cursor time here via cursorAt(); cells read
+    // viewer.cursorT to draw the synced vertical line. NaN means hide.
+    property real cursorT: NaN
+
+    function cursorAt(t) {
+        viewer.cursorT = t
+        // Mark dirty so the next paintThrottle tick (≤ 33 ms) repaints
+        // every cell with the new crosshair x — no per-mousemove paints.
+        viewer._dirty = true
+    }
+
     // ── Trace color per metric ─────────────────────────────────────────
     function _traceColorForMetric(m) {
         if (m === "bfi")      return theme.accentRed
@@ -280,6 +292,7 @@ Rectangle {
                     paintTick: viewer.paintTick
                     liveEdgeSnapshot: viewer.liveEdgeSnapshot
                     panZoomTarget: viewer
+                    cursorT: viewer.cursorT
                 }
             }
         }
@@ -297,6 +310,104 @@ Rectangle {
                 color: theme.textTertiary
                 font.pixelSize: 14
                 font.family: "Roboto Mono"
+            }
+        }
+    }
+
+    // ── Hover tooltip ──────────────────────────────────────────────────
+    // Top-right floating panel: appears when cursorT is finite (hover
+    // active over any cell), lists the time + per-cell primary/secondary
+    // values at that time. Per-cell values are queried from the source
+    // via value_at() each tick — bound to paintTick so the tooltip
+    // refreshes in lockstep with the cells.
+    Rectangle {
+        id: hoverTooltip
+        visible: isFinite(viewer.cursorT) && viewer.scanSource !== null
+                  && viewer._activeCellModel.length > 0
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.topMargin: 56  // clear the toolbar
+        anchors.rightMargin: 16
+        color: theme.bgElevated
+        border.color: theme.borderSubtle
+        border.width: 1
+        radius: 4
+        width: tooltipColumn.implicitWidth + 16
+        height: tooltipColumn.implicitHeight + 12
+
+        // Force a recompute of the rows when paintTick advances. We bind
+        // to paintTick rather than cursorT so the tooltip only refreshes
+        // at the throttled tick rate, not on every mousemove.
+        property var _rows: {
+            void viewer.paintTick  // dependency
+            if (!isFinite(viewer.cursorT) || !viewer.scanSource) return []
+            var t = viewer.cursorT
+            var primMetric = viewer._displayPair.primary
+            var secMetric = viewer._displayPair.secondary
+            var primColor = viewer._traceColorForMetric(primMetric)
+            var secColor = viewer._traceColorForMetric(secMetric)
+            var rows = []
+            for (var i = 0; i < viewer._activeCellModel.length; i++) {
+                var c = viewer._activeCellModel[i]
+                var pv = viewer.scanSource.value_at(c.side, c.camId, primMetric, t)
+                var sv = viewer.scanSource.value_at(c.side, c.camId, secMetric, t)
+                rows.push({
+                    label: c.side.charAt(0).toUpperCase() + (c.camId + 1),
+                    pVal: pv, pColor: primColor,
+                    sVal: sv, sColor: secColor,
+                })
+            }
+            return rows
+        }
+
+        Column {
+            id: tooltipColumn
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.margins: 8
+            spacing: 1
+
+            Text {
+                text: {
+                    var t = viewer.cursorT
+                    if (!isFinite(t)) return ""
+                    var mins = Math.floor(t / 60)
+                    var secs = (t - mins * 60).toFixed(3)
+                    return "t = " + mins + ":" + (secs < 10 ? "0" + secs : secs) + " s"
+                }
+                color: theme.textSecondary
+                font.pixelSize: 11
+                font.family: "Roboto Mono"
+                font.bold: true
+            }
+            Repeater {
+                model: hoverTooltip._rows
+                delegate: Row {
+                    spacing: 6
+                    Text {
+                        text: modelData.label
+                        width: 30
+                        color: theme.textSecondary
+                        font.pixelSize: 10
+                        font.family: "Roboto Mono"
+                    }
+                    Text {
+                        text: isFinite(modelData.pVal) ? modelData.pVal.toFixed(2) : "—"
+                        width: 50
+                        horizontalAlignment: Text.AlignRight
+                        color: modelData.pColor
+                        font.pixelSize: 10
+                        font.family: "Roboto Mono"
+                    }
+                    Text {
+                        text: isFinite(modelData.sVal) ? modelData.sVal.toFixed(2) : "—"
+                        width: 50
+                        horizontalAlignment: Text.AlignRight
+                        color: modelData.sColor
+                        font.pixelSize: 10
+                        font.family: "Roboto Mono"
+                    }
+                }
             }
         }
     }
