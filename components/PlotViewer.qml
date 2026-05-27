@@ -84,6 +84,22 @@ Rectangle {
         return entries
     }
 
+    // ── Autoscale recompute (shared by Timer + displayMode change) ────
+    function _recomputeAutoscale() {
+        if (!viewer.scanSource) return
+        var bp = viewer.scanSource.compute_bounds_for_metric(viewer._displayPair.primary)
+        if (bp && typeof bp.yMin === "number" && typeof bp.yMax === "number") {
+            viewer.primaryYMin = bp.yMin
+            viewer.primaryYMax = bp.yMax
+        }
+        var bs = viewer.scanSource.compute_bounds_for_metric(viewer._displayPair.secondary)
+        if (bs && typeof bs.yMin === "number" && typeof bs.yMax === "number") {
+            viewer.secondaryYMin = bs.yMin
+            viewer.secondaryYMax = bs.yMax
+        }
+        viewer._dirty = true
+    }
+
     // ── DVR controls (called from PlotCell MouseArea) ─────────────────
     // Window-bounds: hard floor at 0.5 s so wheel-zoom can't collapse
     // the visible window to nothing; ceiling at 600 s to keep the
@@ -206,21 +222,10 @@ Rectangle {
         repeat: true
         triggeredOnStart: true
         onTriggered: {
-            if (!viewer.scanSource) return
             // [LAG-DIAG] Time the full autoscale tick (two metrics' worth
             // of compute_bounds_for_metric + property writes).
             var _t0 = Date.now()
-            var bp = viewer.scanSource.compute_bounds_for_metric(viewer._displayPair.primary)
-            if (bp && typeof bp.yMin === "number" && typeof bp.yMax === "number") {
-                viewer.primaryYMin = bp.yMin
-                viewer.primaryYMax = bp.yMax
-            }
-            var bs = viewer.scanSource.compute_bounds_for_metric(viewer._displayPair.secondary)
-            if (bs && typeof bs.yMin === "number" && typeof bs.yMax === "number") {
-                viewer.secondaryYMin = bs.yMin
-                viewer.secondaryYMax = bs.yMax
-            }
-            viewer._dirty = true
+            viewer._recomputeAutoscale()
             var _ms = Date.now() - _t0
             if (_ms > 15) {
                 console.warn("[LAG-DIAG] autoscale tick took " + _ms + " ms")
@@ -241,10 +246,29 @@ Rectangle {
             autoScale: viewer.autoScale
             followLive: viewer.followLive
 
-            onDisplayModeRequested: function(mode) { viewer.displayMode = mode }
-            onWindowSecondsRequested: function(s) { viewer.windowSeconds = s; viewer._dirty = true }
-            onAutoScaleToggled: function(enabled) { viewer.autoScale = enabled }
-            onBackToLiveRequested: viewer.backToLive()
+            onDisplayModeRequested: function(mode) {
+                viewer.displayMode = mode
+                console.info("[Plot] displayMode → " + mode)
+                // Force an immediate autoscale recompute so the new pair
+                // of metrics renders into a sensible y-axis right away
+                // — without this the old (BFI/BVI-fit) bounds make
+                // mean (~100) and contrast (~0.3) draw entirely
+                // off-screen until the next autoscale tick.
+                viewer._recomputeAutoscale()
+            }
+            onWindowSecondsRequested: function(s) {
+                viewer.windowSeconds = s
+                viewer._dirty = true
+                console.info("[Plot] windowSeconds → " + s + " s")
+            }
+            onAutoScaleToggled: function(enabled) {
+                viewer.autoScale = enabled
+                console.info("[Plot] autoScale → " + enabled)
+            }
+            onBackToLiveRequested: {
+                viewer.backToLive()
+                console.info("[Plot] back-to-live (followLive → true)")
+            }
         }
 
         GridLayout {
