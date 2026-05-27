@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Optional
 
 import numpy as np
-from PyQt6.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot, pyqtProperty
 
 
 _INITIAL_CAPACITY = 4096  # ≈ 100 s @ 40 Hz; doubles on overflow.
@@ -155,9 +155,19 @@ class ScanDataSource(QObject):
 
     # ── public ────────────────────────────────────────────────────────────
 
-    @property
+    @pyqtProperty(float)
     def liveEdge(self) -> float:
-        """The maximum timestamp across all buffers, or 0.0 if empty."""
+        """The maximum timestamp across all buffers, or 0.0 if empty.
+
+        Exposed as ``pyqtProperty`` (not plain ``@property``) so QML can
+        read it from JavaScript inside ``PlotCell.onPaint``. Plain Python
+        properties don't appear in PyQt6's meta-object and resolve to
+        ``undefined`` in QML, which would NaN-poison the paint math.
+
+        No notify signal: PlotCell repaints on ``samplesAppended`` (which
+        carries the dirty-buffer signal) and reads liveEdge fresh inside
+        onPaint.
+        """
         edge = 0.0
         for b in self.buffers.values():
             if b.n > 0:
