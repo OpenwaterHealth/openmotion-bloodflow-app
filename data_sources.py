@@ -249,7 +249,11 @@ class ScanDataSource(QObject):
                  track_frame_ids: bool = False) -> None:
         super().__init__(parent)
         self.plot_t0 = float(plot_t0)
-        self.live: bool = False  # LiveScanSource overrides to True
+        # Subclasses set _live in __init__ — backing store for the
+        # `live` pyqtProperty below. Must be a pyqtProperty (not a
+        # plain attribute) for QML to read it; plain Python attributes
+        # are invisible to QML and read as `undefined`.
+        self._live: bool = False
         self.buffers: dict[tuple[str, int, str], _CameraBuffer] = {}
         # Default False — production no longer uses corrected-batch
         # overwrites; saves a per-buffer frame_id dict that scales with
@@ -267,6 +271,15 @@ class ScanDataSource(QObject):
         self._flush_timer.start()
 
     # ── public ────────────────────────────────────────────────────────────
+
+    @pyqtProperty(bool, constant=True)
+    def live(self) -> bool:
+        """True for LiveScanSource, False for PastScanSource. Must be a
+        pyqtProperty (not a plain attribute) for QML to read it — plain
+        Python attributes resolve to ``undefined`` in QML, which silently
+        broke the toolbar's source-type label and the "Back to live"
+        button's variant selection (both branched on `scanSource.live`)."""
+        return self._live
 
     @pyqtProperty(float)
     def liveEdge(self) -> float:
@@ -432,7 +445,7 @@ class LiveScanSource(ScanDataSource):
                  track_frame_ids: bool = False) -> None:
         super().__init__(plot_t0=plot_t0, parent=parent,
                          track_frame_ids=track_frame_ids)
-        self.live = True
+        self._live = True
 
     def append_uncorrected(
         self,
@@ -520,7 +533,7 @@ class PastScanSource(ScanDataSource):
         parent: Optional[QObject] = None,
     ) -> None:
         super().__init__(plot_t0=0.0, parent=parent)
-        self.live = False
+        self._live = False
         self.session_id = int(session_id)
 
         for row in scan_db.iter_session_data(self.session_id):

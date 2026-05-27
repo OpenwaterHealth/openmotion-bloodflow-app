@@ -812,3 +812,104 @@ def test_compute_bounds_expands_when_lo_equals_hi():
     # When lo == hi, expand by ±0.5; with pad_frac=0 the result is [4.5, 5.5]
     assert b["yMin"] == pytest.approx(4.5)
     assert b["yMax"] == pytest.approx(5.5)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ScanDataSource.value_at (Phase 2b-ii — hover tooltip)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_value_at_returns_nearest_sample():
+    src = ScanDataSource(plot_t0=0.0)
+    buf = src.get_or_create_buffer("left", 0, "bfi")
+    for i in range(10):
+        buf.append(t=i * 0.1, v=float(i), frame_id=i)
+
+    # Exact match
+    assert src.value_at("left", 0, "bfi", 0.3) == pytest.approx(3.0)
+    # Nearest-left wins on tie-break (0.35 is equidistant; searchsorted
+    # left returns idx=4 then the elif prefers idx=3 because abs equal)
+    v = src.value_at("left", 0, "bfi", 0.35)
+    assert v in (pytest.approx(3.0), pytest.approx(4.0))
+    # Past the live edge — returns last sample
+    assert src.value_at("left", 0, "bfi", 99.0) == pytest.approx(9.0)
+    # Before the first sample — returns first sample
+    assert src.value_at("left", 0, "bfi", -1.0) == pytest.approx(0.0)
+
+
+def test_value_at_missing_buffer_returns_nan():
+    src = ScanDataSource(plot_t0=0.0)
+    assert math.isnan(src.value_at("left", 7, "bfi", 0.1))
+
+
+def test_value_at_empty_buffer_returns_nan():
+    src = ScanDataSource(plot_t0=0.0)
+    src.get_or_create_buffer("left", 0, "bfi")  # exists but n=0
+    assert math.isnan(src.value_at("left", 0, "bfi", 0.1))
+
+
+def test_value_at_nan_sample_returns_nan():
+    src = ScanDataSource(plot_t0=0.0)
+    buf = src.get_or_create_buffer("left", 0, "bfi")
+    buf.append(t=0.1, v=float("nan"), frame_id=1)
+    assert math.isnan(src.value_at("left", 0, "bfi", 0.1))
+
+
+def test_value_at_handles_searchsorted_at_buffer_end():
+    """Regression for the race-condition fix — searchsorted("left")
+    can return idx == n when t equals or exceeds every sample's
+    timestamp. Without the snapshot, a stale-n bounds check could let
+    idx-1 reach an out-of-bounds slot. We test the snapshot path
+    behaves correctly even at the boundary."""
+    src = ScanDataSource(plot_t0=0.0)
+    buf = src.get_or_create_buffer("left", 0, "bfi")
+    for i in range(5):
+        buf.append(t=float(i), v=float(i) * 2.0, frame_id=i)
+    # t equal to the last timestamp → searchsorted left returns idx=4
+    # (insert before the last). We clamp via the elif tie-break.
+    v = src.value_at("left", 0, "bfi", 4.0)
+    assert v == pytest.approx(8.0)
+    # t past every sample → searchsorted returns idx=5 (== n);
+    # the >= n clamp pulls back to last sample.
+    v = src.value_at("left", 0, "bfi", 1000.0)
+    assert v == pytest.approx(8.0)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ScanDataSource.dropped_at_for (Phase 2b-ii — dropout marker)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_dropped_at_for_returns_dropout_time():
+    """mark_dropped lives on LiveScanSource (only live streams can
+    drop mid-scan). After appending one sample to create a buffer,
+    marking that (side, cam) dropped should surface the timestamp."""
+    src = LiveScanSource(plot_t0=0.0)
+    src.append_uncorrected(side="left", cam_id=0, frame_id=1, t=0.1,
+                           bfi=4.0, bvi=2.0)
+    src.mark_dropped(side="left", cam_id=0, t=12.5)
+    assert src.dropped_at_for("left", 0) == pytest.approx(12.5)
+
+
+def test_dropped_at_for_returns_nan_when_no_dropout():
+    src = LiveScanSource(plot_t0=0.0)
+    src.append_uncorrected(side="left", cam_id=0, frame_id=1, t=0.1,
+                           bfi=4.0, bvi=2.0)
+    assert math.isnan(src.dropped_at_for("left", 0))
+
+
+def test_dropped_at_for_returns_nan_when_buffer_missing():
+    src = LiveScanSource(plot_t0=0.0)
+    # No samples appended → no buffers for (left, 7)
+    assert math.isnan(src.dropped_at_for("left", 7))
+
+
+def test_dropped_at_for_finds_dropout_under_any_metric_key():
+    """dropped_at_for walks all 4 metric buffers for (side, cam) and
+    returns the first dropout it finds — so the marker still surfaces
+    even if mean/contrast happen to be absent for early samples."""
+    src = LiveScanSource(plot_t0=0.0)
+    src.append_uncorrected(side="left", cam_id=3, frame_id=1, t=0.1,
+                           bfi=4.0, bvi=2.0)  # mean/contrast omitted
+    src.mark_dropped(side="left", cam_id=3, t=8.0)
+    assert src.dropped_at_for("left", 3) == pytest.approx(8.0)

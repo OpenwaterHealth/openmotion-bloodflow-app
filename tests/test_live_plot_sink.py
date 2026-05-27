@@ -1,3 +1,4 @@
+import math
 from types import SimpleNamespace
 
 import numpy as np
@@ -185,6 +186,134 @@ def test_final_batch_sink_skips_live_source_when_payload_empty():
     sink.consume("final", interval)
     assert src.corrected_batches == []
     assert conn.scanCorrectedBatch.calls == []
+
+
+def test_live_plot_sink_appends_side_averaged_under_cam_id_minus_1():
+    """Reduced-mode side-averaged samples (bfi_live_side / bvi_live_side
+    set by SDK's SideAveragingStage) must land in cam_id=-1 buffers,
+    one per side per non-dark frame."""
+    conn = _connector()
+    sink, src = _make_sink(conn)
+    batch = SimpleNamespace(
+        bfi_live=np.zeros((2, 2, 8), dtype=np.float32),
+        bvi_live=np.zeros((2, 2, 8), dtype=np.float32),
+        mean_dc_rt=np.zeros((2, 2, 8), dtype=np.float32),
+        contrast_sn_rt=np.zeros((2, 2, 8), dtype=np.float32),
+        temperature_c=np.full((2, 2, 8), 35.0, dtype=np.float32),
+        frame_type=np.array(["light", "light"], dtype="<U8"),
+        timestamp_s=np.array([0.5, 0.525], dtype=np.float64),
+        abs_frame_ids=np.array([100, 101], dtype=np.int64),
+        side_ids=np.array([0, 1], dtype=np.int8),
+        cam_ids=np.array([0, 0], dtype=np.int8),
+        bfi_live_side=np.array([[0.42, 0.31], [0.43, 0.32]], dtype=np.float32),
+        bvi_live_side=np.array([[5.0, 4.9], [5.1, 4.95]], dtype=np.float32),
+    )
+
+    sink.consume("live", batch)
+
+    side_avg_records = [r for r in src.appended if r["cam_id"] == -1]
+    # 2 frames × 2 sides = 4 side-avg records
+    assert len(side_avg_records) == 4
+    # First frame, left side
+    rec = next(r for r in side_avg_records if r["t"] == 0.5 and r["side"] == "left")
+    assert rec["bfi"] == pytest.approx(0.42)
+    assert rec["bvi"] == pytest.approx(5.0)
+    assert rec["frame_id"] == 100
+    assert rec["mean"] is None
+    assert rec["contrast"] is None
+    # Second frame, right side
+    rec = next(r for r in side_avg_records if r["t"] == 0.525 and r["side"] == "right")
+    assert rec["bfi"] == pytest.approx(0.32)
+    assert rec["bvi"] == pytest.approx(4.95)
+
+
+def test_live_plot_sink_side_averaged_appends_even_when_nan():
+    """Regression: the renderer skips non-finite points per-segment,
+    so dropping NaN side-avg samples here leaves the buffer empty when
+    a single camera's NaN poisons the np.mean. Append NaN samples
+    so timestamps stay aligned."""
+    conn = _connector()
+    sink, src = _make_sink(conn)
+    batch = SimpleNamespace(
+        bfi_live=np.zeros((1, 2, 8), dtype=np.float32),
+        bvi_live=np.zeros((1, 2, 8), dtype=np.float32),
+        mean_dc_rt=np.zeros((1, 2, 8), dtype=np.float32),
+        contrast_sn_rt=np.zeros((1, 2, 8), dtype=np.float32),
+        temperature_c=np.full((1, 2, 8), 35.0, dtype=np.float32),
+        frame_type=np.array(["light"], dtype="<U8"),
+        timestamp_s=np.array([0.25], dtype=np.float64),
+        abs_frame_ids=np.array([5], dtype=np.int64),
+        side_ids=np.array([0], dtype=np.int8),
+        cam_ids=np.array([0], dtype=np.int8),
+        # Left side BFI is NaN (one camera was non-finite upstream);
+        # right side is finite.
+        bfi_live_side=np.array([[float("nan"), 0.5]], dtype=np.float32),
+        bvi_live_side=np.array([[float("nan"), 5.0]], dtype=np.float32),
+    )
+
+    sink.consume("live", batch)
+
+    side_avg_records = [r for r in src.appended if r["cam_id"] == -1]
+    # Both sides appended — even the NaN one — so timestamps stay aligned.
+    assert len(side_avg_records) == 2
+    left = next(r for r in side_avg_records if r["side"] == "left")
+    assert math.isnan(left["bfi"])
+    assert math.isnan(left["bvi"])
+    right = next(r for r in side_avg_records if r["side"] == "right")
+    assert right["bfi"] == pytest.approx(0.5)
+
+
+def test_live_plot_sink_side_averaged_skipped_during_dark_frames():
+    """Dark frames don't carry meaningful per-side BFI/BVI display
+    values — the side-avg block is gated on `not is_dark` so the
+    cam_id=-1 buffer stays clean of dark-frame entries."""
+    conn = _connector()
+    sink, src = _make_sink(conn)
+    batch = SimpleNamespace(
+        bfi_live=np.zeros((1, 2, 8), dtype=np.float32),
+        bvi_live=np.zeros((1, 2, 8), dtype=np.float32),
+        mean_dc_rt=np.zeros((1, 2, 8), dtype=np.float32),
+        contrast_sn_rt=np.zeros((1, 2, 8), dtype=np.float32),
+        temperature_c=np.full((1, 2, 8), 35.0, dtype=np.float32),
+        frame_type=np.array(["dark"], dtype="<U8"),
+        timestamp_s=np.array([0.5], dtype=np.float64),
+        abs_frame_ids=np.array([1], dtype=np.int64),
+        side_ids=np.array([0], dtype=np.int8),
+        cam_ids=np.array([0], dtype=np.int8),
+        bfi_live_side=np.array([[0.42, 0.31]], dtype=np.float32),
+        bvi_live_side=np.array([[5.0, 4.9]], dtype=np.float32),
+    )
+
+    sink.consume("live", batch)
+
+    side_avg_records = [r for r in src.appended if r["cam_id"] == -1]
+    assert side_avg_records == []
+
+
+def test_live_plot_sink_no_side_averaged_appends_when_arrays_missing():
+    """When the SDK's SideAveragingStage is disabled (reduced_mode=False),
+    batches don't carry bfi_live_side / bvi_live_side. The sink must
+    not synthesize cam_id=-1 entries."""
+    conn = _connector()
+    sink, src = _make_sink(conn)
+    batch = SimpleNamespace(
+        bfi_live=np.zeros((1, 2, 8), dtype=np.float32),
+        bvi_live=np.zeros((1, 2, 8), dtype=np.float32),
+        mean_dc_rt=np.zeros((1, 2, 8), dtype=np.float32),
+        contrast_sn_rt=np.zeros((1, 2, 8), dtype=np.float32),
+        temperature_c=np.full((1, 2, 8), 35.0, dtype=np.float32),
+        frame_type=np.array(["light"], dtype="<U8"),
+        timestamp_s=np.array([0.5], dtype=np.float64),
+        abs_frame_ids=np.array([1], dtype=np.int64),
+        side_ids=np.array([0], dtype=np.int8),
+        cam_ids=np.array([0], dtype=np.int8),
+        # No bfi_live_side / bvi_live_side attributes at all.
+    )
+
+    sink.consume("live", batch)
+
+    side_avg_records = [r for r in src.appended if r["cam_id"] == -1]
+    assert side_avg_records == []
 
 
 def test_live_plot_sink_appends_to_live_source():

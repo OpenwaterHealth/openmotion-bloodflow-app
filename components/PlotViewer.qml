@@ -415,8 +415,14 @@ Rectangle {
                 var c = viewer._activeCellModel[i]
                 var pv = viewer.scanSource.value_at(c.side, c.camId, primMetric, t)
                 var sv = viewer.scanSource.value_at(c.side, c.camId, secMetric, t)
+                // Reduced mode uses camId=-1 for the side-averaged stream;
+                // (c.camId + 1) would render "L0"/"R0" instead of the
+                // cell's own "LEFT AVG" / "RIGHT AVG" label.
+                var label = c.camId === -1
+                    ? c.side.charAt(0).toUpperCase() + " AVG"
+                    : c.side.charAt(0).toUpperCase() + (c.camId + 1)
                 rows.push({
-                    label: c.side.charAt(0).toUpperCase() + (c.camId + 1),
+                    label: label,
                     pVal: pv, pColor: primColor,
                     sVal: sv, sColor: secColor,
                 })
