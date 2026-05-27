@@ -42,6 +42,7 @@ from motion_config import (
     load_tec_params,
 )
 from utils.resource_path import resource_path
+from data_sources import LiveScanSource, ScanDataSource
 import numpy as np
 import pandas as pd
 
@@ -444,6 +445,9 @@ class MOTIONConnector(QObject):
     vizFinished = pyqtSignal()
     visualizingChanged = pyqtSignal(bool)
 
+    # Real-time plot viewer source — see data_sources.py.
+    currentScanSourceChanged = pyqtSignal()
+
     configProgress = pyqtSignal(int)
     configLog = pyqtSignal(str)
     configFinished = pyqtSignal(bool, str)
@@ -612,6 +616,8 @@ class MOTIONConnector(QObject):
         self._last_fan_status: dict[str, bool | None] = {"left": None, "right": None}
         # Track console connection time for safety grace period (issue #107 follow-up)
         self._console_connected_at: float | None = None
+        # Real-time plot viewer source — assigned at scan start by startCapture.
+        self._current_scan_source: ScanDataSource | None = None
 
         self.laser_params = load_laser_params(config_dir, force_fault=self._force_laser_fail)
         self._tec_voltage_default = load_tec_params(config_dir)
@@ -1670,6 +1676,20 @@ class MOTIONConnector(QObject):
             except Exception as e:
                 logger.error(f"Failed to update scan notes on disk: {e}")
 
+    @pyqtProperty(QObject, notify=currentScanSourceChanged)
+    def currentScanSource(self) -> ScanDataSource | None:
+        """Current ScanDataSource — fresh LiveScanSource at each scan start.
+        Phase 1 has no QML consumer; Phase 2's PlotViewer will bind to this."""
+        return self._current_scan_source
+
+    def _set_current_scan_source(self, source: ScanDataSource | None) -> None:
+        """Replace the active source. Dedupes identical-instance assignments
+        so the notify signal only fires on real transitions."""
+        if source is self._current_scan_source:
+            return
+        self._current_scan_source = source
+        self.currentScanSourceChanged.emit()
+
     @pyqtSlot(str, result=int)
     @pyqtSlot(str, str, result=int)
     @pyqtSlot(str, str, int, result=int)
@@ -1805,6 +1825,12 @@ class MOTIONConnector(QObject):
         # after a mid-scan unplug/replug, the two sides' clocks diverge and the
         # QML plot's shared `latestTimestamp` prunes the lagging side to empty.
         plot_t0 = time.monotonic()
+        # Real-time plot viewer: construct a fresh LiveScanSource for this scan
+        # and install it on the connector. Phase 1 has no QML consumer yet —
+        # the sinks (added in subsequent tasks) accumulate samples here in
+        # parallel with the legacy Qt signal emissions.
+        live_source = LiveScanSource(plot_t0=plot_t0, parent=self)
+        self._set_current_scan_source(live_source)
         self._capture_left_path = ""
         self._capture_right_path = ""
         self._start_runlog(subject_id=subject_id)

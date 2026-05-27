@@ -464,3 +464,73 @@ def test_past_scan_source_skips_null_metric_values(tmp_path):
     assert ("left", 0, "bvi") not in src.buffers
     assert ("left", 0, "mean") not in src.buffers
     assert ("left", 0, "contrast") not in src.buffers
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# currentScanSource holder pattern — verified via a parallel mini-class
+# (MOTIONConnector uses the same pattern; see motion_connector.py)
+# ─────────────────────────────────────────────────────────────────────────────
+
+from PyQt6.QtCore import QObject, pyqtSignal
+from data_sources import LiveScanSource, ScanDataSource
+
+
+def _make_holder():
+    """Returns a fresh QObject with the same currentScanSource surface as
+    MOTIONConnector. Kept in-test rather than exported so production code
+    doesn't grow a separate abstraction layer just for testability."""
+
+    class _ScanSourceHolder(QObject):
+        currentScanSourceChanged = pyqtSignal()
+
+        def __init__(self):
+            super().__init__()
+            self._current_scan_source: ScanDataSource | None = None
+
+        @property
+        def currentScanSource(self):
+            return self._current_scan_source
+
+        def _set_current_scan_source(self, source):
+            if source is self._current_scan_source:
+                return
+            self._current_scan_source = source
+            self.currentScanSourceChanged.emit()
+
+    return _ScanSourceHolder()
+
+
+def test_current_scan_source_default_is_none():
+    holder = _make_holder()
+    assert holder.currentScanSource is None
+
+
+def test_set_current_scan_source_emits_notify():
+    holder = _make_holder()
+    received: list = []
+    holder.currentScanSourceChanged.connect(
+        lambda: received.append(holder.currentScanSource)
+    )
+
+    src1 = LiveScanSource(plot_t0=0.0)
+    holder._set_current_scan_source(src1)
+    assert holder.currentScanSource is src1
+    assert received == [src1]
+
+    src2 = LiveScanSource(plot_t0=10.0)
+    holder._set_current_scan_source(src2)
+    assert holder.currentScanSource is src2
+    assert received == [src1, src2]
+
+
+def test_set_current_scan_source_dedupes_same_instance():
+    holder = _make_holder()
+    src = LiveScanSource(plot_t0=0.0)
+    received: list = []
+    holder.currentScanSourceChanged.connect(
+        lambda: received.append(holder.currentScanSource)
+    )
+
+    holder._set_current_scan_source(src)
+    holder._set_current_scan_source(src)  # no-op — same instance
+    assert received == [src]
