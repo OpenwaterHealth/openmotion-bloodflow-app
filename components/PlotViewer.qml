@@ -95,8 +95,11 @@ Rectangle {
         // Capture the currently-visible window start so pan/zoom from
         // followLive transitions smoothly (no visual jump). After this
         // the caller mutates windowStartT/windowSeconds freely.
-        if (viewer.followLive && viewer.scanSource) {
-            viewer.windowStartT = Math.max(0, viewer.scanSource.liveEdge - viewer.windowSeconds)
+        if (viewer.followLive) {
+            // Use the snapshot (matches what's actually drawn) rather
+            // than re-reading source.liveEdge — avoids a one-frame jump
+            // at the moment of pan/zoom on a fast source.
+            viewer.windowStartT = Math.max(0, viewer.liveEdgeSnapshot - viewer.windowSeconds)
         }
         viewer.followLive = false
     }
@@ -140,6 +143,12 @@ Rectangle {
     property int paintTick: 0
     property bool _dirty: true   // start true so cells paint at least once
 
+    // Snapshot of source.liveEdge captured once per paintTick. All cells
+    // read this (not source.liveEdge directly) so their windows stay
+    // perfectly synced even when individual cell paints land at slightly
+    // different wall-clock times under load.
+    property real liveEdgeSnapshot: 0.0
+
     Connections {
         target: viewer.scanSource
         ignoreUnknownSignals: true
@@ -156,6 +165,7 @@ Rectangle {
         onTriggered: {
             if (viewer._dirty) {
                 viewer._dirty = false
+                viewer.liveEdgeSnapshot = viewer.scanSource ? viewer.scanSource.liveEdge : 0
                 viewer.paintTick++
             }
         }
@@ -163,7 +173,10 @@ Rectangle {
 
     // Source change forces an immediate paint without waiting for the
     // first samplesAppended.
-    onScanSourceChanged: viewer._dirty = true
+    onScanSourceChanged: {
+        viewer.liveEdgeSnapshot = viewer.scanSource ? viewer.scanSource.liveEdge : 0
+        viewer._dirty = true
+    }
 
     // Autoscale tick — 1 Hz. Computes bounds for both metrics in the
     // current display pair and pushes them into the viewer's per-metric
@@ -239,6 +252,7 @@ Rectangle {
                     secondaryYMax: viewer.secondaryYMax
                     secondaryColor: viewer._traceColorForMetric(viewer._displayPair.secondary)
                     paintTick: viewer.paintTick
+                    liveEdgeSnapshot: viewer.liveEdgeSnapshot
                     panZoomTarget: viewer
                 }
             }

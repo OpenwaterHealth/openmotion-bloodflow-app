@@ -14,11 +14,13 @@ Item {
     property int    camId: 0
     property real   windowSeconds: 15
 
-    // Time-axis state — when followLive=true, the cell tracks
-    // source.liveEdge for the window's right edge. When false, the
-    // window is pinned at [windowStartT, windowStartT + windowSeconds].
+    // Time-axis state — when followLive=true, the cell tracks the
+    // viewer's per-tick liveEdge snapshot (NOT source.liveEdge directly,
+    // so every cell sees the same value for a given paintTick). When
+    // false, the window is pinned at [windowStartT, windowStartT + windowSeconds].
     property bool followLive: true
     property real windowStartT: 0.0
+    property real liveEdgeSnapshot: 0.0
 
     // Primary trace
     property string metric: "bfi"
@@ -116,12 +118,12 @@ Item {
 
             if (!cell.source) return
 
-            // Window boundaries — followLive locks tHi to source.liveEdge
-            // (live edge advancing); otherwise the window stays pinned
-            // at the user-set [windowStartT, windowStartT + windowSeconds].
-            // liveEdge is read fresh each paint — it has no notify signal.
+            // Window boundaries — followLive locks tHi to the viewer's
+            // per-tick snapshot (synced across every cell); otherwise the
+            // window stays pinned at the user-set
+            // [windowStartT, windowStartT + windowSeconds].
             var tHi = cell.followLive
-                ? cell.source.liveEdge
+                ? cell.liveEdgeSnapshot
                 : cell.windowStartT + cell.windowSeconds
             var tLo = tHi - cell.windowSeconds
             var dt = tHi - tLo
@@ -189,7 +191,7 @@ Item {
 
         function _currentTHi() {
             if (cell.followLive)
-                return cell.source ? cell.source.liveEdge : 0
+                return cell.liveEdgeSnapshot
             return cell.windowStartT + cell.windowSeconds
         }
 
