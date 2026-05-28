@@ -24,6 +24,7 @@ Item {
 
     function open() {
         refreshScans()
+        console.warn("[History] opened — " + scans.length + " scan(s) listed")
         root.visible = true
     }
     function close() {
@@ -100,7 +101,8 @@ Item {
             Text { anchors.centerIn: parent; text: "✕"; color: theme.textPrimary; font.pixelSize: 13 }
             MouseArea {
                 id: xArea; anchors.fill: parent; hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor; onClicked: root.close()
+                cursorShape: Qt.PointingHandCursor
+                onClicked: { console.warn("[History] close (✕) clicked"); root.close() }
             }
         }
 
@@ -135,7 +137,10 @@ Item {
                         color: parent.hovered ? theme.accentBlue : theme.bgInput
                         border.color: parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
                     }
-                    onClicked: Qt.openUrlExternally("file:///" + MOTIONInterface.directory)
+                    onClicked: {
+                        console.warn("[History] Open Folder clicked → " + MOTIONInterface.directory)
+                        Qt.openUrlExternally("file:///" + MOTIONInterface.directory)
+                    }
                 }
 
                 Button {
@@ -151,7 +156,10 @@ Item {
                         color: parent.hovered ? theme.accentBlue : theme.bgInput
                         border.color: parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
                     }
-                    onClicked: refreshScans()
+                    onClicked: {
+                        console.warn("[History] Refresh clicked")
+                        refreshScans()
+                    }
                 }
             }
 
@@ -228,6 +236,7 @@ Item {
                     }
                     onCurrentIndexChanged: {
                         if (currentIndex >= 0 && currentIndex < scans.length) {
+                            console.warn("[History] scan selected [" + currentIndex + "] " + scans[currentIndex])
                             try { selected = MOTIONInterface.get_scan_details(scans[currentIndex]) || {} }
                             catch (e) { selected = {} }
                         } else { selected = {} }
@@ -307,6 +316,7 @@ Item {
                                 border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
                             }
                             onClicked: {
+                                console.warn("[History] Visualize BFI/BVI (legacy) clicked → " + (scans[scanPicker.currentIndex] || "?"))
                                 root.visualizing = true
                                 MOTIONInterface.visualize_bloodflow(selected.leftPath || "", selected.rightPath || "", 0.0, 0.0, false)
                             }
@@ -329,6 +339,7 @@ Item {
                                 border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
                             }
                             onClicked: {
+                                console.warn("[History] Visualize Contrast/Mean (legacy) clicked → " + (scans[scanPicker.currentIndex] || "?"))
                                 root.visualizing = true
                                 MOTIONInterface.visualize_bloodflow(selected.leftPath || "", selected.rightPath || "", 0.0, 0.0, true)
                             }
@@ -350,6 +361,7 @@ Item {
                                 border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
                             }
                             onClicked: {
+                                console.warn("[History] Visualize BFI/BVI clicked → " + (selected.correctedPath || "?"))
                                 root.visualizing = true
                                 MOTIONInterface.visualize_corrected(selected.correctedPath || "")
                             }
@@ -372,6 +384,7 @@ Item {
                                 border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
                             }
                             onClicked: {
+                                console.warn("[History] Visualize Contrast/Mean clicked → " + (selected.correctedPath || "?"))
                                 root.visualizing = true
                                 MOTIONInterface.visualize_corrected_signal(selected.correctedPath || "")
                             }
@@ -399,6 +412,7 @@ Item {
                                 border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
                             }
                             onClicked: {
+                                console.warn("[History] View in plot → clicked → " + (scans[scanPicker.currentIndex] || "?"))
                                 MOTIONInterface.loadPastScan(scans[scanPicker.currentIndex] || "")
                                 root.close()
                             }
