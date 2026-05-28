@@ -2092,6 +2092,14 @@ class MOTIONConnector(QObject):
         )
 
         started = self._interface.start_scan(req)
+        if started:
+            # Bind the live source's DB tail to THIS scan's session row by its
+            # exact label (set synchronously inside start_scan), so a later
+            # pan-into-past resolves the right session instead of guessing the
+            # newest one.
+            label = getattr(self._scan_workflow, "current_scan_label", None)
+            if label:
+                live_source.set_scan_label(label)
         if not started:
             self._capture_running = False
             self._stop_runlog()

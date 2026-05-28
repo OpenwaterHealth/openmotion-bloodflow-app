@@ -1198,6 +1198,54 @@ def test_live_scan_source_db_ready_resolve_path_no_nameerror(tmp_path):
     assert src._db_session_id == sid
 
 
+def test_live_scan_source_resolves_session_by_label_not_newest(tmp_path):
+    """With a scan label bound, the DB tail resolves THIS scan's session row
+    by exact label — even when a NEWER (other) session exists. MAX(id) alone
+    would wrongly pick the newer one."""
+    from omotion.ScanDatabase import ScanDatabase
+    import time as _t
+    db_path = str(tmp_path / "scan.db")
+    db = ScanDatabase(db_path=db_path)
+    mine = db.create_session(session_label="20260101_000000_subjA",
+                             session_start=_t.time(), session_notes=None,
+                             session_meta={})
+    # A newer, unrelated session (higher id, later start).
+    db.create_session(session_label="20260101_000500_subjB",
+                      session_start=_t.time() + 5, session_notes=None,
+                      session_meta={})
+    db.close()
+
+    src = LiveScanSource(plot_t0=0.0, scan_db_path=db_path)
+    src.set_scan_label("20260101_000000_subjA")
+    assert src._db_ready() is True
+    assert src._db_session_id == mine  # the labelled one, not the newest
+
+
+def test_live_scan_source_soft_retry_when_session_not_yet_present(tmp_path):
+    """A not-yet-visible session row is a SOFT miss: _db_ready returns False
+    without permanently disabling the tail, and a later call (once the row
+    exists) succeeds. Guards against the old one-failure permanent disable."""
+    from omotion.ScanDatabase import ScanDatabase
+    import time as _t
+    db_path = str(tmp_path / "scan.db")
+    ScanDatabase(db_path=db_path).close()  # create schema, no sessions yet
+
+    src = LiveScanSource(plot_t0=0.0, scan_db_path=db_path)
+    src.set_scan_label("20260101_000000_subjA")
+    assert src._db_ready() is False          # session row not there yet
+    assert src._db_unavailable is False      # NOT permanently disabled
+
+    # The session appears (as it would at scan start).
+    db = ScanDatabase(db_path=db_path)
+    sid = db.create_session(session_label="20260101_000000_subjA",
+                            session_start=_t.time(), session_notes=None,
+                            session_meta={})
+    db.close()
+
+    assert src._db_ready() is True           # retry now resolves it
+    assert src._db_session_id == sid
+
+
 def test_live_scan_source_db_tail_disabled_without_path():
     """No scan_db_path → DB tail permanently unavailable; pan-into-past
     returns empty rather than erroring."""

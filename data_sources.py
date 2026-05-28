@@ -513,46 +513,87 @@ class LiveScanSource(ScanDataSource):
         self._scan_db_path = scan_db_path
         self._db = None                       # omotion.ScanDatabase read handle
         self._db_session_id: Optional[int] = None
-        self._db_unavailable = False          # set True after a failed resolve
+        self._db_unavailable = False          # set True only on HARD failure
+        # Exact session label for THIS scan (f"{scan_id}_{subject_id}"), set
+        # by the connector right after start_scan via set_scan_label. Lets
+        # the DB tail bind to this scan's session row by label instead of
+        # guessing the newest session (which could be another scan's).
+        self._scan_label: Optional[str] = None
         self._db_window_buffers: dict = {}     # transient (side,cam,metric)->buffer
         self._db_window_lo = float("inf")     # loaded range, exclusive sentinel
         self._db_window_hi = float("-inf")
 
+    def set_scan_label(self, label: Optional[str]) -> None:
+        """Bind this live source to a specific scan-DB session by label
+        (``f"{scan_id}_{subject_id}"``). Called once, right after the scan
+        starts; the DB tail resolves the session_id from it on first use."""
+        if label:
+            self._scan_label = str(label)
+
     # ── DB tail (lazy) ──────────────────────────────────────────────────────
 
     def _db_ready(self) -> bool:
-        """Resolve the read-only DB handle + this live scan's session_id
-        on first use. The live scan is always the newest session row, so
-        we resolve by MAX(id). Only ever called after the in-memory
-        buffer has ring-trimmed (>30 min in), by which point the session
-        row exists. Returns False (permanently, after one failure) if the
-        DB is unavailable — the source then behaves as in-memory-only."""
+        """Resolve the read-only DB handle + this live scan's session_id on
+        first use. Only ever called after the in-memory buffer has ring-
+        trimmed, by which point the session row exists.
+
+        Binds to THIS scan's session by its exact label (set via
+        set_scan_label) so a concurrent/older scan's session is never picked;
+        falls back to the newest session only when no label was provided
+        (older callers). Permanent disable (_db_unavailable) is reserved for
+        HARD failures — no DB path, or an exception opening it. A merely
+        not-yet-visible session row is a SOFT miss: returns False without
+        disabling so a later paint retries (the row is created at scan start,
+        so this should essentially never persist)."""
         if self._db_unavailable:
             return False
         if self._db is not None and self._db_session_id is not None:
             return True
         if not self._scan_db_path:
-            self._db_unavailable = True
+            self._db_unavailable = True  # hard: no path → never works
             return False
         try:
-            from omotion.ScanDatabase import ScanDatabase
-            self._db = ScanDatabase(db_path=self._scan_db_path)
-            row = next(
-                self._db._connection().execute(
-                    "SELECT id FROM sessions ORDER BY id DESC LIMIT 1"
-                ),
-                None,
-            )
-            if row is None:
-                self._db_unavailable = True
+            if self._db is None:
+                from omotion.ScanDatabase import ScanDatabase
+                self._db = ScanDatabase(db_path=self._scan_db_path)
+            sid = self._resolve_session_id()
+            if sid is None:
+                # Soft miss — keep _db open and retry on a later paint.
                 return False
-            self._db_session_id = int(row[0])
-            logger.info("LiveScanSource: DB tail engaged (session_id=%d)", self._db_session_id)
+            self._db_session_id = sid
+            logger.info(
+                "LiveScanSource: DB tail engaged (session_id=%d, label=%r)",
+                sid, self._scan_label,
+            )
             return True
         except Exception:
             logger.exception("LiveScanSource: DB tail unavailable")
-            self._db_unavailable = True
+            self._db_unavailable = True  # hard failure
             return False
+
+    def _resolve_session_id(self) -> Optional[int]:
+        """Return this scan's session_id, or None if not yet resolvable.
+
+        Prefers an exact label match (this scan's session row); falls back to
+        the newest session when no label was bound. Raises only on a real DB
+        error (handled by _db_ready)."""
+        conn = self._db._connection()
+        if self._scan_label:
+            row = next(
+                conn.execute(
+                    "SELECT id FROM sessions WHERE session_label = ? "
+                    "ORDER BY session_start DESC, id DESC LIMIT 1",
+                    (self._scan_label,),
+                ),
+                None,
+            )
+            return int(row[0]) if row is not None else None
+        # No label bound (older callers): newest session is this live scan.
+        row = next(
+            conn.execute("SELECT id FROM sessions ORDER BY id DESC LIMIT 1"),
+            None,
+        )
+        return int(row[0]) if row is not None else None
 
     def _ensure_db_window(self, t_lo: float, t_hi: float) -> None:
         """Materialize session_data rows for [t_lo, t_hi] (padded) into
