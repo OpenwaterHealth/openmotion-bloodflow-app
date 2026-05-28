@@ -548,19 +548,22 @@ class PastScanSource(ScanDataSource):
         self._live = False
         self.session_id = int(session_id)
 
-        # The SDK currently writes only side-aggregated CORRECTED-FRAME
-        # placeholders into session_data: cam_id=-1, side=0 (left
-        # sentinel), bfi/bvi=NULL, mean/contrast=values. So this loop
-        # populates (left, -1, mean) and (left, -1, contrast). Per-cam
-        # data isn't recoverable here (the spec's "PR 3 will carry per-
-        # cam data" hasn't landed). BFI/BVI come from corrected_csv_path
-        # below.
+        # session_data carries either:
+        #   - Per-cam BFI/BVI rows from the SDK's "live" channel sink
+        #     (cam_id 0..7, side 0/1, bfi+bvi+mean+contrast) — Phase 1
+        #     and newer scans. The loop below buckets these directly
+        #     into the per-cam (side, cam_id, metric) buffers.
+        #   - Side-aggregated corrected-frame placeholder rows
+        #     (cam_id=-1, side=0, mean+contrast only) — bucketed into
+        #     (left, -1, mean) and (left, -1, contrast).
+        # Older scans recorded before the live-channel write landed
+        # have ONLY the placeholder rows; CSV fallback below picks
+        # those up for per-cam display.
+        has_per_cam_bfi = False
         for row in scan_db.iter_session_data(self.session_id):
             side_int = int(row["side"])
             side = _SIDE_INT_TO_STR.get(side_int)
             if side is None:
-                # Unknown side encoding — silently skip rather than crash on
-                # legacy / corrupted data; the load is best-effort.
                 continue
             cam_id = int(row["cam_id"])
             frame_id = int(row["frame_id"])
@@ -569,16 +572,15 @@ class PastScanSource(ScanDataSource):
                 value = row.get(metric)
                 if value is None:
                     continue
+                if cam_id >= 0 and metric in ("bfi", "bvi"):
+                    has_per_cam_bfi = True
                 buf = self.get_or_create_buffer(side, cam_id, metric)
                 buf.append(t=t, v=float(value), frame_id=frame_id)
 
-        # Corrected CSV: columns frame_id, timestamp_s, bfi_left, bfi_right,
-        # bvi_left, bvi_right — side-averaged BFI/BVI per row. Populates
-        # (left, -1, bfi/bvi) and (right, -1, bfi/bvi) so reduced-mode
-        # replay (which uses cam_id=-1 cells) can render the recorded
-        # blood-flow traces. Empty cells (missing values written as ',,')
-        # are skipped per side.
-        if corrected_csv_path:
+        # CSV fallback — load only when the DB didn't already carry per-cam
+        # BFI/BVI. Pre-Phase-1 scans land here. CsvSink writes this CSV
+        # unconditionally for every scan (not gated by writeRawCsv).
+        if not has_per_cam_bfi and corrected_csv_path:
             self._load_corrected_csv(corrected_csv_path)
 
     def _load_corrected_csv(self, csv_path: str) -> None:
