@@ -1813,10 +1813,17 @@ class MOTIONConnector(QObject):
             n_buffers = len(past.buffers)
             n_samples = sum(b.n for b in past.buffers.values())
             sample_keys = sorted(past.buffers.keys())[:8]
+            # Detect which source actually populated per-cam BFI: if
+            # any (side, cam_id != -1, bfi) buffer exists, the DB was
+            # sufficient and the CSV fallback was skipped.
+            db_had_per_cam = any(
+                k[1] >= 0 and k[2] == "bfi" for k in past.buffers
+            )
             logger.info(
-                "[Plot] loaded past scan %r (session_id=%d) csv=%s: "
+                "[Plot] loaded past scan %r (session_id=%d) source=%s: "
                 "buffers=%d samples=%d liveEdge=%.3f sample_keys=%s",
-                session_label, session_id, bool(corrected_csv),
+                session_label, session_id,
+                "db" if db_had_per_cam else ("csv" if corrected_csv else "db-only-sentinel"),
                 n_buffers, n_samples, past.liveEdge, sample_keys,
             )
         except Exception:
