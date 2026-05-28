@@ -110,10 +110,11 @@ def _load_app_config() -> dict:
         # for external analysis tools.
         "writeCorrectedCsv": False,
         # Seconds of live data held in memory per plot buffer before the
-        # oldest half is ring-trimmed (older data then lazy-loads from the
-        # scan DB on pan-into-past). Default 30 min. Lower it (e.g. 60) to
-        # test the DB lazy-load without a long scan.
-        "liveCacheMaxSeconds": 1800,
+        # oldest half is ring-trimmed; older data then lazy-loads from the
+        # scan DB on pan-into-past. 60 s keeps memory tiny (~1 MB vs ~37 MB
+        # at 30 min) and leans on the verified DB tail for deep history.
+        # Raise it if synchronous DB queries on deep pan-back ever stutter.
+        "liveCacheMaxSeconds": 60,
         "autoScale": False,
         "autoScalePerPlot": False,
         "reducedMode": False,
