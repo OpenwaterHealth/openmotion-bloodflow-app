@@ -109,6 +109,11 @@ def _load_app_config() -> dict:
         # read from there). Default off; set true to keep exporting it
         # for external analysis tools.
         "writeCorrectedCsv": False,
+        # Seconds of live data held in memory per plot buffer before the
+        # oldest half is ring-trimmed (older data then lazy-loads from the
+        # scan DB on pan-into-past). Default 30 min. Lower it (e.g. 60) to
+        # test the DB lazy-load without a long scan.
+        "liveCacheMaxSeconds": 1800,
         "autoScale": False,
         "autoScalePerPlot": False,
         "reducedMode": False,

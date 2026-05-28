@@ -38,6 +38,24 @@ def test_camera_buffer_append_grows_high_water_mark():
     assert buf.frame_id[1] == 11
 
 
+def test_camera_buffer_small_max_capacity_ring_trims():
+    """A small max_capacity (test/debug live cache) ring-trims the
+    oldest half and flags ring_trimmed once it fills — the trigger for
+    the LiveScanSource DB tail."""
+    buf = _CameraBuffer(max_capacity=10)
+    for i in range(10):
+        buf.append(t=float(i), v=float(i), frame_id=i)
+    assert buf.n == 10
+    assert not buf.ring_trimmed
+    # 11th append fills past cap → ring-trim drops oldest half.
+    buf.append(t=10.0, v=10.0, frame_id=10)
+    assert buf.ring_trimmed
+    assert buf.n == 6  # kept most-recent 5 + the new one
+    # Oldest retained sample is t=5 (0..4 dropped).
+    assert float(buf.t[0]) == 5.0
+    assert float(buf.t[buf.n - 1]) == 10.0
+
+
 def test_camera_buffer_doubles_capacity_on_overflow():
     buf = _CameraBuffer(initial_capacity=2)
     for i in range(5):

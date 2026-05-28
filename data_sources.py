@@ -50,13 +50,22 @@ class _CameraBuffer:
     """
 
     __slots__ = ("t", "v", "frame_id", "n", "_frame_id_to_index", "dropped_at",
-                 "ring_trimmed")
+                 "ring_trimmed", "_max_capacity")
 
     def __init__(
         self,
-        initial_capacity: int = _INITIAL_CAPACITY,
+        initial_capacity: Optional[int] = None,
         track_frame_ids: bool = False,
+        max_capacity: int = _MAX_CAPACITY,
     ) -> None:
+        # Ring-trim threshold: when the buffer fills to max_capacity, the
+        # oldest half is dropped. Default ~30 min @ 40 Hz; the live source
+        # can pass a smaller value (e.g. for testing the DB lazy-load
+        # without waiting 30 min). PastScanSource / the DB window keep the
+        # large default so they never trim during a bulk load.
+        self._max_capacity = max(2, int(max_capacity))
+        if initial_capacity is None:
+            initial_capacity = self._max_capacity
         self.t = np.empty(initial_capacity, dtype=np.float64)
         self.v = np.empty(initial_capacity, dtype=np.float32)
         self.frame_id = np.empty(initial_capacity, dtype=np.int64)
@@ -72,10 +81,10 @@ class _CameraBuffer:
         self.ring_trimmed: bool = False
 
     def _grow(self) -> None:
-        """Double the capacity of all three parallel arrays atomically.
-        All three must always stay the same length — this method is the
-        single chokepoint that enforces that invariant."""
-        new_cap = self.t.shape[0] * 2
+        """Double the capacity of all three parallel arrays atomically,
+        capped at max_capacity. All three must always stay the same
+        length — this method is the single chokepoint for that invariant."""
+        new_cap = min(self.t.shape[0] * 2, self._max_capacity)
         self.t = np.resize(self.t, new_cap)
         self.v = np.resize(self.v, new_cap)
         self.frame_id = np.resize(self.frame_id, new_cap)
@@ -83,11 +92,14 @@ class _CameraBuffer:
     def _ring_trim(self) -> None:
         """At-cap: drop the oldest half of the buffer in-place so new
         appends keep landing at index n without unbounded growth.
-        Called when capacity has already reached _MAX_CAPACITY."""
-        half = _MAX_CAPACITY // 2
-        self.t[:half] = self.t[half:]
-        self.v[:half] = self.v[half:]
-        self.frame_id[:half] = self.frame_id[half:]
+        Called when capacity has already reached max_capacity."""
+        half = self._max_capacity // 2
+        # Keep the most recent `half` samples (parity-safe — works for
+        # odd max_capacity too, e.g. a test-configured small cache).
+        keep_from = self.n - half
+        self.t[:half] = self.t[keep_from:self.n]
+        self.v[:half] = self.v[keep_from:self.n]
+        self.frame_id[:half] = self.frame_id[keep_from:self.n]
         self.n = half
         self.ring_trimmed = True
         # Frame-id lookup positions shift after the trim; safest to
@@ -97,9 +109,9 @@ class _CameraBuffer:
 
     def append(self, t: float, v: float, frame_id: int) -> None:
         """Append one sample. Grows capacity (doubling) on overflow up
-        to _MAX_CAPACITY; above that, ring-trims the oldest half."""
+        to max_capacity; at the cap, ring-trims the oldest half."""
         if self.n >= self.t.shape[0]:
-            if self.t.shape[0] >= _MAX_CAPACITY:
+            if self.t.shape[0] >= self._max_capacity:
                 self._ring_trim()
             else:
                 self._grow()
@@ -264,7 +276,8 @@ class ScanDataSource(QObject):
     samplesAppended = pyqtSignal(str, int, str, int)
 
     def __init__(self, plot_t0: float, parent: Optional[QObject] = None,
-                 track_frame_ids: bool = False) -> None:
+                 track_frame_ids: bool = False,
+                 buffer_max_capacity: int = _MAX_CAPACITY) -> None:
         super().__init__(parent)
         self.plot_t0 = float(plot_t0)
         # Subclasses set _live in __init__ — backing store for the
@@ -277,6 +290,10 @@ class ScanDataSource(QObject):
         # overwrites; saves a per-buffer frame_id dict that scales with
         # scan duration. Tests opt in via the constructor flag.
         self._track_frame_ids = track_frame_ids
+        # Ring-trim threshold for buffers this source creates. Live
+        # sources can shrink it (config) to exercise the DB tail without
+        # a 30 min scan. Past/DB-window sources keep the large default.
+        self._buffer_max_capacity = int(buffer_max_capacity)
 
         # Pending dirty bookkeeping: (side, cam, metric) -> accumulated count.
         self._pending: dict[tuple[str, int, str], int] = {}
@@ -324,7 +341,8 @@ class ScanDataSource(QObject):
         key = (side, int(cam_id), metric)
         buf = self.buffers.get(key)
         if buf is None:
-            buf = _CameraBuffer(track_frame_ids=self._track_frame_ids)
+            buf = _CameraBuffer(track_frame_ids=self._track_frame_ids,
+                                max_capacity=self._buffer_max_capacity)
             self.buffers[key] = buf
         return buf
 
@@ -472,9 +490,11 @@ class LiveScanSource(ScanDataSource):
 
     def __init__(self, plot_t0: float, parent: Optional[QObject] = None,
                  track_frame_ids: bool = False,
-                 scan_db_path: Optional[str] = None) -> None:
+                 scan_db_path: Optional[str] = None,
+                 cache_max_samples: int = _MAX_CAPACITY) -> None:
         super().__init__(plot_t0=plot_t0, parent=parent,
-                         track_frame_ids=track_frame_ids)
+                         track_frame_ids=track_frame_ids,
+                         buffer_max_capacity=cache_max_samples)
         self._live = True
         # DB tail state — all lazily initialized on first pan-into-past.
         self._scan_db_path = scan_db_path
