@@ -2,7 +2,35 @@
 
 **Branch:** `feature/realtime-plot-viewer` (bloodflow-app) + `feature/side-avg-nanmean` (openmotion-sdk)
 **PR:** #142 (bloodflow-app). Companion SDK PR not yet opened.
-**Last updated:** 2026-05-27
+**Last updated:** 2026-05-28
+
+## Reduced-mode side-average rework (2026-05-28)
+
+Design + plan: `docs/superpowers/specs/2026-05-28-reduced-mode-side-average-design.md`
+(rev 2) and `docs/superpowers/plans/2026-05-28-reduced-mode-side-average.md`.
+
+**Why:** the reduced-mode per-side average was computed-on-read in three diverging
+places (live display, history replay, DB tail) and conflated spatial vs temporal
+averaging. Now it's one pure spatial op, computed once per path and persisted.
+
+**Key decisions:** spatial average = mean across the selected cameras at one
+capture instant (no temporal carry); **live (realtime) ≠ DB (corrected)** by
+design; reduced-mode DB persists the average only.
+
+**As built (SDK `feature/side-avg-nanmean`):**
+- `spatial_side_average` pure helper (single definition).
+- `LiveSideAverageStage` (replaces `SideAveragingStage`) → `LiveEmit("live_side")`,
+  realtime per-capture average for display.
+- `CorrectedSideAverageStage` (new, final-path) → `LiveEmit("final_side")`, the
+  dark-corrected average gathered from the enriched intervals.
+- `ScanDBSink`: `"final"`→`"final_side"`, persists corrected `cam_id=-1` rows;
+  skips per-cam rows in reduced mode.
+- Round-trip test: stored `cam_id=-1` == Stage B output.
+- The `bfi_live_side`/`bvi_live_side` FrameBatch arrays were removed (events
+  replace them); `SideAverageSample` payload added to `batch.py`.
+
+**As built (app):** `_LivePlotSink` reads the `live_side` event; the
+`PastScanSource` derive-on-read is deleted (replay reads `cam_id=-1` from the DB).
 
 ## What's Shipped (Most Recent First)
 
