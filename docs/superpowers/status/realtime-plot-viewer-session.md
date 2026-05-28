@@ -7,6 +7,9 @@
 ## What's Shipped (Most Recent First)
 
 ### openmotion-bloodflow-app
+- `5c1f23d` — **Phase 3 swap**: useNewPlotViewer default flipped to true. Legacy Loaders stay as 1-release fallback.
+- `258e0df` — **Phase 4**: hide matplotlib popouts in HistoryModal when new viewer is on
+- `ddf760a` — docs: session status log
 - `fa51bda` — docs: note SDK-side junk-frame filter in cell label
 - `fdda357` — clearer loadPastScan diagnostic (source=db/csv/db-only-sentinel)
 - `6d5b0f6` — PastScanSource reads per-cam from session_data (skips CSV fallback when DB has per-cam BFI)
@@ -43,9 +46,9 @@
 
 ### Spec phases not yet done
 - **Phase 3 full lazy-load**: pan-into-past beyond the 30-min in-memory cache on a live scan. Currently the workaround is "stop the scan, reload via History" — PastScanSource reads the full session from DB. True lazy-on-pan would need LiveScanSource to fall through to DB query when `t_lo < buf.t[0]`.
-- **Phase 3 swap to default**: flip `useNewPlotViewer` default to `true` and remove the legacy `EmbeddedRealtimePlot` / `ReducedPlotView` loaders from `BloodFlow.qml`. Currently both paths exist behind the flag.
-- **Phase 4 cleanup**: HistoryModal still shows 4 matplotlib popout buttons alongside "View in plot →". Per spec they should gate on `developerMode && !useNewPlotViewer` so clinical users only see the new viewer.
-- **Phase 5 cleanup**: delete `EmbeddedRealtimePlot.qml`, `ReducedPlotView.qml`, `processing/visualize_bloodflow.py`, legacy QML per-sample signals. After Phase 3 is stable for one release.
+- ~~**Phase 3 swap to default**~~ **DONE** in `5c1f23d`. Legacy Loaders stay as 1-release fallback per spec.
+- ~~**Phase 4 cleanup**~~ **DONE** in `258e0df`. All matplotlib popouts now gate on `useNewPlotViewer !== true`.
+- **Phase 5 cleanup**: delete `EmbeddedRealtimePlot.qml`, `ReducedPlotView.qml`, `PlotToolbar.qml` (dead), `processing/visualize_bloodflow.py`, legacy QML per-sample signals. After Phase 3 is stable for one release.
 
 ### Test coverage gaps
 - Headless QML smoke test (needs pytest-qt; deferred)
