@@ -558,12 +558,22 @@ class LiveScanSource(ScanDataSource):
         """Materialize session_data rows for [t_lo, t_hi] (padded) into
         the transient DB-window buffers, if not already covered. Padding
         by one window each side means small pans reuse the cached load
-        instead of re-querying every paint."""
+        instead of re-querying every paint.
+
+        want_hi is capped at the newest available sample (liveEdge) so the
+        cached window never claims to cover future/nonexistent rows — that
+        false coverage used to make the staleness check short-circuit and
+        serve a stale window while live data piled up unshown. Callers only
+        pass t_hi up to the in-memory boundary anyway (the recent portion is
+        served from memory), so this cap is a belt-and-suspenders guard."""
         if t_lo >= self._db_window_lo and t_hi <= self._db_window_hi:
             return
         span = max(1.0, t_hi - t_lo)
         want_lo = max(0.0, t_lo - span)
+        edge = self.liveEdge
         want_hi = t_hi + span
+        if edge > 0.0:
+            want_hi = min(want_hi, edge)
         try:
             self._db_window_buffers, _ = _bucketize_session_rows(
                 self._db, self._db_session_id, t_lo=want_lo, t_hi=want_hi
@@ -595,16 +605,44 @@ class LiveScanSource(ScanDataSource):
         # Only reach for the DB once data has actually been ring-trimmed.
         if not self._needs_db_tail(side, int(cam_id), metric, t_lo) or not self._db_ready():
             return super().points_for_window(side, cam_id, metric, t_lo, t_hi, int(max_points))
-        # Pan-into-past beyond the in-memory window: serve from the DB
-        # tail. The DB has the full history, so a DB-only read of
-        # [t_lo, t_hi] is correct — only the un-flushed live edge
-        # (~100 ms) is absent, never inside a panned-back window.
-        self._ensure_db_window(t_lo, t_hi)
-        buf = self._db_window_buffers.get((side, int(cam_id), metric))
-        if buf is None:
-            return []
-        t_arr, v_arr = buf.window_decimated(t_lo, t_hi, int(max_points))
-        return [[float(t), float(v)] for t, v in zip(t_arr, v_arr)]
+
+        # Straddling window: t_lo is below the oldest in-memory sample but
+        # t_hi may reach into (or past) the live edge. Split at the in-memory
+        # boundary and stitch: serve the OLD portion [t_lo, split] from the
+        # DB tail (static history) and the RECENT portion [split, t_hi] from
+        # the in-memory buffer (fresh every paint). Serving the recent portion
+        # from the DB instead would freeze the live trace — the DB window is
+        # cached and only reloads when `split` advances, so new live samples
+        # wouldn't appear until the next reload. The DB is queried only up to
+        # `split`, never into the live/future region.
+        buf = self.buffers.get((side, int(cam_id), metric))
+        split = float(buf.t[0])  # _needs_db_tail guarantees buf valid & n>0
+        db_hi = min(split, float(t_hi))
+        mem_lo = max(split, float(t_lo))
+
+        # Proportional point budget so trace density (stride) is consistent
+        # across the seam rather than each portion getting the full budget.
+        total_span = max(1e-9, float(t_hi) - float(t_lo))
+        db_span = max(0.0, db_hi - float(t_lo))
+        mem_span = max(0.0, float(t_hi) - mem_lo)
+        mp = int(max_points)
+        db_max = max(1, int(round(mp * db_span / total_span)))
+        mem_max = max(1, int(round(mp * mem_span / total_span)))
+
+        db_pts: list = []
+        if db_span > 0.0:
+            self._ensure_db_window(float(t_lo), db_hi)
+            dbuf = self._db_window_buffers.get((side, int(cam_id), metric))
+            if dbuf is not None:
+                t_arr, v_arr = dbuf.window_decimated(float(t_lo), db_hi, db_max)
+                db_pts = [[float(t), float(v)] for t, v in zip(t_arr, v_arr)]
+
+        mem_pts: list = []
+        if mem_span > 0.0:
+            mem_pts = super().points_for_window(
+                side, cam_id, metric, mem_lo, float(t_hi), mem_max
+            )
+        return db_pts + mem_pts
 
     @pyqtSlot(str, int, str, float, result=float)
     def value_at(self, side, cam_id, metric, t):

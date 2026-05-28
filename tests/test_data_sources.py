@@ -1117,6 +1117,48 @@ def test_live_scan_source_pretrim_window_before_start_skips_db(session_data_db):
     assert all(abs(p[1] - 5.0) < 0.01 for p in pts)
 
 
+def test_live_scan_source_straddle_stitches_db_and_memory(session_data_db):
+    """A window whose left edge is in the DB tail but whose right edge
+    reaches the in-memory live data must STITCH: old portion from the DB,
+    recent portion from memory. Serving the whole window from the DB (the
+    old behavior) froze the live trace, because the cached DB window only
+    reloads when the in-memory boundary advances. session_data_db has
+    (left,0) bfi ≈1.0..1.4 at t≈0..0.1; in-memory holds 99.0 at t≈10."""
+    db, sid = session_data_db
+    src = LiveScanSource(plot_t0=0.0)
+    for i in range(5):
+        src.append_uncorrected(side="left", cam_id=0, frame_id=2000 + i,
+                               t=10.0 + i * 0.025, bfi=99.0, bvi=99.0)
+    for buf in src.buffers.values():
+        buf.ring_trimmed = True
+    src._db = db
+    src._db_session_id = sid
+
+    pts = src.points_for_window("left", 0, "bfi", 0.0, 10.1, max_points=200)
+    vals = [p[1] for p in pts]
+    assert any(v < 50 for v in vals), "DB-tail (old) portion missing from stitch"
+    assert any(v > 50 for v in vals), "in-memory (recent) portion missing from stitch"
+
+
+def test_live_scan_source_db_window_not_padded_into_future(session_data_db):
+    """_ensure_db_window must not claim coverage past the newest sample.
+    Padding want_hi into the future used to make the staleness check
+    short-circuit and serve a stale window while live data piled up unshown."""
+    db, sid = session_data_db
+    src = LiveScanSource(plot_t0=0.0)
+    for i in range(5):
+        src.append_uncorrected(side="left", cam_id=0, frame_id=2000 + i,
+                               t=10.0 + i * 0.025, bfi=99.0, bvi=99.0)
+    for buf in src.buffers.values():
+        buf.ring_trimmed = True
+    src._db = db
+    src._db_session_id = sid
+
+    src.points_for_window("left", 0, "bfi", 0.0, 10.1, max_points=200)
+    # The DB window's claimed upper bound never exceeds the newest sample.
+    assert src._db_window_hi <= src.liveEdge + 1e-9
+
+
 def test_live_scan_source_value_at_uses_db_tail(session_data_db):
     """value_at also falls through to the DB tail for times before the
     in-memory window."""
