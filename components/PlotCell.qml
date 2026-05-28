@@ -219,7 +219,9 @@ Item {
             // autoscale-derived range — clinicians care about "what's
             // it reading right now", not the y-axis extent. paintTick
             // is a dependency so the text refreshes at the throttled
-            // rate.
+            // rate. Junk last-frame values are filtered at the SDK side
+            // (BfiBviStage NaN's anything outside [-2, 10) exclusive),
+            // so the absolute-last sample is safe to read directly.
             text: {
                 void cell.paintTick  // dependency
                 if (!cell.source) return cell.metric.toUpperCase() + "  --"
