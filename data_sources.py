@@ -786,15 +786,18 @@ def _bucketize_session_rows(
 ) -> tuple[dict, bool]:
     """Query session_data rows for a session (optionally a time slice)
     and bucket them into a fresh {(side, cam_id, metric): _CameraBuffer}
-    dict. Returns (buffers, has_per_cam_bfi). Shared by PastScanSource's
-    full load and LiveScanSource's lazy DB-tail window.
+    dict. Returns (buffers, has_bfi). Shared by PastScanSource's full load
+    and LiveScanSource's lazy DB-tail window.
 
-    cam_id >= 0 rows are per-cam (from the SDK "live" channel sink);
-    cam_id == -1 rows are the side-aggregated corrected-frame
-    placeholders. has_per_cam_bfi reflects whether any real per-cam
-    BFI/BVI landed — the caller uses it to decide on CSV fallback."""
+    Rows are bucketed by their stored cam_id verbatim:
+      - cam_id 0..7 — per-camera BFI/BVI/mean/contrast (normal-mode scans).
+      - cam_id == -1 — the reduced-mode dark-corrected per-side average
+        (bfi/bvi/mean/contrast), written by ScanDBSink's "final_side" path.
+    has_bfi reflects whether ANY finite BFI/BVI landed (either layout) — the
+    caller uses it to decide whether to fall back to the corrected CSV (only
+    pre-pipeline scans, which carry no BFI/BVI in the DB)."""
     buffers: dict = {}
-    has_per_cam_bfi = False
+    has_bfi = False
     for row in scan_db.iter_session_data(session_id, t_lo=t_lo, t_hi=t_hi):
         side = _SIDE_INT_TO_STR.get(int(row["side"]))
         if side is None:
@@ -806,8 +809,8 @@ def _bucketize_session_rows(
             value = row.get(metric)
             if value is None:
                 continue
-            if cam_id >= 0 and metric in ("bfi", "bvi"):
-                has_per_cam_bfi = True
+            if metric in ("bfi", "bvi"):
+                has_bfi = True
             key = (side, cam_id, metric)
             buf = buffers.get(key)
             if buf is None:
@@ -817,7 +820,7 @@ def _bucketize_session_rows(
                 buf = _CameraBuffer(max_capacity=None)
                 buffers[key] = buf
             buf.append(t=t, v=float(value), frame_id=frame_id)
-    return buffers, has_per_cam_bfi
+    return buffers, has_bfi
 
 
 class PastScanSource(ScanDataSource):
@@ -840,69 +843,19 @@ class PastScanSource(ScanDataSource):
         self._live = False
         self.session_id = int(session_id)
 
-        # session_data carries either:
-        #   - Per-cam BFI/BVI rows from the SDK's "live" channel sink
-        #     (cam_id 0..7, side 0/1, bfi+bvi+mean+contrast) — Phase 1
-        #     and newer scans. The loop below buckets these directly
-        #     into the per-cam (side, cam_id, metric) buffers.
-        #   - Side-aggregated corrected-frame placeholder rows
-        #     (cam_id=-1, side=0, mean+contrast only) — bucketed into
-        #     (left, -1, mean) and (left, -1, contrast).
-        # Older scans recorded before the live-channel write landed
-        # have ONLY the placeholder rows; CSV fallback below picks
-        # those up for per-cam display.
-        self.buffers, has_per_cam_bfi = _bucketize_session_rows(scan_db, self.session_id)
+        # session_data carries, by cam_id:
+        #   - cam_id 0..7  — per-camera BFI/BVI/mean/contrast (normal-mode scans).
+        #   - cam_id == -1 — the reduced-mode dark-corrected per-side average
+        #     (written by ScanDBSink's "final_side" path). Reduced cells query
+        #     cam_id=-1, so replay reads it straight from the DB — no derivation.
+        # Pre-pipeline scans carry no BFI/BVI in the DB; the CSV fallback covers
+        # those.
+        self.buffers, has_bfi = _bucketize_session_rows(scan_db, self.session_id)
 
-        # CSV fallback — load only when the DB didn't already carry per-cam
-        # BFI/BVI. Pre-Phase-1 scans land here. CsvSink writes this CSV
-        # unconditionally for every scan (not gated by writeRawCsv).
-        if not has_per_cam_bfi and corrected_csv_path:
+        # CSV fallback — only when the DB carried no BFI/BVI at all (old scans).
+        # CsvSink writes the corrected CSV for those.
+        if not has_bfi and corrected_csv_path:
             self._load_corrected_csv(corrected_csv_path)
-
-        # Reduced-mode side averages (cam_id=-1) aren't persisted per-cam in
-        # the DB or the normal per-cam CSV, so derive them from the per-cam
-        # buffers — otherwise reduced-mode replay is empty (the reduced cells
-        # query cam_id=-1). No-op when a reduced CSV already supplied them.
-        self._derive_side_averages()
-
-    def _derive_side_averages(self) -> None:
-        """Build the reduced-mode side-average buffers (cam_id=-1) from the
-        per-cam buffers, reproducing what the live viewer showed.
-
-        The scan DB (and the normal per-cam corrected CSV) carry per-camera
-        BFI/BVI at cam_id 0..7 but never the side average at cam_id=-1 — the
-        SDK's ScanDBSink "live" channel only writes per-cam rows. Live, the
-        cam_id=-1 buffer was fed one sample per frame equal to that frame's
-        single active-camera value: each histogram frame carries exactly one
-        camera (raw_hist[i, side, cam]), so SideAveragingStage's nanmean over
-        the all-but-one-NaN row reduces to that camera's value. The faithful
-        reconstruction is therefore the per-cam samples for a side merged into
-        one time-ordered stream; the renderer's mean-binning then averages
-        across cameras within each display bin, exactly as it did live.
-
-        Only bfi/bvi (the reduced-mode metrics) are derived, and only when no
-        cam_id=-1 buffer already exists (a reduced-mode CSV provides one)."""
-        for side in ("left", "right"):
-            for metric in ("bfi", "bvi"):
-                if (side, -1, metric) in self.buffers:
-                    continue  # reduced CSV already supplied it — don't clobber
-                parts = [
-                    buf for (s, c, m), buf in self.buffers.items()
-                    if s == side and m == metric and c >= 0 and buf.n > 0
-                ]
-                if not parts:
-                    continue
-                t_all = np.concatenate([b.t[: b.n] for b in parts])
-                v_all = np.concatenate([b.v[: b.n] for b in parts])
-                f_all = np.concatenate([b.frame_id[: b.n] for b in parts])
-                order = np.argsort(t_all, kind="stable")
-                size = int(t_all.size)
-                merged = _CameraBuffer(initial_capacity=max(4, size), max_capacity=None)
-                merged.t[:size] = t_all[order]
-                merged.v[:size] = v_all[order]
-                merged.frame_id[:size] = f_all[order]
-                merged.n = size
-                self.buffers[(side, -1, metric)] = merged
 
     def _load_corrected_csv(self, csv_path: str) -> None:
         """Load per-(side, cam, metric) samples from the corrected CSV

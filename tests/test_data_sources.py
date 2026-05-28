@@ -447,25 +447,18 @@ def test_past_scan_source_bucketizes_rows_into_per_metric_buffers(session_data_d
     db, sid = session_data_db
     src = PastScanSource(scan_db=db, session_id=sid)
 
-    # 4 (side, cam) combos × 4 metrics = 16 per-cam buffers, plus the
-    # derived reduced-mode side averages (cam_id=-1) for bfi/bvi on each side.
+    # This fixture is a normal-mode scan: 4 (side, cam) combos × 4 metrics =
+    # 16 per-cam buffers, each holding its 5 rows. No cam_id=-1 (that's the
+    # reduced-mode side average, read straight from the DB when present).
     expected_keys = {
         (side, cam, metric)
         for side in ("left", "right")
         for cam in (0, 3)
         for metric in ("bfi", "bvi", "mean", "contrast")
     }
-    expected_keys |= {
-        (side, -1, metric)
-        for side in ("left", "right")
-        for metric in ("bfi", "bvi")
-    }
     assert set(src.buffers.keys()) == expected_keys
-
-    # Per-cam buffers hold their 5 rows; the merged side averages hold
-    # both cams' rows (2 cams × 5 = 10).
-    for key, buf in src.buffers.items():
-        assert buf.n == (10 if key[1] == -1 else 5)
+    for buf in src.buffers.values():
+        assert buf.n == 5
 
 
 def test_past_scan_source_normalizes_side_integer_to_string(session_data_db):
@@ -502,53 +495,56 @@ def test_past_scan_source_empty_session_yields_empty_source(tmp_path):
     assert src.liveEdge == 0.0
 
 
-def test_past_scan_source_derives_reduced_side_averages(session_data_db):
-    """DB-backed scans store per-cam BFI/BVI but no cam_id=-1 side average.
-    PastScanSource must derive cam_id=-1 by merging the per-cam buffers for
-    a side, time-ordered, so reduced-mode replay isn't empty."""
-    db, sid = session_data_db
-    src = PastScanSource(scan_db=db, session_id=sid)
+def test_past_scan_source_reads_cam_id_minus_1_from_db(tmp_path):
+    """A reduced-mode scan stores the corrected per-side average at cam_id=-1
+    (ScanDBSink's 'final_side' path). PastScanSource exposes those directly —
+    no derivation — so reduced-mode replay reads the corrected trace verbatim."""
+    db_path = tmp_path / "scan.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(_SESSION_DATA_DDL)
+    rows = []
+    for i in range(3):
+        for side in (0, 1):
+            rows.append((9, None, -1, side, 1000 + i, i * 0.025,
+                         2.0 + side + i * 0.1,    # bfi
+                         5.0 + side + i * 0.1,    # bvi
+                         0.3, 100.0))
+    conn.executemany(
+        "INSERT INTO session_data "
+        "(session_id, session_raw_id, cam_id, side, frame_id, timestamp_s, "
+        " bfi, bvi, contrast, mean) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+    db = _FakeScanDatabase(conn)
 
-    for side in ("left", "right"):
-        for metric in ("bfi", "bvi"):
-            buf = src.buffers.get((side, -1, metric))
-            assert buf is not None, f"missing derived ({side}, -1, {metric})"
-            assert buf.n == 10  # cam 0 + cam 3, 5 samples each
-            ts = buf.t[: buf.n]
-            assert np.all(np.diff(ts) >= 0), "merged side buffer must be time-sorted"
-
-    # The merged left/bfi buffer carries BOTH cameras' values. At t=0:
-    # cam0 bfi = 1.0, cam3 bfi = 4.0 (1.0 + cam_id).
+    src = PastScanSource(scan_db=db, session_id=9)
+    # Only cam_id=-1 buffers (reduced-mode scan persists average only).
+    assert all(cam == -1 for (_s, cam, _m) in src.buffers.keys())
     left_bfi = src.buffers[("left", -1, "bfi")]
-    n = left_bfi.n
-    at_t0 = left_bfi.v[:n][np.isclose(left_bfi.t[:n], 0.0)]
-    assert set(round(float(v), 3) for v in at_t0) == {1.0, 4.0}
-
-    # mean/contrast are NOT derived as side averages — only the reduced
-    # metrics (bfi/bvi) the reduced cells plot.
-    assert ("left", -1, "mean") not in src.buffers
-    assert ("left", -1, "contrast") not in src.buffers
+    assert left_bfi.n == 3
+    assert float(left_bfi.v[0]) == pytest.approx(2.0)   # side 0, i 0
+    right_bvi = src.buffers[("right", -1, "bvi")]
+    assert float(right_bvi.v[0]) == pytest.approx(6.0)  # side 1, i 0
 
 
 def test_past_scan_source_buffers_are_unbounded(session_data_db):
-    """Buffers a past scan creates (DB per-cam, derived side averages, and
-    CSV-loaded) must be unbounded so a long bulk load never ring-trims away
-    its own oldest rows."""
+    """Buffers a past scan creates must be unbounded so a long bulk load never
+    ring-trims away its own oldest rows."""
     db, sid = session_data_db
     src = PastScanSource(scan_db=db, session_id=sid)
     for buf in src.buffers.values():
         assert buf._max_capacity is None
 
 
-def test_past_scan_source_does_not_clobber_reduced_csv_side_average(tmp_path):
-    """If a reduced-mode CSV already populated cam_id=-1 buffers, the
-    derivation must leave them untouched (don't overwrite real recorded
-    side data with a merge of nonexistent per-cam buffers)."""
+def test_past_scan_source_csv_fallback_when_db_has_no_bfi(tmp_path):
+    """A pre-pipeline scan with no BFI/BVI in the DB falls back to the reduced
+    corrected CSV, which populates the cam_id=-1 side buffers."""
     db_path = tmp_path / "scan.db"
     conn = sqlite3.connect(str(db_path))
     conn.executescript(_SESSION_DATA_DDL)
     conn.commit()
-    db = _FakeScanDatabase(conn)  # empty DB → triggers CSV fallback
+    db = _FakeScanDatabase(conn)  # empty DB → no BFI → CSV fallback
 
     csv_path = tmp_path / "reduced.csv"
     csv_path.write_text(
@@ -560,7 +556,7 @@ def test_past_scan_source_does_not_clobber_reduced_csv_side_average(tmp_path):
     src = PastScanSource(scan_db=db, session_id=1, corrected_csv_path=str(csv_path))
 
     left_bfi = src.buffers[("left", -1, "bfi")]
-    assert left_bfi.n == 2  # the 2 CSV rows, not a merge
+    assert left_bfi.n == 2
     assert float(left_bfi.v[0]) == pytest.approx(2.5)
 
 
