@@ -7,8 +7,12 @@
 ## What's Shipped (Most Recent First)
 
 ### openmotion-bloodflow-app
+- `4ed0db3` — fix: define logger in data_sources (DB-tail NameError crash on first lazy-load)
+- `ed6fa74` — log History modal button presses (console.warn diagnostics)
+- `2dad750` — configurable live cache size (liveCacheMaxSeconds, default 1800 s)
+- `0e43556` — fix: live plot 1 Hz regression from DB-tail guard (ring_trimmed flag)
 - `cd35103` — corrected CSV opt-in: writeCorrectedCsv config flag (default False); DB is the store
-- `28c759a` — **Phase 3 lazy-load**: LiveScanSource DB tail — pan past the 30-min in-memory window loads from DB
+- `28c759a` — **Phase 3 lazy-load**: LiveScanSource DB tail — pan past the in-memory window loads from DB
 - `5c1f23d` — **Phase 3 swap**: useNewPlotViewer default flipped to true. Legacy Loaders stay as 1-release fallback.
 - `258e0df` — **Phase 4**: hide matplotlib popouts in HistoryModal when new viewer is on
 - `ddf760a` — docs: session status log
@@ -25,7 +29,8 @@
 - `56a6980` — reduced-mode traces missing — drop strict NaN filter
 - Earlier: Phase 1 data_sources + Phase 2a-c PlotViewer / toolbar / scrubber / crosshair / tooltip / dropout / past-scan replay
 
-### openmotion-sdk (`feature/side-avg-nanmean` branch)
+### openmotion-sdk (`feature/side-avg-nanmean` branch) — PR openmotion-sdk#61
+- `d5ff501` — suppress "Mean of empty slice" warning in SideAveragingStage
 - `83a78bf` — gate corrected CSV behind write_corrected; forced on when no scan DB configured
 - `11f9cc7` — BfiBviStage sanity excludes exact upper extreme (BFI=10.0) — fixes task #50 last-frame junk
 - `8fccedc` — BfiBviStage NaN-filters values outside [-2, 12] sanity range
@@ -48,7 +53,7 @@
 - ~~**Task #50**: junk values in last frame at scan stop~~ **DONE** in SDK `11f9cc7`. BfiBviStage now NaN's BFI/BVI outside `[-2, 10)` (lower inclusive for legit BFI=0 occlusion readings, upper exclusive for the formula's degenerate extreme). Verified: scan 111 has 0 BFI=10.0 rows (was 7 in scan 110), cell labels show clean values like `BFI -0.18 BVI 4.79`.
 
 ### Spec phases not yet done
-- ~~**Phase 3 full lazy-load**~~ **DONE** in `28c759a`. LiveScanSource falls through to a transient DB window when `t_lo < buffer's oldest in-memory timestamp`. **CAVEAT: only triggers after the 30-min ring-trim — NOT hardware-verified (would need a 30+ min scan). Unit tests cover the logic (4 tests); app launches clean.** First real >30-min scan should confirm pan-into-deep-past renders.
+- ~~**Phase 3 full lazy-load**~~ **DONE + HARDWARE-VERIFIED** (`28c759a` + `4ed0db3`). LiveScanSource falls through to a transient DB window when `t_lo < buffer's oldest in-memory timestamp`. Verified 2026-05-28 via `liveCacheMaxSeconds: 60` test config: a 7-min scan ring-trimmed, pan-back logged `DB tail engaged (session_id=120)`, no crash. **Two bugs found+fixed during verification:** (1) `data_sources.py` had no `logger` defined → NameError on first DB-tail use (`4ed0db3`); (2) SDK `side_avg.py` "Mean of empty slice" warning spam (`d5ff501`). `liveCacheMaxSeconds` is a new config knob (default 1800 s) added to shrink the cache for this kind of testing.
 - ~~**Phase 3 swap to default**~~ **DONE** in `5c1f23d`. Legacy Loaders stay as 1-release fallback per spec.
 - ~~**Phase 4 cleanup**~~ **DONE** in `258e0df`. All matplotlib popouts now gate on `useNewPlotViewer !== true`.
 - **Phase 5 cleanup**: delete `EmbeddedRealtimePlot.qml`, `ReducedPlotView.qml`, `PlotToolbar.qml` (dead), `processing/visualize_bloodflow.py`, legacy QML per-sample signals. After Phase 3 is stable for one release.
