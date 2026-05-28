@@ -24,6 +24,7 @@ Item {
 
     function open() {
         refreshScans()
+        console.warn("[History] opened — " + scans.length + " scan(s) listed")
         root.visible = true
     }
     function close() {
@@ -100,7 +101,8 @@ Item {
             Text { anchors.centerIn: parent; text: "✕"; color: theme.textPrimary; font.pixelSize: 13 }
             MouseArea {
                 id: xArea; anchors.fill: parent; hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor; onClicked: root.close()
+                cursorShape: Qt.PointingHandCursor
+                onClicked: { console.warn("[History] close (✕) clicked"); root.close() }
             }
         }
 
@@ -135,7 +137,10 @@ Item {
                         color: parent.hovered ? theme.accentBlue : theme.bgInput
                         border.color: parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
                     }
-                    onClicked: Qt.openUrlExternally("file:///" + MOTIONInterface.directory)
+                    onClicked: {
+                        console.warn("[History] Open Folder clicked → " + MOTIONInterface.directory)
+                        Qt.openUrlExternally("file:///" + MOTIONInterface.directory)
+                    }
                 }
 
                 Button {
@@ -151,7 +156,10 @@ Item {
                         color: parent.hovered ? theme.accentBlue : theme.bgInput
                         border.color: parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
                     }
-                    onClicked: refreshScans()
+                    onClicked: {
+                        console.warn("[History] Refresh clicked")
+                        refreshScans()
+                    }
                 }
             }
 
@@ -228,6 +236,7 @@ Item {
                     }
                     onCurrentIndexChanged: {
                         if (currentIndex >= 0 && currentIndex < scans.length) {
+                            console.warn("[History] scan selected [" + currentIndex + "] " + scans[currentIndex])
                             try { selected = MOTIONInterface.get_scan_details(scans[currentIndex]) || {} }
                             catch (e) { selected = {} }
                         } else { selected = {} }
@@ -289,7 +298,11 @@ Item {
 
                         Button {
                             text: "Visualize BFI/BVI (legacy)"
-                            visible: MOTIONInterface.appConfig.developerMode ? true : false
+                            // Phase 4: matplotlib popouts stay reachable via
+                            // developerMode fallback while useNewPlotViewer is
+                            // off, hidden once the new viewer is the default.
+                            visible: MOTIONInterface.appConfig.developerMode === true
+                                     && MOTIONInterface.appConfig.useNewPlotViewer !== true
                             Layout.fillWidth: true; Layout.preferredHeight: 36
                             enabled: !!(selected.leftPath || selected.rightPath)
                             hoverEnabled: enabled
@@ -303,6 +316,7 @@ Item {
                                 border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
                             }
                             onClicked: {
+                                console.warn("[History] Visualize BFI/BVI (legacy) clicked → " + (scans[scanPicker.currentIndex] || "?"))
                                 root.visualizing = true
                                 MOTIONInterface.visualize_bloodflow(selected.leftPath || "", selected.rightPath || "", 0.0, 0.0, false)
                             }
@@ -310,7 +324,8 @@ Item {
 
                         Button {
                             text: "Visualize Contrast/Mean (legacy)"
-                            visible: MOTIONInterface.appConfig.developerMode ? true : false
+                            visible: MOTIONInterface.appConfig.developerMode === true
+                                     && MOTIONInterface.appConfig.useNewPlotViewer !== true
                             Layout.fillWidth: true; Layout.preferredHeight: 36
                             enabled: !!(selected.leftPath || selected.rightPath)
                             hoverEnabled: enabled
@@ -324,6 +339,7 @@ Item {
                                 border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
                             }
                             onClicked: {
+                                console.warn("[History] Visualize Contrast/Mean (legacy) clicked → " + (scans[scanPicker.currentIndex] || "?"))
                                 root.visualizing = true
                                 MOTIONInterface.visualize_bloodflow(selected.leftPath || "", selected.rightPath || "", 0.0, 0.0, true)
                             }
@@ -331,6 +347,7 @@ Item {
 
                         Button {
                             text: "Visualize BFI/BVI"
+                            visible: MOTIONInterface.appConfig.useNewPlotViewer !== true
                             Layout.fillWidth: true; Layout.preferredHeight: 36
                             enabled: !!(selected.correctedPath)
                             hoverEnabled: enabled
@@ -344,6 +361,7 @@ Item {
                                 border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
                             }
                             onClicked: {
+                                console.warn("[History] Visualize BFI/BVI clicked → " + (selected.correctedPath || "?"))
                                 root.visualizing = true
                                 MOTIONInterface.visualize_corrected(selected.correctedPath || "")
                             }
@@ -352,6 +370,7 @@ Item {
                         Button {
                             text: "Visualize Contrast/Mean"
                             visible: MOTIONInterface.appConfig.reducedMode !== true
+                                     && MOTIONInterface.appConfig.useNewPlotViewer !== true
                             Layout.fillWidth: true; Layout.preferredHeight: 36
                             enabled: !!(selected.correctedPath)
                             hoverEnabled: enabled
@@ -365,8 +384,37 @@ Item {
                                 border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
                             }
                             onClicked: {
+                                console.warn("[History] Visualize Contrast/Mean clicked → " + (selected.correctedPath || "?"))
                                 root.visualizing = true
                                 MOTIONInterface.visualize_corrected_signal(selected.correctedPath || "")
+                            }
+                        }
+
+                        // New plot viewer — opens the past scan inside the
+                        // BloodFlow page's PlotViewer instead of a popout.
+                        Button {
+                            text: "View in plot →"
+                            visible: MOTIONInterface.appConfig.useNewPlotViewer === true
+                            Layout.fillWidth: true; Layout.preferredHeight: 36
+                            // `currentIndex` lives on scanPicker (the ComboBox)
+                            // — referencing it bare here resolves to undefined
+                            // at the root scope and `undefined >= 0` is false,
+                            // which left this button perma-greyed.
+                            enabled: scans.length > 0 && scanPicker.currentIndex >= 0
+                            hoverEnabled: enabled
+                            contentItem: Text {
+                                text: parent.text; font.pixelSize: 13
+                                color: parent.enabled ? theme.textSecondary : theme.textTertiary
+                                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                            }
+                            background: Rectangle {
+                                color: !parent.enabled ? theme.bgInput : parent.hovered ? theme.accentBlue : theme.bgInput
+                                border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
+                            }
+                            onClicked: {
+                                console.warn("[History] View in plot → clicked → " + (scans[scanPicker.currentIndex] || "?"))
+                                MOTIONInterface.loadPastScan(scans[scanPicker.currentIndex] || "")
+                                root.close()
                             }
                         }
 

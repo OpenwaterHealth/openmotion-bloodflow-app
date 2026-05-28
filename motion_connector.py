@@ -9,6 +9,7 @@ from PyQt6.QtCore import (
     QRecursiveMutex,
 )
 from pathlib import Path
+from typing import Optional
 import logging
 import math
 import base58
@@ -42,6 +43,7 @@ from motion_config import (
     load_tec_params,
 )
 from utils.resource_path import resource_path
+from data_sources import LiveScanSource, PastScanSource, ScanDataSource
 import numpy as np
 import pandas as pd
 
@@ -160,26 +162,35 @@ class _LivePlotSink:
     """Subscribes to the 'live' pipeline channel and emits per-frame Qt
     signals into the QML realtime plot for each active camera.
 
-    The 'live' channel carries a FrameBatch after BfiBvi (and optionally
-    SideAveraging in reduced mode). Each batch may contain multiple frames
-    and both sides; we iterate frame × side × cam_id and call back into
-    the connector's _emit_frame_to_qml helper, which gates on the camera-
-    dropout watchdog and fires the Qt signals.
+    The 'live' channel carries a FrameBatch after BfiBvi. Each batch may
+    contain multiple frames and both sides; we iterate frame × side × cam_id
+    and call back into the connector's helpers, which gate on the camera-
+    dropout watchdog and fire the Qt signals.
+
+    The 'live_side' channel carries one SideAverageSample per capture per side
+    (from the SDK's LiveSideAverageStage, reduced mode) — the realtime per-side
+    average, appended under cam_id=-1 for the reduced-mode display.
     """
 
-    channels = {"live"}
+    channels = {"live", "live_side"}
 
-    def __init__(self, connector: "MOTIONConnector", plot_t0: float):
+    def __init__(self, connector: "MOTIONConnector", plot_t0: float,
+                 live_source: "LiveScanSource"):
         self._connector = connector
         self._plot_t0 = plot_t0
+        self._live_source = live_source
         self._temp_alerted: dict[tuple[str, int], bool] = {}
 
     def on_scan_start(self, meta) -> None:
         self._temp_alerted.clear()
 
-    def consume(self, channel: str, batch) -> None:
+    def consume(self, channel: str, payload) -> None:
+        if channel == "live_side":
+            self._consume_side_avg(payload)
+            return
         if channel != "live":
             return
+        batch = payload
         if batch.bfi_live is None:
             return
 
@@ -258,6 +269,8 @@ class _LivePlotSink:
                     run_logger.warning(msg)
                     logger.warning(msg)
 
+                mean_for_source: Optional[float] = None
+                contrast_for_source: Optional[float] = None
                 if not is_dark:
                     # Two-pass refinement matches the BFI/BVI pattern: emit
                     # the realtime dark-corrected mean (mean_dc_rt) and
@@ -270,12 +283,14 @@ class _LivePlotSink:
                     if batch.mean_dc_rt is not None:
                         mean_val = float(batch.mean_dc_rt[i, side_idx, cam_id])
                         if math.isfinite(mean_val):
+                            mean_for_source = mean_val
                             connector.scanMeanSampled.emit(
                                 side, cam_id, abs_frame_id, plot_ts, mean_val
                             )
                     if batch.contrast_sn_rt is not None:
                         contrast_val = float(batch.contrast_sn_rt[i, side_idx, cam_id])
                         if math.isfinite(contrast_val):
+                            contrast_for_source = contrast_val
                             connector.scanContrastSampled.emit(
                                 side, cam_id, abs_frame_id, plot_ts, contrast_val
                             )
@@ -283,6 +298,38 @@ class _LivePlotSink:
                 connector.scanBfiSampled.emit(side, cam_id, abs_frame_id, plot_ts, bfi)
                 connector.scanBviSampled.emit(side, cam_id, abs_frame_id, plot_ts, bvi)
                 connector.scanCameraTemperature.emit(side, cam_id, temp_c)
+
+                # Also feed the LiveScanSource so the new PlotViewer (Phase 2+)
+                # has a parallel record. mean/contrast already filtered for
+                # is_dark / non-finite above; None here means "metric not
+                # available for this sample".
+                self._live_source.append_uncorrected(
+                    side=side,
+                    cam_id=cam_id,
+                    frame_id=abs_frame_id,
+                    t=plot_ts,
+                    bfi=bfi,
+                    bvi=bvi,
+                    mean=mean_for_source,
+                    contrast=contrast_for_source,
+                )
+
+    def _consume_side_avg(self, sample) -> None:
+        """Append one reduced-mode per-side average (SideAverageSample from the
+        SDK's LiveSideAverageStage) under cam_id=-1. The stage already emits one
+        true spatial average per capture per side at ~40 Hz, so there's no dedup
+        or skipping here — we just store what it emits."""
+        side_idx = int(getattr(sample, "side", -1))
+        if not (0 <= side_idx < len(_SIDE_NAMES)):
+            return
+        self._live_source.append_uncorrected(
+            side=_SIDE_NAMES[side_idx],
+            cam_id=-1,
+            frame_id=int(getattr(sample, "frame_id", -1)),
+            t=float(getattr(sample, "t", 0.0)),
+            bfi=float(getattr(sample, "bfi", float("nan"))),
+            bvi=float(getattr(sample, "bvi", float("nan"))),
+        )
 
     def on_complete(self) -> None:
         pass
@@ -298,9 +345,11 @@ class _FinalBatchSink:
 
     channels = {"final"}
 
-    def __init__(self, connector: "MOTIONConnector", plot_t0: float):
+    def __init__(self, connector: "MOTIONConnector", plot_t0: float,
+                 live_source: "LiveScanSource"):
         self._connector = connector
         self._plot_t0 = plot_t0
+        self._live_source = live_source
 
     def on_scan_start(self, meta) -> None:
         pass
@@ -341,6 +390,13 @@ class _FinalBatchSink:
             })
         if payload:
             connector.scanCorrectedBatch.emit(payload)
+            # New viewer intentionally NOT fed corrected values for now —
+            # the in-place buffer rewrite at every dark-interval close
+            # caused visible mid-scan disruption ("data jumping between
+            # two datasets"). Legacy EmbeddedRealtimePlot still receives
+            # corrections via scanCorrectedBatch.emit above. Re-enable
+            # `self._live_source.apply_corrected_batch(payload)` when we
+            # have a smoother handoff (e.g. dual-buffer overlay).
 
     def on_complete(self) -> None:
         pass
@@ -456,6 +512,10 @@ class MOTIONConnector(QObject):
     notificationDismissAllRequested = pyqtSignal()       # dismiss every active toast
     vizFinished = pyqtSignal()
     visualizingChanged = pyqtSignal(bool)
+
+    # Real-time plot viewer source — see data_sources.py.
+    currentScanSourceChanged = pyqtSignal()
+    liveSourceAvailableChanged = pyqtSignal()
 
     configProgress = pyqtSignal(int)
     configLog = pyqtSignal(str)
@@ -580,6 +640,7 @@ class MOTIONConnector(QObject):
         self._dropout_timer = QTimer(self)
         self._dropout_timer.setInterval(1000)
         self._dropout_timer.timeout.connect(self._on_dropout_check)
+        self._plot_t0: float = 0.0  # set at scan start; consumed by _on_dropout_check
 
         # Trigger-ON elapsed mirrors — populated from start_capture locals so
         # _on_dropout_check / _scan_elapsed_str can read them off the instance.
@@ -631,6 +692,12 @@ class MOTIONConnector(QObject):
         self._console_fan_on: bool = True
         # Track console connection time for safety grace period (issue #107 follow-up)
         self._console_connected_at: float | None = None
+        # Real-time plot viewer source — assigned at scan start by startCapture.
+        self._current_scan_source: ScanDataSource | None = None
+        # The most-recent LiveScanSource is kept alive even after the user
+        # navigates to a past scan, so "Back to live" can reassign without
+        # reconstructing. None when no scan has run this session.
+        self._live_scan_source: LiveScanSource | None = None
 
         self.laser_params = load_laser_params(config_dir, force_fault=self._force_laser_fail)
         self._tec_voltage_default = load_tec_params(config_dir)
@@ -1502,38 +1569,62 @@ class MOTIONConnector(QObject):
 
     @pyqtSlot(result=list)
     def get_scan_list(self):
-        """Return sorted list of scan IDs.
+        """Return sorted list of scan IDs from BOTH the corrected CSVs on disk
+        and the scan database's sessions.
 
-        Supports three filename formats for the canonical scan CSV:
+        The scan DB is the system of record: reduced-mode scans (and any scan
+        with writeCorrectedCsv off) write no corrected CSV, so they exist only
+        as DB sessions. A session_label has the same shape as the CSV-derived
+        scan id (``YYYYMMDD_HHMMSS_userLabel``), so the two sources merge by id.
+
+        CSV filename formats supported (legacy / corrected-CSV scans):
           New (post-#44): {YYYYMMDD_HHMMSS}_{sessionId}.csv
           Mid:            {YYYYMMDD_HHMMSS}_{sessionId}_corrected.csv
           Legacy:         scan_{sessionId}_{YYYYMMDD_HHMMSS}_corrected.csv
         """
-        base_path = Path(self._directory)
-        if not base_path.exists():
-            return []
-
         seen: set[str] = set()
         ids: list[str] = []
-        for f in base_path.glob("*.csv"):
-            if not f.is_file():
-                continue
-            stem = f.stem
-            # Skip per-scan auxiliary files (raw histo, telemetry).
-            if self._AUX_CSV_RE.search(stem):
-                continue
-            # Mid format: strip the ``_corrected`` suffix to get the
-            # canonical scan id.
-            if stem.endswith("_corrected"):
-                stem = stem[:-10]
-            # Legacy format: ``scan_{sessionId}_{ts}`` — strip the
-            # ``scan_`` prefix.
-            if stem.startswith("scan_"):
-                stem = stem[5:]
-            if stem in seen:
-                continue
-            seen.add(stem)
-            ids.append(stem)
+
+        base_path = Path(self._directory)
+        if base_path.exists():
+            for f in base_path.glob("*.csv"):
+                if not f.is_file():
+                    continue
+                stem = f.stem
+                # Skip per-scan auxiliary files (raw histo, telemetry).
+                if self._AUX_CSV_RE.search(stem):
+                    continue
+                # Mid format: strip the ``_corrected`` suffix to get the
+                # canonical scan id.
+                if stem.endswith("_corrected"):
+                    stem = stem[:-10]
+                # Legacy format: ``scan_{sessionId}_{ts}`` — strip the
+                # ``scan_`` prefix.
+                if stem.startswith("scan_"):
+                    stem = stem[5:]
+                if stem in seen:
+                    continue
+                seen.add(stem)
+                ids.append(stem)
+
+        # DB-backed scans (no corrected CSV on disk). Best-effort: a missing or
+        # unreadable DB just leaves the CSV-derived list.
+        db_path = getattr(self._interface, "scan_db_path", None)
+        if db_path:
+            try:
+                from omotion.ScanDatabase import ScanDatabase
+                db = ScanDatabase(db_path)
+                try:
+                    for session in db.iter_sessions():
+                        label = (session.get("session_label") or "").strip()
+                        if label and label not in seen:
+                            seen.add(label)
+                            ids.append(label)
+                finally:
+                    db.close()
+            except Exception:
+                logger.warning("get_scan_list: could not read scan DB sessions",
+                               exc_info=True)
 
         def ts_key(s):
             # New / mid format starts with YYYYMMDD (8 digits)
@@ -1739,6 +1830,98 @@ class MOTIONConnector(QObject):
             except Exception as e:
                 logger.error(f"Failed to update scan notes on disk: {e}")
 
+    @pyqtProperty(QObject, notify=currentScanSourceChanged)
+    def currentScanSource(self) -> ScanDataSource | None:
+        """Current ScanDataSource bound to the PlotViewer. Usually the
+        live source during a scan; can be a PastScanSource while the
+        user is reviewing history via loadPastScan."""
+        return self._current_scan_source
+
+    @pyqtProperty(bool, notify=liveSourceAvailableChanged)
+    def liveSourceAvailable(self) -> bool:
+        """True when a LiveScanSource is held (i.e. at least one scan
+        has run this session). PlotToolbar uses this to decide whether
+        the "Back to live" button should switch sources back to live."""
+        return self._live_scan_source is not None
+
+    def _set_current_scan_source(self, source: ScanDataSource | None) -> None:
+        """Replace the active source. Dedupes identical-instance assignments
+        so the notify signal only fires on real transitions."""
+        if source is self._current_scan_source:
+            return
+        self._current_scan_source = source
+        self.currentScanSourceChanged.emit()
+
+    @pyqtSlot()
+    def showLiveSource(self) -> None:
+        """Switch the viewer back to the held live source, if any.
+        No-op when no LiveScanSource has been created this session."""
+        if self._live_scan_source is None:
+            return
+        self._set_current_scan_source(self._live_scan_source)
+        logger.info("[Plot] viewer switched back to live source")
+
+    @pyqtSlot(str)
+    def loadPastScan(self, session_label: str) -> None:
+        """Open the saved scan with the given session_label (the
+        YYYYMMDD_HHMMSS_userLabel string used elsewhere in the UI) and
+        display it in the PlotViewer. The held live source is left
+        intact so a subsequent showLiveSource() can return to it.
+
+        Synchronous load — for a typical 30-min scan the SQLite walk
+        completes in well under a second, but if this becomes too slow
+        on long scans we can move it onto a QThread."""
+        if not session_label:
+            logger.warning("loadPastScan: empty session_label")
+            return
+        try:
+            from omotion.ScanDatabase import ScanDatabase
+            db_path = getattr(self._interface, "scan_db_path", None)
+            if not db_path:
+                logger.warning("loadPastScan: scan_db_path unavailable on interface")
+                return
+            db = ScanDatabase(db_path)
+            session = db.get_session_by_label(session_label)
+            if not session:
+                logger.warning("loadPastScan: no session found for label %r", session_label)
+                return
+            session_id = int(session["id"])
+            # Per-cam corrected CSV ({scan_id}.csv, 82-col wide format)
+            # is the only source of per-cam BFI/BVI/mean/contrast for
+            # past replay — the DB's session_data only holds side-
+            # aggregated corrected-frame placeholders. CsvSink writes
+            # this CSV unconditionally for every scan, so it's reliably
+            # available.
+            details = self.get_scan_details(session_label) or {}
+            corrected_csv = details.get("correctedPath") or None
+            past = PastScanSource(
+                scan_db=db,
+                session_id=session_id,
+                corrected_csv_path=corrected_csv,
+                parent=self,
+            )
+            self._set_current_scan_source(past)
+            # Diagnostic — left in for now so we can spot regressions
+            # in past-scan loading. Cheap (one log line per click).
+            n_buffers = len(past.buffers)
+            n_samples = sum(b.n for b in past.buffers.values())
+            sample_keys = sorted(past.buffers.keys())[:8]
+            # Detect which source actually populated per-cam BFI: if
+            # any (side, cam_id != -1, bfi) buffer exists, the DB was
+            # sufficient and the CSV fallback was skipped.
+            db_had_per_cam = any(
+                k[1] >= 0 and k[2] == "bfi" for k in past.buffers
+            )
+            logger.info(
+                "[Plot] loaded past scan %r (session_id=%d) source=%s: "
+                "buffers=%d samples=%d liveEdge=%.3f sample_keys=%s",
+                session_label, session_id,
+                "db" if db_had_per_cam else ("csv" if corrected_csv else "db-only-sentinel"),
+                n_buffers, n_samples, past.liveEdge, sample_keys,
+            )
+        except Exception:
+            logger.exception("loadPastScan failed for label %r", session_label)
+
     @pyqtSlot(str, result=int)
     @pyqtSlot(str, str, result=int)
     @pyqtSlot(str, str, int, result=int)
@@ -1874,6 +2057,34 @@ class MOTIONConnector(QObject):
         # after a mid-scan unplug/replug, the two sides' clocks diverge and the
         # QML plot's shared `latestTimestamp` prunes the lagging side to empty.
         plot_t0 = time.monotonic()
+        self._plot_t0 = plot_t0  # used by _on_dropout_check to compute dropout-marker t
+        # Real-time plot viewer: construct a fresh LiveScanSource for this scan
+        # and install it on the connector. Phase 1 has no QML consumer yet —
+        # the sinks (added in subsequent tasks) accumulate samples here in
+        # parallel with the legacy Qt signal emissions.
+        # Pass the scan DB path so the live source can lazily load older
+        # samples from the DB tail when the user pans before the in-memory
+        # ring-trim window (>30 min into a long scan). None-safe: if the
+        # interface has no scan_db_path the source stays in-memory-only.
+        # In-memory cache size before ring-trim → DB tail. Default 30 min
+        # (1800 s × 40 Hz). Shrink liveCacheMaxSeconds in app_config to
+        # exercise the DB lazy-load quickly (e.g. 60 → eviction after 1 min).
+        _live_cache_sec = self._app_config.get("liveCacheMaxSeconds", 1800)
+        _live_cache_samples = max(2, int(float(_live_cache_sec) * 40))
+        live_source = LiveScanSource(
+            plot_t0=plot_t0,
+            parent=self,
+            scan_db_path=getattr(self._interface, "scan_db_path", None),
+            cache_max_samples=_live_cache_samples,
+        )
+        # Track the live source separately so the user can navigate
+        # to a past scan and return; emit so QML rebinds the
+        # PlotToolbar's "Back to live" visibility.
+        first_live = self._live_scan_source is None
+        self._live_scan_source = live_source
+        if first_live:
+            self.liveSourceAvailableChanged.emit()
+        self._set_current_scan_source(live_source)
         self._capture_left_path = ""
         self._capture_right_path = ""
         self._start_runlog(subject_id=subject_id)
@@ -1953,6 +2164,12 @@ class MOTIONConnector(QObject):
             right_camera_mask=right_camera_mask,
             disable_laser=disable_laser,
             reduced_mode=self._app_config.get("reducedMode", False),
+            # Corrected CSV is opt-in now that per-cam BFI/BVI lands in
+            # the scan DB (the new viewer + past replay read from there).
+            # Default False to skip the redundant {scan_id}.csv; flip
+            # writeCorrectedCsv:true in app_config to keep exporting it.
+            # The SDK still forces it on if no DB is configured.
+            write_corrected_csv=self._app_config.get("writeCorrectedCsv", False),
             # Raw CSV duration forwarded to the pipeline's Tee("raw") gate
             # via raw_save_max_duration_s. None means unbounded (write entire
             # scan); 0 omits raw tee entirely.
@@ -1960,27 +2177,45 @@ class MOTIONConnector(QObject):
                 self._raw_csv_duration_sec if self._write_raw_csv else 0
             ),
             sinks=[
-                _LivePlotSink(connector=self, plot_t0=plot_t0),
-                _FinalBatchSink(connector=self, plot_t0=plot_t0),
+                _LivePlotSink(connector=self, plot_t0=plot_t0, live_source=live_source),
+                _FinalBatchSink(connector=self, plot_t0=plot_t0, live_source=live_source),
                 _TriggerStateSink(connector=self),
                 _CompletionSink(connector=self, on_complete_cb=_on_pipeline_complete),
             ],
         )
 
         started = self._interface.start_scan(req)
+        if started:
+            # Bind the live source's DB tail to THIS scan's session row by its
+            # exact label (set synchronously inside start_scan), so a later
+            # pan-into-past resolves the right session instead of guessing the
+            # newest one.
+            label = getattr(self._scan_workflow, "current_scan_label", None)
+            if label:
+                live_source.set_scan_label(label)
         if not started:
             self._capture_running = False
             self._stop_runlog()
+            self._set_current_scan_source(None)  # release the orphaned LiveScanSource — scan never started
+            # start_scan refuses for two reasons: a prior worker still alive,
+            # or a pre-flight failure (e.g. the scan DB couldn't be opened, in
+            # which case the scan is aborted before the laser fires so its data
+            # isn't silently lost). last_scan_error carries the specific reason
+            # when it's the latter.
+            reason = getattr(self._scan_workflow, "last_scan_error", None)
             # Log at WARNING so this is visible in the run log file —
             # captureLog signal goes through QML console.log which is
             # filtered out by default.
-            logger.warning(
-                "startCapture aborted: SDK refused to spawn a new scan "
-                "(see ScanWorkflow.start_scan log for the underlying "
-                "reason — usually a previous worker thread that didn't "
-                "exit cleanly)."
-            )
-            self.captureLog.emit("Capture already running.")
+            if reason:
+                logger.warning("startCapture aborted: %s", reason)
+                self.captureLog.emit(f"Scan aborted: {reason}")
+                self.errorOccurred.emit(reason)
+            else:
+                logger.warning(
+                    "startCapture aborted: SDK refused to spawn a new scan "
+                    "(usually a previous worker thread that didn't exit cleanly)."
+                )
+                self.captureLog.emit("Capture already running.")
         return bool(started)
 
     def _log_scan_image_stats(self, left_csv: str, right_csv: str) -> None:
@@ -2716,6 +2951,13 @@ class MOTIONConnector(QObject):
                 )
                 self._camera_dropped.add(key)
                 self.cameraDropoutDetected.emit(side, cam_id, elapsed_str)
+                # Also feed the new LiveScanSource so Phase 2+'s PlotViewer can
+                # render a dropout bar. Time is relative to plot_t0 to match the
+                # per-sample t axis (sample timestamps from the SDK use the same
+                # plot_t0-anchored monotonic origin).
+                src = self._current_scan_source
+                if src is not None and getattr(src, "live", False):
+                    src.mark_dropped(side=side, cam_id=cam_id, t=now - self._plot_t0)
 
     def _scan_elapsed_str(self) -> str:
         """Return current scan elapsed trigger-ON time as HH:MM:SS."""

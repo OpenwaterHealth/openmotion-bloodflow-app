@@ -16,6 +16,26 @@ class _Signal:
         self.calls.append(args)
 
 
+class _RecorderLiveSource:
+    def __init__(self):
+        self.appended = []
+        self.dropped = []
+        self.corrected_batches = []  # NEW
+
+    def append_uncorrected(self, *, side, cam_id, frame_id, t, bfi, bvi,
+                           mean=None, contrast=None):
+        self.appended.append({
+            "side": side, "cam_id": cam_id, "frame_id": frame_id, "t": t,
+            "bfi": bfi, "bvi": bvi, "mean": mean, "contrast": contrast,
+        })
+
+    def mark_dropped(self, *, side, cam_id, t):
+        self.dropped.append({"side": side, "cam_id": cam_id, "t": t})
+
+    def apply_corrected_batch(self, payload):  # NEW
+        self.corrected_batches.append(payload)
+
+
 def _connector():
     return SimpleNamespace(
         _camera_temp_alert_threshold_c=100.0,
@@ -33,9 +53,16 @@ def _connector():
     )
 
 
+def _make_sink(conn, live_source=None):
+    """Helper: build a _LivePlotSink with a stub live_source if not provided."""
+    if live_source is None:
+        live_source = _RecorderLiveSource()
+    return _LivePlotSink(connector=conn, plot_t0=0.0, live_source=live_source), live_source
+
+
 def test_live_plot_sink_emits_only_source_camera_for_each_row():
     conn = _connector()
-    sink = _LivePlotSink(connector=conn, plot_t0=0.0)
+    sink, _ = _make_sink(conn)
     batch = SimpleNamespace(
         bfi_live=np.zeros((2, 2, 8), dtype=np.float32),
         bvi_live=np.zeros((2, 2, 8), dtype=np.float32),
@@ -72,7 +99,7 @@ def test_live_plot_sink_emits_only_source_camera_for_each_row():
 
 def test_live_plot_sink_uses_per_frame_sdk_timestamps():
     conn = _connector()
-    sink = _LivePlotSink(connector=conn, plot_t0=0.0)
+    sink, _ = _make_sink(conn)
     batch = SimpleNamespace(
         bfi_live=np.zeros((2, 2, 8), dtype=np.float32),
         bvi_live=np.zeros((2, 2, 8), dtype=np.float32),
@@ -95,37 +122,175 @@ def test_live_plot_sink_uses_per_frame_sdk_timestamps():
     assert [call[3] for call in conn.scanBviSampled.calls] == [1.25, 1.275]
 
 
+def _make_final_sink(conn, live_source=None):
+    if live_source is None:
+        live_source = _RecorderLiveSource()
+    return _FinalBatchSink(connector=conn, plot_t0=0.0, live_source=live_source), live_source
+
+
 def test_final_batch_sink_accepts_enriched_interval_frames():
     conn = _connector()
-    sink = _FinalBatchSink(connector=conn, plot_t0=0.0)
+    sink, _src = _make_final_sink(conn)
     interval = SimpleNamespace(
         frames=[
-            SimpleNamespace(
-                side="left",
-                cam_id=1,
-                abs_frame_id=42,
-                bfi=2.5,
-                bvi=6.5,
-                mean=125.0,
-                contrast=0.31,
-            ),
-            SimpleNamespace(
-                side="right",
-                cam_id=6,
-                abs_frame_id=43,
-                bfi=3.5,
-                bvi=7.5,
-                mean=140.0,
-                contrast=0.29,
-            ),
+            SimpleNamespace(side="left",  cam_id=1, abs_frame_id=42,
+                            bfi=2.5, bvi=6.5, mean=125.0, contrast=0.31),
+            SimpleNamespace(side="right", cam_id=6, abs_frame_id=43,
+                            bfi=3.5, bvi=7.5, mean=140.0, contrast=0.29),
         ]
     )
-
     sink.consume("final", interval)
-
     assert len(conn.scanCorrectedBatch.calls) == 1
     payload = conn.scanCorrectedBatch.calls[0][0]
     assert [(p["side"], p["camId"], p["frameId"], p["bfi"], p["bvi"], p["mean"], p["contrast"]) for p in payload] == [
         ("left", 1, 42, 2.5, 6.5, 125.0, 0.31),
         ("right", 6, 43, 3.5, 7.5, 140.0, 0.29),
     ]
+
+
+def test_final_batch_sink_does_not_forward_to_live_source():
+    """The new viewer is intentionally NOT fed corrected values — the
+    in-place buffer rewrite at every dark-interval close caused visible
+    mid-scan disruption. Legacy plot still gets the scanCorrectedBatch
+    Qt signal; the LiveScanSource is left at uncorrected live values.
+    Re-flip this test if/when corrected handoff is reintroduced."""
+    conn = _connector()
+    sink, src = _make_final_sink(conn)
+    interval = SimpleNamespace(
+        frames=[
+            SimpleNamespace(side="left", cam_id=1, abs_frame_id=42,
+                            bfi=2.5, bvi=6.5, mean=125.0, contrast=0.31),
+        ]
+    )
+    sink.consume("final", interval)
+    # Legacy emit still fires.
+    assert len(conn.scanCorrectedBatch.calls) == 1
+    # New viewer source not touched.
+    assert src.corrected_batches == []
+
+
+def test_final_batch_sink_skips_live_source_when_payload_empty():
+    """Empty payload (no samples passed the dropout gate) shouldn't even
+    call apply_corrected_batch."""
+    conn = _connector()
+    # Pre-populate dropped set so the dropout gate filters everything.
+    conn._camera_dropped.add(("left", 1))
+    sink, src = _make_final_sink(conn)
+    interval = SimpleNamespace(
+        frames=[
+            SimpleNamespace(side="left", cam_id=1, abs_frame_id=42,
+                            bfi=2.5, bvi=6.5, mean=125.0, contrast=0.31),
+        ]
+    )
+    sink.consume("final", interval)
+    assert src.corrected_batches == []
+    assert conn.scanCorrectedBatch.calls == []
+
+
+def test_live_plot_sink_subscribes_to_live_side_channel():
+    sink, _ = _make_sink(_connector())
+    assert "live" in sink.channels
+    assert "live_side" in sink.channels
+
+
+def test_live_plot_sink_live_side_appends_under_cam_id_minus_1():
+    """A SideAverageSample on the 'live_side' channel (one per capture per side
+    from the SDK's LiveSideAverageStage) is appended under cam_id=-1 for its
+    side. No dedup/skip here — the stage already produced one per capture."""
+    conn = _connector()
+    sink, src = _make_sink(conn)
+    sink.consume("live_side", SimpleNamespace(t=0.5, frame_id=100, side=0, bfi=0.42, bvi=5.0))
+    sink.consume("live_side", SimpleNamespace(t=0.5, frame_id=100, side=1, bfi=0.31, bvi=4.9))
+
+    recs = [r for r in src.appended if r["cam_id"] == -1]
+    assert len(recs) == 2
+    left = next(r for r in recs if r["side"] == "left")
+    assert left["bfi"] == pytest.approx(0.42) and left["bvi"] == pytest.approx(5.0)
+    assert left["frame_id"] == 100 and left["t"] == pytest.approx(0.5)
+    assert left["mean"] is None and left["contrast"] is None
+    right = next(r for r in recs if r["side"] == "right")
+    assert right["bfi"] == pytest.approx(0.31)
+
+
+def test_live_plot_sink_live_channel_appends_no_side_average():
+    """The 'live' channel feeds only per-camera buffers; the cam_id=-1 side
+    average comes solely from the 'live_side' channel now."""
+    conn = _connector()
+    sink, src = _make_sink(conn)
+    batch = SimpleNamespace(
+        bfi_live=np.zeros((1, 2, 8), dtype=np.float32),
+        bvi_live=np.zeros((1, 2, 8), dtype=np.float32),
+        mean_dc_rt=np.zeros((1, 2, 8), dtype=np.float32),
+        contrast_sn_rt=np.zeros((1, 2, 8), dtype=np.float32),
+        temperature_c=np.full((1, 2, 8), 35.0, dtype=np.float32),
+        frame_type=np.array(["light"], dtype="<U8"),
+        timestamp_s=np.array([0.5], dtype=np.float64),
+        abs_frame_ids=np.array([1], dtype=np.int64),
+        side_ids=np.array([0], dtype=np.int8),
+        cam_ids=np.array([0], dtype=np.int8),
+    )
+    batch.bfi_live[0, 0, 0] = 0.3
+    batch.bvi_live[0, 0, 0] = 5.0
+
+    sink.consume("live", batch)
+
+    assert [r for r in src.appended if r["cam_id"] == -1] == []
+    assert [r for r in src.appended if r["cam_id"] == 0]  # per-cam still appended
+
+
+def test_live_plot_sink_live_channel_updates_dropout_heartbeat():
+    """Per-camera BFI arrival on the 'live' channel still updates the
+    dropout-watchdog heartbeat — reduced mode shows only the average, but
+    liveness detection must keep seeing each camera."""
+    conn = _connector()
+    sink, _ = _make_sink(conn)
+    batch = SimpleNamespace(
+        bfi_live=np.zeros((1, 2, 8), dtype=np.float32),
+        bvi_live=np.zeros((1, 2, 8), dtype=np.float32),
+        mean_dc_rt=np.zeros((1, 2, 8), dtype=np.float32),
+        contrast_sn_rt=np.zeros((1, 2, 8), dtype=np.float32),
+        temperature_c=np.full((1, 2, 8), 35.0, dtype=np.float32),
+        frame_type=np.array(["light"], dtype="<U8"),
+        timestamp_s=np.array([0.5], dtype=np.float64),
+        abs_frame_ids=np.array([1], dtype=np.int64),
+        side_ids=np.array([0], dtype=np.int8),
+        cam_ids=np.array([3], dtype=np.int8),
+    )
+    batch.bfi_live[0, 0, 3] = 0.3
+    batch.bvi_live[0, 0, 3] = 5.0
+
+    sink.consume("live", batch)
+    assert ("left", 3) in conn._camera_last_seen
+
+
+def test_live_plot_sink_appends_to_live_source():
+    conn = _connector()
+    sink, src = _make_sink(conn)
+    batch = SimpleNamespace(
+        bfi_live=np.zeros((1, 2, 8), dtype=np.float32),
+        bvi_live=np.zeros((1, 2, 8), dtype=np.float32),
+        mean_dc_rt=np.zeros((1, 2, 8), dtype=np.float32),
+        contrast_sn_rt=np.full((1, 2, 8), 0.25, dtype=np.float32),
+        temperature_c=np.full((1, 2, 8), 35.0, dtype=np.float32),
+        frame_type=np.array(["light"], dtype="<U8"),
+        timestamp_s=np.array([1.5], dtype=np.float64),
+        abs_frame_ids=np.array([77], dtype=np.int64),
+        side_ids=np.array([1], dtype=np.int8),
+        cam_ids=np.array([4], dtype=np.int8),
+    )
+    batch.bfi_live[0, 1, 4] = 4.4
+    batch.bvi_live[0, 1, 4] = 3.3
+    batch.mean_dc_rt[0, 1, 4] = 125.0
+
+    sink.consume("live", batch)
+
+    assert len(src.appended) == 1
+    rec = src.appended[0]
+    assert rec["side"] == "right"
+    assert rec["cam_id"] == 4
+    assert rec["frame_id"] == 77
+    assert rec["t"] == 1.5
+    assert rec["bfi"] == pytest.approx(4.4)
+    assert rec["bvi"] == pytest.approx(3.3)
+    assert rec["mean"] == pytest.approx(125.0)
+    assert rec["contrast"] == pytest.approx(0.25)

@@ -104,6 +104,17 @@ def _load_app_config() -> dict:
         "dataDirectory": None,
         "writeRawCsv": True,
         "rawCsvDurationSec": None,
+        # Corrected per-cam CSV ({scan_id}.csv) is redundant now that
+        # per-cam BFI/BVI lands in scans.db (the new viewer + past replay
+        # read from there). Default off; set true to keep exporting it
+        # for external analysis tools.
+        "writeCorrectedCsv": False,
+        # Seconds of live data held in memory per plot buffer before the
+        # oldest half is ring-trimmed; older data then lazy-loads from the
+        # scan DB on pan-into-past. 60 s keeps memory tiny (~1 MB vs ~37 MB
+        # at 30 min) and leans on the verified DB tail for deep history.
+        # Raise it if synchronous DB queries on deep pan-back ever stutter.
+        "liveCacheMaxSeconds": 60,
         "autoScale": False,
         "autoScalePerPlot": False,
         "reducedMode": False,
@@ -123,6 +134,17 @@ def _load_app_config() -> dict:
         "cq_rolling_avg_window": 10,
         "cq_dark_threshold_per_camera": [3.0] * 8,
         "cq_light_threshold_per_camera": [15.0] * 8,
+        # Phase 3 (spec §289): new PlotViewer is now the default. The
+        # legacy EmbeddedRealtimePlot / ReducedPlotView Loaders are kept
+        # in BloodFlow.qml as a one-release fallback — set this flag to
+        # false in app_config.json if a regression surfaces and you need
+        # the old plots back. Will be removed entirely in Phase 5 cleanup.
+        "useNewPlotViewer": True,
+        # Phase 2b: profile HUD overlay on the new PlotViewer — sample
+        # rate, paint-tick ms, avg canvas-paint ms, total points
+        # painted. Gated on `developerMode && showProfiling` so clinical
+        # users never see it.
+        "showProfiling": False,
     }
     config_path = resource_path("config", "app_config.json")
     if not config_path.exists():

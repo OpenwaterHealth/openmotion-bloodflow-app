@@ -1,0 +1,373 @@
+import QtQuick 6.0
+
+// Phase 2a — single-trace Canvas bound to one (side, cam_id, metric) key
+// on a ScanDataSource. No pan/zoom, no crosshair, no axis labels —
+// those land in Phase 2b. The cell tracks the live edge of the source
+// and renders the last `windowSeconds` of samples, strided to at most
+// 2 * width samples per paint.
+Item {
+    id: cell
+
+    // ── Inputs ─────────────────────────────────────────────────────────
+    property var source: null            // ScanDataSource (Python QObject) or null
+    property string side: "left"
+    property int    camId: 0
+    property real   windowSeconds: 15
+
+    // Time-axis state — when followLive=true, the cell tracks the
+    // viewer's per-tick liveEdge snapshot (NOT source.liveEdge directly,
+    // so every cell sees the same value for a given paintTick). When
+    // false, the window is pinned at [windowStartT, windowStartT + windowSeconds].
+    property bool followLive: true
+    property real windowStartT: 0.0
+    property real liveEdgeSnapshot: 0.0
+
+    // Primary trace
+    property string metric: "bfi"
+    property real yMin: 0.0
+    property real yMax: 10.0
+    property color traceColor: theme.statusBlue
+
+    // Secondary trace (optional) — set secondaryMetric to a non-empty
+    // string to render a second overlaid trace with its own y-mapping.
+    // Used for BFI+BVI / Mean+Contrast paired display modes.
+    property string secondaryMetric: ""
+    property real secondaryYMin: 0.0
+    property real secondaryYMax: 10.0
+    property color secondaryColor: theme.statusBlue
+
+    // Visual — defaults pulled from AppTheme; can be overridden per-cell.
+    property color frameColor: theme.borderSubtle
+    property color bgColor: theme.bgPanel
+
+    // DVR target — set to PlotViewer; cell calls .setWindow(startT, sec)
+    // on pan/zoom interactions. Cell itself owns no time-axis state;
+    // viewer is the single source of truth for windowStartT / followLive /
+    // windowSeconds across all cells.
+    property var panZoomTarget: null
+
+    // Crosshair: NaN means hide. The viewer broadcasts the same value
+    // to every cell so the vertical line stays synced across the grid.
+    property real cursorT: NaN
+
+    AppTheme { id: theme }
+
+    // ── Repaint plumbing ───────────────────────────────────────────────
+    // Repaints are throttled by the parent PlotViewer: it owns a 33 ms
+    // dirty-flagged Timer that ticks `paintTick` whenever any
+    // samplesAppended arrived. Binding paintTick here triggers exactly
+    // one repaint per parent tick — caps cell-paint rate to ~30 Hz and
+    // keeps all cells visually in lockstep.
+    property int paintTick: 0
+    onPaintTickChanged: traceCanvas.requestPaint()
+    onWidthChanged: traceCanvas.requestPaint()
+    onHeightChanged: traceCanvas.requestPaint()
+    onSourceChanged: traceCanvas.requestPaint()
+    // Note: cursorT changes do NOT trigger a direct repaint — that
+    // would spam paints on every mouse-move event. Instead the viewer
+    // sets _dirty on cursorAt() so the next paintThrottle tick
+    // (≤ 33 ms) repaints with the new crosshair position.
+
+    // Render one trace inside the current Canvas context using the given
+    // metric/color/yMin/yMax. Defined as a JS function on the cell so
+    // both primary and secondary draws share it. Returns the number of
+    // points actually painted so the profile HUD can sum across cells.
+    function _drawTrace(ctx, metricName, color, yMinVal, yMaxVal,
+                       tLo, tHi, dt, maxPts, w, h) {
+        if (!metricName || metricName.length === 0) return 0
+        var pts = cell.source.points_for_window(
+            cell.side, cell.camId, metricName, tLo, tHi, maxPts
+        )
+        if (pts.length < 2) return 0
+        var dy = yMaxVal - yMinVal
+        if (dy <= 0) return 0
+        ctx.beginPath()
+        ctx.lineWidth = 1.5
+        ctx.strokeStyle = color
+        for (var i = 0; i < pts.length; i++) {
+            var t = pts[i][0]
+            var v = pts[i][1]
+            if (!isFinite(v)) continue
+            var x = ((t - tLo) / dt) * w
+            var y = h - ((v - yMinVal) / dy) * h
+            if (i === 0) ctx.moveTo(x, y)
+            else ctx.lineTo(x, y)
+        }
+        ctx.stroke()
+        return pts.length
+    }
+
+    Rectangle {
+        anchors.fill: parent
+        color: cell.bgColor
+        border.color: cell.frameColor
+        border.width: 1
+        radius: 4
+    }
+
+    Canvas {
+        id: traceCanvas
+        anchors.fill: parent
+        anchors.margins: 4
+
+        onPaint: {
+            // Profile-HUD timing: only sample wall-time when the HUD is
+            // visible to keep clinical-build paint hot path identical.
+            var profOn = cell.panZoomTarget
+                         && cell.panZoomTarget.recordCellPaint
+                         && cell.panZoomTarget._hudVisible
+            var profT0 = profOn ? Date.now() : 0
+            var profPts = 0
+
+            var ctx = getContext("2d")
+            ctx.clearRect(0, 0, width, height)
+
+            // Midline gridline — always drawn for visual reference, even
+            // when no source is bound. Skipped for very narrow cells.
+            if (width >= 60) {
+                ctx.strokeStyle = cell.frameColor
+                ctx.lineWidth = 1
+                ctx.beginPath()
+                var midY = Math.floor(height / 2) + 0.5  // crisp 1px line
+                ctx.moveTo(0, midY)
+                ctx.lineTo(width, midY)
+                ctx.stroke()
+            }
+
+            if (!cell.source) {
+                if (profOn) cell.panZoomTarget.recordCellPaint(Date.now() - profT0, 0)
+                return
+            }
+
+            // Window boundaries — followLive locks tHi to the viewer's
+            // per-tick snapshot (synced across every cell); otherwise the
+            // window stays pinned at the user-set
+            // [windowStartT, windowStartT + windowSeconds].
+            var tHi = cell.followLive
+                ? cell.liveEdgeSnapshot
+                : cell.windowStartT + cell.windowSeconds
+            var tLo = tHi - cell.windowSeconds
+            var dt = tHi - tLo
+            if (dt <= 0) return
+
+            // 0.5 samples per pixel. Source-side stride-aligned causal
+            // smoothing makes the visual quality robust to lower output
+            // counts. Halving maxPts (vs width × 1) lets decimation
+            // saturate at ~3 s of scan instead of ~6 s, cutting the
+            // ramp-up paint-throttle gap in half and giving us a lower
+            // steady-state per-paint marshalling cost.
+            var maxPts = Math.max(50, Math.floor(width * 0.5))
+
+            profPts += cell._drawTrace(ctx, cell.metric, cell.traceColor,
+                            cell.yMin, cell.yMax,
+                            tLo, tHi, dt, maxPts, width, height)
+            profPts += cell._drawTrace(ctx, cell.secondaryMetric, cell.secondaryColor,
+                            cell.secondaryYMin, cell.secondaryYMax,
+                            tLo, tHi, dt, maxPts, width, height)
+
+            // Dropout marker — vertical red bar at the recorded
+            // dropout time for this (side, cam).
+            var dropT = cell.source.dropped_at_for(cell.side, cell.camId)
+            if (isFinite(dropT) && dropT >= tLo && dropT <= tHi) {
+                var dropX = ((dropT - tLo) / dt) * width
+                ctx.strokeStyle = theme.accentRed
+                ctx.lineWidth = 2
+                ctx.beginPath()
+                ctx.moveTo(Math.floor(dropX) + 0.5, 0)
+                ctx.lineTo(Math.floor(dropX) + 0.5, height)
+                ctx.stroke()
+            }
+
+            // Crosshair — vertical line at cursorT (broadcast by the
+            // viewer so every cell stays in sync on hover).
+            if (isFinite(cell.cursorT) && cell.cursorT >= tLo && cell.cursorT <= tHi) {
+                var crossX = ((cell.cursorT - tLo) / dt) * width
+                ctx.strokeStyle = theme.textTertiary
+                ctx.lineWidth = 1
+                ctx.beginPath()
+                ctx.moveTo(Math.floor(crossX) + 0.5, 0)
+                ctx.lineTo(Math.floor(crossX) + 0.5, height)
+                ctx.stroke()
+            }
+
+            if (profOn) cell.panZoomTarget.recordCellPaint(Date.now() - profT0, profPts)
+        }
+    }
+
+    // Cell label — top-left, camera identity plus per-metric range labels
+    // colored to match each trace. When secondaryMetric is empty, only
+    // the primary metric row is shown.
+    Column {
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.margins: 8
+        spacing: 1
+
+        Text {
+            // cam_id = -1 is the side-averaged stream fed by the SDK's
+            // SideAveragingStage in reduced mode. Label it as "AVG".
+            text: cell.camId === -1
+                ? cell.side.toUpperCase() + " AVG"
+                : cell.side.toUpperCase() + " " + (cell.camId + 1)
+            color: theme.textSecondary
+            font.pixelSize: 11
+            font.family: "Roboto Mono"
+        }
+        Text {
+            visible: cell.width >= 80
+            // Show the most recent sample value rather than the
+            // autoscale-derived range — clinicians care about "what's
+            // it reading right now", not the y-axis extent. paintTick
+            // is a dependency so the text refreshes at the throttled
+            // rate. Junk last-frame values are filtered at the SDK side
+            // (BfiBviStage NaN's anything outside [-2, 10) exclusive),
+            // so the absolute-last sample is safe to read directly.
+            text: {
+                void cell.paintTick  // dependency
+                if (!cell.source) return cell.metric.toUpperCase() + "  --"
+                var v = cell.source.value_at(cell.side, cell.camId, cell.metric, cell.liveEdgeSnapshot)
+                return cell.metric.toUpperCase() + "  "
+                       + (isFinite(v) ? v.toFixed(2) : "--")
+            }
+            color: cell.traceColor
+            font.pixelSize: 10
+            font.family: "Roboto Mono"
+        }
+        Text {
+            visible: cell.width >= 80 && cell.secondaryMetric.length > 0
+            text: {
+                void cell.paintTick
+                if (!cell.source) return cell.secondaryMetric.toUpperCase() + "  --"
+                var v = cell.source.value_at(cell.side, cell.camId, cell.secondaryMetric, cell.liveEdgeSnapshot)
+                return cell.secondaryMetric.toUpperCase() + "  "
+                       + (isFinite(v) ? v.toFixed(2) : "--")
+            }
+            color: cell.secondaryColor
+            font.pixelSize: 10
+            font.family: "Roboto Mono"
+        }
+    }
+
+    // ── Pan + wheel-zoom MouseArea ─────────────────────────────────────
+    // Top of z-order (last sibling) so it captures mouse events from
+    // the underlying Canvas + label children. Wheel zooms around the
+    // cursor x; click-drag pans the time axis. Both apply globally via
+    // panZoomTarget.setWindow(...) so every cell in the grid stays in
+    // sync. Sets followLive=false on any interaction.
+    MouseArea {
+        id: panZoomArea
+        anchors.fill: parent
+        acceptedButtons: Qt.LeftButton
+        cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+        hoverEnabled: true
+
+        // Drag snapshot — captured at press so the drag is computed
+        // against a fixed origin instead of accumulating per-move
+        // floating-point drift.
+        property real _dragStartX: 0
+        property real _dragStartWindowStartT: 0
+
+        function _currentTHi() {
+            if (cell.followLive)
+                return cell.liveEdgeSnapshot
+            return cell.windowStartT + cell.windowSeconds
+        }
+
+        function _cursorTFromMouseX(mx) {
+            var tHiNow = panZoomArea._currentTHi()
+            var tLoNow = tHiNow - cell.windowSeconds
+            return tLoNow + (mx / cell.width) * cell.windowSeconds
+        }
+
+        onPressed: function(mouse) {
+            panZoomArea._dragStartX = mouse.x
+            panZoomArea._dragStartWindowStartT = panZoomArea._currentTHi() - cell.windowSeconds
+            // Pull keyboard focus back to the viewer — if the user just
+            // clicked into a text input elsewhere, this restores the
+            // shortcut bindings on the next click into the plot grid.
+            if (cell.panZoomTarget) cell.panZoomTarget.forceActiveFocus()
+        }
+
+        onPositionChanged: function(mouse) {
+            if (pressed) {
+                if (!cell.panZoomTarget || cell.width <= 0) return
+                // Drag right = scroll back in time = windowStartT decreases.
+                var dx = mouse.x - panZoomArea._dragStartX
+                var dt = (dx / cell.width) * cell.windowSeconds
+                cell.panZoomTarget.setWindow(
+                    panZoomArea._dragStartWindowStartT - dt,
+                    cell.windowSeconds
+                )
+            } else {
+                // Hover: broadcast cursor time to the viewer.
+                if (cell.panZoomTarget && cell.width > 0)
+                    cell.panZoomTarget.cursorAt(panZoomArea._cursorTFromMouseX(mouse.x))
+            }
+        }
+
+        onEntered: {
+            if (cell.panZoomTarget && cell.width > 0)
+                cell.panZoomTarget.cursorAt(panZoomArea._cursorTFromMouseX(mouseX))
+        }
+
+        onExited: {
+            if (cell.panZoomTarget) cell.panZoomTarget.cursorAt(NaN)
+        }
+
+        onWheel: function(wheel) {
+            if (!cell.panZoomTarget || cell.width <= 0) {
+                wheel.accepted = false
+                return
+            }
+            // Up = zoom in (smaller window); down = zoom out.
+            var factor = wheel.angleDelta.y > 0 ? 0.8 : 1.25
+            var ratio = Math.max(0, Math.min(1, wheel.x / cell.width))
+            var tHiNow = panZoomArea._currentTHi()
+            var tLoNow = tHiNow - cell.windowSeconds
+            var anchorT = tLoNow + ratio * cell.windowSeconds
+            var newSec = cell.windowSeconds * factor
+            var newStart = anchorT - ratio * newSec
+            cell.panZoomTarget.setWindow(newStart, newSec)
+            wheel.accepted = true
+        }
+    }
+
+    // ── Touch pinch-zoom ───────────────────────────────────────────────
+    // Mouse wheel is mouse-only — touch devices (Surface, etc.) need a
+    // pinch handler. Single-finger drag still flows through the
+    // MouseArea above (Qt auto-translates one touch to mouse events).
+    // The handler snapshots windowSeconds and the anchor at pinch
+    // start, then computes newSec = baseSec / scale so the pinch
+    // gesture's cumulative scale maps smoothly to the visible window.
+    PinchHandler {
+        id: pinchZoom
+        target: null  // we drive the viewer manually via setWindow
+
+        property real _baseWindowSeconds: 0
+        property real _baseTLo: 0
+        property real _anchorRatio: 0.5
+
+        onActiveChanged: {
+            if (active && cell.width > 0) {
+                _baseWindowSeconds = cell.windowSeconds
+                _baseTLo = panZoomArea._currentTHi() - cell.windowSeconds
+                _anchorRatio = Math.max(0, Math.min(1, centroid.position.x / cell.width))
+                // Keyboard focus back to viewer on any touch interaction.
+                if (cell.panZoomTarget) cell.panZoomTarget.forceActiveFocus()
+            }
+        }
+
+        onScaleChanged: {
+            if (!active || !cell.panZoomTarget || cell.width <= 0) return
+            // Pinch out (scale > 1) = zoom in (smaller window); pinch
+            // in (scale < 1) = zoom out. Matches platform conventions.
+            var newSec = pinchZoom._baseWindowSeconds / scale
+            var anchorT = pinchZoom._baseTLo
+                          + pinchZoom._anchorRatio * pinchZoom._baseWindowSeconds
+            cell.panZoomTarget.setWindow(
+                anchorT - pinchZoom._anchorRatio * newSec,
+                newSec
+            )
+        }
+    }
+}
