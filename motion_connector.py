@@ -2065,6 +2065,12 @@ class MOTIONConnector(QObject):
             right_camera_mask=right_camera_mask,
             disable_laser=disable_laser,
             reduced_mode=self._app_config.get("reducedMode", False),
+            # Corrected CSV is opt-in now that per-cam BFI/BVI lands in
+            # the scan DB (the new viewer + past replay read from there).
+            # Default False to skip the redundant {scan_id}.csv; flip
+            # writeCorrectedCsv:true in app_config to keep exporting it.
+            # The SDK still forces it on if no DB is configured.
+            write_corrected_csv=self._app_config.get("writeCorrectedCsv", False),
             # Raw CSV duration forwarded to the pipeline's Tee("raw") gate
             # via raw_save_max_duration_s. None means unbounded (write entire
             # scan); 0 omits raw tee entirely.
