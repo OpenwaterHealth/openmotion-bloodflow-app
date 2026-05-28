@@ -1793,11 +1793,31 @@ class MOTIONConnector(QObject):
                 logger.warning("loadPastScan: no session found for label %r", session_label)
                 return
             session_id = int(session["id"])
-            past = PastScanSource(scan_db=db, session_id=session_id, parent=self)
+            # Per-cam corrected CSV ({scan_id}.csv, 82-col wide format)
+            # is the only source of per-cam BFI/BVI/mean/contrast for
+            # past replay — the DB's session_data only holds side-
+            # aggregated corrected-frame placeholders. CsvSink writes
+            # this CSV unconditionally for every scan, so it's reliably
+            # available.
+            details = self.get_scan_details(session_label) or {}
+            corrected_csv = details.get("correctedPath") or None
+            past = PastScanSource(
+                scan_db=db,
+                session_id=session_id,
+                corrected_csv_path=corrected_csv,
+                parent=self,
+            )
             self._set_current_scan_source(past)
+            # Diagnostic — left in for now so we can spot regressions
+            # in past-scan loading. Cheap (one log line per click).
+            n_buffers = len(past.buffers)
+            n_samples = sum(b.n for b in past.buffers.values())
+            sample_keys = sorted(past.buffers.keys())[:8]
             logger.info(
-                "[Plot] loaded past scan %r (session_id=%d) into viewer",
-                session_label, session_id,
+                "[Plot] loaded past scan %r (session_id=%d) csv=%s: "
+                "buffers=%d samples=%d liveEdge=%.3f sample_keys=%s",
+                session_label, session_id, bool(corrected_csv),
+                n_buffers, n_samples, past.liveEdge, sample_keys,
             )
         except Exception:
             logger.exception("loadPastScan failed for label %r", session_label)

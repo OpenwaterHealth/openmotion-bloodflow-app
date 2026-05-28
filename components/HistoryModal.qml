@@ -376,7 +376,11 @@ Item {
                             text: "View in plot →"
                             visible: MOTIONInterface.appConfig.useNewPlotViewer === true
                             Layout.fillWidth: true; Layout.preferredHeight: 36
-                            enabled: scans.length > 0 && currentIndex >= 0
+                            // `currentIndex` lives on scanPicker (the ComboBox)
+                            // — referencing it bare here resolves to undefined
+                            // at the root scope and `undefined >= 0` is false,
+                            // which left this button perma-greyed.
+                            enabled: scans.length > 0 && scanPicker.currentIndex >= 0
                             hoverEnabled: enabled
                             contentItem: Text {
                                 text: parent.text; font.pixelSize: 13
@@ -388,7 +392,7 @@ Item {
                                 border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
                             }
                             onClicked: {
-                                MOTIONInterface.loadPastScan(scans[currentIndex] || "")
+                                MOTIONInterface.loadPastScan(scans[scanPicker.currentIndex] || "")
                                 root.close()
                             }
                         }

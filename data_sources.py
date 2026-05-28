@@ -541,12 +541,20 @@ class PastScanSource(ScanDataSource):
         self,
         scan_db,                # omotion.ScanDatabase — duck-typed for tests
         session_id: int,
+        corrected_csv_path: Optional[str] = None,
         parent: Optional[QObject] = None,
     ) -> None:
         super().__init__(plot_t0=0.0, parent=parent)
         self._live = False
         self.session_id = int(session_id)
 
+        # The SDK currently writes only side-aggregated CORRECTED-FRAME
+        # placeholders into session_data: cam_id=-1, side=0 (left
+        # sentinel), bfi/bvi=NULL, mean/contrast=values. So this loop
+        # populates (left, -1, mean) and (left, -1, contrast). Per-cam
+        # data isn't recoverable here (the spec's "PR 3 will carry per-
+        # cam data" hasn't landed). BFI/BVI come from corrected_csv_path
+        # below.
         for row in scan_db.iter_session_data(self.session_id):
             side_int = int(row["side"])
             side = _SIDE_INT_TO_STR.get(side_int)
@@ -563,3 +571,79 @@ class PastScanSource(ScanDataSource):
                     continue
                 buf = self.get_or_create_buffer(side, cam_id, metric)
                 buf.append(t=t, v=float(value), frame_id=frame_id)
+
+        # Corrected CSV: columns frame_id, timestamp_s, bfi_left, bfi_right,
+        # bvi_left, bvi_right — side-averaged BFI/BVI per row. Populates
+        # (left, -1, bfi/bvi) and (right, -1, bfi/bvi) so reduced-mode
+        # replay (which uses cam_id=-1 cells) can render the recorded
+        # blood-flow traces. Empty cells (missing values written as ',,')
+        # are skipped per side.
+        if corrected_csv_path:
+            self._load_corrected_csv(corrected_csv_path)
+
+    def _load_corrected_csv(self, csv_path: str) -> None:
+        """Load per-(side, cam, metric) samples from the corrected CSV
+        written by SDK's CsvSink. Two formats:
+
+        - Normal (dev) mode — 82 cols: frame_id, timestamp_s,
+          bfi_l1..bfi_r8, bvi_l1..bvi_r8, mean_l1..mean_r8,
+          contrast_l1..contrast_r8, temp_l1..temp_r8. Each metric
+          column populates (side, cam_id=0..7, metric).
+        - Reduced mode — 6 cols: frame_id, timestamp_s, bfi_left,
+          bfi_right, bvi_left, bvi_right. Each side column populates
+          (side, cam_id=-1, metric).
+
+        This CSV is written unconditionally for every scan (SDK's
+        CsvSink isn't gated by writeRawCsv). Empty cells are skipped.
+        Best-effort load — a missing or malformed file just means the
+        viewer shows whatever else PastScanSource managed to read.
+        """
+        import csv as _csv
+
+        try:
+            with open(csv_path, "r", encoding="utf-8") as f:
+                reader = _csv.DictReader(f)
+                fieldnames = reader.fieldnames or []
+                # Detect format by presence of the per-cam column for
+                # cam 1 in either format.
+                is_per_cam = any(c == "bfi_l1" for c in fieldnames)
+                is_reduced = any(c == "bfi_left" for c in fieldnames)
+                if not (is_per_cam or is_reduced):
+                    return
+                for row in reader:
+                    try:
+                        frame_id = int(row.get("frame_id", -1))
+                        t = float(row["timestamp_s"])
+                    except (ValueError, KeyError, TypeError):
+                        continue
+                    if is_per_cam:
+                        for metric in ("bfi", "bvi", "mean", "contrast"):
+                            for side, side_prefix in (("left", "l"), ("right", "r")):
+                                for cam_idx in range(8):
+                                    # Columns are 1-indexed (l1..l8) so add 1
+                                    # for the column name but store 0-indexed.
+                                    col = f"{metric}_{side_prefix}{cam_idx + 1}"
+                                    raw = row.get(col, "")
+                                    if raw is None or raw == "":
+                                        continue
+                                    try:
+                                        v = float(raw)
+                                    except ValueError:
+                                        continue
+                                    buf = self.get_or_create_buffer(side, cam_idx, metric)
+                                    buf.append(t=t, v=v, frame_id=frame_id)
+                    elif is_reduced:
+                        for metric in ("bfi", "bvi"):
+                            for side in ("left", "right"):
+                                col = f"{metric}_{side}"
+                                raw = row.get(col, "")
+                                if raw is None or raw == "":
+                                    continue
+                                try:
+                                    v = float(raw)
+                                except ValueError:
+                                    continue
+                                buf = self.get_or_create_buffer(side, -1, metric)
+                                buf.append(t=t, v=v, frame_id=frame_id)
+        except OSError:
+            pass

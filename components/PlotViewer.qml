@@ -890,6 +890,30 @@ Rectangle {
                     radius: 8
                 }
 
+                // Mini Switch styled to match SettingsModal's PillSwitch —
+                // blue-background pill with white thumb when on, dark
+                // background when off. Animated thumb glide on toggle.
+                component PopupPillSwitch: Switch {
+                    id: psCtrl
+                    scale: 0.9
+                    indicator: Rectangle {
+                        x:      psCtrl.leftPadding
+                        y:      (psCtrl.height - height) / 2
+                        width:  44; height: 24; radius: 12
+                        color:  psCtrl.checked ? theme.accentBlue : theme.bgInput
+                        border.color: psCtrl.checked ? theme.accentBlue : theme.borderSoft
+                        border.width: 1
+                        Behavior on color { ColorAnimation { duration: 120 } }
+
+                        Rectangle {
+                            x:      psCtrl.checked ? parent.width - width - 3 : 3
+                            y:      3; width: 18; height: 18; radius: 9
+                            color:  "#FFFFFF"
+                            Behavior on x { NumberAnimation { duration: 120 } }
+                        }
+                    }
+                }
+
                 contentItem: Column {
                     id: popupColumn
                     spacing: 6
@@ -897,11 +921,9 @@ Rectangle {
 
                     Row {
                         spacing: 8
-                        Switch {
+                        PopupPillSwitch {
                             id: bfiBviSwitch
                             checked: viewer.displayMode === "bfi_bvi"
-                            // Switch's `text` lives inside its indicator —
-                            // use a sibling Text for free placement.
                             onToggled: viewer.displayModeToggleRequested(checked)
                         }
                         Text {
@@ -914,7 +936,7 @@ Rectangle {
                     }
                     Row {
                         spacing: 8
-                        Switch {
+                        PopupPillSwitch {
                             id: autoScaleSwitch
                             checked: viewer.autoScale
                             onToggled: viewer.autoScaleToggleRequested(checked)
@@ -930,7 +952,7 @@ Rectangle {
                     Row {
                         visible: MOTIONInterface.appConfig.developerMode === true
                         spacing: 8
-                        Switch {
+                        PopupPillSwitch {
                             id: profilerSwitch
                             checked: viewer.showProfiling
                             onToggled: viewer.showProfiling = checked
