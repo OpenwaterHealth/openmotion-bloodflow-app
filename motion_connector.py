@@ -164,9 +164,16 @@ class _LivePlotSink:
         self._plot_t0 = plot_t0
         self._live_source = live_source
         self._temp_alerted: dict[tuple[str, int], bool] = {}
+        # Last abs_frame_id for which a side-average sample was appended, per
+        # side index. The reduced-mode side average is one value per capture
+        # instant (frame_id), but each capture arrives as one frame row PER
+        # camera, so without this dedup the cam_id=-1 buffer would fill at
+        # N_cams×40 Hz and overflow the in-memory cache in seconds.
+        self._last_side_avg_fid: dict[int, int] = {}
 
     def on_scan_start(self, meta) -> None:
         self._temp_alerted.clear()
+        self._last_side_avg_fid.clear()
 
     def consume(self, channel: str, batch) -> None:
         if channel != "live":
@@ -294,28 +301,33 @@ class _LivePlotSink:
                     contrast=contrast_for_source,
                 )
 
-            # Side-averaged samples (reduced-mode) — present iff the
-            # SDK's SideAveragingStage is enabled. Append under
-            # cam_id=-1 so the new viewer's reduced-mode layout can
-            # pick them up without colliding with the per-cam buffers.
-            # Append even when bfi/bvi are NaN: the renderer's
-            # `_drawTrace` skips non-finite points per-segment, and
-            # filtering here drops legitimate timestamps that would
-            # otherwise leave the buffer empty if a single cam's
-            # per-frame value is NaN (np.mean propagates NaN).
+            # Side-averaged sample (reduced-mode) — present iff the SDK's
+            # SideAveragingStage is enabled. SideAveragingStage emits a running
+            # per-side average across the active cameras' latest values; append
+            # it under cam_id=-1 ONCE PER frame_id for THIS frame's side.
+            #
+            # Each capture instant (frame_id) arrives as one frame row per
+            # camera (all synced cameras share a frame_id), so appending per
+            # row drove the cam_id=-1 buffer at N_cams×40 Hz and overflowed the
+            # in-memory cache in seconds. Deduping by frame_id keeps it at the
+            # ~40 Hz capture cadence. Only the frame's own side is appended —
+            # the opposite side's value for this row is a stale/NaN carry that
+            # belongs to that side's own frames.
             bfi_side_arr = getattr(batch, "bfi_live_side", None)
             bvi_side_arr = getattr(batch, "bvi_live_side", None)
-            if bfi_side_arr is not None and bvi_side_arr is not None and not is_dark:
-                for sa_side_idx, sa_side in enumerate(_SIDE_NAMES):
-                    bfi_s = float(bfi_side_arr[i, sa_side_idx])
-                    bvi_s = float(bvi_side_arr[i, sa_side_idx])
+            if (bfi_side_arr is not None and bvi_side_arr is not None
+                    and not is_dark and side_ids is not None):
+                sa_side_idx = int(side_ids[i])
+                if (0 <= sa_side_idx < len(_SIDE_NAMES)
+                        and self._last_side_avg_fid.get(sa_side_idx) != abs_frame_id):
+                    self._last_side_avg_fid[sa_side_idx] = abs_frame_id
                     self._live_source.append_uncorrected(
-                        side=sa_side,
+                        side=_SIDE_NAMES[sa_side_idx],
                         cam_id=-1,
                         frame_id=abs_frame_id,
                         t=plot_ts,
-                        bfi=bfi_s,
-                        bvi=bvi_s,
+                        bfi=float(bfi_side_arr[i, sa_side_idx]),
+                        bvi=float(bvi_side_arr[i, sa_side_idx]),
                     )
 
     def on_complete(self) -> None:

@@ -1,4 +1,3 @@
-import math
 from types import SimpleNamespace
 
 import numpy as np
@@ -189,9 +188,10 @@ def test_final_batch_sink_skips_live_source_when_payload_empty():
 
 
 def test_live_plot_sink_appends_side_averaged_under_cam_id_minus_1():
-    """Reduced-mode side-averaged samples (bfi_live_side / bvi_live_side
-    set by SDK's SideAveragingStage) must land in cam_id=-1 buffers,
-    one per side per non-dark frame."""
+    """Reduced-mode side-averaged samples (bfi_live_side / bvi_live_side set by
+    SDK's SideAveragingStage) land in cam_id=-1 buffers — one per frame_id, for
+    the frame's OWN side only (so the cam_id=-1 buffer stays at the ~40 Hz
+    capture cadence, not N_cams×40 Hz)."""
     conn = _connector()
     sink, src = _make_sink(conn)
     batch = SimpleNamespace(
@@ -212,26 +212,58 @@ def test_live_plot_sink_appends_side_averaged_under_cam_id_minus_1():
     sink.consume("live", batch)
 
     side_avg_records = [r for r in src.appended if r["cam_id"] == -1]
-    # 2 frames × 2 sides = 4 side-avg records
-    assert len(side_avg_records) == 4
-    # First frame, left side
-    rec = next(r for r in side_avg_records if r["t"] == 0.5 and r["side"] == "left")
-    assert rec["bfi"] == pytest.approx(0.42)
+    # frame 100 is a LEFT frame, frame 101 is a RIGHT frame → one record each,
+    # each carrying its own side's average.
+    assert len(side_avg_records) == 2
+    rec = next(r for r in side_avg_records if r["side"] == "left")
+    assert rec["bfi"] == pytest.approx(0.42)   # bfi_live_side[0, 0]
     assert rec["bvi"] == pytest.approx(5.0)
     assert rec["frame_id"] == 100
+    assert rec["t"] == 0.5
     assert rec["mean"] is None
     assert rec["contrast"] is None
-    # Second frame, right side
-    rec = next(r for r in side_avg_records if r["t"] == 0.525 and r["side"] == "right")
-    assert rec["bfi"] == pytest.approx(0.32)
+    rec = next(r for r in side_avg_records if r["side"] == "right")
+    assert rec["bfi"] == pytest.approx(0.32)   # bfi_live_side[1, 1]
     assert rec["bvi"] == pytest.approx(4.95)
+    assert rec["frame_id"] == 101
 
 
-def test_live_plot_sink_side_averaged_appends_even_when_nan():
-    """Regression: the renderer skips non-finite points per-segment,
-    so dropping NaN side-avg samples here leaves the buffer empty when
-    a single camera's NaN poisons the np.mean. Append NaN samples
-    so timestamps stay aligned."""
+def test_live_plot_sink_side_average_deduped_per_frame_id():
+    """All synced cameras of one capture arrive as separate frame rows sharing
+    a frame_id. The side average must be appended ONCE per frame_id, not once
+    per camera row — otherwise the cam_id=-1 buffer fills at N_cams×40 Hz."""
+    conn = _connector()
+    sink, src = _make_sink(conn)
+    # 4 left-side cameras (0,1,6,7) of ONE capture: same frame_id, same t.
+    n = 4
+    batch = SimpleNamespace(
+        bfi_live=np.zeros((n, 2, 8), dtype=np.float32),
+        bvi_live=np.zeros((n, 2, 8), dtype=np.float32),
+        mean_dc_rt=np.zeros((n, 2, 8), dtype=np.float32),
+        contrast_sn_rt=np.zeros((n, 2, 8), dtype=np.float32),
+        temperature_c=np.full((n, 2, 8), 35.0, dtype=np.float32),
+        frame_type=np.array(["light"] * n, dtype="<U8"),
+        timestamp_s=np.full(n, 0.5, dtype=np.float64),
+        abs_frame_ids=np.full(n, 200, dtype=np.int64),
+        side_ids=np.zeros(n, dtype=np.int8),
+        cam_ids=np.array([0, 1, 6, 7], dtype=np.int8),
+        # Running average refines across the 4 rows; first row's value wins.
+        bfi_live_side=np.array([[1.0, np.nan]] * n, dtype=np.float32),
+        bvi_live_side=np.array([[10.0, np.nan]] * n, dtype=np.float32),
+    )
+
+    sink.consume("live", batch)
+
+    side_avg_records = [r for r in src.appended if r["cam_id"] == -1]
+    assert len(side_avg_records) == 1, "side average must be deduped per frame_id"
+    assert side_avg_records[0]["side"] == "left"
+    assert side_avg_records[0]["frame_id"] == 200
+    assert side_avg_records[0]["bfi"] == pytest.approx(1.0)
+
+
+def test_live_plot_sink_side_average_appends_only_own_side():
+    """Only the frame's OWN side is appended (the opposite side's value for
+    this row is a stale/NaN carry belonging to that side's own frames)."""
     conn = _connector()
     sink, src = _make_sink(conn)
     batch = SimpleNamespace(
@@ -243,24 +275,19 @@ def test_live_plot_sink_side_averaged_appends_even_when_nan():
         frame_type=np.array(["light"], dtype="<U8"),
         timestamp_s=np.array([0.25], dtype=np.float64),
         abs_frame_ids=np.array([5], dtype=np.int64),
-        side_ids=np.array([0], dtype=np.int8),
+        side_ids=np.array([0], dtype=np.int8),  # LEFT frame
         cam_ids=np.array([0], dtype=np.int8),
-        # Left side BFI is NaN (one camera was non-finite upstream);
-        # right side is finite.
-        bfi_live_side=np.array([[float("nan"), 0.5]], dtype=np.float32),
-        bvi_live_side=np.array([[float("nan"), 5.0]], dtype=np.float32),
+        bfi_live_side=np.array([[0.42, 0.5]], dtype=np.float32),
+        bvi_live_side=np.array([[5.0, 4.9]], dtype=np.float32),
     )
 
     sink.consume("live", batch)
 
     side_avg_records = [r for r in src.appended if r["cam_id"] == -1]
-    # Both sides appended — even the NaN one — so timestamps stay aligned.
-    assert len(side_avg_records) == 2
-    left = next(r for r in side_avg_records if r["side"] == "left")
-    assert math.isnan(left["bfi"])
-    assert math.isnan(left["bvi"])
-    right = next(r for r in side_avg_records if r["side"] == "right")
-    assert right["bfi"] == pytest.approx(0.5)
+    # Only the LEFT (own) side is appended, not the RIGHT carry value.
+    assert len(side_avg_records) == 1
+    assert side_avg_records[0]["side"] == "left"
+    assert side_avg_records[0]["bfi"] == pytest.approx(0.42)
 
 
 def test_live_plot_sink_side_averaged_skipped_during_dark_frames():
