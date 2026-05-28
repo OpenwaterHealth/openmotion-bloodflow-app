@@ -46,6 +46,8 @@
 - **Time-keyed decimation stride** (not n_window-keyed) — eliminates "trace morphs every few seconds" artifact at wide zoom.
 - **Stride floor = 1 + window = stride** for the smoothing kernel. Earlier `max(2, …) × 3` over-filtered the 5 s zoom; now raw samples render at tight zoom, Nyquist-minimum smoothing kicks in once decimation is actually needed.
 - **CSV fallback for old scans.** Pre-Phase-1 scans don't have per-cam BFI rows in DB; PastScanSource falls through to the per-cam corrected CSV (`{scan_id}.csv`, 82 columns, always written by CsvSink regardless of `writeRawCsv`).
+- **Live cache default = 60 s** (`1c4be27`). Since the DB tail is verified, hold only 60 s in memory (~1 MB/buffer vs ~37 MB at 30 min); deep history serves from the DB. Configurable via `liveCacheMaxSeconds`. Watch-item: DB query on deep pan-back is synchronous on the QML thread — raise the value if it ever stutters.
+- **loadPastScan diagnostic = KEEP** (decided 2026-05-28). The `[Plot] loaded past scan … source=db/csv` info line stays — it's a useful operational breadcrumb (which scan, from where, how many samples), not a debug hack.
 
 ## Open Items
 
