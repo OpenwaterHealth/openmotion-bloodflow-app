@@ -450,13 +450,134 @@ class ScanDataSource(QObject):
 
 class LiveScanSource(ScanDataSource):
     """ScanDataSource fed by the in-flight pipeline. Constructed at scan
-    start; lives as long as the connector holds a reference."""
+    start; lives as long as the connector holds a reference.
+
+    Bounded-memory + DB tail: the in-memory _CameraBuffers ring-trim at
+    _MAX_CAPACITY (~30 min @ 40 Hz), dropping the oldest half. Older
+    samples remain in the scan DB (the SDK's ScanDBSink "live" channel
+    writes per-cam BFI/BVI as the scan runs). When the viewer pans
+    BEFORE the in-memory window, points_for_window / value_at lazily
+    load the requested range from the DB into a transient window so the
+    full scan history stays navigable without unbounded memory growth.
+
+    Pass scan_db_path to enable the DB tail; None (the default, e.g. in
+    unit tests) keeps the legacy in-memory-only behavior."""
 
     def __init__(self, plot_t0: float, parent: Optional[QObject] = None,
-                 track_frame_ids: bool = False) -> None:
+                 track_frame_ids: bool = False,
+                 scan_db_path: Optional[str] = None) -> None:
         super().__init__(plot_t0=plot_t0, parent=parent,
                          track_frame_ids=track_frame_ids)
         self._live = True
+        # DB tail state — all lazily initialized on first pan-into-past.
+        self._scan_db_path = scan_db_path
+        self._db = None                       # omotion.ScanDatabase read handle
+        self._db_session_id: Optional[int] = None
+        self._db_unavailable = False          # set True after a failed resolve
+        self._db_window_buffers: dict = {}     # transient (side,cam,metric)->buffer
+        self._db_window_lo = float("inf")     # loaded range, exclusive sentinel
+        self._db_window_hi = float("-inf")
+
+    # ── DB tail (lazy) ──────────────────────────────────────────────────────
+
+    def _db_ready(self) -> bool:
+        """Resolve the read-only DB handle + this live scan's session_id
+        on first use. The live scan is always the newest session row, so
+        we resolve by MAX(id). Only ever called after the in-memory
+        buffer has ring-trimmed (>30 min in), by which point the session
+        row exists. Returns False (permanently, after one failure) if the
+        DB is unavailable — the source then behaves as in-memory-only."""
+        if self._db_unavailable:
+            return False
+        if self._db is not None and self._db_session_id is not None:
+            return True
+        if not self._scan_db_path:
+            self._db_unavailable = True
+            return False
+        try:
+            from omotion.ScanDatabase import ScanDatabase
+            self._db = ScanDatabase(db_path=self._scan_db_path)
+            row = next(
+                self._db._connection().execute(
+                    "SELECT id FROM sessions ORDER BY id DESC LIMIT 1"
+                ),
+                None,
+            )
+            if row is None:
+                self._db_unavailable = True
+                return False
+            self._db_session_id = int(row[0])
+            return True
+        except Exception:
+            logger.exception("LiveScanSource: DB tail unavailable")
+            self._db_unavailable = True
+            return False
+
+    def _ensure_db_window(self, t_lo: float, t_hi: float) -> None:
+        """Materialize session_data rows for [t_lo, t_hi] (padded) into
+        the transient DB-window buffers, if not already covered. Padding
+        by one window each side means small pans reuse the cached load
+        instead of re-querying every paint."""
+        if t_lo >= self._db_window_lo and t_hi <= self._db_window_hi:
+            return
+        span = max(1.0, t_hi - t_lo)
+        want_lo = max(0.0, t_lo - span)
+        want_hi = t_hi + span
+        try:
+            self._db_window_buffers, _ = _bucketize_session_rows(
+                self._db, self._db_session_id, t_lo=want_lo, t_hi=want_hi
+            )
+            self._db_window_lo = want_lo
+            self._db_window_hi = want_hi
+        except Exception:
+            logger.exception("LiveScanSource: DB window load failed")
+            # Leave the previous window in place; a later paint retries.
+
+    def _in_memory_start(self, side: str, cam_id: int, metric: str) -> float:
+        """Oldest in-memory timestamp for one buffer, or +inf if empty.
+        Below this, data has been ring-trimmed and lives only in the DB."""
+        buf = self.buffers.get((side, int(cam_id), metric))
+        if buf is None or buf.n == 0:
+            return float("inf")
+        return float(buf.t[0])
+
+    @pyqtSlot(str, int, str, float, float, int, result="QVariantList")
+    def points_for_window(self, side, cam_id, metric, t_lo, t_hi, max_points):
+        # Fast path: the whole requested window is still in memory (or no
+        # DB tail configured) — defer to the base implementation.
+        mem_start = self._in_memory_start(side, int(cam_id), metric)
+        if t_lo >= mem_start or not self._db_ready():
+            return super().points_for_window(side, cam_id, metric, t_lo, t_hi, int(max_points))
+        # Pan-into-past: serve from the DB tail. The DB has the full
+        # history (including the in-memory overlap), so a DB-only read of
+        # [t_lo, t_hi] is correct — only the un-flushed live edge (~100 ms)
+        # is absent, and that's never inside a panned-back window.
+        self._ensure_db_window(t_lo, t_hi)
+        buf = self._db_window_buffers.get((side, int(cam_id), metric))
+        if buf is None:
+            return []
+        t_arr, v_arr = buf.window_decimated(t_lo, t_hi, int(max_points))
+        return [[float(t), float(v)] for t, v in zip(t_arr, v_arr)]
+
+    @pyqtSlot(str, int, str, float, result=float)
+    def value_at(self, side, cam_id, metric, t):
+        mem_start = self._in_memory_start(side, int(cam_id), metric)
+        if t >= mem_start or not self._db_ready():
+            return super().value_at(side, cam_id, metric, t)
+        self._ensure_db_window(t, t)
+        buf = self._db_window_buffers.get((side, int(cam_id), metric))
+        if buf is None or buf.n == 0:
+            return float("nan")
+        n = buf.n
+        t_slice = buf.t[:n]
+        import numpy as _np
+        idx = int(_np.searchsorted(t_slice, t, side="left"))
+        if idx >= n:
+            idx = n - 1
+        elif idx > 0 and abs(t_slice[idx - 1] - t) < abs(t_slice[idx] - t):
+            idx -= 1
+        v = float(buf.v[idx])
+        return v if _np.isfinite(v) else float("nan")
 
     def append_uncorrected(
         self,
@@ -532,6 +653,45 @@ class LiveScanSource(ScanDataSource):
 _SIDE_INT_TO_STR = {0: "left", 1: "right"}
 
 
+def _bucketize_session_rows(
+    scan_db,
+    session_id: int,
+    t_lo: Optional[float] = None,
+    t_hi: Optional[float] = None,
+) -> tuple[dict, bool]:
+    """Query session_data rows for a session (optionally a time slice)
+    and bucket them into a fresh {(side, cam_id, metric): _CameraBuffer}
+    dict. Returns (buffers, has_per_cam_bfi). Shared by PastScanSource's
+    full load and LiveScanSource's lazy DB-tail window.
+
+    cam_id >= 0 rows are per-cam (from the SDK "live" channel sink);
+    cam_id == -1 rows are the side-aggregated corrected-frame
+    placeholders. has_per_cam_bfi reflects whether any real per-cam
+    BFI/BVI landed — the caller uses it to decide on CSV fallback."""
+    buffers: dict = {}
+    has_per_cam_bfi = False
+    for row in scan_db.iter_session_data(session_id, t_lo=t_lo, t_hi=t_hi):
+        side = _SIDE_INT_TO_STR.get(int(row["side"]))
+        if side is None:
+            continue
+        cam_id = int(row["cam_id"])
+        frame_id = int(row["frame_id"])
+        t = float(row["timestamp_s"])
+        for metric in ("bfi", "bvi", "mean", "contrast"):
+            value = row.get(metric)
+            if value is None:
+                continue
+            if cam_id >= 0 and metric in ("bfi", "bvi"):
+                has_per_cam_bfi = True
+            key = (side, cam_id, metric)
+            buf = buffers.get(key)
+            if buf is None:
+                buf = _CameraBuffer()
+                buffers[key] = buf
+            buf.append(t=t, v=float(value), frame_id=frame_id)
+    return buffers, has_per_cam_bfi
+
+
 class PastScanSource(ScanDataSource):
     """ScanDataSource constructed from an SDK ScanDatabase session_id.
     Bucketizes session_data rows into per-(side, cam, metric) buffers
@@ -559,23 +719,7 @@ class PastScanSource(ScanDataSource):
         # Older scans recorded before the live-channel write landed
         # have ONLY the placeholder rows; CSV fallback below picks
         # those up for per-cam display.
-        has_per_cam_bfi = False
-        for row in scan_db.iter_session_data(self.session_id):
-            side_int = int(row["side"])
-            side = _SIDE_INT_TO_STR.get(side_int)
-            if side is None:
-                continue
-            cam_id = int(row["cam_id"])
-            frame_id = int(row["frame_id"])
-            t = float(row["timestamp_s"])
-            for metric in ("bfi", "bvi", "mean", "contrast"):
-                value = row.get(metric)
-                if value is None:
-                    continue
-                if cam_id >= 0 and metric in ("bfi", "bvi"):
-                    has_per_cam_bfi = True
-                buf = self.get_or_create_buffer(side, cam_id, metric)
-                buf.append(t=t, v=float(value), frame_id=frame_id)
+        self.buffers, has_per_cam_bfi = _bucketize_session_rows(scan_db, self.session_id)
 
         # CSV fallback — load only when the DB didn't already carry per-cam
         # BFI/BVI. Pre-Phase-1 scans land here. CsvSink writes this CSV

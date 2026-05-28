@@ -345,7 +345,8 @@ class _FakeScanDatabase:
         self._conn = conn
         self._conn.row_factory = sqlite3.Row
 
-    def iter_session_data(self, session_id: int, side=None, cam_id=None):
+    def iter_session_data(self, session_id: int, side=None, cam_id=None,
+                          t_lo=None, t_hi=None):
         sql = "SELECT * FROM session_data WHERE session_id = ?"
         bindings = [session_id]
         if side is not None:
@@ -354,6 +355,12 @@ class _FakeScanDatabase:
         if cam_id is not None:
             sql += " AND cam_id = ?"
             bindings.append(cam_id)
+        if t_lo is not None:
+            sql += " AND timestamp_s >= ?"
+            bindings.append(float(t_lo))
+        if t_hi is not None:
+            sql += " AND timestamp_s <= ?"
+            bindings.append(float(t_hi))
         sql += " ORDER BY timestamp_s ASC"
         for row in self._conn.execute(sql, bindings):
             yield dict(row)
@@ -929,3 +936,79 @@ def test_dropped_at_for_finds_dropout_under_any_metric_key():
                            bfi=4.0, bvi=2.0)  # mean/contrast omitted
     src.mark_dropped(side="left", cam_id=3, t=8.0)
     assert src.dropped_at_for("left", 3) == pytest.approx(8.0)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LiveScanSource DB tail (Phase 3 lazy-load)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_live_scan_source_serves_in_memory_window_without_db(session_data_db):
+    """Fast path: when the requested window is within the in-memory
+    buffer, the DB tail is never consulted (even when a DB is wired)."""
+    db, sid = session_data_db
+    src = LiveScanSource(plot_t0=0.0)
+    for i in range(10):
+        src.append_uncorrected(side="left", cam_id=0, frame_id=i,
+                               t=10.0 + i * 0.025, bfi=5.0, bvi=6.0)
+    src._db = db            # wired but should not be hit
+    src._db_session_id = sid
+    pts = src.points_for_window("left", 0, "bfi", 10.0, 10.25, max_points=100)
+    assert len(pts) > 0
+    # All values are the in-memory 5.0, not the DB's ~1.x values.
+    assert all(abs(p[1] - 5.0) < 0.01 for p in pts)
+
+
+def test_live_scan_source_pans_into_db_tail(session_data_db):
+    """Pan-into-past: when t_lo is before the in-memory start (data
+    ring-trimmed), points_for_window serves the older range from the
+    DB tail. session_data_db has (left, 0) bfi samples at t≈0..0.1;
+    the in-memory buffer starts at t=10, so a request for [0, 0.1]
+    must come from the DB."""
+    db, sid = session_data_db
+    src = LiveScanSource(plot_t0=0.0)
+    # In-memory buffer simulates post-ring-trim state: starts at t=10.
+    for i in range(5):
+        src.append_uncorrected(side="left", cam_id=0, frame_id=2000 + i,
+                               t=10.0 + i * 0.025, bfi=99.0, bvi=99.0)
+    src._db = db
+    src._db_session_id = sid
+
+    pts = src.points_for_window("left", 0, "bfi", 0.0, 0.1, max_points=100)
+    assert len(pts) > 0
+    # DB bfi values for (left, 0) are 1.0 + cam(0) + i*0.1 ≈ 1.0..1.4 —
+    # definitely not the in-memory 99.0.
+    assert all(p[1] < 50 for p in pts)
+
+
+def test_live_scan_source_value_at_uses_db_tail(session_data_db):
+    """value_at also falls through to the DB tail for times before the
+    in-memory window."""
+    db, sid = session_data_db
+    src = LiveScanSource(plot_t0=0.0)
+    for i in range(5):
+        src.append_uncorrected(side="left", cam_id=0, frame_id=2000 + i,
+                               t=10.0 + i * 0.025, bfi=99.0, bvi=99.0)
+    src._db = db
+    src._db_session_id = sid
+
+    v = src.value_at("left", 0, "bfi", 0.0)
+    assert isfinite_or_nan(v)
+    assert v < 50  # DB value, not in-memory 99.0
+
+
+def test_live_scan_source_db_tail_disabled_without_path():
+    """No scan_db_path → DB tail permanently unavailable; pan-into-past
+    returns empty rather than erroring."""
+    src = LiveScanSource(plot_t0=0.0)  # no scan_db_path
+    for i in range(5):
+        src.append_uncorrected(side="left", cam_id=0, frame_id=2000 + i,
+                               t=10.0 + i * 0.025, bfi=5.0, bvi=6.0)
+    # Request before in-memory start — no DB, so base class returns
+    # whatever the in-memory buffer has for that window (empty).
+    pts = src.points_for_window("left", 0, "bfi", 0.0, 0.1, max_points=100)
+    assert pts == []
+
+
+def isfinite_or_nan(v):
+    return math.isfinite(v) or math.isnan(v)

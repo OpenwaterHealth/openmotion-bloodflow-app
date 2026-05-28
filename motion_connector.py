@@ -1969,7 +1969,15 @@ class MOTIONConnector(QObject):
         # and install it on the connector. Phase 1 has no QML consumer yet —
         # the sinks (added in subsequent tasks) accumulate samples here in
         # parallel with the legacy Qt signal emissions.
-        live_source = LiveScanSource(plot_t0=plot_t0, parent=self)
+        # Pass the scan DB path so the live source can lazily load older
+        # samples from the DB tail when the user pans before the in-memory
+        # ring-trim window (>30 min into a long scan). None-safe: if the
+        # interface has no scan_db_path the source stays in-memory-only.
+        live_source = LiveScanSource(
+            plot_t0=plot_t0,
+            parent=self,
+            scan_db_path=getattr(self._interface, "scan_db_path", None),
+        )
         # Track the live source separately so the user can navigate
         # to a past scan and return; emit so QML rebinds the
         # PlotToolbar's "Back to live" visibility.
