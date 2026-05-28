@@ -85,7 +85,8 @@ def _load_app_config() -> dict:
         "ft_max_bvi_per_camera": None,
         "ft_max_dark_per_camera": [3.0] * 8,
         "max_calibration_time_sec": 600,
-        "calibration_scan_duration_sec": 5,
+        "calibration_scan_duration_sec": 15,
+        "test_scan_duration_sec": 5,
         "calibration_scan_delay_sec": 1,
         "leftMask": 0x66,   # 0b01100110 — cameras 2,3,6,7 (Middle pattern)
         "rightMask": 0x66,
