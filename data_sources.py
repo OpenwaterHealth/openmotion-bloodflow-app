@@ -59,16 +59,17 @@ class _CameraBuffer:
         self,
         initial_capacity: Optional[int] = None,
         track_frame_ids: bool = False,
-        max_capacity: int = _MAX_CAPACITY,
+        max_capacity: Optional[int] = _MAX_CAPACITY,
     ) -> None:
         # Ring-trim threshold: when the buffer fills to max_capacity, the
-        # oldest half is dropped. Default ~30 min @ 40 Hz; the live source
-        # can pass a smaller value (e.g. for testing the DB lazy-load
-        # without waiting 30 min). PastScanSource / the DB window keep the
-        # large default so they never trim during a bulk load.
-        self._max_capacity = max(2, int(max_capacity))
+        # oldest half is dropped. The LIVE source passes a finite value
+        # (liveCacheMaxSeconds × 40 Hz) to bound memory. PastScanSource
+        # and the DB-tail window pass max_capacity=None (UNBOUNDED) — they
+        # bulk-load a finite, already-known result set and must never drop
+        # their own rows, so they grow-only from a small initial size.
+        self._max_capacity = None if max_capacity is None else max(2, int(max_capacity))
         if initial_capacity is None:
-            initial_capacity = self._max_capacity
+            initial_capacity = self._max_capacity if self._max_capacity is not None else 4096
         self.t = np.empty(initial_capacity, dtype=np.float64)
         self.v = np.empty(initial_capacity, dtype=np.float32)
         self.frame_id = np.empty(initial_capacity, dtype=np.int64)
@@ -85,9 +86,12 @@ class _CameraBuffer:
 
     def _grow(self) -> None:
         """Double the capacity of all three parallel arrays atomically,
-        capped at max_capacity. All three must always stay the same
-        length — this method is the single chokepoint for that invariant."""
-        new_cap = min(self.t.shape[0] * 2, self._max_capacity)
+        capped at max_capacity (uncapped when max_capacity is None — the
+        unbounded historical/DB-window buffers). All three must always stay
+        the same length — this method is the single chokepoint for that
+        invariant."""
+        doubled = self.t.shape[0] * 2
+        new_cap = doubled if self._max_capacity is None else min(doubled, self._max_capacity)
         self.t = np.resize(self.t, new_cap)
         self.v = np.resize(self.v, new_cap)
         self.frame_id = np.resize(self.frame_id, new_cap)
@@ -114,7 +118,10 @@ class _CameraBuffer:
         """Append one sample. Grows capacity (doubling) on overflow up
         to max_capacity; at the cap, ring-trims the oldest half."""
         if self.n >= self.t.shape[0]:
-            if self.t.shape[0] >= self._max_capacity:
+            # Unbounded (max_capacity=None): always grow, never trim — these
+            # buffers bulk-load a finite, already-known result set (a past scan
+            # or a DB-tail window) and must never drop their own loaded rows.
+            if self._max_capacity is not None and self.t.shape[0] >= self._max_capacity:
                 self._ring_trim()
             else:
                 self._grow()
@@ -280,7 +287,7 @@ class ScanDataSource(QObject):
 
     def __init__(self, plot_t0: float, parent: Optional[QObject] = None,
                  track_frame_ids: bool = False,
-                 buffer_max_capacity: int = _MAX_CAPACITY) -> None:
+                 buffer_max_capacity: Optional[int] = _MAX_CAPACITY) -> None:
         super().__init__(parent)
         self.plot_t0 = float(plot_t0)
         # Subclasses set _live in __init__ — backing store for the
@@ -293,10 +300,13 @@ class ScanDataSource(QObject):
         # overwrites; saves a per-buffer frame_id dict that scales with
         # scan duration. Tests opt in via the constructor flag.
         self._track_frame_ids = track_frame_ids
-        # Ring-trim threshold for buffers this source creates. Live
-        # sources can shrink it (config) to exercise the DB tail without
-        # a 30 min scan. Past/DB-window sources keep the large default.
-        self._buffer_max_capacity = int(buffer_max_capacity)
+        # Ring-trim threshold for buffers this source creates. Live sources
+        # pass a finite value (config) to bound memory; past sources pass None
+        # (UNBOUNDED) so a bulk load of a long scan never ring-trims away its
+        # own oldest rows mid-load.
+        self._buffer_max_capacity = (
+            None if buffer_max_capacity is None else int(buffer_max_capacity)
+        )
 
         # Pending dirty bookkeeping: (side, cam, metric) -> accumulated count.
         self._pending: dict[tuple[str, int, str], int] = {}
@@ -722,7 +732,10 @@ def _bucketize_session_rows(
             key = (side, cam_id, metric)
             buf = buffers.get(key)
             if buf is None:
-                buf = _CameraBuffer()
+                # Unbounded: this is a bulk load of a finite query result
+                # (a full past scan or a DB-tail window). A finite ring-trim
+                # cap would drop the oldest loaded rows mid-load.
+                buf = _CameraBuffer(max_capacity=None)
                 buffers[key] = buf
             buf.append(t=t, v=float(value), frame_id=frame_id)
     return buffers, has_per_cam_bfi
@@ -740,7 +753,11 @@ class PastScanSource(ScanDataSource):
         corrected_csv_path: Optional[str] = None,
         parent: Optional[QObject] = None,
     ) -> None:
-        super().__init__(plot_t0=0.0, parent=parent)
+        # Unbounded buffers: a past scan is a finite, already-known result set
+        # loaded in bulk (DB rows and/or the corrected CSV). With a finite
+        # ring-trim cap, loading a long scan would drop its own oldest rows
+        # as it filled — corrupting the very history the viewer pans back to.
+        super().__init__(plot_t0=0.0, parent=parent, buffer_max_capacity=None)
         self._live = False
         self.session_id = int(session_id)
 
@@ -762,6 +779,51 @@ class PastScanSource(ScanDataSource):
         # unconditionally for every scan (not gated by writeRawCsv).
         if not has_per_cam_bfi and corrected_csv_path:
             self._load_corrected_csv(corrected_csv_path)
+
+        # Reduced-mode side averages (cam_id=-1) aren't persisted per-cam in
+        # the DB or the normal per-cam CSV, so derive them from the per-cam
+        # buffers — otherwise reduced-mode replay is empty (the reduced cells
+        # query cam_id=-1). No-op when a reduced CSV already supplied them.
+        self._derive_side_averages()
+
+    def _derive_side_averages(self) -> None:
+        """Build the reduced-mode side-average buffers (cam_id=-1) from the
+        per-cam buffers, reproducing what the live viewer showed.
+
+        The scan DB (and the normal per-cam corrected CSV) carry per-camera
+        BFI/BVI at cam_id 0..7 but never the side average at cam_id=-1 — the
+        SDK's ScanDBSink "live" channel only writes per-cam rows. Live, the
+        cam_id=-1 buffer was fed one sample per frame equal to that frame's
+        single active-camera value: each histogram frame carries exactly one
+        camera (raw_hist[i, side, cam]), so SideAveragingStage's nanmean over
+        the all-but-one-NaN row reduces to that camera's value. The faithful
+        reconstruction is therefore the per-cam samples for a side merged into
+        one time-ordered stream; the renderer's mean-binning then averages
+        across cameras within each display bin, exactly as it did live.
+
+        Only bfi/bvi (the reduced-mode metrics) are derived, and only when no
+        cam_id=-1 buffer already exists (a reduced-mode CSV provides one)."""
+        for side in ("left", "right"):
+            for metric in ("bfi", "bvi"):
+                if (side, -1, metric) in self.buffers:
+                    continue  # reduced CSV already supplied it — don't clobber
+                parts = [
+                    buf for (s, c, m), buf in self.buffers.items()
+                    if s == side and m == metric and c >= 0 and buf.n > 0
+                ]
+                if not parts:
+                    continue
+                t_all = np.concatenate([b.t[: b.n] for b in parts])
+                v_all = np.concatenate([b.v[: b.n] for b in parts])
+                f_all = np.concatenate([b.frame_id[: b.n] for b in parts])
+                order = np.argsort(t_all, kind="stable")
+                size = int(t_all.size)
+                merged = _CameraBuffer(initial_capacity=max(4, size), max_capacity=None)
+                merged.t[:size] = t_all[order]
+                merged.v[:size] = v_all[order]
+                merged.frame_id[:size] = f_all[order]
+                merged.n = size
+                self.buffers[(side, -1, metric)] = merged
 
     def _load_corrected_csv(self, csv_path: str) -> None:
         """Load per-(side, cam, metric) samples from the corrected CSV

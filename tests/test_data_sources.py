@@ -56,6 +56,23 @@ def test_camera_buffer_small_max_capacity_ring_trims():
     assert float(buf.t[buf.n - 1]) == 10.0
 
 
+def test_camera_buffer_unbounded_never_ring_trims():
+    """max_capacity=None (past / DB-window buffers) grows without bound and
+    never ring-trims — it must keep every row it bulk-loads. Append well past
+    what would be the default cap had it been finite, and assert nothing is
+    dropped."""
+    buf = _CameraBuffer(initial_capacity=4, max_capacity=None)
+    n = 5000
+    for i in range(n):
+        buf.append(t=float(i), v=float(i), frame_id=i)
+    assert buf.n == n
+    assert not buf.ring_trimmed
+    # First and last rows both survive — no oldest-half drop occurred.
+    assert float(buf.t[0]) == 0.0
+    assert float(buf.t[buf.n - 1]) == float(n - 1)
+    assert buf.t.shape[0] >= n
+
+
 def test_camera_buffer_doubles_capacity_on_overflow():
     buf = _CameraBuffer(initial_capacity=2)
     for i in range(5):
@@ -430,18 +447,25 @@ def test_past_scan_source_bucketizes_rows_into_per_metric_buffers(session_data_d
     db, sid = session_data_db
     src = PastScanSource(scan_db=db, session_id=sid)
 
-    # 4 (side, cam) combos × 4 metrics = 16 buffers expected
+    # 4 (side, cam) combos × 4 metrics = 16 per-cam buffers, plus the
+    # derived reduced-mode side averages (cam_id=-1) for bfi/bvi on each side.
     expected_keys = {
         (side, cam, metric)
         for side in ("left", "right")
         for cam in (0, 3)
         for metric in ("bfi", "bvi", "mean", "contrast")
     }
+    expected_keys |= {
+        (side, -1, metric)
+        for side in ("left", "right")
+        for metric in ("bfi", "bvi")
+    }
     assert set(src.buffers.keys()) == expected_keys
 
-    # Each buffer holds the 5 rows for its (side, cam)
+    # Per-cam buffers hold their 5 rows; the merged side averages hold
+    # both cams' rows (2 cams × 5 = 10).
     for key, buf in src.buffers.items():
-        assert buf.n == 5
+        assert buf.n == (10 if key[1] == -1 else 5)
 
 
 def test_past_scan_source_normalizes_side_integer_to_string(session_data_db):
@@ -476,6 +500,68 @@ def test_past_scan_source_empty_session_yields_empty_source(tmp_path):
     src = PastScanSource(scan_db=db, session_id=42)
     assert src.buffers == {}
     assert src.liveEdge == 0.0
+
+
+def test_past_scan_source_derives_reduced_side_averages(session_data_db):
+    """DB-backed scans store per-cam BFI/BVI but no cam_id=-1 side average.
+    PastScanSource must derive cam_id=-1 by merging the per-cam buffers for
+    a side, time-ordered, so reduced-mode replay isn't empty."""
+    db, sid = session_data_db
+    src = PastScanSource(scan_db=db, session_id=sid)
+
+    for side in ("left", "right"):
+        for metric in ("bfi", "bvi"):
+            buf = src.buffers.get((side, -1, metric))
+            assert buf is not None, f"missing derived ({side}, -1, {metric})"
+            assert buf.n == 10  # cam 0 + cam 3, 5 samples each
+            ts = buf.t[: buf.n]
+            assert np.all(np.diff(ts) >= 0), "merged side buffer must be time-sorted"
+
+    # The merged left/bfi buffer carries BOTH cameras' values. At t=0:
+    # cam0 bfi = 1.0, cam3 bfi = 4.0 (1.0 + cam_id).
+    left_bfi = src.buffers[("left", -1, "bfi")]
+    n = left_bfi.n
+    at_t0 = left_bfi.v[:n][np.isclose(left_bfi.t[:n], 0.0)]
+    assert set(round(float(v), 3) for v in at_t0) == {1.0, 4.0}
+
+    # mean/contrast are NOT derived as side averages — only the reduced
+    # metrics (bfi/bvi) the reduced cells plot.
+    assert ("left", -1, "mean") not in src.buffers
+    assert ("left", -1, "contrast") not in src.buffers
+
+
+def test_past_scan_source_buffers_are_unbounded(session_data_db):
+    """Buffers a past scan creates (DB per-cam, derived side averages, and
+    CSV-loaded) must be unbounded so a long bulk load never ring-trims away
+    its own oldest rows."""
+    db, sid = session_data_db
+    src = PastScanSource(scan_db=db, session_id=sid)
+    for buf in src.buffers.values():
+        assert buf._max_capacity is None
+
+
+def test_past_scan_source_does_not_clobber_reduced_csv_side_average(tmp_path):
+    """If a reduced-mode CSV already populated cam_id=-1 buffers, the
+    derivation must leave them untouched (don't overwrite real recorded
+    side data with a merge of nonexistent per-cam buffers)."""
+    db_path = tmp_path / "scan.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(_SESSION_DATA_DDL)
+    conn.commit()
+    db = _FakeScanDatabase(conn)  # empty DB → triggers CSV fallback
+
+    csv_path = tmp_path / "reduced.csv"
+    csv_path.write_text(
+        "frame_id,timestamp_s,bfi_left,bfi_right,bvi_left,bvi_right\n"
+        "0,0.0,2.5,3.5,12.0,13.0\n"
+        "1,0.025,2.6,3.6,12.1,13.1\n",
+        encoding="utf-8",
+    )
+    src = PastScanSource(scan_db=db, session_id=1, corrected_csv_path=str(csv_path))
+
+    left_bfi = src.buffers[("left", -1, "bfi")]
+    assert left_bfi.n == 2  # the 2 CSV rows, not a merge
+    assert float(left_bfi.v[0]) == pytest.approx(2.5)
 
 
 def test_past_scan_source_skips_null_metric_values(tmp_path):
