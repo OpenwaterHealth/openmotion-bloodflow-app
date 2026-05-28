@@ -49,7 +49,8 @@ class _CameraBuffer:
     multi-hour scans at the cost of pan-back history beyond ~30 min.
     """
 
-    __slots__ = ("t", "v", "frame_id", "n", "_frame_id_to_index", "dropped_at")
+    __slots__ = ("t", "v", "frame_id", "n", "_frame_id_to_index", "dropped_at",
+                 "ring_trimmed")
 
     def __init__(
         self,
@@ -64,6 +65,11 @@ class _CameraBuffer:
             {} if track_frame_ids else None
         )
         self.dropped_at: Optional[float] = None
+        # True once _ring_trim has dropped older samples — i.e. data
+        # below t[0] now lives only in the DB, not memory. LiveScanSource
+        # uses this to decide whether a pan below t[0] needs the DB tail
+        # vs is simply before the scan start (no data, serve from memory).
+        self.ring_trimmed: bool = False
 
     def _grow(self) -> None:
         """Double the capacity of all three parallel arrays atomically.
@@ -83,6 +89,7 @@ class _CameraBuffer:
         self.v[:half] = self.v[half:]
         self.frame_id[:half] = self.frame_id[half:]
         self.n = half
+        self.ring_trimmed = True
         # Frame-id lookup positions shift after the trim; safest to
         # drop the mapping and rebuild lazily on subsequent appends.
         if self._frame_id_to_index is not None:
@@ -533,25 +540,31 @@ class LiveScanSource(ScanDataSource):
             logger.exception("LiveScanSource: DB window load failed")
             # Leave the previous window in place; a later paint retries.
 
-    def _in_memory_start(self, side: str, cam_id: int, metric: str) -> float:
-        """Oldest in-memory timestamp for one buffer, or +inf if empty.
-        Below this, data has been ring-trimmed and lives only in the DB."""
+    def _needs_db_tail(self, side: str, cam_id: int, metric: str, t_lo: float) -> bool:
+        """True iff the requested t_lo is below the oldest IN-MEMORY
+        sample AND that buffer has actually ring-trimmed (so the older
+        data exists only in the DB). Crucially, when the buffer has NOT
+        trimmed, t_lo below t[0] just means the window extends before the
+        scan started — there's no older data, so serve from memory. This
+        is the hot-path guard: during normal live scanning (pre-trim) it
+        short-circuits to False WITHOUT touching the DB, so we never open
+        a connection or query per-paint until a scan actually exceeds the
+        ~30 min in-memory window."""
         buf = self.buffers.get((side, int(cam_id), metric))
-        if buf is None or buf.n == 0:
-            return float("inf")
-        return float(buf.t[0])
+        if buf is None or buf.n == 0 or not buf.ring_trimmed:
+            return False
+        return t_lo < float(buf.t[0])
 
     @pyqtSlot(str, int, str, float, float, int, result="QVariantList")
     def points_for_window(self, side, cam_id, metric, t_lo, t_hi, max_points):
-        # Fast path: the whole requested window is still in memory (or no
-        # DB tail configured) — defer to the base implementation.
-        mem_start = self._in_memory_start(side, int(cam_id), metric)
-        if t_lo >= mem_start or not self._db_ready():
+        # Fast path: whole window in memory, or buffer not yet trimmed.
+        # Only reach for the DB once data has actually been ring-trimmed.
+        if not self._needs_db_tail(side, int(cam_id), metric, t_lo) or not self._db_ready():
             return super().points_for_window(side, cam_id, metric, t_lo, t_hi, int(max_points))
-        # Pan-into-past: serve from the DB tail. The DB has the full
-        # history (including the in-memory overlap), so a DB-only read of
-        # [t_lo, t_hi] is correct — only the un-flushed live edge (~100 ms)
-        # is absent, and that's never inside a panned-back window.
+        # Pan-into-past beyond the in-memory window: serve from the DB
+        # tail. The DB has the full history, so a DB-only read of
+        # [t_lo, t_hi] is correct — only the un-flushed live edge
+        # (~100 ms) is absent, never inside a panned-back window.
         self._ensure_db_window(t_lo, t_hi)
         buf = self._db_window_buffers.get((side, int(cam_id), metric))
         if buf is None:
@@ -561,8 +574,7 @@ class LiveScanSource(ScanDataSource):
 
     @pyqtSlot(str, int, str, float, result=float)
     def value_at(self, side, cam_id, metric, t):
-        mem_start = self._in_memory_start(side, int(cam_id), metric)
-        if t >= mem_start or not self._db_ready():
+        if not self._needs_db_tail(side, int(cam_id), metric, t) or not self._db_ready():
             return super().value_at(side, cam_id, metric, t)
         self._ensure_db_window(t, t)
         buf = self._db_window_buffers.get((side, int(cam_id), metric))

@@ -971,6 +971,10 @@ def test_live_scan_source_pans_into_db_tail(session_data_db):
     for i in range(5):
         src.append_uncorrected(side="left", cam_id=0, frame_id=2000 + i,
                                t=10.0 + i * 0.025, bfi=99.0, bvi=99.0)
+    # Mark trimmed so the guard treats t<10 as "older data in DB" rather
+    # than "before scan start" (the pre-trim no-DB fast path).
+    for buf in src.buffers.values():
+        buf.ring_trimmed = True
     src._db = db
     src._db_session_id = sid
 
@@ -981,6 +985,34 @@ def test_live_scan_source_pans_into_db_tail(session_data_db):
     assert all(p[1] < 50 for p in pts)
 
 
+def test_live_scan_source_pretrim_window_before_start_skips_db(session_data_db):
+    """Regression: early in a scan, followLive sets t_lo = liveEdge -
+    windowSeconds which can be BELOW the first sample (window extends
+    before scan start). The buffer hasn't ring-trimmed, so there's no
+    older data — must serve from memory and NEVER touch the DB (the
+    bug made this query the DB every paint → ~1 Hz UI updates)."""
+    db, sid = session_data_db
+    src = LiveScanSource(plot_t0=0.0)
+    # Scan just started: first sample at t=0.25, only ~0.3 s of data.
+    for i in range(12):
+        src.append_uncorrected(side="left", cam_id=0, frame_id=i,
+                               t=0.25 + i * 0.025, bfi=5.0, bvi=6.0)
+    # Sentinel DB that explodes if queried — proves the fast path never
+    # reaches the DB pre-trim.
+    class _Boom:
+        def iter_session_data(self, *a, **k):
+            raise AssertionError("DB must not be queried before ring-trim")
+        def _connection(self):
+            raise AssertionError("DB must not be opened before ring-trim")
+    src._db = _Boom()
+    src._db_session_id = sid
+    # followLive window [-14.5, 0.5]: t_lo well before the first sample.
+    pts = src.points_for_window("left", 0, "bfi", -14.5, 0.5, max_points=100)
+    # Served from memory (the in-scan samples), no exception raised.
+    assert len(pts) > 0
+    assert all(abs(p[1] - 5.0) < 0.01 for p in pts)
+
+
 def test_live_scan_source_value_at_uses_db_tail(session_data_db):
     """value_at also falls through to the DB tail for times before the
     in-memory window."""
@@ -989,6 +1021,8 @@ def test_live_scan_source_value_at_uses_db_tail(session_data_db):
     for i in range(5):
         src.append_uncorrected(side="left", cam_id=0, frame_id=2000 + i,
                                t=10.0 + i * 0.025, bfi=99.0, bvi=99.0)
+    for buf in src.buffers.values():
+        buf.ring_trimmed = True
     src._db = db
     src._db_session_id = sid
 
@@ -1004,8 +1038,11 @@ def test_live_scan_source_db_tail_disabled_without_path():
     for i in range(5):
         src.append_uncorrected(side="left", cam_id=0, frame_id=2000 + i,
                                t=10.0 + i * 0.025, bfi=5.0, bvi=6.0)
-    # Request before in-memory start — no DB, so base class returns
-    # whatever the in-memory buffer has for that window (empty).
+    # Trimmed + pan before start, but no DB path configured → falls
+    # through to the in-memory base impl, which has nothing for that
+    # window (buffer starts at t=10) → empty.
+    for buf in src.buffers.values():
+        buf.ring_trimmed = True
     pts = src.points_for_window("left", 0, "bfi", 0.0, 0.1, max_points=100)
     assert pts == []
 
