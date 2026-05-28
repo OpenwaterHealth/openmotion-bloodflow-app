@@ -123,10 +123,12 @@ def _load_app_config() -> dict:
         "cq_rolling_avg_window": 10,
         "cq_dark_threshold_per_camera": [3.0] * 8,
         "cq_light_threshold_per_camera": [15.0] * 8,
-        # Phase 2a: dev-only flag to mount the new PlotViewer instead of the
-        # legacy EmbeddedRealtimePlot / ReducedPlotView pair. Default false;
-        # flip locally in app_config.json to try the new viewer.
-        "useNewPlotViewer": False,
+        # Phase 3 (spec §289): new PlotViewer is now the default. The
+        # legacy EmbeddedRealtimePlot / ReducedPlotView Loaders are kept
+        # in BloodFlow.qml as a one-release fallback — set this flag to
+        # false in app_config.json if a regression surfaces and you need
+        # the old plots back. Will be removed entirely in Phase 5 cleanup.
+        "useNewPlotViewer": True,
         # Phase 2b: profile HUD overlay on the new PlotViewer — sample
         # rate, paint-tick ms, avg canvas-paint ms, total points
         # painted. Gated on `developerMode && showProfiling` so clinical
