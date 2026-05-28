@@ -1513,38 +1513,62 @@ class MOTIONConnector(QObject):
 
     @pyqtSlot(result=list)
     def get_scan_list(self):
-        """Return sorted list of scan IDs.
+        """Return sorted list of scan IDs from BOTH the corrected CSVs on disk
+        and the scan database's sessions.
 
-        Supports three filename formats for the canonical scan CSV:
+        The scan DB is the system of record: reduced-mode scans (and any scan
+        with writeCorrectedCsv off) write no corrected CSV, so they exist only
+        as DB sessions. A session_label has the same shape as the CSV-derived
+        scan id (``YYYYMMDD_HHMMSS_userLabel``), so the two sources merge by id.
+
+        CSV filename formats supported (legacy / corrected-CSV scans):
           New (post-#44): {YYYYMMDD_HHMMSS}_{sessionId}.csv
           Mid:            {YYYYMMDD_HHMMSS}_{sessionId}_corrected.csv
           Legacy:         scan_{sessionId}_{YYYYMMDD_HHMMSS}_corrected.csv
         """
-        base_path = Path(self._directory)
-        if not base_path.exists():
-            return []
-
         seen: set[str] = set()
         ids: list[str] = []
-        for f in base_path.glob("*.csv"):
-            if not f.is_file():
-                continue
-            stem = f.stem
-            # Skip per-scan auxiliary files (raw histo, telemetry).
-            if self._AUX_CSV_RE.search(stem):
-                continue
-            # Mid format: strip the ``_corrected`` suffix to get the
-            # canonical scan id.
-            if stem.endswith("_corrected"):
-                stem = stem[:-10]
-            # Legacy format: ``scan_{sessionId}_{ts}`` — strip the
-            # ``scan_`` prefix.
-            if stem.startswith("scan_"):
-                stem = stem[5:]
-            if stem in seen:
-                continue
-            seen.add(stem)
-            ids.append(stem)
+
+        base_path = Path(self._directory)
+        if base_path.exists():
+            for f in base_path.glob("*.csv"):
+                if not f.is_file():
+                    continue
+                stem = f.stem
+                # Skip per-scan auxiliary files (raw histo, telemetry).
+                if self._AUX_CSV_RE.search(stem):
+                    continue
+                # Mid format: strip the ``_corrected`` suffix to get the
+                # canonical scan id.
+                if stem.endswith("_corrected"):
+                    stem = stem[:-10]
+                # Legacy format: ``scan_{sessionId}_{ts}`` — strip the
+                # ``scan_`` prefix.
+                if stem.startswith("scan_"):
+                    stem = stem[5:]
+                if stem in seen:
+                    continue
+                seen.add(stem)
+                ids.append(stem)
+
+        # DB-backed scans (no corrected CSV on disk). Best-effort: a missing or
+        # unreadable DB just leaves the CSV-derived list.
+        db_path = getattr(self._interface, "scan_db_path", None)
+        if db_path:
+            try:
+                from omotion.ScanDatabase import ScanDatabase
+                db = ScanDatabase(db_path)
+                try:
+                    for session in db.iter_sessions():
+                        label = (session.get("session_label") or "").strip()
+                        if label and label not in seen:
+                            seen.add(label)
+                            ids.append(label)
+                finally:
+                    db.close()
+            except Exception:
+                logger.warning("get_scan_list: could not read scan DB sessions",
+                               exc_info=True)
 
         def ts_key(s):
             # New / mid format starts with YYYYMMDD (8 digits)
