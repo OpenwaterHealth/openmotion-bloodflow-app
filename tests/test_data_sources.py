@@ -1049,6 +1049,27 @@ def test_live_scan_source_value_at_uses_db_tail(session_data_db):
     assert v < 50  # DB value, not in-memory 99.0
 
 
+def test_live_scan_source_db_ready_resolve_path_no_nameerror(tmp_path):
+    """Regression: _db_ready's resolve path called a module-level
+    `logger` that wasn't defined → NameError crash the first time the
+    DB tail actually engaged (only after ring-trim, so it slipped past
+    the tests that injected _db/_db_session_id directly). Exercise the
+    REAL resolve path against a temp DB with a session row."""
+    from omotion.ScanDatabase import ScanDatabase
+    import time as _t
+    db_path = str(tmp_path / "scan.db")
+    db = ScanDatabase(db_path=db_path)
+    sid = db.create_session(session_label="regress", session_start=_t.time(),
+                            session_notes=None, session_meta={})
+    db.close()
+
+    src = LiveScanSource(plot_t0=0.0, scan_db_path=db_path)
+    # Opens the DB, resolves session via MAX(id), hits the logger.info
+    # line that used to NameError. Must return True without raising.
+    assert src._db_ready() is True
+    assert src._db_session_id == sid
+
+
 def test_live_scan_source_db_tail_disabled_without_path():
     """No scan_db_path → DB tail permanently unavailable; pan-into-past
     returns empty rather than erroring."""

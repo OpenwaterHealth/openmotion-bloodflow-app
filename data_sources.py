@@ -16,10 +16,13 @@ Nothing in QML consumes these yet — Phase 1 is purely additive.
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 import numpy as np
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot, pyqtProperty
+
+logger = logging.getLogger("openmotion.bloodflow-app.data_sources")
 
 
 _MAX_CAPACITY = 72000       # ≈ 30 min @ 40 Hz; ring-trim above this.
@@ -534,6 +537,7 @@ class LiveScanSource(ScanDataSource):
                 self._db_unavailable = True
                 return False
             self._db_session_id = int(row[0])
+            logger.info("LiveScanSource: DB tail engaged (session_id=%d)", self._db_session_id)
             return True
         except Exception:
             logger.exception("LiveScanSource: DB tail unavailable")
