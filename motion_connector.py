@@ -149,14 +149,17 @@ class _LivePlotSink:
     """Subscribes to the 'live' pipeline channel and emits per-frame Qt
     signals into the QML realtime plot for each active camera.
 
-    The 'live' channel carries a FrameBatch after BfiBvi (and optionally
-    SideAveraging in reduced mode). Each batch may contain multiple frames
-    and both sides; we iterate frame × side × cam_id and call back into
-    the connector's _emit_frame_to_qml helper, which gates on the camera-
-    dropout watchdog and fires the Qt signals.
+    The 'live' channel carries a FrameBatch after BfiBvi. Each batch may
+    contain multiple frames and both sides; we iterate frame × side × cam_id
+    and call back into the connector's helpers, which gate on the camera-
+    dropout watchdog and fire the Qt signals.
+
+    The 'live_side' channel carries one SideAverageSample per capture per side
+    (from the SDK's LiveSideAverageStage, reduced mode) — the realtime per-side
+    average, appended under cam_id=-1 for the reduced-mode display.
     """
 
-    channels = {"live"}
+    channels = {"live", "live_side"}
 
     def __init__(self, connector: "MOTIONConnector", plot_t0: float,
                  live_source: "LiveScanSource"):
@@ -164,20 +167,17 @@ class _LivePlotSink:
         self._plot_t0 = plot_t0
         self._live_source = live_source
         self._temp_alerted: dict[tuple[str, int], bool] = {}
-        # Last abs_frame_id for which a side-average sample was appended, per
-        # side index. The reduced-mode side average is one value per capture
-        # instant (frame_id), but each capture arrives as one frame row PER
-        # camera, so without this dedup the cam_id=-1 buffer would fill at
-        # N_cams×40 Hz and overflow the in-memory cache in seconds.
-        self._last_side_avg_fid: dict[int, int] = {}
 
     def on_scan_start(self, meta) -> None:
         self._temp_alerted.clear()
-        self._last_side_avg_fid.clear()
 
-    def consume(self, channel: str, batch) -> None:
+    def consume(self, channel: str, payload) -> None:
+        if channel == "live_side":
+            self._consume_side_avg(payload)
+            return
         if channel != "live":
             return
+        batch = payload
         if batch.bfi_live is None:
             return
 
@@ -301,34 +301,22 @@ class _LivePlotSink:
                     contrast=contrast_for_source,
                 )
 
-            # Side-averaged sample (reduced-mode) — present iff the SDK's
-            # SideAveragingStage is enabled. SideAveragingStage emits a running
-            # per-side average across the active cameras' latest values; append
-            # it under cam_id=-1 ONCE PER frame_id for THIS frame's side.
-            #
-            # Each capture instant (frame_id) arrives as one frame row per
-            # camera (all synced cameras share a frame_id), so appending per
-            # row drove the cam_id=-1 buffer at N_cams×40 Hz and overflowed the
-            # in-memory cache in seconds. Deduping by frame_id keeps it at the
-            # ~40 Hz capture cadence. Only the frame's own side is appended —
-            # the opposite side's value for this row is a stale/NaN carry that
-            # belongs to that side's own frames.
-            bfi_side_arr = getattr(batch, "bfi_live_side", None)
-            bvi_side_arr = getattr(batch, "bvi_live_side", None)
-            if (bfi_side_arr is not None and bvi_side_arr is not None
-                    and not is_dark and side_ids is not None):
-                sa_side_idx = int(side_ids[i])
-                if (0 <= sa_side_idx < len(_SIDE_NAMES)
-                        and self._last_side_avg_fid.get(sa_side_idx) != abs_frame_id):
-                    self._last_side_avg_fid[sa_side_idx] = abs_frame_id
-                    self._live_source.append_uncorrected(
-                        side=_SIDE_NAMES[sa_side_idx],
-                        cam_id=-1,
-                        frame_id=abs_frame_id,
-                        t=plot_ts,
-                        bfi=float(bfi_side_arr[i, sa_side_idx]),
-                        bvi=float(bvi_side_arr[i, sa_side_idx]),
-                    )
+    def _consume_side_avg(self, sample) -> None:
+        """Append one reduced-mode per-side average (SideAverageSample from the
+        SDK's LiveSideAverageStage) under cam_id=-1. The stage already emits one
+        true spatial average per capture per side at ~40 Hz, so there's no dedup
+        or skipping here — we just store what it emits."""
+        side_idx = int(getattr(sample, "side", -1))
+        if not (0 <= side_idx < len(_SIDE_NAMES)):
+            return
+        self._live_source.append_uncorrected(
+            side=_SIDE_NAMES[side_idx],
+            cam_id=-1,
+            frame_id=int(getattr(sample, "frame_id", -1)),
+            t=float(getattr(sample, "t", 0.0)),
+            bfi=float(getattr(sample, "bfi", float("nan"))),
+            bvi=float(getattr(sample, "bvi", float("nan"))),
+        )
 
     def on_complete(self) -> None:
         pass
