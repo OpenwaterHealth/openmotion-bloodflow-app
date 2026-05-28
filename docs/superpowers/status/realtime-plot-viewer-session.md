@@ -7,6 +7,7 @@
 ## What's Shipped (Most Recent First)
 
 ### openmotion-bloodflow-app
+- `cd35103` — corrected CSV opt-in: writeCorrectedCsv config flag (default False); DB is the store
 - `28c759a` — **Phase 3 lazy-load**: LiveScanSource DB tail — pan past the 30-min in-memory window loads from DB
 - `5c1f23d` — **Phase 3 swap**: useNewPlotViewer default flipped to true. Legacy Loaders stay as 1-release fallback.
 - `258e0df` — **Phase 4**: hide matplotlib popouts in HistoryModal when new viewer is on
@@ -25,6 +26,7 @@
 - Earlier: Phase 1 data_sources + Phase 2a-c PlotViewer / toolbar / scrubber / crosshair / tooltip / dropout / past-scan replay
 
 ### openmotion-sdk (`feature/side-avg-nanmean` branch)
+- `83a78bf` — gate corrected CSV behind write_corrected; forced on when no scan DB configured
 - `11f9cc7` — BfiBviStage sanity excludes exact upper extreme (BFI=10.0) — fixes task #50 last-frame junk
 - `8fccedc` — BfiBviStage NaN-filters values outside [-2, 12] sanity range
 - `c043782` — iter_session_data accepts optional t_lo/t_hi time range (Phase 3 prereq)
