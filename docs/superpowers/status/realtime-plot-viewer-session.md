@@ -7,6 +7,7 @@
 ## What's Shipped (Most Recent First)
 
 ### openmotion-bloodflow-app
+- `28c759a` — **Phase 3 lazy-load**: LiveScanSource DB tail — pan past the 30-min in-memory window loads from DB
 - `5c1f23d` — **Phase 3 swap**: useNewPlotViewer default flipped to true. Legacy Loaders stay as 1-release fallback.
 - `258e0df` — **Phase 4**: hide matplotlib popouts in HistoryModal when new viewer is on
 - `ddf760a` — docs: session status log
@@ -45,7 +46,7 @@
 - ~~**Task #50**: junk values in last frame at scan stop~~ **DONE** in SDK `11f9cc7`. BfiBviStage now NaN's BFI/BVI outside `[-2, 10)` (lower inclusive for legit BFI=0 occlusion readings, upper exclusive for the formula's degenerate extreme). Verified: scan 111 has 0 BFI=10.0 rows (was 7 in scan 110), cell labels show clean values like `BFI -0.18 BVI 4.79`.
 
 ### Spec phases not yet done
-- **Phase 3 full lazy-load**: pan-into-past beyond the 30-min in-memory cache on a live scan. Currently the workaround is "stop the scan, reload via History" — PastScanSource reads the full session from DB. True lazy-on-pan would need LiveScanSource to fall through to DB query when `t_lo < buf.t[0]`.
+- ~~**Phase 3 full lazy-load**~~ **DONE** in `28c759a`. LiveScanSource falls through to a transient DB window when `t_lo < buffer's oldest in-memory timestamp`. **CAVEAT: only triggers after the 30-min ring-trim — NOT hardware-verified (would need a 30+ min scan). Unit tests cover the logic (4 tests); app launches clean.** First real >30-min scan should confirm pan-into-deep-past renders.
 - ~~**Phase 3 swap to default**~~ **DONE** in `5c1f23d`. Legacy Loaders stay as 1-release fallback per spec.
 - ~~**Phase 4 cleanup**~~ **DONE** in `258e0df`. All matplotlib popouts now gate on `useNewPlotViewer !== true`.
 - **Phase 5 cleanup**: delete `EmbeddedRealtimePlot.qml`, `ReducedPlotView.qml`, `PlotToolbar.qml` (dead), `processing/visualize_bloodflow.py`, legacy QML per-sample signals. After Phase 3 is stable for one release.
