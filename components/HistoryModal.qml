@@ -289,7 +289,11 @@ Item {
 
                         Button {
                             text: "Visualize BFI/BVI (legacy)"
-                            visible: MOTIONInterface.appConfig.developerMode ? true : false
+                            // Phase 4: matplotlib popouts stay reachable via
+                            // developerMode fallback while useNewPlotViewer is
+                            // off, hidden once the new viewer is the default.
+                            visible: MOTIONInterface.appConfig.developerMode === true
+                                     && MOTIONInterface.appConfig.useNewPlotViewer !== true
                             Layout.fillWidth: true; Layout.preferredHeight: 36
                             enabled: !!(selected.leftPath || selected.rightPath)
                             hoverEnabled: enabled
@@ -310,7 +314,8 @@ Item {
 
                         Button {
                             text: "Visualize Contrast/Mean (legacy)"
-                            visible: MOTIONInterface.appConfig.developerMode ? true : false
+                            visible: MOTIONInterface.appConfig.developerMode === true
+                                     && MOTIONInterface.appConfig.useNewPlotViewer !== true
                             Layout.fillWidth: true; Layout.preferredHeight: 36
                             enabled: !!(selected.leftPath || selected.rightPath)
                             hoverEnabled: enabled
@@ -331,6 +336,7 @@ Item {
 
                         Button {
                             text: "Visualize BFI/BVI"
+                            visible: MOTIONInterface.appConfig.useNewPlotViewer !== true
                             Layout.fillWidth: true; Layout.preferredHeight: 36
                             enabled: !!(selected.correctedPath)
                             hoverEnabled: enabled
@@ -352,6 +358,7 @@ Item {
                         Button {
                             text: "Visualize Contrast/Mean"
                             visible: MOTIONInterface.appConfig.reducedMode !== true
+                                     && MOTIONInterface.appConfig.useNewPlotViewer !== true
                             Layout.fillWidth: true; Layout.preferredHeight: 36
                             enabled: !!(selected.correctedPath)
                             hoverEnabled: enabled
