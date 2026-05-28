@@ -2096,16 +2096,25 @@ class MOTIONConnector(QObject):
             self._capture_running = False
             self._stop_runlog()
             self._set_current_scan_source(None)  # release the orphaned LiveScanSource — scan never started
+            # start_scan refuses for two reasons: a prior worker still alive,
+            # or a pre-flight failure (e.g. the scan DB couldn't be opened, in
+            # which case the scan is aborted before the laser fires so its data
+            # isn't silently lost). last_scan_error carries the specific reason
+            # when it's the latter.
+            reason = getattr(self._scan_workflow, "last_scan_error", None)
             # Log at WARNING so this is visible in the run log file —
             # captureLog signal goes through QML console.log which is
             # filtered out by default.
-            logger.warning(
-                "startCapture aborted: SDK refused to spawn a new scan "
-                "(see ScanWorkflow.start_scan log for the underlying "
-                "reason — usually a previous worker thread that didn't "
-                "exit cleanly)."
-            )
-            self.captureLog.emit("Capture already running.")
+            if reason:
+                logger.warning("startCapture aborted: %s", reason)
+                self.captureLog.emit(f"Scan aborted: {reason}")
+                self.errorOccurred.emit(reason)
+            else:
+                logger.warning(
+                    "startCapture aborted: SDK refused to spawn a new scan "
+                    "(usually a previous worker thread that didn't exit cleanly)."
+                )
+                self.captureLog.emit("Capture already running.")
         return bool(started)
 
     def _log_scan_image_stats(self, left_csv: str, right_csv: str) -> None:
