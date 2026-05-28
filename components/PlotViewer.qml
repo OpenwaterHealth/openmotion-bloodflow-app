@@ -920,6 +920,10 @@ Rectangle {
                     padding: 12
 
                     Row {
+                        // Hidden in reduced (clinical) mode — that view only
+                        // ever shows the BFI/BVI side averages, so the
+                        // Mean/Contrast alternative isn't offered there.
+                        visible: !viewer.reducedMode
                         spacing: 8
                         PopupPillSwitch {
                             id: bfiBviSwitch
