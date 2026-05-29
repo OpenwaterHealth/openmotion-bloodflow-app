@@ -893,7 +893,11 @@ class MOTIONConnector(QObject):
             return False
         try:
             speed = 100 if on else 0
-            if self._interface.console.set_fan_speed(fan_speed=speed):
+            # set_fan_speed returns the duty cycle that was set (0..100),
+            # or -1 on OW_ERROR. Check against the -1 sentinel — NOT
+            # truthiness — because turning the fan off returns 0, which
+            # is falsy but successful.
+            if self._interface.console.set_fan_speed(fan_speed=speed) != -1:
                 self._console_fan_on = bool(on)
                 self.consoleFanChanged.emit()
                 logger.info("Console fan set to %s", "ON" if on else "OFF")
