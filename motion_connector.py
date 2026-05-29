@@ -317,6 +317,7 @@ class MOTIONConnector(QObject):
     tecStatusChanged = pyqtSignal()
     tecDacChanged = pyqtSignal()
     appConfigChanged = pyqtSignal()
+    consoleFanChanged = pyqtSignal()
 
     # App update signals
     updateAvailable = pyqtSignal(str, str)   # (latest_version, download_url)
@@ -415,6 +416,11 @@ class MOTIONConnector(QObject):
         self._trigger_state = "OFF"
         self._state = DISCONNECTED
         self._last_fan_status: dict[str, bool | None] = {"left": None, "right": None}
+        # Console fan on/off cache. Seeded True because the connector
+        # forces set_fan_speed(100) at console-connect time (see the
+        # connect handler below). Surfaced to QML as ``consoleFanOn`` and
+        # toggled via ``setConsoleFan``.
+        self._console_fan_on: bool = True
         # Track console connection time for safety grace period (issue #107 follow-up)
         self._console_connected_at: float | None = None
 
@@ -867,6 +873,37 @@ class MOTIONConnector(QObject):
         """Expose Console connection status to QML."""
         return self._consoleConnected
 
+    @pyqtProperty(bool, notify=consoleFanChanged)
+    def consoleFanOn(self) -> bool:
+        """Cached last-set console-fan state (True=on). Reflects the
+        connect-time 100% default and any setConsoleFan call. Read by the
+        Developer settings switch when the Settings modal opens."""
+        return self._console_fan_on
+
+    @pyqtSlot(bool, result=bool)
+    def setConsoleFan(self, on: bool) -> bool:
+        """Drive the console fan to 100% (on) or 0% (off).
+
+        Updates the cached state + notifies QML on success. Guarded and
+        wrapped like the other console slots so a mid-flight disconnect
+        can't raise out of the Qt slot and kill the process.
+        """
+        if not self._consoleConnected:
+            logger.error("Console not connected — cannot set console fan")
+            return False
+        try:
+            speed = 100 if on else 0
+            if self._interface.console.set_fan_speed(fan_speed=speed):
+                self._console_fan_on = bool(on)
+                self.consoleFanChanged.emit()
+                logger.info("Console fan set to %s", "ON" if on else "OFF")
+                return True
+            logger.error("Failed to set console fan")
+            return False
+        except Exception as e:  # noqa: BLE001 — slot must not raise
+            logger.error("Error setting console fan: %s", e)
+            return False
+
     @pyqtProperty(bool, notify=laserStateChanged)
     def laserOn(self):
         """Expose Console connection status to QML."""
@@ -1009,6 +1046,8 @@ class MOTIONConnector(QObject):
                         )
                     if self._interface.console.set_fan_speed(fan_speed=100):
                         logger.info("Console fan speed set to 100%")
+                        self._console_fan_on = True
+                        self.consoleFanChanged.emit()
                     else:
                         logger.error("Failed to set console fan speed")
                 except Exception as e:
