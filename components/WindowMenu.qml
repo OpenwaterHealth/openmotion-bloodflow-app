@@ -15,6 +15,10 @@ Rectangle {
     // close-while-busy warning before tearing down (issue #75).
     signal closeRequested()
 
+    // Emitted on double-click of the logo. main.qml owns the behavior
+    // (opens the developer-unlock prompt) — this component stays dumb.
+    signal logoDoubleClicked()
+
     // Properties to configure the logo
     property string logoSource: "" // Default to no logo
 
@@ -110,6 +114,15 @@ Rectangle {
                         ctx.fillRect(0, 0, width, height)
                     }
                 }
+            }
+
+            // Double-click → developer-mode unlock prompt (dev gate).
+            // Sits above the header drag MouseArea so only the logo area
+            // captures the double-click; the rest of the bar still drags.
+            MouseArea {
+                anchors.fill: parent
+                acceptedButtons: Qt.LeftButton
+                onDoubleClicked: windowMenu.logoDoubleClicked()
             }
         }
 
