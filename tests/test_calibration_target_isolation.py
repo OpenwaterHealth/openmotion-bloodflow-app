@@ -68,11 +68,25 @@ from hil_helpers import (
     RE_CONNECTED,
     click_panel,
     find_app_log,
+    force_app_config_value,
     recalibrate_panel_buttons,
     wait_for_pattern,
+    write_app_config_value,
 )
 
 pytestmark = pytest.mark.release
+
+# Calibration controls live in the developerMode-gated "Developer" card
+# of the Settings modal. The app ships with developerMode=false, so force
+# it true on disk before the test's app relaunches read the config;
+# restore the original value when the module finishes.
+_INITIAL_DEVELOPER_MODE = force_app_config_value("developerMode", True)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _restore_developer_mode():
+    yield
+    write_app_config_value("developerMode", _INITIAL_DEVELOPER_MODE)
 
 # Calibration on real hardware: phase-0 flash (~5–15 s) + 2 sub-scans
 # of ~6 s each + compute + write + validation. Field runs settle

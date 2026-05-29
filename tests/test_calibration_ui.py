@@ -43,9 +43,20 @@ import pytest
 from pywinauto import findwindows
 
 from conftest import SLEEP, ensure_visible, log, uia_window
-from hil_helpers import click_panel
+from hil_helpers import click_panel, force_app_config_value, write_app_config_value
 
 pytestmark = pytest.mark.dev
+
+# Calibration controls live in the developerMode-gated "Developer" card
+# of the Settings modal. The app ships with developerMode=false, so force
+# it true before the session ``app`` fixture launches; restore afterward.
+_INITIAL_DEVELOPER_MODE = force_app_config_value("developerMode", True)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _restore_developer_mode():
+    yield
+    write_app_config_value("developerMode", _INITIAL_DEVELOPER_MODE)
 
 # Calibration on real hardware: phase-0 flash (~5-15 s) + 2 sub-scans
 # of ~6 s each + compute + write_calibration. Field runs settle around
