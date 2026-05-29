@@ -725,6 +725,21 @@ Item {
                     }
 
                     FieldRow {
+                        label: "Console fans"
+                        PillSwitch {
+                            checked: MOTIONInterface.consoleFanOn
+                            enabled: MOTIONInterface.consoleConnected
+                            onToggled: MOTIONInterface.setConsoleFan(checked)
+                        }
+                        Text {
+                            text: MOTIONInterface.consoleFanOn ? "On" : "Off"
+                            color: MOTIONInterface.consoleFanOn ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    FieldRow {
                         label: "Save raw CSV"
                         PillSwitch {
                             checked: root.writeRawCsv
@@ -768,11 +783,16 @@ Item {
                         }
                         Item { Layout.fillWidth: true }
                     }
-                }
 
-                // ── Calibration ──────────────────────────────────────────────
-                SectionCard {
-                    title: "Calibration"
+                    // ── Calibration / Test (moved here from the former
+                    //    standalone Calibration card; now developer-only) ──
+                    Rectangle { Layout.fillWidth: true; height: 1; color: root.colBorderSoft }
+                    Text {
+                        text: "Calibration"
+                        color: root.colTextPri
+                        font.pixelSize: 13
+                        font.weight: Font.DemiBold
+                    }
 
                     RowLayout {
                         Layout.fillWidth: true
@@ -905,6 +925,21 @@ Item {
                                 testResultsWindow.requestActivate()
                             }
                         }
+                    }
+
+                    Rectangle { Layout.fillWidth: true; height: 1; color: root.colBorderSoft }
+                    FieldRow {
+                        label: "Developer mode"
+                        ActionButton {
+                            text: "Disable developer mode"
+                            Layout.preferredWidth: 200
+                            hoverColor: "#C0392B"
+                            onClicked: {
+                                MOTIONInterface.setConfig("developerMode", false)
+                                MOTIONInterface.notify("Developer mode disabled.", "info", 3000, false, "dev-mode")
+                            }
+                        }
+                        Item { Layout.fillWidth: true }
                     }
                 }
 
