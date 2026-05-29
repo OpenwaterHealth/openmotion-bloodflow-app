@@ -12,7 +12,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-05-28-developer-mode-gate-design.md`
 
-> **Password value:** This plan uses the constant `"openwater-dev"`. Change `_DEVELOPER_PASSWORD` in Task 1 if a different value is wanted — it is the only place it is defined.
+> **Password value:** This plan uses the constant `"OnePointOne"`. Change `_DEVELOPER_PASSWORD` in Task 1 if a different value is wanted — it is the only place it is defined.
 
 ---
 
@@ -67,7 +67,7 @@ In `motion_connector.py`, add near the other module-level constants (top of file
 # opens a prompt; entering this value sets developerMode=true (persisted).
 # This is the ONLY place the literal is defined. The check lives in Python
 # (not QML) so the literal never ships inside readable QML text.
-_DEVELOPER_PASSWORD = "openwater-dev"
+_DEVELOPER_PASSWORD = "OnePointOne"
 
 
 def developer_password_matches(pw) -> bool:
@@ -726,7 +726,7 @@ Verify: no "Log" button in the side panel; open Settings → no "Developer" card
 
 - [ ] **Step 3: Unlock**
 
-Double-click the Openwater logo (top-left). The password modal appears. Enter a wrong password → "Incorrect password", no change. Enter `openwater-dev` → toast "Developer mode enabled."; modal closes.
+Double-click the Openwater logo (top-left). The password modal appears. Enter a wrong password → "Incorrect password", no change. Enter `OnePointOne` → toast "Developer mode enabled."; modal closes.
 
 - [ ] **Step 4: Confirm unlocked state**
 

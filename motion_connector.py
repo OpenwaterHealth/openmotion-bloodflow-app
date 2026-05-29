@@ -69,7 +69,7 @@ _CQ_DEFAULT_ROLLING_WINDOW = 10
 # opens a prompt; entering this value sets developerMode=true (persisted).
 # This is the ONLY place the literal is defined. The check lives in Python
 # (not QML) so the literal never ships inside readable QML text.
-_DEVELOPER_PASSWORD = "openwater-dev"
+_DEVELOPER_PASSWORD = "OnePointOne"
 
 
 def developer_password_matches(pw) -> bool:
