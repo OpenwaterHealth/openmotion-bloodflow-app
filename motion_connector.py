@@ -64,6 +64,19 @@ _CQ_DEFAULT_DARK_THRESHOLD_DN = 3.0
 _CQ_DEFAULT_LIGHT_THRESHOLD_DN = 15.0
 _CQ_DEFAULT_ROLLING_WINDOW = 10
 
+# ── Developer-mode unlock ────────────────────────────────────────────────
+# Hardcoded developer-mode password. Double-clicking the Openwater logo
+# opens a prompt; entering this value sets developerMode=true (persisted).
+# This is the ONLY place the literal is defined. The check lives in Python
+# (not QML) so the literal never ships inside readable QML text.
+_DEVELOPER_PASSWORD = "openwater-dev"
+
+
+def developer_password_matches(pw) -> bool:
+    """Return True iff ``pw`` equals the developer-mode password."""
+    return isinstance(pw, str) and pw == _DEVELOPER_PASSWORD
+
+
 # Global loggers - will be configured by _configure_logging method
 logger = logging.getLogger("openmotion.bloodflow-app.connector")
 run_logger = logging.getLogger("bloodflow-app.runlog")
@@ -1423,6 +1436,19 @@ class MOTIONConnector(QObject):
                 json.dump(out, f, indent=2)
         except OSError as e:
             logger.warning(f"[Connector] Could not write app_config.json: {e}")
+
+    @pyqtSlot(str, result=bool)
+    def checkDeveloperPassword(self, pw: str) -> bool:
+        """Return True if ``pw`` matches the developer-mode password.
+
+        Comparison lives in Python so the literal is not present in
+        shipped QML source. QML calls this from the unlock modal and,
+        on True, sets developerMode via setConfig.
+        """
+        ok = developer_password_matches(pw)
+        if not ok:
+            logger.info("[Connector] Developer unlock attempt failed")
+        return ok
 
     @pyqtSlot(str, 'QVariant')
     def setConfig(self, key: str, value):
