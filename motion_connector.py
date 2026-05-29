@@ -37,9 +37,6 @@ from omotion.MotionProcessing import process_bin_file
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
 from processing.visualize_bloodflow import VisualizeBloodflow
 from motion_config import (
-    FpgaModel,
-    apply_laser_power_from_config,
-    load_laser_params,
     load_tec_params,
 )
 from utils.resource_path import resource_path
@@ -699,10 +696,7 @@ class MOTIONConnector(QObject):
         # reconstructing. None when no scan has run this session.
         self._live_scan_source: LiveScanSource | None = None
 
-        self.laser_params = load_laser_params(config_dir, force_fault=self._force_laser_fail)
         self._tec_voltage_default = load_tec_params(config_dir)
-        # Load FPGA model (preferred JSON, with legacy JS fallback)
-        self._fpga = FpgaModel()
         self._console_mutex = QRecursiveMutex()
 
         ft_mean     = cfg.get("ft_min_mean_per_camera")
@@ -1488,33 +1482,6 @@ class MOTIONConnector(QObject):
 
     # --- SCAN MANAGEMENT METHODS ---
     @pyqtSlot(result=list)
-    def _load_laser_params(self, config_dir):
-        filename = (
-            "laser_params_fault.json" if self._force_laser_fail else "laser_params.json"
-        )
-        config_path = (
-            resource_path("config", filename)
-            if config_dir == "config"
-            else Path(config_dir) / filename
-        )
-        if not config_path.exists():
-            logger.error(f"[Connector] Laser parameter file not found: {config_path}")
-            return []
-
-        try:
-            with open(config_path, "r") as f:
-                params = json.load(f)
-            logger.info(
-                f"[Connector] Loaded {len(params)} laser parameter sets from {config_path}"
-            )
-            return params
-        except FileNotFoundError:
-            logger.error(f"[Connector] Laser parameter file not found: {config_path}")
-            return []
-        except json.JSONDecodeError as e:
-            logger.error(f"[Connector] Invalid JSON in {config_path}: {e}")
-            return []
-
     def _load_tec_params(self, config_dir):
         """Load TEC parameters from tec_params.json and return the voltage value."""
         config_path = (
@@ -2710,9 +2677,11 @@ class MOTIONConnector(QObject):
             return False
 
     def set_laser_power_from_config(self, interface):
-        return apply_laser_power_from_config(
-            interface, self.laser_params, self._fpga, self._console_mutex
-        )
+        # Laser-power config now lives in the SDK (omotion.laser): it bundles
+        # the FPGA register map + the laser param set and writes them over I2C.
+        # force_fault honors the forceLaserFail app flag (loads the
+        # safety-trip param set to exercise the interlock).
+        return interface.apply_laser_power(force_fault=self._force_laser_fail)
 
     # ------------------------------------------------------------------
     # Contact-quality quick-check
