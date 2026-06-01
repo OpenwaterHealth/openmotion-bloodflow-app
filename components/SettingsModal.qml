@@ -52,6 +52,17 @@ Item {
 
     signal settingsChanged()
 
+    // Password gate for the Calibrate action.
+    PasswordPromptModal {
+        id: calibrationPasswordModal
+        title: "Calibration"
+        description: "Enter the password to start calibration."
+        confirmLabel: "Calibrate"
+        onAccepted: MOTIONInterface.runCalibration(
+            calibrationTargetCombo.currentText.toLowerCase()
+        )
+    }
+
     // ── Lifecycle ───────────────────────────────────────────────────────────
     function _loadFromConfig() {
         var cfg = MOTIONInterface.appConfig
@@ -830,9 +841,7 @@ Item {
                             enabled: MOTIONInterface.consoleConnected
                                   && !MOTIONInterface.calibrationRunning
                                   && !MOTIONInterface.testScanRunning
-                            onClicked: MOTIONInterface.runCalibration(
-                                calibrationTargetCombo.currentText.toLowerCase()
-                            )
+                            onClicked: calibrationPasswordModal.open()
                         }
 
                         Rectangle {
