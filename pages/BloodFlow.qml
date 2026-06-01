@@ -425,6 +425,7 @@ Rectangle {
             reducedStartPending = false
         }
         onContinueRequested: {
+            console.warn("[CQDBG] onContinueRequested rsp=" + bloodFlow.reducedStartPending)
             if (bloodFlow.reducedStartPending) {
                 contactQualityModal.close()
                 beginScanNow()
@@ -437,6 +438,7 @@ Rectangle {
             qualityCheckRunner.start()
         }
         onDismissed: {
+            console.warn("[CQDBG] onDismissed scanning=" + bloodFlow.scanning + " rsp=" + bloodFlow.reducedStartPending)
             if (!bloodFlow.scanning)
                 reducedStartPending = false
             if (!bloodFlow.reducedStartPending)
