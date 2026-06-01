@@ -83,11 +83,17 @@ Item {
             TextField {
                 id: pwField
                 Layout.fillWidth: true
-                Layout.preferredHeight: 34
+                Layout.preferredHeight: 38
                 echoMode: TextInput.Password
-                placeholderText: "Password"
+                placeholderText: ""
                 color: theme.textPrimary
+                placeholderTextColor: theme.textSecondary
                 font.pixelSize: 14
+                verticalAlignment: TextInput.AlignVCenter
+                leftPadding: 10
+                rightPadding: 10
+                topPadding: 0
+                bottomPadding: 0
                 background: Rectangle {
                     color: theme.bgInput
                     radius: 4

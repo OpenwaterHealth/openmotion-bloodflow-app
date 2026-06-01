@@ -488,7 +488,7 @@ Item {
                         visible: !root.reducedMode
                         label: "Display mode"
                         Text {
-                            text: "Mean / C"
+                            text: "Mean / Contrast"
                             color: !root.showBfiBvi ? root.colAccent : root.colTextSec
                             font.pixelSize: 13
                             font.weight: !root.showBfiBvi ? Font.DemiBold : Font.Normal
@@ -670,7 +670,7 @@ Item {
                 // ── Reduced Mode ─────────────────────────────────────────────
                 SectionCard {
                     title: "Reduced Mode"
-                    visible: !root.reducedMode
+                    visible: !root.reducedMode || (MOTIONInterface.appConfig.developerMode ? true : false)
 
                     FieldRow {
                         label: "Enable"
@@ -763,7 +763,7 @@ Item {
                             enabled: root.writeRawCsv
                             text: root.rawCsvDurationSec !== null && root.rawCsvDurationSec !== undefined
                                   ? root.rawCsvDurationSec.toString() : ""
-                            placeholderText: "unlimited"
+                            placeholderText: ""
                             inputMethodHints: Qt.ImhDigitsOnly
                             color: root.colTextPri
                             background: Rectangle {
@@ -794,15 +794,39 @@ Item {
                         font.weight: Font.DemiBold
                     }
 
+                    // Row 1: Target | [Both ▾]
+                    // Issue #117: test stations don't always have two
+                    // static phantoms — let the operator calibrate one
+                    // side at a time. "Both" preserves the prior default.
+                    FieldRow {
+                        label: "Target"
+                        StyledCombo {
+                            id: calibrationTargetCombo
+                            Layout.preferredWidth: 130
+                            model: ["Both", "Left", "Right"]
+                            currentIndex: 0
+                            enabled: !MOTIONInterface.calibrationRunning
+                                  && !MOTIONInterface.testScanRunning
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    // Row 2: [Calibrate] ● status text  (aligned under Both combo)
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 12
 
+                        // Spacer matching FieldRow label width to align with combo
+                        Item {
+                            Layout.preferredWidth: 140
+                            Layout.minimumWidth: 140
+                        }
+
                         ActionButton {
                             id: runCalibrationButton
                             text: "Calibrate"
-                            Layout.preferredWidth: 110
-                            Layout.preferredHeight: 40
+                            Layout.preferredWidth: 130
+                            Layout.preferredHeight: 34
                             enabled: MOTIONInterface.consoleConnected
                                   && !MOTIONInterface.calibrationRunning
                                   && !MOTIONInterface.testScanRunning
@@ -811,37 +835,12 @@ Item {
                             )
                         }
 
-                        ActionButton {
-                            id: runTestButton
-                            text: "Test"
-                            Layout.preferredWidth: 110
-                            Layout.preferredHeight: 40
-                            enabled: MOTIONInterface.consoleConnected
-                                  && !MOTIONInterface.calibrationRunning
-                                  && !MOTIONInterface.testScanRunning
-                            onClicked: MOTIONInterface.runTestScan(
-                                calibrationTargetCombo.currentText.toLowerCase()
-                            )
-                        }
-
-                        // Issue #117: test stations don't always have two
-                        // static phantoms — let the operator calibrate one
-                        // side at a time. "Both" preserves the prior default.
-                        StyledCombo {
-                            id: calibrationTargetCombo
-                            Layout.preferredWidth: 110
-                            model: ["Both", "Left", "Right"]
-                            currentIndex: 0
-                            enabled: !MOTIONInterface.calibrationRunning
-                                  && !MOTIONInterface.testScanRunning
-                        }
-
-                        // Indicator light
                         Rectangle {
                             id: calibLight
-                            width: 14
-                            height: 14
-                            radius: 7
+                            width: 10
+                            height: 10
+                            radius: 5
+                            Layout.alignment: Qt.AlignVCenter
                             border.width: 1
                             border.color: root.colBorderSoft
                             color: {
@@ -865,9 +864,7 @@ Item {
                         TextArea {
                             id: calibStatusLabel
                             Layout.fillWidth: true
-                            // Match the buttons' 40px height for single-line
-                            // statuses; grow for multi-line failure breakdown.
-                            Layout.preferredHeight: Math.max(40, implicitHeight)
+                            Layout.preferredHeight: Math.max(34, implicitHeight)
                             readOnly: true
                             selectByMouse: false
                             activeFocusOnTab: false
@@ -876,7 +873,7 @@ Item {
                             wrapMode: TextEdit.Wrap
                             verticalAlignment: TextEdit.AlignVCenter
                             color: root.colTextPri
-                            font.pixelSize: 13
+                            font.pixelSize: 12
                             text: {
                                 switch (MOTIONInterface.calibrationStatus) {
                                 case "running":
@@ -893,6 +890,32 @@ Item {
                                 }
                             }
                         }
+                    }
+
+                    // Row 3: [Test] aligned under Calibrate
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 12
+
+                        Item {
+                            Layout.preferredWidth: 140
+                            Layout.minimumWidth: 140
+                        }
+
+                        ActionButton {
+                            id: runTestButton
+                            text: "Test"
+                            Layout.preferredWidth: 130
+                            Layout.preferredHeight: 34
+                            enabled: MOTIONInterface.consoleConnected
+                                  && !MOTIONInterface.calibrationRunning
+                                  && !MOTIONInterface.testScanRunning
+                            onClicked: MOTIONInterface.runTestScan(
+                                calibrationTargetCombo.currentText.toLowerCase()
+                            )
+                        }
+
+                        Item { Layout.fillWidth: true }
                     }
 
                     // 1 Hz tick driving the elapsed counter while running.
