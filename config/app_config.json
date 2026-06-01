@@ -87,7 +87,7 @@
   "rightMask": 102,
   "uncorrectedOnly": true,
   "autoConfigureOnStartup": false,
-  "developerMode": true,
+  "developerMode": false,
   "showBfiBvi": true,
   "bfiMin": 1.0,
   "bfiMax": 9.0,
@@ -97,7 +97,7 @@
   "meanMax": 200.0,
   "contrastMin": 0.0,
   "contrastMax": 0.7,
-  "dataDirectory": "C:\\Users\\ethan\\Projects\\openmotion-bloodflow-app\\scan_data",
+  "dataDirectory": null,
   "writeRawCsv": false,
   "rawCsvDurationSec": 60.0,
   "autoScale": false,
@@ -136,6 +136,5 @@
     15.0,
     15.0,
     15.0
-  ],
-  "triggerConfig": null
+  ]
 }
