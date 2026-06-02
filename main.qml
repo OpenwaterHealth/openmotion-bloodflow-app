@@ -114,6 +114,9 @@ ApplicationWindow {
                 window._exitArmed = true
                 exitDisarmTimer.restart()
             }
+
+            // Hidden developer-mode entry point.
+            onLogoDoubleClicked: developerUnlockModal.open()
         }
 
         // Update available banner (slides in below header)
@@ -142,6 +145,11 @@ ApplicationWindow {
                 id: bloodFlowPage
                 anchors.fill: parent
             }
+        }
+
+        // Developer-mode unlock prompt (opened by logo double-click).
+        DeveloperUnlockModal {
+            id: developerUnlockModal
         }
     }
 
