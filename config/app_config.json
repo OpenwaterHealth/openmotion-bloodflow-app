@@ -1,4 +1,6 @@
 {
+  "developerMode": false,
+  "reducedMode": true,
   "forceLaserFail": false,
   "cameraTempAlertThresholdC": 110,
   "sensorDebugLogging": false,
@@ -8,76 +10,24 @@
   "powerOffUnusedCameras": false,
   "commVerbose": false,
   "verboseCommandHandling": false,
-  "ft_min_mean_per_camera": [
-    40,
-    40,
-    40,
-    40,
-    40,
-    40,
-    40,
-    40
-  ],
+
+  "ft_min_mean_per_camera": [40, 40, 40, 40, 40, 40, 40, 40],
   "ft_min_contrast_per_camera": [
-    0.25,
-    0.25,
-    0.25,
-    0.25,
-    0.25,
-    0.25,
-    0.25,
-    0.25
+    0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25
   ],
-  "ft_min_bfi_per_camera": [
-    -0.5,
-    -0.5,
-    -0.5,
-    -0.5,
-    -0.5,
-    -0.5,
-    -0.5,
-    -0.5
+  "ft_min_bfi_per_camera": [-0.5, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5],
+  "ft_max_bfi_per_camera": [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+  "ft_min_bvi_per_camera": [4.5, 4.5, 4.5, 4.5, 4.5, 4.5, 4.5, 4.5],
+  "ft_max_bvi_per_camera": [5.5, 5.5, 5.5, 5.5, 5.5, 5.5, 5.5, 5.5],
+  "ft_max_dark_per_camera": [3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0],
+
+  "cq_check_duration_sec": 1.0,
+  "cq_rolling_avg_window": 10,
+  "cq_dark_threshold_per_camera": [3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0],
+  "cq_light_threshold_per_camera": [
+    15.0, 15.0, 15.0, 15.0, 15.0, 15.0, 15.0, 15.0
   ],
-  "ft_max_bfi_per_camera": [
-    0.5,
-    0.5,
-    0.5,
-    0.5,
-    0.5,
-    0.5,
-    0.5,
-    0.5
-  ],
-  "ft_min_bvi_per_camera": [
-    4.5,
-    4.5,
-    4.5,
-    4.5,
-    4.5,
-    4.5,
-    4.5,
-    4.5
-  ],
-  "ft_max_bvi_per_camera": [
-    5.5,
-    5.5,
-    5.5,
-    5.5,
-    5.5,
-    5.5,
-    5.5,
-    5.5
-  ],
-  "ft_max_dark_per_camera": [
-    3.0,
-    3.0,
-    3.0,
-    3.0,
-    3.0,
-    3.0,
-    3.0,
-    3.0
-  ],
+
   "max_calibration_time_sec": 600,
   "calibration_scan_duration_sec": 15,
   "test_scan_duration_sec": 5,
@@ -86,7 +36,6 @@
   "rightMask": 102,
   "uncorrectedOnly": true,
   "autoConfigureOnStartup": false,
-  "developerMode": false,
   "showBfiBvi": true,
   "bfiMin": 1.0,
   "bfiMax": 9.0,
@@ -101,7 +50,6 @@
   "rawCsvDurationSec": null,
   "autoScale": false,
   "autoScalePerPlot": false,
-  "reducedMode": false,
   "reducedModeLeftMask": 195,
   "reducedModeRightMask": 195,
   "plotWindowSec": 5,
@@ -113,27 +61,5 @@
   "bfiClampHigh": 10.0,
   "bviClampLow": 0.0,
   "bviClampHigh": 10.0,
-  "darkMode": true,
-  "cq_check_duration_sec": 1.0,
-  "cq_rolling_avg_window": 10,
-  "cq_dark_threshold_per_camera": [
-    3.0,
-    3.0,
-    3.0,
-    3.0,
-    3.0,
-    3.0,
-    3.0,
-    3.0
-  ],
-  "cq_light_threshold_per_camera": [
-    15.0,
-    15.0,
-    15.0,
-    15.0,
-    15.0,
-    15.0,
-    15.0,
-    15.0
-  ]
+  "darkMode": true
 }
