@@ -159,7 +159,11 @@ QtObject {
         onFinished: function(ok, err) {
             if (runner._done) return
             if (!ok) { runner._finish(false, err, "", ""); return }
-            runner._stage = "post"
+            // The new SDK pipeline writes CSVs in real-time via CsvSink,
+            // so there's no post-process .raw→.csv conversion to do here —
+            // this is a finalization gesture: notes get written and the
+            // notes modal opens on scanNotesReady.
+            runner._stage = "finish"
             runner.stageUpdate("Scan complete")
             runner._finish(true, "", "", "")
         }
@@ -214,9 +218,9 @@ QtObject {
             else if (connector && connector.stopTrigger)
                 try { connector.stopTrigger() } catch(e) {}
             break
-        case "post":
-            if (connector && connector.cancelPostProcess)
-                try { connector.cancelPostProcess() } catch(e) {}
+        case "finish":
+            // No long-running work — scan-notes write is synchronous,
+            // and CSVs are already on disk. Nothing to cancel.
             break
         }
         runner._finish(false, "Canceled", "", "")

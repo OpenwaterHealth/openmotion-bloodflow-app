@@ -36,7 +36,7 @@ def connector(monkeypatch):
     c = MOTIONConnector(
         interface=fake_iface,
         app_config={"developerMode": False},
-        output_path=".",
+        data_dir=".",
         config_dir="config",
     )
     c._consoleConnected = True

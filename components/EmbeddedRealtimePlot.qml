@@ -274,20 +274,20 @@ Rectangle {
         _store[key].latestTemp = tempC
     }
 
-    function handleMeanSample(side, camId, ts, val) {
+    function handleMeanSample(side, camId, frameId, ts, val) {
         if (!running) return
         const key = _seriesKey(side, camId)
         _ensureEntry(key)
-        _store[key].mean.push({ t: ts, v: val })
+        _store[key].mean.push({ t: ts, v: val, fid: frameId })
         _store[key].latestMean = val
         if (ts > latestTimestamp) latestTimestamp = ts
     }
 
-    function handleContrastSample(side, camId, ts, val) {
+    function handleContrastSample(side, camId, frameId, ts, val) {
         if (!running) return
         const key = _seriesKey(side, camId)
         _ensureEntry(key)
-        _store[key].contrast.push({ t: ts, v: val })
+        _store[key].contrast.push({ t: ts, v: val, fid: frameId })
         _store[key].latestContrast = val
         if (ts > latestTimestamp) latestTimestamp = ts
     }
@@ -312,6 +312,20 @@ Rectangle {
                 if (_store[key].bvi[j].fid === s.frameId) {
                     _store[key].bvi[j].v = s.bvi
                     _store[key].latestBvi = s.bvi
+                    break
+                }
+            }
+            for (let j = 0; j < _store[key].mean.length; j++) {
+                if (_store[key].mean[j].fid === s.frameId) {
+                    _store[key].mean[j].v = s.mean
+                    _store[key].latestMean = s.mean
+                    break
+                }
+            }
+            for (let j = 0; j < _store[key].contrast.length; j++) {
+                if (_store[key].contrast[j].fid === s.frameId) {
+                    _store[key].contrast[j].v = s.contrast
+                    _store[key].latestContrast = s.contrast
                     break
                 }
             }
@@ -806,11 +820,11 @@ Rectangle {
         function onScanBviSampled(side, camId, frameId, timestampSec, bviVal) {
             plotArea.handleBviSample(side, camId, frameId, timestampSec, bviVal)
         }
-        function onScanMeanSampled(side, camId, timestampSec, meanVal) {
-            plotArea.handleMeanSample(side, camId, timestampSec, meanVal)
+        function onScanMeanSampled(side, camId, frameId, timestampSec, meanVal) {
+            plotArea.handleMeanSample(side, camId, frameId, timestampSec, meanVal)
         }
-        function onScanContrastSampled(side, camId, timestampSec, contrastVal) {
-            plotArea.handleContrastSample(side, camId, timestampSec, contrastVal)
+        function onScanContrastSampled(side, camId, frameId, timestampSec, contrastVal) {
+            plotArea.handleContrastSample(side, camId, frameId, timestampSec, contrastVal)
         }
         function onScanCorrectedBatch(samples) {
             plotArea.handleCorrectedBatch(samples)

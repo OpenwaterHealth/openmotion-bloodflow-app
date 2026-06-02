@@ -1,0 +1,1039 @@
+import QtQuick 6.0
+import QtQuick.Controls 6.0
+import QtQuick.Layouts 6.0
+import OpenMotion 1.0
+
+// Phase 2b-i — multi-cell viewer. Always renders 16 cells (2 sides × 8 cams).
+// Inactive cameras just render an empty Canvas + label; no per-mask branching.
+// Reduced-mode 2-cell layout is Phase 2b-ii. Toolbar + autoscale arrive in
+// Task 5; the current header text is the Phase 2a placeholder.
+Rectangle {
+    id: viewer
+    anchors.fill: parent
+    color: theme.bgPlot
+    radius: 8
+    border.color: theme.borderSoft
+    border.width: 1
+
+    // Keyboard focus — viewer starts focused so spec keys (← → +/- 0
+    // Home End Esc) work without a prior click. Click on a cell or
+    // the scrubber re-focuses; Esc clears focus so text inputs (notes
+    // editor, subject ID) take precedence afterward.
+    focus: true
+    activeFocusOnTab: true
+
+    Keys.onPressed: function(event) {
+        if (event.key === Qt.Key_Left) {
+            var dt = (event.modifiers & Qt.ShiftModifier)
+                ? -viewer.windowSeconds : -1
+            viewer._kbPan(dt)
+            event.accepted = true
+        } else if (event.key === Qt.Key_Right) {
+            var dt2 = (event.modifiers & Qt.ShiftModifier)
+                ? viewer.windowSeconds : 1
+            viewer._kbPan(dt2)
+            event.accepted = true
+        } else if (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal
+                   || event.key === Qt.Key_Up) {
+            // Equal key shares the physical key with Plus on US layouts
+            // — accept it so the user doesn't need to hold Shift. ↑/↓
+            // mirror mouse-wheel direction: wheel-up zooms in.
+            viewer._kbZoom(0.8)
+            event.accepted = true
+        } else if (event.key === Qt.Key_Minus || event.key === Qt.Key_Underscore
+                   || event.key === Qt.Key_Down) {
+            viewer._kbZoom(1.25)
+            event.accepted = true
+        } else if (event.key === Qt.Key_0) {
+            viewer._kbReset()
+            event.accepted = true
+        } else if (event.key === Qt.Key_Home) {
+            viewer.setWindow(0, viewer.windowSeconds)
+            event.accepted = true
+        } else if (event.key === Qt.Key_End) {
+            viewer._kbEnd()
+            event.accepted = true
+        } else if (event.key === Qt.Key_Escape) {
+            viewer.focus = false
+            event.accepted = true
+        }
+    }
+
+    AppTheme { id: theme }
+
+    // ── Inputs ─────────────────────────────────────────────────────────
+    property bool reducedMode: false   // honored in Phase 2b-ii
+    // displayMode pair selector — driven externally (BloodFlow.qml binds
+    // it from settingsModal.showBfiBvi). "bfi_bvi" overlays BFI+BVI on
+    // each cell; "mean_contrast" overlays Mean+Contrast.
+    property string displayMode: "bfi_bvi"
+    // autoScale — driven externally from Settings; when true, the 3 s
+    // _recomputeAutoscale timer below repins primary/secondary YMin/YMax
+    // to per-metric percentile bounds across the buffer.
+    property bool autoScale: true
+
+    // ── State (owned here; pushed to every cell) ───────────────────────
+    // windowSeconds is internal — the bottom-right pill overlay edits it
+    // via _windowSecondsRequested. Each metric has its own y-axis mapping
+    // (primary*/secondary*) so the two traces don't squash each other
+    // when their ranges differ wildly.
+    property real windowSeconds: 15
+
+    // When displayMode changes (e.g. from the Settings modal flipping
+    // BFI/BVI ↔ Mean/Contrast), the previously-fit y-bounds will be
+    // for the wrong pair — mean ~100 + contrast ~0.3 would render
+    // entirely off-axis until the next 3 s autoscale tick. Force an
+    // immediate recompute so the switch lands cleanly.
+    onDisplayModeChanged: viewer._recomputeAutoscale()
+
+    // ── Time-axis state ────────────────────────────────────────────────
+    // followLive = true: cells render the last `windowSeconds` of data
+    // up to source.liveEdge (DVR "live" mode). False: the visible window
+    // is pinned at [windowStartT, windowStartT + windowSeconds] and any
+    // new samples scroll on without moving the view (DVR "paused" mode).
+    // Any pan/wheel-zoom interaction sets followLive=false; only the
+    // "Back to live" button restores it.
+    property bool followLive: true
+    property real windowStartT: 0.0
+
+    // Y-axis bounds — when autoScale is true, _autoPrimaryYMin/Max are
+    // written by _recomputeAutoscale (every 3 s + on displayMode change)
+    // and primaryYMin/Max read them through the derived bindings below.
+    // When autoScale is false, primaryYMin/Max instead read the per-
+    // metric clamps from settingsModal (settingBfiMin/Max etc.) so the
+    // operator's preferred fixed scale applies.
+    property real _autoPrimaryYMin: 0.0
+    property real _autoPrimaryYMax: 10.0
+    property real _autoSecondaryYMin: 0.0
+    property real _autoSecondaryYMax: 10.0
+
+    // Manual-bound inputs — BloodFlow.qml binds these from settingsModal.
+    property real settingBfiMin: 0.0
+    property real settingBfiMax: 10.0
+    property real settingBviMin: 0.0
+    property real settingBviMax: 10.0
+    property real settingMeanMin: 0.0
+    property real settingMeanMax: 500.0
+    property real settingContrastMin: 0.0
+    property real settingContrastMax: 1.0
+
+    function _settingBound(metric, which) {
+        if (metric === "bfi")      return which === "min" ? settingBfiMin      : settingBfiMax
+        if (metric === "bvi")      return which === "min" ? settingBviMin      : settingBviMax
+        if (metric === "mean")     return which === "min" ? settingMeanMin     : settingMeanMax
+        if (metric === "contrast") return which === "min" ? settingContrastMin : settingContrastMax
+        return which === "min" ? 0.0 : 10.0
+    }
+
+    readonly property real primaryYMin: autoScale
+        ? _autoPrimaryYMin
+        : _settingBound(_displayPair.primary, "min")
+    readonly property real primaryYMax: autoScale
+        ? _autoPrimaryYMax
+        : _settingBound(_displayPair.primary, "max")
+    readonly property real secondaryYMin: autoScale
+        ? _autoSecondaryYMin
+        : _settingBound(_displayPair.secondary, "min")
+    readonly property real secondaryYMax: autoScale
+        ? _autoSecondaryYMax
+        : _settingBound(_displayPair.secondary, "max")
+
+    // ── Source subscription ────────────────────────────────────────────
+    readonly property var scanSource: MOTIONInterface.currentScanSource
+
+    // ── Grid model ─────────────────────────────────────────────────────
+    // Dev mode (default) — one cell per active camera (bits set in
+    // leftMask / rightMask). 4 columns max; left-side cams fill the
+    // top rows, right-side cams fill the rows below.
+    readonly property var _devCellModel: {
+        var lm = (MOTIONInterface.appConfig.leftMask  || 0) & 0xFF
+        var rm = (MOTIONInterface.appConfig.rightMask || 0) & 0xFF
+        var leftCams = []
+        var rightCams = []
+        for (var i = 0; i < 8; i++) {
+            if (lm & (1 << i)) leftCams.push(i)
+            if (rm & (1 << i)) rightCams.push(i)
+        }
+        var entries = []
+        var leftRows = Math.ceil(leftCams.length / 4)
+        for (var li = 0; li < leftCams.length; li++) {
+            entries.push({
+                side: "left",
+                camId: leftCams[li],
+                row: Math.floor(li / 4),
+                col: li % 4
+            })
+        }
+        for (var ri = 0; ri < rightCams.length; ri++) {
+            entries.push({
+                side: "right",
+                camId: rightCams[ri],
+                row: leftRows + Math.floor(ri / 4),
+                col: ri % 4
+            })
+        }
+        return entries
+    }
+
+    // Reduced mode — 2 cells, one per side, each rendering the
+    // side-averaged stream (cam_id=-1, fed by SDK's SideAveragingStage
+    // via _LivePlotSink.consume). Stacked vertically in a single column.
+    readonly property var _reducedCellModel: [
+        { side: "left",  camId: -1, row: 0, col: 0 },
+        { side: "right", camId: -1, row: 1, col: 0 }
+    ]
+
+    readonly property var _activeCellModel: viewer.reducedMode
+        ? _reducedCellModel
+        : _devCellModel
+
+    // ── Autoscale recompute (shared by Timer + displayMode change) ────
+    // Writes to _auto* — the derived primaryYMin/Max bindings above
+    // pick the _auto vs setting-bound value based on autoScale.
+    function _recomputeAutoscale() {
+        if (!viewer.scanSource) return
+        var bp = viewer.scanSource.compute_bounds_for_metric(viewer._displayPair.primary)
+        if (bp && typeof bp.yMin === "number" && typeof bp.yMax === "number") {
+            viewer._autoPrimaryYMin = bp.yMin
+            viewer._autoPrimaryYMax = bp.yMax
+        }
+        var bs = viewer.scanSource.compute_bounds_for_metric(viewer._displayPair.secondary)
+        if (bs && typeof bs.yMin === "number" && typeof bs.yMax === "number") {
+            viewer._autoSecondaryYMin = bs.yMin
+            viewer._autoSecondaryYMax = bs.yMax
+        }
+        viewer._dirty = true
+    }
+
+    // ── DVR controls (called from PlotCell MouseArea) ─────────────────
+    // Window-bounds: hard floor at 0.5 s so wheel-zoom can't collapse
+    // the visible window to nothing; ceiling at 600 s to keep the
+    // decimation point count sane for very-long scans.
+    readonly property real _minWindowSeconds: 0.5
+    readonly property real _maxWindowSeconds: 600.0
+
+    function _ensureFrozen() {
+        // Capture the currently-visible window start so pan/zoom from
+        // followLive transitions smoothly (no visual jump). After this
+        // the caller mutates windowStartT/windowSeconds freely.
+        if (viewer.followLive) {
+            // Use the snapshot (matches what's actually drawn) rather
+            // than re-reading source.liveEdge — avoids a one-frame jump
+            // at the moment of pan/zoom on a fast source.
+            viewer.windowStartT = Math.max(0, viewer.liveEdgeSnapshot - viewer.windowSeconds)
+        }
+        viewer.followLive = false
+    }
+
+    function setWindow(startT, seconds) {
+        _ensureFrozen()
+        viewer.windowSeconds = Math.max(_minWindowSeconds, Math.min(_maxWindowSeconds, seconds))
+        // Cap startT so the window can't extend past the live edge —
+        // otherwise the scrubber inset slides off into empty future
+        // space when the user keeps dragging right. Lower bound 0
+        // (scan start); upper bound puts the rightmost data at the
+        // right edge of the visible plot.
+        var maxStart = Math.max(0, viewer.liveEdgeSnapshot - viewer.windowSeconds)
+        viewer.windowStartT = Math.max(0, Math.min(maxStart, startT))
+        viewer._dirty = true
+    }
+
+    function backToLive() {
+        viewer.followLive = true
+        viewer._dirty = true
+    }
+
+    // ── Keyboard shortcut helpers ──────────────────────────────────────
+    // Default windowSeconds matches PlotToolbar's "15 s" combo entry —
+    // the `0` shortcut resets to this canonical value.
+    readonly property real _defaultWindowSeconds: 15
+
+    function _kbPan(seconds) {
+        _ensureFrozen()
+        setWindow(viewer.windowStartT + seconds, viewer.windowSeconds)
+    }
+
+    function _kbZoom(factor) {
+        _ensureFrozen()
+        // Zoom around the center of the currently-visible window so the
+        // operator's mental anchor stays put on the screen.
+        var center = viewer.windowStartT + viewer.windowSeconds / 2
+        var newSec = viewer.windowSeconds * factor
+        setWindow(center - newSec / 2, newSec)
+    }
+
+    function _kbEnd() {
+        // Past mode: pin window so the rightmost data sits at the right
+        // edge. Live mode: resume followLive (snaps to liveEdge AND
+        // keeps tracking new samples as they arrive).
+        if (viewer.scanSource && viewer.scanSource.live) {
+            backToLive()
+        } else {
+            setWindow(
+                Math.max(0, viewer.liveEdgeSnapshot - viewer.windowSeconds),
+                viewer.windowSeconds
+            )
+        }
+    }
+
+    function _kbReset() {
+        viewer.windowSeconds = _defaultWindowSeconds
+        backToLive()
+    }
+
+    // ── Hover crosshair ────────────────────────────────────────────────
+    // Cells broadcast cursor time here via cursorAt(); cells read
+    // viewer.cursorT to draw the synced vertical line. NaN means hide.
+    property real cursorT: NaN
+
+    function cursorAt(t) {
+        viewer.cursorT = t
+        // Mark dirty so the next paintThrottle tick (≤ 33 ms) repaints
+        // every cell with the new crosshair x — no per-mousemove paints.
+        viewer._dirty = true
+    }
+
+    // ── Trace color per metric ─────────────────────────────────────────
+    // Hex values match the legacy EmbeddedRealtimePlot defaults so the
+    // visual identity carries across the viewer swap — clinicians don't
+    // suddenly see a different palette for the same metric.
+    function _traceColorForMetric(m) {
+        if (m === "bfi")      return "#E74C3C"  // red
+        if (m === "bvi")      return "#3498DB"  // blue
+        if (m === "mean")     return "#2ECC71"  // green
+        if (m === "contrast") return "#9B59B6"  // purple
+        return "#3498DB"
+    }
+
+    // ── Display-mode pair resolution ───────────────────────────────────
+    // Maps the displayMode toggle to the primary/secondary metric pair
+    // pushed to every cell.
+    readonly property var _displayPair: {
+        if (viewer.displayMode === "mean_contrast")
+            return { primary: "mean", secondary: "contrast" }
+        return { primary: "bfi", secondary: "bvi" }
+    }
+
+    // ── Viewer-driven paint throttle ───────────────────────────────────
+    // Single dirty flag set by ANY samplesAppended emission. A 33 ms
+    // Timer ticks paintTick (consumed by every PlotCell) whenever dirty.
+    // Caps total cell-paint rate to ~30 Hz regardless of how many
+    // samplesAppended signals fire in between, and renders all cells
+    // in one pass so they stay visually in lockstep.
+    property int paintTick: 0
+    property bool _dirty: true   // start true so cells paint at least once
+
+    // Snapshot of source.liveEdge captured once per paintTick. All cells
+    // read this (not source.liveEdge directly) so their windows stay
+    // perfectly synced even when individual cell paints land at slightly
+    // different wall-clock times under load.
+    property real liveEdgeSnapshot: 0.0
+
+    Connections {
+        target: viewer.scanSource
+        ignoreUnknownSignals: true
+        function onSamplesAppended(s, c, m, n) {
+            viewer._dirty = true
+            viewer._profSamplesAccum += n
+        }
+    }
+
+    // ── Profile HUD state ──────────────────────────────────────────────
+    // Hidden behind developerMode && showProfiling — clinical users
+    // never see this overlay. Counters accumulate per tick; the 1 Hz
+    // _profHudTimer below converts them to display values.
+    property int _profSamplesAccum: 0        // samples since last 1Hz roll-up
+    property real _profPaintTickMs: 0.0      // last tick's dispatch duration
+    property real _profCanvasMsSum: 0.0      // current-tick canvas-ms accumulator
+    property int _profCanvasCount: 0         // # cells that reported this tick
+    property int _profPointsAccum: 0         // points painted this tick
+    // Display values — read by the HUD overlay, refreshed at 1 Hz.
+    property real profSampleRateHz: 0.0
+    property real profPaintTickMsAvg: 0.0
+    property real profCanvasMsAvg: 0.0
+    property real profCanvasMsMax: 0.0
+    property int profPointsLastTick: 0
+    property real _profHudLastWall: 0
+
+    // PlotCell calls this from its onPaint with the wall-time it took
+    // and the points-painted count. We accumulate, the 1 Hz HUD timer
+    // computes the rolling average / max.
+    function recordCellPaint(ms, points) {
+        viewer._profCanvasMsSum += ms
+        viewer._profCanvasCount += 1
+        viewer._profPointsAccum += points
+        if (ms > viewer.profCanvasMsMax) viewer.profCanvasMsMax = ms
+    }
+
+    Timer {
+        id: profHudTimer
+        interval: 1000
+        repeat: true
+        // No need to run when the HUD isn't visible — saves the per-tick
+        // EWMA + division on every clinical-user session.
+        running: viewer._hudVisible
+        triggeredOnStart: true
+        onTriggered: {
+            var now = Date.now()
+            if (viewer._profHudLastWall > 0) {
+                var dtSec = (now - viewer._profHudLastWall) * 0.001
+                if (dtSec > 0) {
+                    var instantHz = viewer._profSamplesAccum / dtSec
+                    // EWMA α=0.15 matches the legacy plot's rate display.
+                    viewer.profSampleRateHz = (viewer.profSampleRateHz === 0)
+                        ? instantHz
+                        : 0.85 * viewer.profSampleRateHz + 0.15 * instantHz
+                }
+            }
+            viewer._profSamplesAccum = 0
+            viewer._profHudLastWall = now
+            // Snapshot per-tick canvas stats then reset for the next sec.
+            if (viewer._profCanvasCount > 0) {
+                viewer.profCanvasMsAvg = viewer._profCanvasMsSum / viewer._profCanvasCount
+            }
+            viewer.profPointsLastTick = viewer._profPointsAccum
+            viewer._profCanvasMsSum = 0
+            viewer._profCanvasCount = 0
+            viewer._profPointsAccum = 0
+            viewer.profCanvasMsMax = 0
+        }
+    }
+
+    // Runtime toggle — initialized from app_config.showProfiling but
+    // flippable from the PlotToolbar's Profiler checkbox at runtime.
+    // The toolbar checkbox itself is hidden outside developer mode,
+    // and _hudVisible further gates on developerMode so the HUD can't
+    // appear in clinical builds even if showProfiling is flipped.
+    property bool showProfiling: MOTIONInterface.appConfig.showProfiling === true
+    readonly property bool _hudVisible: MOTIONInterface.appConfig.developerMode === true
+                                        && viewer.showProfiling
+
+    Timer {
+        id: paintThrottle
+        // 33 ms = 30 Hz. Each tick moves the trace ~1 sample at the
+        // data rate (40 Hz), so the scroll feels continuous instead
+        // of stepwise.
+        interval: 33
+        running: viewer.scanSource !== null
+        repeat: true
+        onTriggered: {
+            if (viewer._dirty) {
+                var t0 = viewer._hudVisible ? Date.now() : 0
+                viewer._dirty = false
+                viewer.liveEdgeSnapshot = viewer.scanSource ? viewer.scanSource.liveEdge : 0
+                viewer.paintTick++
+                if (viewer._hudVisible) {
+                    var dt = Date.now() - t0
+                    viewer.profPaintTickMsAvg = (viewer.profPaintTickMsAvg === 0)
+                        ? dt
+                        : 0.85 * viewer.profPaintTickMsAvg + 0.15 * dt
+                }
+            }
+        }
+    }
+
+    // Source change forces an immediate paint without waiting for the
+    // first samplesAppended; also resets followLive so each new source
+    // (live or past) opens at its own latest window.
+    onScanSourceChanged: {
+        viewer.liveEdgeSnapshot = viewer.scanSource ? viewer.scanSource.liveEdge : 0
+        viewer.followLive = true
+        viewer._dirty = true
+        // Re-fit y-axis to the new source's data immediately, otherwise
+        // a past scan loaded with very different value ranges would draw
+        // off-axis until the next autoscale tick.
+        viewer._recomputeAutoscale()
+    }
+
+    // Autoscale tick — every 3 s. compute_bounds_for_metric walks every
+    // sample across all buffers, so the per-call cost scales with scan
+    // duration; 3 s amortizes that work without making the y-axis feel
+    // unresponsive (a 3-second delay between bound adjustments is hard
+    // to notice during live monitoring).
+    Timer {
+        interval: 3000
+        running: viewer.autoScale && viewer.scanSource !== null
+        repeat: true
+        triggeredOnStart: true
+        onTriggered: viewer._recomputeAutoscale()
+    }
+
+    // Window-seconds options — duplicated here from the old PlotToolbar
+    // so the new bottom-right overlay can use the same list. Keeping
+    // the labels formatter symmetric (15 → "15 s", 300 → "5 min").
+    readonly property var _windowOptions: [
+        { value: 5,   label: "5 s" },
+        { value: 15,  label: "15 s" },
+        { value: 30,  label: "30 s" },
+        { value: 60,  label: "1 min" },
+        { value: 300, label: "5 min" }
+    ]
+
+    function _labelForWindowSeconds(s) {
+        for (var i = 0; i < viewer._windowOptions.length; i++) {
+            if (viewer._windowOptions[i].value === s)
+                return viewer._windowOptions[i].label
+        }
+        // Custom (wheel-zoomed) value — show as "<n>s" or "<m>m" tersely.
+        if (s >= 60) return Math.round(s / 60 * 10) / 10 + " min"
+        return Math.round(s * 10) / 10 + " s"
+    }
+
+    // Triggered by the bottom-right back-to-live overlay button.
+    function _backToLiveRequested() {
+        if (viewer.scanSource && viewer.scanSource.live === false
+                && MOTIONInterface.liveSourceAvailable) {
+            MOTIONInterface.showLiveSource()
+            console.info("[Plot] back-to-live (past → live source)")
+        } else {
+            viewer.backToLive()
+            console.info("[Plot] back-to-live (followLive → true)")
+        }
+    }
+
+    // Triggered by the bottom-right window-seconds menu.
+    function _windowSecondsRequested(s) {
+        if (viewer.followLive) {
+            viewer.windowSeconds = s
+        } else {
+            viewer.setWindow(viewer.windowStartT, s)
+        }
+        viewer._dirty = true
+        console.info("[Plot] windowSeconds → " + s + " s")
+    }
+
+    ColumnLayout {
+        anchors.fill: parent
+        anchors.margins: 12
+        spacing: 8
+
+        GridLayout {
+            id: grid
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            // Reduced mode: single column, 2 stacked cells. Dev mode:
+            // 4 columns, rows determined by active-cam count.
+            columns: viewer.reducedMode ? 1 : 4
+            rowSpacing: 6
+            columnSpacing: 6
+
+            Repeater {
+                model: viewer._activeCellModel
+                delegate: PlotCell {
+                    Layout.row: modelData.row
+                    Layout.column: modelData.col
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    source: viewer.scanSource
+                    side: modelData.side
+                    camId: modelData.camId
+                    windowSeconds: viewer.windowSeconds
+                    followLive: viewer.followLive
+                    windowStartT: viewer.windowStartT
+                    metric: viewer._displayPair.primary
+                    yMin: viewer.primaryYMin
+                    yMax: viewer.primaryYMax
+                    traceColor: viewer._traceColorForMetric(viewer._displayPair.primary)
+                    secondaryMetric: viewer._displayPair.secondary
+                    secondaryYMin: viewer.secondaryYMin
+                    secondaryYMax: viewer.secondaryYMax
+                    secondaryColor: viewer._traceColorForMetric(viewer._displayPair.secondary)
+                    paintTick: viewer.paintTick
+                    liveEdgeSnapshot: viewer.liveEdgeSnapshot
+                    panZoomTarget: viewer
+                    cursorT: viewer.cursorT
+                }
+            }
+        }
+
+        // Placeholder when no cameras are active (both masks 0). Lets the
+        // viewer still show its toolbar + scan-source state without an
+        // empty grid below it.
+        Item {
+            visible: viewer._activeCellModel.length === 0
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            Text {
+                anchors.centerIn: parent
+                text: "No active cameras selected"
+                color: theme.textTertiary
+                font.pixelSize: 14
+                font.family: "Roboto Mono"
+            }
+        }
+
+        PlotScrubber {
+            id: scrubber
+            Layout.fillWidth: true
+            Layout.preferredHeight: 28
+            visible: viewer.scanSource !== null
+            focusTarget: viewer
+            fullScanDuration: viewer.liveEdgeSnapshot
+            // When followLive, project the visible window onto the live
+            // edge so the inset stays glued to the right; when paused
+            // (panned/zoomed), reflect the user-set windowStartT.
+            windowStartT: viewer.followLive
+                ? Math.max(0, viewer.liveEdgeSnapshot - viewer.windowSeconds)
+                : viewer.windowStartT
+            windowSeconds: viewer.windowSeconds
+            followLive: viewer.followLive
+
+            onPanRequested: function(startT) {
+                viewer.setWindow(startT, viewer.windowSeconds)
+                console.info("[Plot] scrubber pan → " + startT.toFixed(2) + " s")
+            }
+        }
+    }
+
+    // ── Hover tooltip ──────────────────────────────────────────────────
+    // Top-right floating panel: appears when cursorT is finite (hover
+    // active over any cell), lists the time + per-cell primary/secondary
+    // values at that time. Per-cell values are queried from the source
+    // via value_at() each tick — bound to paintTick so the tooltip
+    // refreshes in lockstep with the cells.
+    Rectangle {
+        id: hoverTooltip
+        visible: isFinite(viewer.cursorT) && viewer.scanSource !== null
+                  && viewer._activeCellModel.length > 0
+        anchors.top: parent.top
+        anchors.right: parent.right
+        // When the back-to-live pill is showing in the top-right corner,
+        // push the tooltip down past it (BTL height + same rim margin
+        // we use between the BTL pill and the plot rim) so the two
+        // don't overlap. Otherwise sit at the standard edge margin.
+        anchors.topMargin: viewer._overlayEdgeMarginPx
+                           + (viewer._showBackToLive
+                              ? backToLiveOverlay.height + viewer._overlayMarginPx
+                              : 0)
+        anchors.rightMargin: viewer._overlayEdgeMarginPx
+        color: theme.bgElevated
+        border.color: theme.borderSubtle
+        border.width: 1
+        radius: 4
+        width: tooltipColumn.implicitWidth + 16
+        height: tooltipColumn.implicitHeight + 12
+
+        // Force a recompute of the rows when paintTick advances. We bind
+        // to paintTick rather than cursorT so the tooltip only refreshes
+        // at the throttled tick rate, not on every mousemove.
+        property var _rows: {
+            void viewer.paintTick  // dependency
+            if (!isFinite(viewer.cursorT) || !viewer.scanSource) return []
+            var t = viewer.cursorT
+            var primMetric = viewer._displayPair.primary
+            var secMetric = viewer._displayPair.secondary
+            var primColor = viewer._traceColorForMetric(primMetric)
+            var secColor = viewer._traceColorForMetric(secMetric)
+            var rows = []
+            for (var i = 0; i < viewer._activeCellModel.length; i++) {
+                var c = viewer._activeCellModel[i]
+                var pv = viewer.scanSource.value_at(c.side, c.camId, primMetric, t)
+                var sv = viewer.scanSource.value_at(c.side, c.camId, secMetric, t)
+                // Reduced mode uses camId=-1 for the side-averaged stream;
+                // (c.camId + 1) would render "L0"/"R0" instead of the
+                // cell's own "LEFT AVG" / "RIGHT AVG" label.
+                var label = c.camId === -1
+                    ? c.side.charAt(0).toUpperCase() + " AVG"
+                    : c.side.charAt(0).toUpperCase() + (c.camId + 1)
+                rows.push({
+                    label: label,
+                    pVal: pv, pColor: primColor,
+                    sVal: sv, sColor: secColor,
+                })
+            }
+            return rows
+        }
+
+        Column {
+            id: tooltipColumn
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.margins: 8
+            spacing: 1
+
+            Text {
+                text: {
+                    var t = viewer.cursorT
+                    if (!isFinite(t)) return ""
+                    var mins = Math.floor(t / 60)
+                    var secs = (t - mins * 60).toFixed(3)
+                    return "t = " + mins + ":" + (secs < 10 ? "0" + secs : secs) + " s"
+                }
+                color: theme.textSecondary
+                font.pixelSize: 11
+                font.family: "Roboto Mono"
+                font.bold: true
+            }
+            Repeater {
+                model: hoverTooltip._rows
+                delegate: Row {
+                    spacing: 6
+                    Text {
+                        text: modelData.label
+                        width: 30
+                        color: theme.textSecondary
+                        font.pixelSize: 10
+                        font.family: "Roboto Mono"
+                    }
+                    Text {
+                        text: isFinite(modelData.pVal) ? modelData.pVal.toFixed(2) : "—"
+                        width: 50
+                        horizontalAlignment: Text.AlignRight
+                        color: modelData.pColor
+                        font.pixelSize: 10
+                        font.family: "Roboto Mono"
+                    }
+                    Text {
+                        text: isFinite(modelData.sVal) ? modelData.sVal.toFixed(2) : "—"
+                        width: 50
+                        horizontalAlignment: Text.AlignRight
+                        color: modelData.sColor
+                        font.pixelSize: 10
+                        font.family: "Roboto Mono"
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Overlay margins ───────────────────────────────────────────────
+    // Plot grid lives inside a ColumnLayout that's anchored fill to the
+    // viewer with a 12 px outer margin. Visual rim margin we want
+    // between an overlay and the plot cell edge is another 12 px. So
+    // for the LEFT/RIGHT/TOP edges (anchored to viewer's edges) the
+    // total margin is outer-layout-margin + rim-margin. The BOTTOM
+    // edge is further inset by the scrubber area (scrubber height +
+    // ColumnLayout.spacing).
+    readonly property real _overlayMarginPx: 12      // rim margin (inside grid)
+    readonly property real _outerLayoutMarginPx: 12  // ColumnLayout.anchors.margins
+    readonly property real _scrubberAreaPx: 28 + 8   // scrubber height + Layout.spacing
+    // Convenience: full edge margin from viewer.{right,top,left}.
+    readonly property real _overlayEdgeMarginPx: _outerLayoutMarginPx + _overlayMarginPx
+    // Convenience: full bottom margin from viewer.bottom.
+    readonly property real _overlayBottomMarginPx: _outerLayoutMarginPx + _scrubberAreaPx + _overlayMarginPx
+
+    // Signals back to the host (BloodFlow.qml) for state that's owned by
+    // settingsModal — Autoscale and BFI/BVI ↔ Mean/Contrast persist in
+    // app config and are also reachable from the Settings modal, so the
+    // bottom-right popup switches just request changes; BloodFlow.qml
+    // applies them to settingsModal which then flows back into the
+    // viewer's `autoScale` / `displayMode` bindings.
+    signal autoScaleToggleRequested(bool enabled)
+    signal displayModeToggleRequested(bool bfiBviMode)
+
+    // ── Top-right overlay: back-to-live ───────────────────────────────
+    // Same spacing guidelines as bottom-right overlay group.
+    readonly property bool _showBackToLive:
+        viewer.scanSource !== null
+        && (
+            (viewer.scanSource.live === false && MOTIONInterface.liveSourceAvailable)
+            || (viewer.scanSource.live === true && !viewer.followLive)
+        )
+
+    Rectangle {
+        id: backToLiveOverlay
+        visible: viewer._showBackToLive
+        width: backToLiveText.implicitWidth + 28
+        height: 36
+        radius: 18
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.topMargin: viewer._overlayEdgeMarginPx
+        anchors.rightMargin: viewer._overlayEdgeMarginPx
+        z: 6
+        color: Qt.rgba(0.10, 0.10, 0.12, 0.82)
+        border.color: theme.accentRed
+        border.width: 1
+
+        Text {
+            id: backToLiveText
+            anchors.centerIn: parent
+            text: (viewer.scanSource !== null
+                   && viewer.scanSource.live === false
+                   && MOTIONInterface.liveSourceAvailable)
+                  ? "← Back to live scan"
+                  : "● Back to live"
+            color: theme.accentRed
+            font.pixelSize: 13
+            font.family: "Roboto Mono"
+        }
+
+        MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: viewer._backToLiveRequested()
+        }
+    }
+
+    // ── Bottom-right overlay: window-seconds pill + three-dot menu ────
+    // Window-seconds pill shows the current zoom and opens a dropdown
+    // menu of the canonical zoom options when clicked. The three-dot
+    // button to its right opens a popup with switches for display mode,
+    // autoscale, and (dev-only) profiler.
+    Row {
+        id: bottomRightOverlay
+        visible: viewer.scanSource !== null
+        spacing: 8
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.rightMargin: viewer._overlayEdgeMarginPx
+        anchors.bottomMargin: viewer._overlayBottomMarginPx
+        z: 6
+
+        Rectangle {
+            id: windowSecondsPill
+            width: windowSecondsText.implicitWidth + 38
+            height: 36
+            radius: 18
+            color: Qt.rgba(0.10, 0.10, 0.12, 0.82)
+            border.color: theme.borderSubtle
+            border.width: 1
+
+            Text {
+                id: windowSecondsText
+                anchors.left: parent.left
+                anchors.leftMargin: 14
+                anchors.verticalCenter: parent.verticalCenter
+                text: viewer._labelForWindowSeconds(viewer.windowSeconds)
+                color: theme.textPrimary
+                font.pixelSize: 13
+                font.family: "Roboto Mono"
+            }
+            Text {
+                anchors.right: parent.right
+                anchors.rightMargin: 12
+                anchors.verticalCenter: parent.verticalCenter
+                text: "▾"
+                color: theme.textTertiary
+                font.pixelSize: 12
+            }
+
+            MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: windowSecondsMenu.popup(windowSecondsPill, 0, windowSecondsPill.height + 4)
+            }
+
+            Menu {
+                id: windowSecondsMenu
+                // Match the bottom-right settings popup's visual style
+                // — same translucent dark card, subtle border, rounded
+                // corners — so the two corner overlays read as parts
+                // of the same control system. Keeping the default
+                // MenuItem contentItem (instead of overriding it) so
+                // implicitWidth resolves correctly; a custom Text
+                // contentItem leaves the menu zero-width and the items
+                // un-clickable.
+                padding: 6
+                implicitWidth: 120
+                background: Rectangle {
+                    color: Qt.rgba(0.12, 0.12, 0.14, 0.96)
+                    border.color: theme.borderSubtle
+                    border.width: 1
+                    radius: 8
+                }
+                Repeater {
+                    model: viewer._windowOptions
+                    MenuItem {
+                        text: modelData.label
+                        font.family: "Roboto Mono"
+                        font.pixelSize: 13
+                        onTriggered: viewer._windowSecondsRequested(modelData.value)
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            id: settingsMenuButton
+            width: 36
+            height: 36
+            radius: 18
+            color: settingsPopup.opened
+                   ? Qt.rgba(0.29, 0.56, 0.89, 0.85)
+                   : Qt.rgba(0.10, 0.10, 0.12, 0.82)
+            border.color: settingsPopup.opened ? "#4A90E2" : theme.borderSubtle
+            border.width: 1
+
+            Text {
+                anchors.centerIn: parent
+                text: "⋯"
+                color: settingsPopup.opened ? "white" : theme.textPrimary
+                font.pixelSize: 20
+                font.bold: true
+            }
+
+            MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: settingsPopup.opened ? settingsPopup.close() : settingsPopup.open()
+            }
+
+            // Popup opens UPWARD from the button so it doesn't cover
+            // the scrubber. Width tracks the longest switch row.
+            Popup {
+                id: settingsPopup
+                parent: settingsMenuButton
+                x: settingsMenuButton.width - width
+                y: -height - 6
+                padding: 0
+                width: popupColumn.implicitWidth + 24
+                height: popupColumn.implicitHeight + 16
+                modal: false
+                focus: true
+                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
+
+                background: Rectangle {
+                    color: Qt.rgba(0.12, 0.12, 0.14, 0.95)
+                    border.color: theme.borderSubtle
+                    border.width: 1
+                    radius: 8
+                }
+
+                // Mini Switch styled to match SettingsModal's PillSwitch —
+                // blue-background pill with white thumb when on, dark
+                // background when off. Animated thumb glide on toggle.
+                component PopupPillSwitch: Switch {
+                    id: psCtrl
+                    scale: 0.9
+                    indicator: Rectangle {
+                        x:      psCtrl.leftPadding
+                        y:      (psCtrl.height - height) / 2
+                        width:  44; height: 24; radius: 12
+                        color:  psCtrl.checked ? theme.accentBlue : theme.bgInput
+                        border.color: psCtrl.checked ? theme.accentBlue : theme.borderSoft
+                        border.width: 1
+                        Behavior on color { ColorAnimation { duration: 120 } }
+
+                        Rectangle {
+                            x:      psCtrl.checked ? parent.width - width - 3 : 3
+                            y:      3; width: 18; height: 18; radius: 9
+                            color:  "#FFFFFF"
+                            Behavior on x { NumberAnimation { duration: 120 } }
+                        }
+                    }
+                }
+
+                contentItem: Column {
+                    id: popupColumn
+                    spacing: 6
+                    padding: 12
+
+                    Row {
+                        // Hidden in reduced (clinical) mode — that view only
+                        // ever shows the BFI/BVI side averages, so the
+                        // Mean/Contrast alternative isn't offered there.
+                        visible: !viewer.reducedMode
+                        spacing: 8
+                        PopupPillSwitch {
+                            id: bfiBviSwitch
+                            checked: viewer.displayMode === "bfi_bvi"
+                            onToggled: viewer.displayModeToggleRequested(checked)
+                        }
+                        Text {
+                            anchors.verticalCenter: bfiBviSwitch.verticalCenter
+                            text: bfiBviSwitch.checked ? "BFI / BVI" : "Mean / Contrast"
+                            color: theme.textPrimary
+                            font.pixelSize: 12
+                            font.family: "Roboto Mono"
+                        }
+                    }
+                    Row {
+                        spacing: 8
+                        PopupPillSwitch {
+                            id: autoScaleSwitch
+                            checked: viewer.autoScale
+                            onToggled: viewer.autoScaleToggleRequested(checked)
+                        }
+                        Text {
+                            anchors.verticalCenter: autoScaleSwitch.verticalCenter
+                            text: "Autoscale"
+                            color: theme.textPrimary
+                            font.pixelSize: 12
+                            font.family: "Roboto Mono"
+                        }
+                    }
+                    Row {
+                        visible: MOTIONInterface.appConfig.developerMode === true
+                        spacing: 8
+                        PopupPillSwitch {
+                            id: profilerSwitch
+                            checked: viewer.showProfiling
+                            onToggled: viewer.showProfiling = checked
+                        }
+                        Text {
+                            anchors.verticalCenter: profilerSwitch.verticalCenter
+                            text: "Profiler"
+                            color: "#4A90E2"
+                            font.pixelSize: 12
+                            font.family: "Roboto Mono"
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Bottom-left overlay: profiler HUD ─────────────────────────────
+    // Developer-only HUD; toggled from the bottom-right settings menu's
+    // Profiler switch. Renders as a static overlay anchored at the
+    // bottom-left corner of the plot grid, with the same rim margin as
+    // the other overlays.
+    Rectangle {
+        id: profileHud
+        visible: MOTIONInterface.appConfig.developerMode === true
+                 && viewer.showProfiling
+                 && viewer.scanSource !== null
+        anchors.left: parent.left
+        anchors.bottom: parent.bottom
+        anchors.leftMargin: viewer._overlayEdgeMarginPx
+        anchors.bottomMargin: viewer._overlayBottomMarginPx
+        z: 5
+        width: hudColumn.implicitWidth + 16
+        height: hudColumn.implicitHeight + 12
+        color: Qt.rgba(0.10, 0.10, 0.12, 0.85)
+        border.color: "#4A90E2"
+        border.width: 1
+        radius: 4
+
+        Column {
+            id: hudColumn
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.margins: 8
+            spacing: 1
+
+            Text {
+                text: "PROFILE"
+                color: "#4A90E2"
+                font.pixelSize: 11
+                font.family: "Roboto Mono"
+                font.bold: true
+            }
+            Text {
+                text: "rate    " + viewer.profSampleRateHz.toFixed(1) + " Hz"
+                color: theme.textSecondary
+                font.pixelSize: 10
+                font.family: "Roboto Mono"
+            }
+            Text {
+                text: "tick    " + viewer.profPaintTickMsAvg.toFixed(2) + " ms"
+                color: theme.textSecondary
+                font.pixelSize: 10
+                font.family: "Roboto Mono"
+            }
+            Text {
+                text: "canvas  " + viewer.profCanvasMsAvg.toFixed(2) + " ms avg"
+                color: theme.textSecondary
+                font.pixelSize: 10
+                font.family: "Roboto Mono"
+            }
+            Text {
+                text: "points  " + viewer.profPointsLastTick
+                color: theme.textSecondary
+                font.pixelSize: 10
+                font.family: "Roboto Mono"
+            }
+        }
+    }
+}
