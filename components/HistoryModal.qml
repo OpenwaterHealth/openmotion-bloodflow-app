@@ -418,11 +418,48 @@ Item {
                             }
                         }
 
+                        Button {
+                            text: "Export CSV"
+                            Layout.fillWidth: true; Layout.preferredHeight: 36
+                            enabled: scans.length > 0 && scanPicker.currentIndex >= 0
+                            hoverEnabled: enabled
+                            contentItem: Text {
+                                text: parent.text; font.pixelSize: 13
+                                color: parent.enabled ? theme.textSecondary : theme.textTertiary
+                                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                            }
+                            background: Rectangle {
+                                color: !parent.enabled ? theme.bgInput : parent.hovered ? theme.accentBlue : theme.bgInput
+                                border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
+                            }
+                            onClicked: {
+                                var scanId = scans[scanPicker.currentIndex] || ""
+                                console.warn("[History] Export CSV clicked → " + scanId)
+                                exportDialog.selectedScanId = scanId
+                                exportDialog.selectedFile = "file:///" + MOTIONInterface.directory + "/" + scanId + "_export.csv"
+                                exportDialog.open()
+                            }
+                        }
+
                         Item { Layout.fillHeight: true }
                     }
                 }
             }
 
+        }
+
+        Dialogs.FileDialog {
+            id: exportDialog
+            title: "Export Scan CSV"
+            fileMode: Dialogs.FileDialog.SaveFile
+            nameFilters: ["CSV files (*.csv)", "All files (*)"]
+            property string selectedScanId: ""
+            onAccepted: {
+                var path = selectedFile.toString().replace("file:///", "")
+                console.warn("[History] exporting " + selectedScanId + " → " + path)
+                var ok = MOTIONInterface.exportScanCsv(selectedScanId, path)
+                if (ok) MOTIONInterface.notify("Exported to " + path, "success")
+            }
         }
 
         // Busy overlay

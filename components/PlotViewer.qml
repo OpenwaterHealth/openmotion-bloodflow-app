@@ -71,6 +71,10 @@ Rectangle {
     // _recomputeAutoscale timer below repins primary/secondary YMin/YMax
     // to per-metric percentile bounds across the buffer.
     property bool autoScale: true
+    // Camera masks — bound from BloodFlow.qml so the grid reacts to
+    // Scan Settings changes, not just the persisted config defaults.
+    property int leftMask:  0x66
+    property int rightMask: 0x66
 
     // ── State (owned here; pushed to every cell) ───────────────────────
     // windowSeconds is internal — the bottom-right pill overlay edits it
@@ -146,8 +150,8 @@ Rectangle {
     // leftMask / rightMask). 4 columns max; left-side cams fill the
     // top rows, right-side cams fill the rows below.
     readonly property var _devCellModel: {
-        var lm = (MOTIONInterface.appConfig.leftMask  || 0) & 0xFF
-        var rm = (MOTIONInterface.appConfig.rightMask || 0) & 0xFF
+        var lm = viewer.leftMask & 0xFF
+        var rm = viewer.rightMask & 0xFF
         var leftCams = []
         var rightCams = []
         for (var i = 0; i < 8; i++) {

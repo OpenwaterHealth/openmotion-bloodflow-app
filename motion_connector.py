@@ -1889,6 +1889,45 @@ class MOTIONConnector(QObject):
         except Exception:
             logger.exception("loadPastScan failed for label %r", session_label)
 
+    @pyqtSlot(str, str, result=bool)
+    def exportScanCsv(self, session_label: str, output_path: str) -> bool:
+        """Export a scan's session_data to a corrected-format CSV.
+
+        Called from the History modal's "Export CSV" button after the user
+        picks a save path via FileDialog.
+        """
+        if not session_label or not output_path:
+            return False
+        try:
+            from omotion.ScanDatabase import ScanDatabase
+            from omotion.SessionPlayback import materialize_corrected_csv
+
+            db_path = getattr(self._interface, "scan_db_path", None)
+            if not db_path:
+                self.errorOccurred.emit("No scan database available.")
+                return False
+            db = ScanDatabase(db_path)
+            session = db.get_session_by_label(session_label)
+            if not session:
+                self.errorOccurred.emit(
+                    f"No database session found for '{session_label}'."
+                )
+                return False
+            session_id = int(session["id"])
+            materialize_corrected_csv(
+                str(db_path), session_id, output_path,
+                include_quality=True,
+            )
+            logger.info(
+                "exportScanCsv: exported %r (sid=%d) → %s",
+                session_label, session_id, output_path,
+            )
+            return True
+        except Exception as exc:
+            logger.exception("exportScanCsv failed for %r", session_label)
+            self.errorOccurred.emit(f"Export failed:\n{exc}")
+            return False
+
     @pyqtSlot(str, result=int)
     @pyqtSlot(str, str, result=int)
     @pyqtSlot(str, str, int, result=int)

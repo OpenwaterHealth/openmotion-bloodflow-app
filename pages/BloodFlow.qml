@@ -242,6 +242,8 @@ Rectangle {
             reducedMode: bloodFlow.reducedMode
             autoScale: settingsModal.autoScale
             displayMode: settingsModal.showBfiBvi ? "bfi_bvi" : "mean_contrast"
+            leftMask:  bloodFlow.leftMask
+            rightMask: bloodFlow.rightMask
             // Manual y-axis bounds — applied when autoScale is off.
             settingBfiMin:      settingsModal.bfiMin
             settingBfiMax:      settingsModal.bfiMax
