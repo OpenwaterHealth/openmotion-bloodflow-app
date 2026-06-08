@@ -933,33 +933,173 @@ def _isolate_writable_root(request, tmp_path, monkeypatch):
 # (commits ba05bd0 + e3a017a in tests/test_clinicalmode.py).
 
 _REPORT_SESSION_START: datetime | None = None
+# Resolved at session start so we don't depend on the app process
+# still being alive when the atexit-registered _write_hil_report runs
+# (test cleanup or a crash may have killed it by then).
+_REPORT_APP_VERSION: str | None = None
+
+
+def _running_app_exe_path() -> str:
+    """Find the .exe path of the bloodflow process that's currently running.
+
+    Returns the path of the FIRST live process whose name matches
+    one of the bloodflow executable names. Falls back to '' if no
+    matching process is alive.
+
+    This is the source of truth for "which app is being tested" —
+    much more reliable than ``_find_exe()`` (which picks the newest
+    installed .exe by mtime, possibly a different install).
+    """
+    # Old (≤1.3.x) and new (Open-Motion rename on next) packaged exe names.
+    target_names = {"openwaterapp.exe", "openwaterapp_console.exe",
+                    "open-motion.exe", "open-motion_console.exe"}
+    try:
+        for proc in psutil.process_iter(["name", "exe"]):
+            try:
+                name = (proc.info.get("name") or "").lower()
+                if name in target_names:
+                    exe = proc.info.get("exe") or ""
+                    if exe and os.path.exists(exe):
+                        return exe
+            except Exception:
+                continue
+    except Exception as e:
+        log.warning(f"  _running_app_exe_path failed: {e}")
+    return ""
+
+
+def _resolve_app_version() -> str:
+    """Resolve the version of the *running* bloodflow app.
+
+    Priority — match the version of what's actually being tested,
+    NOT the source tree's git state:
+
+      0. **Find the .exe path of the currently-running OpenWaterApp
+         process** via psutil. This guarantees the version we report
+         is for the app actually under test, not the newest install
+         on disk (which is what ``_find_exe()`` would pick).
+         Falls back to ``_find_exe()`` if no process is alive (e.g.
+         resolver called before the ``app`` fixture launches it).
+      1. Embedded ``ProductVersion`` / ``FileVersion`` from the .exe
+         metadata.
+      2. Walk UP from the .exe through parent / grandparent folders
+         looking for a name that contains a version pattern. Install
+         layouts vary:
+           ``…\\OpenWaterApp-1.0.2-pre-0-g8027c14\\OpenWaterApp.exe``
+                                ^ version in parent
+           ``…\\OpenMotion-Bloodflow-1.2.0-dev.1_RUO\\OpenWaterApp\\OpenWaterApp.exe``
+                                ^ version in grandparent (with _RUO suffix)
+      3. ``version.get_version()`` from the source tree — git-describe
+         based; used only when no .exe is discoverable.
+      4. ``$OPENWATER_VERSION`` env override.
+      5. ``"unknown"``.
+    """
+    import re
+
+    version_re = re.compile(r"^\d+(\.\d+)+")
+    folder_version_re = re.compile(
+        r"\d+\.\d+(?:\.\d+)*(?:[-_+][A-Za-z0-9._+-]*)?"
+    )
+
+    # 0. Prefer the path of the actually-running process.
+    exe_path = _running_app_exe_path()
+    if exe_path:
+        log.info(f"  resolving version from running process: {exe_path}")
+    else:
+        log.info("  no running OpenWaterApp process — falling back to _find_exe()")
+        try:
+            exe_path = _find_exe()
+        except Exception as e:
+            log.warning(f"  _find_exe() failed: {e}")
+            exe_path = ""
+
+    # 1. .exe ProductVersion / FileVersion metadata.
+    try:
+        if exe_path:
+            ps_cmd = (
+                f"$v = (Get-Item '{exe_path}').VersionInfo; "
+                "Write-Output $v.FileVersion; "
+                "Write-Output $v.ProductVersion; "
+                "Write-Output $v.FileVersionRaw; "
+                "Write-Output $v.ProductVersionRaw"
+            )
+            try:
+                result = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", ps_cmd],
+                    capture_output=True, text=True, timeout=10,
+                )
+                candidates = [ln.strip() for ln in (result.stdout or "").splitlines()
+                              if ln.strip()]
+                log.info(f"  app version metadata candidates: {candidates}")
+                for c in candidates:
+                    if version_re.match(c):
+                        log.info(f"  resolved app version (from .exe): {c}")
+                        return c
+            except Exception as e:
+                log.warning(f"  PowerShell VersionInfo read failed: {e}")
+
+            # 2. Walk up from the .exe — first ancestor folder whose
+            #    name contains a version-shaped substring wins.
+            for ancestor in Path(exe_path).parents:
+                folder_name = ancestor.name
+                # Don't walk past the user's home directory layout.
+                if folder_name.lower() in ("users", "documents", "openmotion", ""):
+                    if folder_name.lower() in ("users", ""):
+                        break
+                    # OpenMotion / Documents themselves don't have a
+                    # version in them but their CHILDREN do — keep
+                    # going, just don't try to match this folder.
+                    continue
+                m = folder_version_re.search(folder_name)
+                if m:
+                    version = m.group(0)
+                    log.info(
+                        f"  resolved app version (from path '{folder_name}'): "
+                        f"{version}"
+                    )
+                    return version
+
+            # Final fallback: the immediate parent folder name, even
+            # without a version pattern — at least it tells you which
+            # install was picked.
+            parent_name = Path(exe_path).parent.name
+            log.info(f"  resolved app version (parent folder): {parent_name}")
+            return parent_name
+    except Exception as e:
+        log.warning(f"  _resolve_app_version: .exe path resolution failed: {e}")
+
+    # 3. No .exe discoverable — running from source. Use git describe.
+    try:
+        repo_root = Path(__file__).resolve().parent.parent
+        if str(repo_root) not in sys.path:
+            sys.path.insert(0, str(repo_root))
+        import version as _project_version    # noqa: PLC0415
+        v = (_project_version.get_version() or "").strip()
+        if v:
+            log.info(f"  resolved app version (from source git describe): {v}")
+            return v
+    except Exception as e:
+        log.warning(f"  version.get_version() unavailable: {e}")
+
+    # 4. Env override / 5. unknown.
+    return os.environ.get("OPENWATER_VERSION", "unknown")
 
 
 def _report_get_app_version() -> str:
-    """Best-effort guess at the bundled bloodflow build version.
+    """Return the version of the running bloodflow app.
 
-    Reads it from the running Open-Motion.exe path (the build script
-    lays the version into the parent-directory name). Falls back to
-    ``$OPENWATER_VERSION`` if no app process is detected.
+    Resolves on each call so we always pick up the currently-running
+    process's path via ``_running_app_exe_path``. Once a live answer
+    has been resolved we cache it so a later call (after the app may
+    have been killed by test cleanup) still has the right value.
     """
-    try:
-        for proc_name in ("Open-Motion.exe",):
-            try:
-                result = subprocess.run(
-                    ["wmic", "process", "where", f"name='{proc_name}'",
-                     "get", "ExecutablePath", "/value"],
-                    capture_output=True, text=True, timeout=5,
-                )
-                for line in result.stdout.splitlines():
-                    if "ExecutablePath=" in line:
-                        path = line.split("=", 1)[1].strip()
-                        if path:
-                            return Path(path).parent.name
-            except Exception:
-                continue
-    except Exception:
-        pass
-    return os.environ.get("OPENWATER_VERSION", "unknown")
+    global _REPORT_APP_VERSION
+    v = _resolve_app_version()
+    if v and v != "unknown":
+        _REPORT_APP_VERSION = v
+    # If the live resolve failed, fall back to the last good cached
+    # value (e.g. the app died during cleanup, but it was alive earlier).
+    return v if (v and v != "unknown") else (_REPORT_APP_VERSION or "unknown")
 
 
 def _report_get_environment() -> dict:
@@ -1172,10 +1312,18 @@ def _write_hil_report() -> None:
 
 @pytest.fixture(scope="session", autouse=True)
 def _hil_report_session():
-    """Capture session start time and arm the atexit-registered writer.
+    """Capture session start time + app version, and arm the atexit-
+    registered report writer.
 
     Autouse + session-scope so it runs once for every pytest invocation
     that touches this conftest, with no per-test setup/teardown.
+
+    Version resolution happens lazily in ``_write_hil_report`` (NOT
+    at session start) because this fixture runs BEFORE the ``app``
+    fixture launches the bloodflow app — querying ``psutil`` at
+    session start would never find a running process, defeating the
+    "use the actually-running app's path" priority. The lazy resolver
+    runs at atexit, when the app is most likely still alive.
     """
     global _REPORT_SESSION_START
     _REPORT_SESSION_START = datetime.now()
