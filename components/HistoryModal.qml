@@ -296,105 +296,11 @@ Item {
 
                         Text { text: "Actions"; color: theme.textPrimary; font.pixelSize: 15 }
 
-                        Button {
-                            text: "Visualize BFI/BVI (legacy)"
-                            // Phase 4: matplotlib popouts stay reachable via
-                            // developerMode fallback while useNewPlotViewer is
-                            // off, hidden once the new viewer is the default.
-                            visible: MOTIONInterface.appConfig.developerMode === true
-                                     && MOTIONInterface.appConfig.useNewPlotViewer !== true
-                            Layout.fillWidth: true; Layout.preferredHeight: 36
-                            enabled: !!(selected.leftPath || selected.rightPath)
-                            hoverEnabled: enabled
-                            contentItem: Text {
-                                text: parent.text; font.pixelSize: 13
-                                color: parent.enabled ? theme.textSecondary : theme.textTertiary
-                                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-                            }
-                            background: Rectangle {
-                                color: !parent.enabled ? theme.bgInput : parent.hovered ? theme.accentBlue : theme.bgInput
-                                border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
-                            }
-                            onClicked: {
-                                console.warn("[History] Visualize BFI/BVI (legacy) clicked → " + (scans[scanPicker.currentIndex] || "?"))
-                                root.visualizing = true
-                                MOTIONInterface.visualize_bloodflow(selected.leftPath || "", selected.rightPath || "", 0.0, 0.0, false)
-                            }
-                        }
-
-                        Button {
-                            text: "Visualize Contrast/Mean (legacy)"
-                            visible: MOTIONInterface.appConfig.developerMode === true
-                                     && MOTIONInterface.appConfig.useNewPlotViewer !== true
-                            Layout.fillWidth: true; Layout.preferredHeight: 36
-                            enabled: !!(selected.leftPath || selected.rightPath)
-                            hoverEnabled: enabled
-                            contentItem: Text {
-                                text: parent.text; font.pixelSize: 13
-                                color: parent.enabled ? theme.textSecondary : theme.textTertiary
-                                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-                            }
-                            background: Rectangle {
-                                color: !parent.enabled ? theme.bgInput : parent.hovered ? theme.accentBlue : theme.bgInput
-                                border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
-                            }
-                            onClicked: {
-                                console.warn("[History] Visualize Contrast/Mean (legacy) clicked → " + (scans[scanPicker.currentIndex] || "?"))
-                                root.visualizing = true
-                                MOTIONInterface.visualize_bloodflow(selected.leftPath || "", selected.rightPath || "", 0.0, 0.0, true)
-                            }
-                        }
-
-                        Button {
-                            text: "Visualize BFI/BVI"
-                            visible: MOTIONInterface.appConfig.useNewPlotViewer !== true
-                            Layout.fillWidth: true; Layout.preferredHeight: 36
-                            enabled: !!(selected.correctedPath)
-                            hoverEnabled: enabled
-                            contentItem: Text {
-                                text: parent.text; font.pixelSize: 13
-                                color: parent.enabled ? theme.textSecondary : theme.textTertiary
-                                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-                            }
-                            background: Rectangle {
-                                color: !parent.enabled ? theme.bgInput : parent.hovered ? theme.accentBlue : theme.bgInput
-                                border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
-                            }
-                            onClicked: {
-                                console.warn("[History] Visualize BFI/BVI clicked → " + (selected.correctedPath || "?"))
-                                root.visualizing = true
-                                MOTIONInterface.visualize_corrected(selected.correctedPath || "")
-                            }
-                        }
-
-                        Button {
-                            text: "Visualize Contrast/Mean"
-                            visible: MOTIONInterface.appConfig.reducedMode !== true
-                                     && MOTIONInterface.appConfig.useNewPlotViewer !== true
-                            Layout.fillWidth: true; Layout.preferredHeight: 36
-                            enabled: !!(selected.correctedPath)
-                            hoverEnabled: enabled
-                            contentItem: Text {
-                                text: parent.text; font.pixelSize: 13
-                                color: parent.enabled ? theme.textSecondary : theme.textTertiary
-                                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-                            }
-                            background: Rectangle {
-                                color: !parent.enabled ? theme.bgInput : parent.hovered ? theme.accentBlue : theme.bgInput
-                                border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
-                            }
-                            onClicked: {
-                                console.warn("[History] Visualize Contrast/Mean clicked → " + (selected.correctedPath || "?"))
-                                root.visualizing = true
-                                MOTIONInterface.visualize_corrected_signal(selected.correctedPath || "")
-                            }
-                        }
-
-                        // New plot viewer — opens the past scan inside the
-                        // BloodFlow page's PlotViewer instead of a popout.
+                        // Opens the past scan inside the BloodFlow page's
+                        // PlotViewer (the matplotlib popout buttons that
+                        // lived here died with the legacy plots).
                         Button {
                             text: "View in plot →"
-                            visible: MOTIONInterface.appConfig.useNewPlotViewer === true
                             Layout.fillWidth: true; Layout.preferredHeight: 36
                             // `currentIndex` lives on scanPicker (the ComboBox)
                             // — referencing it bare here resolves to undefined

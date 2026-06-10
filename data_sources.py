@@ -42,23 +42,17 @@ class _CameraBuffer:
     Holds three parallel arrays (t, v, frame_id). NaN values are stored;
     the renderer is responsible for skipping them on draw.
 
-    Optional `track_frame_ids=True` enables a frame_id → array-index
-    lookup for in-place corrected-batch overwrites. Off by default
-    (the new viewer no longer applies corrections, and tracking the
-    dict added meaningful memory + GC pressure over long scans).
-
     Above _MAX_CAPACITY samples, the oldest half is dropped on the
     next overflow (drop-oldest ring behavior). Bounds memory for
     multi-hour scans at the cost of pan-back history beyond ~30 min.
     """
 
-    __slots__ = ("t", "v", "frame_id", "n", "_frame_id_to_index", "dropped_at",
+    __slots__ = ("t", "v", "frame_id", "n", "dropped_at",
                  "ring_trimmed", "_max_capacity")
 
     def __init__(
         self,
         initial_capacity: Optional[int] = None,
-        track_frame_ids: bool = False,
         max_capacity: Optional[int] = _MAX_CAPACITY,
     ) -> None:
         # Ring-trim threshold: when the buffer fills to max_capacity, the
@@ -74,9 +68,6 @@ class _CameraBuffer:
         self.v = np.empty(initial_capacity, dtype=np.float32)
         self.frame_id = np.empty(initial_capacity, dtype=np.int64)
         self.n = 0
-        self._frame_id_to_index: Optional[dict[int, int]] = (
-            {} if track_frame_ids else None
-        )
         self.dropped_at: Optional[float] = None
         # True once _ring_trim has dropped older samples — i.e. data
         # below t[0] now lives only in the DB, not memory. LiveScanSource
@@ -109,10 +100,6 @@ class _CameraBuffer:
         self.frame_id[:half] = self.frame_id[keep_from:self.n]
         self.n = half
         self.ring_trimmed = True
-        # Frame-id lookup positions shift after the trim; safest to
-        # drop the mapping and rebuild lazily on subsequent appends.
-        if self._frame_id_to_index is not None:
-            self._frame_id_to_index.clear()
 
     def append(self, t: float, v: float, frame_id: int) -> None:
         """Append one sample. Grows capacity (doubling) on overflow up
@@ -129,27 +116,7 @@ class _CameraBuffer:
         self.t[idx] = t
         self.v[idx] = v
         self.frame_id[idx] = frame_id
-        # frame_id == -1 is the SDK's "unknown" sentinel; don't index it —
-        # apply_corrected with frame_id=-1 must NOT silently rewrite the
-        # most-recent unknown sample.
-        if self._frame_id_to_index is not None and frame_id != -1:
-            self._frame_id_to_index[int(frame_id)] = idx
         self.n += 1
-
-    def apply_corrected(self, frame_id: int, value: float) -> None:
-        """Overwrite v at the row whose frame_id matches. Silent no-op
-        when frame-id tracking is disabled (the default), when
-        frame_id is the -1 sentinel, or when no matching frame_id was
-        appended (race: final arrived before live, or the row was
-        dropped by a ring-trim).
-
-        Value is stored as float32; sub-float32 precision is lost on write."""
-        if self._frame_id_to_index is None or frame_id == -1:
-            return
-        idx = self._frame_id_to_index.get(int(frame_id))
-        if idx is None:
-            return
-        self.v[idx] = value
 
     def window_indices(self, t_lo: float, t_hi: float) -> tuple[int, int]:
         """Return (i_lo, i_hi) such that t[i_lo:i_hi] covers [t_lo, t_hi].
@@ -286,7 +253,6 @@ class ScanDataSource(QObject):
     samplesAppended = pyqtSignal(str, int, str, int)
 
     def __init__(self, plot_t0: float, parent: Optional[QObject] = None,
-                 track_frame_ids: bool = False,
                  buffer_max_capacity: Optional[int] = _MAX_CAPACITY) -> None:
         super().__init__(parent)
         self.plot_t0 = float(plot_t0)
@@ -296,10 +262,6 @@ class ScanDataSource(QObject):
         # are invisible to QML and read as `undefined`.
         self._live: bool = False
         self.buffers: dict[tuple[str, int, str], _CameraBuffer] = {}
-        # Default False — production no longer uses corrected-batch
-        # overwrites; saves a per-buffer frame_id dict that scales with
-        # scan duration. Tests opt in via the constructor flag.
-        self._track_frame_ids = track_frame_ids
         # Ring-trim threshold for buffers this source creates. Live sources
         # pass a finite value (config) to bound memory; past sources pass None
         # (UNBOUNDED) so a bulk load of a long scan never ring-trims away its
@@ -354,8 +316,7 @@ class ScanDataSource(QObject):
         key = (side, int(cam_id), metric)
         buf = self.buffers.get(key)
         if buf is None:
-            buf = _CameraBuffer(track_frame_ids=self._track_frame_ids,
-                                max_capacity=self._buffer_max_capacity)
+            buf = _CameraBuffer(max_capacity=self._buffer_max_capacity)
             self.buffers[key] = buf
         return buf
 
@@ -437,7 +398,8 @@ class ScanDataSource(QObject):
         Neutral fallback {"yMin": 0.0, "yMax": 1.0} when fewer than 4 valid
         samples are available (too noisy to autoscale meaningfully).
 
-        Matches legacy EmbeddedRealtimePlot._boundsFromArray semantics."""
+        Semantics carried over from the legacy plot's _boundsFromArray
+        (2%/98% percentile bounds + 25% padding)."""
         # Stay in numpy throughout — building a Python list from
         # `.tolist()` was the dominant cost of this slot at 1 Hz over
         # 8 cams × 2 metrics × growing buffers.
@@ -502,11 +464,9 @@ class LiveScanSource(ScanDataSource):
     unit tests) keeps the legacy in-memory-only behavior."""
 
     def __init__(self, plot_t0: float, parent: Optional[QObject] = None,
-                 track_frame_ids: bool = False,
                  scan_db_path: Optional[str] = None,
                  cache_max_samples: int = _MAX_CAPACITY) -> None:
         super().__init__(plot_t0=plot_t0, parent=parent,
-                         track_frame_ids=track_frame_ids,
                          buffer_max_capacity=cache_max_samples)
         self._live = True
         # DB tail state — all lazily initialized on first pan-into-past.
@@ -728,27 +688,6 @@ class LiveScanSource(ScanDataSource):
         if contrast is not None:
             self._append_one(side, cam_id, "contrast", frame_id, t, contrast)
 
-    def apply_corrected_batch(self, batch: list) -> None:
-        """Overwrite in place at matching frame_ids across all 4 metrics.
-
-        Payload shape matches scanCorrectedBatch.emit: list[dict] with
-        keys side, camId, frameId, bfi, bvi, mean, contrast (ts is
-        ignored — t is set at live-append time, not at correction time)."""
-        for sample in batch:
-            side = str(sample["side"])
-            cam_id = int(sample["camId"])
-            frame_id = int(sample["frameId"])
-            for metric_key, payload_key in (
-                ("bfi", "bfi"),
-                ("bvi", "bvi"),
-                ("mean", "mean"),
-                ("contrast", "contrast"),
-            ):
-                buf = self.buffers.get((side, cam_id, metric_key))
-                if buf is None:
-                    continue
-                buf.apply_corrected(frame_id=frame_id, value=float(sample[payload_key]))
-
     def mark_dropped(self, side: str, cam_id: int, t: float) -> None:
         """Record a dropout timestamp on every existing metric buffer for
         this (side, cam). Idempotent per _CameraBuffer.mark_dropped."""
@@ -792,7 +731,8 @@ def _bucketize_session_rows(
     Rows are bucketed by their stored cam_id verbatim:
       - cam_id 0..7 — per-camera BFI/BVI/mean/contrast (normal-mode scans).
       - cam_id == -1 — the reduced-mode dark-corrected per-side average
-        (bfi/bvi/mean/contrast), written by ScanDBSink's "final_side" path.
+        (bfi/bvi/mean/contrast), persisted by ScanDBSink from the cam_id=-1
+        frames the SDK's SideAverageStage routes onto the "final" channel.
     has_bfi reflects whether ANY finite BFI/BVI landed (either layout) — the
     caller uses it to decide whether to fall back to the corrected CSV (only
     pre-pipeline scans, which carry no BFI/BVI in the DB)."""
@@ -846,7 +786,8 @@ class PastScanSource(ScanDataSource):
         # session_data carries, by cam_id:
         #   - cam_id 0..7  — per-camera BFI/BVI/mean/contrast (normal-mode scans).
         #   - cam_id == -1 — the reduced-mode dark-corrected per-side average
-        #     (written by ScanDBSink's "final_side" path). Reduced cells query
+        #     (cam_id=-1 frames on the "final" channel, persisted by
+        #     ScanDBSink). Reduced cells query
         #     cam_id=-1, so replay reads it straight from the DB — no derivation.
         # Pre-pipeline scans carry no BFI/BVI in the DB; the CSV fallback covers
         # those.
