@@ -209,6 +209,32 @@ def test_live_scan_source_skips_none_mean_or_contrast():
     assert ("left", 0, "contrast") not in src.buffers
 
 
+def test_live_scan_source_append_uncorrected_stores_temp():
+    """temp is an optional fifth metric — stored under metric key "temp"
+    so PlotCell can read it via value_at (issue #165)."""
+    src = LiveScanSource(plot_t0=0.0)
+    src.append_uncorrected(
+        side="left", cam_id=2, frame_id=42, t=0.025,
+        bfi=4.5, bvi=3.1, temp=54.3,
+    )
+    buf = src.buffers[("left", 2, "temp")]
+    assert buf.n == 1
+    assert buf.v[0] == np.float32(54.3)
+    assert buf.t[0] == 0.025
+    assert src.value_at("left", 2, "temp", 0.025) == pytest.approx(54.3, abs=1e-4)
+
+
+def test_live_scan_source_skips_none_temp():
+    """temp=None (the default) creates no "temp" buffer — same contract
+    as mean/contrast."""
+    src = LiveScanSource(plot_t0=0.0)
+    src.append_uncorrected(
+        side="left", cam_id=0, frame_id=1, t=0.0,
+        bfi=4.0, bvi=3.0,
+    )
+    assert ("left", 0, "temp") not in src.buffers
+
+
 def test_live_scan_source_stores_nan_values():
     """NaN survives. The renderer filters non-finite, not the source."""
     src = LiveScanSource(plot_t0=0.0)

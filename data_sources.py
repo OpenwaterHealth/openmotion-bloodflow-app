@@ -687,19 +687,23 @@ class LiveScanSource(ScanDataSource):
         bvi: float,
         mean: Optional[float] = None,
         contrast: Optional[float] = None,
+        temp: Optional[float] = None,
     ) -> None:
         """Append one frame's worth of uncorrected metrics.
 
         bfi and bvi are always appended (NaN included — the source stores
-        what arrives). mean/contrast are appended only when non-None;
+        what arrives). mean/contrast/temp are appended only when non-None;
         the existing _LivePlotSink passes None for samples where the
-        SDK reported a non-finite mean_dc_rt / contrast_sn_rt."""
+        SDK reported a non-finite mean_dc_rt / contrast_sn_rt, and None
+        temp for dark frames (whose camera-temp reading is meaningless)."""
         self._append_one(side, cam_id, "bfi", frame_id, t, bfi)
         self._append_one(side, cam_id, "bvi", frame_id, t, bvi)
         if mean is not None:
             self._append_one(side, cam_id, "mean", frame_id, t, mean)
         if contrast is not None:
             self._append_one(side, cam_id, "contrast", frame_id, t, contrast)
+        if temp is not None:
+            self._append_one(side, cam_id, "temp", frame_id, t, temp)
 
     def mark_dropped(self, side: str, cam_id: int, t: float) -> None:
         """Record a dropout timestamp on every existing metric buffer for
