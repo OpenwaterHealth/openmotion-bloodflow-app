@@ -21,14 +21,13 @@ ApplicationWindow {
     // to interrupt mid-flight by accident counts.
     readonly property bool _anyInProgress:
         bloodFlowPage.scanning ||
-        bloodFlowPage.configuring ||
         bloodFlowPage.checkRunning ||
         MotionInterface.calibrationRunning ||
         MotionInterface.testScanRunning
 
     // Most-specific in-progress label for the warn-toast text. First
     // match wins — calibration is rarest + costliest to interrupt,
-    // scan next, configuration / contact-quality check after.
+    // scan next, contact-quality check after.
     //
     // If a non-dismissable modal is on screen at click time
     // (ContactQualityModal mid-check, etc.), prefer its declared
@@ -41,7 +40,6 @@ ApplicationWindow {
         if (MotionInterface.calibrationRunning) return "Calibration"
         if (MotionInterface.testScanRunning)    return "Test scan"
         if (bloodFlowPage.scanning)             return "Scan"
-        if (bloodFlowPage.configuring)          return "Camera configuration"
         if (bloodFlowPage.checkRunning)         return "Contact-quality check"
         return ""
     }

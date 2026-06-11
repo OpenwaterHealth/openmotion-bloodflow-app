@@ -16,8 +16,7 @@ Rectangle {
     AppTheme { id: theme }
 
     property bool scanning: false
-    property bool camerasReady: true  // starts true, goes false when camera selection changes
-    property bool configuring: false  // true during camera flash
+    property bool camerasReady: true  // gates Start/Check; false only while no sensor is connected
 
     // Aggregate live state of the contact-quality runners so main.qml
     // can detect 'check in progress' for the close-while-busy warning
@@ -104,18 +103,10 @@ Rectangle {
             rightMask = defRight;
             _rightMaskInitialApplied = true;
         }
-        if (cfg.autoConfigureOnStartup !== false &&
-                (MotionInterface.leftSensorConnected || MotionInterface.rightSensorConnected)) {
-            flashDefaultCameras();
-        }
-    }
-
-    function flashDefaultCameras() {
-        if (configuring || scanning) return;
-        camerasReady = false;
-        configuring = true;
-        console.log("Auto-flashing cameras: left=0x" + leftMask.toString(16) + " right=0x" + rightMask.toString(16));
-        MotionInterface.startConfigureCameraSensors(leftMask, rightMask);
+        // No FPGA flash here (issue #154): ScanRunner runs
+        // FlashSensorsTask unconditionally on every Start/Check, so a
+        // startup flash would only block the Start button for ~2 min
+        // doing redundant work.
     }
 
     function beginScanNow() {
@@ -176,8 +167,8 @@ Rectangle {
         z: 10000
 
         scanning: bloodFlow.scanning
-        waiting: bloodFlow.configuring || bloodFlow.scanStartPending
-        camerasReady: bloodFlow.camerasReady && !bloodFlow.configuring
+        waiting: bloodFlow.scanStartPending
+        camerasReady: bloodFlow.camerasReady
         reducedMode: bloodFlow.reducedMode
 
         // Action buttons — close any open modal first (which by
@@ -446,13 +437,13 @@ Rectangle {
         target: MotionInterface
 
         function onSignalConnected(descriptor, port) {
-            // Auto-flash default cameras when sensors connect.
+            // Adopt the config default camera masks when sensors connect.
             // Descriptor is the handle name from the SDK ("console" / "left" / "right").
             // The SDK already logs the state transition at INFO; no need
             // to duplicate it from QML.
             if (descriptor === "left" || descriptor === "right") {
                 Qt.callLater(function() {
-                    if (!bloodFlow.scanning && !bloodFlow.configuring) {
+                    if (!bloodFlow.scanning) {
                         var cfg      = MotionInterface.appConfig;
                         var defLeft  = bloodFlow.reducedMode ? (cfg.reducedModeLeftMask  !== undefined ? cfg.reducedModeLeftMask  : 0xC3) : (cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99);
                         var defRight = bloodFlow.reducedMode ? (cfg.reducedModeRightMask !== undefined ? cfg.reducedModeRightMask : 0xC3) : (cfg.rightMask !== undefined ? cfg.rightMask : 0x99);
@@ -460,9 +451,7 @@ Rectangle {
                         // default. Subsequent reconnects (e.g. console power
                         // cycle) preserve whatever's already in *Mask —
                         // either the cfg default already adopted earlier or
-                        // the user's Scan Settings choice (issue #127). The
-                        // re-flash below still runs because the FPGA loses
-                        // its camera-enable state on power cycle.
+                        // the user's Scan Settings choice (issue #127).
                         if (MotionInterface.leftSensorConnected && !bloodFlow._leftMaskInitialApplied) {
                             bloodFlow.leftMask  = defLeft;
                             bloodFlow._leftMaskInitialApplied = true;
@@ -471,8 +460,9 @@ Rectangle {
                             bloodFlow.rightMask = defRight;
                             bloodFlow._rightMaskInitialApplied = true;
                         }
-                        if (cfg.autoConfigureOnStartup !== false)
-                            flashDefaultCameras()
+                        // No FPGA flash on connect (issue #154): ScanRunner
+                        // runs FlashSensorsTask on every Start/Check, so the
+                        // post-power-cycle FPGA state is restored there.
                     }
                 })
             }
@@ -491,7 +481,6 @@ Rectangle {
         }
 
         function onConfigFinished(ok, err) {
-            bloodFlow.configuring = false
             bloodFlow.camerasReady = true  // always unblock; allConnected is the real gate
             if (ok) {
                 console.log("Camera configuration complete")
