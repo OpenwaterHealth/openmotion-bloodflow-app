@@ -1067,6 +1067,83 @@ def test_live_scan_source_db_window_not_padded_into_future(session_data_db):
     assert src._db_window_hi <= src.liveEdge + 1e-9
 
 
+def test_live_scan_source_negative_t_lo_paint_loop_hits_cache(session_data_db):
+    """Regression (issue #151): after "Back to live" with a wheel-zoomed-out
+    window WIDER than the elapsed scan, followLive requests
+    t_lo = liveEdge - windowSeconds < 0 on every paint. _db_window_lo is
+    floored at 0 when stored, so an unclamped negative t_lo could never
+    satisfy the staleness check — every points_for_window call re-queried
+    and re-bucketized the DB window synchronously on the GUI thread
+    (cells × metrics × 30 Hz), freezing the app until the scan ended.
+    The clamp in _ensure_db_window must make the second-and-later paints
+    cache hits."""
+    db, sid = session_data_db
+
+    class _CountingDb:
+        def __init__(self, inner):
+            self._inner = inner
+            self.calls = 0
+
+        def iter_session_data(self, *a, **k):
+            self.calls += 1
+            return self._inner.iter_session_data(*a, **k)
+
+    counting = _CountingDb(db)
+    src = LiveScanSource(plot_t0=0.0)
+    # Post-ring-trim in-memory state: data from t=10 onward only.
+    for i in range(5):
+        src.append_uncorrected(side="left", cam_id=0, frame_id=2000 + i,
+                               t=10.0 + i * 0.025, bfi=99.0, bvi=99.0)
+    for buf in src.buffers.values():
+        buf.ring_trimmed = True
+    src._db = counting
+    src._db_session_id = sid
+
+    # Simulate the followLive paint loop: windowSeconds=600 ≫ liveEdge,
+    # so t_lo is negative and creeps up as the live edge advances.
+    edge = src.liveEdge
+    for tick in range(20):
+        t_hi = edge + tick * 0.033
+        src.points_for_window("left", 0, "bfi", t_hi - 600.0, t_hi,
+                              max_points=200)
+
+    # One initial load (per metric buffer touched) — NOT one per paint.
+    assert counting.calls <= 2, (
+        f"DB re-queried {counting.calls} times across 20 paints — "
+        "negative-t_lo staleness thrash is back"
+    )
+
+    # And the stitched result still contains both DB and memory data.
+    pts = src.points_for_window("left", 0, "bfi", -590.0, 10.1, max_points=200)
+    vals = [p[1] for p in pts]
+    assert any(v < 50 for v in vals)
+    assert any(v > 50 for v in vals)
+
+
+def test_live_scan_source_value_at_negative_t_cache_valid(session_data_db):
+    """Companion to the paint-loop regression: value_at with a negative
+    cursor time (hover over the empty left margin of a wider-than-scan
+    window) goes through the same _ensure_db_window clamp and must not
+    shrink/clobber the cached window into an unsatisfiable range."""
+    db, sid = session_data_db
+    src = LiveScanSource(plot_t0=0.0)
+    for i in range(5):
+        src.append_uncorrected(side="left", cam_id=0, frame_id=2000 + i,
+                               t=10.0 + i * 0.025, bfi=99.0, bvi=99.0)
+    for buf in src.buffers.values():
+        buf.ring_trimmed = True
+    src._db = db
+    src._db_session_id = sid
+
+    v = src.value_at("left", 0, "bfi", -5.0)
+    # Cache bounds remain a valid (lo <= hi), non-negative range.
+    assert src._db_window_lo >= 0.0
+    assert src._db_window_hi >= src._db_window_lo
+    # Nearest stored sample (t≈0) is served — finite, from the DB.
+    assert math.isfinite(v)
+    assert v < 50
+
+
 def test_live_scan_source_value_at_uses_db_tail(session_data_db):
     """value_at also falls through to the DB tail for times before the
     in-memory window."""
