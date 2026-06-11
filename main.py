@@ -203,7 +203,7 @@ def main():
 
     # Configure file logging
     app_config = _load_app_config()
-    # Single output root: dataDirectory. app-logs/, run-logs/, scan files,
+    # Single output root: dataDirectory. app-logs/, scan files,
     # scans.db, ft-test-csvs/ all land under this directory. Falls back to
     # cwd (when writable) or ~/Documents/OpenWater Bloodflow (e.g. macOS
     # Finder launch where cwd is "/").

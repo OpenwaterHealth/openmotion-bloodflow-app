@@ -646,7 +646,7 @@ class MotionConnector(QObject):
         self._verbose_command_handling    = bool(cfg.get("verboseCommandHandling", False))
         # Single output root: caller-supplied (from main.py) wins, else
         # dataDirectory from app config, else default (cwd or ~/Documents).
-        # All sub-paths (app-logs, run-logs, scan files, scans.db,
+        # All sub-paths (app-logs, scan files, scans.db,
         # ft-test-csvs) live under self._directory.
         resolved_dir = data_dir or cfg.get("dataDirectory") or self._default_data_dir()
         self._power_off_unused_cameras    = bool(cfg.get("powerOffUnusedCameras", False))
@@ -755,12 +755,6 @@ class MotionConnector(QObject):
         self._calibration_t0 = None
         self._test_scan_t0 = None
         self._cq_t0 = None
-
-        # --- per-trigger telemetry CSV support ---
-        self._runlog_csv_path = None  # str or None
-        self._runlog_csv_file = None  # open file handle or None
-        self._runlog_csv_writer = None  # csv.writer or None
-        self._runlog_csv_lock = threading.Lock()
 
         os.makedirs(resolved_dir, exist_ok=True)
         self._directory = resolved_dir
@@ -888,89 +882,6 @@ class MotionConnector(QObject):
         self._read_and_log_camera_uids(side)
 
         self.connectionStatusChanged.emit()
-
-    def _start_run_csv(self, subject_id: str = None):
-        """
-        Open the per-trigger telemetry CSV (TCM / TCL / PDC samples).
-
-        Issue #43: clinical users don't need per-scan TCM / TCL / PDC
-        samples — gate the file creation on developerMode. Skipping
-        the open leaves _runlog_csv_writer as None, which
-        _write_runlog_csv_sample already null-checks, so per-update
-        writes become no-ops.
-        """
-        if self._runlog_csv_writer is not None:
-            # Already running; nothing to do
-            return
-        if not self._app_config.get("developerMode", False):
-            return
-
-        # Directory for individual trigger runs
-        run_dir = os.path.join(self._directory, "run-logs")
-        os.makedirs(run_dir, exist_ok=True)
-
-        # Timestamped filename for this specific trigger session
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        base_subject = subject_id or self._user_label or "unknown"
-        safe_subject = re.sub(r"[^A-Za-z0-9_-]", "", base_subject)
-        self._runlog_csv_path = os.path.join(run_dir, f"run-{safe_subject}_{ts}.csv")
-
-        try:
-            self._runlog_csv_file = open(
-                self._runlog_csv_path, "w", newline="", encoding="utf-8"
-            )
-            self._runlog_csv_writer = csv.writer(self._runlog_csv_file)
-            self._runlog_csv_writer.writerow(
-                ["timestamp", "unix_ms", "tcm", "tcl", "pdc"]
-            )
-            self._runlog_csv_file.flush()
-        except Exception as e:
-            logger.error(f"Failed to open run CSV log: {e}")
-            self._runlog_csv_file = None
-            self._runlog_csv_writer = None
-            self._runlog_csv_path = None
-            return
-
-        logger.info(f"[RUNLOG] telemetry CSV started -> {self._runlog_csv_path}")
-
-    def _stop_run_csv(self):
-        """Flush and close the per-trigger telemetry CSV."""
-        with self._runlog_csv_lock:
-            if self._runlog_csv_file is not None:
-                logger.info(
-                    f"[RUNLOG] telemetry CSV stopped -> {self._runlog_csv_path}"
-                )
-                try:
-                    self._runlog_csv_file.flush()
-                except Exception as e:
-                    logger.error(f"Error flushing run CSV log: {e}")
-                try:
-                    self._runlog_csv_file.close()
-                except Exception as e:
-                    logger.error(f"Error closing run CSV log: {e}")
-            self._runlog_csv_file = None
-            self._runlog_csv_writer = None
-            self._runlog_csv_path = None
-
-    def _write_runlog_csv_sample(
-        self, tcm: int, tcl: int, pdc: float, timestamp: float
-    ):
-        if self._runlog_csv_writer is None:
-            return
-        iso_ts = datetime.datetime.fromtimestamp(timestamp).isoformat(
-            timespec="milliseconds"
-        )
-        unix_ms = int(timestamp * 1000)
-        with self._runlog_csv_lock:
-            if self._runlog_csv_writer is None:
-                return
-            try:
-                self._runlog_csv_writer.writerow(
-                    [iso_ts, unix_ms, tcm, tcl, f"{pdc:.3f}"]
-                )
-                self._runlog_csv_file.flush()
-            except Exception as e:
-                logger.error(f"Failed to write run CSV sample: {e}")
 
     # --- GETTERS/SETTERS FOR Qt PROPERTIES ---
     def getUserLabel(self) -> str:
@@ -1329,7 +1240,6 @@ class MotionConnector(QObject):
                 "Analog Values – TCM: %d, TCL: %d, PDC: %.3f",
                 snap.tcm, snap.tcl, snap.pdc,
             )
-            self._write_runlog_csv_sample(snap.tcm, snap.tcl, snap.pdc, snap.timestamp)
         except Exception as exc:
             logger.error("_on_telemetry_update analog error: %s", exc)
 
@@ -1352,11 +1262,6 @@ class MotionConnector(QObject):
             self.triggerStateChanged.emit()
         except Exception as e:
             logger.warning("Error stopping trigger: %s", e)
-
-        try:
-            self._stop_run_csv()
-        except Exception as e:
-            logger.warning("Error stopping run CSV: %s", e)
 
         self._capture_thread = None
 
@@ -1994,7 +1899,6 @@ class MotionConnector(QObject):
         self._set_current_scan_source(live_source)
         self._capture_left_path = ""
         self._capture_right_path = ""
-        self._start_run_csv(subject_id=subject_id)
 
         # Camera dropout watchdog state — fresh per scan.
         self._camera_last_seen = {}
@@ -2064,7 +1968,6 @@ class MotionConnector(QObject):
             self._safety_cancel_scheduled = False
             self._capture_thread = None
             self.captureFinished.emit(True, "", "", "")
-            self._stop_run_csv()
             self.scanNotesReady.emit()
 
         req = ScanRequest(
@@ -2111,7 +2014,6 @@ class MotionConnector(QObject):
                 live_source.set_scan_label(label)
         if not started:
             self._capture_running = False
-            self._stop_run_csv()
             self._set_current_scan_source(None)  # release the orphaned LiveScanSource — scan never started
             # start_scan refuses for two reasons: a prior worker still alive,
             # or a pre-flight failure (e.g. the scan DB couldn't be opened, in
@@ -2586,7 +2488,6 @@ class MotionConnector(QObject):
         self._interface.console.stop_trigger()
         self._trigger_state = "OFF"
         self.triggerStateChanged.emit()
-        self._stop_run_csv()
         logger.info("Trigger stopped.")
 
     @pyqtSlot(result=int)

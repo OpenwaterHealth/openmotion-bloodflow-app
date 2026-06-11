@@ -82,11 +82,10 @@ The application creates the following directories for output:
 |-----------|----------|
 | `app-logs/` | Application log files (timestamped) |
 | `scan_data/` | Captured histogram data and processed CSV files |
-| `run-logs/` | Per-scan run logs |
 
 **Where these are created:**
 
-All three directories live under a single root, chosen in this order:
+Both directories live under a single root, chosen in this order:
 
 1. `dataDirectory` from `config/app_config.json` (also settable from the UI directory picker)
 2. The current working directory, when writable
@@ -98,7 +97,7 @@ Edit `config/app_config.json` to customize behavior:
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `dataDirectory` | `null` | Root directory for scan data, app-logs, and run-logs (null = auto-detect) |
+| `dataDirectory` | `null` | Root directory for scan data and app-logs (null = auto-detect) |
 | `developerMode` | `false` | Enable developer UI features |
 | `reducedMode` | `false` | Simplified clinical UI: forces far camera config + free run, hides scan settings, shows large left/right BFI/BVI panels |
 | `leftMask` / `rightMask` | `0x66` | Camera bitmask for left/right sensor modules |
