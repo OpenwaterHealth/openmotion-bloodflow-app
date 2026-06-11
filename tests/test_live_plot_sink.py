@@ -187,6 +187,36 @@ def test_final_batch_sink_skips_live_source_when_payload_empty():
     assert conn.scanCorrectedBatch.calls == []
 
 
+def test_final_batch_sink_skips_side_average_frames():
+    """Reduced-mode side averages ride the "final" channel as cam_id=-1
+    EnrichedCorrectedFrames (SDK PR #67). No live consumer wants them
+    (ReducedPlotView ignores corrected batches; reduced replay reads the
+    DB), so the sink must filter them out of the per-camera payload."""
+    conn = _connector()
+    sink, src = _make_final_sink(conn)
+    interval = SimpleNamespace(
+        frames=[
+            SimpleNamespace(side="left", cam_id=-1, abs_frame_id=42,
+                            bfi=2.5, bvi=6.5, mean=float("nan"), contrast=0.31),
+            SimpleNamespace(side="left", cam_id=1, abs_frame_id=42,
+                            bfi=2.0, bvi=6.0, mean=120.0, contrast=0.30),
+        ]
+    )
+    sink.consume("final", interval)
+    assert len(conn.scanCorrectedBatch.calls) == 1
+    payload = conn.scanCorrectedBatch.calls[0][0]
+    assert [(p["side"], p["camId"]) for p in payload] == [("left", 1)]
+
+    # All-side-average payload (reduced mode): nothing emitted at all.
+    conn.scanCorrectedBatch.calls.clear()
+    sink.consume("final", SimpleNamespace(frames=[
+        SimpleNamespace(side="right", cam_id=-1, abs_frame_id=50,
+                        bfi=3.0, bvi=7.0, mean=float("nan"), contrast=0.2),
+    ]))
+    assert conn.scanCorrectedBatch.calls == []
+    assert src.corrected_batches == []
+
+
 def test_live_plot_sink_subscribes_to_live_side_channel():
     sink, _ = _make_sink(_connector())
     assert "live" in sink.channels

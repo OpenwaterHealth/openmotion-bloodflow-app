@@ -365,6 +365,15 @@ class _FinalBatchSink:
         for s in samples:
             side = str(getattr(s, "side", ""))
             cam_id = int(getattr(s, "cam_id", -1))
+            if cam_id < 0:
+                # Reduced-mode side-average frames (cam_id=-1) ride the
+                # "final" channel since SDK PR #67. No live consumer wants
+                # them: ReducedPlotView deliberately ignores corrected
+                # batches, and reduced replay reads the cam_id=-1 rows
+                # straight from the scan DB. Skipping avoids misindexing
+                # the legacy per-camera plot and pointless cross-thread
+                # fan-out (in reduced mode it is the whole payload).
+                continue
             should_emit, recovery_msg = _check_dropped_camera_emit(
                 side, cam_id,
                 connector._camera_dropped,

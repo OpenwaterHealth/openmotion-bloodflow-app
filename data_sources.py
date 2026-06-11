@@ -792,7 +792,8 @@ def _bucketize_session_rows(
     Rows are bucketed by their stored cam_id verbatim:
       - cam_id 0..7 — per-camera BFI/BVI/mean/contrast (normal-mode scans).
       - cam_id == -1 — the reduced-mode dark-corrected per-side average
-        (bfi/bvi/mean/contrast), written by ScanDBSink's "final_side" path.
+        (bfi/bvi/mean/contrast), persisted by ScanDBSink from the "final"
+        channel's cam_id=-1 side-average frames.
     has_bfi reflects whether ANY finite BFI/BVI landed (either layout) — the
     caller uses it to decide whether to fall back to the corrected CSV (only
     pre-pipeline scans, which carry no BFI/BVI in the DB)."""
@@ -846,8 +847,9 @@ class PastScanSource(ScanDataSource):
         # session_data carries, by cam_id:
         #   - cam_id 0..7  — per-camera BFI/BVI/mean/contrast (normal-mode scans).
         #   - cam_id == -1 — the reduced-mode dark-corrected per-side average
-        #     (written by ScanDBSink's "final_side" path). Reduced cells query
-        #     cam_id=-1, so replay reads it straight from the DB — no derivation.
+        #     (persisted by ScanDBSink from the "final" channel's cam_id=-1
+        #     side-average frames). Reduced cells query cam_id=-1, so replay
+        #     reads it straight from the DB — no derivation.
         # Pre-pipeline scans carry no BFI/BVI in the DB; the CSV fallback covers
         # those.
         self.buffers, has_bfi = _bucketize_session_rows(scan_db, self.session_id)
