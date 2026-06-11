@@ -228,7 +228,11 @@ def main():
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
-    logger.info(f"logging to {logfile_path}")
+    logger.info("=" * 64)
+    logger.info("Open-Motion Bloodflow App %s starting", APP_VERSION)
+    logger.info("Log file:       %s", logfile_path)
+    logger.info("Data directory: %s", _data_dir)
+    logger.info("=" * 64)
 
     # Configure the SDK logger hierarchy to use the same handlers
     sdk_logger = logging.getLogger("openmotion.sdk")
@@ -301,6 +305,9 @@ def main():
             logger.warning("Error stopping MotionInterface: %s", e)
         engine.deleteLater()
         cleanup_single_instance()
+        logger.info("=" * 64)
+        logger.info("Open-Motion Bloodflow App %s exited cleanly", APP_VERSION)
+        logger.info("=" * 64)
 
     app.aboutToQuit.connect(handle_exit)
 
