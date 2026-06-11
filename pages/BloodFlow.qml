@@ -115,21 +115,6 @@ Rectangle {
         }
     }
 
-    function patternToMask(index) {
-        switch(index) {
-            case 0: return 0x00;
-            case 1: return 0x5A;
-            case 2: return 0x66;
-            case 3: return 0xA5;
-            case 4: return 0x99;
-            case 5: return 0x0F;
-            case 6: return 0xF0;
-            case 7: return 0x42;
-            case 8: return 0xFF;
-            default: return 0x99;
-        }
-    }
-
     function flashDefaultCameras() {
         if (configuring || scanning) return;
         camerasReady = false;
