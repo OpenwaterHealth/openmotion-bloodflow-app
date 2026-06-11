@@ -4,7 +4,6 @@ from PyQt6.QtCore import (
     pyqtProperty,
     pyqtSlot,
     QVariant,
-    QThread,
     QTimer,
     QRecursiveMutex,
 )
@@ -154,13 +153,12 @@ _SIDE_NAMES = ("left", "right")
 
 
 class _LivePlotSink:
-    """Subscribes to the 'live' pipeline channel and emits per-frame Qt
-    signals into the QML realtime plot for each active camera.
+    """Subscribes to the 'live' pipeline channel and feeds per-frame samples
+    into the LiveScanSource backing the PlotViewer, for each active camera.
 
     The 'live' channel carries a FrameBatch after BfiBvi. Each batch may
-    contain multiple frames and both sides; we iterate frame × side × cam_id
-    and call back into the connector's helpers, which gate on the camera-
-    dropout watchdog and fire the Qt signals.
+    contain multiple frames and both sides; we iterate frame × side × cam_id,
+    gate on the camera-dropout watchdog, and append to the source.
 
     The 'live_side' channel carries one SideAverageSample per capture per side
     (from the SDK's LiveSideAverageStage, reduced mode) — the realtime per-side
@@ -265,7 +263,7 @@ class _LivePlotSink:
                 mean_for_source: Optional[float] = None
                 contrast_for_source: Optional[float] = None
                 if not is_dark:
-                    # Emit the realtime dark-corrected mean (mean_dc_rt) and
+                    # Record the realtime dark-corrected mean (mean_dc_rt) and
                     # shot-noise-corrected contrast (contrast_sn_rt). The
                     # live display is realtime-only by design; the accurate
                     # corrected record lands in the scan DB via the SDK's
@@ -276,25 +274,14 @@ class _LivePlotSink:
                         mean_val = float(batch.mean_dc_rt[i, side_idx, cam_id])
                         if math.isfinite(mean_val):
                             mean_for_source = mean_val
-                            connector.scanMeanSampled.emit(
-                                side, cam_id, abs_frame_id, plot_ts, mean_val
-                            )
                     if batch.contrast_sn_rt is not None:
                         contrast_val = float(batch.contrast_sn_rt[i, side_idx, cam_id])
                         if math.isfinite(contrast_val):
                             contrast_for_source = contrast_val
-                            connector.scanContrastSampled.emit(
-                                side, cam_id, abs_frame_id, plot_ts, contrast_val
-                            )
 
-                connector.scanBfiSampled.emit(side, cam_id, abs_frame_id, plot_ts, bfi)
-                connector.scanBviSampled.emit(side, cam_id, abs_frame_id, plot_ts, bvi)
-                connector.scanCameraTemperature.emit(side, cam_id, temp_c)
-
-                # Also feed the LiveScanSource so the new PlotViewer (Phase 2+)
-                # has a parallel record. mean/contrast already filtered for
-                # is_dark / non-finite above; None here means "metric not
-                # available for this sample".
+                # mean/contrast already filtered for is_dark / non-finite
+                # above; None here means "metric not available for this
+                # sample".
                 self._live_source.append_uncorrected(
                     side=side,
                     cam_id=cam_id,
@@ -435,8 +422,6 @@ class MotionConnector(QObject):
     notificationDismissByIdRequested = pyqtSignal(int)   # dismiss the toast with this id
     notificationDismissByTagRequested = pyqtSignal(str)  # dismiss the toast with this tag
     notificationDismissAllRequested = pyqtSignal()       # dismiss every active toast
-    vizFinished = pyqtSignal()
-    visualizingChanged = pyqtSignal(bool)
 
     # Real-time plot viewer source — see data_sources.py.
     currentScanSourceChanged = pyqtSignal()
@@ -464,21 +449,6 @@ class MotionConnector(QObject):
     # is guaranteed to reflect the just-completed scan. Not emitted on
     # hard errors — those keep the scan dialog visible with the error.
     scanNotesReady = pyqtSignal()
-    scanMeanSampled = pyqtSignal(
-        str, int, int, float, float
-    )  # side, cam_id, frame_id, timestamp_s, mean
-    scanContrastSampled = pyqtSignal(
-        str, int, int, float, float
-    )  # side, cam_id, frame_id, timestamp_s, contrast
-    scanBfiSampled = pyqtSignal(
-        str, int, int, float, float
-    )  # side, cam_id, frame_id, timestamp_s, bfi
-    scanBviSampled = pyqtSignal(
-        str, int, int, float, float
-    )  # side, cam_id, frame_id, timestamp_s, bvi
-    scanBfiCorrectedSampled = pyqtSignal(
-        str, int, float, float
-    )  # side, cam_id, timestamp_s, bfi  (kept for backward compat)
 
     # Contact-quality quick-check signals.
     contactQualityCheckStarted = pyqtSignal(int)  # expected duration in seconds
@@ -489,10 +459,6 @@ class MotionConnector(QObject):
     # ``False`` edge to clear an entry from the live modal.
     contactQualityIssueStateChanged = pyqtSignal(str, str, str, float, bool)
     contactQualityScanInProgress = pyqtSignal(bool)
-    scanBviCorrectedSampled = pyqtSignal(
-        str, int, float, float
-    )  # side, cam_id, timestamp_s, bvi  (kept for backward compat)
-    scanCameraTemperature = pyqtSignal(str, int, float)  # side, cam_id, temperature_c
     cameraDropoutDetected = pyqtSignal(str, int, str)  # side ("left"/"right"), cam_id (0-7), elapsed HH:MM:SS
 
     # post-processing signals
@@ -668,8 +634,6 @@ class MotionConnector(QObject):
         self._scan_notes = ""
         self._scan_notes_path = ""  # path to current scan's notes file on disk
         self.connect_signals()
-        self._viz_thread = None
-        self._viz_worker = None
 
         self._tec_voltage = 0.0
         self._tec_temp = 0.0
@@ -3008,184 +2972,7 @@ class MotionConnector(QObject):
             logger.debug(f"Fan status read on {side} failed during disconnect: {e}")
             return False
 
-    # --- BLOODFLOW VISUALIZATION / POST-PROCESSING METHODS ---
-    @pyqtSlot(str, str, float, float, bool, result=bool)
-    def visualize_bloodflow(
-        self,
-        left_csv: str,
-        right_csv: str,
-        t1: float = 0.0,
-        t2: float = 120.0,
-        plot_contrast: bool = False,
-    ) -> bool:
-        left_csv = (left_csv or "").strip()
-        right_csv = (right_csv or "").strip()
-        if left_csv.lower().endswith(".raw"):
-            left_csv = left_csv[:-4] + ".csv"
-        if right_csv.lower().endswith(".raw"):
-            right_csv = right_csv[:-4] + ".csv"
-
-        if not left_csv and not right_csv:
-            self.errorOccurred.emit(
-                "No files selected. Please pick a left and/or right CSV."
-            )
-            return False
-
-        missing = []
-        if left_csv and not Path(left_csv).exists():
-            missing.append(f"Left file not found:\n{left_csv}")
-        if right_csv and not Path(right_csv).exists():
-            missing.append(f"Right file not found:\n{right_csv}")
-        if missing:
-            self.errorOccurred.emit("\n\n".join(missing))
-            return False
-
-        logger.info(
-            f"Visualizing bloodflow: left_csv={left_csv}, right_csv={right_csv}, t1={t1}, t2={t2}, plot_contrast={plot_contrast}"
-        )
-
-        # start spinner
-        self.visualizingChanged.emit(True)
-
-        # start worker thread (compute only)
-        self._viz_thread = QThread(self)
-        self._viz_worker = _VizWorker(left_csv, right_csv, t1, t2, plot_contrast)
-        self._viz_worker.moveToThread(self._viz_thread)
-
-        # --- connections when starting the worker ---
-        self._viz_thread.started.connect(self._viz_worker.run)
-        self._viz_worker.resultsReady.connect(self._onVizResults)  # will pass 1 arg
-        self._viz_worker.error.connect(self._onVizError)
-        self._viz_worker.finished.connect(self._viz_thread.quit)
-        self._viz_worker.finished.connect(self._viz_worker.deleteLater)
-        self._viz_thread.finished.connect(self._viz_thread.deleteLater)
-        self._viz_thread.start()
-        return True
-
-    @pyqtSlot(object)
-    def _onVizResults(self, payload: dict):
-        try:
-            import matplotlib.pyplot as plt
-            from processing.visualize_bloodflow import VisualizeBloodflow
-
-            # Close any existing matplotlib figures to prevent multiple windows from old scans
-            plt.close("all")
-
-            bfi = payload["bfi"]
-            bvi = payload["bvi"]
-            camera_inds = payload["camera_inds"]
-            contrast = payload["contrast"]
-            mean = payload["mean"]
-            nmodules = payload["nmodules"]
-            t1 = payload["t1"]
-            t2 = payload["t2"]
-
-            viz = VisualizeBloodflow(left_csv="", right_csv="", t1=t1, t2=t2)
-            viz._BFI = bfi
-            viz._BVI = bvi
-            viz._contrast = contrast
-            viz._mean = mean
-            viz._camera_inds = camera_inds
-            viz._nmodules = nmodules
-            viz._sides = payload.get("sides", [])
-            plot_contrast = payload.get("plot_contrast", False)
-
-            if plot_contrast:
-                fig = viz.plot(("contrast", "mean"))
-            else:
-                fig = viz.plot(("BFI", "BVI"))
-            plt.show(block=False)
-        except Exception as e:
-            logger.exception("Visualization display failed")
-            self.errorOccurred.emit(f"Visualization display failed:\n{e}")
-        finally:
-            self.visualizingChanged.emit(False)
-            self.vizFinished.emit()
-
-    @pyqtSlot(str)
-    def _onVizError(self, msg: str):
-        self.visualizingChanged.emit(False)
-        self.errorOccurred.emit(f"Visualization failed:\n{msg}")
-
-    @pyqtSlot()
-    def _onVizFinished(self):
-        # Show the figure on the main thread
-        try:
-            import matplotlib.pyplot as plt
-
-            plt.show(block=False)
-        except Exception as e:
-            logger.exception("Visualization display failed")
-            self.errorOccurred.emit(f"Visualization display failed:\n{e}")
-        finally:
-            self.visualizingChanged.emit(False)
-            self.vizFinished.emit()
-
-    @pyqtSlot(str, result=bool)
-    def visualize_corrected(self, corrected_csv: str) -> bool:
-        """Plot BFI/BVI from a _corrected.csv using plot_corrected_scan from the SDK."""
-        return self._launch_correct_viz(corrected_csv, mode="bfi")
-
-    @pyqtSlot(str, result=bool)
-    def visualize_corrected_signal(self, corrected_csv: str) -> bool:
-        """Plot contrast/mean from a _corrected.csv using plot_corrected_scan from the SDK."""
-        return self._launch_correct_viz(corrected_csv, mode="signal")
-
-    def _launch_correct_viz(self, corrected_csv: str, mode: str) -> bool:
-        corrected_csv = (corrected_csv or "").strip()
-        if not corrected_csv:
-            self.errorOccurred.emit("No corrected CSV file found for this scan.")
-            return False
-        if not Path(corrected_csv).exists():
-            self.errorOccurred.emit(f"Corrected CSV not found:\n{corrected_csv}")
-            return False
-
-        logger.info(f"Visualizing corrected scan ({mode}): {corrected_csv}")
-        self.visualizingChanged.emit(True)
-
-        self._correct_viz_thread = QThread(self)
-        self._correct_viz_worker = _CorrectVizWorker(corrected_csv, mode=mode)
-        self._correct_viz_worker.moveToThread(self._correct_viz_thread)
-
-        self._correct_viz_thread.started.connect(self._correct_viz_worker.run)
-        self._correct_viz_worker.resultsReady.connect(self._onCorrectVizResults)
-        self._correct_viz_worker.error.connect(self._onCorrectVizError)
-        self._correct_viz_worker.finished.connect(self._correct_viz_thread.quit)
-        self._correct_viz_worker.finished.connect(self._correct_viz_worker.deleteLater)
-        self._correct_viz_thread.finished.connect(self._correct_viz_thread.deleteLater)
-        self._correct_viz_thread.start()
-        return True
-
-    @pyqtSlot(object)
-    def _onCorrectVizResults(self, payload: dict):
-        try:
-            import matplotlib.pyplot as plt
-            plt.close("all")
-            mod = payload["mod"]
-            if payload.get("reduced", False):
-                mod._make_reduced_figure(payload["df"], payload["active_sides"])
-            else:
-                kwargs = dict(
-                    cells=payload["cells"],
-                    row_map=payload["row_map"],
-                    col_map=payload["col_map"],
-                    n_rows=payload["n_rows"],
-                    n_cols=payload["n_cols"],
-                )
-                mod._make_figure(payload["df"], mode=payload["mode"], **kwargs)
-            plt.show(block=False)
-        except Exception as e:
-            logger.exception("Corrected scan visualization display failed")
-            self.errorOccurred.emit(f"Visualization display failed:\n{e}")
-        finally:
-            self.visualizingChanged.emit(False)
-            self.vizFinished.emit()
-
-    @pyqtSlot(str)
-    def _onCorrectVizError(self, msg: str):
-        self.visualizingChanged.emit(False)
-        self.errorOccurred.emit(f"Corrected visualization failed:\n{msg}")
-
+    # --- POST-PROCESSING METHODS ---
     @pyqtSlot(str, str, result=bool)
     def startPostProcess(self, left_raw: str, right_raw: str) -> bool:
         """
@@ -3737,152 +3524,3 @@ class MotionConnector(QObject):
         """Open the download URL in the system browser."""
         import webbrowser
         webbrowser.open(url)
-
-
-def _load_plot_corrected_scan():
-    """Load plot_corrected_scan.py — bundled in processing/ for deployed builds,
-    falling back to the sibling SDK repo for development."""
-    import importlib.util
-    candidates = [
-        # Bundled with the deployed app (PyInstaller) and dev tree alike
-        resource_path("processing", "plot_corrected_scan.py"),
-        # Dev fallback: sibling openmotion-sdk checkout
-        Path(os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "openmotion-sdk", "data-processing", "plot_corrected_scan.py",
-        )),
-    ]
-    script_path = next((p for p in candidates if Path(p).is_file()), None)
-    if script_path is None:
-        searched = "\n  ".join(str(p) for p in candidates)
-        raise FileNotFoundError(
-            f"plot_corrected_scan.py not found. Looked in:\n  {searched}"
-        )
-    spec = importlib.util.spec_from_file_location(
-        "plot_corrected_scan", str(script_path)
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-class _CorrectVizWorker(QObject):
-    finished = pyqtSignal()
-    error = pyqtSignal(str)
-    resultsReady = pyqtSignal(object)
-
-    def __init__(self, corrected_csv: str, mode: str = "bfi"):
-        super().__init__()
-        self.corrected_csv = corrected_csv
-        self.mode = mode
-
-    @pyqtSlot()
-    def run(self):
-        try:
-            import pandas as pd
-            mod = _load_plot_corrected_scan()
-            df = pd.read_csv(self.corrected_csv)
-            if "timestamp_s" not in df.columns:
-                raise ValueError(
-                    "'timestamp_s' column not found — is this a _corrected.csv file?"
-                )
-            active_sides = mod._requested_sides(df, "both")
-            if not active_sides:
-                raise ValueError("No camera data found in corrected CSV.")
-
-            reduced = mod._is_reduced_mode(df)
-            if reduced:
-                if self.mode == "signal":
-                    raise ValueError(
-                        "Contrast/Mean visualization is not available for "
-                        "reduced mode scans."
-                    )
-                self.resultsReady.emit({
-                    "mod": mod,
-                    "df": df,
-                    "reduced": True,
-                    "active_sides": active_sides,
-                    "mode": self.mode,
-                })
-            else:
-                cells = mod._active_cells(df, active_sides)
-                row_map, col_map, n_rows, n_cols = mod._collapse(cells)
-                self.resultsReady.emit({
-                    "mod": mod,
-                    "df": df,
-                    "reduced": False,
-                    "cells": cells,
-                    "row_map": row_map,
-                    "col_map": col_map,
-                    "n_rows": n_rows,
-                    "n_cols": n_cols,
-                    "mode": self.mode,
-                })
-        except Exception as e:
-            self.error.emit(str(e))
-        finally:
-            self.finished.emit()
-
-
-# --- worker to run visualiztion ---
-class _VizWorker(QObject):
-    finished = pyqtSignal()
-    error = pyqtSignal(str)
-    resultsReady = pyqtSignal(object)  # emits a dict with arrays/metadata
-
-    def __init__(self, left_csv, right_csv, t1, t2, plot_contrast=False):
-        super().__init__()
-        self.left_csv = left_csv
-        self.right_csv = right_csv
-        self.t1 = t1
-        self.t2 = t2
-        self.plot_contrast = plot_contrast
-
-    @pyqtSlot()
-    def run(self):
-        try:
-            from processing.visualize_bloodflow import VisualizeBloodflow
-
-            # Convert empty strings to None for optional right_csv, but ensure left_csv is valid
-            left_path = self.left_csv if self.left_csv else None
-            right_path = self.right_csv if self.right_csv else None
-
-            if not left_path and not right_path:
-                self.error.emit("No valid CSV file provided for visualization")
-                self.finished.emit()
-                return
-
-            viz = VisualizeBloodflow(left_path, right_path, t1=self.t1, t2=self.t2)
-            viz.compute()
-
-            # Save results CSV based on left_csv or right_csv naming rule
-            if self.left_csv:
-                new_file_name = re.sub(
-                    r"_left.*\.csv$", "_bfi_results.csv", self.left_csv
-                )
-            else:
-                new_file_name = re.sub(
-                    r"_right.*\.csv$", "_bfi_results.csv", self.right_csv
-                )
-            viz.save_results_csv(new_file_name)
-            logger.info(f"Results CSV saved to: {new_file_name}")
-
-            bfi, bvi, cam_inds, contrast, mean = viz.get_results()
-            payload = {
-                "bfi": bfi,
-                "bvi": bvi,
-                "camera_inds": cam_inds,
-                "contrast": contrast,
-                "mean": mean,
-                "nmodules": 2 if self.right_csv else 1,
-                "sides": viz._sides,
-                "freq": viz.frequency_hz,
-                "t1": viz.t1,
-                "t2": viz.t2,
-                "plot_contrast": self.plot_contrast,
-            }
-            self.resultsReady.emit(payload)
-            self.finished.emit()
-        except Exception as e:
-            logger.exception("VisualizeBloodflow worker failed")
-            self.error.emit(str(e))

@@ -6,7 +6,7 @@ The OpenWater Bloodflow App is a PyQt6/QML desktop application that interfaces w
 
 **Key Constraints:**
 - **Real-time streaming**: Binary histogram packets arrive at ~40 Hz per camera; parsing and CSV writing must keep up without dropping frames.
-- **Concurrency**: Multiple threads handle capture (per-side writer threads), telemetry polling (`ConsoleStatusThread`), correction (`_correction_worker`), and visualization (`_VizWorker`).
+- **Concurrency**: Multiple threads handle capture (per-side writer threads), telemetry polling (`ConsoleStatusThread`), and correction (`_correction_worker`).
 - **Scale**: Up to 16 cameras (8 per module × 2 modules), each producing 1024-bin histograms at 40 fps → ~65 KB/s per camera raw.
 - **Storage**: Raw binary → CSV conversion produces large files (millions of rows per scan). In-memory numpy arrays used for post-processing.
 
@@ -115,7 +115,6 @@ MotionConnector
  ├── 1:1    ConsoleStatusThread (polling loop)
  ├── 1:N    CaptureWriter threads (1 per active side during scan)
  ├── 1:1    _ConfigureWorker (QThread, transient)
- ├── 1:1    _VizWorker (QThread, transient)
  └── 1:1    _correction_worker (daemon thread, permanent)
 
 DataProcessor
@@ -134,7 +133,7 @@ CSVIntegrityChecker
 - `MotionConnector` is created once in `main.py` and registered as a QML singleton.
 - `ConsoleStatusThread` starts when the console connects, stops on disconnect or shutdown.
 - Capture writer threads are created per `startCapture()` call and joined when capture completes or is canceled.
-- `_VizWorker` and `_ConfigureWorker` are ephemeral QThread workers created on demand and destroyed on completion.
+- `_ConfigureWorker` is an ephemeral QThread worker created on demand and destroyed on completion.
 
 ---
 
@@ -349,7 +348,7 @@ _pdu_vals = [float] * 16  # scaled voltage values
 ### Concurrency Concerns
 - **`_telemetry_lock`**: Protects `_tcm`, `_tcl`, `_pdc` shared between `ConsoleStatusThread` and writer threads. Minimal contention (read-heavy in writers, write-only by status thread).
 - **No lock on `_capture_running`/`_capture_thread`**: These boolean/thread guards are set/checked across threads without synchronization. Race condition possible if `startCapture` is called rapidly, though the QML UI practically prevents this.
-- **Qt signal/slot across threads**: `scanMeanSampled`, `scanBfiSampled` etc. are emitted from writer threads. Qt's queued connection mechanism handles cross-thread delivery, but high-frequency emission (640 signals/sec) may saturate the event loop.
+- **Cross-thread live-sample delivery**: `_LivePlotSink` appends per-frame samples into the `LiveScanSource` buffers from pipeline threads; the QML `PlotViewer` reads them on its repaint timer.
 
 ### Data Growth
 - **Scan data**: ~20 MB CSV per minute per camera on disk. Extended sessions or many subjects will fill local storage.

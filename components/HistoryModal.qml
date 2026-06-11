@@ -20,7 +20,6 @@ Item {
 
     property var scans: []
     property var selected: ({})
-    property bool visualizing: false
 
     function open() {
         refreshScans()
@@ -368,18 +367,6 @@ Item {
             }
         }
 
-        // Busy overlay
-        Rectangle {
-            anchors.fill: parent; color: "#000"; opacity: 0.45
-            visible: root.visualizing; z: 9999; radius: 12
-            MouseArea { anchors.fill: parent }
-            Column {
-                anchors.centerIn: parent; spacing: 12
-                BusyIndicator { running: root.visualizing; width: 48; height: 48 }
-                Text { text: "Processing..."; color: theme.textPrimary; font.pixelSize: 14 }
-            }
-        }
-
         // Match the other modals (SettingsModal, ScanSettingsModal):
         // Escape closes. Without this, ``pyautogui.press('escape')`` is
         // a no-op for History, which left the modal stuck open between
@@ -391,17 +378,14 @@ Item {
 
     Dialogs.MessageDialog {
         id: histErrDialog
-        title: "Visualization Error"
+        title: "Error"
         text: ""
     }
 
     Connections {
         target: MotionInterface
-        function onVizFinished() { root.visualizing = false }
-        function onVisualizingChanged(b) { root.visualizing = b }
         function onDirectoryChanged() { if (root.visible) refreshScans() }
         function onErrorOccurred(msg) {
-            root.visualizing = false
             histErrDialog.text = msg || "Unknown error."
             histErrDialog.visible = true
         }

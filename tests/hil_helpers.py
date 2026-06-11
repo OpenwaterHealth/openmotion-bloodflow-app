@@ -13,7 +13,7 @@ Three categories so far:
   - **Window / UIA**: ``move_window_on_screen``, ``is_app_alive``,
     ``click_element_center``, ``focus_combobox_by_label``,
     ``selected_scan_text``.
-  - **Modal handling**: ``close_plot_window``, ``dismiss_signal_quality_modal``.
+  - **Modal handling**: ``dismiss_signal_quality_modal``, ``visible_modals``.
 
 ``SENSOR_OPTIONS`` is the canonical sensor-dropdown ordering used by both
 the scan-settings and scan-auto-stop tests; keep it in sync with the QML
@@ -788,9 +788,6 @@ def click_panel_button(label: str, fallback: tuple[float, float] | None = None) 
 # ─────────────────────────────────────────────
 # Modal / dialog handling
 # ─────────────────────────────────────────────
-_PLOT_TITLE_RE = re.compile(r"^Figure \d+", re.IGNORECASE)
-
-
 # Each modal in the bloodflow app is a QML ``Item`` overlay
 # (anchors.fill: parent, visible toggle, z-index) inside the main
 # OpenWater Bloodflow window — not a Qt Dialog or separate Window —
@@ -882,40 +879,6 @@ def visible_modals() -> set[str]:
     return found
 
 
-def close_plot_window() -> bool:
-    """Close the matplotlib plot window opened by the app via Alt+F4.
-
-    Filters to windows whose title matches matplotlib's default
-    ``Figure N`` pattern. Earlier this function iterated every visible
-    desktop window and Alt+F4'd the first non-bloodflow one, which on
-    a busy machine meant trying to activate Parsec / LGDisplay / Chrome
-    / 'Program Manager' (the desktop itself) etc. — the activate
-    fallbacks for those special windows can move the mouse cursor and
-    trip pyautogui.FAILSAFE, which then breaks every subsequent
-    pyautogui call in the suite.
-    """
-    for w in gw.getAllWindows():
-        title = (w.title or "").strip()
-        if not title:
-            continue
-        if any(k in title.lower() for k in APP_KEYWORDS):
-            continue
-        if not _PLOT_TITLE_RE.match(title):
-            continue  # Not a matplotlib plot — leave it alone.
-        try:
-            if w.isMinimized:
-                w.restore()
-                time.sleep(1)
-            w.activate()
-            time.sleep(0.5)
-            log.info(f"  Closing plot window: '{title}'")
-            pyautogui.hotkey("alt", "f4")
-            time.sleep(SLEEP)
-            return True
-        except Exception as e:
-            log.warning(f"  Could not close '{title}': {e}")
-    log.warning("  No plot window found to close")
-    return False
 
 
 # ContactQualityModal title strings for each post-``checking`` state
