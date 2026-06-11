@@ -1267,23 +1267,11 @@ class MotionConnector(QObject):
 
     @pyqtSlot()
     def shutdown(self):
-        """Shutdown connector. Stops capture, stops monitoring, then disconnects all devices."""
+        """Shutdown connector. Stops any capture in flight; main.py's
+        handle_exit stops the MotionInterface (monitoring + device
+        teardown) right after this returns."""
         logger.info("Shutting down MotionConnector...")
         self.stopCapture()
-
-        try:
-            if self._interface:
-                self._interface.stop_monitoring()
-                logger.info("USB monitoring stopped.")
-        except Exception as e:
-            logger.warning("Error stopping monitoring: %s", e)
-
-        try:
-            if self._interface:
-                self._interface.disconnect()
-        except Exception as e:
-            logger.warning("Error disconnecting interface: %s", e)
-
         logger.info("MotionConnector shutdown complete.")
 
     # --- SCAN MANAGEMENT METHODS ---
@@ -1825,7 +1813,9 @@ class MotionConnector(QObject):
         disable_laser: bool,
     ) -> bool:
         """Start capture asynchronously; returns True if kicked off."""
-        logger.info(
+        # Entry params at DEBUG — the "=== Full scan started ===" banner
+        # covers the successful path; this is for diagnosing refused starts.
+        logger.debug(
             f"startCapture(subject_id={subject_id}, dur={duration_sec}s, "
             f"left_mask=0x{left_camera_mask:02X}, right_mask=0x{right_camera_mask:02X}, "
             f"dir={data_dir}, disable_laser={disable_laser})"
@@ -3775,22 +3765,22 @@ class MotionConnector(QObject):
     def _version_newer(remote: str, local: str) -> bool:
         """Return True if remote version is strictly newer than local.
 
-        Handles versions like '0.4.3', 'pre-0.4.3', '1.0-pre3'.
-        Strips 'pre-' prefix for numeric comparison; pre-releases are
-        considered older than the same base version.
+        Handles versions like '0.4.3', 'pre-0.4.3', '1.0-pre3', and
+        setuptools_scm-style dev strings like '1.2.0-dev.1-0-gabc1234-dirty'.
+        Compares the leading dotted-numeric core; any suffix after it
+        marks a pre-release, which counts as older than the same base
+        version. (The old int() parse raised on dev suffixes and fell
+        back to [0], making every remote release look newer.)
         """
         def parse(v):
-            # Strip pre- prefix, track it
             is_pre = v.startswith("pre-")
             base = v[4:] if is_pre else v
-            # Also handle "1.0-pre3" format
-            if "-pre" in base:
-                base = base.split("-pre")[0]
+            m = re.match(r"(\d+(?:\.\d+)*)(.*)", base)
+            if not m:
+                return [0], is_pre
+            parts = [int(x) for x in m.group(1).split(".")]
+            if m.group(2):
                 is_pre = True
-            try:
-                parts = [int(x) for x in base.split(".")]
-            except ValueError:
-                parts = [0]
             return parts, is_pre
 
         r_parts, r_pre = parse(remote)
