@@ -1813,9 +1813,7 @@ class MotionConnector(QObject):
         disable_laser: bool,
     ) -> bool:
         """Start capture asynchronously; returns True if kicked off."""
-        # Entry params at DEBUG — the "=== Full scan started ===" banner
-        # covers the successful path; this is for diagnosing refused starts.
-        logger.debug(
+        logger.info(
             f"startCapture(subject_id={subject_id}, dur={duration_sec}s, "
             f"left_mask=0x{left_camera_mask:02X}, right_mask=0x{right_camera_mask:02X}, "
             f"dir={data_dir}, disable_laser={disable_laser})"
