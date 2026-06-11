@@ -7,9 +7,12 @@ import OpenMotion 1.0
 // Inactive cameras just render an empty Canvas + label; no per-mask branching.
 // Reduced-mode 2-cell layout is Phase 2b-ii. Toolbar + autoscale arrive in
 // Task 5; the current header text is the Phase 2a placeholder.
+// Geometry is owned by the instantiation site (BloodFlow.qml anchors the
+// viewer beside the icon bar) — no anchors here. A root-level
+// `anchors.fill: parent` used to be harmless behind a Loader, but once
+// inlined it overrode the caller's anchors and slid under the ButtonPanel.
 Rectangle {
     id: viewer
-    anchors.fill: parent
     color: theme.bgPlot
     radius: 8
     border.color: theme.borderSoft

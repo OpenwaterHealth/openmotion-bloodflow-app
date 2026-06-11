@@ -15,13 +15,13 @@ For style guidance on writing or editing tests, see
 
 ## Test inventory
 
-128 tests across 11 files, split into two run-tier markers.
+125 tests across 11 files, split into two run-tier markers.
 
 ### `dev` tier — fires on every push to `next` (~5 min total)
 
 | File | Tests | Coverage |
 |---|---|---|
-| `test_history.py` | 5 | History modal: open, scan listing, BFI/BVI visualize, close. Class-scoped autouse fixture seeds a 30 s Middle/Middle scan if History is empty. |
+| `test_history.py` | 5 | History modal: open, scan listing, "View in plot →" into the embedded PlotViewer, close. Class-scoped autouse fixture seeds a 30 s Middle/Middle scan if History is empty. |
 | `test_notes.py` | 18 | Notes textarea: open/auto-focus, type, persist across reopen, append, clear, multi-line, long text, numeric+punctuation, cut/paste/undo, sidebar toggle, rapid open/close. |
 | `test_scan_settings.py` | 30 | Scan Settings modal: User Label field, Left/Right sensor dropdowns (parametrized over all 9 options × 2), duration toggle (Timed ↔ Free Run), H/M/S inputs, close via X and Escape. |
 
@@ -29,8 +29,8 @@ For style guidance on writing or editing tests, see
 
 | File | Tests | Coverage | Wall-clock |
 |---|---|---|---|
-| `test_scan_flow.py` | 16 | End-to-end happy path: configure → notes → check → 2-min scan → visualize. | ~10 min |
-| `test_reducedmode.py` | 37 | Reduced Mode workflow in four classes (Reduced Mode forced on via `app_config.json`, not the Settings modal): keyboard-driven (05–21), mouse-driven (22–32), Settings feature (33–37: Time Window dropdown × 4, Auto-scale Y-axes ON), and modal-exclusivity detector (38: opens Settings then clicks Start, asserts only one modal is visible — verifies the `modalManager.closeCurrent()` call in `BloodFlow.qml`'s `onStartStopClicked` dismisses Settings before `ContactQualityModal` opens). | ~52 min |
+| `test_scan_flow.py` | 15 | End-to-end happy path: configure → notes → check → 2-min scan → view in plot. | ~10 min |
+| `test_reducedmode.py` | 35 | Reduced Mode workflow in four classes (Reduced Mode forced on via `app_config.json`, not the Settings modal): keyboard-driven (05–20), mouse-driven (22–31), Settings feature (33–37: Time Window dropdown × 4, Auto-scale Y-axes ON), and modal-exclusivity detector (38: opens Settings then clicks Start, asserts only one modal is visible — verifies the `modalManager.closeCurrent()` call in `BloodFlow.qml`'s `onStartStopClicked` dismisses Settings before `ContactQualityModal` opens). | ~52 min |
 | `test_connection_redesign.py` | 4 | Power-cycle resilience: app off + power on → auto-connect; idle power-cycle; mid-scan power-cycle; rapid 5× toggle survival. Requires Shelly outlet. | ~5 min |
 | `test_scan_auto_stop_bug.py` | 5 | GH issue #47 repro: 5×10-min All/All scans, power-cycle between loops 1–3, skip cycle on 4–5. Loop 5 expected to fail. Requires Shelly. | ~70 min |
 | `test_scan_auto_stop_bug_abbreviated.py` | 5 | Same repro logic with 2-min Far/Far scans for fast iteration. | ~25 min |

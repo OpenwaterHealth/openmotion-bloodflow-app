@@ -24,11 +24,9 @@ import time
 from datetime import datetime
 
 import pyautogui
-import pygetwindow as gw
 import pytest
 
 from conftest import (
-    APP_KEYWORDS,
     SLEEP,
     click_by_name,
     ensure_visible,
@@ -41,7 +39,6 @@ from conftest import (
 )
 from hil_helpers import (
     click_panel,
-    close_plot_window,
     force_app_config_value,
     move_window_on_screen,
     selected_scan_text,
@@ -71,40 +68,10 @@ def _restore_reduced_mode_on_module_teardown():
 SCAN_WAIT       = 200   # seconds to run the long scan (3 min 20 s)
 SHORT_SCAN_WAIT = 120   # seconds to run each Settings-feature scan (2 min)
 STOP_BUFFER     = 15    # seconds to wait after stopping for data to save
-VIZ_WAIT        = 60    # seconds to leave each plot open
 
 # Time window dropdown values shown in the Settings modal (seconds).
 # TestReducedModeSettings.test_33 parametrizes over each of these.
 TIME_WINDOW_OPTIONS = [3, 5, 15, 30]
-
-
-# ─────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────
-def _close_plot_window_mouse() -> bool:
-    """Close the plot window by moving the mouse to its center then alt+f4."""
-    for w in gw.getAllWindows():
-        if not w.title.strip():
-            continue
-        if any(k in w.title.lower() for k in APP_KEYWORDS):
-            continue
-        try:
-            if w.isMinimized:
-                w.restore()
-                time.sleep(1)
-            w.activate()
-            time.sleep(0.5)
-            cx = w.left + w.width // 2
-            cy = w.top + w.height // 2
-            pyautogui.moveTo(cx, cy, duration=0.3)
-            log.info(f"  Closing plot window (mouse): '{w.title}'  center=({cx},{cy})")
-            pyautogui.hotkey("alt", "f4")
-            time.sleep(SLEEP)
-            return True
-        except Exception as e:
-            log.warning(f"  Could not close '{w.title}': {e}")
-    log.warning("  No plot window found to close")
-    return False
 
 
 # Title text rendered by ContactQualityModal as a function of its
@@ -710,7 +677,7 @@ class TestReducedMode:
         log.info(f"  Waiting {STOP_BUFFER}s for scan data to save...")
         time.sleep(STOP_BUFFER)
 
-    # ── History: verify scan, visualize BFI/BVI only (no Contrast/Mean in Reduced Mode)
+    # ── History: verify scan, open it in the embedded PlotViewer
 
     def test_17_open_history(self, app):
         click_panel("History")
@@ -722,14 +689,15 @@ class TestReducedMode:
         )
         log.info(f"  Latest scan in ComboBox: '{scan_text}'")
 
-    def test_19_visualize_bfi_bvi(self, app):
-        click_by_name("Visualize BFI/BVI")
-        wait_with_log(VIZ_WAIT, "BFI/BVI plot open")
+    def test_19_view_in_plot(self, app):
+        """'View in plot →' loads the scan into the embedded PlotViewer
+        and closes the History modal itself."""
+        click_by_name("View in plot →")
+        time.sleep(SLEEP)
 
-    def test_20_close_bfi_plot(self, app):
-        close_plot_window()
-
-    def test_21_close_history(self, app):
+    def test_20_close_history(self, app):
+        """Defensive: History should already have closed itself on
+        'View in plot →'; a stray Escape on the main page is a no-op."""
         require_focus()
         pyautogui.press("escape")
         time.sleep(SLEEP)
@@ -790,7 +758,7 @@ class TestReducedModeMouse:
         log.info(f"  Waiting {STOP_BUFFER}s for scan data to save...")
         time.sleep(STOP_BUFFER)
 
-    # ── History: verify scan, visualize BFI/BVI only
+    # ── History: verify scan, open it in the embedded PlotViewer
 
     def test_28_open_history(self, app):
         click_panel("History")
@@ -802,15 +770,15 @@ class TestReducedModeMouse:
         )
         log.info(f"  Latest scan in ComboBox: '{scan_text}'")
 
-    def test_30_visualize_bfi_bvi(self, app):
-        click_by_name("Visualize BFI/BVI")
-        wait_with_log(VIZ_WAIT, "BFI/BVI plot open")
+    def test_30_view_in_plot(self, app):
+        """'View in plot →' loads the scan into the embedded PlotViewer
+        and closes the History modal itself."""
+        click_by_name("View in plot →")
+        time.sleep(SLEEP)
 
-    def test_31_close_bfi_plot_mouse(self, app):
-        """Move mouse to plot window center then close."""
-        _close_plot_window_mouse()
-
-    def test_32_close_history(self, app):
+    def test_31_close_history(self, app):
+        """Defensive: History should already have closed itself on
+        'View in plot →'; a stray Escape on the main page is a no-op."""
         require_focus()
         pyautogui.press("escape")
         time.sleep(SLEEP)

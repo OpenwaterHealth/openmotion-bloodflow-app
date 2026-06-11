@@ -86,7 +86,7 @@ design; reduced-mode DB persists the average only.
 - ~~**Phase 3 full lazy-load**~~ **DONE + HARDWARE-VERIFIED** (`28c759a` + `4ed0db3`). LiveScanSource falls through to a transient DB window when `t_lo < buffer's oldest in-memory timestamp`. Verified 2026-05-28 via `liveCacheMaxSeconds: 60` test config: a 7-min scan ring-trimmed, pan-back logged `DB tail engaged (session_id=120)`, no crash. **Two bugs found+fixed during verification:** (1) `data_sources.py` had no `logger` defined → NameError on first DB-tail use (`4ed0db3`); (2) SDK `side_avg.py` "Mean of empty slice" warning spam (`d5ff501`). `liveCacheMaxSeconds` is a new config knob (default 1800 s) added to shrink the cache for this kind of testing.
 - ~~**Phase 3 swap to default**~~ **DONE** in `5c1f23d`. Legacy Loaders stay as 1-release fallback per spec.
 - ~~**Phase 4 cleanup**~~ **DONE** in `258e0df`. All matplotlib popouts now gate on `useNewPlotViewer !== true`.
-- **Phase 5 cleanup**: delete `EmbeddedRealtimePlot.qml`, `ReducedPlotView.qml`, `PlotToolbar.qml` (dead), `processing/visualize_bloodflow.py`, legacy QML per-sample signals. After Phase 3 is stable for one release.
+- ~~**Phase 5 cleanup**~~ **DONE** (2026-06-10), split across two PRs. PR #155 deleted `EmbeddedRealtimePlot.qml`, `ReducedPlotView.qml`, the legacy Loaders, the HistoryModal matplotlib buttons, `_FinalBatchSink`/`scanCorrectedBatch`/`apply_corrected_batch`, and the `useNewPlotViewer` flag. PR #162 finished the job: `PlotToolbar.qml`, `processing/plot_corrected_scan.py`, the `visualize_*` slots + `_VizWorker`/`_CorrectVizWorker`, `vizFinished`/`visualizingChanged` + the HistoryModal busy overlay, and the remaining per-sample signals (`scanBfi/Bvi/Mean/ContrastSampled`, `scanCameraTemperature`, never-emitted `scanBfi/BviCorrectedSampled`). **Deviation from the spec list:** `processing/visualize_bloodflow.py` is KEPT — `_log_scan_image_stats` (factory-test per-camera mean/contrast stats + ft CSV export) still imports `VisualizeBloodflow` for compute (not plotting). HIL tests now click "View in plot →" instead of the matplotlib buttons.
 
 ### Test coverage gaps
 - Headless QML smoke test (needs pytest-qt; deferred)
@@ -109,7 +109,7 @@ design; reduced-mode DB persists the average only.
 - **PlotViewer.qml** — root component. Corner overlays + ColumnLayout (grid + scrubber). 940+ lines.
 - **PlotCell.qml** — single trace canvas. PinchHandler for touch, MouseArea for mouse, keyboard focus on click.
 - **PlotScrubber.qml** — bottom timeline. Blue inset = followLive, orange = paused, green tick = liveEdge.
-- **PlotToolbar.qml** — **dead code now**, kept for one release as fallback. Can delete in Phase 5 cleanup.
+- **PlotToolbar.qml** — deleted in Phase 5 cleanup (2026-06-10).
 - **data_sources.py** — `_CameraBuffer`, `ScanDataSource`, `LiveScanSource`, `PastScanSource`. Past now CSV-aware (`_load_corrected_csv`) + DB-aware.
 - **motion_connector.py** — `MOTIONConnector` (4000+ lines). `loadPastScan` (1772), `showLiveSource` (1763), `_LivePlotSink.consume` (171).
 - **openmotion-sdk/omotion/pipeline/sinks.py** — `ScanDBSink._consume_live` (Phase 1)

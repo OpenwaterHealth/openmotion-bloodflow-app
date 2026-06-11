@@ -40,11 +40,6 @@ def _connector():
         _camera_last_seen={},
         _camera_last_temp={},
         captureLog=_Signal(),
-        scanMeanSampled=_Signal(),
-        scanContrastSampled=_Signal(),
-        scanBfiSampled=_Signal(),
-        scanBviSampled=_Signal(),
-        scanCameraTemperature=_Signal(),
     )
 
 
@@ -55,9 +50,9 @@ def _make_sink(conn, live_source=None):
     return _LivePlotSink(connector=conn, plot_t0=0.0, live_source=live_source), live_source
 
 
-def test_live_plot_sink_emits_only_source_camera_for_each_row():
+def test_live_plot_sink_appends_only_source_camera_for_each_row():
     conn = _connector()
-    sink, _ = _make_sink(conn)
+    sink, src = _make_sink(conn)
     batch = SimpleNamespace(
         bfi_live=np.zeros((2, 2, 8), dtype=np.float32),
         bvi_live=np.zeros((2, 2, 8), dtype=np.float32),
@@ -81,20 +76,21 @@ def test_live_plot_sink_emits_only_source_camera_for_each_row():
 
     sink.consume("live", batch)
 
-    # Signal shape: (side, cam_id, frame_id, timestamp_s, value)
-    assert [(c[0], c[1], c[2], c[4]) for c in conn.scanContrastSampled.calls] == [
-        ("left", 0, 10, np.float32(0.22)),
-        ("right", 2, 11, np.float32(0.24)),
+    assert [(r["side"], r["cam_id"], r["frame_id"]) for r in src.appended] == [
+        ("left", 0, 10),
+        ("right", 2, 11),
     ]
-    assert [(c[0], c[1]) for c in conn.scanBfiSampled.calls] == [
-        ("left", 0),
-        ("right", 2),
+    assert [r["contrast"] for r in src.appended] == [
+        pytest.approx(0.22), pytest.approx(0.24),
+    ]
+    assert [r["bfi"] for r in src.appended] == [
+        pytest.approx(7.0), pytest.approx(8.0),
     ]
 
 
 def test_live_plot_sink_uses_per_frame_sdk_timestamps():
     conn = _connector()
-    sink, _ = _make_sink(conn)
+    sink, src = _make_sink(conn)
     batch = SimpleNamespace(
         bfi_live=np.zeros((2, 2, 8), dtype=np.float32),
         bvi_live=np.zeros((2, 2, 8), dtype=np.float32),
@@ -110,11 +106,7 @@ def test_live_plot_sink_uses_per_frame_sdk_timestamps():
 
     sink.consume("live", batch)
 
-    # Signal shape: (side, cam_id, frame_id, timestamp_s, value); ts is at [3]
-    assert [call[3] for call in conn.scanMeanSampled.calls] == [1.25, 1.275]
-    assert [call[3] for call in conn.scanContrastSampled.calls] == [1.25, 1.275]
-    assert [call[3] for call in conn.scanBfiSampled.calls] == [1.25, 1.275]
-    assert [call[3] for call in conn.scanBviSampled.calls] == [1.25, 1.275]
+    assert [r["t"] for r in src.appended] == [1.25, 1.275]
 
 
 def test_live_plot_sink_subscribes_to_live_side_channel():
