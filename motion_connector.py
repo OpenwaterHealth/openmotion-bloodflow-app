@@ -650,7 +650,10 @@ class MotionConnector(QObject):
         # ft-test-csvs) live under self._directory.
         resolved_dir = data_dir or cfg.get("dataDirectory") or self._default_data_dir()
         self._power_off_unused_cameras    = bool(cfg.get("powerOffUnusedCameras", False))
-        self._write_raw_csv               = bool(cfg.get("writeRawCsv", True))
+        # Raw CSV is a developer feature (Settings → Developer → "Save raw
+        # CSV"); default False so a config missing the key fails closed for
+        # clinical use (#43).
+        self._write_raw_csv               = bool(cfg.get("writeRawCsv", False))
         raw_csv                           = cfg.get("rawCsvDurationSec")
         self._raw_csv_duration_sec        = float(raw_csv) if raw_csv is not None else None
         self._uncorrected_only            = bool(cfg.get("uncorrectedOnly", False))
@@ -1958,6 +1961,10 @@ class MotionConnector(QObject):
             self.captureFinished.emit(True, "", "", "")
             self.scanNotesReady.emit()
 
+        # Issue #43: telemetry and raw CSVs are developer diagnostics —
+        # clinical users must not get them. Default False (fail closed).
+        developer_mode = self._app_config.get("developerMode", False)
+
         req = ScanRequest(
             subject_id=subject_id,
             duration_sec=duration_sec,
@@ -1971,11 +1978,20 @@ class MotionConnector(QObject):
             # writeCorrectedCsv:true in app_config to keep exporting it.
             # The SDK still forces it on if no DB is configured.
             write_corrected_csv=self._app_config.get("writeCorrectedCsv", False),
+            # Issue #43 (regression): the SDK defaults write_telemetry_csv
+            # to True, so the per-scan {scan_id}_{subject}_telemetry.csv
+            # must be explicitly gated on developerMode here. The original
+            # gate was dropped in the sink-refactor follow-up (93c2feb).
+            write_telemetry_csv=developer_mode,
             # Raw CSV duration forwarded to the pipeline's Tee("raw") gate
             # via raw_save_max_duration_s. None means unbounded (write entire
-            # scan); 0 omits raw tee entirely.
+            # scan); 0 omits raw tee entirely. The writeRawCsv toggle lives
+            # in the developer-only Settings card, so its persisted value is
+            # additionally gated on developerMode (#43) — flipping dev mode
+            # off must stop raw output even if the toggle was left on.
             raw_save_max_duration_s=(
-                self._raw_csv_duration_sec if self._write_raw_csv else 0
+                self._raw_csv_duration_sec
+                if (developer_mode and self._write_raw_csv) else 0
             ),
             sinks=[
                 _LivePlotSink(connector=self, plot_t0=plot_t0, live_source=live_source),
