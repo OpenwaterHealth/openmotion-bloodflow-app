@@ -750,6 +750,12 @@ class MOTIONConnector(QObject):
         self._pdu_raws = [0] * 16
         self._pdu_vals = [0.0] * 16
 
+        # Start times for the scan start/end log banners (monotonic, or
+        # None when the flow has never run).
+        self._calibration_t0 = None
+        self._test_scan_t0 = None
+        self._cq_t0 = None
+
         # --- per-trigger telemetry CSV support ---
         self._runlog_csv_path = None  # str or None
         self._runlog_csv_file = None  # open file handle or None
@@ -2021,6 +2027,9 @@ class MOTIONConnector(QObject):
             seconds = int(elapsed % 60)
             duration_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
             status = "stopped" if canceled else "completed"
+            logger.info(
+                "=== Full scan ended: %s — duration %s ===", status, duration_str
+            )
             duration_line = f"\n---\nScan {status} — duration: {duration_str}"
             self._scan_notes = (self._scan_notes.strip() + duration_line)
             self.scanNotesChanged.emit()
@@ -2078,6 +2087,12 @@ class MOTIONConnector(QObject):
 
         started = self._interface.start_scan(req)
         if started:
+            logger.info(
+                "=== Full scan started: subject=%s duration=%ss "
+                "left=0x%02X right=0x%02X laser=%s ===",
+                subject_id, duration_sec, left_camera_mask, right_camera_mask,
+                "off" if disable_laser else "on",
+            )
             # Bind the live source's DB tail to THIS scan's session row by its
             # exact label (set synchronously inside start_scan), so a later
             # pan-into-past resolves the right session instead of guessing the
@@ -2679,6 +2694,13 @@ class MOTIONConnector(QObject):
         left_mask = 0xFF if self._leftSensorConnected else 0x00
         right_mask = 0xFF if self._rightSensorConnected else 0x00
 
+        self._cq_t0 = time.monotonic()
+        logger.info(
+            "=== Contact-quality check started: duration=%.1fs "
+            "left=0x%02X right=0x%02X ===",
+            duration_s, left_mask, right_mask,
+        )
+
         def _worker():
             try:
                 result = self._interface.contact_quality_workflow.check(
@@ -2719,9 +2741,20 @@ class MOTIONConnector(QObject):
         self._cq_quick_running = False
         self.contactQualityScanInProgress.emit(False)
 
+        elapsed_s = (
+            time.monotonic() - self._cq_t0 if self._cq_t0 is not None else 0.0
+        )
         if result is None:
+            logger.info(
+                "=== Contact-quality check ended: failed after %.1fs ===",
+                elapsed_s,
+            )
             self.contactQualityCheckFinished.emit(False, "CQ check failed", [])
             return
+        logger.info(
+            "=== Contact-quality check ended: completed after %.1fs ===",
+            elapsed_s,
+        )
 
         # Convert CamCQResult.reason → (typeKey, warning dict) that the QML
         # ContactQualityModal expects.
@@ -3525,6 +3558,12 @@ class MOTIONConnector(QObject):
         self._calibration_status = "running"
         self.calibrationStateChanged.emit()
         self.captureLog.emit("Calibration: starting…")
+        self._calibration_t0 = time.monotonic()
+        logger.info(
+            "=== Calibration started: target=%s left=0x%02X right=0x%02X "
+            "scan_duration=%ss ===",
+            target, left_mask, right_mask, self._calibration_scan_duration_sec,
+        )
 
         # Issue #108: apply laser-power params to the firmware before
         # calibration runs. The normal scan chain does this via
@@ -3651,6 +3690,12 @@ class MOTIONConnector(QObject):
         self._test_scan_failure_reason = ""
         self.testScanStateChanged.emit()
         self.captureLog.emit("Test scan: starting…")
+        self._test_scan_t0 = time.monotonic()
+        logger.info(
+            "=== Test scan started: target=%s left=0x%02X right=0x%02X "
+            "duration=%ss ===",
+            target, left_mask, right_mask, self._test_scan_duration_sec,
+        )
 
         # Same #108 laser-power cold-start guard the Calibrate path uses.
         try:
@@ -3719,6 +3764,16 @@ class MOTIONConnector(QObject):
             self.captureLog.emit(
                 f"❌ Test scan: FAIL  (CSV: {result.csv_path})"
             )
+
+        elapsed_s = (
+            time.monotonic() - self._test_scan_t0
+            if self._test_scan_t0 is not None
+            else 0.0
+        )
+        logger.info(
+            "=== Test scan ended: %s after %.1fs ===",
+            self._test_scan_status, elapsed_s,
+        )
 
         # Build the QML-friendly row dicts.
         self._test_scan_rows = [
@@ -3801,6 +3856,15 @@ class MOTIONConnector(QObject):
             self.captureLog.emit(
                 f"❌ Calibration: FAIL  (CSV: {result.csv_path})"
             )
+        elapsed_s = (
+            time.monotonic() - self._calibration_t0
+            if self._calibration_t0 is not None
+            else 0.0
+        )
+        logger.info(
+            "=== Calibration ended: %s after %.1fs ===",
+            self._calibration_status, elapsed_s,
+        )
         self.calibrationStateChanged.emit()
 
     @property
