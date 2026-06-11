@@ -3,16 +3,17 @@ Regression test for issue #150 — "All camera selection not reflected in
 UI after updating Scan Settings".
 
 Root cause: PlotViewer.qml's ``_devCellModel`` used to read the camera
-masks from ``MOTIONInterface.appConfig.leftMask/rightMask`` (the
+masks from ``MotionInterface.appConfig.leftMask/rightMask`` (the
 *persisted defaults*, which Scan Settings never touches and which carry
 no change notification) instead of the live ``leftMask``/``rightMask``
-selection that BloodFlow.qml owns. Selecting "All" (0xFF) in Scan
-Settings updated the capture mask (the scan really did record all 16
-cameras) but the plot grid stayed pinned at the config default 0x66 —
-the middle 4 cameras per sensor.
+selection that BloodFlow.qml owns. (The singleton was spelled
+``MOTIONInterface`` when the bug shipped; it was renamed in 62195e8.)
+Selecting "All" (0xFF) in Scan Settings updated the capture mask (the
+scan really did record all 16 cameras) but the plot grid stayed pinned
+at the config default 0x66 — the middle 4 cameras per sensor.
 
 These tests load the real ``components/PlotViewer.qml`` in a bare
-QQmlEngine with a stubbed ``MOTIONInterface`` singleton whose appConfig
+QQmlEngine with a stubbed ``MotionInterface`` singleton whose appConfig
 deliberately carries the middle-4 masks, then drive the viewer's
 ``leftMask``/``rightMask`` properties exactly the way BloodFlow.qml's
 bindings do after Scan Settings closes. If the grid model ever regresses
@@ -68,7 +69,7 @@ ALL_MASK = 0xFF
 
 
 class _StubMotionInterface(QObject):
-    """Minimal MOTIONInterface stand-in covering every property/slot
+    """Minimal MotionInterface stand-in covering every property/slot
     PlotViewer.qml (and its child components) actually reference."""
 
     _neverEmitted = pyqtSignal()
@@ -125,7 +126,7 @@ def _basic_controls_style():
 def viewer_factory():
     """Compile components/PlotViewer.qml once; hand out fresh instances."""
     stub = _StubMotionInterface()
-    qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MOTIONInterface", stub)
+    qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MotionInterface", stub)
     engine = QQmlEngine()
     with _basic_controls_style():
         component = QQmlComponent(
