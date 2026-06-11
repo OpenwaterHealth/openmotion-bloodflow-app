@@ -135,7 +135,7 @@ CSVIntegrityChecker
 - `ConsoleStatusThread` starts when the console connects, stops on disconnect or shutdown.
 - Capture writer threads are created per `startCapture()` call and joined when capture completes or is canceled.
 - `_VizWorker` and `_ConfigureWorker` are ephemeral QThread workers created on demand and destroyed on completion.
-- Per-run log files and CSV telemetry logs are opened at trigger start (`_start_runlog`) and closed at trigger stop (`_stop_runlog`).
+- Per-run CSV telemetry logs (developer mode only) are opened at trigger start (`_start_run_csv`) and closed at trigger stop (`_stop_run_csv`).
 
 ---
 
