@@ -154,34 +154,37 @@ Rectangle {
 
     // ── Grid model ─────────────────────────────────────────────────────
     // Dev mode (default) — one cell per active camera (bits set in
-    // leftMask / rightMask). 4 columns max; left-side cams fill the
-    // top rows, right-side cams fill the rows below.
+    // leftMask / rightMask), arranged to mirror the physical U-shape of
+    // each sensor module displayed upside-down (issue #164). Cameras 1-8
+    // run down one arm of the U and back up the other — 1|8 at the top
+    // of the U, 4|5 at the bottom — so display row r pairs 1-based cams
+    // (4-r | 5+r): row 0 is 4|5, row 3 is 1|8. Left module owns columns
+    // 0-1, right module 2-3 (a module with nothing selected gives up its
+    // column pair). Rows empty on both sides are dropped and the rest
+    // compact upward; an unselected camera in a kept row just leaves its
+    // slot blank.
     readonly property var _devCellModel: {
-        var lm = viewer.leftMask & 0xFF
-        var rm = viewer.rightMask & 0xFF
-        var leftCams = []
-        var rightCams = []
-        for (var i = 0; i < 8; i++) {
-            if (lm & (1 << i)) leftCams.push(i)
-            if (rm & (1 << i)) rightCams.push(i)
-        }
+        var masks = [viewer.leftMask & 0xFF, viewer.rightMask & 0xFF]
+        var sides = ["left", "right"]
+        var colBase = [0, masks[0] !== 0 ? 2 : 0]
         var entries = []
-        var leftRows = Math.ceil(leftCams.length / 4)
-        for (var li = 0; li < leftCams.length; li++) {
-            entries.push({
-                side: "left",
-                camId: leftCams[li],
-                row: Math.floor(li / 4),
-                col: li % 4
-            })
-        }
-        for (var ri = 0; ri < rightCams.length; ri++) {
-            entries.push({
-                side: "right",
-                camId: rightCams[ri],
-                row: leftRows + Math.floor(ri / 4),
-                col: ri % 4
-            })
+        var displayRow = 0
+        for (var r = 0; r < 4; r++) {
+            var armA = 3 - r   // zero-based camId, 1-based cam 4-r
+            var armB = 4 + r   // zero-based camId, 1-based cam 5+r
+            var rowBits = (1 << armA) | (1 << armB)
+            if (!((masks[0] | masks[1]) & rowBits)) continue
+            for (var s = 0; s < 2; s++) {
+                if (masks[s] & (1 << armA)) {
+                    entries.push({ side: sides[s], camId: armA,
+                                   row: displayRow, col: colBase[s] })
+                }
+                if (masks[s] & (1 << armB)) {
+                    entries.push({ side: sides[s], camId: armB,
+                                   row: displayRow, col: colBase[s] + 1 })
+                }
+            }
+            displayRow++
         }
         return entries
     }
