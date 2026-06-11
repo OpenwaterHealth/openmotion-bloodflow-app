@@ -136,7 +136,7 @@ Item {
                         id: leftSensorView
                         title: "Left Sensor"
                         sensorSide: "left"
-                        connector: MOTIONInterface
+                        connector: MotionInterface
                     }
 
                     ComboBox {
@@ -146,7 +146,7 @@ Item {
                         model: sensorPatterns
                         textRole: "name"
                         font.pixelSize: 13
-                        enabled: MOTIONInterface.leftSensorConnected
+                        enabled: MotionInterface.leftSensorConnected
                         opacity: enabled ? 1.0 : 0.4
                         onCurrentIndexChanged: applyPatternToSensor(currentIndex, "left")
                         contentItem: Text {
@@ -197,7 +197,7 @@ Item {
                         id: rightSensorView
                         title: "Right Sensor"
                         sensorSide: "right"
-                        connector: MOTIONInterface
+                        connector: MotionInterface
                     }
 
                     ComboBox {
@@ -207,7 +207,7 @@ Item {
                         model: sensorPatterns
                         textRole: "name"
                         font.pixelSize: 13
-                        enabled: MOTIONInterface.rightSensorConnected
+                        enabled: MotionInterface.rightSensorConnected
                         opacity: enabled ? 1.0 : 0.4
                         onCurrentIndexChanged: applyPatternToSensor(currentIndex, "right")
                         contentItem: Text {
@@ -262,13 +262,13 @@ Item {
     }
 
     Connections {
-        target: MOTIONInterface
+        target: MotionInterface
         function onConnectionStatusChanged() {
-            if (!MOTIONInterface.leftSensorConnected) {
+            if (!MotionInterface.leftSensorConnected) {
                 leftSelector.currentIndex = 0
                 leftSensorView.resetCamerasWhenDisconnected()
             }
-            if (!MOTIONInterface.rightSensorConnected) {
+            if (!MotionInterface.rightSensorConnected) {
                 rightSelector.currentIndex = 0
                 rightSensorView.resetCamerasWhenDisconnected()
             }

@@ -14,12 +14,12 @@ The OpenWater Bloodflow App is a PyQt6/QML desktop application that interfaces w
 
 ## 2. Core Entities
 
-### 2.1 `MOTIONConnector`
+### 2.1 `MotionConnector`
 **Role:** Central bridge between the QML UI and all hardware/processing subsystems.
 
 | Field | Type | Mutable | Description |
 |---|---|---|---|
-| `_interface` | `MOTIONInterface` | No | Singleton SDK handle |
+| `_interface` | `MotionInterface` | No | Singleton SDK handle |
 | `_state` | `int` (enum: 0–4) | Yes | System FSM state (DISCONNECTED → READY → RUNNING) |
 | `_leftSensorConnected` | `bool` | Yes | Left sensor USB connection status |
 | `_rightSensorConnected` | `bool` | Yes | Right sensor USB connection status |
@@ -90,7 +90,7 @@ No persistent fields. Operates on raw `memoryview` buffers and writes to `csv.wr
 | `skipped_percentage` | `float` | % of skipped frame IDs |
 | `details` | `Dict[str, object]` | `expected_cam_count`, `bad_sum_rows`, `skipped_expected_fids` |
 
-### 2.5 `MOTIONInterface` (External SDK — singleton)
+### 2.5 `MotionInterface` (External SDK — singleton)
 **Role:** Low-level USB interface to hardware.
 
 | Field | Type | Description |
@@ -98,20 +98,20 @@ No persistent fields. Operates on raw `memoryview` buffers and writes to `csv.wr
 | `console_module` | object | Console hardware commands (trigger, TEC, I2C, RGB, fan) |
 | `sensors` | `Dict[str, SensorModule]` | `{"left": ..., "right": ...}` — sensor hardware handles |
 
-**Acquired once** via `MOTIONInterface.acquire_motion_interface()` which returns `(interface, console_connected, left_sensor, right_sensor)`.
+**Acquired once** via `MotionInterface.acquire_motion_interface()` which returns `(interface, console_connected, left_sensor, right_sensor)`.
 
 ---
 
 ## 3. Relationships
 
 ```
-MOTIONInterface (singleton)
+MotionInterface (singleton)
  ├── 1:1    console_module
  └── 1:N    sensors {"left", "right"}
                 └── 1:1    uart.histo (streaming interface)
 
-MOTIONConnector
- ├── 1:1    MOTIONInterface (via motion_singleton)
+MotionConnector
+ ├── 1:1    MotionInterface (via motion_singleton)
  ├── 1:1    ConsoleStatusThread (polling loop)
  ├── 1:N    CaptureWriter threads (1 per active side during scan)
  ├── 1:1    _ConfigureWorker (QThread, transient)
@@ -130,12 +130,11 @@ CSVIntegrityChecker
 ```
 
 **Lifecycle Rules:**
-- `MOTIONInterface` lives for the application lifetime. Created once at import of `motion_singleton.py`.
-- `MOTIONConnector` is created once in `main.py` and registered as a QML singleton.
+- `MotionInterface` lives for the application lifetime. Created once at import of `motion_singleton.py`.
+- `MotionConnector` is created once in `main.py` and registered as a QML singleton.
 - `ConsoleStatusThread` starts when the console connects, stops on disconnect or shutdown.
 - Capture writer threads are created per `startCapture()` call and joined when capture completes or is canceled.
 - `_VizWorker` and `_ConfigureWorker` are ephemeral QThread workers created on demand and destroyed on completion.
-- Per-run log files and CSV telemetry logs are opened at trigger start (`_start_runlog`) and closed at trigger stop (`_stop_runlog`).
 
 ---
 
@@ -349,17 +348,16 @@ _pdu_vals = [float] * 16  # scaled voltage values
 
 ### Concurrency Concerns
 - **`_telemetry_lock`**: Protects `_tcm`, `_tcl`, `_pdc` shared between `ConsoleStatusThread` and writer threads. Minimal contention (read-heavy in writers, write-only by status thread).
-- **`_runlog_csv_lock`**: Protects CSV telemetry log writes. Low frequency (~1 Hz), no real contention risk.
 - **No lock on `_capture_running`/`_capture_thread`**: These boolean/thread guards are set/checked across threads without synchronization. Race condition possible if `startCapture` is called rapidly, though the QML UI practically prevents this.
 - **Qt signal/slot across threads**: `scanMeanSampled`, `scanBfiSampled` etc. are emitted from writer threads. Qt's queued connection mechanism handles cross-thread delivery, but high-frequency emission (640 signals/sec) may saturate the event loop.
 
 ### Data Growth
 - **Scan data**: ~20 MB CSV per minute per camera on disk. Extended sessions or many subjects will fill local storage.
-- **Run logs**: Modest (KB per session), but accumulate indefinitely in `run-logs/` and `app-logs/` directories. No automatic cleanup or rotation.
+- **App logs**: Modest (KB per session), but accumulate indefinitely in the `app-logs/` directory. No automatic cleanup or rotation.
 - **No data lifecycle management**: Old scans, logs, and results persist until manually deleted.
 
 ### Assumptions Made
-1. The `omotion` SDK (`MOTIONInterface`) is a closed-source external dependency; its internal data structures are opaque.
+1. The `omotion` SDK (`MotionInterface`) is a closed-source external dependency; its internal data structures are opaque.
 2. Camera IDs within a module are in range 0–7; maximum 8 cameras per sensor module.
 3. The dark interval (600 frames) and frame rate (40 Hz) are hardware-dictated constants for the current device generation.
 4. All captured data is stored locally — no network/cloud storage path exists.

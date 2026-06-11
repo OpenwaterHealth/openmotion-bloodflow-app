@@ -25,16 +25,16 @@ python -m PyInstaller -y openwater.spec # package .exe → dist/OpenWaterApp/
 
 | Path | What lives here |
 |---|---|
-| `main.py` | Entry point. PyQt app, QML engine, logging. Registers `MOTIONInterface` as a QML singleton. |
-| `motion_connector.py` | **4031 lines.** Single `MOTIONConnector` QObject — all UI⇄hardware glue, 135 signals/slots. State machine constants at lines 72–76; transitions at 1076–1084. |
+| `main.py` | Entry point. PyQt app, QML engine, logging. Registers `MotionInterface` as a QML singleton. |
+| `motion_connector.py` | **4031 lines.** Single `MotionConnector` QObject — all UI⇄hardware glue, 135 signals/slots. State machine constants at lines 72–76; transitions at 1076–1084. |
 | `motion_config.py` | FPGA model + laser-parameter helpers (extracted in May 2025 for reuse). |
 | `pages/BloodFlow.qml` | Main scan page: patient info, sensor config, trigger. |
 | `pages/DataAnalysis.qml` | Post-processing + BFI/BVI visualization. |
 | `pages/Settings.qml` | Settings overlay. |
-| `pages/scan/` | `ScanRunner.qml` plus task QMLs: `CaptureDataTask`, `ContactQualityCheckTask`, `FlashSensorsTask`, `PostProcessTask`, `SetTriggerLaserTask`. Newer orchestration suite. |
-| `components/` | 30 reusable QML components — `SettingsModal`, `ContactQualityModal`, `CameraDot`, `TestResultsWindow`, etc. |
+| `pages/scan/` | `ScanRunner.qml` plus task QMLs: `CaptureDataTask`, `ContactQualityCheckTask`, `FlashSensorsTask`, `PostProcessTask`, `SetTriggerTask`. Newer orchestration suite. |
+| `components/` | 29 reusable QML components — `SettingsModal`, `ContactQualityModal`, `CameraDot`, `TestResultsWindow`, etc. |
 | `processing/visualize_bloodflow.py` | BFI/BVI computation from CSV histograms. |
-| `config/app_config.json` | 141 feature flags / thresholds (see below). |
+| `config/app_config.json` | 56 feature flags / thresholds, grouped by topic: output paths, scan/camera masks, plot/UI, calibration + FT thresholds, contact quality, developer/debug. |
 | `config/laser_params.json` | 18 laser I2C register sets (TA / SEED / EE / OPT variants). **Not user-tunable calibration data** — init/baseline commands for the laser driver chips. |
 | `openwater.spec` | PyInstaller spec. Custom logic mirrors vendored libusb binaries into `_internal\_vendor` so the runtime hook can find them. |
 | `tests/` | Hardware-in-loop pytest suite, ~23 files. Markers: `@pytest.mark.dev` (~1–2 min, runs on every push to `next`), `@pytest.mark.release` (~6–8 min, runs on release tags). |
@@ -49,7 +49,7 @@ DISCONNECTED (0) → SENSOR_CONNECTED (1) → CONSOLE_CONNECTED (2) → READY (3
 
 No FSM class — integer enum + conditional branches on `self._state`. Transitions in `motion_connector.py` around line 1076.
 
-QML↔Python wiring: `main.py:256` registers the connector as a QML singleton (`qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MOTIONInterface", connector)`). QML calls `MOTIONInterface.slotName()`; Python emits signals QML connects to with `onSignalNameChanged`.
+QML↔Python wiring: `main.py:256` registers the connector as a QML singleton (`qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MotionInterface", connector)`). QML calls `MotionInterface.slotName()`; Python emits signals QML connects to with `onSignalNameChanged`.
 
 ## Working without hardware
 
@@ -75,7 +75,7 @@ Flip these in `config/app_config.json`:
 | `cq_dark_threshold_per_camera` | `[3.0,…]` | Contact-quality dark threshold. |
 | `bfiClampLow` / `bfiClampHigh` | `0.0` / `10.0` | Display clamps (values outside show `--`). |
 | `bviLowPassEnabled` | `true` | 1-pole LPF on BVI (cutoff 40 Hz). |
-| `dataDirectory` | `C:\Users\ethan\Projects\scan_data` | Single output root — scan CSVs/DB, `app-logs/`, `run-logs/`, `app-logs/ft-test-csvs/` all land under here. |
+| `dataDirectory` | `C:\Users\ethan\Projects\scan_data` | Single output root — scan CSVs/DB, `app-logs/`, `app-logs/ft-test-csvs/` all land under here. |
 
 ## Reading the app log
 
@@ -100,7 +100,6 @@ Get-ChildItem C:\Users\ethan\Projects\scan_data\app-logs\ow-bloodflowapp-*.log |
 The `dataDirectory` config key controls the root (defaults to cwd if unset — falls back to `~/Documents/OpenWater Bloodflow` on macOS). Sibling output directories under the same root:
 - `app-logs/` — app log files (one per launch)
 - `app-logs/ft-test-csvs/` — factory-test CSVs
-- `run-logs/` — per-scan run logs (one per trigger session: `run-<subject>_<ts>.log`)
 - `calibrations/` — saved calibration JSONs (also written here)
 - The scan output files (raw / corrected / notes / telemetry CSV + `scans.db`) land directly in the root
 

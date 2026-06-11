@@ -31,7 +31,7 @@ Item {
     }
 
     function _submit() {
-        if (MOTIONInterface.checkDeveloperPassword(pwField.text)) {
+        if (MotionInterface.checkDeveloperPassword(pwField.text)) {
             root.accepted()
             root.close()
         } else {

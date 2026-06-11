@@ -143,7 +143,7 @@ Rectangle {
         : _settingBound(_displayPair.secondary, "max")
 
     // ── Source subscription ────────────────────────────────────────────
-    readonly property var scanSource: MOTIONInterface.currentScanSource
+    readonly property var scanSource: MotionInterface.currentScanSource
 
     // ── Grid model ─────────────────────────────────────────────────────
     // Dev mode (default) — one cell per active camera (bits set in
@@ -408,8 +408,8 @@ Rectangle {
     // The toolbar checkbox itself is hidden outside developer mode,
     // and _hudVisible further gates on developerMode so the HUD can't
     // appear in clinical builds even if showProfiling is flipped.
-    property bool showProfiling: MOTIONInterface.appConfig.showProfiling === true
-    readonly property bool _hudVisible: MOTIONInterface.appConfig.developerMode === true
+    property bool showProfiling: MotionInterface.appConfig.showProfiling === true
+    readonly property bool _hudVisible: MotionInterface.appConfig.developerMode === true
                                         && viewer.showProfiling
 
     Timer {
@@ -486,8 +486,8 @@ Rectangle {
     // Triggered by the bottom-right back-to-live overlay button.
     function _backToLiveRequested() {
         if (viewer.scanSource && viewer.scanSource.live === false
-                && MOTIONInterface.liveSourceAvailable) {
-            MOTIONInterface.showLiveSource()
+                && MotionInterface.liveSourceAvailable) {
+            MotionInterface.showLiveSource()
             console.info("[Plot] back-to-live (past → live source)")
         } else {
             viewer.backToLive()
@@ -730,7 +730,7 @@ Rectangle {
     readonly property bool _showBackToLive:
         viewer.scanSource !== null
         && (
-            (viewer.scanSource.live === false && MOTIONInterface.liveSourceAvailable)
+            (viewer.scanSource.live === false && MotionInterface.liveSourceAvailable)
             || (viewer.scanSource.live === true && !viewer.followLive)
         )
 
@@ -754,7 +754,7 @@ Rectangle {
             anchors.centerIn: parent
             text: (viewer.scanSource !== null
                    && viewer.scanSource.live === false
-                   && MOTIONInterface.liveSourceAvailable)
+                   && MotionInterface.liveSourceAvailable)
                   ? "← Back to live scan"
                   : "● Back to live"
             color: theme.accentRed
@@ -958,7 +958,7 @@ Rectangle {
                         }
                     }
                     Row {
-                        visible: MOTIONInterface.appConfig.developerMode === true
+                        visible: MotionInterface.appConfig.developerMode === true
                         spacing: 8
                         PopupPillSwitch {
                             id: profilerSwitch
@@ -985,7 +985,7 @@ Rectangle {
     // the other overlays.
     Rectangle {
         id: profileHud
-        visible: MOTIONInterface.appConfig.developerMode === true
+        visible: MotionInterface.appConfig.developerMode === true
                  && viewer.showProfiling
                  && viewer.scanSource !== null
         anchors.left: parent.left

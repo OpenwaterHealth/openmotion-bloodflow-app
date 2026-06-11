@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtQml import QQmlApplicationEngine, qmlRegisterSingletonInstance
 from PyQt6.QtCore import qInstallMessageHandler, QtMsgType
 
-from motion_connector import MOTIONConnector
+from motion_connector import MotionConnector
 from omotion import MotionInterface
 from utils.single_instance import check_single_instance, cleanup_single_instance
 from version import get_version
@@ -197,7 +197,7 @@ def main():
 
     # Configure file logging
     app_config = _load_app_config()
-    # Single output root: dataDirectory. app-logs/, run-logs/, scan files,
+    # Single output root: dataDirectory. app-logs/, scan files,
     # scans.db, ft-test-csvs/ all land under this directory. Falls back to
     # cwd (when writable) or ~/Documents/OpenWater Bloodflow (e.g. macOS
     # Finder launch where cwd is "/").
@@ -222,7 +222,11 @@ def main():
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
-    logger.info(f"logging to {logfile_path}")
+    logger.info("=" * 64)
+    logger.info("Open-Motion Bloodflow App %s starting", APP_VERSION)
+    logger.info("Log file:       %s", logfile_path)
+    logger.info("Data directory: %s", _data_dir)
+    logger.info("=" * 64)
 
     # Configure the SDK logger hierarchy to use the same handlers
     sdk_logger = logging.getLogger("openmotion.sdk")
@@ -267,8 +271,8 @@ def main():
 
     engine = QQmlApplicationEngine()
 
-    connector = MOTIONConnector(motion_interface, app_config=app_config, data_dir=_data_dir)
-    qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MOTIONInterface", connector)
+    connector = MotionConnector(motion_interface, app_config=app_config, data_dir=_data_dir)
+    qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MotionInterface", connector)
     engine.rootContext().setContextProperty("appVersion", APP_VERSION)
 
     # Load the QML file
@@ -280,7 +284,7 @@ def main():
 
     # Start the SDK's connection monitor synchronously — it owns its own
     # daemon thread, so the app's Qt event loop runs unblocked.
-    logger.info("Starting MOTION monitoring...")
+    logger.info("Starting Motion monitoring...")
     motion_interface.start(wait=True, wait_timeout=2.0)
 
     def handle_exit():
@@ -295,6 +299,9 @@ def main():
             logger.warning("Error stopping MotionInterface: %s", e)
         engine.deleteLater()
         cleanup_single_instance()
+        logger.info("=" * 64)
+        logger.info("Open-Motion Bloodflow App %s exited cleanly", APP_VERSION)
+        logger.info("=" * 64)
 
     app.aboutToQuit.connect(handle_exit)
 

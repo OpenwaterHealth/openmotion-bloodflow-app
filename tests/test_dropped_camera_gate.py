@@ -4,7 +4,7 @@ Unit tests for _check_dropped_camera_emit (issue #85 + follow-up).
 What this exercises
 -------------------
 The pure-function gate that the per-frame and corrected-batch emit
-paths in ``MOTIONConnector`` consult before pushing a sample to the
+paths in ``MotionConnector`` consult before pushing a sample to the
 UI:
 
   - Alive cameras pass through (return ``(True, None)``).

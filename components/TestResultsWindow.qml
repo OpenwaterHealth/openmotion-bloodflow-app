@@ -18,10 +18,10 @@ Window {
 
     color: theme.bgBase
 
-    readonly property var rows: MOTIONInterface.testScanRows
-    readonly property string status: MOTIONInterface.testScanStatus
-    readonly property string failureReason: MOTIONInterface.testScanFailureReason
-    readonly property bool running: MOTIONInterface.testScanRunning
+    readonly property var rows: MotionInterface.testScanRows
+    readonly property string status: MotionInterface.testScanStatus
+    readonly property string failureReason: MotionInterface.testScanFailureReason
+    readonly property bool running: MotionInterface.testScanRunning
 
     function _fmtNum(v, decimals) {
         if (v === null || v === undefined) return ""
@@ -53,7 +53,7 @@ Window {
                 r.overall,
             ].join("\t"))
         }
-        MOTIONInterface.copyToClipboard(lines.join("\n"))
+        MotionInterface.copyToClipboard(lines.join("\n"))
     }
 
     ColumnLayout {

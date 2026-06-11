@@ -81,7 +81,7 @@ Item {
     }
 
     function open() {
-        userLabelField.text = MOTIONInterface.userLabel
+        userLabelField.text = MotionInterface.userLabel
         root.visible = true
     }
     function close() {
@@ -104,7 +104,7 @@ Item {
         // dedupes repeated rejections into a single visible toast.
         if (!root.freeRun && h === 0 && m === 0 && s === 0) {
             h = 0; m = 1; s = 0
-            MOTIONInterface.notify(
+            MotionInterface.notify(
                 "Scan duration cannot be 0 seconds — reset to 1 minute.",
                 "warning", 5000, true, "scan-duration-zero"
             )
@@ -225,9 +225,9 @@ Item {
                         border.width: 1
                     }
                     onEditingFinished: {
-                        if (text !== MOTIONInterface.userLabel) {
-                            MOTIONInterface.userLabel = text
-                            text = MOTIONInterface.userLabel  // reflect normalization
+                        if (text !== MotionInterface.userLabel) {
+                            MotionInterface.userLabel = text
+                            text = MotionInterface.userLabel  // reflect normalization
                         }
                     }
                 }
@@ -257,8 +257,8 @@ Item {
                         id: leftSensorView
                         title: "Left Sensor"
                         sensorSide: "left"
-                        connector: MOTIONInterface
-                        showFanControl: MOTIONInterface.appConfig.developerMode ? true : false
+                        connector: MotionInterface
+                        showFanControl: MotionInterface.appConfig.developerMode ? true : false
                     }
 
                     ComboBox {
@@ -269,7 +269,7 @@ Item {
                         model: sensorPatterns
                         textRole: "name"
                         font.pixelSize: 13
-                        enabled: MOTIONInterface.leftSensorConnected
+                        enabled: MotionInterface.leftSensorConnected
                         opacity: enabled ? 1.0 : 0.4
                         onCurrentIndexChanged: applyPatternToSensor(currentIndex, "left")
                         contentItem: Text {
@@ -290,8 +290,8 @@ Item {
                             background: Rectangle { color: theme.bgCard; radius: 4; border.color: theme.borderSubtle; border.width: 1 }
                         }
                         Component.onCompleted: {
-                            var defMask = MOTIONInterface.appConfig.leftMask !== undefined
-                                          ? MOTIONInterface.appConfig.leftMask : 0x99
+                            var defMask = MotionInterface.appConfig.leftMask !== undefined
+                                          ? MotionInterface.appConfig.leftMask : 0x99
                             var idx = maskToPatternIndex(defMask)
                             currentIndex = (idx >= 0) ? idx : 4
                         }
@@ -307,8 +307,8 @@ Item {
                         id: rightSensorView
                         title: "Right Sensor"
                         sensorSide: "right"
-                        connector: MOTIONInterface
-                        showFanControl: MOTIONInterface.appConfig.developerMode ? true : false
+                        connector: MotionInterface
+                        showFanControl: MotionInterface.appConfig.developerMode ? true : false
                     }
 
                     ComboBox {
@@ -319,7 +319,7 @@ Item {
                         model: sensorPatterns
                         textRole: "name"
                         font.pixelSize: 13
-                        enabled: MOTIONInterface.rightSensorConnected
+                        enabled: MotionInterface.rightSensorConnected
                         opacity: enabled ? 1.0 : 0.4
                         onCurrentIndexChanged: applyPatternToSensor(currentIndex, "right")
                         contentItem: Text {
@@ -340,8 +340,8 @@ Item {
                             background: Rectangle { color: theme.bgCard; radius: 4; border.color: theme.borderSubtle; border.width: 1 }
                         }
                         Component.onCompleted: {
-                            var defMask = MOTIONInterface.appConfig.rightMask !== undefined
-                                          ? MOTIONInterface.appConfig.rightMask : 0x99
+                            var defMask = MotionInterface.appConfig.rightMask !== undefined
+                                          ? MotionInterface.appConfig.rightMask : 0x99
                             var idx = maskToPatternIndex(defMask)
                             currentIndex = (idx >= 0) ? idx : 0
                         }

@@ -499,7 +499,7 @@ def test_past_scan_source_skips_null_metric_values(tmp_path):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # currentScanSource holder pattern — verified via a parallel mini-class
-# (MOTIONConnector uses the same pattern; see motion_connector.py)
+# (MotionConnector uses the same pattern; see motion_connector.py)
 # ─────────────────────────────────────────────────────────────────────────────
 
 from PyQt6.QtCore import QObject, pyqtSignal
@@ -508,7 +508,7 @@ from data_sources import LiveScanSource, ScanDataSource
 
 def _make_holder():
     """Returns a fresh QObject with the same currentScanSource surface as
-    MOTIONConnector. Kept in-test rather than exported so production code
+    MotionConnector. Kept in-test rather than exported so production code
     doesn't grow a separate abstraction layer just for testability."""
 
     class _ScanSourceHolder(QObject):

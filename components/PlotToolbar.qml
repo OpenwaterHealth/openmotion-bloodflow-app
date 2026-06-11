@@ -20,7 +20,7 @@ Item {
     property int windowSeconds: 15
     property bool autoScale: true
     property bool followLive: true
-    // True iff a LiveScanSource exists in MOTIONConnector — lets the
+    // True iff a LiveScanSource exists in MotionConnector — lets the
     // Back-to-live button stay enabled when the viewer is showing a
     // past scan so the user can return to the live edge in one click.
     property bool liveSourceAvailable: false

@@ -33,10 +33,10 @@ Item {
 
     function refreshScans() {
         try {
-            scans = MOTIONInterface.get_scan_list() || []
+            scans = MotionInterface.get_scan_list() || []
             if (scans.length > 0) {
                 scanPicker.currentIndex = 0
-                selected = MOTIONInterface.get_scan_details(scans[0]) || {}
+                selected = MotionInterface.get_scan_details(scans[0]) || {}
             } else {
                 selected = {}
             }
@@ -138,8 +138,8 @@ Item {
                         border.color: parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
                     }
                     onClicked: {
-                        console.warn("[History] Open Folder clicked → " + MOTIONInterface.directory)
-                        Qt.openUrlExternally("file:///" + MOTIONInterface.directory)
+                        console.warn("[History] Open Folder clicked → " + MotionInterface.directory)
+                        Qt.openUrlExternally("file:///" + MotionInterface.directory)
                     }
                 }
 
@@ -167,7 +167,7 @@ Item {
             RowLayout {
                 Layout.fillWidth: true; spacing: 8
                 Text { text: "Data Directory:"; color: theme.textSecondary; font.pixelSize: 13 }
-                Text { text: MOTIONInterface.directory; color: theme.textPrimary; font.pixelSize: 13; elide: Text.ElideRight; Layout.fillWidth: true }
+                Text { text: MotionInterface.directory; color: theme.textPrimary; font.pixelSize: 13; elide: Text.ElideRight; Layout.fillWidth: true }
             }
 
             // Scan selector
@@ -237,7 +237,7 @@ Item {
                     onCurrentIndexChanged: {
                         if (currentIndex >= 0 && currentIndex < scans.length) {
                             console.warn("[History] scan selected [" + currentIndex + "] " + scans[currentIndex])
-                            try { selected = MOTIONInterface.get_scan_details(scans[currentIndex]) || {} }
+                            try { selected = MotionInterface.get_scan_details(scans[currentIndex]) || {} }
                             catch (e) { selected = {} }
                         } else { selected = {} }
                     }
@@ -319,7 +319,7 @@ Item {
                             }
                             onClicked: {
                                 console.warn("[History] View in plot → clicked → " + (scans[scanPicker.currentIndex] || "?"))
-                                MOTIONInterface.loadPastScan(scans[scanPicker.currentIndex] || "")
+                                MotionInterface.loadPastScan(scans[scanPicker.currentIndex] || "")
                                 root.close()
                             }
                         }
@@ -342,7 +342,7 @@ Item {
                                 var scanId = scans[scanPicker.currentIndex] || ""
                                 console.warn("[History] Export CSV clicked → " + scanId)
                                 exportDialog.selectedScanId = scanId
-                                exportDialog.selectedFile = "file:///" + MOTIONInterface.directory + "/" + scanId + "_export.csv"
+                                exportDialog.selectedFile = "file:///" + MotionInterface.directory + "/" + scanId + "_export.csv"
                                 exportDialog.open()
                             }
                         }
@@ -363,8 +363,8 @@ Item {
             onAccepted: {
                 var path = selectedFile.toString().replace("file:///", "")
                 console.warn("[History] exporting " + selectedScanId + " → " + path)
-                var ok = MOTIONInterface.exportScanCsv(selectedScanId, path)
-                if (ok) MOTIONInterface.notify("Exported to " + path, "success")
+                var ok = MotionInterface.exportScanCsv(selectedScanId, path)
+                if (ok) MotionInterface.notify("Exported to " + path, "success")
             }
         }
 
@@ -396,7 +396,7 @@ Item {
     }
 
     Connections {
-        target: MOTIONInterface
+        target: MotionInterface
         function onVizFinished() { root.visualizing = false }
         function onVisualizingChanged(b) { root.visualizing = b }
         function onDirectoryChanged() { if (root.visible) refreshScans() }

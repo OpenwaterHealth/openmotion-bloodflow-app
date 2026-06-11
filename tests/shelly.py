@@ -6,7 +6,7 @@ Controls a Shelly relay over LAN so tests can power-cycle the device
 under test (DUT). Auto-detects Gen1 (HTTP) and Gen2+ (RPC) Shelly
 devices. Use this when:
 
-  - The DUT (e.g. an OpenMOTION console) is plugged into a Shelly outlet
+  - The DUT (e.g. an Open-Motion console) is plugged into a Shelly outlet
     on the same LAN as the test runner.
   - A test needs to verify reconnect / recovery behavior after power loss.
   - You want to reset the DUT into a known state between tests.
@@ -345,7 +345,7 @@ def power_cycle(off_time: float = 2.0, settle_time: float = 0.5) -> bool:
     """Power-cycle the shared outlet (off → wait → on → settle).
 
     Defaults are intentionally short for unit-style use. For
-    USB-reconnect tests against an OpenMOTION device, prefer
+    USB-reconnect tests against an Open-Motion device, prefer
     ``off_time=5.0`` so the OS fully drops the device.
     """
     return default_outlet().power_cycle(off_time=off_time, settle_time=settle_time)

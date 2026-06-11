@@ -15,8 +15,8 @@ PasswordPromptModal {
     signal unlocked()
 
     onAccepted: {
-        MOTIONInterface.setConfig("developerMode", true)
-        MOTIONInterface.notify("Developer mode enabled.", "info", 3000, false, "dev-mode")
+        MotionInterface.setConfig("developerMode", true)
+        MotionInterface.notify("Developer mode enabled.", "info", 3000, false, "dev-mode")
         root.unlocked()
     }
 }
