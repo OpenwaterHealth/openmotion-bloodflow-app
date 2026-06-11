@@ -30,7 +30,6 @@ Rectangle {
     signal notesClicked()
     signal checkClicked()
     signal historyClicked()
-    signal logClicked()
     signal settingsClicked()
 
     FontLoader {
@@ -176,14 +175,6 @@ Rectangle {
             iconText: "\uea31"  // graph-3 icon
             label: "Check"
             onClicked: panel.checkClicked()
-        }
-
-        // Log viewer (developer mode only)
-        PanelButton {
-            visible: MOTIONInterface.appConfig.developerMode ? true : false
-            iconText: "\uea65"  // list/log icon
-            label: "Log"
-            onClicked: panel.logClicked()
         }
 
         // ── spacer pushes bottom controls down ──

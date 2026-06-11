@@ -148,9 +148,6 @@ Rectangle {
         // the new scan — without this reset, the modal would keep showing
         // an orange dot from the prior scan.
         contactQualityModal.entries = []
-        scanDialog.message = "Scanning..."
-        scanDialog.stageText = "Preparing..."
-        scanDialog.progress = 1
         if (bloodFlow.reducedMode) reducedPlotLoader.item?.startScan()
         else                        embeddedPlotLoader.item?.startScan(bloodFlow.leftMask, bloodFlow.rightMask)
         scanRunner.start()
@@ -180,7 +177,6 @@ Rectangle {
             modalManager.closeCurrent()
             if (bloodFlow.scanning) {
                 scanRunner.cancel()
-                scanDialog.close()
                 if (bloodFlow.reducedMode) reducedPlotLoader.item?.stopScan()
                 else                   embeddedPlotLoader.item?.stopScan()
                 // Notes modal opens via MOTIONInterface.scanNotesReady
@@ -218,7 +214,6 @@ Rectangle {
         }
         onNotesClicked:    modalManager.toggle(notesModal)
         onHistoryClicked:  modalManager.toggle(historyModal)
-        onLogClicked:      modalManager.toggle(scanDialog)
         onSettingsClicked: modalManager.toggle(settingsModal)
     }
 
@@ -230,7 +225,7 @@ Rectangle {
     ModalManager {
         id: modalManager
         modals: [scanSettingsModal, notesModal, historyModal,
-                 settingsModal, contactQualityModal, scanDialog]
+                 settingsModal, contactQualityModal]
     }
 
     // Data viewer — fills remaining space to the right of ButtonPanel.
@@ -448,10 +443,6 @@ Rectangle {
         }
     }
 
-    ScanProgressDialog {
-        id: scanDialog
-    }
-
     // ===== SCAN RUNNER (capture mode) =====
     ScanRunner {
         id: scanRunner
@@ -471,7 +462,6 @@ Rectangle {
         triggerConfig: ({})
 
         onStageUpdate: function(txt) {
-            scanDialog.stageText = txt
             if (scanRunner._stage === "capture") {
                 bloodFlow.elapsedSec = 0
                 // scanTimer is started declaratively by its `running:` binding
@@ -479,11 +469,7 @@ Rectangle {
                 // start() needed here.
             }
         }
-        onProgressUpdate: function(pct) {
-            scanDialog.progress = pct
-        }
         onMessageOut: function(line) {
-            scanDialog.appendLog(line)
             console.log(line)
         }
         onScanFinished: function(ok, err, left, right) {
@@ -492,24 +478,8 @@ Rectangle {
             bloodFlow.scanning = false
             bloodFlow.suppressLiveCqModal = false
 
-            if (err === "Canceled") {
-                scanDialog.close()
-                if (bloodFlow.reducedMode) reducedPlotLoader.item?.stopScan(); else embeddedPlotLoader.item?.stopScan()
-                // Notes modal opens via MOTIONInterface.scanNotesReady.
-                return
-            }
-
-            if (!ok) {
-                scanDialog.appendLog("ERROR: " + err)
-                scanDialog.stageText = "Error during capture"
-                scanDialog.done = true
-                if (bloodFlow.reducedMode) reducedPlotLoader.item?.stopScan(); else embeddedPlotLoader.item?.stopScan()
-                return
-            }
-
-            scanDialog.stageText = "Capture complete"
-            scanDialog.progress = 100
-            scanDialog.done = true
+            if (!ok && err !== "Canceled")
+                console.log("ERROR: " + err)
             if (bloodFlow.reducedMode) reducedPlotLoader.item?.stopScan(); else embeddedPlotLoader.item?.stopScan()
             // Notes modal opens via MOTIONInterface.scanNotesReady.
         }
