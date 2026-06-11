@@ -20,6 +20,10 @@ Item {
 
     property var scans: []
     property var selected: ({})
+    // True while an async "View in plot" load is in flight (issue #152):
+    // the heavy DB/CSV walk runs on a worker thread in the connector, and
+    // this drives the busy overlay until pastScanLoadFinished fires.
+    property bool loadingPlot: false
 
     function open() {
         refreshScans()
@@ -318,8 +322,12 @@ Item {
                             }
                             onClicked: {
                                 console.warn("[History] View in plot → clicked → " + (scans[scanPicker.currentIndex] || "?"))
+                                // Async load (issue #152): the heavy DB/CSV walk runs on a
+                                // worker thread. Show the busy overlay and keep the modal
+                                // open; onPastScanLoadFinished clears it and closes the
+                                // modal only when the scan actually loaded.
+                                root.loadingPlot = true
                                 MotionInterface.loadPastScan(scans[scanPicker.currentIndex] || "")
-                                root.close()
                             }
                         }
 
@@ -367,6 +375,20 @@ Item {
             }
         }
 
+        // Busy overlay while an async "View in plot" load is in flight
+        // (issue #152). Blocks clicks on the panel so the selection can't
+        // change under the in-flight load.
+        Rectangle {
+            anchors.fill: parent; color: "#000"; opacity: 0.45
+            visible: root.loadingPlot; z: 9999; radius: 12
+            MouseArea { anchors.fill: parent }
+            Column {
+                anchors.centerIn: parent; spacing: 12
+                BusyIndicator { running: root.loadingPlot; width: 48; height: 48 }
+                Text { text: "Loading scan..."; color: theme.textPrimary; font.pixelSize: 14 }
+            }
+        }
+
         // Match the other modals (SettingsModal, ScanSettingsModal):
         // Escape closes. Without this, ``pyautogui.press('escape')`` is
         // a no-op for History, which left the modal stuck open between
@@ -384,8 +406,16 @@ Item {
 
     Connections {
         target: MotionInterface
+        // Async "View in plot" completion (issue #152). On success the
+        // modal closes to reveal the PlotViewer; on failure it stays
+        // open (onErrorOccurred below pops the error dialog).
+        function onPastScanLoadFinished(label, ok) {
+            root.loadingPlot = false
+            if (ok) root.close()
+        }
         function onDirectoryChanged() { if (root.visible) refreshScans() }
         function onErrorOccurred(msg) {
+            root.loadingPlot = false
             histErrDialog.text = msg || "Unknown error."
             histErrDialog.visible = true
         }
