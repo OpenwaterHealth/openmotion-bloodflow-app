@@ -606,7 +606,20 @@ class LiveScanSource(ScanDataSource):
         false coverage used to make the staleness check short-circuit and
         serve a stale window while live data piled up unshown. Callers only
         pass t_hi up to the in-memory boundary anyway (the recent portion is
-        served from memory), so this cap is a belt-and-suspenders guard."""
+        served from memory), so this cap is a belt-and-suspenders guard.
+
+        t_lo is clamped to >= 0 BEFORE the staleness check: scan timestamps
+        start at 0, so no rows can ever exist below it, and the stored
+        _db_window_lo is itself floored at 0 (want_lo). A followLive window
+        wider than the elapsed scan — wheel-zoom out to e.g. 600 s, then
+        "Back to live" mid-scan — requests t_lo = liveEdge - windowSeconds
+        < 0 on EVERY paint; unclamped, that request can never be satisfied
+        by the cache, so every points_for_window call (cells × metrics,
+        ~30 Hz) re-queried and re-bucketized the whole DB window on the GUI
+        thread, freezing the app until liveEdge outgrew the window or the
+        scan ended (issue #151)."""
+        t_lo = max(0.0, float(t_lo))
+        t_hi = max(t_lo, float(t_hi))
         if t_lo >= self._db_window_lo and t_hi <= self._db_window_hi:
             return
         span = max(1.0, t_hi - t_lo)
