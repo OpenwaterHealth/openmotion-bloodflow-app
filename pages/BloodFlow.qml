@@ -465,7 +465,7 @@ Rectangle {
         disableLaser: false
         laserOn: true
         laserPower: 50
-        // triggerConfig left at the SetTriggerLaserTask default ({}) so
+        // triggerConfig left at the SetTriggerTask default ({}) so
         // the connector's setTrigger merges only TriggerStatus over the
         // SDK-resolved DEFAULT_TRIGGER_CONFIG.
         triggerConfig: ({})

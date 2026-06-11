@@ -1,4 +1,4 @@
-// qml/scan/SetTriggerLaserTask.qml
+// qml/scan/SetTriggerTask.qml
 import QtQuick 6.5
 
 QtObject {
@@ -6,7 +6,6 @@ QtObject {
     property var connector
     property bool laserOn: true
     property var triggerConfig: ({})     // extra fields merged into payload
-    property bool applyLaserPowerFromConfig: true  // toggle for testing
 
     signal started()
     signal progress(int pct)
@@ -16,10 +15,10 @@ QtObject {
     function run() {
         started()
         progress(20)
-        log("Setting trigger & laser…")
+        log("Setting trigger…")
 
-        if (!connector || !connector.setTrigger || !connector.setLaserPowerFromConfig) {
-            finished(false, "Connector missing setTrigger/setLaserPowerFromConfig")
+        if (!connector || !connector.setTrigger) {
+            finished(false, "Connector missing setTrigger")
             return
         }
 
@@ -27,7 +26,8 @@ QtObject {
         var payload = { "TriggerStatus": laserOn ? 2 : 1 }
         for (var k in triggerConfig) payload[k] = triggerConfig[k]
 
-        // Set trigger
+        // Set trigger. Laser power is applied once per console connect
+        // by the connector, not per scan.
         try {
             var res = connector.setTrigger(JSON.stringify(payload))
             var ok = (typeof res === "boolean") ? res : true
@@ -41,25 +41,6 @@ QtObject {
             log("setTrigger exception: " + e)
             finished(false, "setTrigger exception: " + e)
             return
-        }
-
-        // Optionally apply laser power from config
-        if (applyLaserPowerFromConfig) {
-            progress(23)
-            try {
-                var res2 = connector.setLaserPowerFromConfig()
-                var ok2 = (typeof res2 === "boolean") ? res2 : true
-                if (!ok2) {
-                    log("setLaserPowerFromConfig returned false")
-                    finished(false, "setLaserPowerFromConfig returned false")
-                    return
-                }
-                log("Laser power applied from config.")
-            } catch (e2) {
-                log("setLaserPowerFromConfig exception: " + e2)
-                finished(false, "setLaserPowerFromConfig exception: " + e2)
-                return
-            }
         }
 
         progress(25)

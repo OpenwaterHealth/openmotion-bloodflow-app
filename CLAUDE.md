@@ -31,7 +31,7 @@ python -m PyInstaller -y openwater.spec # package .exe → dist/OpenWaterApp/
 | `pages/BloodFlow.qml` | Main scan page: patient info, sensor config, trigger. |
 | `pages/DataAnalysis.qml` | Post-processing + BFI/BVI visualization. |
 | `pages/Settings.qml` | Settings overlay. |
-| `pages/scan/` | `ScanRunner.qml` plus task QMLs: `CaptureDataTask`, `ContactQualityCheckTask`, `FlashSensorsTask`, `PostProcessTask`, `SetTriggerLaserTask`. Newer orchestration suite. |
+| `pages/scan/` | `ScanRunner.qml` plus task QMLs: `CaptureDataTask`, `ContactQualityCheckTask`, `FlashSensorsTask`, `PostProcessTask`, `SetTriggerTask`. Newer orchestration suite. |
 | `components/` | 26 reusable QML components — `SettingsModal`, `ContactQualityModal`, `CameraDot`, `TestResultsWindow`, etc. |
 | `processing/visualize_bloodflow.py` | BFI/BVI computation from CSV histograms. |
 | `config/app_config.json` | 141 feature flags / thresholds (see below). |

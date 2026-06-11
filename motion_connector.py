@@ -1190,6 +1190,15 @@ class MOTIONConnector(QObject):
                         self.consoleFanChanged.emit()
                     else:
                         logger.error("Failed to set console fan speed")
+                    # Apply laser-power params once per console connect —
+                    # the FPGA registers are volatile across power cycles,
+                    # so every (re)connect needs them. Scans no longer
+                    # re-apply per run (was SetTriggerLaserTask + the
+                    # issue-#108 cold-start guards).
+                    if self.set_laser_power_from_config(self._interface):
+                        logger.info("Laser power params applied from config")
+                    else:
+                        logger.error("Failed to apply laser power params from config")
                 except Exception as e:
                     logger.warning(
                         f"Console connect-time setup interrupted "
@@ -2602,15 +2611,6 @@ class MOTIONConnector(QObject):
             logger.error(f"Error getting Lsync count: {e}")
             return -1
 
-    @pyqtSlot(result=bool)
-    def setLaserPowerFromConfig(self) -> bool:
-        """Apply laser power parameters loaded at startup."""
-        try:
-            return self.set_laser_power_from_config(self._interface)
-        except Exception as e:
-            logger.error(f"setLaserPowerFromConfig error: {e}")
-            return False
-
     def set_laser_power_from_config(self, interface):
         # Laser-power config now lives in the SDK (omotion.laser): it bundles
         # the FPGA register map + the laser param set and writes them over I2C.
@@ -3542,7 +3542,7 @@ class MOTIONConnector(QObject):
         # CalibrationWorkflow resolves the trigger config to the
         # interface's default (SDK ⊕ app override at construction)
         # when the request doesn't override — matches what the QML
-        # scan / CQ flows do via SetTriggerLaserTask. Pass None so
+        # scan / CQ flows do via SetTriggerTask. Pass None so
         # the workflow always sees the canonical config.
         req = CalibrationRequest(
             operator_id="bloodflow-app",
@@ -3564,36 +3564,6 @@ class MOTIONConnector(QObject):
             "scan_duration=%ss ===",
             target, left_mask, right_mask, self._calibration_scan_duration_sec,
         )
-
-        # Issue #108: apply laser-power params to the firmware before
-        # calibration runs. The normal scan chain does this via
-        # SetTriggerLaserTask in QML (after FlashSensorsTask, before
-        # the actual scan), but the calibration path goes directly
-        # from runCalibration → SDK CalibrationWorkflow and skips that
-        # chain entirely. On a cold start — when no scan or Check has
-        # programmed the laser channels yet — the calibration scan
-        # would fire its trigger over an unprogrammed laser, every
-        # camera would see only dark, and phase 1 would abort with
-        # 'zero or negative aggregate'. Applying the params here is
-        # idempotent; runs that already had a scan kick the same
-        # values back in without harm.
-        try:
-            ok = self.set_laser_power_from_config(self._interface)
-            if not ok:
-                logger.warning(
-                    "runCalibration: set_laser_power_from_config "
-                    "returned False — proceeding anyway, but the "
-                    "calibration scan will likely abort with "
-                    "'zero or negative aggregate' if this is a cold "
-                    "start. See issue #108."
-                )
-            else:
-                logger.info("runCalibration: laser params applied")
-        except Exception as e:
-            logger.error(
-                "runCalibration: applying laser params raised: %s — "
-                "proceeding anyway", e
-            )
 
         started = self._interface.start_calibration(
             req,
@@ -3696,24 +3666,6 @@ class MOTIONConnector(QObject):
             "duration=%ss ===",
             target, left_mask, right_mask, self._test_scan_duration_sec,
         )
-
-        # Same #108 laser-power cold-start guard the Calibrate path uses.
-        try:
-            ok = self.set_laser_power_from_config(self._interface)
-            if not ok:
-                logger.warning(
-                    "runTestScan: set_laser_power_from_config returned "
-                    "False — proceeding anyway, but the test scan will "
-                    "likely abort with 'zero or negative aggregate' if "
-                    "this is a cold start. See issue #108."
-                )
-            else:
-                logger.info("runTestScan: laser params applied")
-        except Exception as e:
-            logger.error(
-                "runTestScan: applying laser params raised: %s — "
-                "proceeding anyway", e
-            )
 
         started = self._interface.start_test_scan(
             req,
