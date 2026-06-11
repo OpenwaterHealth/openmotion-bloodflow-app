@@ -586,6 +586,84 @@ def test_past_scan_source_skips_null_metric_values(tmp_path):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# load_past_scan_buffers + PastScanSource(preloaded_buffers=...) — the
+# off-thread bulk-load path used by the async loadPastScan (issue #152).
+# ─────────────────────────────────────────────────────────────────────────────
+
+from data_sources import load_past_scan_buffers
+
+
+def test_load_past_scan_buffers_matches_sync_constructor(session_data_db):
+    """The Qt-free bulk loader must produce exactly what the synchronous
+    PastScanSource constructor path produces."""
+    db, sid = session_data_db
+    buffers, has_bfi = load_past_scan_buffers(db, sid)
+    sync_src = PastScanSource(scan_db=db, session_id=sid)
+
+    assert has_bfi is True
+    assert set(buffers.keys()) == set(sync_src.buffers.keys())
+    for key, buf in buffers.items():
+        sync_buf = sync_src.buffers[key]
+        assert buf.n == sync_buf.n
+        np.testing.assert_array_equal(buf.t[:buf.n], sync_buf.t[:sync_buf.n])
+        np.testing.assert_array_equal(buf.v[:buf.n], sync_buf.v[:sync_buf.n])
+
+
+def test_load_past_scan_buffers_csv_fallback(tmp_path):
+    """No BFI/BVI in the DB → the corrected-CSV fallback populates the
+    reduced-mode cam_id=-1 side buffers, same as the sync path."""
+    db_path = tmp_path / "scan.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(_SESSION_DATA_DDL)
+    conn.commit()
+    db = _FakeScanDatabase(conn)  # empty DB → no BFI → CSV fallback
+
+    csv_path = tmp_path / "reduced.csv"
+    csv_path.write_text(
+        "frame_id,timestamp_s,bfi_left,bfi_right,bvi_left,bvi_right\n"
+        "0,0.0,2.5,3.5,12.0,13.0\n"
+        "1,0.025,2.6,3.6,12.1,13.1\n",
+        encoding="utf-8",
+    )
+    buffers, has_bfi = load_past_scan_buffers(db, 1, str(csv_path))
+    assert has_bfi is False  # DB itself carried no BFI
+    left_bfi = buffers[("left", -1, "bfi")]
+    assert left_bfi.n == 2
+    assert float(left_bfi.v[0]) == pytest.approx(2.5)
+    # CSV-fallback buffers must be unbounded too.
+    for buf in buffers.values():
+        assert buf._max_capacity is None
+
+
+def test_past_scan_source_adopts_preloaded_buffers(session_data_db):
+    """preloaded_buffers skips the DB walk entirely — scan_db=None must
+    never be touched — and the source exposes the adopted buffers."""
+    db, sid = session_data_db
+    buffers, _ = load_past_scan_buffers(db, sid)
+
+    src = PastScanSource(
+        scan_db=None,  # would raise if the constructor tried to walk it
+        session_id=sid,
+        preloaded_buffers=buffers,
+    )
+    assert src.live is False
+    assert src.session_id == sid
+    assert src.buffers is buffers
+    assert src.liveEdge == pytest.approx(0.025 * 4)
+    # QML-facing window query works against the adopted buffers.
+    pts = src.points_for_window("left", 0, "bfi", 0.0, 1.0, 100)
+    assert len(pts) == 5
+
+
+def test_past_scan_source_preloaded_empty_dict_is_empty_source():
+    """An empty preloaded dict (failed/empty session) still yields a
+    valid, empty source — no fallback to the (None) scan_db."""
+    src = PastScanSource(scan_db=None, session_id=3, preloaded_buffers={})
+    assert src.buffers == {}
+    assert src.liveEdge == 0.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # currentScanSource holder pattern — verified via a parallel mini-class
 # (MotionConnector uses the same pattern; see motion_connector.py)
 # ─────────────────────────────────────────────────────────────────────────────

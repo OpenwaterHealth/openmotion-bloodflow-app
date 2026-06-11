@@ -413,8 +413,12 @@ Item {
                             }
                             onClicked: {
                                 console.warn("[History] View in plot → clicked → " + (scans[scanPicker.currentIndex] || "?"))
+                                // Async load (issue #152): the heavy DB/CSV walk runs on a
+                                // worker thread. Show the busy overlay and keep the modal
+                                // open; onPastScanLoadFinished clears it and closes the
+                                // modal only when the scan actually loaded.
+                                root.visualizing = true
                                 MotionInterface.loadPastScan(scans[scanPicker.currentIndex] || "")
-                                root.close()
                             }
                         }
 
@@ -492,6 +496,13 @@ Item {
     Connections {
         target: MotionInterface
         function onVizFinished() { root.visualizing = false }
+        // Async "View in plot" completion (issue #152). On success the
+        // modal closes to reveal the PlotViewer; on failure it stays
+        // open (onErrorOccurred below pops the error dialog).
+        function onPastScanLoadFinished(label, ok) {
+            root.visualizing = false
+            if (ok) root.close()
+        }
         function onVisualizingChanged(b) { root.visualizing = b }
         function onDirectoryChanged() { if (root.visible) refreshScans() }
         function onErrorOccurred(msg) {

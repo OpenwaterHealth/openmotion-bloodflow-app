@@ -508,6 +508,13 @@ class MotionConnector(QObject):
     # Real-time plot viewer source — see data_sources.py.
     currentScanSourceChanged = pyqtSignal()
     liveSourceAvailableChanged = pyqtSignal()
+    # History → "View in plot": fires on the GUI thread when an async
+    # loadPastScan completes. (session_label, ok). HistoryModal uses it
+    # to clear its busy overlay and close only on success (issue #152).
+    pastScanLoadFinished = pyqtSignal(str, bool)
+    # Private worker→main marshalling for loadPastScan results:
+    # (seq, session_label, session_id, buffers-or-None, source_tag)
+    _pastScanBuffersReady = pyqtSignal(int, str, int, object, str)
 
     configProgress = pyqtSignal(int)
     configLog = pyqtSignal(str)
@@ -687,6 +694,9 @@ class MotionConnector(QObject):
         # navigates to a past scan, so "Back to live" can reassign without
         # reconstructing. None when no scan has run this session.
         self._live_scan_source: LiveScanSource | None = None
+        # Monotonic token for async past-scan loads — a result whose seq
+        # doesn't match the latest request is stale and dropped.
+        self._past_scan_load_seq = 0
 
         self._tec_voltage_default = load_tec_params(config_dir)
         self._console_mutex = QRecursiveMutex()
@@ -1629,37 +1639,122 @@ class MotionConnector(QObject):
         display it in the PlotViewer. The held live source is left
         intact so a subsequent showLiveSource() can return to it.
 
-        Synchronous load — for a typical 30-min scan the SQLite walk
-        completes in well under a second, but if this becomes too slow
-        on long scans we can move it onto a QThread."""
+        Asynchronous load (issue #152): the bulk SQLite walk / CSV parse
+        is multi-second for long scans (a ~70-min scan measured ~8.3M
+        samples ≈ 20 s) and used to freeze the GUI thread. The heavy
+        load now runs on a daemon worker thread; the finished buffers
+        are marshalled back to the GUI thread via _pastScanBuffersReady,
+        where the PastScanSource QObject is constructed and bound to the
+        viewer. pastScanLoadFinished(label, ok) fires on completion
+        either way so the History modal can clear its busy state."""
         if not session_label:
             logger.warning("loadPastScan: empty session_label")
+            self.pastScanLoadFinished.emit("", False)
             return
+        db_path = getattr(self._interface, "scan_db_path", None)
+        if not db_path:
+            logger.warning(
+                "loadPastScan: scan_db_path unavailable on interface"
+            )
+            self.pastScanLoadFinished.emit(session_label, False)
+            return
+        # Per-cam corrected CSV ({scan_id}.csv, 82-col wide format)
+        # is the only source of per-cam BFI/BVI/mean/contrast for
+        # past replay — the DB's session_data only holds side-
+        # aggregated corrected-frame placeholders. CsvSink writes
+        # this CSV unconditionally for every scan, so it's reliably
+        # available. Resolving the path is a cheap directory glob —
+        # fine on the GUI thread (the modal already does it per
+        # selection); the heavy parse happens on the worker.
+        details = self.get_scan_details(session_label) or {}
+        corrected_csv = details.get("correctedPath") or None
+        self._past_scan_load_seq += 1
+        seq = self._past_scan_load_seq
+        threading.Thread(
+            target=self._load_past_scan_worker,
+            args=(seq, session_label, str(db_path), corrected_csv),
+            name=f"past-scan-load-{seq}",
+            daemon=True,
+        ).start()
+
+    def _load_past_scan_worker(
+        self,
+        seq: int,
+        session_label: str,
+        db_path: str,
+        corrected_csv: Optional[str],
+    ) -> None:
+        """Worker thread: bulk-load a past scan's samples (the heavy,
+        Qt-free part of loadPastScan). Opens its own ScanDatabase handle;
+        results cross back to the GUI thread via _pastScanBuffersReady
+        (cross-thread signal → queued delivery)."""
         try:
             from omotion.ScanDatabase import ScanDatabase
-            db_path = getattr(self._interface, "scan_db_path", None)
-            if not db_path:
-                logger.warning("loadPastScan: scan_db_path unavailable on interface")
-                return
+            from data_sources import load_past_scan_buffers
             db = ScanDatabase(db_path)
-            session = db.get_session_by_label(session_label)
-            if not session:
-                logger.warning("loadPastScan: no session found for label %r", session_label)
-                return
-            session_id = int(session["id"])
-            # Per-cam corrected CSV ({scan_id}.csv, 82-col wide format)
-            # is the only source of per-cam BFI/BVI/mean/contrast for
-            # past replay — the DB's session_data only holds side-
-            # aggregated corrected-frame placeholders. CsvSink writes
-            # this CSV unconditionally for every scan, so it's reliably
-            # available.
-            details = self.get_scan_details(session_label) or {}
-            corrected_csv = details.get("correctedPath") or None
+            try:
+                session = db.get_session_by_label(session_label)
+                if not session:
+                    logger.warning(
+                        "loadPastScan: no session found for label %r",
+                        session_label,
+                    )
+                    self._pastScanBuffersReady.emit(
+                        seq, session_label, -1, None, ""
+                    )
+                    return
+                session_id = int(session["id"])
+                buffers, _ = load_past_scan_buffers(
+                    db, session_id, corrected_csv
+                )
+            finally:
+                db.close()
+            # Detect which source actually populated per-cam BFI: if
+            # any (side, cam_id != -1, bfi) buffer exists, the DB was
+            # sufficient and the CSV fallback was skipped.
+            db_had_per_cam = any(k[1] >= 0 and k[2] == "bfi" for k in buffers)
+            source_tag = (
+                "db" if db_had_per_cam
+                else ("csv" if corrected_csv else "db-only-sentinel")
+            )
+            self._pastScanBuffersReady.emit(
+                seq, session_label, session_id, buffers, source_tag
+            )
+        except Exception:
+            logger.exception("loadPastScan failed for label %r", session_label)
+            self._pastScanBuffersReady.emit(seq, session_label, -1, None, "")
+
+    def _on_past_scan_buffers_ready(
+        self,
+        seq: int,
+        session_label: str,
+        session_id: int,
+        buffers,
+        source_tag: str,
+    ) -> None:
+        """GUI thread: bind a worker-loaded past scan to the viewer.
+        Results from a superseded request (user clicked another scan
+        while this one was loading) are dropped."""
+        if seq != self._past_scan_load_seq:
+            logger.info(
+                "loadPastScan: dropping stale result for %r "
+                "(seq %d, latest %d)",
+                session_label, seq, self._past_scan_load_seq,
+            )
+            return
+        if buffers is None:
+            self.errorOccurred.emit(
+                f"Could not load scan '{session_label}' for plotting.\n"
+                "See the app log for details."
+            )
+            self.pastScanLoadFinished.emit(session_label, False)
+            return
+        try:
             past = PastScanSource(
-                scan_db=db,
+                scan_db=None,
                 session_id=session_id,
-                corrected_csv_path=corrected_csv,
                 parent=self,
+                preloaded_buffers=buffers,
             )
             self._set_current_scan_source(past)
             # Diagnostic — left in for now so we can spot regressions
@@ -1667,21 +1762,16 @@ class MotionConnector(QObject):
             n_buffers = len(past.buffers)
             n_samples = sum(b.n for b in past.buffers.values())
             sample_keys = sorted(past.buffers.keys())[:8]
-            # Detect which source actually populated per-cam BFI: if
-            # any (side, cam_id != -1, bfi) buffer exists, the DB was
-            # sufficient and the CSV fallback was skipped.
-            db_had_per_cam = any(
-                k[1] >= 0 and k[2] == "bfi" for k in past.buffers
-            )
             logger.info(
                 "[Plot] loaded past scan %r (session_id=%d) source=%s: "
                 "buffers=%d samples=%d liveEdge=%.3f sample_keys=%s",
-                session_label, session_id,
-                "db" if db_had_per_cam else ("csv" if corrected_csv else "db-only-sentinel"),
+                session_label, session_id, source_tag,
                 n_buffers, n_samples, past.liveEdge, sample_keys,
             )
+            self.pastScanLoadFinished.emit(session_label, True)
         except Exception:
             logger.exception("loadPastScan failed for label %r", session_label)
+            self.pastScanLoadFinished.emit(session_label, False)
 
     @pyqtSlot(str, str, result=bool)
     def exportScanCsv(self, session_label: str, output_path: str) -> bool:
@@ -3365,6 +3455,8 @@ class MotionConnector(QObject):
         self._testScanCompleteSignal.connect(self._on_test_scan_complete)
         # Worker → Qt main thread for the CQ workflow result.
         self._cq_result_signal.connect(self._on_cq_result_ready)
+        # Worker → Qt main thread for async past-scan loads (issue #152).
+        self._pastScanBuffersReady.connect(self._on_past_scan_buffers_ready)
 
     @pyqtSlot()
     @pyqtSlot(str)
