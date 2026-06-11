@@ -473,7 +473,7 @@ Item {
     // issue #40 — a transient USB drop while the modal is open used to
     // zero out leftSelector/rightSelector here, which then propagated to
     // bloodFlow.leftMask/rightMask via close() → selectionChanged → the
-    // EmbeddedRealtimePlot ended up with seriesOrder=[] and rendered the
+    // plot ended up with an empty series order and rendered the
     // "Press Start to begin scanning" placeholder instead of the live
     // plot. Preserving the selection lets it ride through the reconnect.
 }

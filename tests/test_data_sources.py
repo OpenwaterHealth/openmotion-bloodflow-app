@@ -102,49 +102,6 @@ def test_camera_buffer_window_indices_empty_buffer():
     assert i_hi == 0
 
 
-def test_camera_buffer_apply_corrected_overwrites_in_place():
-    # apply_corrected requires the frame-id index, which is opt-in.
-    buf = _CameraBuffer(initial_capacity=8, track_frame_ids=True)
-    buf.append(t=0.0, v=1.0, frame_id=100)
-    buf.append(t=0.025, v=2.0, frame_id=101)
-    buf.append(t=0.050, v=3.0, frame_id=102)
-
-    buf.apply_corrected(frame_id=101, value=99.9)
-
-    assert buf.v[0] == np.float32(1.0)
-    assert buf.v[1] == np.float32(99.9)
-    assert buf.v[2] == np.float32(3.0)
-
-
-def test_camera_buffer_apply_corrected_unknown_frame_is_noop():
-    buf = _CameraBuffer(initial_capacity=8, track_frame_ids=True)
-    buf.append(t=0.0, v=1.0, frame_id=100)
-    # frame_id 999 was never appended — must not raise, must not corrupt state
-    buf.apply_corrected(frame_id=999, value=42.0)
-    assert buf.n == 1
-    assert buf.v[0] == np.float32(1.0)
-
-
-def test_camera_buffer_apply_corrected_skips_sentinel_frame_id():
-    """frame_id=-1 means 'unknown'; we don't index it, so apply_corrected(-1, ...)
-    must not silently overwrite the most-recent -1 sample."""
-    buf = _CameraBuffer(initial_capacity=8, track_frame_ids=True)
-    buf.append(t=0.0, v=1.0, frame_id=-1)
-    buf.append(t=0.025, v=2.0, frame_id=-1)
-    buf.apply_corrected(frame_id=-1, value=99.9)
-    assert buf.v[0] == np.float32(1.0)
-    assert buf.v[1] == np.float32(2.0)
-
-
-def test_camera_buffer_apply_corrected_noop_without_tracking():
-    """Default is track_frame_ids=False — apply_corrected is a silent
-    no-op even for valid frame_ids."""
-    buf = _CameraBuffer(initial_capacity=8)  # default: no tracking
-    buf.append(t=0.0, v=1.0, frame_id=100)
-    buf.apply_corrected(frame_id=100, value=99.9)
-    assert buf.v[0] == np.float32(1.0)  # unchanged
-
-
 def test_camera_buffer_mark_dropped_sets_timestamp_once():
     buf = _CameraBuffer(initial_capacity=8)
     buf.mark_dropped(t=1.5)
@@ -285,52 +242,6 @@ def test_live_scan_source_append_uncorrected_notes_dirty():
         ("left", 0, "contrast", 2),
         ("left", 0, "mean", 2),
     ]
-
-
-def test_live_scan_source_apply_corrected_batch_overwrites_in_place():
-    # apply_corrected_batch is currently no-op in production; opt-in via
-    # the constructor flag exercises the original overwrite semantics.
-    src = LiveScanSource(plot_t0=0.0, track_frame_ids=True)
-    # Seed live samples for frame_ids 100, 101, 102.
-    for i, fid in enumerate((100, 101, 102)):
-        src.append_uncorrected(
-            side="left", cam_id=0, frame_id=fid, t=i * 0.025,
-            bfi=1.0 + i, bvi=10.0 + i, mean=100.0 + i, contrast=0.30 + i * 0.01,
-        )
-    src._flush()  # drain seed dirty state
-
-    batch = [
-        {"side": "left", "camId": 0, "frameId": 101, "ts": 0.025,
-         "bfi": 99.0, "bvi": 88.0, "mean": 77.0, "contrast": 0.66},
-    ]
-    src.apply_corrected_batch(batch)
-
-    bfi_buf = src.buffers[("left", 0, "bfi")]
-    bvi_buf = src.buffers[("left", 0, "bvi")]
-    mean_buf = src.buffers[("left", 0, "mean")]
-    contrast_buf = src.buffers[("left", 0, "contrast")]
-
-    assert bfi_buf.v[1] == np.float32(99.0)   # overwritten
-    assert bfi_buf.v[0] == np.float32(1.0)    # untouched
-    assert bfi_buf.v[2] == np.float32(3.0)    # untouched
-    assert bvi_buf.v[1] == np.float32(88.0)
-    assert mean_buf.v[1] == np.float32(77.0)
-    assert contrast_buf.v[1] == np.float32(0.66)
-
-
-def test_live_scan_source_apply_corrected_batch_unknown_frame_silently_skipped():
-    src = LiveScanSource(plot_t0=0.0)
-    src.append_uncorrected(
-        side="left", cam_id=0, frame_id=100, t=0.0,
-        bfi=1.0, bvi=10.0,
-    )
-    # frame_id 999 was never seen on the live path (race window)
-    src.apply_corrected_batch([
-        {"side": "left", "camId": 0, "frameId": 999, "ts": 0.0,
-         "bfi": 99.0, "bvi": 88.0, "mean": 77.0, "contrast": 0.66},
-    ])
-    assert src.buffers[("left", 0, "bfi")].v[0] == np.float32(1.0)
-    assert ("left", 0, "mean") not in src.buffers
 
 
 def test_live_scan_source_mark_dropped_sets_buffer_dropped_at():
@@ -497,7 +408,8 @@ def test_past_scan_source_empty_session_yields_empty_source(tmp_path):
 
 def test_past_scan_source_reads_cam_id_minus_1_from_db(tmp_path):
     """A reduced-mode scan stores the corrected per-side average at cam_id=-1
-    (ScanDBSink's 'final_side' path). PastScanSource exposes those directly —
+    (cam_id=-1 frames on the 'final' channel, persisted by ScanDBSink).
+    PastScanSource exposes those directly —
     no derivation — so reduced-mode replay reads the corrected trace verbatim."""
     db_path = tmp_path / "scan.db"
     conn = sqlite3.connect(str(db_path))

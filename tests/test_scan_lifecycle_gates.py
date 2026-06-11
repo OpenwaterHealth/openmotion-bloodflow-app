@@ -51,3 +51,25 @@ def test_start_capture_refuses_while_scan_workflow_running(connector, tmp_path):
 
     assert ok is False
     connector._interface.start_scan.assert_not_called()
+
+
+def test_is_pipeline_idle_mirrors_ensure_idle(connector):
+    """QML scan-start gate polls isPipelineIdle(); it must flip false for
+    every busy state _ensure_idle refuses on, and true once clear. The
+    workflow.running case is the one that bit in the field: the pre-scan
+    CQ check's worker keeps unwinding ~2 s after results are displayed."""
+    assert connector.isPipelineIdle() is True
+
+    connector._scan_workflow.running = True
+    assert connector.isPipelineIdle() is False
+    connector._scan_workflow.running = False
+
+    connector._cq_quick_running = True
+    assert connector.isPipelineIdle() is False
+    connector._cq_quick_running = False
+
+    connector._capture_running = True
+    assert connector.isPipelineIdle() is False
+    connector._capture_running = False
+
+    assert connector.isPipelineIdle() is True

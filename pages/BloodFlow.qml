@@ -33,11 +33,6 @@ Rectangle {
     // FDA mode (read from app config). Forces Far camera pattern + free run,
     // hides scan-settings button, and swaps in the FDA plot view.
     property bool reducedMode: MotionInterface.appConfig.reducedMode === true
-    // Phase 2a: useNewPlotViewer flag selects between the new (foundation-only)
-    // PlotViewer and the legacy EmbeddedRealtimePlot / ReducedPlotView pair.
-    // Flag default is false (legacy renders). Flip locally via app_config.json
-    // to dev-test the new viewer.
-    readonly property bool _useNewViewer: MotionInterface.appConfig.useNewPlotViewer === true
     // In reduced mode, Start first runs a contact-quality preflight check.
     property bool reducedStartPending: false
     // Prevent late CQ callbacks from re-opening the modal while a stop/cancel
@@ -148,9 +143,41 @@ Rectangle {
         // the new scan — without this reset, the modal would keep showing
         // an orange dot from the prior scan.
         contactQualityModal.entries = []
-        if (bloodFlow.reducedMode) reducedPlotLoader.item?.startScan()
-        else                        embeddedPlotLoader.item?.startScan(bloodFlow.leftMask, bloodFlow.rightMask)
         scanRunner.start()
+    }
+
+    // Scan-start gate: the pre-scan CQ check's SDK worker keeps unwinding
+    // for ~2 s after its results are displayed, and a start issued in that
+    // window is refused synchronously by the connector's _ensure_idle gate
+    // (the failure used to be swallowed — modal closed, nothing happened).
+    // Poll isPipelineIdle() and begin the scan the moment the connector is
+    // actually free; give up loudly after 8 s.
+    property bool scanStartPending: scanStartGate.running
+    function beginScanWhenReady() {
+        if (bloodFlow.scanning || scanStartGate.running) return
+        scanStartGate.elapsedMs = 0
+        scanStartGate.start()
+    }
+    Timer {
+        id: scanStartGate
+        interval: 200
+        repeat: true
+        triggeredOnStart: true   // idle path starts the scan with no delay
+        property int elapsedMs: 0
+        onTriggered: {
+            if (MotionInterface.isPipelineIdle()) {
+                stop()
+                beginScanNow()
+                return
+            }
+            elapsedMs += interval
+            if (elapsedMs >= 8000) {
+                stop()
+                MotionInterface.notify(
+                    "Could not start scan — the previous check is still " +
+                    "finishing. Please press Start again.", "error")
+            }
+        }
     }
 
     // ButtonPanel — sits above modal backdrops so it's always clickable
@@ -164,7 +191,7 @@ Rectangle {
         z: 10000
 
         scanning: bloodFlow.scanning
-        waiting: bloodFlow.configuring
+        waiting: bloodFlow.configuring || bloodFlow.scanStartPending
         camerasReady: bloodFlow.camerasReady && !bloodFlow.configuring
         reducedMode: bloodFlow.reducedMode
 
@@ -174,11 +201,12 @@ Rectangle {
         // an in-flight check), modalManager.closeCurrent() is a
         // no-op and the action below still runs.
         onStartStopClicked: {
+            // A start is already armed and waiting on the connector to go
+            // idle — ignore further clicks until it fires or times out.
+            if (bloodFlow.scanStartPending) return
             modalManager.closeCurrent()
             if (bloodFlow.scanning) {
                 scanRunner.cancel()
-                if (bloodFlow.reducedMode) reducedPlotLoader.item?.stopScan()
-                else                   embeddedPlotLoader.item?.stopScan()
                 // Notes modal opens via MotionInterface.scanNotesReady
                 // after the SDK actually unwinds and the duration line
                 // has been appended to scanNotes. Opening it here would
@@ -190,7 +218,7 @@ Rectangle {
                     contactQualityModal.reset(true, 0)
                     qualityCheckRunner.start()
                 } else {
-                    beginScanNow()
+                    beginScanWhenReady()
                 }
             }
         }
@@ -229,129 +257,37 @@ Rectangle {
     }
 
     // Data viewer — fills remaining space to the right of ButtonPanel.
-    // Phase 2a: useNewPlotViewer mounts the new PlotViewer via Loader when
-    // true; otherwise the legacy plots below render unchanged.
-    Component {
-        id: plotViewerComponent
-        PlotViewer {
-            reducedMode: bloodFlow.reducedMode
-            autoScale: settingsModal.autoScale
-            displayMode: settingsModal.showBfiBvi ? "bfi_bvi" : "mean_contrast"
-            leftMask:  bloodFlow.leftMask
-            rightMask: bloodFlow.rightMask
-            // Manual y-axis bounds — applied when autoScale is off.
-            settingBfiMin:      settingsModal.bfiMin
-            settingBfiMax:      settingsModal.bfiMax
-            settingBviMin:      settingsModal.bviMin
-            settingBviMax:      settingsModal.bviMax
-            settingMeanMin:     settingsModal.meanMin
-            settingMeanMax:     settingsModal.meanMax
-            settingContrastMin: settingsModal.contrastMin
-            settingContrastMax: settingsModal.contrastMax
-            // Bottom-right settings popup writes back through these
-            // signals → settingsModal owns the persisted state and
-            // the Settings modal stays in sync with the viewer's quick
-            // toggles.
-            onAutoScaleToggleRequested: function(enabled) {
-                settingsModal.autoScale = enabled
-                settingsModal.autoScalePerPlot = enabled
-            }
-            onDisplayModeToggleRequested: function(bfiBviMode) {
-                settingsModal.showBfiBvi = bfiBviMode
-            }
+    PlotViewer {
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.left: buttonPanel.right
+        anchors.right: parent.right
+        anchors.margins: 8
+        anchors.leftMargin: 16
+        reducedMode: bloodFlow.reducedMode
+        autoScale: settingsModal.autoScale
+        displayMode: settingsModal.showBfiBvi ? "bfi_bvi" : "mean_contrast"
+        leftMask:  bloodFlow.leftMask
+        rightMask: bloodFlow.rightMask
+        // Manual y-axis bounds — applied when autoScale is off.
+        settingBfiMin:      settingsModal.bfiMin
+        settingBfiMax:      settingsModal.bfiMax
+        settingBviMin:      settingsModal.bviMin
+        settingBviMax:      settingsModal.bviMax
+        settingMeanMin:     settingsModal.meanMin
+        settingMeanMax:     settingsModal.meanMax
+        settingContrastMin: settingsModal.contrastMin
+        settingContrastMax: settingsModal.contrastMax
+        // Bottom-right settings popup writes back through these
+        // signals → settingsModal owns the persisted state and
+        // the Settings modal stays in sync with the viewer's quick
+        // toggles.
+        onAutoScaleToggleRequested: function(enabled) {
+            settingsModal.autoScale = enabled
+            settingsModal.autoScalePerPlot = enabled
         }
-    }
-
-    Loader {
-        id: newPlotLoader
-        active: bloodFlow._useNewViewer
-        visible: bloodFlow._useNewViewer
-        anchors.top: parent.top
-        anchors.bottom: parent.bottom
-        anchors.left: buttonPanel.right
-        anchors.right: parent.right
-        anchors.margins: 8
-        anchors.leftMargin: 16
-        sourceComponent: plotViewerComponent
-    }
-
-    // Legacy plots — wrapped in Loaders so they're FULLY UNMOUNTED when
-    // the new viewer is active. Previously `visible: false` left their
-    // QML Connections blocks alive, so every scanBfiSampled / scanBviSampled
-    // / scanMeanSampled / scanContrastSampled / scanCameraTemperature /
-    // scanCorrectedBatch emit still fired their slots — ~1600 cross-thread
-    // signal events/sec keeping the QML main thread pinned at 3-5 Hz
-    // paint, plus burst spikes (500-850 ms) at dark-frame closes when
-    // 8 corrected-batches arrive in ~100 ms each fanning out to the
-    // legacy plot's heavy in-place rewrite handler.
-    Loader {
-        id: embeddedPlotLoader
-        active: !bloodFlow._useNewViewer && !bloodFlow.reducedMode
-        visible: active
-        anchors.top: parent.top
-        anchors.bottom: parent.bottom
-        anchors.left: buttonPanel.right
-        anchors.right: parent.right
-        anchors.margins: 8
-        anchors.leftMargin: 16
-        sourceComponent: Component {
-            EmbeddedRealtimePlot {
-                anchors.fill: parent
-                showBfiBvi:  settingsModal.showBfiBvi
-                windowSeconds: settingsModal.plotWindowSec
-                bfiColor: settingsModal.bfiColor
-                bviColor: settingsModal.bviColor
-                bviLowPassEnabled:  settingsModal.bviLowPassEnabled
-                bviLowPassCutoffHz: settingsModal.bviLowPassCutoffHz
-                bfiClampLow:  MotionInterface.appConfig.bfiClampLow  !== undefined ? MotionInterface.appConfig.bfiClampLow  : 0.0
-                bfiClampHigh: MotionInterface.appConfig.bfiClampHigh !== undefined ? MotionInterface.appConfig.bfiClampHigh : 10.0
-                bviClampLow:  MotionInterface.appConfig.bviClampLow  !== undefined ? MotionInterface.appConfig.bviClampLow  : 0.0
-                bviClampHigh: MotionInterface.appConfig.bviClampHigh !== undefined ? MotionInterface.appConfig.bviClampHigh : 10.0
-                autoScale:        settingsModal.autoScale
-                autoScalePerPlot: settingsModal.autoScalePerPlot
-                bfiMin:      settingsModal.bfiMin
-                bfiMax:      settingsModal.bfiMax
-                bviMin:      settingsModal.bviMin
-                bviMax:      settingsModal.bviMax
-                meanMin:     settingsModal.meanMin
-                meanMax:     settingsModal.meanMax
-                contrastMin: settingsModal.contrastMin
-                contrastMax: settingsModal.contrastMax
-                previewLeftMask:  bloodFlow.leftMask
-                previewRightMask: bloodFlow.rightMask
-            }
-        }
-    }
-
-    // FDA-mode data viewer — two big aggregated plots
-    Loader {
-        id: reducedPlotLoader
-        active: !bloodFlow._useNewViewer && bloodFlow.reducedMode
-        visible: active
-        anchors.top: parent.top
-        anchors.bottom: parent.bottom
-        anchors.left: buttonPanel.right
-        anchors.right: parent.right
-        anchors.margins: 8
-        anchors.leftMargin: 16
-        sourceComponent: Component {
-            ReducedPlotView {
-                anchors.fill: parent
-                windowSeconds: settingsModal.plotWindowSec
-                bfiColor: settingsModal.bfiColor
-                bviColor: settingsModal.bviColor
-                bviLowPassEnabled:  settingsModal.bviLowPassEnabled
-                bviLowPassCutoffHz: settingsModal.bviLowPassCutoffHz
-                bfiClampLow:  MotionInterface.appConfig.bfiClampLow  !== undefined ? MotionInterface.appConfig.bfiClampLow  : 0.0
-                bfiClampHigh: MotionInterface.appConfig.bfiClampHigh !== undefined ? MotionInterface.appConfig.bfiClampHigh : 10.0
-                bviClampLow:  MotionInterface.appConfig.bviClampLow  !== undefined ? MotionInterface.appConfig.bviClampLow  : 0.0
-                bviClampHigh: MotionInterface.appConfig.bviClampHigh !== undefined ? MotionInterface.appConfig.bviClampHigh : 10.0
-                autoScale: settingsModal.autoScale
-                bfiMin: settingsModal.bfiMin
-                bfiMax: settingsModal.bfiMax
-                bviMin: settingsModal.bviMin
-                bviMax: settingsModal.bviMax
-            }
+        onDisplayModeToggleRequested: function(bfiBviMode) {
+            settingsModal.showBfiBvi = bfiBviMode
         }
     }
 
@@ -422,10 +358,12 @@ Rectangle {
             reducedStartPending = false
         }
         onContinueRequested: {
-            console.warn("[CQDBG] onContinueRequested rsp=" + bloodFlow.reducedStartPending)
             if (bloodFlow.reducedStartPending) {
                 contactQualityModal.close()
-                beginScanNow()
+                // Gated, not direct: the CQ check's worker is often still
+                // unwinding when the user clicks Start Scan, and an
+                // immediate start would be refused (silently, pre-gate).
+                beginScanWhenReady()
             }
             // Otherwise (live-scan warning modal), Continue just dismisses.
         }
@@ -435,7 +373,6 @@ Rectangle {
             qualityCheckRunner.start()
         }
         onDismissed: {
-            console.warn("[CQDBG] onDismissed scanning=" + bloodFlow.scanning + " rsp=" + bloodFlow.reducedStartPending)
             if (!bloodFlow.scanning)
                 reducedStartPending = false
             if (!bloodFlow.reducedStartPending)
@@ -478,9 +415,12 @@ Rectangle {
             bloodFlow.scanning = false
             bloodFlow.suppressLiveCqModal = false
 
-            if (!ok && err !== "Canceled")
+            if (!ok && err !== "Canceled") {
                 console.log("ERROR: " + err)
-            if (bloodFlow.reducedMode) reducedPlotLoader.item?.stopScan(); else embeddedPlotLoader.item?.stopScan()
+                // The scan progress dialog that used to surface these is
+                // gone — without a toast, a failed start is invisible.
+                MotionInterface.notify("Scan failed: " + err, "error")
+            }
             // Notes modal opens via MotionInterface.scanNotesReady.
         }
     }

@@ -265,12 +265,11 @@ class _LivePlotSink:
                 mean_for_source: Optional[float] = None
                 contrast_for_source: Optional[float] = None
                 if not is_dark:
-                    # Two-pass refinement matches the BFI/BVI pattern: emit
-                    # the realtime dark-corrected mean (mean_dc_rt) and
-                    # shot-noise-corrected contrast (contrast_sn_rt) here;
-                    # _FinalBatchSink overwrites both by frame_id once a
-                    # dark interval closes (using the more-accurate
-                    # linearly-interpolated baseline). Skip NaN samples —
+                    # Emit the realtime dark-corrected mean (mean_dc_rt) and
+                    # shot-noise-corrected contrast (contrast_sn_rt). The
+                    # live display is realtime-only by design; the accurate
+                    # corrected record lands in the scan DB via the SDK's
+                    # ScanDBSink and is what replay shows. Skip NaN samples —
                     # early light frames before the first dark observation
                     # have NaN mean_dc_rt and shouldn't poison the plot.
                     if batch.mean_dc_rt is not None:
@@ -323,72 +322,6 @@ class _LivePlotSink:
             bfi=float(getattr(sample, "bfi", float("nan"))),
             bvi=float(getattr(sample, "bvi", float("nan"))),
         )
-
-    def on_complete(self) -> None:
-        pass
-
-
-class _FinalBatchSink:
-    """Subscribes to the 'final' pipeline channel and emits the
-    scanCorrectedBatch Qt signal into the QML realtime plot
-    (EmbeddedRealtimePlot.qml). Each batch corresponds to one closed
-    dark interval; the QML side overwrites the previously-plotted
-    realtime values with these more-accurate values, keyed by frame_id.
-    """
-
-    channels = {"final"}
-
-    def __init__(self, connector: "MotionConnector", plot_t0: float,
-                 live_source: "LiveScanSource"):
-        self._connector = connector
-        self._plot_t0 = plot_t0
-        self._live_source = live_source
-
-    def on_scan_start(self, meta) -> None:
-        pass
-
-    def consume(self, channel: str, batch) -> None:
-        if channel != "final":
-            return
-        # Current SDK final payloads are EnrichedCorrectedInterval objects with
-        # .frames; keep .samples fallback for older corrected-batch shims.
-        connector = self._connector
-        plot_ts = time.monotonic() - self._plot_t0
-        payload = []
-        samples = getattr(batch, "frames", None)
-        if samples is None:
-            samples = getattr(batch, "samples", ())
-        for s in samples:
-            side = str(getattr(s, "side", ""))
-            cam_id = int(getattr(s, "cam_id", -1))
-            should_emit, recovery_msg = _check_dropped_camera_emit(
-                side, cam_id,
-                connector._camera_dropped,
-                connector._camera_dropped_recovery_logged,
-            )
-            if recovery_msg is not None:
-                logger.warning(recovery_msg)
-            if not should_emit:
-                continue
-            payload.append({
-                "side": side,
-                "camId": cam_id,
-                "frameId": int(getattr(s, "abs_frame_id", getattr(s, "absolute_frame_id", 0))),
-                "ts": plot_ts,
-                "bfi": float(getattr(s, "bfi", 0.0)),
-                "bvi": float(getattr(s, "bvi", 0.0)),
-                "mean": float(getattr(s, "mean", 0.0)),
-                "contrast": float(getattr(s, "contrast", 0.0)),
-            })
-        if payload:
-            connector.scanCorrectedBatch.emit(payload)
-            # New viewer intentionally NOT fed corrected values for now —
-            # the in-place buffer rewrite at every dark-interval close
-            # caused visible mid-scan disruption ("data jumping between
-            # two datasets"). Legacy EmbeddedRealtimePlot still receives
-            # corrections via scanCorrectedBatch.emit above. Re-enable
-            # `self._live_source.apply_corrected_batch(payload)` when we
-            # have a smoother handoff (e.g. dual-buffer overlay).
 
     def on_complete(self) -> None:
         pass
@@ -559,7 +492,6 @@ class MotionConnector(QObject):
     scanBviCorrectedSampled = pyqtSignal(
         str, int, float, float
     )  # side, cam_id, timestamp_s, bvi  (kept for backward compat)
-    scanCorrectedBatch = pyqtSignal('QVariantList')  # list of {side,camId,frameId,ts,bfi,bvi}
     scanCameraTemperature = pyqtSignal(str, int, float)  # side, cam_id, temperature_c
     cameraDropoutDetected = pyqtSignal(str, int, str)  # side ("left"/"right"), cam_id (0-7), elapsed HH:MM:SS
 
@@ -1979,7 +1911,6 @@ class MotionConnector(QObject):
             ),
             sinks=[
                 _LivePlotSink(connector=self, plot_t0=plot_t0, live_source=live_source),
-                _FinalBatchSink(connector=self, plot_t0=plot_t0, live_source=live_source),
                 _TriggerStateSink(connector=self),
                 _CompletionSink(connector=self, on_complete_cb=_on_pipeline_complete),
             ],
@@ -2546,6 +2477,15 @@ class MotionConnector(QObject):
             return "Camera configuration already in progress"
         return None
 
+    @pyqtSlot(result=bool)
+    def isPipelineIdle(self) -> bool:
+        """QML probe: True when a pipeline-starting slot called right now
+        would not be refused by _ensure_idle. The pre-scan CQ check's SDK
+        worker keeps unwinding for ~2 s after results are displayed, so a
+        fast Start Scan click used to be refused synchronously and silently
+        — BloodFlow's scan-start gate polls this instead of firing blind."""
+        return self._ensure_idle() is None
+
     # ──────────────────────────────────────────────────────────────────
     @pyqtSlot()
     def runContactQualityCheck(self):
@@ -2847,6 +2787,7 @@ class MotionConnector(QObject):
     ) -> bool:
         err = self._ensure_idle()
         if err is not None:
+            logger.warning("startConfigureCameraSensors refused: %s", err)
             self.configFinished.emit(False, err)
             return False
         self._config_running = True

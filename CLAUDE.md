@@ -32,7 +32,7 @@ python -m PyInstaller -y openwater.spec # package .exe → dist/OpenWaterApp/
 | `pages/DataAnalysis.qml` | Post-processing + BFI/BVI visualization. |
 | `pages/Settings.qml` | Settings overlay. |
 | `pages/scan/` | `ScanRunner.qml` plus task QMLs: `CaptureDataTask`, `ContactQualityCheckTask`, `FlashSensorsTask`, `PostProcessTask`, `SetTriggerTask`. Newer orchestration suite. |
-| `components/` | 26 reusable QML components — `SettingsModal`, `ContactQualityModal`, `CameraDot`, `TestResultsWindow`, etc. |
+| `components/` | 29 reusable QML components — `SettingsModal`, `ContactQualityModal`, `CameraDot`, `TestResultsWindow`, etc. |
 | `processing/visualize_bloodflow.py` | BFI/BVI computation from CSV histograms. |
 | `config/app_config.json` | 56 feature flags / thresholds, grouped by topic: output paths, scan/camera masks, plot/UI, calibration + FT thresholds, contact quality, developer/debug. |
 | `config/laser_params.json` | 18 laser I2C register sets (TA / SEED / EE / OPT variants). **Not user-tunable calibration data** — init/baseline commands for the laser driver chips. |
