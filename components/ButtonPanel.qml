@@ -15,8 +15,8 @@ Rectangle {
     border.width: 1
 
     property bool scanning: false
-    property bool waiting: false       // true while cameras are flashing / scan is arming
-    property bool camerasReady: false  // true when camera flash is complete
+    property bool waiting: false       // true while a scan start is armed (pipeline-idle gate)
+    property bool camerasReady: false  // gates Start/Check enablement
     property bool reducedMode: false       // FDA mode hides scan-settings button
 
     // Connection state — drives start button icon and enablement.

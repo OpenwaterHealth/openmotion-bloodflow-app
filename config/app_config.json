@@ -8,7 +8,6 @@
   "reducedMode": true,
   "reducedModeLeftMask": 195,
   "reducedModeRightMask": 195,
-  "autoConfigureOnStartup": false,
   "uncorrectedOnly": true,
 
   "showBfiBvi": true,

@@ -90,7 +90,6 @@ def _load_app_config() -> dict:
         "leftMask": 0x66,   # 0b01100110 — cameras 2,3,6,7 (Middle pattern)
         "rightMask": 0x66,
         "uncorrectedOnly": False,
-        "autoConfigureOnStartup": True,
         "developerMode": False,
         "showBfiBvi": True,
         "bfiMin": 0.0,
