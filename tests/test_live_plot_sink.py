@@ -22,10 +22,11 @@ class _RecorderLiveSource:
         self.dropped = []
 
     def append_uncorrected(self, *, side, cam_id, frame_id, t, bfi, bvi,
-                           mean=None, contrast=None):
+                           mean=None, contrast=None, temp=None):
         self.appended.append({
             "side": side, "cam_id": cam_id, "frame_id": frame_id, "t": t,
             "bfi": bfi, "bvi": bvi, "mean": mean, "contrast": contrast,
+            "temp": temp,
         })
 
     def mark_dropped(self, *, side, cam_id, t):
@@ -220,3 +221,81 @@ def test_live_plot_sink_appends_to_live_source():
     assert rec["bvi"] == pytest.approx(3.3)
     assert rec["mean"] == pytest.approx(125.0)
     assert rec["contrast"] == pytest.approx(0.25)
+
+
+def test_live_plot_sink_passes_temp_for_light_frames():
+    """Light frames carry the camera temperature into the plot source as
+    the "temp" metric (issue #165 — per-cell dev-mode readout)."""
+    conn = _connector()
+    sink, src = _make_sink(conn)
+    batch = SimpleNamespace(
+        bfi_live=np.zeros((1, 2, 8), dtype=np.float32),
+        bvi_live=np.zeros((1, 2, 8), dtype=np.float32),
+        mean_dc_rt=np.zeros((1, 2, 8), dtype=np.float32),
+        contrast_sn_rt=np.zeros((1, 2, 8), dtype=np.float32),
+        temperature_c=np.full((1, 2, 8), 54.3, dtype=np.float32),
+        frame_type=np.array(["light"], dtype="<U8"),
+        timestamp_s=np.array([0.5], dtype=np.float64),
+        abs_frame_ids=np.array([1], dtype=np.int64),
+        side_ids=np.array([0], dtype=np.int8),
+        cam_ids=np.array([0], dtype=np.int8),
+    )
+    batch.bfi_live[0, 0, 0] = 0.3
+    batch.bvi_live[0, 0, 0] = 5.0
+
+    sink.consume("live", batch)
+
+    assert len(src.appended) == 1
+    assert src.appended[0]["temp"] == pytest.approx(54.3, abs=1e-4)
+
+
+def test_live_plot_sink_no_temp_for_dark_frames():
+    """Dark frames have no meaningful camera-temp reading — temp must be
+    None so the plot's temp stream only carries light-frame readings."""
+    conn = _connector()
+    sink, src = _make_sink(conn)
+    batch = SimpleNamespace(
+        bfi_live=np.zeros((1, 2, 8), dtype=np.float32),
+        bvi_live=np.zeros((1, 2, 8), dtype=np.float32),
+        mean_dc_rt=np.zeros((1, 2, 8), dtype=np.float32),
+        contrast_sn_rt=np.zeros((1, 2, 8), dtype=np.float32),
+        temperature_c=np.full((1, 2, 8), 54.3, dtype=np.float32),
+        frame_type=np.array(["dark"], dtype="<U8"),
+        timestamp_s=np.array([0.5], dtype=np.float64),
+        abs_frame_ids=np.array([1], dtype=np.int64),
+        side_ids=np.array([0], dtype=np.int8),
+        cam_ids=np.array([0], dtype=np.int8),
+    )
+    batch.bfi_live[0, 0, 0] = 0.3
+    batch.bvi_live[0, 0, 0] = 5.0
+
+    sink.consume("live", batch)
+
+    assert len(src.appended) == 1
+    assert src.appended[0]["temp"] is None
+
+
+def test_live_plot_sink_no_temp_when_non_finite():
+    """A NaN temperature (e.g. sensor metadata gap) is not appended —
+    the temp buffer carries only real readings."""
+    conn = _connector()
+    sink, src = _make_sink(conn)
+    batch = SimpleNamespace(
+        bfi_live=np.zeros((1, 2, 8), dtype=np.float32),
+        bvi_live=np.zeros((1, 2, 8), dtype=np.float32),
+        mean_dc_rt=np.zeros((1, 2, 8), dtype=np.float32),
+        contrast_sn_rt=np.zeros((1, 2, 8), dtype=np.float32),
+        temperature_c=np.full((1, 2, 8), np.nan, dtype=np.float32),
+        frame_type=np.array(["light"], dtype="<U8"),
+        timestamp_s=np.array([0.5], dtype=np.float64),
+        abs_frame_ids=np.array([1], dtype=np.int64),
+        side_ids=np.array([0], dtype=np.int8),
+        cam_ids=np.array([0], dtype=np.int8),
+    )
+    batch.bfi_live[0, 0, 0] = 0.3
+    batch.bvi_live[0, 0, 0] = 5.0
+
+    sink.consume("live", batch)
+
+    assert len(src.appended) == 1
+    assert src.appended[0]["temp"] is None
