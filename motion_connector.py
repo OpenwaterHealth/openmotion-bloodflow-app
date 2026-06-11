@@ -169,7 +169,7 @@ class _LivePlotSink:
 
     channels = {"live", "live_side"}
 
-    def __init__(self, connector: "MOTIONConnector", plot_t0: float,
+    def __init__(self, connector: "MotionConnector", plot_t0: float,
                  live_source: "LiveScanSource"):
         self._connector = connector
         self._plot_t0 = plot_t0
@@ -338,7 +338,7 @@ class _FinalBatchSink:
 
     channels = {"final"}
 
-    def __init__(self, connector: "MOTIONConnector", plot_t0: float,
+    def __init__(self, connector: "MotionConnector", plot_t0: float,
                  live_source: "LiveScanSource"):
         self._connector = connector
         self._plot_t0 = plot_t0
@@ -413,7 +413,7 @@ class _TriggerStateSink:
 
     channels: set = frozenset({"diagnostics"})
 
-    def __init__(self, connector: "MOTIONConnector"):
+    def __init__(self, connector: "MotionConnector"):
         self._connector = connector
 
     def on_scan_start(self, meta) -> None:
@@ -459,7 +459,7 @@ class _CompletionSink:
 
     channels: set = frozenset()  # no data channels — lifecycle only
 
-    def __init__(self, connector: "MOTIONConnector", on_complete_cb):
+    def __init__(self, connector: "MotionConnector", on_complete_cb):
         self._connector = connector
         self._on_complete_cb = on_complete_cb
         self._meta = None
@@ -477,7 +477,7 @@ class _CompletionSink:
             logger.exception("_CompletionSink.on_complete callback raised")
 
 
-class MOTIONConnector(QObject):
+class MotionConnector(QObject):
     # Ensure signals are correctly defined
     signalConnected = pyqtSignal(str, str)  # (descriptor, port)
     signalDisconnected = pyqtSignal(str, str)  # (descriptor, port)
@@ -772,7 +772,7 @@ class MOTIONConnector(QObject):
         # Note: synthetic startup connect events for already-attached
         # devices are no longer needed. The new SDK lifecycle is:
         #   1. main.py constructs MotionInterface
-        #   2. main.py constructs MOTIONConnector (this); we subscribe
+        #   2. main.py constructs MotionConnector (this); we subscribe
         #      to handle.signal_state_changed in connect_signals()
         #   3. main.py calls motion_interface.start(), which discovers
         #      devices and drives state-machine transitions, firing the
@@ -1363,7 +1363,7 @@ class MOTIONConnector(QObject):
     @pyqtSlot()
     def shutdown(self):
         """Shutdown connector. Stops capture, stops monitoring, then disconnects all devices."""
-        logger.info("Shutting down MOTIONConnector...")
+        logger.info("Shutting down MotionConnector...")
         self.stopCapture()
 
         try:
@@ -1379,7 +1379,7 @@ class MOTIONConnector(QObject):
         except Exception as e:
             logger.warning("Error disconnecting interface: %s", e)
 
-        logger.info("MOTIONConnector shutdown complete.")
+        logger.info("MotionConnector shutdown complete.")
 
     # --- SCAN MANAGEMENT METHODS ---
     @pyqtSlot(result=list)
@@ -1836,7 +1836,7 @@ class MOTIONConnector(QObject):
     @pyqtSlot(str, str, int, bool, str, result=int)
     def notify(self, text: str, type_: str = "info", duration_ms: int = 4000,
                dismissible: bool = True, tag: str = "") -> int:
-        """Fire a toast notification. Reachable from QML as MOTIONInterface.notify(...)
+        """Fire a toast notification. Reachable from QML as MotionInterface.notify(...)
         and from any Python code holding the connector instance.
 
         Args:

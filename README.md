@@ -1,4 +1,4 @@
-# OpenMOTION Bloodflow Application
+# Open-Motion Bloodflow Application
 
 Python Application UI for OpenMotion Bloodflow monitoring.
 
@@ -15,7 +15,7 @@ Python Application UI for OpenMotion Bloodflow monitoring.
 ## Prerequisites
 
 - **Python 3.12 or later**
-- **OpenMOTION SDK** (`openmotion-pylib`) — installed from the [openmotion-sdk](https://github.com/OpenwaterHealth/OpenMOTION-Pylib) repo
+- **Open-Motion SDK** (`openmotion-pylib`) — installed from the [openmotion-sdk](https://github.com/OpenwaterHealth/OpenMOTION-Pylib) repo
 - **libusb** — required for USB communication with sensor modules
   - macOS: `brew install libusb`
   - Linux: `sudo apt install libusb-1.0-0-dev` (Debian/Ubuntu)
@@ -29,7 +29,7 @@ python3.12 -m venv .venv
 source .venv/bin/activate    # macOS/Linux
 # .venv\Scripts\activate     # Windows
 
-# Install the OpenMOTION SDK (from the neighboring repo)
+# Install the Open-Motion SDK (from the neighboring repo)
 pip install -e ../openmotion-sdk
 
 # Install app dependencies

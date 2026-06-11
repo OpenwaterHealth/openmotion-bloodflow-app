@@ -68,7 +68,7 @@ Rectangle {
                 anchors.fill: parent
                 cursorShape: Qt.PointingHandCursor
                 hoverEnabled: true
-                onClicked: MOTIONInterface.openDownloadUrl(banner.downloadUrl)
+                onClicked: MotionInterface.openDownloadUrl(banner.downloadUrl)
                 onContainsMouseChanged: parent.color = containsMouse ? "#E0E0E0" : "#FFFFFF"
             }
         }
@@ -96,13 +96,13 @@ Rectangle {
 
     // Reduced (clinical) mode: clinical users shouldn't see update
     // prompts. Skip the auto-check on launch and refuse to show the
-    // banner even if MOTIONInterface.checkForUpdates() is somehow
+    // banner even if MotionInterface.checkForUpdates() is somehow
     // triggered (e.g. via developer-mode-only Settings row that
     // shouldn't be reachable in reduced mode anyway). Issue #96.
-    readonly property bool _reducedMode: MOTIONInterface.appConfig.reducedMode === true
+    readonly property bool _reducedMode: MotionInterface.appConfig.reducedMode === true
 
     Connections {
-        target: MOTIONInterface
+        target: MotionInterface
         function onUpdateAvailable(version, url) {
             if (banner._reducedMode) return
             banner.latestVersion = version
@@ -118,6 +118,6 @@ Rectangle {
         interval: 3000
         running: !banner._reducedMode
         repeat: false
-        onTriggered: MOTIONInterface.checkForUpdates()
+        onTriggered: MotionInterface.checkForUpdates()
     }
 }

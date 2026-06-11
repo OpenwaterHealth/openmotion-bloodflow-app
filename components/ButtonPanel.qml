@@ -23,8 +23,8 @@ Rectangle {
     // A laser-safety trip is surfaced via a persistent NotificationCenter
     // toast (see motion_connector.safetyFailure setter), not by faking
     // a disconnect here.
-    property bool allConnected: MOTIONInterface.consoleConnected &&
-        (MOTIONInterface.leftSensorConnected || MOTIONInterface.rightSensorConnected)
+    property bool allConnected: MotionInterface.consoleConnected &&
+        (MotionInterface.leftSensorConnected || MotionInterface.rightSensorConnected)
     signal startStopClicked()
     signal scanSettingsClicked()
     signal notesClicked()

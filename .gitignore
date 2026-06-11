@@ -101,3 +101,4 @@ tests/New_UI_TestScripts/run-logs/
 tests/New_UI_TestScripts/scan_data/
 tests/New_UI_TestScripts/app-logs/
 tests/New_UI_TestScripts/debug_uia.py
+test_logs/

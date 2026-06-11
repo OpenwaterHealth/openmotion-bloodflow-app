@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtQml import QQmlApplicationEngine, qmlRegisterSingletonInstance
 from PyQt6.QtCore import qInstallMessageHandler, QtMsgType
 
-from motion_connector import MOTIONConnector
+from motion_connector import MotionConnector
 from omotion import MotionInterface
 from utils.single_instance import check_single_instance, cleanup_single_instance
 from version import get_version
@@ -273,8 +273,8 @@ def main():
 
     engine = QQmlApplicationEngine()
 
-    connector = MOTIONConnector(motion_interface, app_config=app_config, data_dir=_data_dir)
-    qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MOTIONInterface", connector)
+    connector = MotionConnector(motion_interface, app_config=app_config, data_dir=_data_dir)
+    qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MotionInterface", connector)
     engine.rootContext().setContextProperty("appVersion", APP_VERSION)
 
     # Load the QML file
@@ -286,7 +286,7 @@ def main():
 
     # Start the SDK's connection monitor synchronously — it owns its own
     # daemon thread, so the app's Qt event loop runs unblocked.
-    logger.info("Starting MOTION monitoring...")
+    logger.info("Starting Motion monitoring...")
     motion_interface.start(wait=True, wait_timeout=2.0)
 
     def handle_exit():
