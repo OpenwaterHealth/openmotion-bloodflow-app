@@ -1204,7 +1204,7 @@ class MotionConnector(QObject):
 
         try:
             self.tec_status(snap)
-            logger.info(
+            logger.debug(
                 "TEC Status – temp: %.2f set: %.2f tec_c: %.3f tec_v: %.3f good: %s",
                 self._tec_voltage, self._tec_temp,
                 snap.tec_curr_raw, snap.tec_volt_raw, snap.tec_good,
@@ -1215,7 +1215,7 @@ class MotionConnector(QObject):
         try:
             self.pdu_mon(snap)
             if snap.pdu_volts:
-                logger.info(
+                logger.debug(
                     "PDU MON ADC0 vals: %s",
                     " ".join(f"{(v / SCALE_V):.3f}" for v in snap.pdu_volts[:8]),
                 )
@@ -1223,7 +1223,7 @@ class MotionConnector(QObject):
                     (v / SCALE_V) if idx == 6 else (v / SCALE_I)
                     for idx, v in enumerate(snap.pdu_volts[8:])
                 ]
-                logger.info(
+                logger.debug(
                     "PDU MON ADC1 vals: %s",
                     " ".join(f"{v:.3f}" for v in adc1_scaled),
                 )
@@ -1236,7 +1236,7 @@ class MotionConnector(QObject):
             logger.error("_on_telemetry_update safety error: %s", exc)
 
         try:
-            logger.info(
+            logger.debug(
                 "Analog Values – TCM: %d, TCL: %d, PDC: %.3f",
                 snap.tcm, snap.tcl, snap.pdc,
             )
