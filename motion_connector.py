@@ -74,9 +74,7 @@ def developer_password_matches(pw) -> bool:
     return isinstance(pw, str) and pw == _DEVELOPER_PASSWORD
 
 
-# Global loggers - will be configured by _configure_logging method
 logger = logging.getLogger("openmotion.bloodflow-app.connector")
-run_logger = logging.getLogger("bloodflow-app.runlog")
 
 # Define system states
 DISCONNECTED = 0
@@ -171,7 +169,7 @@ class _LivePlotSink:
 
     channels = {"live", "live_side"}
 
-    def __init__(self, connector: "MOTIONConnector", plot_t0: float,
+    def __init__(self, connector: "MotionConnector", plot_t0: float,
                  live_source: "LiveScanSource"):
         self._connector = connector
         self._plot_t0 = plot_t0
@@ -244,7 +242,6 @@ class _LivePlotSink:
                 )
                 if recovery_msg is not None:
                     logger.warning(recovery_msg)
-                    run_logger.warning(recovery_msg)
                 if not should_emit:
                     continue
 
@@ -263,7 +260,6 @@ class _LivePlotSink:
                         f"temperature {temp_c:.1f}°C >= {threshold:.0f}°C threshold."
                     )
                     connector.captureLog.emit(msg)
-                    run_logger.warning(msg)
                     logger.warning(msg)
 
                 mean_for_source: Optional[float] = None
@@ -342,7 +338,7 @@ class _FinalBatchSink:
 
     channels = {"final"}
 
-    def __init__(self, connector: "MOTIONConnector", plot_t0: float,
+    def __init__(self, connector: "MotionConnector", plot_t0: float,
                  live_source: "LiveScanSource"):
         self._connector = connector
         self._plot_t0 = plot_t0
@@ -372,7 +368,6 @@ class _FinalBatchSink:
             )
             if recovery_msg is not None:
                 logger.warning(recovery_msg)
-                run_logger.warning(recovery_msg)
             if not should_emit:
                 continue
             payload.append({
@@ -418,7 +413,7 @@ class _TriggerStateSink:
 
     channels: set = frozenset({"diagnostics"})
 
-    def __init__(self, connector: "MOTIONConnector"):
+    def __init__(self, connector: "MotionConnector"):
         self._connector = connector
 
     def on_scan_start(self, meta) -> None:
@@ -464,7 +459,7 @@ class _CompletionSink:
 
     channels: set = frozenset()  # no data channels — lifecycle only
 
-    def __init__(self, connector: "MOTIONConnector", on_complete_cb):
+    def __init__(self, connector: "MotionConnector", on_complete_cb):
         self._connector = connector
         self._on_complete_cb = on_complete_cb
         self._meta = None
@@ -482,7 +477,7 @@ class _CompletionSink:
             logger.exception("_CompletionSink.on_complete callback raised")
 
 
-class MOTIONConnector(QObject):
+class MotionConnector(QObject):
     # Ensure signals are correctly defined
     signalConnected = pyqtSignal(str, str)  # (descriptor, port)
     signalDisconnected = pyqtSignal(str, str)  # (descriptor, port)
@@ -651,7 +646,7 @@ class MOTIONConnector(QObject):
         self._verbose_command_handling    = bool(cfg.get("verboseCommandHandling", False))
         # Single output root: caller-supplied (from main.py) wins, else
         # dataDirectory from app config, else default (cwd or ~/Documents).
-        # All sub-paths (app-logs, run-logs, scan files, scans.db,
+        # All sub-paths (app-logs, scan files, scans.db,
         # ft-test-csvs) live under self._directory.
         resolved_dir = data_dir or cfg.get("dataDirectory") or self._default_data_dir()
         self._power_off_unused_cameras    = bool(cfg.get("powerOffUnusedCameras", False))
@@ -659,9 +654,6 @@ class MOTIONConnector(QObject):
         raw_csv                           = cfg.get("rawCsvDurationSec")
         self._raw_csv_duration_sec        = float(raw_csv) if raw_csv is not None else None
         self._uncorrected_only            = bool(cfg.get("uncorrectedOnly", False))
-
-        # Configure logging with the provided level
-        self._configure_logging(log_level)
 
         # Initialize CSV output directory to user's home directory
         self._csv_output_directory = os.path.expanduser("~")
@@ -758,14 +750,11 @@ class MOTIONConnector(QObject):
         self._pdu_raws = [0] * 16
         self._pdu_vals = [0.0] * 16
 
-        # --- per-trigger run log support ---
-        self._runlog_handler = None  # logging.FileHandler or None
-        self._runlog_path = None  # str or None
-        self._runlog_active = False  # bool
-        self._runlog_csv_path = None  # str or None
-        self._runlog_csv_file = None  # open file handle or None
-        self._runlog_csv_writer = None  # csv.writer or None
-        self._runlog_csv_lock = threading.Lock()
+        # Start times for the scan start/end log banners (monotonic, or
+        # None when the flow has never run).
+        self._calibration_t0 = None
+        self._test_scan_t0 = None
+        self._cq_t0 = None
 
         os.makedirs(resolved_dir, exist_ok=True)
         self._directory = resolved_dir
@@ -777,7 +766,7 @@ class MOTIONConnector(QObject):
         # Note: synthetic startup connect events for already-attached
         # devices are no longer needed. The new SDK lifecycle is:
         #   1. main.py constructs MotionInterface
-        #   2. main.py constructs MOTIONConnector (this); we subscribe
+        #   2. main.py constructs MotionConnector (this); we subscribe
         #      to handle.signal_state_changed in connect_signals()
         #   3. main.py calls motion_interface.start(), which discovers
         #      devices and drives state-machine transitions, firing the
@@ -802,12 +791,6 @@ class MOTIONConnector(QObject):
             if isinstance(min_contrast_per_camera, (list, tuple))
             else None
         )
-
-    def _configure_logging(self, log_level):
-
-        run_logger.propagate = True
-        # TEC RT lookup now lives in omotion.console_telemetry_conversions
-        # (lazy-loaded from the SDK wheel's omotion/models/10K3CG_R-T.csv).
 
     def _compute_sensor_debug_flags(self) -> int:
         """Compute sensor debug flag bitfield from current config booleans."""
@@ -893,192 +876,12 @@ class MOTIONConnector(QObject):
                     refresh_cache()  # fallback: fill cache without power cycle (may get zeros for off cameras)
         except Exception as e:
             logger.debug("Could not refresh sensor ID cache for %s: %s", side, e)
-        # self._interface.log_sensor_info(side)
+
+        # Log camera UIDs once per sensor connect (the cache above just
+        # filled), instead of re-logging them at every scan start.
+        self._read_and_log_camera_uids(side)
+
         self.connectionStatusChanged.emit()
-
-    def _start_runlog(self, subject_id: str = None):
-        """
-        Create a dedicated run log file and attach it to the global logger
-        so that all logger.info / logger.error etc. also go into this file
-        while the trigger is running.
-        """
-        if self._runlog_active:
-            # Already running; nothing to do
-            return
-
-        # Directory for individual trigger runs
-        run_dir = os.path.join(self._directory, "run-logs")
-        os.makedirs(run_dir, exist_ok=True)
-
-        # Timestamped filename for this specific trigger session
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        base_subject = subject_id or self._user_label or "unknown"
-        safe_subject = re.sub(r"[^A-Za-z0-9_-]", "", base_subject)
-        self._runlog_path = os.path.join(run_dir, f"run-{safe_subject}_{ts}.log")
-        self._runlog_csv_path = os.path.join(run_dir, f"run-{safe_subject}_{ts}.csv")
-
-        # Create handler with immediate flushing (delay=False ensures file is opened immediately)
-        run_handler = logging.FileHandler(
-            self._runlog_path, mode="w", encoding="utf-8", delay=False
-        )
-        # Match the global formatter you already defined at top of file
-        run_handler.setFormatter(
-            logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-        )
-
-        run_handler.setLevel(logging.INFO)
-
-        # Attach this handler to run_logger ONLY
-        run_logger.addHandler(run_handler)
-
-        # Ensure run_logger has a level set (in case it wasn't configured)
-        if run_logger.level == logging.NOTSET:
-            run_logger.setLevel(logging.INFO)
-
-        # Save so we can remove/close it later
-        self._runlog_handler = run_handler
-        self._runlog_active = True
-
-        # Initialize CSV telemetry log (same basename as run log).
-        # Issue #43: clinical users don't need per-scan TCM / TCL / PDC
-        # samples — gate the file creation on developerMode. Skipping
-        # the open leaves _runlog_csv_writer as None, which
-        # _write_runlog_csv_sample already null-checks, so per-update
-        # writes become no-ops.
-        if self._app_config.get("developerMode", False):
-            try:
-                self._runlog_csv_file = open(
-                    self._runlog_csv_path, "w", newline="", encoding="utf-8"
-                )
-                self._runlog_csv_writer = csv.writer(self._runlog_csv_file)
-                self._runlog_csv_writer.writerow(
-                    ["timestamp", "unix_ms", "tcm", "tcl", "pdc"]
-                )
-                self._runlog_csv_file.flush()
-            except Exception as e:
-                logger.error(f"Failed to open run CSV log: {e}")
-                self._runlog_csv_file = None
-                self._runlog_csv_writer = None
-        else:
-            self._runlog_csv_file = None
-            self._runlog_csv_writer = None
-            self._runlog_csv_path = None
-
-        # --- Gather version info for header ---
-        # SDK version (MOTION SDK / sensor SDK)
-        try:
-            sdk_ver = (
-                self._interface.get_sdk_version()
-            )  # same as get_sdk_version() slot :contentReference[oaicite:4]{index=4}
-        except Exception as e:
-            sdk_ver = f"ERROR({e})"
-
-        # App version (from constant we defined at top)
-        try:
-            from main import APP_VERSION
-
-            app_ver = APP_VERSION  # from main.py
-        except Exception as e:
-            app_ver = f"ERROR({e})"
-
-        # Console firmware version (from console module) :contentReference[oaicite:5]{index=5}
-        try:
-            fw_ver = self._interface.console.get_version()
-        except Exception as e:
-            fw_ver = f"ERROR({e})"
-
-        #
-        # Write session header into the run log
-        #
-        run_logger.info("=" * 80)
-        run_logger.info("RUN START")
-        run_logger.info("=" * 80)
-        run_logger.info(f"App Version: {app_ver}")
-        run_logger.info(f"SDK Version: {sdk_ver}")
-        run_logger.info(f"Console Firmware: {fw_ver}")
-
-        self._read_and_log_camera_uids()
-
-        # Flush the handler to ensure header is written immediately
-        try:
-            self._runlog_handler.flush()
-        except Exception as e:
-            logger.error(f"Error flushing run log handler after header: {e}")
-
-        # Also drop a breadcrumb to the main logger so humans see it in console/UI log:
-        logger.info(f"[RUNLOG] started -> {self._runlog_path}")
-
-    def _stop_runlog(self):
-        """
-        Detach and close the per-run file handler.
-        """
-        if not self._runlog_active or self._runlog_handler is None:
-            return
-
-        # Mark end of run in the run log
-        run_logger.info(f"[RUNLOG] Trigger run logging stopped -> {self._runlog_path}")
-        run_logger.info("========== RUN END ==========")
-
-        # Also note it in the main logger (console/app log)
-        logger.info(f"[RUNLOG] stopped -> {self._runlog_path}")
-
-        # Flush the handler before removing it to ensure all data is written
-        try:
-            self._runlog_handler.flush()
-        except Exception as e:
-            logger.error(f"Error flushing run log handler: {e}")
-
-        # 1. Remove handler from run_logger
-        try:
-            run_logger.removeHandler(self._runlog_handler)
-        except Exception as e:
-            logger.error(f"Error detaching run log handler: {e}")
-
-        # 2. Close the handler so the file is flushed and released
-        try:
-            self._runlog_handler.close()
-        except Exception as e:
-            logger.error(f"Error closing run log handler: {e}")
-
-        # 3. Clear state
-        self._runlog_handler = None
-        self._runlog_path = None
-        self._runlog_active = False
-
-        # Close CSV telemetry log
-        with self._runlog_csv_lock:
-            if self._runlog_csv_file is not None:
-                try:
-                    self._runlog_csv_file.flush()
-                except Exception as e:
-                    logger.error(f"Error flushing run CSV log: {e}")
-                try:
-                    self._runlog_csv_file.close()
-                except Exception as e:
-                    logger.error(f"Error closing run CSV log: {e}")
-            self._runlog_csv_file = None
-            self._runlog_csv_writer = None
-            self._runlog_csv_path = None
-
-    def _write_runlog_csv_sample(
-        self, tcm: int, tcl: int, pdc: float, timestamp: float
-    ):
-        if not self._runlog_active or self._runlog_csv_writer is None:
-            return
-        iso_ts = datetime.datetime.fromtimestamp(timestamp).isoformat(
-            timespec="milliseconds"
-        )
-        unix_ms = int(timestamp * 1000)
-        with self._runlog_csv_lock:
-            if self._runlog_csv_writer is None:
-                return
-            try:
-                self._runlog_csv_writer.writerow(
-                    [iso_ts, unix_ms, tcm, tcl, f"{pdc:.3f}"]
-                )
-                self._runlog_csv_file.flush()
-            except Exception as e:
-                logger.error(f"Failed to write run CSV sample: {e}")
 
     # --- GETTERS/SETTERS FOR Qt PROPERTIES ---
     def getUserLabel(self) -> str:
@@ -1298,6 +1101,15 @@ class MOTIONConnector(QObject):
                         self.consoleFanChanged.emit()
                     else:
                         logger.error("Failed to set console fan speed")
+                    # Apply laser-power params once per console connect —
+                    # the FPGA registers are volatile across power cycles,
+                    # so every (re)connect needs them. Scans no longer
+                    # re-apply per run (was SetTriggerLaserTask + the
+                    # issue-#108 cold-start guards).
+                    if self.set_laser_power_from_config(self._interface):
+                        logger.info("Laser power params applied from config")
+                    else:
+                        logger.error("Failed to apply laser power params from config")
                 except Exception as e:
                     logger.warning(
                         f"Console connect-time setup interrupted "
@@ -1392,7 +1204,7 @@ class MOTIONConnector(QObject):
 
         try:
             self.tec_status(snap)
-            run_logger.info(
+            logger.debug(
                 "TEC Status – temp: %.2f set: %.2f tec_c: %.3f tec_v: %.3f good: %s",
                 self._tec_voltage, self._tec_temp,
                 snap.tec_curr_raw, snap.tec_volt_raw, snap.tec_good,
@@ -1403,7 +1215,7 @@ class MOTIONConnector(QObject):
         try:
             self.pdu_mon(snap)
             if snap.pdu_volts:
-                run_logger.info(
+                logger.debug(
                     "PDU MON ADC0 vals: %s",
                     " ".join(f"{(v / SCALE_V):.3f}" for v in snap.pdu_volts[:8]),
                 )
@@ -1411,7 +1223,7 @@ class MOTIONConnector(QObject):
                     (v / SCALE_V) if idx == 6 else (v / SCALE_I)
                     for idx, v in enumerate(snap.pdu_volts[8:])
                 ]
-                run_logger.info(
+                logger.debug(
                     "PDU MON ADC1 vals: %s",
                     " ".join(f"{v:.3f}" for v in adc1_scaled),
                 )
@@ -1424,11 +1236,10 @@ class MOTIONConnector(QObject):
             logger.error("_on_telemetry_update safety error: %s", exc)
 
         try:
-            run_logger.info(
+            logger.debug(
                 "Analog Values – TCM: %d, TCL: %d, PDC: %.3f",
                 snap.tcm, snap.tcl, snap.pdc,
             )
-            self._write_runlog_csv_sample(snap.tcm, snap.tcl, snap.pdc, snap.timestamp)
         except Exception as exc:
             logger.error("_on_telemetry_update analog error: %s", exc)
 
@@ -1452,33 +1263,16 @@ class MOTIONConnector(QObject):
         except Exception as e:
             logger.warning("Error stopping trigger: %s", e)
 
-        try:
-            self._stop_runlog()
-        except Exception as e:
-            logger.warning("Error stopping run log: %s", e)
-
         self._capture_thread = None
 
     @pyqtSlot()
     def shutdown(self):
-        """Shutdown connector. Stops capture, stops monitoring, then disconnects all devices."""
-        logger.info("Shutting down MOTIONConnector...")
+        """Shutdown connector. Stops any capture in flight; main.py's
+        handle_exit stops the MotionInterface (monitoring + device
+        teardown) right after this returns."""
+        logger.info("Shutting down MotionConnector...")
         self.stopCapture()
-
-        try:
-            if self._interface:
-                self._interface.stop_monitoring()
-                logger.info("USB monitoring stopped.")
-        except Exception as e:
-            logger.warning("Error stopping monitoring: %s", e)
-
-        try:
-            if self._interface:
-                self._interface.disconnect()
-        except Exception as e:
-            logger.warning("Error disconnecting interface: %s", e)
-
-        logger.info("MOTIONConnector shutdown complete.")
+        logger.info("MotionConnector shutdown complete.")
 
     # --- SCAN MANAGEMENT METHODS ---
     @pyqtSlot(result=list)
@@ -1935,7 +1729,7 @@ class MOTIONConnector(QObject):
     @pyqtSlot(str, str, int, bool, str, result=int)
     def notify(self, text: str, type_: str = "info", duration_ms: int = 4000,
                dismissible: bool = True, tag: str = "") -> int:
-        """Fire a toast notification. Reachable from QML as MOTIONInterface.notify(...)
+        """Fire a toast notification. Reachable from QML as MotionInterface.notify(...)
         and from any Python code holding the connector instance.
 
         Args:
@@ -2093,7 +1887,6 @@ class MOTIONConnector(QObject):
         self._set_current_scan_source(live_source)
         self._capture_left_path = ""
         self._capture_right_path = ""
-        self._start_runlog(subject_id=subject_id)
 
         # Camera dropout watchdog state — fresh per scan.
         self._camera_last_seen = {}
@@ -2135,6 +1928,9 @@ class MOTIONConnector(QObject):
             seconds = int(elapsed % 60)
             duration_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
             status = "stopped" if canceled else "completed"
+            logger.info(
+                "=== Full scan ended: %s — duration %s ===", status, duration_str
+            )
             duration_line = f"\n---\nScan {status} — duration: {duration_str}"
             self._scan_notes = (self._scan_notes.strip() + duration_line)
             self.scanNotesChanged.emit()
@@ -2160,7 +1956,6 @@ class MOTIONConnector(QObject):
             self._safety_cancel_scheduled = False
             self._capture_thread = None
             self.captureFinished.emit(True, "", "", "")
-            self._stop_runlog()
             self.scanNotesReady.emit()
 
         req = ScanRequest(
@@ -2192,6 +1987,12 @@ class MOTIONConnector(QObject):
 
         started = self._interface.start_scan(req)
         if started:
+            logger.info(
+                "=== Full scan started: subject=%s duration=%ss "
+                "left=0x%02X right=0x%02X laser=%s ===",
+                subject_id, duration_sec, left_camera_mask, right_camera_mask,
+                "off" if disable_laser else "on",
+            )
             # Bind the live source's DB tail to THIS scan's session row by its
             # exact label (set synchronously inside start_scan), so a later
             # pan-into-past resolves the right session instead of guessing the
@@ -2201,7 +2002,6 @@ class MOTIONConnector(QObject):
                 live_source.set_scan_label(label)
         if not started:
             self._capture_running = False
-            self._stop_runlog()
             self._set_current_scan_source(None)  # release the orphaned LiveScanSource — scan never started
             # start_scan refuses for two reasons: a prior worker still alive,
             # or a pre-flight failure (e.g. the scan DB couldn't be opened, in
@@ -2259,7 +2059,6 @@ class MOTIONConnector(QObject):
         sides = getattr(viz, "_sides", None)
 
         logger.info("Scan image stats per camera:")
-        run_logger.info("Scan image stats per camera:")
 
         # Build rows for CSV export (same data as log output)
         ft_rows = []
@@ -2289,7 +2088,6 @@ class MOTIONConnector(QObject):
 
             if per_cam_contrast is None:
                 logger.info("  %s mean: %.0f", label, mean_val)
-                run_logger.info("  %s mean: %.0f", label, mean_val)
             else:
                 logger.info(
                     "  %s mean: %.0f, avg contrast: %.3f",
@@ -2379,10 +2177,8 @@ class MOTIONConnector(QObject):
                 w.writeheader()
                 w.writerows(ft_rows)
             logger.info(f"Scan image stats CSV written to {ft_path}")
-            run_logger.info(f"Scan image stats CSV written to {ft_path}")
         except Exception as e:
             logger.warning(f"Failed to write FT CSV: {e}")
-            run_logger.warning(f"Failed to write FT CSV: {e}")
 
         # Emit a single end-of-scan FT verdict to the Qt capture log window.
         overall_ft_pass = bool(ft_rows) and all(
@@ -2394,7 +2190,6 @@ class MOTIONConnector(QObject):
         ft_msg = f"{status_emoji} FT criteria result: {ft_result}"
         self.captureLog.emit(ft_msg)
         logger.info(ft_msg)
-        run_logger.info(ft_msg)
 
     def _on_safety_trip_during_capture(self):
         """Called on main thread when safety tripped while scan was running: show message and cancel scan in 5 s."""
@@ -2681,7 +2476,6 @@ class MOTIONConnector(QObject):
         self._interface.console.stop_trigger()
         self._trigger_state = "OFF"
         self.triggerStateChanged.emit()
-        self._stop_runlog()
         logger.info("Trigger stopped.")
 
     @pyqtSlot(result=int)
@@ -2705,15 +2499,6 @@ class MOTIONConnector(QObject):
         except Exception as e:
             logger.error(f"Error getting Lsync count: {e}")
             return -1
-
-    @pyqtSlot(result=bool)
-    def setLaserPowerFromConfig(self) -> bool:
-        """Apply laser power parameters loaded at startup."""
-        try:
-            return self.set_laser_power_from_config(self._interface)
-        except Exception as e:
-            logger.error(f"setLaserPowerFromConfig error: {e}")
-            return False
 
     def set_laser_power_from_config(self, interface):
         # Laser-power config now lives in the SDK (omotion.laser): it bundles
@@ -2798,6 +2583,13 @@ class MOTIONConnector(QObject):
         left_mask = 0xFF if self._leftSensorConnected else 0x00
         right_mask = 0xFF if self._rightSensorConnected else 0x00
 
+        self._cq_t0 = time.monotonic()
+        logger.info(
+            "=== Contact-quality check started: duration=%.1fs "
+            "left=0x%02X right=0x%02X ===",
+            duration_s, left_mask, right_mask,
+        )
+
         def _worker():
             try:
                 result = self._interface.contact_quality_workflow.check(
@@ -2838,9 +2630,20 @@ class MOTIONConnector(QObject):
         self._cq_quick_running = False
         self.contactQualityScanInProgress.emit(False)
 
+        elapsed_s = (
+            time.monotonic() - self._cq_t0 if self._cq_t0 is not None else 0.0
+        )
         if result is None:
+            logger.info(
+                "=== Contact-quality check ended: failed after %.1fs ===",
+                elapsed_s,
+            )
             self.contactQualityCheckFinished.emit(False, "CQ check failed", [])
             return
+        logger.info(
+            "=== Contact-quality check ended: completed after %.1fs ===",
+            elapsed_s,
+        )
 
         # Convert CamCQResult.reason → (typeKey, warning dict) that the QML
         # ContactQualityModal expects.
@@ -2946,10 +2749,6 @@ class MOTIONConnector(QObject):
                     f"(no data for >{threshold:.0f} s). Last temperature: {temp:.1f}°C"
                 )
                 logger.warning(msg)
-                run_logger.warning(
-                    "[DROPOUT] side=%s cam=%d temp=%.1f°C threshold=%.0fs at %s",
-                    side, cam_id, temp, threshold, elapsed_str,
-                )
                 self.notify(
                     f"Camera {side.upper()} {cam_id + 1} connection lost at {elapsed_str}"
                     f" — last temp {temp:.1f}°C",
@@ -2979,96 +2778,68 @@ class MOTIONConnector(QObject):
         return f"{h:02d}:{m:02d}:{s:02d}"
 
     # --- SENSOR COMMUNICATION METHODS ---
-    def _read_and_log_camera_uids(self):
+    def _read_and_log_camera_uids(self, side: str):
         """
-        Read and log security UIDs for all connected cameras.
-        This is called at the beginning of a scan.
-        Logs to both the main logger and run_logger (if active).
+        Read and log security UIDs for the given sensor's cameras.
+
+        Called once per sensor connect (after the ID cache fill in
+        _run_sensor_init), not at every scan start.
         """
         try:
-            logger.info("=== Reading camera security UIDs ===")
-            if self._runlog_active:
-                run_logger.info("=== Reading camera security UIDs ===")
-
-            # Get all sensors (left and right) — handles are stable, gate
-            # on the per-handle connected flag.
-            sensors = []
-            if self._leftSensorConnected:
-                sensors.append(("left", self._interface.left))
-            if self._rightSensorConnected:
-                sensors.append(("right", self._interface.right))
-
-            if not sensors:
-                logger.warning("No sensors connected, cannot read camera UIDs")
-                if self._runlog_active:
-                    run_logger.warning("No sensors connected, cannot read camera UIDs")
+            connected = (
+                self._leftSensorConnected
+                if side == "left"
+                else self._rightSensorConnected
+            )
+            sensor = getattr(self._interface, side, None) if self._interface else None
+            if not connected or sensor is None:
+                logger.warning("%s sensor not connected, cannot read camera UIDs", side)
                 return
 
-            # Read UIDs for all cameras (0-7) on each connected sensor.
-            # Prefer cached values (populated at sensor init) to avoid polling at scan start.
-            for sensor_name, sensor in sensors:
-                logger.info(f"Reading camera UIDs from {sensor_name} sensor...")
-                if self._runlog_active:
-                    run_logger.info(f"Reading camera UIDs from {sensor_name} sensor...")
-                cache_populated = (
-                    getattr(sensor, "_cached_camera_uids", None) is not None
-                )
-                get_cached = getattr(sensor, "get_cached_camera_security_uid", None)
-                read_uid = getattr(sensor, "read_camera_security_uid", None)
-                for camera_id in range(8):
-                    try:
-                        if cache_populated and get_cached:
-                            uid_str = get_cached(camera_id)
-                            uid_hex = uid_str.replace("0x", "") if uid_str else ""
-                        elif read_uid:
-                            uid_bytes = read_uid(camera_id)
-                            time.sleep(0.05)
-                            uid_hex = "".join(f"{b:02X}" for b in uid_bytes)
-                        else:
-                            continue
-                        display_uid = (
-                            f"0x{uid_hex}"
-                            if uid_hex and not uid_hex.startswith("0x")
-                            else (uid_hex or "0x000000000000")
+            # Prefer cached values (populated by refresh_id_cache) over
+            # per-camera hardware reads.
+            logger.info(f"Camera UIDs on {side} sensor:")
+            cache_populated = (
+                getattr(sensor, "_cached_camera_uids", None) is not None
+            )
+            get_cached = getattr(sensor, "get_cached_camera_security_uid", None)
+            read_uid = getattr(sensor, "read_camera_security_uid", None)
+            for camera_id in range(8):
+                try:
+                    if cache_populated and get_cached:
+                        uid_str = get_cached(camera_id)
+                        uid_hex = uid_str.replace("0x", "") if uid_str else ""
+                    elif read_uid:
+                        uid_bytes = read_uid(camera_id)
+                        time.sleep(0.05)
+                        uid_hex = "".join(f"{b:02X}" for b in uid_bytes)
+                    else:
+                        continue
+                    display_uid = (
+                        f"0x{uid_hex}"
+                        if uid_hex and not uid_hex.startswith("0x")
+                        else (uid_hex or "0x000000000000")
+                    )
+                    if not uid_hex or set(uid_hex.replace("0x", "").upper()) <= {
+                        "0"
+                    }:
+                        logger.info(
+                            f"  Camera {camera_id + 1}: Not present (UID: {display_uid})"
                         )
-                        if not uid_hex or set(uid_hex.replace("0x", "").upper()) <= {
-                            "0"
-                        }:
-                            logger.info(
-                                f"  Camera {camera_id + 1}: Not present (UID: {display_uid})"
-                            )
-                            if self._runlog_active:
-                                run_logger.info(
-                                    f"  Camera {camera_id + 1}: Not present (UID: {display_uid})"
-                                )
-                            self.configLog.emit(f"Camera {camera_id + 1}: Not present")
-                        else:
-                            logger.info(
-                                f"  Camera {camera_id + 1}: UID = {display_uid}"
-                            )
-                            if self._runlog_active:
-                                run_logger.info(
-                                    f"  Camera {camera_id + 1}: UID = {display_uid}"
-                                )
-                            self.configLog.emit(
-                                f"Camera {camera_id + 1} UID: {display_uid}"
-                            )
-                    except Exception as e:
-                        logger.error(
-                            f"Error reading UID for camera {camera_id + 1} on {sensor_name} sensor: {e}"
+                        self.configLog.emit(f"Camera {camera_id + 1}: Not present")
+                    else:
+                        logger.info(
+                            f"  Camera {camera_id + 1}: UID = {display_uid}"
                         )
-                        if self._runlog_active:
-                            run_logger.error(
-                                f"Error reading UID for camera {camera_id + 1} on {sensor_name} sensor: {e}"
-                            )
-
-            logger.info("=== Camera UID read complete ===")
-            if self._runlog_active:
-                run_logger.info("=== Camera UID read complete ===")
+                        self.configLog.emit(
+                            f"Camera {camera_id + 1} UID: {display_uid}"
+                        )
+                except Exception as e:
+                    logger.error(
+                        f"Error reading UID for camera {camera_id + 1} on {side} sensor: {e}"
+                    )
         except Exception as e:
             logger.error(f"Error reading camera UIDs: {e}")
-            if self._runlog_active:
-                run_logger.error(f"Error reading camera UIDs: {e}")
 
     @pyqtSlot(int, int, result=bool)
     def startConfigureCameraSensors(
@@ -3660,7 +3431,7 @@ class MOTIONConnector(QObject):
         # CalibrationWorkflow resolves the trigger config to the
         # interface's default (SDK ⊕ app override at construction)
         # when the request doesn't override — matches what the QML
-        # scan / CQ flows do via SetTriggerLaserTask. Pass None so
+        # scan / CQ flows do via SetTriggerTask. Pass None so
         # the workflow always sees the canonical config.
         req = CalibrationRequest(
             operator_id="bloodflow-app",
@@ -3676,36 +3447,12 @@ class MOTIONConnector(QObject):
         self._calibration_status = "running"
         self.calibrationStateChanged.emit()
         self.captureLog.emit("Calibration: starting…")
-
-        # Issue #108: apply laser-power params to the firmware before
-        # calibration runs. The normal scan chain does this via
-        # SetTriggerLaserTask in QML (after FlashSensorsTask, before
-        # the actual scan), but the calibration path goes directly
-        # from runCalibration → SDK CalibrationWorkflow and skips that
-        # chain entirely. On a cold start — when no scan or Check has
-        # programmed the laser channels yet — the calibration scan
-        # would fire its trigger over an unprogrammed laser, every
-        # camera would see only dark, and phase 1 would abort with
-        # 'zero or negative aggregate'. Applying the params here is
-        # idempotent; runs that already had a scan kick the same
-        # values back in without harm.
-        try:
-            ok = self.set_laser_power_from_config(self._interface)
-            if not ok:
-                logger.warning(
-                    "runCalibration: set_laser_power_from_config "
-                    "returned False — proceeding anyway, but the "
-                    "calibration scan will likely abort with "
-                    "'zero or negative aggregate' if this is a cold "
-                    "start. See issue #108."
-                )
-            else:
-                logger.info("runCalibration: laser params applied")
-        except Exception as e:
-            logger.error(
-                "runCalibration: applying laser params raised: %s — "
-                "proceeding anyway", e
-            )
+        self._calibration_t0 = time.monotonic()
+        logger.info(
+            "=== Calibration started: target=%s left=0x%02X right=0x%02X "
+            "scan_duration=%ss ===",
+            target, left_mask, right_mask, self._calibration_scan_duration_sec,
+        )
 
         started = self._interface.start_calibration(
             req,
@@ -3802,24 +3549,12 @@ class MOTIONConnector(QObject):
         self._test_scan_failure_reason = ""
         self.testScanStateChanged.emit()
         self.captureLog.emit("Test scan: starting…")
-
-        # Same #108 laser-power cold-start guard the Calibrate path uses.
-        try:
-            ok = self.set_laser_power_from_config(self._interface)
-            if not ok:
-                logger.warning(
-                    "runTestScan: set_laser_power_from_config returned "
-                    "False — proceeding anyway, but the test scan will "
-                    "likely abort with 'zero or negative aggregate' if "
-                    "this is a cold start. See issue #108."
-                )
-            else:
-                logger.info("runTestScan: laser params applied")
-        except Exception as e:
-            logger.error(
-                "runTestScan: applying laser params raised: %s — "
-                "proceeding anyway", e
-            )
+        self._test_scan_t0 = time.monotonic()
+        logger.info(
+            "=== Test scan started: target=%s left=0x%02X right=0x%02X "
+            "duration=%ss ===",
+            target, left_mask, right_mask, self._test_scan_duration_sec,
+        )
 
         started = self._interface.start_test_scan(
             req,
@@ -3870,6 +3605,16 @@ class MOTIONConnector(QObject):
             self.captureLog.emit(
                 f"❌ Test scan: FAIL  (CSV: {result.csv_path})"
             )
+
+        elapsed_s = (
+            time.monotonic() - self._test_scan_t0
+            if self._test_scan_t0 is not None
+            else 0.0
+        )
+        logger.info(
+            "=== Test scan ended: %s after %.1fs ===",
+            self._test_scan_status, elapsed_s,
+        )
 
         # Build the QML-friendly row dicts.
         self._test_scan_rows = [
@@ -3952,6 +3697,15 @@ class MOTIONConnector(QObject):
             self.captureLog.emit(
                 f"❌ Calibration: FAIL  (CSV: {result.csv_path})"
             )
+        elapsed_s = (
+            time.monotonic() - self._calibration_t0
+            if self._calibration_t0 is not None
+            else 0.0
+        )
+        logger.info(
+            "=== Calibration ended: %s after %.1fs ===",
+            self._calibration_status, elapsed_s,
+        )
         self.calibrationStateChanged.emit()
 
     @property
@@ -4009,22 +3763,22 @@ class MOTIONConnector(QObject):
     def _version_newer(remote: str, local: str) -> bool:
         """Return True if remote version is strictly newer than local.
 
-        Handles versions like '0.4.3', 'pre-0.4.3', '1.0-pre3'.
-        Strips 'pre-' prefix for numeric comparison; pre-releases are
-        considered older than the same base version.
+        Handles versions like '0.4.3', 'pre-0.4.3', '1.0-pre3', and
+        setuptools_scm-style dev strings like '1.2.0-dev.1-0-gabc1234-dirty'.
+        Compares the leading dotted-numeric core; any suffix after it
+        marks a pre-release, which counts as older than the same base
+        version. (The old int() parse raised on dev suffixes and fell
+        back to [0], making every remote release look newer.)
         """
         def parse(v):
-            # Strip pre- prefix, track it
             is_pre = v.startswith("pre-")
             base = v[4:] if is_pre else v
-            # Also handle "1.0-pre3" format
-            if "-pre" in base:
-                base = base.split("-pre")[0]
+            m = re.match(r"(\d+(?:\.\d+)*)(.*)", base)
+            if not m:
+                return [0], is_pre
+            parts = [int(x) for x in m.group(1).split(".")]
+            if m.group(2):
                 is_pre = True
-            try:
-                parts = [int(x) for x in base.split(".")]
-            except ValueError:
-                parts = [0]
             return parts, is_pre
 
         r_parts, r_pre = parse(remote)

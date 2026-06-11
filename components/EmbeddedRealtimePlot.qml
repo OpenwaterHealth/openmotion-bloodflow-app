@@ -42,7 +42,7 @@ Rectangle {
         var rc = 1.0 / (2.0 * Math.PI * Math.max(0.01, bviLowPassCutoffHz))
         return dt / (rc + dt)
     }
-    property bool developerMode: MOTIONInterface.appConfig.developerMode ? true : false
+    property bool developerMode: MotionInterface.appConfig.developerMode ? true : false
     // Mean/contrast axes invert; BFI/BVI axes do not.
     readonly property bool invertPlotAxes: !showBfiBvi
 
@@ -813,7 +813,7 @@ Rectangle {
     // ── Signal connections ────────────────────────────────────────────────────
 
     Connections {
-        target: MOTIONInterface
+        target: MotionInterface
         function onScanBfiSampled(side, camId, frameId, timestampSec, bfiVal) {
             plotArea.handleBfiSample(side, camId, frameId, timestampSec, bfiVal)
         }

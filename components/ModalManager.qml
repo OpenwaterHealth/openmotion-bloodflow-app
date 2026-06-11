@@ -7,7 +7,7 @@ import QtQuick 6.0
  *      ModalManager {
  *          id: modalManager
  *          modals: [settingsModal, notesModal, historyModal,
- *                   scanSettingsModal, contactQualityModal, scanDialog]
+ *                   scanSettingsModal, contactQualityModal]
  *      }
  *
  *  Each modal is expected to expose ``visible`` and ``function close()``,

@@ -7,12 +7,12 @@ import OpenMotion 1.0
  *      AppTheme { id: theme }
  *  Then reference: theme.bgBase, theme.textPrimary, etc.
  *
- *  All tokens react to MOTIONInterface.appConfig.darkMode so the
+ *  All tokens react to MotionInterface.appConfig.darkMode so the
  *  entire UI flips live when the toggle is changed.
  */
 QtObject {
     // ── convenience alias ──────────────────────────────────────────
-    readonly property bool dark: MOTIONInterface.appConfig.darkMode !== false
+    readonly property bool dark: MotionInterface.appConfig.darkMode !== false
 
     // ── backgrounds (lightest → darkest in dark mode) ─────────────
     readonly property color bgBase:       dark ? "#1C1C1E" : "#D5D5DA"

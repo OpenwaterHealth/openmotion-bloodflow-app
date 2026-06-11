@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Plot BFI and BVI from a _corrected.csv file produced by the OpenMOTION SDK.
+Plot BFI and BVI from a _corrected.csv file produced by the Open-Motion SDK.
 
 Supports two CSV formats:
 
@@ -143,7 +143,7 @@ def _requested_sides(df: pd.DataFrame, requested: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Plot OpenMOTION corrected scan CSV")
+    p = argparse.ArgumentParser(description="Plot Open-Motion corrected scan CSV")
     p.add_argument("--csv", required=True, help="Path to the _corrected.csv file")
     p.add_argument(
         "--sides", choices=["left", "right", "both"], default="both",

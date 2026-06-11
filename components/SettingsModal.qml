@@ -18,7 +18,7 @@ Item {
     // ── Settings values — initialised from live config on creation ──────────
     property int    defaultLeftMaskIndex:  4
     property int    defaultRightMaskIndex: 4
-    property string dataOutputPath: MOTIONInterface.directory
+    property string dataOutputPath: MotionInterface.directory
     property bool   showBfiBvi:        true
     property bool   autoScale:         false
     property bool   autoScalePerPlot:  false
@@ -58,14 +58,14 @@ Item {
         title: "Calibration"
         description: "Enter the password to start calibration."
         confirmLabel: "Calibrate"
-        onAccepted: MOTIONInterface.runCalibration(
+        onAccepted: MotionInterface.runCalibration(
             calibrationTargetCombo.currentText.toLowerCase()
         )
     }
 
     // ── Lifecycle ───────────────────────────────────────────────────────────
     function _loadFromConfig() {
-        var cfg = MOTIONInterface.appConfig
+        var cfg = MotionInterface.appConfig
         defaultLeftMaskIndex  = maskToIndex(cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99)
         defaultRightMaskIndex = maskToIndex(cfg.rightMask !== undefined ? cfg.rightMask : 0x99)
         reducedMode        = cfg.reducedMode        !== undefined ? cfg.reducedMode        : false
@@ -105,14 +105,14 @@ Item {
 
     function open() {
         _loadFromConfig()
-        dataPathField.text = MOTIONInterface.directory
+        dataPathField.text = MotionInterface.directory
         root.visible = true
     }
     function close() {
         // Commit any in-progress text field edit before saving
         panel.forceActiveFocus()
-        MOTIONInterface.directory = dataPathField.text
-        MOTIONInterface.saveConfigs({
+        MotionInterface.directory = dataPathField.text
+        MotionInterface.saveConfigs({
             "leftMask":           maskFromIndex(defaultLeftMaskIndex),
             "rightMask":          maskFromIndex(defaultRightMaskIndex),
             "showBfiBvi":         showBfiBvi,
@@ -133,8 +133,8 @@ Item {
             "contrastMin": contrastMin,
             "contrastMax": contrastMax
         })
-        MOTIONInterface.setWriteRawCsv(writeRawCsv)
-        MOTIONInterface.setRawCsvDurationSec(rawCsvDurationSec)
+        MotionInterface.setWriteRawCsv(writeRawCsv)
+        MotionInterface.setRawCsvDurationSec(rawCsvDurationSec)
         settingsChanged()
         root.visible = false
     }
@@ -566,7 +566,7 @@ Item {
                     }
 
                     FieldRow {
-                        visible: MOTIONInterface.appConfig.developerMode ? true : false
+                        visible: MotionInterface.appConfig.developerMode ? true : false
                         label: "Trace colors"
                         Rectangle {
                             width: 26; height: 26; radius: 4
@@ -681,7 +681,7 @@ Item {
                 // ── Reduced Mode ─────────────────────────────────────────────
                 SectionCard {
                     title: "Reduced Mode"
-                    visible: !root.reducedMode || (MOTIONInterface.appConfig.developerMode ? true : false)
+                    visible: !root.reducedMode || (MotionInterface.appConfig.developerMode ? true : false)
 
                     FieldRow {
                         label: "Enable"
@@ -710,9 +710,9 @@ Item {
                             label: "Dark Mode"
                             PillSwitch {
                                 id: darkModeSwitch
-                                checked: MOTIONInterface.appConfig.darkMode !== false
+                                checked: MotionInterface.appConfig.darkMode !== false
                                 onToggled: {
-                                    MOTIONInterface.setConfig("darkMode", checked)
+                                    MotionInterface.setConfig("darkMode", checked)
                                 }
                             }
                         }
@@ -722,7 +722,7 @@ Item {
                 // ── Developer ────────────────────────────────────────────────
                 SectionCard {
                     title: "Developer"
-                    visible: MOTIONInterface.appConfig.developerMode ? true : false
+                    visible: MotionInterface.appConfig.developerMode ? true : false
 
                     FieldRow {
                         label: "Console"
@@ -730,7 +730,7 @@ Item {
                             text: "Soft Reset"
                             Layout.preferredWidth: 110
                             hoverColor: "#E67E22"
-                            onClicked: MOTIONInterface.softResetSensor("console")
+                            onClicked: MotionInterface.softResetSensor("console")
                         }
                         Item { Layout.fillWidth: true }
                     }
@@ -738,13 +738,13 @@ Item {
                     FieldRow {
                         label: "Console fans"
                         PillSwitch {
-                            checked: MOTIONInterface.consoleFanOn
-                            enabled: MOTIONInterface.consoleConnected
-                            onToggled: MOTIONInterface.setConsoleFan(checked)
+                            checked: MotionInterface.consoleFanOn
+                            enabled: MotionInterface.consoleConnected
+                            onToggled: MotionInterface.setConsoleFan(checked)
                         }
                         Text {
-                            text: MOTIONInterface.consoleFanOn ? "On" : "Off"
-                            color: MOTIONInterface.consoleFanOn ? root.colAccent : root.colTextMuted
+                            text: MotionInterface.consoleFanOn ? "On" : "Off"
+                            color: MotionInterface.consoleFanOn ? root.colAccent : root.colTextMuted
                             font.pixelSize: 12
                         }
                         Item { Layout.fillWidth: true }
@@ -816,8 +816,8 @@ Item {
                             Layout.preferredWidth: 130
                             model: ["Both", "Left", "Right"]
                             currentIndex: 0
-                            enabled: !MOTIONInterface.calibrationRunning
-                                  && !MOTIONInterface.testScanRunning
+                            enabled: !MotionInterface.calibrationRunning
+                                  && !MotionInterface.testScanRunning
                         }
                         Item { Layout.fillWidth: true }
                     }
@@ -838,9 +838,9 @@ Item {
                             text: "Calibrate"
                             Layout.preferredWidth: 130
                             Layout.preferredHeight: 34
-                            enabled: MOTIONInterface.consoleConnected
-                                  && !MOTIONInterface.calibrationRunning
-                                  && !MOTIONInterface.testScanRunning
+                            enabled: MotionInterface.consoleConnected
+                                  && !MotionInterface.calibrationRunning
+                                  && !MotionInterface.testScanRunning
                             onClicked: calibrationPasswordModal.open()
                         }
 
@@ -853,7 +853,7 @@ Item {
                             border.width: 1
                             border.color: root.colBorderSoft
                             color: {
-                                switch (MOTIONInterface.calibrationStatus) {
+                                switch (MotionInterface.calibrationStatus) {
                                 case "running": return "#2196F3"
                                 case "passed":  return "#4CAF50"
                                 case "failed":  return "#F44336"
@@ -884,13 +884,13 @@ Item {
                             color: root.colTextPri
                             font.pixelSize: 12
                             text: {
-                                switch (MOTIONInterface.calibrationStatus) {
+                                switch (MotionInterface.calibrationStatus) {
                                 case "running":
                                     return "Calibrating... (" + calibTimer.elapsedSec
-                                           + "s / " + MOTIONInterface.maxCalibrationTimeSec + "s)"
+                                           + "s / " + MotionInterface.maxCalibrationTimeSec + "s)"
                                 case "passed":  return "Calibration Passed"
                                 case "failed":
-                                    var reason = MOTIONInterface.calibrationFailureReason
+                                    var reason = MotionInterface.calibrationFailureReason
                                     return reason
                                         ? "Calibration Failed — " + reason
                                         : "Calibration Failed"
@@ -916,10 +916,10 @@ Item {
                             text: "Test"
                             Layout.preferredWidth: 130
                             Layout.preferredHeight: 34
-                            enabled: MOTIONInterface.consoleConnected
-                                  && !MOTIONInterface.calibrationRunning
-                                  && !MOTIONInterface.testScanRunning
-                            onClicked: MOTIONInterface.runTestScan(
+                            enabled: MotionInterface.consoleConnected
+                                  && !MotionInterface.calibrationRunning
+                                  && !MotionInterface.testScanRunning
+                            onClicked: MotionInterface.runTestScan(
                                 calibrationTargetCombo.currentText.toLowerCase()
                             )
                         }
@@ -933,23 +933,23 @@ Item {
                         property int elapsedSec: 0
                         interval: 1000
                         repeat: true
-                        running: MOTIONInterface.calibrationRunning
+                        running: MotionInterface.calibrationRunning
                         onTriggered: elapsedSec += 1
                     }
 
                     Connections {
-                        target: MOTIONInterface
+                        target: MotionInterface
                         function onCalibrationStateChanged() {
-                            if (MOTIONInterface.calibrationStatus === "running") {
+                            if (MotionInterface.calibrationStatus === "running") {
                                 calibTimer.elapsedSec = 0
                             }
                         }
                     }
 
                     Connections {
-                        target: MOTIONInterface
+                        target: MotionInterface
                         function onTestScanStateChanged() {
-                            var s = MOTIONInterface.testScanStatus
+                            var s = MotionInterface.testScanStatus
                             if (s === "running" || s === "done"
                                 || s === "failed" || s === "aborted") {
                                 testResultsWindow.show()
@@ -967,8 +967,8 @@ Item {
                             Layout.preferredWidth: 200
                             hoverColor: "#C0392B"
                             onClicked: {
-                                MOTIONInterface.setConfig("developerMode", false)
-                                MOTIONInterface.notify("Developer mode disabled.", "info", 3000, false, "dev-mode")
+                                MotionInterface.setConfig("developerMode", false)
+                                MotionInterface.notify("Developer mode disabled.", "info", 3000, false, "dev-mode")
                             }
                         }
                         Item { Layout.fillWidth: true }
@@ -986,7 +986,7 @@ Item {
                     }
                     FieldRow {
                         label: "SDK"
-                        Text { text: MOTIONInterface.get_sdk_version(); color: root.colTextPri; font.pixelSize: 13; font.family: "Consolas" }
+                        Text { text: MotionInterface.get_sdk_version(); color: root.colTextPri; font.pixelSize: 13; font.family: "Consolas" }
                         Item { Layout.fillWidth: true }
                     }
                     // Updates row is hidden in reduced (clinical) mode —
@@ -1003,7 +1003,7 @@ Item {
                             onClicked: {
                                 updateCheckBtn.text = "Checking..."
                                 updateCheckBtn.enabled = false
-                                MOTIONInterface.checkForUpdates()
+                                MotionInterface.checkForUpdates()
                             }
                         }
                         Text {
@@ -1016,7 +1016,7 @@ Item {
                     }
 
                     Connections {
-                        target: MOTIONInterface
+                        target: MotionInterface
                         enabled: !root.reducedMode
                         function onUpdateAvailable(version, url) {
                             updateCheckBtn.text = "Check for Updates"

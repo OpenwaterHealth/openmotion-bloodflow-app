@@ -9,7 +9,7 @@ import OpenMotion 1.0
  *      NotificationCenter { id: notificationCenter; anchors.fill: parent; z: 99999 }
  *
  *  Fire a notification from QML:
- *      MOTIONInterface.notify("Note saved.", "success", 4000, true)
+ *      MotionInterface.notify("Note saved.", "success", 4000, true)
  *  Or from Python:
  *      self.notify("Scan complete.", "success")
  */
@@ -153,7 +153,7 @@ Item {
     /* ── Python bridge ─────────────────────────────────────────────── */
 
     Connections {
-        target: MOTIONInterface
+        target: MotionInterface
         function onNotificationRequested(payload) {
             root.notify(payload)
         }

@@ -1,4 +1,4 @@
-# OpenMOTION Bloodflow Application
+# Open-Motion Bloodflow Application
 
 Python Application UI for OpenMotion Bloodflow monitoring.
 
@@ -15,7 +15,7 @@ Python Application UI for OpenMotion Bloodflow monitoring.
 ## Prerequisites
 
 - **Python 3.12 or later**
-- **OpenMOTION SDK** (`openmotion-pylib`) — installed from the [openmotion-sdk](https://github.com/OpenwaterHealth/OpenMOTION-Pylib) repo
+- **Open-Motion SDK** (`openmotion-pylib`) — installed from the [openmotion-sdk](https://github.com/OpenwaterHealth/OpenMOTION-Pylib) repo
 - **libusb** — required for USB communication with sensor modules
   - macOS: `brew install libusb`
   - Linux: `sudo apt install libusb-1.0-0-dev` (Debian/Ubuntu)
@@ -29,7 +29,7 @@ python3.12 -m venv .venv
 source .venv/bin/activate    # macOS/Linux
 # .venv\Scripts\activate     # Windows
 
-# Install the OpenMOTION SDK (from the neighboring repo)
+# Install the Open-Motion SDK (from the neighboring repo)
 pip install -e ../openmotion-sdk
 
 # Install app dependencies
@@ -82,11 +82,10 @@ The application creates the following directories for output:
 |-----------|----------|
 | `app-logs/` | Application log files (timestamped) |
 | `scan_data/` | Captured histogram data and processed CSV files |
-| `run-logs/` | Per-scan run logs |
 
 **Where these are created:**
 
-All three directories live under a single root, chosen in this order:
+Both directories live under a single root, chosen in this order:
 
 1. `dataDirectory` from `config/app_config.json` (also settable from the UI directory picker)
 2. The current working directory, when writable
@@ -98,7 +97,7 @@ Edit `config/app_config.json` to customize behavior:
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `dataDirectory` | `null` | Root directory for scan data, app-logs, and run-logs (null = auto-detect) |
+| `dataDirectory` | `null` | Root directory for scan data and app-logs (null = auto-detect) |
 | `developerMode` | `false` | Enable developer UI features |
 | `reducedMode` | `false` | Simplified clinical UI: forces far camera config + free run, hides scan settings, shows large left/right BFI/BVI panels |
 | `leftMask` / `rightMask` | `0x66` | Camera bitmask for left/right sensor modules |
