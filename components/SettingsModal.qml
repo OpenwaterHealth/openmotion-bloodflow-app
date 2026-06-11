@@ -275,18 +275,35 @@ Item {
     }
 
     component StyledNumberField: TextField {
+        id: numFieldCtrl
+        // Decimal places this field accepts and displays — typing more
+        // is rejected by the validator, and commits round to match.
+        property int decimals: 1
         Layout.preferredWidth: 84
         Layout.preferredHeight: 30
         font.pixelSize: 13
         color: root.colTextPri
         horizontalAlignment: Text.AlignHCenter
         inputMethodHints: Qt.ImhFormattedNumbersOnly
+        validator: RegularExpressionValidator {
+            regularExpression: new RegExp(
+                "^-?\\d*" + (numFieldCtrl.decimals > 0
+                             ? "(\\.\\d{0," + numFieldCtrl.decimals + "})?"
+                             : "") + "$")
+        }
         background: Rectangle {
             color: root.colBgInput
             radius: 4
-            border.color: parent.activeFocus ? root.colAccent : root.colBorderSoft
+            border.color: numFieldCtrl.activeFocus ? root.colAccent : root.colBorderSoft
             border.width: 1
         }
+    }
+
+    // Round to the field's decimal precision before storing, so the
+    // persisted config value matches what the field displays.
+    function _roundTo(v, decimals) {
+        var f = Math.pow(10, decimals)
+        return Math.round(v * f) / f
     }
 
     component PillSwitch: Switch {
@@ -624,55 +641,63 @@ Item {
                         Text { text: "Max"; color: root.colTextMuted; font.pixelSize: 12; font.weight: Font.DemiBold; Layout.alignment: Qt.AlignHCenter; Layout.preferredWidth: 90 }
                         Item { Layout.fillWidth: true }
 
-                        Text { text: "BFI"; color: "#E74C3C"; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
+                        Text { text: "BFI"; color: root.bfiColor; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
                             Layout.preferredWidth: 90
+                            decimals: 1
                             text: root.bfiMin.toFixed(1)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bfiMin = v; text = root.bfiMin.toFixed(1) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bfiMin = root._roundTo(v, 1); text = root.bfiMin.toFixed(1) }
                         }
                         StyledNumberField {
                             Layout.preferredWidth: 90
+                            decimals: 1
                             text: root.bfiMax.toFixed(1)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bfiMax = v; text = root.bfiMax.toFixed(1) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bfiMax = root._roundTo(v, 1); text = root.bfiMax.toFixed(1) }
                         }
                         Item { Layout.fillWidth: true }
 
-                        Text { text: "BVI"; color: "#3498DB"; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
+                        Text { text: "BVI"; color: root.bviColor; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
                             Layout.preferredWidth: 90
+                            decimals: 1
                             text: root.bviMin.toFixed(1)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bviMin = v; text = root.bviMin.toFixed(1) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bviMin = root._roundTo(v, 1); text = root.bviMin.toFixed(1) }
                         }
                         StyledNumberField {
                             Layout.preferredWidth: 90
+                            decimals: 1
                             text: root.bviMax.toFixed(1)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bviMax = v; text = root.bviMax.toFixed(1) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bviMax = root._roundTo(v, 1); text = root.bviMax.toFixed(1) }
                         }
                         Item { Layout.fillWidth: true }
 
                         Text { text: "Mean"; color: "#2ECC71"; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
                             Layout.preferredWidth: 90
+                            decimals: 0
                             text: root.meanMin.toFixed(0)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.meanMin = v; text = root.meanMin.toFixed(0) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.meanMin = Math.round(v); text = root.meanMin.toFixed(0) }
                         }
                         StyledNumberField {
                             Layout.preferredWidth: 90
+                            decimals: 0
                             text: root.meanMax.toFixed(0)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.meanMax = v; text = root.meanMax.toFixed(0) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.meanMax = Math.round(v); text = root.meanMax.toFixed(0) }
                         }
                         Item { Layout.fillWidth: true }
 
                         Text { text: "Contrast"; color: "#9B59B6"; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
                             Layout.preferredWidth: 90
+                            decimals: 2
                             text: root.contrastMin.toFixed(2)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.contrastMin = v; text = root.contrastMin.toFixed(2) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.contrastMin = root._roundTo(v, 2); text = root.contrastMin.toFixed(2) }
                         }
                         StyledNumberField {
                             Layout.preferredWidth: 90
+                            decimals: 2
                             text: root.contrastMax.toFixed(2)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.contrastMax = v; text = root.contrastMax.toFixed(2) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.contrastMax = root._roundTo(v, 2); text = root.contrastMax.toFixed(2) }
                         }
                         Item { Layout.fillWidth: true }
                     }

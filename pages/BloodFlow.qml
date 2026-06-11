@@ -245,6 +245,10 @@ Rectangle {
         displayMode: settingsModal.showBfiBvi ? "bfi_bvi" : "mean_contrast"
         leftMask:  bloodFlow.leftMask
         rightMask: bloodFlow.rightMask
+        // Trace colors — settingsModal loads bfiColor/bviColor from app
+        // config and persists edits from the color pickers.
+        bfiColor: settingsModal.bfiColor
+        bviColor: settingsModal.bviColor
         // Manual y-axis bounds — applied when autoScale is off.
         settingBfiMin:      settingsModal.bfiMin
         settingBfiMax:      settingsModal.bfiMax

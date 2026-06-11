@@ -50,6 +50,10 @@ Item {
     // to every cell so the vertical line stays synced across the grid.
     property real cursorT: NaN
 
+    // Top-left live value labels — toggleable so reduced mode (which
+    // shows the same numbers on the large side panels) can hide them.
+    property bool showValueLabels: true
+
     AppTheme { id: theme }
 
     // ── Repaint plumbing ───────────────────────────────────────────────
@@ -67,6 +71,15 @@ Item {
     // would spam paints on every mouse-move event. Instead the viewer
     // sets _dirty on cursorAt() so the next paintThrottle tick
     // (≤ 33 ms) repaints with the new crosshair position.
+
+    // GUI-only display clamp — delegates to the viewer (panZoomTarget)
+    // so the per-metric clamp bounds live in one place. The trace
+    // geometry and underlying data are untouched.
+    function _displayValue(metricName, v) {
+        if (cell.panZoomTarget && cell.panZoomTarget.clampForDisplay)
+            return cell.panZoomTarget.clampForDisplay(metricName, v)
+        return v
+    }
 
     // Render one trace inside the current Canvas context using the given
     // metric/color/yMin/yMax. Defined as a JS function on the cell so
@@ -205,16 +218,16 @@ Item {
 
         Text {
             // cam_id = -1 is the side-averaged stream fed by the SDK's
-            // SideAveragingStage in reduced mode. Label it as "AVG".
-            text: cell.camId === -1
-                ? cell.side.toUpperCase() + " AVG"
-                : cell.side.toUpperCase() + " " + (cell.camId + 1)
+            // SideAveragingStage in reduced mode — hide the label there;
+            // the large side panel next to the plot already names the side.
+            visible: cell.camId !== -1
+            text: cell.side.toUpperCase() + " " + (cell.camId + 1)
             color: theme.textSecondary
             font.pixelSize: 11
             font.family: "Roboto Mono"
         }
         Text {
-            visible: cell.width >= 80
+            visible: cell.showValueLabels && cell.width >= 80
             // Show the most recent sample value rather than the
             // autoscale-derived range — clinicians care about "what's
             // it reading right now", not the y-axis extent. paintTick
@@ -225,7 +238,8 @@ Item {
             text: {
                 void cell.paintTick  // dependency
                 if (!cell.source) return cell.metric.toUpperCase() + "  --"
-                var v = cell.source.value_at(cell.side, cell.camId, cell.metric, cell.liveEdgeSnapshot)
+                var v = cell._displayValue(cell.metric,
+                    cell.source.value_at(cell.side, cell.camId, cell.metric, cell.liveEdgeSnapshot))
                 return cell.metric.toUpperCase() + "  "
                        + (isFinite(v) ? v.toFixed(2) : "--")
             }
@@ -234,11 +248,13 @@ Item {
             font.family: "Roboto Mono"
         }
         Text {
-            visible: cell.width >= 80 && cell.secondaryMetric.length > 0
+            visible: cell.showValueLabels && cell.width >= 80
+                     && cell.secondaryMetric.length > 0
             text: {
                 void cell.paintTick
                 if (!cell.source) return cell.secondaryMetric.toUpperCase() + "  --"
-                var v = cell.source.value_at(cell.side, cell.camId, cell.secondaryMetric, cell.liveEdgeSnapshot)
+                var v = cell._displayValue(cell.secondaryMetric,
+                    cell.source.value_at(cell.side, cell.camId, cell.secondaryMetric, cell.liveEdgeSnapshot))
                 return cell.secondaryMetric.toUpperCase() + "  "
                        + (isFinite(v) ? v.toFixed(2) : "--")
             }

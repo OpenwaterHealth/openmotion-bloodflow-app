@@ -66,6 +66,10 @@ Rectangle {
 
     // ── Inputs ─────────────────────────────────────────────────────────
     property bool reducedMode: false   // honored in Phase 2b-ii
+    // Per-cell top-left value labels. Default off in reduced mode — the
+    // large side panels show the same numbers there — and toggleable at
+    // runtime from the bottom-right ⋯ popup.
+    property bool showCellValues: !viewer.reducedMode
     // displayMode pair selector — driven externally (BloodFlow.qml binds
     // it from settingsModal.showBfiBvi). "bfi_bvi" overlays BFI+BVI on
     // each cell; "mean_contrast" overlays Mean+Contrast.
@@ -301,15 +305,38 @@ Rectangle {
     }
 
     // ── Trace color per metric ─────────────────────────────────────────
-    // Hex values match the legacy EmbeddedRealtimePlot defaults so the
-    // visual identity carries across the viewer swap — clinicians don't
-    // suddenly see a different palette for the same metric.
+    // BFI/BVI colors come from app config (bfiColor / bviColor) via the
+    // bindings below; mean/contrast keep the legacy palette (no config
+    // keys exist for them).
+    property color bfiColor: "#E74C3C"
+    property color bviColor: "#3498DB"
+
     function _traceColorForMetric(m) {
-        if (m === "bfi")      return "#E74C3C"  // red
-        if (m === "bvi")      return "#3498DB"  // blue
+        if (m === "bfi")      return viewer.bfiColor
+        if (m === "bvi")      return viewer.bviColor
         if (m === "mean")     return "#2ECC71"  // green
         if (m === "contrast") return "#9B59B6"  // purple
-        return "#3498DB"
+        return viewer.bviColor
+    }
+
+    // ── Display clamps (GUI-only) ──────────────────────────────────────
+    // Numeric readouts for BFI/BVI saturate into [low, high] before
+    // formatting. Display-side only — the data stream, CSVs, and trace
+    // geometry are untouched. Bounds come from app config (0–10 default).
+    readonly property real _bfiClampLow:
+        MotionInterface.appConfig.bfiClampLow !== undefined ? MotionInterface.appConfig.bfiClampLow : 0.0
+    readonly property real _bfiClampHigh:
+        MotionInterface.appConfig.bfiClampHigh !== undefined ? MotionInterface.appConfig.bfiClampHigh : 10.0
+    readonly property real _bviClampLow:
+        MotionInterface.appConfig.bviClampLow !== undefined ? MotionInterface.appConfig.bviClampLow : 0.0
+    readonly property real _bviClampHigh:
+        MotionInterface.appConfig.bviClampHigh !== undefined ? MotionInterface.appConfig.bviClampHigh : 10.0
+
+    function clampForDisplay(m, v) {
+        if (!isFinite(v)) return v
+        if (m === "bfi") return Math.min(Math.max(v, _bfiClampLow), _bfiClampHigh)
+        if (m === "bvi") return Math.min(Math.max(v, _bviClampLow), _bviClampHigh)
+        return v
     }
 
     // ── Display-mode pair resolution ───────────────────────────────────
@@ -509,63 +536,161 @@ Rectangle {
         console.info("[Plot] windowSeconds → " + s + " s")
     }
 
+    // Large per-side BFI/BVI readout panel — reduced (clinical) mode
+    // only, one per plot row, sitting to the left of the plot. Mirrors
+    // the legacy ReducedPlotView side column: side label up top, big
+    // mono values beneath. Values are the side-averaged stream
+    // (cam_id = -1), refreshed on paintTick and clamped for display.
+    component SideMetricPanel: Item {
+        id: panel
+        property string panelSide: "left"
+
+        function _displayText(metricName) {
+            void viewer.paintTick  // dependency
+            if (!viewer.scanSource) return "--"
+            var v = viewer.scanSource.value_at(
+                panel.panelSide, -1, metricName, viewer.liveEdgeSnapshot)
+            if (!isFinite(v)) return "--"
+            return viewer.clampForDisplay(metricName, v).toFixed(2)
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 16
+            spacing: 2
+
+            Text {
+                text: panel.panelSide.toUpperCase()
+                color: theme.textSecondary
+                font.pixelSize: 20
+                font.weight: Font.DemiBold
+            }
+
+            Item { Layout.fillHeight: true }
+
+            Text {
+                text: "BFI"
+                color: viewer.bfiColor
+                font.pixelSize: 24
+                font.weight: Font.DemiBold
+            }
+            Text {
+                text: panel._displayText("bfi")
+                color: theme.textPrimary
+                font.pixelSize: 60
+                font.weight: Font.Bold
+                font.family: "Roboto Mono"
+            }
+
+            Item { height: 10 }
+
+            Text {
+                text: "BVI"
+                color: viewer.bviColor
+                font.pixelSize: 24
+                font.weight: Font.DemiBold
+            }
+            Text {
+                text: panel._displayText("bvi")
+                color: theme.textPrimary
+                font.pixelSize: 60
+                font.weight: Font.Bold
+                font.family: "Roboto Mono"
+            }
+
+            Item { Layout.fillHeight: true }
+        }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 12
         spacing: 8
 
-        GridLayout {
-            id: grid
+        RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            // Reduced mode: single column, 2 stacked cells. Dev mode:
-            // 4 columns, rows determined by active-cam count.
-            columns: viewer.reducedMode ? 1 : 4
-            rowSpacing: 6
-            columnSpacing: 6
+            spacing: 8
 
-            Repeater {
-                model: viewer._activeCellModel
-                delegate: PlotCell {
-                    Layout.row: modelData.row
-                    Layout.column: modelData.col
+            // Reduced mode: large readouts beside the plots, one panel
+            // per stacked plot row. Equal fillHeight keeps each panel
+            // aligned with its row. fillWidth must be EXPLICITLY false:
+            // nested layouts default it to true, which would make this
+            // column compete with the grid for the whole row width.
+            ColumnLayout {
+                visible: viewer.reducedMode
+                Layout.fillWidth: false
+                Layout.fillHeight: true
+                Layout.preferredWidth: 250
+                spacing: 6
+
+                SideMetricPanel {
+                    panelSide: "left"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    source: viewer.scanSource
-                    side: modelData.side
-                    camId: modelData.camId
-                    windowSeconds: viewer.windowSeconds
-                    followLive: viewer.followLive
-                    windowStartT: viewer.windowStartT
-                    metric: viewer._displayPair.primary
-                    yMin: viewer.primaryYMin
-                    yMax: viewer.primaryYMax
-                    traceColor: viewer._traceColorForMetric(viewer._displayPair.primary)
-                    secondaryMetric: viewer._displayPair.secondary
-                    secondaryYMin: viewer.secondaryYMin
-                    secondaryYMax: viewer.secondaryYMax
-                    secondaryColor: viewer._traceColorForMetric(viewer._displayPair.secondary)
-                    paintTick: viewer.paintTick
-                    liveEdgeSnapshot: viewer.liveEdgeSnapshot
-                    panZoomTarget: viewer
-                    cursorT: viewer.cursorT
+                }
+                SideMetricPanel {
+                    panelSide: "right"
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
                 }
             }
-        }
 
-        // Placeholder when no cameras are active (both masks 0). Lets the
-        // viewer still show its toolbar + scan-source state without an
-        // empty grid below it.
-        Item {
-            visible: viewer._activeCellModel.length === 0
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            Text {
-                anchors.centerIn: parent
-                text: "No active cameras selected"
-                color: theme.textTertiary
-                font.pixelSize: 14
-                font.family: "Roboto Mono"
+            GridLayout {
+                id: grid
+                visible: viewer._activeCellModel.length > 0
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                // Reduced mode: single column, 2 stacked cells. Dev mode:
+                // 4 columns, rows determined by active-cam count.
+                columns: viewer.reducedMode ? 1 : 4
+                rowSpacing: 6
+                columnSpacing: 6
+
+                Repeater {
+                    model: viewer._activeCellModel
+                    delegate: PlotCell {
+                        Layout.row: modelData.row
+                        Layout.column: modelData.col
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        source: viewer.scanSource
+                        side: modelData.side
+                        camId: modelData.camId
+                        windowSeconds: viewer.windowSeconds
+                        followLive: viewer.followLive
+                        windowStartT: viewer.windowStartT
+                        metric: viewer._displayPair.primary
+                        yMin: viewer.primaryYMin
+                        yMax: viewer.primaryYMax
+                        traceColor: viewer._traceColorForMetric(viewer._displayPair.primary)
+                        secondaryMetric: viewer._displayPair.secondary
+                        secondaryYMin: viewer.secondaryYMin
+                        secondaryYMax: viewer.secondaryYMax
+                        secondaryColor: viewer._traceColorForMetric(viewer._displayPair.secondary)
+                        showValueLabels: viewer.showCellValues
+                        paintTick: viewer.paintTick
+                        liveEdgeSnapshot: viewer.liveEdgeSnapshot
+                        panZoomTarget: viewer
+                        cursorT: viewer.cursorT
+                    }
+                }
+            }
+
+            // Placeholder when no cameras are active (both masks 0). Lets the
+            // viewer still show its toolbar + scan-source state without an
+            // empty grid below it.
+            Item {
+                visible: viewer._activeCellModel.length === 0
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Text {
+                    anchors.centerIn: parent
+                    text: "No active cameras selected"
+                    color: theme.textTertiary
+                    font.pixelSize: 14
+                    font.family: "Roboto Mono"
+                }
             }
         }
 
@@ -634,8 +759,10 @@ Rectangle {
             var rows = []
             for (var i = 0; i < viewer._activeCellModel.length; i++) {
                 var c = viewer._activeCellModel[i]
-                var pv = viewer.scanSource.value_at(c.side, c.camId, primMetric, t)
-                var sv = viewer.scanSource.value_at(c.side, c.camId, secMetric, t)
+                var pv = viewer.clampForDisplay(primMetric,
+                    viewer.scanSource.value_at(c.side, c.camId, primMetric, t))
+                var sv = viewer.clampForDisplay(secMetric,
+                    viewer.scanSource.value_at(c.side, c.camId, secMetric, t))
                 // Reduced mode uses camId=-1 for the side-averaged stream;
                 // (c.camId + 1) would render "L0"/"R0" instead of the
                 // cell's own "LEFT AVG" / "RIGHT AVG" label.
@@ -955,6 +1082,21 @@ Rectangle {
                         Text {
                             anchors.verticalCenter: autoScaleSwitch.verticalCenter
                             text: "Autoscale"
+                            color: theme.textPrimary
+                            font.pixelSize: 12
+                            font.family: "Roboto Mono"
+                        }
+                    }
+                    Row {
+                        spacing: 8
+                        PopupPillSwitch {
+                            id: cellValuesSwitch
+                            checked: viewer.showCellValues
+                            onToggled: viewer.showCellValues = checked
+                        }
+                        Text {
+                            anchors.verticalCenter: cellValuesSwitch.verticalCenter
+                            text: "Cell values"
                             color: theme.textPrimary
                             font.pixelSize: 12
                             font.family: "Roboto Mono"

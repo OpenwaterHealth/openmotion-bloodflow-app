@@ -11,10 +11,10 @@
   "uncorrectedOnly": true,
 
   "showBfiBvi": true,
-  "bfiMin": 1.0,
-  "bfiMax": 9.0,
+  "bfiMin": 0.0,
+  "bfiMax": 10.0,
   "bviMin": 0.0,
-  "bviMax": 9.0,
+  "bviMax": 10.0,
   "meanMin": 0.0,
   "meanMax": 200.0,
   "contrastMin": 0.0,
