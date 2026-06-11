@@ -2477,6 +2477,15 @@ class MotionConnector(QObject):
             return "Camera configuration already in progress"
         return None
 
+    @pyqtSlot(result=bool)
+    def isPipelineIdle(self) -> bool:
+        """QML probe: True when a pipeline-starting slot called right now
+        would not be refused by _ensure_idle. The pre-scan CQ check's SDK
+        worker keeps unwinding for ~2 s after results are displayed, so a
+        fast Start Scan click used to be refused synchronously and silently
+        — BloodFlow's scan-start gate polls this instead of firing blind."""
+        return self._ensure_idle() is None
+
     # ──────────────────────────────────────────────────────────────────
     @pyqtSlot()
     def runContactQualityCheck(self):
@@ -2778,6 +2787,7 @@ class MotionConnector(QObject):
     ) -> bool:
         err = self._ensure_idle()
         if err is not None:
+            logger.warning("startConfigureCameraSensors refused: %s", err)
             self.configFinished.emit(False, err)
             return False
         self._config_running = True

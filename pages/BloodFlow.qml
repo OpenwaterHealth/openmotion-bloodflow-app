@@ -146,6 +146,40 @@ Rectangle {
         scanRunner.start()
     }
 
+    // Scan-start gate: the pre-scan CQ check's SDK worker keeps unwinding
+    // for ~2 s after its results are displayed, and a start issued in that
+    // window is refused synchronously by the connector's _ensure_idle gate
+    // (the failure used to be swallowed — modal closed, nothing happened).
+    // Poll isPipelineIdle() and begin the scan the moment the connector is
+    // actually free; give up loudly after 8 s.
+    property bool scanStartPending: scanStartGate.running
+    function beginScanWhenReady() {
+        if (bloodFlow.scanning || scanStartGate.running) return
+        scanStartGate.elapsedMs = 0
+        scanStartGate.start()
+    }
+    Timer {
+        id: scanStartGate
+        interval: 200
+        repeat: true
+        triggeredOnStart: true   // idle path starts the scan with no delay
+        property int elapsedMs: 0
+        onTriggered: {
+            if (MotionInterface.isPipelineIdle()) {
+                stop()
+                beginScanNow()
+                return
+            }
+            elapsedMs += interval
+            if (elapsedMs >= 8000) {
+                stop()
+                MotionInterface.notify(
+                    "Could not start scan — the previous check is still " +
+                    "finishing. Please press Start again.", "error")
+            }
+        }
+    }
+
     // ButtonPanel — sits above modal backdrops so it's always clickable
     ButtonPanel {
         id: buttonPanel
@@ -157,7 +191,7 @@ Rectangle {
         z: 10000
 
         scanning: bloodFlow.scanning
-        waiting: bloodFlow.configuring
+        waiting: bloodFlow.configuring || bloodFlow.scanStartPending
         camerasReady: bloodFlow.camerasReady && !bloodFlow.configuring
         reducedMode: bloodFlow.reducedMode
 
@@ -167,6 +201,9 @@ Rectangle {
         // an in-flight check), modalManager.closeCurrent() is a
         // no-op and the action below still runs.
         onStartStopClicked: {
+            // A start is already armed and waiting on the connector to go
+            // idle — ignore further clicks until it fires or times out.
+            if (bloodFlow.scanStartPending) return
             modalManager.closeCurrent()
             if (bloodFlow.scanning) {
                 scanRunner.cancel()
@@ -181,7 +218,7 @@ Rectangle {
                     contactQualityModal.reset(true, 0)
                     qualityCheckRunner.start()
                 } else {
-                    beginScanNow()
+                    beginScanWhenReady()
                 }
             }
         }
@@ -321,10 +358,12 @@ Rectangle {
             reducedStartPending = false
         }
         onContinueRequested: {
-            console.warn("[CQDBG] onContinueRequested rsp=" + bloodFlow.reducedStartPending)
             if (bloodFlow.reducedStartPending) {
                 contactQualityModal.close()
-                beginScanNow()
+                // Gated, not direct: the CQ check's worker is often still
+                // unwinding when the user clicks Start Scan, and an
+                // immediate start would be refused (silently, pre-gate).
+                beginScanWhenReady()
             }
             // Otherwise (live-scan warning modal), Continue just dismisses.
         }
@@ -334,7 +373,6 @@ Rectangle {
             qualityCheckRunner.start()
         }
         onDismissed: {
-            console.warn("[CQDBG] onDismissed scanning=" + bloodFlow.scanning + " rsp=" + bloodFlow.reducedStartPending)
             if (!bloodFlow.scanning)
                 reducedStartPending = false
             if (!bloodFlow.reducedStartPending)
@@ -377,8 +415,12 @@ Rectangle {
             bloodFlow.scanning = false
             bloodFlow.suppressLiveCqModal = false
 
-            if (!ok && err !== "Canceled")
+            if (!ok && err !== "Canceled") {
                 console.log("ERROR: " + err)
+                // The scan progress dialog that used to surface these is
+                // gone — without a toast, a failed start is invisible.
+                MotionInterface.notify("Scan failed: " + err, "error")
+            }
             // Notes modal opens via MotionInterface.scanNotesReady.
         }
     }

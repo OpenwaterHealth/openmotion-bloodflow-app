@@ -572,7 +572,7 @@ Item {
                         color: parent.hovered ? theme.accentGreen : theme.bgInput
                         radius: 4; border.color: parent.hovered ? theme.accentGreen : theme.borderSoft; border.width: 1
                     }
-                    onClicked: { console.warn("[CQDBG] preScan StartScan onClicked"); root.continueRequested(); root.close(); root.dismissed() }
+                    onClicked: { root.continueRequested(); root.close(); root.dismissed() }
                 }
 
                 // Live-scan footer (warnings state only)
