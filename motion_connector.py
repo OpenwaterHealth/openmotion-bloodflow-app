@@ -262,6 +262,7 @@ class _LivePlotSink:
 
                 mean_for_source: Optional[float] = None
                 contrast_for_source: Optional[float] = None
+                temp_for_source: Optional[float] = None
                 if not is_dark:
                     # Record the realtime dark-corrected mean (mean_dc_rt) and
                     # shot-noise-corrected contrast (contrast_sn_rt). The
@@ -278,10 +279,16 @@ class _LivePlotSink:
                         contrast_val = float(batch.contrast_sn_rt[i, side_idx, cam_id])
                         if math.isfinite(contrast_val):
                             contrast_for_source = contrast_val
+                    # Camera temperature — light frames only (dark-frame
+                    # readings are meaningless for display, same rule as the
+                    # temperature alert above). Feeds the per-cell dev-mode
+                    # readout (issue #165).
+                    if math.isfinite(temp_c):
+                        temp_for_source = temp_c
 
-                # mean/contrast already filtered for is_dark / non-finite
-                # above; None here means "metric not available for this
-                # sample".
+                # mean/contrast/temp already filtered for is_dark /
+                # non-finite above; None here means "metric not available
+                # for this sample".
                 self._live_source.append_uncorrected(
                     side=side,
                     cam_id=cam_id,
@@ -291,6 +298,7 @@ class _LivePlotSink:
                     bvi=bvi,
                     mean=mean_for_source,
                     contrast=contrast_for_source,
+                    temp=temp_for_source,
                 )
 
     def _consume_side_avg(self, sample) -> None:

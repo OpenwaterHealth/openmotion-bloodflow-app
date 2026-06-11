@@ -676,6 +676,7 @@ Rectangle {
                         secondaryYMax: viewer.secondaryYMax
                         secondaryColor: viewer._traceColorForMetric(viewer._displayPair.secondary)
                         showValueLabels: viewer.showCellValues
+                        showTemperature: MotionInterface.appConfig.developerMode === true
                         paintTick: viewer.paintTick
                         liveEdgeSnapshot: viewer.liveEdgeSnapshot
                         panZoomTarget: viewer

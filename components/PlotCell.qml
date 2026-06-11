@@ -54,6 +54,10 @@ Item {
     // shows the same numbers on the large side panels) can hide them.
     property bool showValueLabels: true
 
+    // Top-right temperature readout — developer mode only; the viewer
+    // binds this from appConfig.developerMode (issue #165).
+    property bool showTemperature: false
+
     AppTheme { id: theme }
 
     // ── Repaint plumbing ───────────────────────────────────────────────
@@ -262,6 +266,27 @@ Item {
             font.pixelSize: 10
             font.family: "Roboto Mono"
         }
+    }
+
+    // Camera temperature — top-right, orange, dev mode only. Reads the
+    // "temp" metric stream (light frames only; absent for the reduced-
+    // mode cam_id=-1 average and for past scans) and hides itself when
+    // no finite reading exists.
+    Text {
+        property real tempC: {
+            void cell.paintTick  // dependency
+            if (!cell.source || !cell.showTemperature) return NaN
+            return cell.source.value_at(cell.side, cell.camId, "temp",
+                                        cell.liveEdgeSnapshot)
+        }
+        visible: cell.showTemperature && cell.width >= 80 && isFinite(tempC)
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.margins: 8
+        text: isFinite(tempC) ? tempC.toFixed(1) + "°C" : ""
+        color: theme.readableInk(theme.accentOrange)
+        font.pixelSize: 10
+        font.family: "Roboto Mono"
     }
 
     // ── Pan + wheel-zoom MouseArea ─────────────────────────────────────
