@@ -38,7 +38,7 @@ Item {
 
     // Visual — defaults pulled from AppTheme; can be overridden per-cell.
     property color frameColor: theme.borderSubtle
-    property color bgColor: theme.bgPanel
+    property color bgColor: theme.plotCellBg
 
     // DVR target — set to PlotViewer; cell calls .setWindow(startT, sec)
     // on pan/zoom interactions. Cell itself owns no time-axis state;

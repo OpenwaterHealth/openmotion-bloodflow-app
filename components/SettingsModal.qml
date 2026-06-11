@@ -641,7 +641,7 @@ Item {
                         Text { text: "Max"; color: root.colTextMuted; font.pixelSize: 12; font.weight: Font.DemiBold; Layout.alignment: Qt.AlignHCenter; Layout.preferredWidth: 90 }
                         Item { Layout.fillWidth: true }
 
-                        Text { text: "BFI"; color: root.bfiColor; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
+                        Text { text: "BFI"; color: theme.readableInk(root.bfiColor); font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
                             Layout.preferredWidth: 90
                             decimals: 1
@@ -656,7 +656,7 @@ Item {
                         }
                         Item { Layout.fillWidth: true }
 
-                        Text { text: "BVI"; color: root.bviColor; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
+                        Text { text: "BVI"; color: theme.readableInk(root.bviColor); font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
                             Layout.preferredWidth: 90
                             decimals: 1

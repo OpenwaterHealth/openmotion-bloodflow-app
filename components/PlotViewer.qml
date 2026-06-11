@@ -307,16 +307,20 @@ Rectangle {
     // ── Trace color per metric ─────────────────────────────────────────
     // BFI/BVI colors come from app config (bfiColor / bviColor) via the
     // bindings below; mean/contrast keep the legacy palette (no config
-    // keys exist for them).
+    // keys exist for them). Every color is passed through the theme's
+    // readability guard so a palette tuned for one mode (e.g. white BFI
+    // on dark) doesn't render invisible in the other.
     property color bfiColor: "#E74C3C"
     property color bviColor: "#3498DB"
+    readonly property color bfiInk: theme.readableInk(viewer.bfiColor)
+    readonly property color bviInk: theme.readableInk(viewer.bviColor)
 
     function _traceColorForMetric(m) {
-        if (m === "bfi")      return viewer.bfiColor
-        if (m === "bvi")      return viewer.bviColor
-        if (m === "mean")     return "#2ECC71"  // green
-        if (m === "contrast") return "#9B59B6"  // purple
-        return viewer.bviColor
+        if (m === "bfi")      return viewer.bfiInk
+        if (m === "bvi")      return viewer.bviInk
+        if (m === "mean")     return theme.readableInk("#2ECC71")  // green
+        if (m === "contrast") return theme.readableInk("#9B59B6")  // purple
+        return viewer.bviInk
     }
 
     // ── Display clamps (GUI-only) ──────────────────────────────────────
@@ -570,7 +574,7 @@ Rectangle {
 
             Text {
                 text: "BFI"
-                color: viewer.bfiColor
+                color: viewer.bfiInk
                 font.pixelSize: 24
                 font.weight: Font.DemiBold
             }
@@ -586,7 +590,7 @@ Rectangle {
 
             Text {
                 text: "BVI"
-                color: viewer.bviColor
+                color: viewer.bviInk
                 font.pixelSize: 24
                 font.weight: Font.DemiBold
             }
@@ -738,7 +742,7 @@ Rectangle {
                               ? backToLiveOverlay.height + viewer._overlayMarginPx
                               : 0)
         anchors.rightMargin: viewer._overlayEdgeMarginPx
-        color: theme.bgElevated
+        color: theme.overlayBgSolid
         border.color: theme.borderSubtle
         border.width: 1
         radius: 4
@@ -875,7 +879,7 @@ Rectangle {
         anchors.topMargin: viewer._overlayEdgeMarginPx
         anchors.rightMargin: viewer._overlayEdgeMarginPx
         z: 6
-        color: Qt.rgba(0.10, 0.10, 0.12, 0.82)
+        color: theme.overlayBg
         border.color: theme.accentRed
         border.width: 1
 
@@ -919,7 +923,7 @@ Rectangle {
             width: windowSecondsText.implicitWidth + 38
             height: 36
             radius: 18
-            color: Qt.rgba(0.10, 0.10, 0.12, 0.82)
+            color: theme.overlayBg
             border.color: theme.borderSubtle
             border.width: 1
 
@@ -961,7 +965,7 @@ Rectangle {
                 padding: 6
                 implicitWidth: 120
                 background: Rectangle {
-                    color: Qt.rgba(0.12, 0.12, 0.14, 0.96)
+                    color: theme.overlayBgSolid
                     border.color: theme.borderSubtle
                     border.width: 1
                     radius: 8
@@ -985,7 +989,7 @@ Rectangle {
             radius: 18
             color: settingsPopup.opened
                    ? Qt.rgba(0.29, 0.56, 0.89, 0.85)
-                   : Qt.rgba(0.10, 0.10, 0.12, 0.82)
+                   : theme.overlayBg
             border.color: settingsPopup.opened ? "#4A90E2" : theme.borderSubtle
             border.width: 1
 
@@ -1018,7 +1022,7 @@ Rectangle {
                 closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
 
                 background: Rectangle {
-                    color: Qt.rgba(0.12, 0.12, 0.14, 0.95)
+                    color: theme.overlayBgSolid
                     border.color: theme.borderSubtle
                     border.width: 1
                     radius: 8

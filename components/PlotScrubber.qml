@@ -39,7 +39,7 @@ Item {
     // ── Background ─────────────────────────────────────────────────────
     Rectangle {
         anchors.fill: parent
-        color: theme.bgPanel
+        color: theme.plotCellBg
         border.color: theme.borderSubtle
         border.width: 1
         radius: 4
