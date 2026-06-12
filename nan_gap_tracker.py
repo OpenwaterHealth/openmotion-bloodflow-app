@@ -81,7 +81,9 @@ class NanGapTracker:
             end_t = self._t_max
         gaps = list(self._gaps)
         if end_t is not None:
-            # list() snapshot: record() may insert a new key from the worker thread.
+            # Defensive copy. The class is not thread-safe; in the app,
+            # record() and merged_gaps() both run on the pipeline runner
+            # thread (on_complete fires after all consumes).
             for last in list(self._last.values()):
                 if (end_t - last) > self.min_gap_s:
                     gaps.append((last, end_t))

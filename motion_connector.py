@@ -564,8 +564,9 @@ class MotionConnector(QObject):
         self._camera_dropped_recovery_logged: set[tuple[str, int]] = set()
 
         # NaN-gap tracker — replaced with a fresh instance at each scan
-        # start (startCapture); _on_pipeline_complete reads it to append
-        # the data-gaps footer to the session notes.
+        # start. Kept on the instance for debugging/introspection only;
+        # the scan path (sink + completion closure in startCapture) uses
+        # a closure-local binding of the same object.
         self._nan_gap_tracker = NanGapTracker()
 
         # 1 Hz watchdog timer — started/stopped around the scan lifecycle.
