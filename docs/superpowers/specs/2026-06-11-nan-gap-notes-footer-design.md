@@ -175,9 +175,13 @@ Pure unit tests for `NanGapTracker` (no hardware):
   plot. A mid-scan sensor reboot resets the firmware clock
   (`motion_connector.py:1899`), which can skew absolute offsets — the same
   caveat the live plot already carries.
-- In reduced mode, gaps reflect whole-side loss (the per-side average is NaN only
-  when every camera on that side is NaN); in full mode, any single camera's
-  sustained gap registers. Both are reasonable; behavior differs by mode.
+- Gap granularity is per-camera in BOTH modes: the SDK's `Tee("live", ...)` is
+  unconditional, so the per-camera channel feeds the tracker even in reduced
+  mode (alongside the `cam_id=-1` side-average keys). A single flaky camera
+  therefore produces a `Data gaps` line in clinical (reduced) mode even though
+  the displayed side average never blinked — consistent with the "any camera"
+  union decision. (Corrected during implementation review; an earlier draft of
+  this section wrongly claimed reduced mode only registered whole-side loss.)
 
 ## Out of scope
 
