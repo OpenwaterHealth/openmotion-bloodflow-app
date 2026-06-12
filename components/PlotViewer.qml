@@ -70,6 +70,11 @@ Rectangle {
     // large side panels show the same numbers there — and toggleable at
     // runtime from the bottom-right ⋯ popup.
     property bool showCellValues: !viewer.reducedMode
+    // Y-axis tick labels (max/mid/min per metric). Config is the single
+    // source of truth: the ⋯ popup toggle (hidden in reduced mode) writes
+    // through MotionInterface.setConfig, which persists to app_config.json
+    // and notifies appConfigChanged — this binding then updates.
+    property bool showAxisLabels: MotionInterface.appConfig.showAxisLabels === true
     // displayMode pair selector — driven externally (BloodFlow.qml binds
     // it from settingsModal.showBfiBvi). "bfi_bvi" overlays BFI+BVI on
     // each cell; "mean_contrast" overlays Mean+Contrast.
@@ -676,6 +681,7 @@ Rectangle {
                         secondaryYMax: viewer.secondaryYMax
                         secondaryColor: viewer._traceColorForMetric(viewer._displayPair.secondary)
                         showValueLabels: viewer.showCellValues
+                        showAxisLabels: viewer.showAxisLabels
                         showTemperature: MotionInterface.appConfig.developerMode === true
                         paintTick: viewer.paintTick
                         liveEdgeSnapshot: viewer.liveEdgeSnapshot
@@ -1100,6 +1106,22 @@ Rectangle {
                         Text {
                             anchors.verticalCenter: autoScaleSwitch.verticalCenter
                             text: "Autoscale"
+                            color: theme.textPrimary
+                            font.pixelSize: 12
+                            font.family: "Roboto Mono"
+                        }
+                    }
+                    Row {
+                        visible: !viewer.reducedMode
+                        spacing: 8
+                        PopupPillSwitch {
+                            id: axisLabelsSwitch
+                            checked: viewer.showAxisLabels
+                            onToggled: MotionInterface.setConfig("showAxisLabels", checked)
+                        }
+                        Text {
+                            anchors.verticalCenter: axisLabelsSwitch.verticalCenter
+                            text: "Axis labels"
                             color: theme.textPrimary
                             font.pixelSize: 12
                             font.family: "Roboto Mono"

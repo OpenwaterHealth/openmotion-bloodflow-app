@@ -30,6 +30,7 @@
   "plotWindowSec": 5,
   "autoScale": false,
   "autoScalePerPlot": false,
+  "showAxisLabels": false,
   "darkMode": true,
 
   "max_calibration_time_sec": 600,
