@@ -241,7 +241,10 @@ Rectangle {
         anchors.margins: 8
         anchors.leftMargin: 16
         reducedMode: bloodFlow.reducedMode
-        autoScale: settingsModal.autoScale
+        // Reduced mode never autoscales: the toggle is hidden in both the
+        // Settings modal and the viewer's three-dot popup, so a stale
+        // autoScale=true in config must not leave it stuck on.
+        autoScale: bloodFlow.reducedMode ? false : settingsModal.autoScale
         displayMode: settingsModal.showBfiBvi ? "bfi_bvi" : "mean_contrast"
         leftMask:  bloodFlow.leftMask
         rightMask: bloodFlow.rightMask

@@ -988,6 +988,12 @@ Rectangle {
 
         Rectangle {
             id: settingsMenuButton
+            // In reduced mode the popup's only rows (display mode +
+            // autoscale) are hidden and Cell values is gone, leaving the
+            // dev-only Profiler as the sole possible entry. Hide the
+            // button entirely when it would open an empty card.
+            visible: !viewer.reducedMode
+                     || MotionInterface.appConfig.developerMode === true
             width: 36
             height: 36
             radius: 18
@@ -1081,6 +1087,10 @@ Rectangle {
                         }
                     }
                     Row {
+                        // Hidden in reduced (clinical) mode — autoscale is
+                        // not offered there; the view always uses the
+                        // configured manual bounds.
+                        visible: !viewer.reducedMode
                         spacing: 8
                         PopupPillSwitch {
                             id: autoScaleSwitch
@@ -1090,21 +1100,6 @@ Rectangle {
                         Text {
                             anchors.verticalCenter: autoScaleSwitch.verticalCenter
                             text: "Autoscale"
-                            color: theme.textPrimary
-                            font.pixelSize: 12
-                            font.family: "Roboto Mono"
-                        }
-                    }
-                    Row {
-                        spacing: 8
-                        PopupPillSwitch {
-                            id: cellValuesSwitch
-                            checked: viewer.showCellValues
-                            onToggled: viewer.showCellValues = checked
-                        }
-                        Text {
-                            anchors.verticalCenter: cellValuesSwitch.verticalCenter
-                            text: "Cell values"
                             color: theme.textPrimary
                             font.pixelSize: 12
                             font.family: "Roboto Mono"

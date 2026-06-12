@@ -15,9 +15,8 @@ teardown. This mirrors the pattern used by ``test_history`` and
 Three classes:
   TestReducedMode         (05–21) — keyboard-driven Notes / scan / history flow
   TestReducedModeMouse    (22–32) — mouse-driven repeat of the same flow
-  TestReducedModeSettings (33–37) — Settings modal: Time Window dropdown
-                                    parametrized over 3/5/15/30s, plus
-                                    Auto-scale Y-axes toggle ON.
+  TestReducedModeSettings (33)    — Settings modal: Time Window dropdown
+                                    parametrized over 3/5/15/30s.
 """
 
 import time
@@ -354,150 +353,13 @@ def _select_time_window(seconds: int):
     time.sleep(SLEEP)
 
 
-def _scroll_settings_to_top():
-    """Scroll the Settings modal up so Time Window / Auto-scale appear.
-
-    Mirror of ``_scroll_modal_to_bottom`` for the opposite direction;
-    Auto-scale lives near the top of the modal, Time Window just below
-    it. Eight short scroll-up nudges with brief pauses cope with
-    modals that animate.
-    """
-    ensure_visible()
-    w = get_app_window()
-    cx = w.left + w.width // 2
-    cy = w.top + w.height // 2
-    pyautogui.moveTo(cx, cy, duration=0.2)
-    for _ in range(8):
-        pyautogui.scroll(50)   # positive = scroll up
-        time.sleep(0.2)
-    time.sleep(0.5)
-
-
-def _toggle_auto_scale_on():
-    """Toggle the 'Auto-scale Y-axes' Switch ON in the Settings modal.
-
-    QML Switch elements aren't exposed as CheckBox/Button via UIA,
-    so we have two strategies:
-
-      1. Find any Text element whose contents match a known label
-         variant ('auto-scale', 'auto scale', 'autoscale', 'y-axes',
-         'y-axis'). When found, click ~43% across the window — that's
-         where the Switch sits relative to the label per current QML
-         layout. (Style-guide §6 calibrated coord, not a static ratio.)
-      2. Tab navigation fallback: focus the first ComboBox in the
-         modal (Time Window), Tab once to reach the toggle, Space to
-         flip it.
-
-    On total failure we dump the visible UIA texts so the failure is
-    diagnosable from the log alone (style-guide §9).
-    """
-    require_focus()
-    log.info("  Toggling Auto-scale Y-axes ON")
-    _scroll_settings_to_top()
-
-    win = uia_window()
-    label_elem = None
-    seen_texts: list[str] = []
-
-    try:
-        for elem in win.descendants():
-            try:
-                t = (elem.window_text() or "").strip()
-            except Exception:
-                continue
-            if t:
-                seen_texts.append(t)
-            tl = t.lower()
-            if any(tag in tl for tag in (
-                "auto-scale", "autoscale", "auto scale",
-                "y-axes", "y-axis",
-            )):
-                label_elem = elem
-                log.info(f"  Found auto-scale label: '{t}'")
-                break
-    except Exception as e:
-        log.warning(f"  Auto-scale label search failed: {e}")
-
-    if label_elem is not None:
-        rect = label_elem.rectangle()
-        label_cy = (rect.top + rect.bottom) // 2
-        w = get_app_window()
-        toggle_x = int(w.left + 0.43 * w.width)
-        log.info(f"  Clicking Auto-scale toggle at ({toggle_x}, {label_cy})")
-        pyautogui.click(toggle_x, label_cy)
-        time.sleep(SLEEP)
-        return
-
-    log.warning(
-        f"  Auto-scale label not found; first 40 UIA texts: "
-        f"{seen_texts[:40]}"
-    )
-    # Tab+Space fallback. The danger this fallback used to court was
-    # firing in non-reduced-mode Settings, where the first ComboBox is
-    # Default Camera Left Sensor (not Time Window) and Tab from there
-    # lands on Right Sensor — Space then opened a sensor dropdown
-    # instead of toggling Auto-scale, with cascading state corruption.
-    #
-    # Anchoring on the "Time window" label doesn't work either: Qt's
-    # accessibility bridge does not expose FieldRow labels (plain QML
-    # Text) as descendants() titles. Iteration 2 confirmed this — the
-    # title query returned nothing in a real reduced-mode Settings
-    # modal, and the test failed even though Tab+Space would have
-    # worked correctly there.
-    #
-    # The reliable discriminator is ComboBox count:
-    #   - reduced-mode Settings  → 1 ComboBox  (Time Window)
-    #   - non-reduced Settings   → 3 ComboBoxes (Default Camera Left,
-    #     Default Camera Right, Time Window)
-    # Only fire Tab+Space when count == 1; that's the only case where
-    # first-ComboBox = Time Window and the next focusable is the
-    # Auto-scale PillSwitch.
-    log.info("  Label search missed; checking ComboBox count to safely Tab+Space")
-    try:
-        cbs = win.descendants(control_type="ComboBox")
-    except Exception as e:
-        cbs = []
-        log.warning(f"  ComboBox enumeration failed: {e}")
-
-    if len(cbs) == 1:
-        log.info(
-            "  Settings modal exposes 1 ComboBox → reduced-mode layout "
-            "confirmed; firing Tab+Space from Time Window"
-        )
-        try:
-            rect = cbs[0].rectangle()
-            cx = (rect.left + rect.right) // 2
-            cy = (rect.top + rect.bottom) // 2
-            pyautogui.click(cx, cy)
-            time.sleep(0.3)
-            pyautogui.press("tab")
-            time.sleep(0.2)
-            pyautogui.press("space")
-            time.sleep(SLEEP)
-            log.info("  Tab+Space (count-guarded) engaged Auto-scale toggle")
-            return
-        except Exception as e:
-            log.warning(f"  count-guarded Tab+Space failed: {e}")
-
-    raise RuntimeError(
-        f"Could not locate the Auto-scale Y-axes toggle. Label search "
-        f"missed, and the Tab+Space fallback was refused because "
-        f"Settings exposes {len(cbs)} ComboBox(es) — only 1 is safe "
-        f"(reduced-mode layout: Time Window first, Auto-scale PillSwitch "
-        f"on Tab). {len(cbs)} ComboBoxes means the modal is in "
-        f"non-reduced layout and Tab+Space would target the wrong "
-        f"control. See the WARNING above for the UIA text dump."
-    )
-
-
 def _run_scan(label: str, duration_sec: int):
     """Click Start, dismiss the signal-quality dialog (Reduced Mode
     auto-runs it), wait for ``duration_sec``, click Start again to
     stop, dismiss the post-scan modal.
 
     Used by ``TestReducedModeSettings`` to run a scan per Time Window
-    value and per Auto-scale state. Calibrated panel clicks per
-    style-guide §6.
+    value. Calibrated panel clicks per style-guide §6.
     """
     log.info(f"  [{label}] Starting scan for {duration_sec}s")
     click_panel("Start")
@@ -785,16 +647,19 @@ class TestReducedModeMouse:
 
 
 # ─────────────────────────────────────────────
-# Settings feature class — Time Window dropdown + Auto-scale toggle
+# Settings feature class — Time Window dropdown
 # ─────────────────────────────────────────────
 @pytest.mark.incremental
 class TestReducedModeSettings:
-    """Reduced Mode Settings — Time Window dropdown + Auto-scale Y-axes.
+    """Reduced Mode Settings — Time Window dropdown.
 
     For each Time Window value (3, 5, 15, 30 s): open Settings, select
-    the value, close Settings, run a 2-min scan. Then turn Auto-scale
-    Y-axes ON and run one final 2-min scan to verify both feature
-    paths produce a viable scan.
+    the value, close Settings, run a 2-min scan.
+
+    Auto-scale is intentionally NOT covered here: reduced mode removes
+    the option entirely (the Settings row and the plot viewer's
+    three-dot popup entry are hidden, and BloodFlow.qml forces
+    autoScale off), so there is nothing to toggle.
 
     Reduced Mode is forced on in ``app_config.json`` at module-import
     time (see the module docstring); all three classes in this module
@@ -815,25 +680,6 @@ class TestReducedModeSettings:
         pyautogui.press("escape")
         time.sleep(SLEEP)
         _run_scan(f"TimeWindow={seconds}s", SHORT_SCAN_WAIT)
-
-    def test_34_open_settings_for_autoscale(self, app):
-        """Reopen Settings to enable Auto-scale Y-axes."""
-        move_window_on_screen()
-        ensure_visible()
-        click_panel("Settings")
-
-    def test_35_toggle_autoscale_on(self, app):
-        """Flip the Auto-scale Y-axes Switch to ON."""
-        _toggle_auto_scale_on()
-
-    def test_36_close_settings(self, app):
-        require_focus()
-        pyautogui.press("escape")
-        time.sleep(SLEEP)
-
-    def test_37_autoscale_scan(self, app):
-        """One final 2-min scan with Auto-scale enabled."""
-        _run_scan("AutoScale=ON", SHORT_SCAN_WAIT)
 
 
 # ─────────────────────────────────────────────

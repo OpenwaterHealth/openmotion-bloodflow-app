@@ -551,6 +551,7 @@ Item {
                     }
 
                     FieldRow {
+                        visible: !root.reducedMode
                         label: "Auto-scale Y-axes"
                         PillSwitch {
                             checked: root.autoScale
@@ -622,7 +623,10 @@ Item {
                     title: "Manual Plot Bounds"
 
                     Text {
-                        text: "Used when auto-scale is off."
+                        // Reduced mode hides the auto-scale toggle and always
+                        // uses these bounds, so don't reference it there.
+                        text: root.reducedMode ? "Y-axis range for the plots."
+                                               : "Used when auto-scale is off."
                         color: root.colTextMuted
                         font.pixelSize: 11
                         font.italic: true
@@ -671,35 +675,43 @@ Item {
                         }
                         Item { Layout.fillWidth: true }
 
-                        Text { text: "Mean"; color: "#2ECC71"; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
+                        // Mean / Contrast bounds only apply to the Mean/Contrast
+                        // display mode, which reduced mode never shows — hide
+                        // these two rows there. GridLayout skips invisible
+                        // children, so the grid reflows to just BFI / BVI.
+                        Text { visible: !root.reducedMode; text: "Mean"; color: "#2ECC71"; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
+                            visible: !root.reducedMode
                             Layout.preferredWidth: 90
                             decimals: 0
                             text: root.meanMin.toFixed(0)
                             onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.meanMin = Math.round(v); text = root.meanMin.toFixed(0) }
                         }
                         StyledNumberField {
+                            visible: !root.reducedMode
                             Layout.preferredWidth: 90
                             decimals: 0
                             text: root.meanMax.toFixed(0)
                             onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.meanMax = Math.round(v); text = root.meanMax.toFixed(0) }
                         }
-                        Item { Layout.fillWidth: true }
+                        Item { visible: !root.reducedMode; Layout.fillWidth: true }
 
-                        Text { text: "Contrast"; color: "#9B59B6"; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
+                        Text { visible: !root.reducedMode; text: "Contrast"; color: "#9B59B6"; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
+                            visible: !root.reducedMode
                             Layout.preferredWidth: 90
                             decimals: 2
                             text: root.contrastMin.toFixed(2)
                             onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.contrastMin = root._roundTo(v, 2); text = root.contrastMin.toFixed(2) }
                         }
                         StyledNumberField {
+                            visible: !root.reducedMode
                             Layout.preferredWidth: 90
                             decimals: 2
                             text: root.contrastMax.toFixed(2)
                             onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.contrastMax = root._roundTo(v, 2); text = root.contrastMax.toFixed(2) }
                         }
-                        Item { Layout.fillWidth: true }
+                        Item { visible: !root.reducedMode; Layout.fillWidth: true }
                     }
                 }
 
