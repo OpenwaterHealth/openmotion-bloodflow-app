@@ -263,12 +263,14 @@ CONSOLE_CONNECTED (2) ──► READY (3) ──► RUNNING (4)
 
 ```
 scan_{subjectId}_{YYYYMMDD_HHMMSS}_{side}_mask{XX}.csv   # histogram data
-scan_{subjectId}_{YYYYMMDD_HHMMSS}_notes.txt              # scan notes
+scan_{subjectId}_{YYYYMMDD_HHMMSS}_notes.txt              # scan notes (legacy — read-only fallback)
 scan_{subjectId}_{YYYYMMDD_HHMMSS}_bfi_results.csv        # computed BFI/BVI
 ```
 
 **Structure type:** Filesystem directory listing, glob-matched  
-**Access pattern:** `get_scan_list()` globs for `scan_*_notes.txt`, extracts `{subjectId}_{timestamp}`, sorts by timestamp descending.
+**Access pattern:** `get_scan_list()` merges corrected-CSV stems on disk with `sessions.session_label` rows from `scans.db`, sorted by timestamp descending.
+
+**Notes storage:** scan notes live in `scans.db` (`sessions.session_notes`, keyed by `session_label = {YYYYMMDD_HHMMSS}_{sessionId}`). The connector writes them there at scan end and on every Notes-modal edit; `get_scan_details()` reads them from the DB, falling back to a legacy `*_notes.txt` only for scans that predate the migration. New scans write no notes file.
 
 ### 4.10 Real-Time Correction State (Per-Camera)
 

@@ -653,7 +653,9 @@ class MotionConnector(QObject):
         self._capture_left_path = ""
         self._capture_right_path = ""
         self._scan_notes = ""
-        self._scan_notes_path = ""  # path to current scan's notes file on disk
+        # session_label of the just-completed scan's DB session — notes edits
+        # persist there (sessions.session_notes); empty until a scan completes.
+        self._scan_notes_session_label = ""
         self.connect_signals()
 
         self._tec_voltage = 0.0
@@ -1374,11 +1376,29 @@ class MotionConnector(QObject):
             if m:
                 right_mask = m.group(1)
 
+        # Notes live in the scan DB (sessions.session_notes, keyed by
+        # session_label == scan_id). Scans from before the DB migration
+        # only have a *_notes.txt on disk — fall back to that.
         notes = ""
-        try:
-            notes = notes_path.read_text(encoding="utf-8")
-        except Exception:
-            pass
+        db_path = getattr(self._interface, "scan_db_path", None)
+        if db_path:
+            try:
+                from omotion.ScanDatabase import ScanDatabase
+                db = ScanDatabase(db_path)
+                try:
+                    session = db.get_session_by_label(scan_id)
+                    if session and session.get("session_notes"):
+                        notes = session["session_notes"]
+                finally:
+                    db.close()
+            except Exception:
+                logger.warning("get_scan_details: could not read notes from DB",
+                               exc_info=True)
+        if not notes:
+            try:
+                notes = notes_path.read_text(encoding="utf-8")
+            except Exception:
+                pass
 
         return {
             "userLabel": subject,
@@ -1498,15 +1518,41 @@ class MotionConnector(QObject):
         if value != self._scan_notes:
             self._scan_notes = value
             self.scanNotesChanged.emit()
-        # Always persist to disk when a notes file path exists, even if the
+        # Always persist when a scan's DB session exists, even if the
         # in-memory value didn't change (covers the first save after capture).
-        if self._scan_notes_path:
+        if self._scan_notes_session_label:
+            self._persist_scan_notes(self._scan_notes_session_label)
+
+    def _persist_scan_notes(self, session_label: str) -> bool:
+        """Write the in-memory notes buffer to sessions.session_notes of the
+        scan DB session whose session_label matches. Returns True on success.
+        ScanDBSink (critical) creates the session at scan start, so every scan
+        that ran has a row to update."""
+        db_path = getattr(self._interface, "scan_db_path", None)
+        if not db_path or not session_label:
+            return False
+        try:
+            from omotion.ScanDatabase import ScanDatabase
+            db = ScanDatabase(db_path)
             try:
-                with open(self._scan_notes_path, "w", encoding="utf-8") as nf:
-                    nf.write(self._scan_notes.strip() + "\n")
-                logger.info(f"Notes saved to disk: {self._scan_notes_path}")
-            except Exception as e:
-                logger.error(f"Failed to update scan notes on disk: {e}")
+                session = db.get_session_by_label(session_label)
+                if session is None:
+                    logger.error(
+                        "Scan notes: no DB session with label %r", session_label
+                    )
+                    return False
+                db.update_session(session["id"],
+                                  session_notes=self._scan_notes.strip())
+                logger.info("Scan notes saved to DB session %r",
+                            session_label)
+                return True
+            finally:
+                db.close()
+        except Exception:
+            logger.exception(
+                "Failed to save scan notes to DB (label %r)", session_label
+            )
+            return False
 
     @pyqtProperty(QObject, notify=currentScanSourceChanged)
     def currentScanSource(self) -> ScanDataSource | None:
@@ -1845,7 +1891,7 @@ class MotionConnector(QObject):
         self._capture_stop = threading.Event()
         # Each new scan starts with a fresh notes buffer
         self._scan_notes = ""
-        self._scan_notes_path = ""
+        self._scan_notes_session_label = ""
         self.scanNotesChanged.emit()
         self._capture_running = True
         self._capture_start_time = time.time()
@@ -1932,17 +1978,13 @@ class MotionConnector(QObject):
             self._scan_notes = (self._scan_notes.strip() + duration_line)
             self.scanNotesChanged.emit()
 
-            # Write scan notes file using scan_id from metadata.
+            # Persist notes to the scan DB session ScanDBSink created at
+            # scan start (label = scan_id_subject_id). Later edits via the
+            # Notes modal update the same row through the scanNotes setter.
             scan_id = getattr(meta, "scan_id", "") if meta else ""
-            try:
-                notes_filename = f"{scan_id}_{subject_id}_notes.txt"
-                notes_path = os.path.join(data_dir, notes_filename)
-                with open(notes_path, "w", encoding="utf-8") as nf:
-                    nf.write(self._scan_notes.strip() + "\n")
-                self._scan_notes_path = notes_path
-                logger.info(f"Saved scan notes to {notes_path}")
-            except Exception as e:
-                logger.error(f"Failed to save scan notes: {e}")
+            session_label = f"{scan_id}_{subject_id}" if scan_id else ""
+            self._scan_notes_session_label = session_label
+            self._persist_scan_notes(session_label)
 
             # New pipeline writes CSVs directly; no .raw→.csv post-processing
             # needed.  Pass empty paths to captureFinished so startPostProcess
