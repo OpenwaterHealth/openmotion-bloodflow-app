@@ -22,7 +22,7 @@ Example footer (added after the existing duration line):
 ```
 ---
 Scan completed — duration: 00:05:12
-Data gaps (NaN-filled, >1.0s): 12.4–15.8s, 47.0–49.2s
+Data gaps (>1.0s): 12.4–15.8s, 47.0–49.2s
 ```
 
 ## Key constraint: NaN is routine, not always an "issue"
@@ -125,7 +125,7 @@ Notes:
   tracker = self._nan_gap_tracker
   ranges = tracker.merged_gaps()
   if ranges:
-      line = "\nData gaps (NaN-filled, >1.0s): " + format_gaps(ranges, tracker.t0)
+      line = "\nData gaps (>1.0s): " + format_gaps(ranges, tracker.t0)
       self._scan_notes = self._scan_notes + line
   ```
   This runs before `scanNotesChanged.emit()` and `_persist_scan_notes(...)`, so
