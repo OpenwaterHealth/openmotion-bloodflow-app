@@ -65,7 +65,8 @@ class NanGapTracker:
         last = self._last.get(key)
         if last is not None and (t - last) > self.min_gap_s:
             self._gaps.append((last, t))
-        self._last[key] = t
+        if last is None or t > last:
+            self._last[key] = t
 
     def merged_gaps(self, end_t: Optional[float] = None) -> list[tuple[float, float]]:
         """Union of all per-key gap intervals, sorted and merged.
@@ -73,13 +74,15 @@ class NanGapTracker:
         end_t closes trailing gaps: any key whose last finite sample is more
         than min_gap_s before end_t contributes (last, end_t). Defaults to
         the global max timestamp seen, so a camera that died mid-scan shows
-        a gap running to the end of the data.
+        a gap running to the end of the data. An end_t earlier than recorded
+        gaps does not truncate them.
         """
         if end_t is None:
             end_t = self._t_max
         gaps = list(self._gaps)
         if end_t is not None:
-            for last in self._last.values():
+            # list() snapshot: record() may insert a new key from the worker thread.
+            for last in list(self._last.values()):
                 if (end_t - last) > self.min_gap_s:
                     gaps.append((last, end_t))
         if not gaps:
