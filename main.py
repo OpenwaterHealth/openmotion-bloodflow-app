@@ -117,7 +117,7 @@ def _load_app_config() -> dict:
         "autoScale": False,
         "autoScalePerPlot": False,
         # Y-axis tick labels on plot cells; runtime toggle in the ⋯ popup.
-        "showAxisLabels": False,
+        "showAxisLabels": True,
         "reducedMode": False,
         "reducedModeLeftMask": 0xC3,
         "reducedModeRightMask": 0xC3,
