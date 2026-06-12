@@ -93,7 +93,7 @@ before `close()`, add:
     // before the new entry; an empty note gets no leading blank line. Cursor
     // is parked after the timestamp, ready for the operator to type.
     function openWithTimestamp(stamp) {
-        var existing = MOTIONInterface.scanNotes
+        var existing = MotionInterface.scanNotes
         var prefix = existing.length > 0 ? existing.replace(/\s+$/, "") + "\n" : ""
         notesArea.text = prefix + "[" + stamp + "] "
         root.visible = true
@@ -142,15 +142,15 @@ block (after line 313), add:
                  && MOTIONInterface.triggerState === "ON"
                  && modalManager.current === null
         onActivated: {
-            var elapsed = MOTIONInterface.scanElapsedStr()
+            var elapsed = MotionInterface.scanElapsedStr()
             var wall = Qt.formatTime(new Date(), "HH:mm:ss")
             notesModal.openWithTimestamp(elapsed + " / " + wall)
         }
     }
 ```
 
-`modalManager` is the `ModalManager` declared in this file (lines ~227); `notesModal` is the
-`NotesModal` above; `bloodFlow` is the root id; `MOTIONInterface` is the registered singleton.
+`modalManager` is the `ModalManager` declared in this file (lines ~229); `notesModal` is the
+`NotesModal` above; `bloodFlow` is the root id; `MotionInterface` is the registered singleton.
 All are already in scope here.
 
 - [ ] **Step 2: Verify the file parses (syntax sanity)**
