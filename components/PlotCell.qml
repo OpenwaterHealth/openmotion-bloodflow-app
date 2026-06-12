@@ -106,7 +106,11 @@ Item {
     // very narrow cells alongside the midline gridline.
     function _drawAxisLabels(ctx, w, h) {
         if (w < 60) return
-        ctx.font = "9px 'Roboto Mono'"
+        // Context2D validates font families strictly (unlike Text, which
+        // silently falls back), so an unregistered "Roboto Mono" warns on
+        // every paint. Keep it as the preferred family but add a generic
+        // monospace fallback to satisfy the parser and silence the spam.
+        ctx.font = "9px 'Roboto Mono', monospace"
         var midY = Math.floor(h / 2)
         var span = cell.yMax - cell.yMin
         ctx.fillStyle = cell.traceColor
