@@ -3,7 +3,7 @@ BFI/BVI sample timestamps (spec: 2026-06-11-nan-gap-notes-footer)."""
 
 import pytest
 
-from nan_gap_tracker import NanGapTracker
+from nan_gap_tracker import NanGapTracker, format_gaps, gap_note_line
 
 pytestmark = pytest.mark.unit
 
@@ -146,3 +146,27 @@ def test_side_average_keys_work_like_camera_keys():
     tr = NanGapTracker()
     _feed(tr, ("left", -1), [0.0, 0.025, 2.0, 2.025])
     assert tr.merged_gaps() == [(pytest.approx(0.025), pytest.approx(2.0))]
+
+
+def test_format_gaps_is_scan_relative_one_decimal():
+    # t0=2.0 → ranges shift down by 2.0 and render with 1 decimal.
+    s = format_gaps([(14.4, 17.8), (49.0, 51.2)], t0=2.0)
+    assert s == "12.4–15.8s, 47.0–49.2s"
+
+
+def test_format_gaps_with_none_t0_treats_zero_as_origin():
+    assert format_gaps([(1.0, 2.5)], t0=None) == "1.0–2.5s"
+
+
+def test_gap_note_line_empty_when_no_gaps():
+    tr = NanGapTracker()
+    _feed(tr, LEFT0, [i * 0.025 for i in range(80)])
+    assert gap_note_line(tr) == ""
+    assert gap_note_line(NanGapTracker()) == ""  # never recorded
+
+
+def test_gap_note_line_formats_threshold_and_ranges():
+    tr = NanGapTracker()
+    _feed(tr, LEFT0, [0.0, 0.5, 3.5, 4.0])
+    line = gap_note_line(tr)
+    assert line == "\nData gaps (>1.0s): 0.5–3.5s"

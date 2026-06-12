@@ -96,3 +96,27 @@ class NanGapTracker:
             else:
                 merged.append((lo, hi))
         return merged
+
+
+def format_gaps(ranges: list[tuple[float, float]], t0: Optional[float]) -> str:
+    """Render ranges as scan-relative '12.4–15.8s, 47.0–49.2s' (1 decimal).
+    t0 is the scan's first finite timestamp (NanGapTracker.t0); None means
+    timestamps are already zero-based."""
+    origin = t0 or 0.0
+    return ", ".join(
+        f"{lo - origin:.1f}–{hi - origin:.1f}s" for lo, hi in ranges
+    )
+
+
+def gap_note_line(tracker: NanGapTracker) -> str:
+    """The complete notes-footer line for this scan's gaps, starting with a
+    newline so the caller can append it directly after the duration line.
+    Empty string when there were no gaps (the common case — no footer noise).
+    """
+    ranges = tracker.merged_gaps()
+    if not ranges:
+        return ""
+    return (
+        f"\nData gaps (>{tracker.min_gap_s:.1f}s): "
+        + format_gaps(ranges, tracker.t0)
+    )
