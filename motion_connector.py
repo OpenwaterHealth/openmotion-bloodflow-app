@@ -2826,6 +2826,11 @@ class MotionConnector(QObject):
                 if src is not None and getattr(src, "live", False):
                     src.mark_dropped(side=side, cam_id=cam_id, t=now - self._plot_t0)
 
+    @pyqtSlot(result=str)
+    def scanElapsedStr(self) -> str:
+        """QML-facing accessor for trigger-ON elapsed time (HH:MM:SS)."""
+        return self._scan_elapsed_str()
+
     def _scan_elapsed_str(self) -> str:
         """Return current scan elapsed trigger-ON time as HH:MM:SS."""
         elapsed = self._trigger_cumulative_s
