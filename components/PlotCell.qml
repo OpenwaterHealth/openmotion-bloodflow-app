@@ -54,6 +54,10 @@ Item {
     // shows the same numbers on the large side panels) can hide them.
     property bool showValueLabels: true
 
+    // Y-axis tick labels (max/mid/min). Toggleable from the ⋯ popup;
+    // default comes from appConfig.showAxisLabels (false = labels off).
+    property bool showAxisLabels: true
+
     // Top-right temperature readout — developer mode only; the viewer
     // binds this from appConfig.developerMode (issue #165).
     property bool showTemperature: false
@@ -78,6 +82,7 @@ Item {
     onYMaxChanged: traceCanvas.requestPaint()
     onSecondaryYMinChanged: traceCanvas.requestPaint()
     onSecondaryYMaxChanged: traceCanvas.requestPaint()
+    onShowAxisLabelsChanged: traceCanvas.requestPaint()
     // Note: cursorT changes do NOT trigger a direct repaint — that
     // would spam paints on every mouse-move event. Instead the viewer
     // sets _dirty on cursorAt() so the next paintThrottle tick
@@ -195,7 +200,7 @@ Item {
             }
 
             if (!cell.source) {
-                cell._drawAxisLabels(ctx, width, height)
+                if (cell.showAxisLabels) cell._drawAxisLabels(ctx, width, height)
                 if (profOn) cell.panZoomTarget.recordCellPaint(Date.now() - profT0, 0)
                 return
             }
@@ -252,7 +257,7 @@ Item {
             }
 
             // Last so the tick labels stay readable over the traces.
-            cell._drawAxisLabels(ctx, width, height)
+            if (cell.showAxisLabels) cell._drawAxisLabels(ctx, width, height)
 
             if (profOn) cell.panZoomTarget.recordCellPaint(Date.now() - profT0, profPts)
         }
@@ -265,8 +270,9 @@ Item {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.margins: 8
-        // Clear the primary metric's top tick label in the corner above.
-        anchors.topMargin: 18
+        // Clear the primary metric's top tick label in the corner above —
+        // but only when it's drawn; reclaim the space when axis labels are off.
+        anchors.topMargin: cell.showAxisLabels ? 18 : 8
         spacing: 1
 
         Text {
@@ -332,8 +338,9 @@ Item {
         anchors.top: parent.top
         anchors.right: parent.right
         anchors.margins: 8
-        // Clear the secondary metric's top tick label in the corner above.
-        anchors.topMargin: 18
+        // Clear the secondary metric's top tick label in the corner above —
+        // but only when it's drawn; reclaim the space when axis labels are off.
+        anchors.topMargin: cell.showAxisLabels ? 18 : 8
         text: isFinite(tempC) ? tempC.toFixed(1) + "°C" : ""
         color: theme.readableInk(theme.accentOrange)
         font.pixelSize: 10
