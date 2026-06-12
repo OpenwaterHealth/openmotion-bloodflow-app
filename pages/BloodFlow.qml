@@ -297,6 +297,23 @@ Rectangle {
         id: notesModal
     }
 
+    // Spacebar during an active scan pops the Notes modal with a fresh
+    // newline + [elapsed / wall-clock] timestamp, cursor ready to type.
+    // Gated so it only fires mid-scan and never over another modal; once
+    // NotesModal opens, modalManager.current is non-null so the shortcut
+    // disables itself and Space types a literal space in the textarea.
+    Shortcut {
+        sequence: "Space"
+        enabled: bloodFlow.scanning
+                 && MotionInterface.triggerState === "ON"
+                 && modalManager.current === null
+        onActivated: {
+            var elapsed = MotionInterface.scanElapsedStr()
+            var wall = Qt.formatTime(new Date(), "HH:mm:ss")
+            notesModal.openWithTimestamp(elapsed + " / " + wall)
+        }
+    }
+
     // Open the notes modal exactly when the connector signals that
     // scanNotes has been finalized for the just-completed scan (duration
     // line appended, notes.txt written). This is the only path that
