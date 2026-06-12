@@ -53,9 +53,15 @@ QML↔Python wiring: `main.py:256` registers the connector as a QML singleton (`
 
 ## Working without hardware
 
-Flip these in `config/app_config.json`:
+There is currently **no working no-hardware mock mode** for the running app:
 
-- `cameraFakeData: true` — generate synthetic histograms; app runs without USB devices attached.
+- `cameraFakeData` in `app_config.json` is broken — ignore it (confirmed 2026-06-11). It never enabled a hardware-free launch anyway: it only sets the `DEBUG_FLAG_FAKE_DATA` bit on an already-connected sensor (`motion_connector.py:714` / `_run_sensor_init`), and the firmware-side synthetic histograms no longer work.
+- The SDK's `demo_mode` is also broken (confirmed 2026-05-28).
+
+To exercise app logic without hardware, write unit tests that mock the hardware seams instead — see the tests marked `@pytest.mark.unit` (e.g. `tests/test_live_plot_sink.py`, `tests/test_scan_notes_db.py`). The conftest autouse fixtures short-circuit on that marker, so no app launch or UI machinery fires.
+
+Debug flags that are still useful when hardware **is** attached (`config/app_config.json`):
+
 - `developerMode: true` — show per-camera CQ dots, test buttons, debug telemetry.
 - `commVerbose: true` + `verboseCommandHandling: true` — SDK logs all UART packets + MCU printf output.
 
@@ -66,7 +72,7 @@ Flip these in `config/app_config.json`:
 | `developerMode` | `true` | Show debug telemetry, per-camera CQ dots, test buttons. |
 | `reducedMode` | `true` | Clinical UI: hide settings, large BFI/BVI panels. |
 | `forceLaserFail` | `false` | Debug: simulate a laser safety trip. |
-| `cameraFakeData` | `false` | Mock mode (no hardware). |
+| `cameraFakeData` | `false` | **Broken — do not use.** Was meant to request firmware fake histograms; see "Working without hardware". |
 | `histoThrottle` | `false` | Drop histograms to reduce log spam. |
 | `histoCmp` | `true` | Compare received vs expected histogram frame counts. |
 | `ft_min_mean_per_camera` | `[40,40,…]` | Calibration pass threshold — min pixel mean per camera (8-element array). |
@@ -127,6 +133,6 @@ The `dataDirectory` config key controls the root (defaults to cwd if unset — f
 | Hook a new SDK feature into the UI | Add `@pyqtSlot`/`@pyqtSignal` in `motion_connector.py`; bind in the relevant QML page. |
 | Modify scan orchestration | `pages/scan/ScanRunner.qml` + the task QMLs. |
 | Tune a clinical threshold | `config/app_config.json` (check the table above first — most knobs live here). |
-| Reproduce a bug without hardware | Set `cameraFakeData: true` in `app_config.json`, then `python main.py`. |
+| Reproduce a bug without hardware | Not currently possible in the running app (no working mock mode — see "Working without hardware"). Write a `unit`-marked pytest that mocks the hardware seam instead. |
 | Touch laser register defaults | `config/laser_params.json` — but loop in firmware/SDK owners first; this is locked baseline data. |
 | Diagnose USB enumeration in the packaged exe | `openwater.spec` libusb mirror + `rthook_libusb_paths.py`. |
