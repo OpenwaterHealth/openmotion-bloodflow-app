@@ -1,10 +1,10 @@
 import QtQuick 6.0
 
 // Phase 2a — single-trace Canvas bound to one (side, cam_id, metric) key
-// on a ScanDataSource. No pan/zoom, no crosshair, no axis labels —
-// those land in Phase 2b. The cell tracks the live edge of the source
+// on a ScanDataSource. The cell tracks the live edge of the source
 // and renders the last `windowSeconds` of samples, strided to at most
-// 2 * width samples per paint.
+// 2 * width samples per paint. Y-axis tick labels (max/mid/min) render
+// per metric: primary on the left edge, secondary on the right.
 Item {
     id: cell
 
@@ -71,6 +71,13 @@ Item {
     onWidthChanged: traceCanvas.requestPaint()
     onHeightChanged: traceCanvas.requestPaint()
     onSourceChanged: traceCanvas.requestPaint()
+    // Bound changes must repaint directly — on a static (past-scan)
+    // source no samplesAppended tick arrives to flush a Settings edit
+    // or an autoscale recompute into the axis labels / trace mapping.
+    onYMinChanged: traceCanvas.requestPaint()
+    onYMaxChanged: traceCanvas.requestPaint()
+    onSecondaryYMinChanged: traceCanvas.requestPaint()
+    onSecondaryYMaxChanged: traceCanvas.requestPaint()
     // Note: cursorT changes do NOT trigger a direct repaint — that
     // would spam paints on every mouse-move event. Instead the viewer
     // sets _dirty on cursorAt() so the next paintThrottle tick
@@ -83,6 +90,42 @@ Item {
         if (cell.panZoomTarget && cell.panZoomTarget.clampForDisplay)
             return cell.panZoomTarget.clampForDisplay(metricName, v)
         return v
+    }
+
+    // Y-axis tick decimals chosen per axis from its span so all three
+    // ticks format consistently — whole numbers for wide ranges (mean's
+    // 0–500), one decimal for BFI/BVI's 0–10, two for contrast's 0–1
+    // (where the 0.35 midpoint would otherwise round to "0.3").
+    function _fmtAxis(v, span) {
+        return v.toFixed(span >= 100 ? 0 : span >= 2 ? 1 : 2)
+    }
+
+    // Y-axis tick labels — primary bounds down the left edge, secondary
+    // down the right, colored to match their traces. Drawn even when no
+    // source is bound so an idle grid still shows its scale. Skipped for
+    // very narrow cells alongside the midline gridline.
+    function _drawAxisLabels(ctx, w, h) {
+        if (w < 60) return
+        // Context2D validates font families strictly (unlike Text, which
+        // silently falls back), so an unregistered "Roboto Mono" warns on
+        // every paint. Keep it as the preferred family but add a generic
+        // monospace fallback to satisfy the parser and silence the spam.
+        ctx.font = "9px 'Roboto Mono', monospace"
+        var midY = Math.floor(h / 2)
+        var span = cell.yMax - cell.yMin
+        ctx.fillStyle = cell.traceColor
+        ctx.textAlign = "left"
+        ctx.fillText(_fmtAxis(cell.yMax, span), 2, 9)
+        ctx.fillText(_fmtAxis((cell.yMin + cell.yMax) / 2, span), 2, midY - 3)
+        ctx.fillText(_fmtAxis(cell.yMin, span), 2, h - 3)
+        if (cell.secondaryMetric.length > 0) {
+            span = cell.secondaryYMax - cell.secondaryYMin
+            ctx.fillStyle = cell.secondaryColor
+            ctx.textAlign = "right"
+            ctx.fillText(_fmtAxis(cell.secondaryYMax, span), w - 2, 9)
+            ctx.fillText(_fmtAxis((cell.secondaryYMin + cell.secondaryYMax) / 2, span), w - 2, midY - 3)
+            ctx.fillText(_fmtAxis(cell.secondaryYMin, span), w - 2, h - 3)
+        }
     }
 
     // Render one trace inside the current Canvas context using the given
@@ -152,6 +195,7 @@ Item {
             }
 
             if (!cell.source) {
+                cell._drawAxisLabels(ctx, width, height)
                 if (profOn) cell.panZoomTarget.recordCellPaint(Date.now() - profT0, 0)
                 return
             }
@@ -207,6 +251,9 @@ Item {
                 ctx.stroke()
             }
 
+            // Last so the tick labels stay readable over the traces.
+            cell._drawAxisLabels(ctx, width, height)
+
             if (profOn) cell.panZoomTarget.recordCellPaint(Date.now() - profT0, profPts)
         }
     }
@@ -218,6 +265,8 @@ Item {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.margins: 8
+        // Clear the primary metric's top tick label in the corner above.
+        anchors.topMargin: 18
         spacing: 1
 
         Text {
@@ -283,6 +332,8 @@ Item {
         anchors.top: parent.top
         anchors.right: parent.right
         anchors.margins: 8
+        // Clear the secondary metric's top tick label in the corner above.
+        anchors.topMargin: 18
         text: isFinite(tempC) ? tempC.toFixed(1) + "°C" : ""
         color: theme.readableInk(theme.accentOrange)
         font.pixelSize: 10
