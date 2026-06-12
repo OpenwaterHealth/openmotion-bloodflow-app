@@ -1966,7 +1966,10 @@ class MotionConnector(QObject):
         self._dropout_timer.start()
 
         # NaN-gap tracker — fresh per scan (same lifecycle as the watchdog).
-        self._nan_gap_tracker = NanGapTracker()
+        # Bound to a local so the completion closure and the sink provably
+        # share THIS scan's tracker even if the attribute is reset elsewhere.
+        nan_gap_tracker = NanGapTracker()
+        self._nan_gap_tracker = nan_gap_tracker
 
         # Reset trigger ON-time mirrors so _scan_elapsed_str starts from zero.
         self._trigger_cumulative_s = 0.0
@@ -2012,7 +2015,7 @@ class MotionConnector(QObject):
             # of this handler — a tracker bug must never block notes
             # persistence.
             try:
-                gap_line = gap_note_line(self._nan_gap_tracker)
+                gap_line = gap_note_line(nan_gap_tracker)
                 if gap_line:
                     logger.warning("Scan data gaps detected: %s", gap_line.strip())
                     self._scan_notes += gap_line
@@ -2073,7 +2076,7 @@ class MotionConnector(QObject):
             ),
             sinks=[
                 _LivePlotSink(connector=self, plot_t0=plot_t0, live_source=live_source,
-                              nan_gap_tracker=self._nan_gap_tracker),
+                              nan_gap_tracker=nan_gap_tracker),
                 _TriggerStateSink(connector=self),
                 _CompletionSink(connector=self, on_complete_cb=_on_pipeline_complete),
             ],
