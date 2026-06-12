@@ -299,3 +299,107 @@ def test_live_plot_sink_no_temp_when_non_finite():
 
     assert len(src.appended) == 1
     assert src.appended[0]["temp"] is None
+
+
+def test_live_plot_sink_records_finite_samples_into_nan_gap_tracker():
+    from nan_gap_tracker import NanGapTracker
+
+    conn = _connector()
+    tracker = NanGapTracker()
+    src = _RecorderLiveSource()
+    sink = _LivePlotSink(connector=conn, plot_t0=0.0, live_source=src,
+                         nan_gap_tracker=tracker)
+    batch = SimpleNamespace(
+        bfi_live=np.zeros((3, 2, 8), dtype=np.float32),
+        bvi_live=np.zeros((3, 2, 8), dtype=np.float32),
+        mean_dc_rt=np.zeros((3, 2, 8), dtype=np.float32),
+        contrast_sn_rt=np.zeros((3, 2, 8), dtype=np.float32),
+        temperature_c=np.full((3, 2, 8), 35.0, dtype=np.float32),
+        frame_type=np.array(["light", "light", "light"], dtype="<U8"),
+        timestamp_s=np.array([0.1, 0.125, 3.0], dtype=np.float64),
+        abs_frame_ids=np.array([10, 11, 12], dtype=np.int64),
+        side_ids=np.array([0, 0, 0], dtype=np.int8),
+        cam_ids=np.array([1, 1, 1], dtype=np.int8),
+    )
+    # Middle sample is NaN-filled → skipped by the sink AND absent from
+    # the tracker, leaving a 0.1→3.0 gap for ("left", 1). The gap starts
+    # at the last finite sample before the silence (t=0.1, frame 0);
+    # t=0.125 (frame 1) is NaN and never recorded.
+    batch.bfi_live[:] = 7.0
+    batch.bvi_live[:] = 4.0
+    batch.bfi_live[1, 0, 1] = np.nan
+
+    sink.consume("live", batch)
+
+    assert tracker.merged_gaps() == [
+        (pytest.approx(0.1), pytest.approx(3.0))
+    ]
+    # Sink behavior unchanged: NaN sample not appended to the live source.
+    assert [r["t"] for r in src.appended] == [
+        pytest.approx(0.1), pytest.approx(3.0)
+    ]
+
+
+def test_live_plot_sink_records_dropout_suppressed_samples_in_tracker():
+    """A camera in the dropped set is suppressed from the live source, but
+    its finite samples still reach the tracker — record() sits before the
+    dropout gate (arriving finite data is not a NaN gap)."""
+    from nan_gap_tracker import NanGapTracker
+
+    conn = _connector()
+    conn._camera_dropped = {("left", 1)}
+    tracker = NanGapTracker()
+    src = _RecorderLiveSource()
+    sink = _LivePlotSink(connector=conn, plot_t0=0.0, live_source=src,
+                         nan_gap_tracker=tracker)
+    batch = SimpleNamespace(
+        bfi_live=np.full((1, 2, 8), 7.0, dtype=np.float32),
+        bvi_live=np.full((1, 2, 8), 4.0, dtype=np.float32),
+        mean_dc_rt=np.zeros((1, 2, 8), dtype=np.float32),
+        contrast_sn_rt=np.zeros((1, 2, 8), dtype=np.float32),
+        temperature_c=np.full((1, 2, 8), 35.0, dtype=np.float32),
+        frame_type=np.array(["light"], dtype="<U8"),
+        timestamp_s=np.array([0.1], dtype=np.float64),
+        abs_frame_ids=np.array([10], dtype=np.int64),
+        side_ids=np.array([0], dtype=np.int8),
+        cam_ids=np.array([1], dtype=np.int8),
+    )
+
+    sink.consume("live", batch)
+
+    assert src.appended == []          # suppressed from the live source
+    assert tracker.t0 == pytest.approx(0.1)  # but recorded in the tracker
+
+
+def test_live_plot_sink_side_average_records_only_finite_into_tracker():
+    from nan_gap_tracker import NanGapTracker
+
+    conn = _connector()
+    tracker = NanGapTracker()
+    src = _RecorderLiveSource()
+    sink = _LivePlotSink(connector=conn, plot_t0=0.0, live_source=src,
+                         nan_gap_tracker=tracker)
+
+    sink.consume("live_side", SimpleNamespace(
+        t=0.5, frame_id=100, side=0, bfi=0.42, bvi=5.0))
+    sink.consume("live_side", SimpleNamespace(
+        t=0.6, frame_id=101, side=0, bfi=float("nan"), bvi=5.0))
+    sink.consume("live_side", SimpleNamespace(
+        t=2.0, frame_id=102, side=0, bfi=0.40, bvi=4.8))
+
+    # Side-average appends still store NaN (existing behavior)...
+    assert len(src.appended) == 3
+    # ...but the tracker only saw the finite samples → 0.5→2.0 gap.
+    assert tracker.merged_gaps() == [
+        (pytest.approx(0.5), pytest.approx(2.0))
+    ]
+
+
+def test_live_plot_sink_tracker_is_optional():
+    """Default nan_gap_tracker=None keeps the sink working unchanged —
+    existing callers and tests construct it without a tracker."""
+    conn = _connector()
+    sink, src = _make_sink(conn)
+    sink.consume("live_side", SimpleNamespace(
+        t=0.5, frame_id=100, side=0, bfi=0.42, bvi=5.0))
+    assert len(src.appended) == 1
