@@ -26,7 +26,7 @@ Item {
     function openWithTimestamp(stamp) {
         var existing = MotionInterface.scanNotes
         var prefix = existing.length > 0 ? existing.replace(/\s+$/, "") + "\n" : ""
-        notesArea.text = prefix + "[" + stamp + "] "
+        notesArea.text = prefix + "[" + stamp + "] - "
         root.visible = true
         notesArea.forceActiveFocus()
         notesArea.cursorPosition = notesArea.text.length
