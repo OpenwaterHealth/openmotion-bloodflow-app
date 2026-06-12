@@ -237,14 +237,15 @@ class _LivePlotSink:
                 if not (math.isfinite(bfi) and math.isfinite(bvi)):
                     continue
 
+                _key = (side, cam_id)
+
                 # Finite sample — feed the NaN-gap tracker before the
                 # dropout gate: a dropout-suppressed camera still sending
                 # finite data is not a NaN gap.
                 if self._nan_gap_tracker is not None:
-                    self._nan_gap_tracker.record((side, cam_id), plot_ts)
+                    self._nan_gap_tracker.record(_key, plot_ts)
 
                 # Dropout gate — same logic as the old _on_uncorrected closure.
-                _key = (side, cam_id)
                 should_emit, recovery_msg = _check_dropped_camera_emit(
                     side, cam_id,
                     connector._camera_dropped,
@@ -561,6 +562,11 @@ class MotionConnector(QObject):
         # data after Connection Lost' warning for. One log per dropout
         # — at 40 Hz a flapping camera would otherwise spam the logs.
         self._camera_dropped_recovery_logged: set[tuple[str, int]] = set()
+
+        # NaN-gap tracker — replaced with a fresh instance at each scan
+        # start (startCapture); _on_pipeline_complete reads it to append
+        # the data-gaps footer to the session notes.
+        self._nan_gap_tracker = NanGapTracker()
 
         # 1 Hz watchdog timer — started/stopped around the scan lifecycle.
         self._dropout_timer = QTimer(self)
@@ -1959,6 +1965,9 @@ class MotionConnector(QObject):
         self._camera_dropped_recovery_logged = set()
         self._dropout_timer.start()
 
+        # NaN-gap tracker — fresh per scan (same lifecycle as the watchdog).
+        self._nan_gap_tracker = NanGapTracker()
+
         # Reset trigger ON-time mirrors so _scan_elapsed_str starts from zero.
         self._trigger_cumulative_s = 0.0
         self._trigger_on_mono = None
@@ -1997,6 +2006,18 @@ class MotionConnector(QObject):
             )
             duration_line = f"\n---\nScan {status} — duration: {duration_str}"
             self._scan_notes = (self._scan_notes.strip() + duration_line)
+            # Data-gap footer: aggregate ranges where any camera went >1 s
+            # without a finite BFI/BVI sample (sustained NaN-fill/dropout).
+            # Empty string when the scan was clean. Fail-soft like the rest
+            # of this handler — a tracker bug must never block notes
+            # persistence.
+            try:
+                gap_line = gap_note_line(self._nan_gap_tracker)
+                if gap_line:
+                    logger.warning("Scan data gaps detected: %s", gap_line.strip())
+                    self._scan_notes += gap_line
+            except Exception:
+                logger.exception("NaN-gap footer computation failed")
             self.scanNotesChanged.emit()
 
             # Persist notes to the scan DB session ScanDBSink created at
@@ -2051,7 +2072,8 @@ class MotionConnector(QObject):
                 if (developer_mode and self._write_raw_csv) else 0
             ),
             sinks=[
-                _LivePlotSink(connector=self, plot_t0=plot_t0, live_source=live_source),
+                _LivePlotSink(connector=self, plot_t0=plot_t0, live_source=live_source,
+                              nan_gap_tracker=self._nan_gap_tracker),
                 _TriggerStateSink(connector=self),
                 _CompletionSink(connector=self, on_complete_cb=_on_pipeline_complete),
             ],
