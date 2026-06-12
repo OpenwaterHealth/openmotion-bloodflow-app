@@ -101,7 +101,7 @@ The `dataDirectory` config key controls the root (defaults to cwd if unset — f
 - `app-logs/` — app log files (one per launch)
 - `app-logs/ft-test-csvs/` — factory-test CSVs
 - `calibrations/` — saved calibration JSONs (also written here)
-- The scan output files (raw / corrected / notes / telemetry CSV + `scans.db`) land directly in the root
+- The scan output files (raw / corrected / telemetry CSV + `scans.db`) land directly in the root. Scan notes live in `scans.db` (`sessions.session_notes`), not as files; `*_notes.txt` files are legacy read-only fallbacks.
 
 **Important:** the runner is fail-soft. `ScanRunner._safe_consume` catches sink exceptions and logs them as `sink %r raised on channel ...` at ERROR; `pipeline.process` exceptions log as `pipeline.process raised — resetting and continuing` at ERROR. **Neither aborts the scan**, so the app may report "complete" while every interval was actually broken. Always grep for `raised|exception` even on apparent successes when something downstream looks wrong.
 
