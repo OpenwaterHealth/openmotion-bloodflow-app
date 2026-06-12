@@ -270,8 +270,9 @@ Item {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.margins: 8
-        // Clear the primary metric's top tick label in the corner above.
-        anchors.topMargin: 18
+        // Clear the primary metric's top tick label in the corner above —
+        // but only when it's drawn; reclaim the space when axis labels are off.
+        anchors.topMargin: cell.showAxisLabels ? 18 : 8
         spacing: 1
 
         Text {
@@ -337,8 +338,9 @@ Item {
         anchors.top: parent.top
         anchors.right: parent.right
         anchors.margins: 8
-        // Clear the secondary metric's top tick label in the corner above.
-        anchors.topMargin: 18
+        // Clear the secondary metric's top tick label in the corner above —
+        // but only when it's drawn; reclaim the space when axis labels are off.
+        anchors.topMargin: cell.showAxisLabels ? 18 : 8
         text: isFinite(tempC) ? tempC.toFixed(1) + "°C" : ""
         color: theme.readableInk(theme.accentOrange)
         font.pixelSize: 10
