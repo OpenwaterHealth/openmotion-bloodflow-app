@@ -61,3 +61,47 @@ def classify_scan_outcome(
             "segment could not be dark-corrected and was discarded.",
         )
     return ScanOutcome("ok", "", "")
+
+
+class _ScanOutcomeSink:
+    """Pipeline sink that tallies the two signals classify_scan_outcome needs.
+
+    Pure Python — no Qt, no connector reference — so the completion handler
+    reads .final_frames / .terminal_dark_missing directly off the instance
+    after the scan.
+
+      "final"       — corrected intervals (EnrichedCorrectedInterval). Each
+                      carries .frames; summing their counts = corrected frames
+                      persisted by ScanDBSink (same channel, same payloads).
+      "diagnostics" — integrity events; a TerminalDarkResult with found=False
+                      means a camera's terminal dark was missing/contaminated.
+    """
+
+    channels = frozenset({"final", "diagnostics"})
+
+    def __init__(self) -> None:
+        self.final_frames = 0
+        self.terminal_dark_missing = False
+
+    def on_scan_start(self, meta) -> None:
+        self.final_frames = 0
+        self.terminal_dark_missing = False
+
+    def consume(self, channel: str, payload) -> None:
+        if channel == "final":
+            frames = getattr(payload, "frames", None)
+            if frames:
+                self.final_frames += len(frames)
+            return
+        if channel == "diagnostics":
+            # Lazy-import the event type so this module loads against an SDK
+            # that pre-dates TerminalDarkResult (mirrors _TriggerStateSink).
+            try:
+                from omotion.pipeline.batch import TerminalDarkResult
+            except Exception:
+                return
+            if isinstance(payload, TerminalDarkResult) and not payload.found:
+                self.terminal_dark_missing = True
+
+    def on_complete(self) -> None:
+        pass

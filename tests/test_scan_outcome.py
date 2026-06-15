@@ -1,7 +1,10 @@
 # tests/test_scan_outcome.py
-import pytest
+from types import SimpleNamespace
 
-from scan_outcome import ScanOutcome, classify_scan_outcome
+import pytest
+from omotion.pipeline.batch import TerminalDarkResult
+
+from scan_outcome import ScanOutcome, classify_scan_outcome, _ScanOutcomeSink
 
 pytestmark = pytest.mark.unit
 
@@ -70,3 +73,41 @@ def test_partial_suppressed_when_user_canceled():
         canceled=True, disable_laser=False,
     )
     assert out.kind == "ok"
+
+
+def test_sink_counts_final_frames():
+    sink = _ScanOutcomeSink()
+    sink.on_scan_start(meta=None)
+    sink.consume("final", SimpleNamespace(frames=[object(), object()]))
+    sink.consume("final", SimpleNamespace(frames=[object()]))
+    assert sink.final_frames == 3
+    assert sink.terminal_dark_missing is False
+
+
+def test_sink_flags_missing_terminal_dark():
+    sink = _ScanOutcomeSink()
+    sink.on_scan_start(meta=None)
+    sink.consume("diagnostics", TerminalDarkResult(
+        side="left", cam_id=0, abs_frame_id=339,
+        u1=171.6, threshold=133.0, found=False, identified_by="content",
+    ))
+    assert sink.terminal_dark_missing is True
+
+
+def test_sink_ignores_present_terminal_dark():
+    sink = _ScanOutcomeSink()
+    sink.on_scan_start(meta=None)
+    sink.consume("diagnostics", TerminalDarkResult(
+        side="left", cam_id=0, abs_frame_id=49,
+        u1=127.3, threshold=133.0, found=True, identified_by="fsync",
+    ))
+    assert sink.terminal_dark_missing is False
+
+
+def test_sink_resets_on_scan_start():
+    sink = _ScanOutcomeSink()
+    sink.final_frames = 99
+    sink.terminal_dark_missing = True
+    sink.on_scan_start(meta=None)
+    assert sink.final_frames == 0
+    assert sink.terminal_dark_missing is False
