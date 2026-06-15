@@ -1415,6 +1415,7 @@ class MotionConnector(QObject):
         # session_label == scan_id). Scans from before the DB migration
         # only have a *_notes.txt on disk — fall back to that.
         notes = ""
+        has_db_rows = False
         db_path = getattr(self._interface, "scan_db_path", None)
         if db_path:
             try:
@@ -1424,10 +1425,20 @@ class MotionConnector(QObject):
                     session = db.get_session_by_label(scan_id)
                     if session and session.get("session_notes"):
                         notes = session["session_notes"]
+                    if session:
+                        row = next(
+                            db._connection().execute(
+                                "SELECT EXISTS(SELECT 1 FROM session_data "
+                                "WHERE session_id = ? LIMIT 1)",
+                                (int(session["id"]),),
+                            ),
+                            None,
+                        )
+                        has_db_rows = bool(row[0]) if row else False
                 finally:
                     db.close()
             except Exception:
-                logger.warning("get_scan_details: could not read notes from DB",
+                logger.warning("get_scan_details: could not read notes/rows from DB",
                                exc_info=True)
         if not notes:
             try:
@@ -1446,6 +1457,7 @@ class MotionConnector(QObject):
             "correctedPath": str(corrected) if corrected else "",
             "notesPath": str(notes_path),
             "notes": notes,
+            "hasData": bool(has_db_rows or corrected or left or right),
         }
 
     @pyqtProperty(str, notify=directoryChanged)
