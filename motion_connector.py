@@ -41,6 +41,7 @@ from motion_config import (
 from nan_gap_tracker import NanGapTracker, gap_note_line
 from utils.resource_path import resource_path
 from data_sources import LiveScanSource, PastScanSource, ScanDataSource
+from scan_outcome import _ScanOutcomeSink, classify_scan_outcome
 import numpy as np
 import pandas as pd
 
@@ -463,6 +464,10 @@ class MotionConnector(QObject):
     # Private worker→main marshalling for loadPastScan results:
     # (seq, session_label, session_id, buffers-or-None, source_tag)
     _pastScanBuffersReady = pyqtSignal(int, str, int, object, str)
+    # Worker->main: interrupted/empty-scan outcome toast (message, severity).
+    # Emitted from _on_pipeline_complete (pipeline worker thread); delivered
+    # on the GUI thread via the auto-queued connection wired in connect_signals.
+    _scanOutcomeWarningSignal = pyqtSignal(str, str)
 
     configProgress = pyqtSignal(int)
     configLog = pyqtSignal(str)
@@ -1705,6 +1710,13 @@ class MotionConnector(QObject):
             logger.exception("loadPastScan failed for label %r", session_label)
             self._pastScanBuffersReady.emit(seq, session_label, -1, None, "")
 
+    @pyqtSlot(str, str)
+    def _on_scan_outcome_warning(self, message: str, severity: str) -> None:
+        """GUI thread: surface an interrupted/empty-scan toast. Errors are
+        sticky (duration_ms=0) so a 'not saved' scan can't be missed."""
+        duration = 0 if severity == "error" else 8000
+        self.notify(message, severity, duration_ms=duration, tag="scan-outcome")
+
     def _on_past_scan_buffers_ready(
         self,
         seq: int,
@@ -1972,6 +1984,11 @@ class MotionConnector(QObject):
         nan_gap_tracker = NanGapTracker()
         self._nan_gap_tracker = nan_gap_tracker
 
+        # Interrupted-scan outcome tracker — bound to a local so the
+        # completion closure and the sink list provably share THIS scan's
+        # instance (same pattern as nan_gap_tracker above).
+        outcome_sink = _ScanOutcomeSink()
+
         # Reset trigger ON-time mirrors so _scan_elapsed_str starts from zero.
         self._trigger_cumulative_s = 0.0
         self._trigger_on_mono = None
@@ -2032,6 +2049,27 @@ class MotionConnector(QObject):
             self._scan_notes_session_label = session_label
             self._persist_scan_notes(session_label)
 
+            # Interrupted-scan outcome. An interrupted scan loses its open
+            # interval; one that ends before any interval closes saves
+            # nothing. Surface a toast; ScanDBSink deletes the empty session
+            # row and the History viewer guards against loading it.
+            try:
+                outcome = classify_scan_outcome(
+                    final_frames=outcome_sink.final_frames,
+                    terminal_dark_missing=outcome_sink.terminal_dark_missing,
+                    canceled=canceled,
+                    disable_laser=disable_laser,
+                )
+                if outcome.severity:
+                    logger.warning(
+                        "Scan outcome: %s — %s", outcome.kind, outcome.message
+                    )
+                    self._scanOutcomeWarningSignal.emit(
+                        outcome.message, outcome.severity
+                    )
+            except Exception:
+                logger.exception("scan-outcome classification failed")
+
             # New pipeline writes CSVs directly; no .raw→.csv post-processing
             # needed.  Pass empty paths to captureFinished so startPostProcess
             # is a no-op (QML still proceeds to the next scan step).
@@ -2079,6 +2117,7 @@ class MotionConnector(QObject):
                 _LivePlotSink(connector=self, plot_t0=plot_t0, live_source=live_source,
                               nan_gap_tracker=nan_gap_tracker),
                 _TriggerStateSink(connector=self),
+                outcome_sink,
                 _CompletionSink(connector=self, on_complete_cb=_on_pipeline_complete),
             ],
         )
@@ -3303,6 +3342,9 @@ class MotionConnector(QObject):
         self._cq_result_signal.connect(self._on_cq_result_ready)
         # Worker → Qt main thread for async past-scan loads (issue #152).
         self._pastScanBuffersReady.connect(self._on_past_scan_buffers_ready)
+        # Auto-queued: emitted on the pipeline worker thread, runs the toast
+        # on the GUI thread (same marshalling pattern as _pastScanBuffersReady).
+        self._scanOutcomeWarningSignal.connect(self._on_scan_outcome_warning)
 
     @pyqtSlot()
     @pyqtSlot(str)
