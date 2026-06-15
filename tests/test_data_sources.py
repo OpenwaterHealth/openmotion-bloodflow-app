@@ -601,6 +601,73 @@ def test_past_scan_source_preloaded_empty_dict_is_empty_source():
     assert src.liveEdge == 0.0
 
 
+# ── Issue #175 — past scan carries its own camera configuration ────────
+# The plot viewer lays its grid out from leftMask/rightMask. When a past
+# scan is replayed, the viewer must use THAT scan's camera config (which
+# cameras actually recorded), not the operator's live Scan Settings
+# selection. PastScanSource reconstructs the masks from which per-camera
+# (cam_id 0..7) streams it loaded so the viewer can prefer them.
+
+
+def test_past_scan_source_derives_masks_from_buffer_cam_ids(session_data_db):
+    db, sid = session_data_db
+    src = PastScanSource(scan_db=db, session_id=sid)
+    # Fixture records cams 0 and 3 on both sides → bits 0 and 3 → 0x09.
+    assert src.leftMask == 0x09
+    assert src.rightMask == 0x09
+
+
+def test_past_scan_source_derives_masks_for_far_config():
+    """A 'Far' (0xC3 = cams 1,2,7,8 → camIds 0,1,6,7) scan recorded only
+    those cameras; the derived masks reflect that regardless of any live
+    selection."""
+    buffers = {}
+    for side in ("left", "right"):
+        for cam_id in (0, 1, 6, 7):
+            buf = _CameraBuffer(max_capacity=None)
+            buf.append(t=0.0, v=1.0, frame_id=0)
+            buffers[(side, cam_id, "bfi")] = buf
+    src = PastScanSource(scan_db=None, session_id=1, preloaded_buffers=buffers)
+    assert src.leftMask == 0xC3
+    assert src.rightMask == 0xC3
+
+
+def test_past_scan_source_derives_per_side_masks_independently():
+    """Left and right masks are reconstructed separately — a one-sided or
+    asymmetric scan keeps each side's true configuration."""
+    buffers = {}
+    for cam_id in (0, 1, 6, 7):  # left = Far
+        buf = _CameraBuffer(max_capacity=None)
+        buf.append(t=0.0, v=1.0, frame_id=0)
+        buffers[("left", cam_id, "bfi")] = buf
+    # right side: no cameras recorded
+    src = PastScanSource(scan_db=None, session_id=1, preloaded_buffers=buffers)
+    assert src.leftMask == 0xC3
+    assert src.rightMask == 0x00
+
+
+def test_live_scan_source_masks_unknown():
+    """A live source reports unknown (-1) masks so the viewer keeps using
+    the operator's live Scan Settings selection during a live scan."""
+    src = LiveScanSource(plot_t0=0.0)
+    assert src.leftMask == -1
+    assert src.rightMask == -1
+
+
+def test_past_scan_source_masks_unknown_when_no_per_cam_streams():
+    """Reduced-mode scans only carry the cam_id=-1 side average; with no
+    per-camera streams there is no normal-mode mask to derive, so the
+    masks read -1 (unknown) and the viewer falls back to its live masks."""
+    buffers = {}
+    for side in ("left", "right"):
+        buf = _CameraBuffer(max_capacity=None)
+        buf.append(t=0.0, v=1.0, frame_id=0)
+        buffers[(side, -1, "bfi")] = buf
+    src = PastScanSource(scan_db=None, session_id=1, preloaded_buffers=buffers)
+    assert src.leftMask == -1
+    assert src.rightMask == -1
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # currentScanSource holder pattern — verified via a parallel mini-class
 # (MotionConnector uses the same pattern; see motion_connector.py)

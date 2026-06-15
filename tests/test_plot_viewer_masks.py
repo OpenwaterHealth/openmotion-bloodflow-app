@@ -68,11 +68,67 @@ MIDDLE_MASK = 0x66  # cams 2,3,6,7 (1-based) — the persisted config default
 ALL_MASK = 0xFF
 
 
+FAR_MASK = 0xC3  # cams 1,2,7,8 (1-based) → camIds 0,1,6,7
+
+
+class _StubPastScanSource(QObject):
+    """Minimal past-scan source exposing the camera-config masks the way
+    data_sources.PastScanSource does. live=False marks it as a replayed
+    scan; leftMask/rightMask carry the configuration that scan recorded."""
+
+    _neverEmitted = pyqtSignal()
+
+    def __init__(self, left_mask: int, right_mask: int, parent=None):
+        super().__init__(parent)
+        self._left = int(left_mask)
+        self._right = int(right_mask)
+
+    @pyqtProperty(bool, notify=_neverEmitted)
+    def live(self):
+        return False
+
+    @pyqtProperty(int, notify=_neverEmitted)
+    def leftMask(self):
+        return self._left
+
+    @pyqtProperty(int, notify=_neverEmitted)
+    def rightMask(self):
+        return self._right
+
+    @pyqtProperty(float, notify=_neverEmitted)
+    def liveEdge(self):
+        return 0.0
+
+    # Slots PlotViewer / PlotCell invoke during paint. Neutral returns —
+    # this stub has no data; the test only inspects the grid model.
+    @pyqtSlot(str, result="QVariantMap")
+    @pyqtSlot(str, float, float, float, result="QVariantMap")
+    def compute_bounds_for_metric(self, metric, lo=2.0, hi=98.0, pad=0.25):
+        return {"yMin": 0.0, "yMax": 1.0}
+
+    @pyqtSlot(str, int, str, float, float, int, result="QVariantList")
+    def points_for_window(self, side, cam_id, metric, t_lo, t_hi, max_points):
+        return []
+
+    @pyqtSlot(str, int, str, float, result=float)
+    def value_at(self, side, cam_id, metric, t):
+        return float("nan")
+
+    @pyqtSlot(str, int, result=float)
+    def dropped_at_for(self, side, cam_id):
+        return float("nan")
+
+
 class _StubMotionInterface(QObject):
     """Minimal MotionInterface stand-in covering every property/slot
     PlotViewer.qml (and its child components) actually reference."""
 
+    currentScanSourceChanged = pyqtSignal()
     _neverEmitted = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._scan_source = None
 
     @pyqtProperty("QVariantMap", notify=_neverEmitted)
     def appConfig(self):
@@ -87,9 +143,13 @@ class _StubMotionInterface(QObject):
             "showProfiling": False,
         }
 
-    @pyqtProperty(QObject, notify=_neverEmitted)
+    @pyqtProperty(QObject, notify=currentScanSourceChanged)
     def currentScanSource(self):
-        return None
+        return self._scan_source
+
+    def setScanSource(self, source):
+        self._scan_source = source
+        self.currentScanSourceChanged.emit()
 
     @pyqtProperty(bool, notify=_neverEmitted)
     def liveSourceAvailable(self):
@@ -150,6 +210,11 @@ def viewer_factory():
         created.append(obj)
         return obj
 
+    # Tests that need to drive currentScanSource reach the singleton stub
+    # through the factory; reset it to None in a finally so the shared
+    # module-scoped singleton can't leak a source into other tests.
+    make.stub = stub
+
     yield make
 
     for obj in created:
@@ -209,6 +274,49 @@ def test_single_side_all_keeps_other_side_unchanged(viewer_factory):
     assert _cam_ids(cells, "left") == list(range(8))
     assert _cam_ids(cells, "right") == [1, 2, 5, 6]
     assert len(cells) == 12
+
+
+# ── Issue #175 — replayed scan keeps its own camera configuration ──────
+# Loading a past scan must lay the grid out from the camera config that
+# scan recorded, not the operator's current Scan Settings selection.
+# PlotViewer reads the active source's leftMask/rightMask when the source
+# exposes them (a past scan does); a live source reports -1 so the grid
+# keeps following the live selection.
+
+
+def test_past_scan_config_overrides_live_mask_selection(viewer_factory):
+    viewer = viewer_factory()
+    try:
+        # Operator's live selection is All → 16-cell grid.
+        viewer.setProperty("leftMask", ALL_MASK)
+        viewer.setProperty("rightMask", ALL_MASK)
+        assert len(_cells(viewer)) == 16
+
+        # Replay a Far scan; the grid must adopt the Far config (cams
+        # 1,2,7,8 → camIds 0,1,6,7, 8 cells), not stay at All.
+        past = _StubPastScanSource(FAR_MASK, FAR_MASK)
+        viewer_factory.stub.setScanSource(past)
+
+        cells = _cells(viewer)
+        assert _cam_ids(cells, "left") == [0, 1, 6, 7]
+        assert _cam_ids(cells, "right") == [0, 1, 6, 7]
+        assert len(cells) == 8
+    finally:
+        viewer_factory.stub.setScanSource(None)
+
+
+def test_unknown_source_masks_fall_back_to_live_selection(viewer_factory):
+    """A source reporting -1 masks (e.g. a live source) leaves the grid
+    following the operator's live Scan Settings selection."""
+    viewer = viewer_factory()
+    try:
+        viewer.setProperty("leftMask", ALL_MASK)
+        viewer.setProperty("rightMask", ALL_MASK)
+        unknown = _StubPastScanSource(-1, -1)
+        viewer_factory.stub.setScanSource(unknown)
+        assert len(_cells(viewer)) == 16
+    finally:
+        viewer_factory.stub.setScanSource(None)
 
 
 def test_zero_masks_render_empty_grid(viewer_factory):

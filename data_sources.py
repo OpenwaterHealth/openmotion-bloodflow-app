@@ -261,6 +261,14 @@ class ScanDataSource(QObject):
         # plain attribute) for QML to read it; plain Python attributes
         # are invisible to QML and read as `undefined`.
         self._live: bool = False
+        # Camera configuration this source represents, as left/right 8-bit
+        # masks (bit c set ⇒ camera c recorded). -1 means "unknown" — the
+        # default for live sources, which leave the plot grid following the
+        # operator's live Scan Settings selection. PastScanSource overrides
+        # these with the config the replayed scan actually recorded (issue
+        # #175) so its grid doesn't inherit the current selection.
+        self._left_mask: int = -1
+        self._right_mask: int = -1
         self.buffers: dict[tuple[str, int, str], _CameraBuffer] = {}
         # Ring-trim threshold for buffers this source creates. Live sources
         # pass a finite value (config) to bound memory; past sources pass None
@@ -290,6 +298,23 @@ class ScanDataSource(QObject):
         broke the toolbar's source-type label and the "Back to live"
         button's variant selection (both branched on `scanSource.live`)."""
         return self._live
+
+    @pyqtProperty(int, constant=True)
+    def leftMask(self) -> int:
+        """Left-sensor camera mask this source represents, or -1 if unknown.
+
+        Exposed as ``pyqtProperty`` (not a plain attribute) so QML can read
+        it — PlotViewer prefers this over the live selection when it's a
+        real mask (>= 0), so a replayed scan lays its grid out from its own
+        configuration (issue #175). ``constant=True``: set once at
+        construction, never changes for the life of the source."""
+        return self._left_mask
+
+    @pyqtProperty(int, constant=True)
+    def rightMask(self) -> int:
+        """Right-sensor camera mask this source represents, or -1 if unknown.
+        See ``leftMask``."""
+        return self._right_mask
 
     @pyqtProperty(float)
     def liveEdge(self) -> float:
@@ -866,6 +891,26 @@ def _load_corrected_csv_into(buffers: dict, csv_path: str) -> None:
         pass
 
 
+def _derive_masks_from_buffers(buffers: dict) -> tuple[int, int]:
+    """Reconstruct (left_mask, right_mask) from which per-camera streams a
+    loaded scan carries — bit c set ⇒ camera c (cam_id 0..7) recorded data.
+
+    Returns (-1, -1) when no per-camera streams exist (e.g. a reduced-mode
+    scan whose only buffers are the cam_id=-1 side average) so the viewer
+    falls back to its live/preview masks rather than rendering an empty
+    normal-mode grid. A side that recorded nothing yields mask 0 as long as
+    the other side has cameras — preserving an asymmetric/one-sided scan's
+    true per-side configuration (issue #175)."""
+    masks = {"left": 0, "right": 0}
+    for key in buffers:
+        side, cam_id = key[0], key[1]
+        if side in masks and 0 <= cam_id < 8:
+            masks[side] |= (1 << cam_id)
+    if masks["left"] == 0 and masks["right"] == 0:
+        return -1, -1
+    return masks["left"], masks["right"]
+
+
 def load_past_scan_buffers(
     scan_db,
     session_id: int,
@@ -922,10 +967,15 @@ class PastScanSource(ScanDataSource):
         if preloaded_buffers is not None:
             # Already bulk-loaded on a worker thread — adopt as-is.
             self.buffers = preloaded_buffers
-            return
+        else:
+            # Synchronous load (tests / small scans): see
+            # load_past_scan_buffers for the layout and CSV-fallback rules.
+            self.buffers, _ = load_past_scan_buffers(
+                scan_db, self.session_id, corrected_csv_path
+            )
 
-        # Synchronous load (tests / small scans): see load_past_scan_buffers
-        # for the layout and the CSV-fallback rules.
-        self.buffers, _ = load_past_scan_buffers(
-            scan_db, self.session_id, corrected_csv_path
+        # Lay the plot grid out from THIS scan's recorded cameras, not the
+        # operator's live selection (issue #175).
+        self._left_mask, self._right_mask = _derive_masks_from_buffers(
+            self.buffers
         )
