@@ -40,7 +40,9 @@ from motion_config import (
 )
 from nan_gap_tracker import NanGapTracker, gap_note_line
 from utils.resource_path import resource_path
-from data_sources import LiveScanSource, PastScanSource, ScanDataSource
+from data_sources import (
+    LiveScanSource, PastScanSource, ScanDataSource, buffers_are_empty,
+)
 from scan_outcome import _ScanOutcomeSink, classify_scan_outcome
 import numpy as np
 import pandas as pd
@@ -1739,6 +1741,17 @@ class MotionConnector(QObject):
             self.errorOccurred.emit(
                 f"Could not load scan '{session_label}' for plotting.\n"
                 "See the app log for details."
+            )
+            self.pastScanLoadFinished.emit(session_label, False)
+            return
+        if buffers_are_empty(buffers):
+            logger.info(
+                "loadPastScan: %r contains no samples — not displaying",
+                session_label,
+            )
+            self.errorOccurred.emit(
+                f"Scan '{session_label}' contains no data.\n"
+                "It was interrupted before any data could be recorded."
             )
             self.pastScanLoadFinished.emit(session_label, False)
             return
