@@ -68,4 +68,17 @@ def test_export_csv_strips_file_url(tmp_path):
     c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
     dest = str(tmp_path / "audit2.csv")
     out = c.exportAuditLogCsv("file:///" + dest.replace("\\", "/"))
+    assert out                     # returned path must be non-empty
     assert os.path.exists(out)
+
+
+def test_no_db_path_noop(tmp_path):
+    # With no scan_db_path the audit log is a no-op; the connector must
+    # still construct and the slots must return gracefully (no raise).
+    import os
+    c = _connector(tmp_path, scan_db_path=None)
+    assert c.auditLogEntries() == []
+    c.recordAuditLogViewed()       # must not raise
+    dest = str(tmp_path / "out.csv")
+    c.exportAuditLogCsv(dest)      # no raise; nothing written when disabled
+    assert not os.path.exists(dest)

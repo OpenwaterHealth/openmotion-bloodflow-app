@@ -179,6 +179,20 @@ class AuditLog:
             logger.warning("AuditLog: query failed", exc_info=True)
             return []
 
+    def count(self) -> int:
+        """Total number of log rows (0 when disabled / on error)."""
+        try:
+            with self._lock:
+                if self._conn is None:
+                    return 0
+                row = self._conn.execute(
+                    "SELECT COUNT(*) FROM logs"
+                ).fetchone()
+                return int(row[0]) if row else 0
+        except Exception:
+            logger.warning("AuditLog: count failed", exc_info=True)
+            return 0
+
     def export_csv(self, dest_path: str | Path) -> int:
         """Write the full log (oldest first) to ``dest_path`` as CSV.
         Returns the number of data rows written (0 on any failure)."""

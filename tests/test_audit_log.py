@@ -97,6 +97,15 @@ def test_concurrent_writes_all_land(tmp_path):
     a.close()
 
 
+def test_count_returns_total_rows(tmp_path):
+    a = AuditLog(str(tmp_path / "scans.db"))
+    for _ in range(7):
+        a.log("scan_started", {"x": 1})
+    assert a.count() == 7
+    a.close()
+    assert a.count() == 0          # no-op after close
+
+
 def test_gather_host_info_has_core_fields():
     info = gather_host_info()
     assert "hostname" in info

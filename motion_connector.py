@@ -671,6 +671,14 @@ class MotionConnector(QObject):
         self._interface = interface
         self._scan_workflow = self._interface.scan_workflow
 
+        # Audit log constructed early — before connect_signals() — so the
+        # connect/disconnect handler and other instrumentation can call
+        # self._audit.log(...) safely. No-op if there's no scan_db_path.
+        # The system_startup / system_info events are logged later, once
+        # self._directory is resolved.
+        from audit_log import AuditLog
+        self._audit = AuditLog(getattr(self._interface, "scan_db_path", None))
+
         # Unpack operational settings from config
         self._force_laser_fail            = bool(cfg.get("forceLaserFail", False))
         self._camera_temp_alert_threshold_c = float(cfg.get("cameraTempAlertThresholdC", 105.0))
@@ -828,11 +836,10 @@ class MotionConnector(QObject):
         os.makedirs(resolved_dir, exist_ok=True)
         self._directory = resolved_dir
 
-        # ── Audit log: append-only, machine-readable event record in
-        #    scans.db, surfaced via the password-gated Logs modal. See
-        #    audit_log.py. No-op if the interface has no scan_db_path.
-        from audit_log import AuditLog, gather_host_info
-        self._audit = AuditLog(getattr(self._interface, "scan_db_path", None))
+        # ── Audit log startup events (the AuditLog itself was constructed
+        #    earlier, before connect_signals). Logged here now that
+        #    self._directory is resolved.
+        from audit_log import gather_host_info
         try:
             from version import get_version as _get_app_version
             _app_version = _get_app_version()
@@ -1775,7 +1782,7 @@ class MotionConnector(QObject):
         """Record that the audit log was opened. Called once from
         LogsModal.open()."""
         try:
-            n = len(self._audit.query())
+            n = self._audit.count()
         except Exception:
             n = 0
         self._audit.log("audit_log_viewed", {"entry_count": n})
