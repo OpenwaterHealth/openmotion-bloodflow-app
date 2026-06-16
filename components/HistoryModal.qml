@@ -129,6 +129,14 @@ Item {
         return m + ":" + (s < 10 ? "0" + s : s)
     }
 
+    // Format an 8-bit mask as "0xNN", or "—" when unknown (< 0). Keeps the
+    // detail pane consistent with the Config cell, which also shows "—" for
+    // an unknown mask (a -1 rendered as 0xFF would misread as "All").
+    function maskLabel(m) {
+        if (m === undefined || m === null || m < 0) return "—"
+        return "0x" + (m & 0xFF).toString(16).toUpperCase()
+    }
+
     // Re-filter whenever the search/config filter changes.
     onSearchTextChanged: rebuildView()
     onConfigFilterChanged: rebuildView()
@@ -420,8 +428,8 @@ Item {
                         Text {
                             color: theme.textPrimary; font.pixelSize: 12
                             text: root.focusedRow
-                                  ? ("0x" + (root.focusedRow.leftMask & 0xFF).toString(16).toUpperCase()
-                                     + " / 0x" + (root.focusedRow.rightMask & 0xFF).toString(16).toUpperCase())
+                                  ? (root.maskLabel(root.focusedRow.leftMask)
+                                     + " / " + root.maskLabel(root.focusedRow.rightMask))
                                   : ""
                         }
                         Text { text: "Config (L / R):"; color: theme.textSecondary; font.pixelSize: 12 }
