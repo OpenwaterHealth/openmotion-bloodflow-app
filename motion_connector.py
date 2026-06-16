@@ -2348,6 +2348,12 @@ class MotionConnector(QObject):
         self.scanNotesChanged.emit()
         self._capture_running = True
         self._capture_start_time = time.time()
+        self._audit.log("scan_started", {
+            "label": subject_id,
+            "left_mask": int(left_camera_mask),
+            "right_mask": int(right_camera_mask),
+            "session_id": None,
+        })
         # Per-scan monotonic zero for plot timestamps. sample.timestamp_s comes
         # from each sensor's firmware clock, which resets on sensor reboot — so
         # after a mid-scan unplug/replug, the two sides' clocks diverge and the
@@ -2491,6 +2497,21 @@ class MotionConnector(QObject):
             self._capture_running = False
             self._safety_cancel_scheduled = False
             self._capture_thread = None
+            try:
+                _outcome_kind = outcome.kind
+            except Exception:
+                _outcome_kind = None
+            try:
+                _dur = (time.time() - self._capture_start_time
+                        if self._capture_start_time else None)
+            except Exception:
+                _dur = None
+            self._audit.log("scan_ended", {
+                "label": subject_id,
+                "session_label": session_label or None,
+                "duration_s": round(_dur, 1) if _dur is not None else None,
+                "outcome": _outcome_kind,
+            })
             self.captureFinished.emit(True, "", "", "")
             self.scanNotesReady.emit()
 
