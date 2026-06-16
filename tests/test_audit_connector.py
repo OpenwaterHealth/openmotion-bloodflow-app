@@ -104,6 +104,11 @@ def test_connect_logs_device_connected_and_stats(tmp_path):
     handle.name = "console"
     handle.get_hardware_id.return_value = "DEADBEEF"
     handle.get_version.return_value = "1.0.0"
+    # _log_device_stats resolves the handle via getattr(self._interface,
+    # name) — in production that IS the same object the callback receives.
+    # Wire the mock interface so the test exercises that real resolution
+    # and can assert the captured IDs.
+    c._interface.console = handle
     c._on_handle_state_changed_impl(
         handle, ConnectionState.DISCONNECTED, ConnectionState.CONNECTED,
         "found",
@@ -111,6 +116,12 @@ def test_connect_logs_device_connected_and_stats(tmp_path):
     t = _types(c)
     assert "device_connected" in t
     assert "device_stats" in t
+    stats = [e for e in c.auditLogEntries()
+             if e["event_type"] == "device_stats"]
+    assert stats
+    d = json.loads(stats[0]["details"])
+    assert d["hardware_id"] == "DEADBEEF"
+    assert d["firmware_version"] == "1.0.0"
 
 
 def test_run_calibration_logs_started(tmp_path):

@@ -795,6 +795,7 @@ class MotionConnector(QObject):
         )
         self._calibration_status = ""  # "", "running", "passed", "failed", "aborted"
         self._calibration_failure_reason = ""  # populated only on FAIL in dev mode
+        self._calibration_target = None  # last runCalibration() target
         self._test_scan_status = ""              # "", "running", "done", "aborted", "failed"
         self._test_scan_failure_reason = ""
         self._test_scan_rows: list[dict] = []
@@ -1788,8 +1789,16 @@ class MotionConnector(QObject):
         except Exception:
             logger.warning(
                 "deleteScans: could not open scan DB", exc_info=True)
+        # Tolerate non-int ids the same way the delete loop above does —
+        # this comprehension runs outside AuditLog.log's fail-soft wrapper.
+        _ids = []
+        for s in session_ids:
+            try:
+                _ids.append(int(s))
+            except (TypeError, ValueError):
+                pass
         self._audit.log("scan_deleted", {
-            "session_ids": [int(s) for s in session_ids],
+            "session_ids": _ids,
             "count": deleted,
         })
         return deleted
@@ -2352,7 +2361,6 @@ class MotionConnector(QObject):
             "label": subject_id,
             "left_mask": int(left_camera_mask),
             "right_mask": int(right_camera_mask),
-            "session_id": None,
         })
         # Per-scan monotonic zero for plot timestamps. sample.timestamp_s comes
         # from each sensor's firmware clock, which resets on sensor reboot — so
@@ -4123,7 +4131,7 @@ class MotionConnector(QObject):
             self._calibration_status, elapsed_s,
         )
         self._audit.log("calibration_ended", {
-            "target": getattr(self, "_calibration_target", None),
+            "target": self._calibration_target,
             "outcome": self._calibration_status,
             "reason": self._calibration_failure_reason or None,
         })
