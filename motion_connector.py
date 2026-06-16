@@ -1895,7 +1895,8 @@ class MotionConnector(QObject):
         self.notify(
             "Debug logs saved to " + path
             + ". Please email this file to support@openwater.cc.",
-            "success", 0, True, "debug-bundle",
+            type_="success", duration_ms=0, dismissible=True,
+            tag="debug-bundle",
         )
         return path
 

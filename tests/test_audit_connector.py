@@ -218,3 +218,18 @@ def test_prepare_debug_bundle_creates_zip_and_logs(tmp_path):
     assert any(n.startswith("app-logs/") for n in names)
     assert "system_info.txt" in names
     assert "debug_bundle_created" in _types(c)
+
+
+def test_prepare_debug_bundle_failure_returns_empty(tmp_path, monkeypatch):
+    # If the bundle build raises, the slot must return "" and NOT log a
+    # debug_bundle_created event (fail-soft, mirrors the other slots).
+    import debug_bundle
+    c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
+    c._reveal_in_explorer = lambda p: None
+
+    def boom(*a, **k):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(debug_bundle, "build_debug_bundle", boom)
+    assert c.prepareDebugLogBundle() == ""
+    assert "debug_bundle_created" not in _types(c)
