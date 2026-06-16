@@ -53,6 +53,33 @@ def test_config_name_known_and_unknown():
     assert _config_name(0x00) == "None"
     assert _config_name(0x12) == "0x12"   # unmapped -> hex
     assert _config_name(-1) == "—"        # unknown
+    assert _config_name(None) == "—"      # missing
+
+
+def test_get_scan_sessions_skips_malformed_row_keeps_rest(tmp_path):
+    """One unparseable session must not blank the whole History view."""
+    db_path = str(tmp_path / "scans.db")
+    _make_session(db_path, "20260612_092000_subjA", 100.0, 105.0, 0xC3, 0xC3)
+    c = _connector(tmp_path, db_path)
+
+    real = MotionConnector._session_to_row
+
+    def flaky(self, s):
+        if s.get("session_label", "").endswith("boom"):
+            raise ValueError("malformed row")
+        return real(self, s)
+
+    db = ScanDatabase(db_path=db_path)
+    db.create_session(session_label="20260612_093000_boom",
+                      session_start=200.0, session_end=205.0,
+                      session_notes=None, session_meta={})
+    db.close()
+
+    c._session_to_row = flaky.__get__(c, MotionConnector)
+    rows = c.get_scan_sessions()
+    labels = [r["label"] for r in rows]
+    assert "20260612_092000_subjA" in labels
+    assert "20260612_093000_boom" not in labels
 
 
 def test_get_scan_sessions_rows_and_sort(tmp_path):

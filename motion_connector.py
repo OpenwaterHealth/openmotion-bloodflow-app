@@ -1651,7 +1651,14 @@ class MotionConnector(QObject):
             db = ScanDatabase(db_path)
             try:
                 for s in db.iter_sessions():
-                    rows.append(self._session_to_row(s))
+                    # Per-row guard: one malformed session must not blank the
+                    # whole History view — skip it and keep the rest.
+                    try:
+                        rows.append(self._session_to_row(s))
+                    except Exception:
+                        logger.warning(
+                            "get_scan_sessions: skipping malformed session %s",
+                            s.get("id"), exc_info=True)
             finally:
                 db.close()
         except Exception:
