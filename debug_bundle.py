@@ -52,7 +52,12 @@ def build_debug_bundle(
     Includes <data_dir>/app-logs/*.log with mtime within window_hours,
     the app_config.json at config_path (default <data_dir>/app_config.json)
     if present, and a generated system_info.txt. Returns
-    {"path", "file_count", "log_count", "bytes"}.
+    {"path", "file_count", "log_count", "bytes"} where:
+      - log_count  = log files that matched the time window.
+      - file_count = entries actually written into the zip (logs + config
+        if present + system_info). May be < log_count + 1 if a matched log
+        fails to add (skipped fail-soft).
+      - bytes      = size of the written zip on disk.
     """
     data_dir = Path(data_dir)
     dest_dir = Path(dest_dir)
