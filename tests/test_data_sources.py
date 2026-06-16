@@ -1420,3 +1420,26 @@ def test_live_scan_source_db_tail_disabled_without_path():
 
 def isfinite_or_nan(v):
     return math.isfinite(v) or math.isnan(v)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# buffers_are_empty (Task 4 — interrupted-scan guard)
+# ─────────────────────────────────────────────────────────────────────────────
+
+from data_sources import buffers_are_empty
+
+
+def test_buffers_are_empty_true_for_none_and_empty():
+    assert buffers_are_empty(None) is True
+    assert buffers_are_empty({}) is True
+
+
+def test_buffers_are_empty_true_when_all_buffers_have_no_samples():
+    buffers = {("left", -1, "bfi"): _CameraBuffer(max_capacity=None)}
+    assert buffers_are_empty(buffers) is True
+
+
+def test_buffers_are_empty_false_when_any_sample_present():
+    buf = _CameraBuffer(max_capacity=None)
+    buf.append(t=0.0, v=1.0, frame_id=0)
+    assert buffers_are_empty({("left", -1, "bfi"): buf}) is False

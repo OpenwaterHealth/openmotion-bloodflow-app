@@ -279,6 +279,20 @@ Item {
                             Text { text: ""; } Text { text: ""; }
                         }
 
+                        // Interrupted-scan banner (empty scans used to load blank).
+                        // hasData === false only when the connector explicitly
+                        // reported no rows/CSV; undefined (legacy details) stays hidden.
+                        Text {
+                            visible: selected.hasData === false
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            text: "⚠ No data recorded — this scan was interrupted "
+                                  + "before any data could be saved."
+                            color: "#E67E22"
+                            font.pixelSize: 13
+                            font.weight: Font.Bold
+                        }
+
                         Text { text: "Notes:"; color: theme.textSecondary; font.pixelSize: 13 }
                         Rectangle {
                             Layout.fillWidth: true; Layout.fillHeight: true
@@ -310,6 +324,7 @@ Item {
                             // at the root scope and `undefined >= 0` is false,
                             // which left this button perma-greyed.
                             enabled: scans.length > 0 && scanPicker.currentIndex >= 0
+                                     && selected.hasData !== false
                             hoverEnabled: enabled
                             contentItem: Text {
                                 text: parent.text; font.pixelSize: 13
@@ -335,6 +350,7 @@ Item {
                             text: "Export CSV"
                             Layout.fillWidth: true; Layout.preferredHeight: 36
                             enabled: scans.length > 0 && scanPicker.currentIndex >= 0
+                                     && selected.hasData !== false
                             hoverEnabled: enabled
                             contentItem: Text {
                                 text: parent.text; font.pixelSize: 13

@@ -8,7 +8,7 @@ from PyQt6.QtCore import (
     QRecursiveMutex,
 )
 from pathlib import Path
-from typing import Optional
+from typing import NamedTuple, Optional
 import logging
 import math
 import base58
@@ -40,7 +40,9 @@ from motion_config import (
 )
 from nan_gap_tracker import NanGapTracker, gap_note_line
 from utils.resource_path import resource_path
-from data_sources import LiveScanSource, PastScanSource, ScanDataSource
+from data_sources import (
+    LiveScanSource, PastScanSource, ScanDataSource, buffers_are_empty,
+)
 import numpy as np
 import pandas as pd
 
@@ -427,6 +429,105 @@ class _CompletionSink:
             logger.exception("_CompletionSink.on_complete callback raised")
 
 
+# ── Scan-outcome classification (interrupted / empty scans) ────────────────
+# Kept Qt-free so it stays unit-testable (tests/test_scan_outcome.py). An
+# "interval" is a dark-bounded segment the dark-correction stage emits on the
+# pipeline's "final" channel; ScanDBSink persists those frames. The final,
+# still-open interval is always discarded (no terminal dark closes it), so an
+# unclean shutdown loses its tail — and a scan that ends before *any* interval
+# closes persists nothing. classify_scan_outcome turns the two facts the sink
+# observes (frames persisted, terminal-dark missing) into a user-facing
+# outcome — no wall-clock thresholds.
+
+
+class ScanOutcome(NamedTuple):
+    kind: str       # "ok" | "partial" | "empty" | "skipped"
+    severity: str   # "warning" | "error"  ("" when no alert)
+    message: str    # "" when no alert should be shown
+
+
+def classify_scan_outcome(
+    *,
+    final_frames: int,
+    terminal_dark_missing: bool,
+    canceled: bool,
+    disable_laser: bool,
+) -> ScanOutcome:
+    """Decide what (if anything) to tell the user after a scan ends.
+
+    - disable_laser scans legitimately produce no BFI/BVI → never alert.
+    - final_frames <= 0:
+        canceled  → user stopped before any interval closed; not an error.
+        otherwise → interrupted before any data (e.g. device disconnect);
+                    nothing was saved → error.
+    - final_frames > 0:
+        terminal_dark_missing and not canceled → final segment could not be
+            corrected and was discarded → warning (partial save).
+        otherwise → clean → no alert.
+    """
+    if disable_laser:
+        return ScanOutcome("skipped", "", "")
+    if final_frames <= 0:
+        if canceled:
+            return ScanOutcome("skipped", "", "")
+        return ScanOutcome(
+            "empty", "error",
+            "Scan ended unexpectedly and no data was recorded (the device "
+            "may have disconnected mid-scan). This scan was not saved.",
+        )
+    if terminal_dark_missing and not canceled:
+        return ScanOutcome(
+            "partial", "warning",
+            "Scan ended unexpectedly — partial data was saved. The final "
+            "segment could not be dark-corrected and was discarded.",
+        )
+    return ScanOutcome("ok", "", "")
+
+
+class _ScanOutcomeSink:
+    """Pipeline sink that tallies the two signals classify_scan_outcome needs.
+
+    Duck-typed like the other sinks above (channels / on_scan_start / consume /
+    on_complete). Holds no connector reference, so the completion handler reads
+    .final_frames / .terminal_dark_missing directly off the instance.
+
+      "final"       — corrected intervals (EnrichedCorrectedInterval). Each
+                      carries .frames; summing their counts = corrected frames
+                      persisted by ScanDBSink (same channel, same payloads).
+      "diagnostics" — integrity events; a TerminalDarkResult with found=False
+                      means a camera's terminal dark was missing/contaminated.
+    """
+
+    channels = frozenset({"final", "diagnostics"})
+
+    def __init__(self) -> None:
+        self.final_frames = 0
+        self.terminal_dark_missing = False
+
+    def on_scan_start(self, meta) -> None:
+        self.final_frames = 0
+        self.terminal_dark_missing = False
+
+    def consume(self, channel: str, payload) -> None:
+        if channel == "final":
+            frames = getattr(payload, "frames", None)
+            if frames:
+                self.final_frames += len(frames)
+            return
+        if channel == "diagnostics":
+            # Lazy-import the event type so this module loads against an SDK
+            # that pre-dates TerminalDarkResult (mirrors _TriggerStateSink).
+            try:
+                from omotion.pipeline.batch import TerminalDarkResult
+            except Exception:
+                return
+            if isinstance(payload, TerminalDarkResult) and not payload.found:
+                self.terminal_dark_missing = True
+
+    def on_complete(self) -> None:
+        pass
+
+
 class MotionConnector(QObject):
     # Ensure signals are correctly defined
     signalConnected = pyqtSignal(str, str)  # (descriptor, port)
@@ -463,6 +564,10 @@ class MotionConnector(QObject):
     # Private worker→main marshalling for loadPastScan results:
     # (seq, session_label, session_id, buffers-or-None, source_tag)
     _pastScanBuffersReady = pyqtSignal(int, str, int, object, str)
+    # Worker->main: interrupted/empty-scan outcome toast (message, severity).
+    # Emitted from _on_pipeline_complete (pipeline worker thread); delivered
+    # on the GUI thread via the auto-queued connection wired in connect_signals.
+    _scanOutcomeWarningSignal = pyqtSignal(str, str)
 
     configProgress = pyqtSignal(int)
     configLog = pyqtSignal(str)
@@ -1408,6 +1513,7 @@ class MotionConnector(QObject):
         # session_label == scan_id). Scans from before the DB migration
         # only have a *_notes.txt on disk — fall back to that.
         notes = ""
+        has_db_rows = False
         db_path = getattr(self._interface, "scan_db_path", None)
         if db_path:
             try:
@@ -1417,10 +1523,20 @@ class MotionConnector(QObject):
                     session = db.get_session_by_label(scan_id)
                     if session and session.get("session_notes"):
                         notes = session["session_notes"]
+                    if session:
+                        row = next(
+                            db._connection().execute(
+                                "SELECT EXISTS(SELECT 1 FROM session_data "
+                                "WHERE session_id = ? LIMIT 1)",
+                                (int(session["id"]),),
+                            ),
+                            None,
+                        )
+                        has_db_rows = bool(row[0]) if row else False
                 finally:
                     db.close()
             except Exception:
-                logger.warning("get_scan_details: could not read notes from DB",
+                logger.warning("get_scan_details: could not read notes/rows from DB",
                                exc_info=True)
         if not notes:
             try:
@@ -1439,6 +1555,7 @@ class MotionConnector(QObject):
             "correctedPath": str(corrected) if corrected else "",
             "notesPath": str(notes_path),
             "notes": notes,
+            "hasData": bool(has_db_rows or corrected or left or right),
         }
 
     @pyqtProperty(str, notify=directoryChanged)
@@ -1705,6 +1822,13 @@ class MotionConnector(QObject):
             logger.exception("loadPastScan failed for label %r", session_label)
             self._pastScanBuffersReady.emit(seq, session_label, -1, None, "")
 
+    @pyqtSlot(str, str)
+    def _on_scan_outcome_warning(self, message: str, severity: str) -> None:
+        """GUI thread: surface an interrupted/empty-scan toast. Errors are
+        sticky (duration_ms=0) so a 'not saved' scan can't be missed."""
+        duration = 0 if severity == "error" else 8000
+        self.notify(message, severity, duration_ms=duration, tag="scan-outcome")
+
     def _on_past_scan_buffers_ready(
         self,
         seq: int,
@@ -1727,6 +1851,17 @@ class MotionConnector(QObject):
             self.errorOccurred.emit(
                 f"Could not load scan '{session_label}' for plotting.\n"
                 "See the app log for details."
+            )
+            self.pastScanLoadFinished.emit(session_label, False)
+            return
+        if buffers_are_empty(buffers):
+            logger.info(
+                "loadPastScan: %r contains no samples — not displaying",
+                session_label,
+            )
+            self.errorOccurred.emit(
+                f"Scan '{session_label}' contains no data.\n"
+                "It was interrupted before any data could be recorded."
             )
             self.pastScanLoadFinished.emit(session_label, False)
             return
@@ -1972,6 +2107,11 @@ class MotionConnector(QObject):
         nan_gap_tracker = NanGapTracker()
         self._nan_gap_tracker = nan_gap_tracker
 
+        # Interrupted-scan outcome tracker — bound to a local so the
+        # completion closure and the sink list provably share THIS scan's
+        # instance (same pattern as nan_gap_tracker above).
+        outcome_sink = _ScanOutcomeSink()
+
         # Reset trigger ON-time mirrors so _scan_elapsed_str starts from zero.
         self._trigger_cumulative_s = 0.0
         self._trigger_on_mono = None
@@ -2032,6 +2172,27 @@ class MotionConnector(QObject):
             self._scan_notes_session_label = session_label
             self._persist_scan_notes(session_label)
 
+            # Interrupted-scan outcome. An interrupted scan loses its open
+            # interval; one that ends before any interval closes saves
+            # nothing. Surface a toast; ScanDBSink deletes the empty session
+            # row and the History viewer guards against loading it.
+            try:
+                outcome = classify_scan_outcome(
+                    final_frames=outcome_sink.final_frames,
+                    terminal_dark_missing=outcome_sink.terminal_dark_missing,
+                    canceled=canceled,
+                    disable_laser=disable_laser,
+                )
+                if outcome.severity:
+                    logger.warning(
+                        "Scan outcome: %s — %s", outcome.kind, outcome.message
+                    )
+                    self._scanOutcomeWarningSignal.emit(
+                        outcome.message, outcome.severity
+                    )
+            except Exception:
+                logger.exception("scan-outcome classification failed")
+
             # New pipeline writes CSVs directly; no .raw→.csv post-processing
             # needed.  Pass empty paths to captureFinished so startPostProcess
             # is a no-op (QML still proceeds to the next scan step).
@@ -2079,6 +2240,7 @@ class MotionConnector(QObject):
                 _LivePlotSink(connector=self, plot_t0=plot_t0, live_source=live_source,
                               nan_gap_tracker=nan_gap_tracker),
                 _TriggerStateSink(connector=self),
+                outcome_sink,
                 _CompletionSink(connector=self, on_complete_cb=_on_pipeline_complete),
             ],
         )
@@ -3303,6 +3465,9 @@ class MotionConnector(QObject):
         self._cq_result_signal.connect(self._on_cq_result_ready)
         # Worker → Qt main thread for async past-scan loads (issue #152).
         self._pastScanBuffersReady.connect(self._on_past_scan_buffers_ready)
+        # Auto-queued: emitted on the pipeline worker thread, runs the toast
+        # on the GUI thread (same marshalling pattern as _pastScanBuffersReady).
+        self._scanOutcomeWarningSignal.connect(self._on_scan_outcome_warning)
 
     @pyqtSlot()
     @pyqtSlot(str)

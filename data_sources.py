@@ -891,6 +891,18 @@ def _load_corrected_csv_into(buffers: dict, csv_path: str) -> None:
         pass
 
 
+def buffers_are_empty(buffers: Optional[dict]) -> bool:
+    """True when a loaded past-scan buffer dict holds no samples at all.
+
+    A scan interrupted before any dark interval closed yields a session row
+    but zero session_data and no corrected CSV, so the loader returns an
+    empty (or sample-less) dict. The viewer uses this to show a 'no data'
+    error instead of silently opening an empty plot."""
+    if not buffers:
+        return True
+    return all(getattr(b, "n", 0) == 0 for b in buffers.values())
+
+
 def _derive_masks_from_buffers(buffers: dict) -> tuple[int, int]:
     """Reconstruct (left_mask, right_mask) from which per-camera streams a
     loaded scan carries — bit c set ⇒ camera c (cam_id 0..7) recorded data.
