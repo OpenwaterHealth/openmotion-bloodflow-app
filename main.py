@@ -272,7 +272,10 @@ def main():
 
     engine = QQmlApplicationEngine()
 
-    connector = MotionConnector(motion_interface, app_config=app_config, data_dir=_data_dir)
+    connector = MotionConnector(
+        motion_interface, app_config=app_config, data_dir=_data_dir,
+        app_version=APP_VERSION, log_path=logfile_path,
+    )
     qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MotionInterface", connector)
     engine.rootContext().setContextProperty("appVersion", APP_VERSION)
 

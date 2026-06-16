@@ -60,5 +60,6 @@
   "histoThrottle": false,
   "histoCmp": true,
   "commVerbose": false,
-  "verboseCommandHandling": false
+  "verboseCommandHandling": false,
+  "support_email": "support@openwater.health"
 }

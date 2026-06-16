@@ -115,8 +115,17 @@ Edit `config/app_config.json` to customize behavior:
 | `bviMin` / `bviMax` | `4.0` / `8.0` | Manual BVI plot bounds (when autoscale is off) |
 | `meanMin` / `meanMax` | `0` / `200` | Manual mean plot bounds |
 | `contrastMin` / `contrastMax` | `0.0` / `0.7` | Manual contrast plot bounds |
+| `support_email` | `support@openwater.health` | Destination for the critical-error modal's **Send Bug Report** button |
+| `bug_report_smtp` | _(absent)_ | Optional `{host, port, username, password, from_addr, use_tls}` block. When set, bug reports are emailed automatically with the session log attached; otherwise the app opens your mail client for manual send |
 
 Most of these are also editable from the in-app **Settings** panel and persisted automatically.
+
+## Critical Errors
+
+Showstopper conditions (e.g. the sensor's boot-time I2C self-check failing) raise
+a dismissible modal carrying a stable error code such as `E-101`. See
+[docs/ERROR_CODES.md](docs/ERROR_CODES.md) for the full catalog and recommended
+actions.
 
 ## Antivirus Note (Windows)
 

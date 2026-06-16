@@ -46,20 +46,23 @@ their existing toast/inline handling).
 
 | Code | Condition | Source site |
 |---|---|---|
-| E-101 | Sensor I2C bus check failed — expected device(s) missing at boot (mux / IMU / camera / FPGA) | `MotionSensor.is_i2c_healthy()` false after connect |
-| E-102 | I2C health unreadable — firmware returned no snapshot | `MotionSensor.i2c_health is None` |
-| E-103 | Sensor failed to connect / not detected (on a failed connect attempt) | connection handler |
-| E-104 | Console failed to connect / not detected (on a failed connect attempt) | connection handler |
+| E-101 | Sensor I2C self-check: expected device(s) missing at boot (mux / IMU / camera / FPGA) | `_check_sensor_i2c_health` (reads `MotionSensor.i2c_health`) |
+| E-102 | I2C health unreadable — firmware returned no snapshot | `_check_sensor_i2c_health` (`i2c_health is None`) |
+| E-103 | Console init failed — laser-power params didn't apply at connect | `_on_handle_state_changed_impl` console branch |
 | E-105 | Camera power-on failed during init | `_run_sensor_init` |
-| E-201 | Laser safety chip unresponsive at startup | safety read at connect |
-| E-202 | Laser safety trip during scan | `safetyTripDuringCaptureRequested` |
-| E-203 | Laser safety state unknown beyond transient threshold | safety_known streak (issue #119) |
-| E-301 | Capture aborted before laser fired (precondition fail) | `startCapture` abort |
-| E-302 | SDK refused to spawn a new scan | `startCapture` |
-| E-303 | Capture / pipeline failed | `captureFinished(ok=False)` |
+| E-201 | Laser safety monitor unresponsive beyond transient window | safety_known streak block (issue #119) |
+| E-202 | Laser safety trip during scan | `_on_safety_trip_during_capture` |
+| E-301 | Capture aborted before laser fired (precondition fail) | `startCapture` abort (with reason) |
+| E-302 | SDK refused to spawn a new scan | `startCapture` (no reason) |
 
-E-103/E-104 fire only on a *failed connect attempt*, not on routine
-unplug/disconnect (those keep the existing connection-status UI).
+**Reshaped from the original proposal so every documented code has a real
+trigger.** Dropped: E-104 (console "not detected" — connection is
+CONNECTED/DISCONNECTED only; no failed-attempt event without a new timeout
+watchdog), E-203 (merged into E-201), E-303 (capture is fail-soft —
+`captureFinished` always emits success). E-103 was repurposed from "sensor not
+detected" to "console init failed", which does have a clean site. A
+connection-timeout watchdog for true enumeration failures (E-104-style) is a
+possible follow-up.
 
 ## Modal — `components/CriticalErrorModal.qml`
 
