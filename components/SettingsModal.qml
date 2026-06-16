@@ -63,6 +63,19 @@ Item {
         )
     }
 
+    // Emitted when the user enters the correct password for the audit log.
+    // BloodFlow.qml opens the (ModalManager-governed) LogsModal in response.
+    signal logsRequested()
+
+    // Password gate for the audit Logs viewer.
+    PasswordPromptModal {
+        id: logsPasswordModal
+        title: "Audit Log"
+        description: "Enter the password to view the audit log."
+        confirmLabel: "View Logs"
+        onAccepted: root.logsRequested()
+    }
+
     // ── Lifecycle ───────────────────────────────────────────────────────────
     function _loadFromConfig() {
         var cfg = MotionInterface.appConfig
@@ -753,6 +766,38 @@ Item {
                                 }
                             }
                         }
+                    }
+                }
+
+                // ── Audit Log ────────────────────────────────────────────────
+                SectionCard {
+                    title: "Audit Log"
+
+                    FieldRow {
+                        label: "Logs"
+                        ActionButton {
+                            text: "View Logs"
+                            Layout.preferredWidth: 130
+                            onClicked: logsPasswordModal.open()
+                        }
+                        ActionButton {
+                            text: "Send Debug Logs"
+                            Layout.preferredWidth: 150
+                            // Direct action — zips the last 48h of app logs,
+                            // reveals the file, and toasts the support address.
+                            onClicked: MotionInterface.prepareDebugLogBundle()
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+                    Text {
+                        text: "Password-protected, machine-readable record of system "
+                              + "events for auditors. Open the viewer to browse entries "
+                              + "or export them as CSV. Send Debug Logs zips the last "
+                              + "48 hours of app logs to email to support@openwater.cc."
+                        color: root.colTextMuted
+                        font.pixelSize: 11
+                        wrapMode: Text.WordWrap
+                        Layout.fillWidth: true
                     }
                 }
 
