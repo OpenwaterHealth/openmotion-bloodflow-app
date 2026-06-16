@@ -29,7 +29,6 @@ Item {
     property int focusedSampleCount: -1
     // Toolbar filters / sort.
     property string searchText: ""
-    property string configFilter: "All"
     property string sortKey: "timestamp"
     property bool sortAsc: false
     // Async "Load in viewer" busy state (issue #152 pattern).
@@ -54,7 +53,6 @@ Item {
 
     function rebuildView() {
         var q = (searchText || "").toLowerCase()
-        var cfg = configFilter
         // In reduced (clinical) mode, omit scans not shot in reduced mode —
         // the reduced viewer can't render their per-camera data. Dev mode
         // lists everything. A scan with no recorded mode counts as non-reduced.
@@ -65,8 +63,6 @@ Item {
             if (q.length > 0
                 && (r.userLabel || "").toLowerCase().indexOf(q) < 0
                 && (r.label || "").toLowerCase().indexOf(q) < 0)
-                return false
-            if (cfg !== "All" && r.configL !== cfg && r.configR !== cfg)
                 return false
             return true
         })
@@ -143,9 +139,8 @@ Item {
         return "0x" + (m & 0xFF).toString(16).toUpperCase()
     }
 
-    // Re-filter whenever the search/config filter changes.
+    // Re-filter whenever the search text changes.
     onSearchTextChanged: rebuildView()
-    onConfigFilterChanged: rebuildView()
 
     // ── backdrop ───────────────────────────────────────────────────
     Rectangle {
@@ -165,7 +160,7 @@ Item {
     }
 
     Rectangle {
-        width: Math.min(parent.width - 60, 960)
+        width: Math.min(parent.width - 60, 1040)
         height: Math.min(parent.height - 60, 680)
         radius: 12
         color: theme.bgContainer
@@ -184,84 +179,35 @@ Item {
             // ── toolbar ────────────────────────────────────────────
             RowLayout {
                 Layout.fillWidth: true
-                spacing: 10
+                spacing: 12
 
                 Text {
                     text: root.label
                     font.pixelSize: 20; font.weight: Font.Bold
                     color: theme.textPrimary
                 }
-                Item { Layout.preferredWidth: 8 }
+                Item { Layout.fillWidth: true }
 
                 TextField {
                     id: searchField
-                    Layout.preferredWidth: 200
-                    Layout.preferredHeight: 32
+                    Layout.preferredWidth: 240
+                    Layout.preferredHeight: 34
                     placeholderText: "Search label…"
                     color: theme.textPrimary
                     placeholderTextColor: theme.textSecondary
                     font.pixelSize: 13
-                    leftPadding: 10; rightPadding: 10
+                    leftPadding: 12; rightPadding: 12
                     verticalAlignment: TextInput.AlignVCenter
                     background: Rectangle {
-                        color: theme.bgInput; radius: 4
+                        color: theme.bgInput; radius: 6
                         border.color: searchField.activeFocus ? theme.accentBlue : theme.borderSubtle
                         border.width: 1
                     }
                     onTextChanged: root.searchText = text
                 }
 
-                ComboBox {
-                    id: configBox
-                    Layout.preferredWidth: 130
-                    Layout.preferredHeight: 32
-                    model: ["All", "Near", "Middle", "Far", "Outer",
-                            "Left", "Right", "Third Row", "None"]
-                    font.pixelSize: 13
-                    contentItem: Text {
-                        leftPadding: 10; text: configBox.displayText
-                        font: configBox.font; color: theme.textPrimary
-                        verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight
-                    }
-                    background: Rectangle {
-                        color: theme.bgInput; radius: 4
-                        border.color: theme.borderSubtle; border.width: 1
-                    }
-                    onCurrentTextChanged: root.configFilter = currentText
-                }
-
-                Item { Layout.fillWidth: true }
-
-                Button {
-                    text: "Open Folder"
-                    Layout.preferredWidth: 100; Layout.preferredHeight: 32
-                    hoverEnabled: true
-                    contentItem: Text {
-                        text: parent.text; font.pixelSize: 13; color: theme.textSecondary
-                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-                    }
-                    background: Rectangle {
-                        color: parent.hovered ? theme.accentBlue : theme.bgInput
-                        border.color: parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
-                    }
-                    onClicked: Qt.openUrlExternally("file:///" + MotionInterface.directory)
-                }
-                Button {
-                    text: "Refresh"
-                    Layout.preferredWidth: 80; Layout.preferredHeight: 32
-                    hoverEnabled: true
-                    contentItem: Text {
-                        text: parent.text; font.pixelSize: 13; color: theme.textSecondary
-                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-                    }
-                    background: Rectangle {
-                        color: parent.hovered ? theme.accentBlue : theme.bgInput
-                        border.color: parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
-                    }
-                    onClicked: root.refresh()
-                }
                 Rectangle {
-                    width: 28; height: 28; radius: 14
+                    width: 30; height: 30; radius: 15
                     color: xArea.containsMouse ? "#C0392B" : theme.borderStrong
                     border.color: theme.borderHover; border.width: 1
                     Behavior on color { ColorAnimation { duration: 120 } }
@@ -414,22 +360,27 @@ Item {
             // ── detail pane (focused row, read-only) ───────────────
             Rectangle {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 150
+                Layout.preferredHeight: 230
                 radius: 6; color: theme.bgCardAlt
                 border.color: theme.borderSubtle; border.width: 1
                 visible: root.focusedRow !== null
 
-                RowLayout {
-                    anchors.fill: parent; anchors.margins: 12; spacing: 16
+                // Stacked: a compact metadata strip on top, then the notes box
+                // spanning the full pane width below (much wider than the old
+                // side-by-side layout).
+                ColumnLayout {
+                    anchors.fill: parent; anchors.margins: 14; spacing: 10
 
                     GridLayout {
-                        columns: 2; columnSpacing: 14; rowSpacing: 4
-                        Layout.preferredWidth: 320
-                        Layout.alignment: Qt.AlignTop
+                        Layout.fillWidth: true
+                        columns: 6; columnSpacing: 12; rowSpacing: 6
                         Text { text: "Full label:"; color: theme.textSecondary; font.pixelSize: 12 }
                         Text { text: root.focusedRow ? root.focusedRow.label : ""; color: theme.textPrimary; font.pixelSize: 12; elide: Text.ElideRight; Layout.fillWidth: true }
                         Text { text: "Operator:"; color: theme.textSecondary; font.pixelSize: 12 }
                         Text { text: root.focusedRow ? (root.focusedRow.operator || "-") : ""; color: theme.textPrimary; font.pixelSize: 12 }
+                        Text { text: "Samples:"; color: theme.textSecondary; font.pixelSize: 12 }
+                        Text { text: root.focusedSampleCount < 0 ? "…" : root.focusedSampleCount.toLocaleString(); color: theme.textPrimary; font.pixelSize: 12; Layout.preferredWidth: 70 }
+
                         Text { text: "Mask (L / R):"; color: theme.textSecondary; font.pixelSize: 12 }
                         Text {
                             color: theme.textPrimary; font.pixelSize: 12
@@ -440,27 +391,19 @@ Item {
                         }
                         Text { text: "Config (L / R):"; color: theme.textSecondary; font.pixelSize: 12 }
                         Text { text: root.focusedRow ? (root.focusedRow.configL + " / " + root.focusedRow.configR) : ""; color: theme.textPrimary; font.pixelSize: 12 }
-                        Text { text: "Samples:"; color: theme.textSecondary; font.pixelSize: 12 }
-                        Text {
-                            color: theme.textPrimary; font.pixelSize: 12
-                            text: root.focusedSampleCount < 0 ? "…" : root.focusedSampleCount.toLocaleString()
-                        }
                     }
 
-                    ColumnLayout {
-                        Layout.fillWidth: true; Layout.fillHeight: true; spacing: 4
-                        Text { text: "Notes (read-only):"; color: theme.textSecondary; font.pixelSize: 12 }
-                        Rectangle {
-                            Layout.fillWidth: true; Layout.fillHeight: true
-                            radius: 4; color: theme.bgInput
-                            border.color: theme.borderSubtle; border.width: 1
-                            ScrollView {
-                                anchors.fill: parent; anchors.margins: 2
-                                TextArea {
-                                    readOnly: true; wrapMode: Text.Wrap; background: null
-                                    text: root.focusedRow ? (root.focusedRow.notes || "") : ""
-                                    color: theme.textPrimary; font.pixelSize: 12
-                                }
+                    Text { text: "Notes (read-only):"; color: theme.textSecondary; font.pixelSize: 12 }
+                    Rectangle {
+                        Layout.fillWidth: true; Layout.fillHeight: true
+                        radius: 4; color: theme.bgInput
+                        border.color: theme.borderSubtle; border.width: 1
+                        ScrollView {
+                            anchors.fill: parent; anchors.margins: 2
+                            TextArea {
+                                readOnly: true; wrapMode: Text.Wrap; background: null
+                                text: root.focusedRow ? (root.focusedRow.notes || "") : ""
+                                color: theme.textPrimary; font.pixelSize: 12
                             }
                         }
                     }
@@ -468,47 +411,52 @@ Item {
             }
 
             // ── actions ────────────────────────────────────────────
+            // Destructive Delete sits apart on the left; primary actions
+            // (Export, then the emphasized Load) group on the right.
             RowLayout {
                 Layout.fillWidth: true; spacing: 10
 
-                Text {
-                    text: root.checkedCount > 0 ? (root.checkedCount + " selected") : ""
-                    color: theme.textSecondary; font.pixelSize: 12
+                Button {
+                    id: deleteBtn
+                    text: "🗑  Delete" + (root.checkedCount > 0 ? "  (" + root.checkedCount + ")" : "")
+                    Layout.preferredWidth: 132; Layout.preferredHeight: 36
+                    // Don't allow deleting while a scan is running (could be the
+                    // in-flight session). The password prompt still guards it.
+                    enabled: root.checkedCount > 0 && MotionInterface.state !== 4
+                    hoverEnabled: enabled
+                    contentItem: Text {
+                        text: parent.text; font.pixelSize: 13
+                        color: deleteBtn.enabled ? theme.accentRed : theme.textTertiary
+                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle {
+                        radius: 6
+                        color: deleteBtn.hovered && deleteBtn.enabled
+                               ? Qt.rgba(0.75, 0.22, 0.17, 0.16) : "transparent"
+                        border.color: deleteBtn.enabled ? theme.accentRed : theme.textTertiary
+                        border.width: 1
+                    }
+                    onClicked: root.requestDelete()
                 }
+
                 Item { Layout.fillWidth: true }
 
                 Button {
-                    text: "Load in viewer →"
-                    Layout.preferredWidth: 140; Layout.preferredHeight: 34
-                    enabled: root.focusedRow !== null && !root.focusedRow.interrupted
-                    hoverEnabled: enabled
-                    contentItem: Text {
-                        text: parent.text; font.pixelSize: 13
-                        color: parent.enabled ? theme.textSecondary : theme.textTertiary
-                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-                    }
-                    background: Rectangle {
-                        color: !parent.enabled ? theme.bgInput : parent.hovered ? theme.accentBlue : theme.bgInput
-                        border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
-                    }
-                    onClicked: {
-                        root.loadingPlot = true
-                        MotionInterface.loadPastScan(root.focusedRow.label)
-                    }
-                }
-                Button {
+                    id: exportBtn
                     text: "Export CSV"
-                    Layout.preferredWidth: 110; Layout.preferredHeight: 34
+                    Layout.preferredWidth: 112; Layout.preferredHeight: 36
                     enabled: root.focusedRow !== null && !root.focusedRow.interrupted
                     hoverEnabled: enabled
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 13
-                        color: parent.enabled ? theme.textSecondary : theme.textTertiary
+                        color: exportBtn.enabled ? theme.textSecondary : theme.textTertiary
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: !parent.enabled ? theme.bgInput : parent.hovered ? theme.accentBlue : theme.bgInput
-                        border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
+                        radius: 6
+                        color: exportBtn.hovered && exportBtn.enabled ? theme.bgHover : "transparent"
+                        border.color: exportBtn.enabled ? theme.borderStrong : theme.textTertiary
+                        border.width: 1
                     }
                     onClicked: {
                         exportDialog.selectedScanId = root.focusedRow.label
@@ -518,22 +466,26 @@ Item {
                     }
                 }
                 Button {
-                    text: "🔒 Delete" + (root.checkedCount > 0 ? " (" + root.checkedCount + ")" : "")
-                    Layout.preferredWidth: 120; Layout.preferredHeight: 34
-                    // Don't allow deleting while a scan is running (could be the
-                    // in-flight session).
-                    enabled: root.checkedCount > 0 && MotionInterface.state !== 4
+                    id: loadBtn
+                    text: "Load in viewer  →"
+                    Layout.preferredWidth: 156; Layout.preferredHeight: 36
+                    enabled: root.focusedRow !== null && !root.focusedRow.interrupted
                     hoverEnabled: enabled
                     contentItem: Text {
-                        text: parent.text; font.pixelSize: 13
-                        color: parent.enabled ? "#E8786A" : theme.textTertiary
+                        text: parent.text; font.pixelSize: 13; font.weight: Font.DemiBold
+                        color: loadBtn.enabled ? "#FFFFFF" : theme.textTertiary
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered && parent.enabled ? "#3A1714" : theme.bgInput
-                        border.color: parent.enabled ? "#C0392B" : theme.textTertiary; radius: 4
+                        radius: 6
+                        color: !loadBtn.enabled ? theme.bgInput
+                               : (loadBtn.hovered ? Qt.lighter(theme.accentBlue, 1.12)
+                                                  : theme.accentBlue)
                     }
-                    onClicked: root.requestDelete()
+                    onClicked: {
+                        root.loadingPlot = true
+                        MotionInterface.loadPastScan(root.focusedRow.label)
+                    }
                 }
             }
         }
