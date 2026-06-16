@@ -183,6 +183,16 @@ Item {
                     Layout.preferredHeight: 36
                     model: scans
                     font.pixelSize: 13
+                    // Largest the dropdown popup may grow: the space between
+                    // the bottom of the field and the bottom of the modal,
+                    // less a small margin. Caps a long scan list so it stays
+                    // on-screen and the inner ListView scrolls instead of
+                    // running off the bottom of the window (issue #199).
+                    // Floored at ~3 rows so it's never uselessly small.
+                    readonly property real maxPopupHeight: {
+                        var below = root.height - mapToItem(root, 0, height).y - 12
+                        return Math.max(below, 96)
+                    }
                     contentItem: Text {
                         leftPadding: 10
                         text: scanPicker.displayText
@@ -222,12 +232,20 @@ Item {
                     popup: Popup {
                         y: scanPicker.height
                         width: scanPicker.width
-                        implicitHeight: contentItem.implicitHeight + 2
+                        // Cap the height so the popup never extends past the
+                        // bottom of the window; the ListView then overflows
+                        // and becomes scrollable (issue #199).
+                        height: Math.min(contentItem.implicitHeight + 2,
+                                         scanPicker.maxPopupHeight)
                         padding: 1
                         contentItem: ListView {
                             clip: true
                             implicitHeight: contentHeight
                             model: scanPicker.delegateModel
+                            // Keep the keyboard-highlighted row scrolled into
+                            // view so arrow-key navigation is visible — you can
+                            // tell which scan is selected (issue #199).
+                            currentIndex: scanPicker.highlightedIndex
                             ScrollIndicator.vertical: ScrollIndicator {}
                         }
                         background: Rectangle {
