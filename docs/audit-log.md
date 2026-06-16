@@ -54,6 +54,7 @@ plus a small JSON `details` payload. The app records the following events:
 | `scan_deleted` | One or more scans are deleted. | `session_ids`, `count` |
 | `audit_log_viewed` | The audit log itself is opened. | `entry_count` |
 | `audit_log_exported` | The audit log is exported to CSV. | `dest`, `row_count` |
+| `debug_bundle_created` | The "Send Debug Logs" button is used. | `dest`, `file_count`, `log_count`, `bytes`, `window_hours` |
 
 Notes for auditors:
 
@@ -101,6 +102,18 @@ LIMIT 50;
 ```
 
 ---
+
+## Sending debug logs to Openwater
+
+The **Send Debug Logs** button (top of the audit-log viewer) packages the
+app's diagnostic logs for support. It writes a zip to
+`<dataDirectory>/app-logs/debug-bundles/debug-bundle-<timestamp>.zip`
+containing the app log files from the last 48 hours, `app_config.json`,
+and a `system_info.txt` (app/SDK version + host details). The file
+explorer opens with the zip selected, and a message shows the path —
+**email that zip to support@openwater.cc**. No data is sent
+automatically, and the bundle contains no scan data or patient
+information.
 
 ## Exporting to CSV
 
