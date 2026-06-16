@@ -827,6 +827,28 @@ class MotionConnector(QObject):
 
         os.makedirs(resolved_dir, exist_ok=True)
         self._directory = resolved_dir
+
+        # ── Audit log: append-only, machine-readable event record in
+        #    scans.db, surfaced via the password-gated Logs modal. See
+        #    audit_log.py. No-op if the interface has no scan_db_path.
+        from audit_log import AuditLog, gather_host_info
+        self._audit = AuditLog(getattr(self._interface, "scan_db_path", None))
+        try:
+            from version import get_version as _get_app_version
+            _app_version = _get_app_version()
+        except Exception:
+            _app_version = ""
+        try:
+            _sdk_version = self._interface.get_sdk_version()
+            _sdk_version = _sdk_version if isinstance(_sdk_version, str) else ""
+        except Exception:
+            _sdk_version = ""
+        self._audit.log("system_startup", {
+            "app_version": _app_version,
+            "sdk_version": _sdk_version,
+            "data_dir": self._directory,
+        })
+        self._audit.log("system_info", gather_host_info())
         logger.info(f"[Connector] Directory initialized to: {self._directory}")
 
         self._user_label = self.generate_user_label()
@@ -1341,6 +1363,11 @@ class MotionConnector(QObject):
         teardown) right after this returns."""
         logger.info("Shutting down MotionConnector...")
         self.stopCapture()
+        try:
+            self._audit.log("system_shutdown", {"clean": True})
+            self._audit.close()
+        except Exception:
+            logger.warning("audit shutdown log failed", exc_info=True)
         logger.info("MotionConnector shutdown complete.")
 
     # --- SCAN MANAGEMENT METHODS ---
