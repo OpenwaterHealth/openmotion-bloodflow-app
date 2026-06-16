@@ -229,7 +229,7 @@ Rectangle {
     ModalManager {
         id: modalManager
         modals: [scanSettingsModal, notesModal, historyModal,
-                 settingsModal, contactQualityModal]
+                 settingsModal, contactQualityModal, logsModal]
     }
 
     // Data viewer — fills remaining space to the right of ButtonPanel.
@@ -332,6 +332,16 @@ Rectangle {
 
     SettingsModal {
         id: settingsModal
+        // Audit Log: the password gate lives in SettingsModal; on success
+        // close Settings and open the ModalManager-governed LogsModal.
+        onLogsRequested: {
+            settingsModal.close()
+            modalManager.toggle(logsModal)
+        }
+    }
+
+    LogsModal {
+        id: logsModal
     }
 
     ContactQualityModal {
