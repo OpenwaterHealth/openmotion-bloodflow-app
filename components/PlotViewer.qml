@@ -69,7 +69,7 @@ Rectangle {
     // Per-cell top-left value labels. Default off in reduced mode — the
     // large side panels show the same numbers there — and toggleable at
     // runtime from the bottom-right ⋯ popup.
-    property bool showCellValues: !viewer.reducedMode
+    property bool showCellValues: !viewer.effectiveReduced
     // Y-axis tick labels (max/mid/min per metric). Config is the single
     // source of truth: the ⋯ popup toggle (hidden in reduced mode) writes
     // through MotionInterface.setConfig, which persists to app_config.json
@@ -173,6 +173,28 @@ Rectangle {
          && viewer.scanSource.rightMask >= 0)
             ? viewer.scanSource.rightMask : viewer.rightMask
 
+    // Replay adopts the loaded scan's recorded mode: when the source reports a
+    // known mode (reducedMode >= 0) use it, else fall back to the live-config
+    // `reducedMode` input. Mirrors _effLeftMask/_effRightMask (#175). Note:
+    // scanSource.reducedMode is an int tri-state (-1/0/1) from Python;
+    // viewer.reducedMode is the bool live-config input.
+    readonly property bool effectiveReduced:
+        (viewer.scanSource && viewer.scanSource.reducedMode !== undefined
+         && viewer.scanSource.reducedMode >= 0)
+            ? (viewer.scanSource.reducedMode === 1)
+            : viewer.reducedMode
+
+    // ── Side break ─────────────────────────────────────────────────────
+    // A bit of extra margin between the left and right sensor modules in
+    // dev (non-reduced) mode. The grid reserves an empty spacer column
+    // (col 2) between them, but only when BOTH sides have active cameras —
+    // a single-sided scan keeps filling the width with no dangling gap.
+    readonly property bool _sideGapActive:
+        !viewer.effectiveReduced
+        && (viewer._effLeftMask & 0xFF) !== 0
+        && (viewer._effRightMask & 0xFF) !== 0
+    readonly property real _sideGapPx: 3
+
     // ── Grid model ─────────────────────────────────────────────────────
     // Dev mode (default) — one cell per active camera (bits set in
     // leftMask / rightMask), arranged to mirror the physical U-shape of
@@ -180,14 +202,15 @@ Rectangle {
     // run down one arm of the U and back up the other — 1|8 at the top
     // of the U, 4|5 at the bottom — so display row r pairs 1-based cams
     // (4-r | 5+r): row 0 is 4|5, row 3 is 1|8. Left module owns columns
-    // 0-1, right module 2-3 (a module with nothing selected gives up its
+    // 0-1, right module 3-4 — col 2 is the empty side-break spacer when
+    // both sides are active (a module with nothing selected gives up its
     // column pair). Rows empty on both sides are dropped and the rest
     // compact upward; an unselected camera in a kept row just leaves its
     // slot blank.
     readonly property var _devCellModel: {
         var masks = [viewer._effLeftMask & 0xFF, viewer._effRightMask & 0xFF]
         var sides = ["left", "right"]
-        var colBase = [0, masks[0] !== 0 ? 2 : 0]
+        var colBase = [0, masks[0] !== 0 ? 3 : 0]
         var entries = []
         var displayRow = 0
         for (var r = 0; r < 4; r++) {
@@ -218,7 +241,7 @@ Rectangle {
         { side: "right", camId: -1, row: 1, col: 0 }
     ]
 
-    readonly property var _activeCellModel: viewer.reducedMode
+    readonly property var _activeCellModel: viewer.effectiveReduced
         ? _reducedCellModel
         : _devCellModel
 
@@ -646,7 +669,7 @@ Rectangle {
             // nested layouts default it to true, which would make this
             // column compete with the grid for the whole row width.
             ColumnLayout {
-                visible: viewer.reducedMode
+                visible: viewer.effectiveReduced
                 Layout.fillWidth: false
                 Layout.fillHeight: true
                 Layout.preferredWidth: 250
@@ -670,10 +693,24 @@ Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 // Reduced mode: single column, 2 stacked cells. Dev mode:
-                // 4 columns, rows determined by active-cam count.
-                columns: viewer.reducedMode ? 1 : 4
+                // 4 columns; +1 spacer column (col 2) when both sides are
+                // active, for a visual break between the modules.
+                columns: viewer.effectiveReduced ? 1 : (viewer._sideGapActive ? 5 : 4)
                 rowSpacing: 6
                 columnSpacing: 6
+
+                // Side-break spacer — fixed-width empty column 2 between the
+                // left (cols 0-1) and right (cols 3-4) modules. fillWidth is
+                // false so it stays a fixed gap; the plot cells (fillWidth)
+                // absorb the rest of the row width around it.
+                Item {
+                    visible: viewer._sideGapActive
+                    Layout.row: 0
+                    Layout.column: 2
+                    Layout.fillWidth: false
+                    Layout.fillHeight: false
+                    Layout.preferredWidth: viewer._sideGapPx
+                }
 
                 Repeater {
                     model: viewer._activeCellModel
@@ -1014,7 +1051,7 @@ Rectangle {
             // autoscale) are hidden and Cell values is gone, leaving the
             // dev-only Profiler as the sole possible entry. Hide the
             // button entirely when it would open an empty card.
-            visible: !viewer.reducedMode
+            visible: !viewer.effectiveReduced
                      || MotionInterface.appConfig.developerMode === true
             width: 36
             height: 36
@@ -1093,7 +1130,7 @@ Rectangle {
                         // Hidden in reduced (clinical) mode — that view only
                         // ever shows the BFI/BVI side averages, so the
                         // Mean/Contrast alternative isn't offered there.
-                        visible: !viewer.reducedMode
+                        visible: !viewer.effectiveReduced
                         spacing: 8
                         PopupPillSwitch {
                             id: bfiBviSwitch
@@ -1112,7 +1149,7 @@ Rectangle {
                         // Hidden in reduced (clinical) mode — autoscale is
                         // not offered there; the view always uses the
                         // configured manual bounds.
-                        visible: !viewer.reducedMode
+                        visible: !viewer.effectiveReduced
                         spacing: 8
                         PopupPillSwitch {
                             id: autoScaleSwitch
@@ -1128,7 +1165,7 @@ Rectangle {
                         }
                     }
                     Row {
-                        visible: !viewer.reducedMode
+                        visible: !viewer.effectiveReduced
                         spacing: 8
                         PopupPillSwitch {
                             id: axisLabelsSwitch

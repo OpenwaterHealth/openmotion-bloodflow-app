@@ -140,6 +140,13 @@ def _load_app_config() -> dict:
         # painted. Gated on `developerMode && showProfiling` so clinical
         # users never see it.
         "showProfiling": False,
+        # Critical-error bug report (see error_codes.py / CriticalErrorModal).
+        "support_email": "support@openwater.health",
+        "bug_report_smtp": None,
+        # Startup connection watchdog (E-104/E-106).
+        "connectionTimeoutSec": 30,
+        "requireConsole": True,
+        "minSensors": 1,
     }
     config_path = resource_path("config", "app_config.json")
     if not config_path.exists():
@@ -272,7 +279,10 @@ def main():
 
     engine = QQmlApplicationEngine()
 
-    connector = MotionConnector(motion_interface, app_config=app_config, data_dir=_data_dir)
+    connector = MotionConnector(
+        motion_interface, app_config=app_config, data_dir=_data_dir,
+        app_version=APP_VERSION, log_path=logfile_path,
+    )
     qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MotionInterface", connector)
     engine.rootContext().setContextProperty("appVersion", APP_VERSION)
 

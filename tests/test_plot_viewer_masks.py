@@ -330,8 +330,11 @@ def test_zero_masks_render_empty_grid(viewer_factory):
 # A sensor module arranges cameras 1-8 in a U: 1 and 8 at the top of the
 # U, 4 and 5 at the bottom. The grid displays an upside-down U — row 0
 # pairs cams 4|5, then 3|6, 2|7, and 1|8 at the bottom. Left module owns
-# columns 0-1, right module columns 2-3; rows with no selected camera on
-# either side are dropped (the remaining rows compact upward).
+# columns 0-1. When BOTH sides have active cameras a fixed side-break
+# spacer occupies column 2 and the right module sits at columns 3-4; when
+# only one side is active there is no spacer and that side starts at
+# column 0. Rows with no selected camera on either side are dropped (the
+# remaining rows compact upward).
 
 
 def _pos(cells, side, cam_id):
@@ -349,11 +352,13 @@ def test_all_masks_lay_out_as_upside_down_u(viewer_factory):
     cells = _cells(viewer)
     assert len(cells) == 16
     # Row r pairs 1-based cams (4-r | 5+r): zero-based camIds 3-r | 4+r.
+    # Both sides active → the side-break spacer occupies column 2, so the
+    # right module sits at columns 3-4 (left stays at 0-1).
     for r in range(4):
         assert _pos(cells, "left", 3 - r) == (r, 0)
         assert _pos(cells, "left", 4 + r) == (r, 1)
-        assert _pos(cells, "right", 3 - r) == (r, 2)
-        assert _pos(cells, "right", 4 + r) == (r, 3)
+        assert _pos(cells, "right", 3 - r) == (r, 3)
+        assert _pos(cells, "right", 4 + r) == (r, 4)
 
 
 def test_middle_masks_compact_to_4x2(viewer_factory):
@@ -363,14 +368,15 @@ def test_middle_masks_compact_to_4x2(viewer_factory):
     cells = _cells(viewer)
     assert len(cells) == 8
     # Middle = cams 3,6 (U row 1) and 2,7 (U row 2) — rows compact to 0,1.
+    # Both sides active → right module shifts to columns 3-4 (spacer at 2).
     assert _pos(cells, "left", 2) == (0, 0)
     assert _pos(cells, "left", 5) == (0, 1)
-    assert _pos(cells, "right", 2) == (0, 2)
-    assert _pos(cells, "right", 5) == (0, 3)
+    assert _pos(cells, "right", 2) == (0, 3)
+    assert _pos(cells, "right", 5) == (0, 4)
     assert _pos(cells, "left", 1) == (1, 0)
     assert _pos(cells, "left", 6) == (1, 1)
-    assert _pos(cells, "right", 1) == (1, 2)
-    assert _pos(cells, "right", 6) == (1, 3)
+    assert _pos(cells, "right", 1) == (1, 3)
+    assert _pos(cells, "right", 6) == (1, 4)
 
 
 def test_right_module_alone_takes_first_column_pair(viewer_factory):
@@ -394,7 +400,8 @@ def test_unselected_slot_leaves_gap_in_its_row(viewer_factory):
     cells = _cells(viewer)
     assert len(cells) == 2
     assert _pos(cells, "left", 3) == (0, 0)
-    assert _pos(cells, "right", 4) == (0, 3)
+    # Both sides active → spacer at col 2 pushes the right module to col 3-4.
+    assert _pos(cells, "right", 4) == (0, 4)
 
 
 def test_row_compaction_is_shared_across_modules(viewer_factory):
@@ -406,14 +413,15 @@ def test_row_compaction_is_shared_across_modules(viewer_factory):
     viewer.setProperty("rightMask", MIDDLE_MASK)
     cells = _cells(viewer)
     assert len(cells) == 8
+    # Both sides have active cameras → spacer at col 2, right module at 3-4.
     # U row 1 (cams 3|6) → display row 0: right side only.
-    assert _pos(cells, "right", 2) == (0, 2)
-    assert _pos(cells, "right", 5) == (0, 3)
+    assert _pos(cells, "right", 2) == (0, 3)
+    assert _pos(cells, "right", 5) == (0, 4)
     # U row 2 (cams 2|7) → display row 1: both sides.
     assert _pos(cells, "left", 1) == (1, 0)
     assert _pos(cells, "left", 6) == (1, 1)
-    assert _pos(cells, "right", 1) == (1, 2)
-    assert _pos(cells, "right", 6) == (1, 3)
+    assert _pos(cells, "right", 1) == (1, 3)
+    assert _pos(cells, "right", 6) == (1, 4)
     # U row 3 (cams 1|8) → display row 2: left side only.
     assert _pos(cells, "left", 0) == (2, 0)
     assert _pos(cells, "left", 7) == (2, 1)
