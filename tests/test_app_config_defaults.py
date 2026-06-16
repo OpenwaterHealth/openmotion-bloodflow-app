@@ -69,6 +69,33 @@ def test_unknown_keys_are_dropped(tmp_path, monkeypatch):
     assert "autoConfigureOnStartup" not in cfg
 
 
+def test_critical_error_config_keys_preserved(tmp_path, monkeypatch):
+    """Bug-report + connection-watchdog keys must survive the whitelist.
+
+    `_load_app_config` drops any key not present in the in-code defaults, so
+    these keys must be registered there or they silently never reach the
+    connector (e.g. `bug_report_smtp` could never enable SMTP send).
+    """
+    config_path = tmp_path / "app_config.json"
+    config_path.write_text(
+        json.dumps({
+            "support_email": "x@y.z",
+            "bug_report_smtp": {"host": "h"},
+            "connectionTimeoutSec": 12,
+            "requireConsole": True,
+            "minSensors": 2,
+        }),
+        encoding="utf-8",
+    )
+    _patch_config_path(monkeypatch, config_path)
+    cfg = app_main._load_app_config()
+    assert cfg["support_email"] == "x@y.z"
+    assert cfg["bug_report_smtp"] == {"host": "h"}
+    assert cfg["connectionTimeoutSec"] == 12
+    assert cfg["minSensors"] == 2
+    assert cfg["requireConsole"] is True
+
+
 def test_auto_configure_flag_is_gone():
     """Tombstone for issue #154: the startup auto-flash flag must not
     come back — not in the in-code defaults, not in the shipped config,

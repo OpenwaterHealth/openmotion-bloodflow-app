@@ -38,6 +38,8 @@ from processing.visualize_bloodflow import VisualizeBloodflow
 from motion_config import (
     load_tec_params,
 )
+import error_codes
+import bug_report
 from nan_gap_tracker import NanGapTracker, gap_note_line
 from utils.resource_path import resource_path
 from data_sources import (
@@ -583,6 +585,10 @@ class MotionConnector(QObject):
     gyroscopeSensorUpdated = pyqtSignal(float, float, float)  # (x, y, z)
     rgbStateReceived = pyqtSignal(int, str)  # (state, state_text)
     errorOccurred = pyqtSignal(str)
+    # Critical/showstopper conditions surfaced to the user as a blocking,
+    # dismissible modal with a stable error code (see error_codes.py).
+    # Payload: (code, title, message, suggestedAction, detail).
+    criticalErrorRaised = pyqtSignal(str, str, str, str, str)
     notificationRequested = pyqtSignal('QVariant')  # toast notification payload dict
     notificationDismissByIdRequested = pyqtSignal(int)   # dismiss the toast with this id
     notificationDismissByTagRequested = pyqtSignal(str)  # dismiss the toast with this tag
@@ -678,12 +684,27 @@ class MotionConnector(QObject):
         config_dir="config",
         parent=None,
         log_level=logging.INFO,
+        app_version="",
+        log_path="",
     ):
         super().__init__(parent)
         cfg = app_config or {}
 
         # Store the full config dict — exposed to QML as appConfig property
         self._app_config = dict(cfg)
+
+        # Bug-report context (see sendBugReport). app_version + log_path come
+        # from main.py; support_email / bug_report_smtp from app config.
+        self._app_version = app_version
+        self._log_path = log_path
+        self._support_email = cfg.get("support_email", "support@openwater.health")
+        self._bug_report_smtp = cfg.get("bug_report_smtp")
+
+        # Connection watchdog (E-104/E-106): one-shot check armed at startup
+        # that flags expected devices that never enumerated. 0 disables it.
+        self._connection_timeout_sec = float(cfg.get("connectionTimeoutSec", 30))
+        self._require_console = bool(cfg.get("requireConsole", True))
+        self._min_sensors = int(cfg.get("minSensors", 1))
 
         self._interface = interface
         self._scan_workflow = self._interface.scan_workflow
@@ -898,6 +919,11 @@ class MotionConnector(QObject):
 
         self._interface.console.telemetry.add_listener(self._on_telemetry_update)
 
+        # Arm the startup connection watchdog (E-104/E-106). The timer starts
+        # once the Qt event loop runs — by which point motion_interface.start()
+        # has had its window to enumerate already-attached devices.
+        self._arm_connection_watchdog()
+
     def set_ft_thresholds(
         self,
         min_mean_per_camera=None,
@@ -975,6 +1001,11 @@ class MotionConnector(QObject):
 
         self.getFanControlStatus(side)
 
+        # Surface the firmware's boot-time I2C self-check (E-101/E-102) — the
+        # canonical "I2C check at the beginning". Best-effort: never blocks
+        # init, just raises the modal if the sensor reports trouble.
+        self._check_sensor_i2c_health(side)
+
         # Power on all cameras, fill the ID cache (serial numbers, connection info), then power off
         try:
             sensor = getattr(self._interface, side, None) if self._interface else None
@@ -994,6 +1025,7 @@ class MotionConnector(QObject):
                             "Could not power on cameras on %s sensor for ID cache fill",
                             side,
                         )
+                        self._raise_critical("E-105", detail=f"{side} sensor")
                         refresh_cache()  # try anyway in case some cameras are already on
                 elif refresh_cache:
                     refresh_cache()  # fallback: fill cache without power cycle (may get zeros for off cameras)
@@ -1005,6 +1037,91 @@ class MotionConnector(QObject):
         self._read_and_log_camera_uids(side)
 
         self.connectionStatusChanged.emit()
+
+    def _check_sensor_i2c_health(self, side: str) -> None:
+        """Raise E-101/E-102 if a sensor's boot-time I2C self-check is bad.
+
+        Reads the firmware's cached snapshot (no disruptive rescan). Never
+        raises out — it's a best-effort surfacing layer over the SDK's
+        ``MotionSensor.i2c_health``.
+        """
+        try:
+            sensor = getattr(self._interface, side, None) if self._interface else None
+            if sensor is None or not sensor.is_connected():
+                return
+            health = getattr(sensor, "i2c_health", None)
+            if health is None:
+                self._raise_critical("E-102", detail=f"{side} sensor")
+            elif not health.get("all_present", False):
+                missing = self._i2c_missing_devices(health)
+                self._raise_critical("E-101", detail=f"{side} sensor: {missing}")
+        except Exception:
+            logger.exception("I2C health check failed for %s sensor", side)
+
+    def _arm_connection_watchdog(self) -> None:
+        """Schedule the one-shot startup connection check (E-104/E-106)."""
+        if self._connection_timeout_sec > 0:
+            QTimer.singleShot(
+                int(self._connection_timeout_sec * 1000),
+                self._check_connection_watchdog,
+            )
+
+    def _check_connection_watchdog(self) -> None:
+        """Warn about devices that never connected within the startup timeout.
+
+        One-shot: reads the current cached connection state. A missing console
+        (E-104) and/or too few sensors (E-106) are non-blocking — they surface
+        as a single yellow warning toast (bottom-right), not the critical
+        modal, since the fix is usually just "plug it in". If *both* are
+        missing the toast collapses to a plain "System not found". Disconnects
+        that happen *after* startup are handled by the connection-status UI.
+        """
+        try:
+            console_missing = self._require_console and not self._consoleConnected
+            n_sensors = (int(bool(self._leftSensorConnected))
+                         + int(bool(self._rightSensorConnected)))
+            sensors_missing = n_sensors < self._min_sensors
+            if not console_missing and not sensors_missing:
+                return
+
+            if console_missing and sensors_missing:
+                logger.warning(
+                    "Connection watchdog: console and sensors missing "
+                    "(E-104/E-106: %d of %d sensors)", n_sensors, self._min_sensors)
+                msg = ("System not found. Check that the console and sensor "
+                       "are connected and powered on.")
+            elif console_missing:
+                logger.warning("Connection watchdog: console not detected (E-104)")
+                msg = ("Console not detected. Check the console USB cable and "
+                       "power, then reconnect.")
+            else:
+                logger.warning(
+                    "Connection watchdog: sensor not detected "
+                    "(E-106: %d of %d)", n_sensors, self._min_sensors)
+                msg = ("Sensor not detected. Check the sensor USB cable and "
+                       "power, then reconnect.")
+            # Sticky, single (tagged) yellow toast — the user must act, but it
+            # never blocks the UI like the critical modal.
+            self.notify(msg, "warning", duration_ms=0, dismissible=True,
+                        tag="connection-watchdog")
+        except Exception:
+            logger.exception("connection watchdog check failed")
+
+    @staticmethod
+    def _i2c_missing_devices(health: dict) -> str:
+        """Human-readable summary of which I2C devices didn't respond."""
+        parts = []
+        if not health.get("mux", True):
+            parts.append("mux")
+        if not health.get("imu", True):
+            parts.append("imu")
+        cams = [i for i, ok in enumerate(health.get("cameras", [])) if not ok]
+        if cams:
+            parts.append("cameras " + ",".join(str(i) for i in cams))
+        fpgas = [i for i, ok in enumerate(health.get("fpgas", [])) if not ok]
+        if fpgas:
+            parts.append("fpgas " + ",".join(str(i) for i in fpgas))
+        return "; ".join(parts) or "unknown device"
 
     # --- GETTERS/SETTERS FOR Qt PROPERTIES ---
     def getUserLabel(self) -> str:
@@ -1233,6 +1350,8 @@ class MotionConnector(QObject):
                         logger.info("Laser power params applied from config")
                     else:
                         logger.error("Failed to apply laser power params from config")
+                        self._raise_critical(
+                            "E-103", detail="laser power params not applied")
                 except Exception as e:
                     logger.warning(
                         f"Console connect-time setup interrupted "
@@ -2692,12 +2811,14 @@ class MotionConnector(QObject):
                 logger.warning("startCapture aborted: %s", reason)
                 self.captureLog.emit(f"Scan aborted: {reason}")
                 self.errorOccurred.emit(reason)
+                self._raise_critical("E-301", detail=reason)
             else:
                 logger.warning(
                     "startCapture aborted: SDK refused to spawn a new scan "
                     "(usually a previous worker thread that didn't exit cleanly)."
                 )
                 self.captureLog.emit("Capture already running.")
+                self._raise_critical("E-302")
         return bool(started)
 
     def _log_scan_image_stats(self, left_csv: str, right_csv: str) -> None:
@@ -2875,6 +2996,7 @@ class MotionConnector(QObject):
         self.captureLog.emit(
             "Laser safety system tripped. Scan will be cancelled in 5 seconds."
         )
+        self._raise_critical("E-202")
         QTimer.singleShot(5000, self.stopCapture)
 
     @pyqtSlot(result=QVariant)
@@ -2972,6 +3094,7 @@ class MotionConnector(QObject):
                     logger.error(f"Laser safety failure: {fault_detail}")
                     self.safetyFailure = True
                     self._fire_safety_notification(fault_detail)
+                    self._raise_critical("E-201", detail=fault_detail)
                     self.stopTrigger()
                     self._laserOn = False
                     self.laserStateChanged.emit()
@@ -3862,6 +3985,87 @@ class MotionConnector(QObject):
         cb = QGuiApplication.clipboard()
         if cb is not None:
             cb.setText(text)
+
+    # --- CRITICAL ERROR SURFACING -----------------------------------------
+    def _raise_critical(self, code: str, detail: str = "") -> None:
+        """Surface a showstopper to the user via the critical-error modal.
+
+        Looks ``code`` up in :mod:`error_codes`, logs it, and emits
+        ``criticalErrorRaised``. Safe to call from worker threads — the QML
+        side connects with a queued connection. Never raises.
+        """
+        try:
+            err = error_codes.lookup(code)
+            logger.error("CRITICAL %s — %s%s", code, err.title,
+                         f" ({detail})" if detail else "")
+            self.criticalErrorRaised.emit(
+                code, err.title, err.message, err.suggested_action, detail)
+        except Exception:
+            logger.exception("Failed to raise critical error %s", code)
+
+    def _device_info_str(self) -> str:
+        """Best-effort one-line device identity for bug reports."""
+        try:
+            console, left, right = self._interface.is_device_connected()
+            return f"console={'yes' if console else 'no'} " \
+                   f"left={'yes' if left else 'no'} " \
+                   f"right={'yes' if right else 'no'}"
+        except Exception:
+            return "unknown"
+
+    @pyqtSlot(str)
+    def sendBugReport(self, code: str) -> None:
+        """Send the current session log + error context to Openwater support.
+
+        If a complete ``bug_report_smtp`` block is configured the email is sent
+        directly (with the log attached) on a background thread. Otherwise we
+        fall back to opening the user's mail client and revealing the log file
+        so they can attach it manually.
+        """
+        err = error_codes.lookup(code)
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        subject = f"BloodFlow Bug Report — {code} {err.title}"
+        body = bug_report.build_report_text(
+            code=code, title=err.title, message=err.message,
+            timestamp=timestamp, app_version=self._app_version or "unknown",
+            device_info=self._device_info_str(),
+            log_path=self._log_path or "(no log file)",
+        )
+        if bug_report.smtp_config_complete(self._bug_report_smtp):
+            self._send_bug_report_smtp(subject, body)
+        else:
+            self._send_bug_report_fallback(subject, body)
+
+    def _send_bug_report_smtp(self, subject: str, body: str) -> None:
+        """Send the report via SMTP on a daemon thread; toast the result."""
+        def _worker():
+            try:
+                bug_report.send_via_smtp(
+                    self._bug_report_smtp, to_addr=self._support_email,
+                    subject=subject, body=body, log_path=self._log_path or None,
+                )
+                self.notify("Bug report sent to Openwater.", "success")
+            except Exception as exc:
+                logger.exception("SMTP bug report failed")
+                self.notify(f"Could not send bug report: {exc}", "error")
+                # Fall back so the user can still get the report out.
+                self._send_bug_report_fallback(subject, body)
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _send_bug_report_fallback(self, subject: str, body: str) -> None:
+        """Open the mail client, copy the report, and reveal the log file."""
+        import webbrowser
+        self.copyToClipboard(body)
+        if self._log_path:
+            bug_report.reveal_in_file_manager(self._log_path)
+        try:
+            webbrowser.open(bug_report.build_mailto_url(
+                self._support_email, subject=subject, body=body))
+        except Exception:
+            logger.exception("Could not open mail client for bug report")
+        self.notify(
+            "Bug report copied to clipboard. Attach the highlighted log "
+            "file and send the email to Openwater.", "info", 8000, True)
 
     def connect_signals(self):
         """Subscribe to per-handle state changes on the SDK interface."""
