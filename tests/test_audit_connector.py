@@ -111,3 +111,30 @@ def test_connect_logs_device_connected_and_stats(tmp_path):
     t = _types(c)
     assert "device_connected" in t
     assert "device_stats" in t
+
+
+def test_run_calibration_logs_started(tmp_path):
+    c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
+    c._consoleConnected = True
+    c._leftSensorConnected = True
+    c._interface.start_calibration.return_value = True
+    c.runCalibration("left")
+    ev = [e for e in c.auditLogEntries()
+          if e["event_type"] == "calibration_started"]
+    assert ev
+    assert json.loads(ev[0]["details"])["target"] == "left"
+
+
+def test_calibration_complete_logs_ended(tmp_path):
+    c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
+    c._calibration_t0 = None
+    result = MagicMock()
+    result.canceled = False
+    result.ok = True
+    result.passed = True
+    result.csv_path = "cal.csv"
+    c._on_calibration_complete(result)
+    ev = [e for e in c.auditLogEntries()
+          if e["event_type"] == "calibration_ended"]
+    assert ev
+    assert json.loads(ev[0]["details"])["outcome"] == "passed"

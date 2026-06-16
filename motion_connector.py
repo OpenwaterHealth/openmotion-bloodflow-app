@@ -3822,9 +3822,11 @@ class MotionConnector(QObject):
         )
 
         self._calibration_status = "running"
+        self._calibration_target = target
         self.calibrationStateChanged.emit()
         self.captureLog.emit("Calibration: starting…")
         self._calibration_t0 = time.monotonic()
+        self._audit.log("calibration_started", {"target": target})
         logger.info(
             "=== Calibration started: target=%s left=0x%02X right=0x%02X "
             "scan_duration=%ss ===",
@@ -4083,6 +4085,11 @@ class MotionConnector(QObject):
             "=== Calibration ended: %s after %.1fs ===",
             self._calibration_status, elapsed_s,
         )
+        self._audit.log("calibration_ended", {
+            "target": getattr(self, "_calibration_target", None),
+            "outcome": self._calibration_status,
+            "reason": self._calibration_failure_reason or None,
+        })
         self.calibrationStateChanged.emit()
 
     @property
