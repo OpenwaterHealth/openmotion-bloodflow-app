@@ -70,12 +70,28 @@ _STARTUP = [
         "report — the console firmware or config may need attention.",
     ),
     _e(
+        "E-104", "startup",
+        "Console not detected",
+        "No console was detected within the expected time after the app "
+        "started. The system cannot run a scan without the console.",
+        "Check the console USB cable and power, then reconnect. Power-cycle "
+        "the console if it does not appear.",
+    ),
+    _e(
         "E-105", "startup",
         "Camera power-on failed",
         "The sensor could not power on its cameras during initialization, so "
         "camera identities could not be read.",
         "Power-cycle the sensor and reconnect. If only some cameras are "
         "affected, the camera board may need service.",
+    ),
+    _e(
+        "E-106", "startup",
+        "Sensor not detected",
+        "Fewer sensor modules were detected than required within the expected "
+        "time after the app started. At least one sensor is required to scan.",
+        "Check the sensor USB cable and power, then reconnect. Try a different "
+        "USB port if it does not appear.",
     ),
 ]
 

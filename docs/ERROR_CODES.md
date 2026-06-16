@@ -39,12 +39,27 @@ The laser may not operate correctly until this is resolved.
 **What to do:** Power-cycle the console and reconnect. If it persists, send a bug
 report — the console firmware or config may need attention.
 
+### E-104 — Console not detected
+No console was detected within the expected time after the app started (the
+startup *connection watchdog*). The system cannot run a scan without the console.
+
+**What to do:** Check the console USB cable and power, then reconnect. Power-cycle
+the console if it does not appear.
+
 ### E-105 — Camera power-on failed
 The sensor could not power on its cameras during initialization, so camera
 identities could not be read.
 
 **What to do:** Power-cycle the sensor and reconnect. If only some cameras are
 affected, the camera board may need service.
+
+### E-106 — Sensor not detected
+Fewer sensor modules were detected than required within the expected time after
+the app started (the startup *connection watchdog*). At least one sensor is
+required to scan.
+
+**What to do:** Check the sensor USB cable and power, then reconnect. Try a
+different USB port if it does not appear.
 
 ## E-2xx — Laser safety
 
@@ -78,6 +93,22 @@ finishing.
 
 **What to do:** Wait a few seconds for the previous scan to finish, then try
 again. Reconnect if the system stays busy.
+
+## Startup connection watchdog
+
+E-104 and E-106 are raised by a one-shot check armed at app launch. If the
+expected devices haven't enumerated within `connectionTimeoutSec` (default 30 s),
+the missing ones are flagged. Tunable in
+[`config/app_config.json`](../config/app_config.json):
+
+- `connectionTimeoutSec` (default `30`) — grace period before the check runs;
+  `0` disables the watchdog.
+- `requireConsole` (default `true`) — raise E-104 if no console connected.
+- `minSensors` (default `1`) — raise E-106 if fewer than this many sensors
+  connected.
+
+Disconnects that happen *after* startup are handled by the normal connection
+status UI, not by this watchdog.
 
 ## Sending a bug report
 

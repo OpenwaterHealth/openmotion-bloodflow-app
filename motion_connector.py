@@ -683,6 +683,12 @@ class MotionConnector(QObject):
         self._support_email = cfg.get("support_email", "support@openwater.health")
         self._bug_report_smtp = cfg.get("bug_report_smtp")
 
+        # Connection watchdog (E-104/E-106): one-shot check armed at startup
+        # that flags expected devices that never enumerated. 0 disables it.
+        self._connection_timeout_sec = float(cfg.get("connectionTimeoutSec", 30))
+        self._require_console = bool(cfg.get("requireConsole", True))
+        self._min_sensors = int(cfg.get("minSensors", 1))
+
         self._interface = interface
         self._scan_workflow = self._interface.scan_workflow
 
@@ -891,6 +897,11 @@ class MotionConnector(QObject):
 
         self._interface.console.telemetry.add_listener(self._on_telemetry_update)
 
+        # Arm the startup connection watchdog (E-104/E-106). The timer starts
+        # once the Qt event loop runs — by which point motion_interface.start()
+        # has had its window to enumerate already-attached devices.
+        self._arm_connection_watchdog()
+
     def set_ft_thresholds(
         self,
         min_mean_per_camera=None,
@@ -1024,6 +1035,36 @@ class MotionConnector(QObject):
                 self._raise_critical("E-101", detail=f"{side} sensor: {missing}")
         except Exception:
             logger.exception("I2C health check failed for %s sensor", side)
+
+    def _arm_connection_watchdog(self) -> None:
+        """Schedule the one-shot startup connection check (E-104/E-106)."""
+        if self._connection_timeout_sec > 0:
+            QTimer.singleShot(
+                int(self._connection_timeout_sec * 1000),
+                self._check_connection_watchdog,
+            )
+
+    def _check_connection_watchdog(self) -> None:
+        """Flag devices that never connected within the startup timeout.
+
+        One-shot: reads the current cached connection state. If the console
+        and/or the required number of sensors still haven't enumerated, raise
+        the matching critical error. Disconnects that happen *after* startup
+        are handled by the normal connection-status UI, not here.
+        """
+        try:
+            if self._require_console and not self._consoleConnected:
+                self._raise_critical("E-104")
+            n_sensors = (int(bool(self._leftSensorConnected))
+                         + int(bool(self._rightSensorConnected)))
+            if n_sensors < self._min_sensors:
+                self._raise_critical(
+                    "E-106",
+                    detail=f"{n_sensors} of {self._min_sensors} "
+                           f"required sensor(s) detected",
+                )
+        except Exception:
+            logger.exception("connection watchdog check failed")
 
     @staticmethod
     def _i2c_missing_devices(health: dict) -> str:

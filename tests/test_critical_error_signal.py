@@ -10,9 +10,9 @@ from motion_connector import MotionConnector
 pytestmark = pytest.mark.unit
 
 
-def _connector(tmp_path, app_config=None):
+def _connector(tmp_path, app_config=None, connected=(True, True, True)):
     iface = MagicMock()
-    iface.is_device_connected.return_value = (True, True, True)
+    iface.is_device_connected.return_value = connected
     iface.scan_workflow.running = False
     iface.scan_workflow.config_running = False
     iface.scan_db_path = None
@@ -23,6 +23,10 @@ def _connector(tmp_path, app_config=None):
         interface=iface, app_config=cfg,
         data_dir=str(tmp_path), config_dir="config",
     )
+
+
+def _codes(received):
+    return [r[0] for r in received]
 
 
 _FULL_SMTP = {
@@ -108,6 +112,57 @@ def test_i2c_health_none_raises_e102(tmp_path):
 
     assert len(received) == 1
     assert received[0][0] == "E-102"
+
+
+def test_watchdog_all_connected_raises_nothing(tmp_path):
+    conn = _connector(tmp_path, connected=(True, True, True))
+    received = []
+    conn.criticalErrorRaised.connect(lambda *a: received.append(a))
+
+    conn._check_connection_watchdog()
+
+    assert received == []
+
+
+def test_watchdog_no_console_raises_e104(tmp_path):
+    conn = _connector(tmp_path, connected=(False, True, False))
+    received = []
+    conn.criticalErrorRaised.connect(lambda *a: received.append(a))
+
+    conn._check_connection_watchdog()
+
+    assert _codes(received) == ["E-104"]
+
+
+def test_watchdog_no_sensor_raises_e106(tmp_path):
+    conn = _connector(tmp_path, connected=(True, False, False))
+    received = []
+    conn.criticalErrorRaised.connect(lambda *a: received.append(a))
+
+    conn._check_connection_watchdog()
+
+    assert _codes(received) == ["E-106"]
+
+
+def test_watchdog_nothing_connected_raises_both(tmp_path):
+    conn = _connector(tmp_path, connected=(False, False, False))
+    received = []
+    conn.criticalErrorRaised.connect(lambda *a: received.append(a))
+
+    conn._check_connection_watchdog()
+
+    assert set(_codes(received)) == {"E-104", "E-106"}
+
+
+def test_watchdog_respects_min_sensors_config(tmp_path):
+    conn = _connector(tmp_path, app_config={"minSensors": 2},
+                      connected=(True, True, False))  # only one sensor
+    received = []
+    conn.criticalErrorRaised.connect(lambda *a: received.append(a))
+
+    conn._check_connection_watchdog()
+
+    assert _codes(received) == ["E-106"]
 
 
 def test_send_bug_report_selects_smtp_when_configured(tmp_path, monkeypatch):
