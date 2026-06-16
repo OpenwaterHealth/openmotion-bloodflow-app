@@ -73,6 +73,27 @@ Item {
                 Item { Layout.fillWidth: true }
 
                 Button {
+                    text: "Send Debug Logs"
+                    Layout.preferredWidth: 140; Layout.preferredHeight: 32
+                    hoverEnabled: true
+                    contentItem: Text {
+                        text: parent.text; font.pixelSize: 13; color: theme.textSecondary
+                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle {
+                        color: parent.hovered ? theme.accentBlue : theme.bgInput
+                        border.color: parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
+                    }
+                    // Connector builds the zip, reveals it, and toasts the
+                    // support address; refresh so the debug_bundle_created
+                    // entry shows up in the list.
+                    onClicked: {
+                        MotionInterface.prepareDebugLogBundle()
+                        root.refresh()
+                    }
+                }
+
+                Button {
                     text: "Export CSV"
                     Layout.preferredWidth: 110; Layout.preferredHeight: 32
                     hoverEnabled: true
