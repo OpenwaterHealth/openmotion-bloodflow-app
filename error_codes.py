@@ -70,14 +70,6 @@ _STARTUP = [
         "report — the console firmware or config may need attention.",
     ),
     _e(
-        "E-104", "startup",
-        "Console not detected",
-        "No console was detected within the expected time after the app "
-        "started. The system cannot run a scan without the console.",
-        "Check the console USB cable and power, then reconnect. Power-cycle "
-        "the console if it does not appear.",
-    ),
-    _e(
         "E-105", "startup",
         "Camera power-on failed",
         "The sensor could not power on its cameras during initialization, so "
@@ -85,15 +77,13 @@ _STARTUP = [
         "Power-cycle the sensor and reconnect. If only some cameras are "
         "affected, the camera board may need service.",
     ),
-    _e(
-        "E-106", "startup",
-        "Sensor not detected",
-        "Fewer sensor modules were detected than required within the expected "
-        "time after the app started. At least one sensor is required to scan.",
-        "Check the sensor USB cable and power, then reconnect. Try a different "
-        "USB port if it does not appear.",
-    ),
 ]
+
+# Note: E-104 (console not detected) and E-106 (sensor not detected) are NOT in
+# this critical-modal registry. The startup connection watchdog surfaces them as
+# a non-blocking yellow warning toast instead (see
+# MotionConnector._check_connection_watchdog). They remain documented in
+# docs/ERROR_CODES.md under "Startup warnings".
 
 # --- E-2xx: laser safety -----------------------------------------------------
 _SAFETY = [

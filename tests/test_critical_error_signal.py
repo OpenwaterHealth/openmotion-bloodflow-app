@@ -25,10 +25,6 @@ def _connector(tmp_path, app_config=None, connected=(True, True, True)):
     )
 
 
-def _codes(received):
-    return [r[0] for r in received]
-
-
 _FULL_SMTP = {
     "host": "smtp.example.com", "port": 587, "username": "u",
     "password": "p", "from_addr": "app@example.com",
@@ -114,55 +110,79 @@ def test_i2c_health_none_raises_e102(tmp_path):
     assert received[0][0] == "E-102"
 
 
-def test_watchdog_all_connected_raises_nothing(tmp_path):
+def _notifs(conn):
+    """Capture toast payloads emitted via notificationRequested."""
+    out = []
+    conn.notificationRequested.connect(lambda p: out.append(p))
+    return out
+
+
+def test_watchdog_all_connected_no_notification(tmp_path):
     conn = _connector(tmp_path, connected=(True, True, True))
-    received = []
-    conn.criticalErrorRaised.connect(lambda *a: received.append(a))
+    notifs = _notifs(conn)
 
     conn._check_connection_watchdog()
 
-    assert received == []
+    assert notifs == []
 
 
-def test_watchdog_no_console_raises_e104(tmp_path):
-    conn = _connector(tmp_path, connected=(False, True, False))
-    received = []
-    conn.criticalErrorRaised.connect(lambda *a: received.append(a))
-
-    conn._check_connection_watchdog()
-
-    assert _codes(received) == ["E-104"]
-
-
-def test_watchdog_no_sensor_raises_e106(tmp_path):
-    conn = _connector(tmp_path, connected=(True, False, False))
-    received = []
-    conn.criticalErrorRaised.connect(lambda *a: received.append(a))
-
-    conn._check_connection_watchdog()
-
-    assert _codes(received) == ["E-106"]
-
-
-def test_watchdog_nothing_connected_raises_both(tmp_path):
+def test_watchdog_is_a_warning_not_a_critical_modal(tmp_path):
+    """E-104/E-106 are downgraded: a yellow warning toast, never the modal."""
     conn = _connector(tmp_path, connected=(False, False, False))
-    received = []
-    conn.criticalErrorRaised.connect(lambda *a: received.append(a))
+    crit = []
+    conn.criticalErrorRaised.connect(lambda *a: crit.append(a))
+    notifs = _notifs(conn)
 
     conn._check_connection_watchdog()
 
-    assert set(_codes(received)) == {"E-104", "E-106"}
+    assert crit == []
+    assert all(n["type"] == "warning" for n in notifs)
+
+
+def test_watchdog_both_missing_shows_single_system_not_found(tmp_path):
+    conn = _connector(tmp_path, connected=(False, False, False))
+    notifs = _notifs(conn)
+
+    conn._check_connection_watchdog()
+
+    assert len(notifs) == 1
+    assert notifs[0]["type"] == "warning"
+    assert "System not found" in notifs[0]["text"]
+
+
+def test_watchdog_console_only_missing_warns(tmp_path):
+    conn = _connector(tmp_path, connected=(False, True, False))
+    notifs = _notifs(conn)
+
+    conn._check_connection_watchdog()
+
+    assert len(notifs) == 1
+    assert notifs[0]["type"] == "warning"
+    assert "Console" in notifs[0]["text"]
+    assert "System not found" not in notifs[0]["text"]
+
+
+def test_watchdog_sensor_only_missing_warns(tmp_path):
+    conn = _connector(tmp_path, connected=(True, False, False))
+    notifs = _notifs(conn)
+
+    conn._check_connection_watchdog()
+
+    assert len(notifs) == 1
+    assert notifs[0]["type"] == "warning"
+    assert "Sensor" in notifs[0]["text"]
 
 
 def test_watchdog_respects_min_sensors_config(tmp_path):
     conn = _connector(tmp_path, app_config={"minSensors": 2},
                       connected=(True, True, False))  # only one sensor
-    received = []
-    conn.criticalErrorRaised.connect(lambda *a: received.append(a))
+    notifs = _notifs(conn)
 
     conn._check_connection_watchdog()
 
-    assert _codes(received) == ["E-106"]
+    assert len(notifs) == 1
+    assert notifs[0]["type"] == "warning"
+    assert "Sensor" in notifs[0]["text"]
 
 
 def test_send_bug_report_selects_smtp_when_configured(tmp_path, monkeypatch):

@@ -49,9 +49,9 @@ their existing toast/inline handling).
 | E-101 | Sensor I2C self-check: expected device(s) missing at boot (mux / IMU / camera / FPGA) | `_check_sensor_i2c_health` (reads `MotionSensor.i2c_health`) |
 | E-102 | I2C health unreadable — firmware returned no snapshot | `_check_sensor_i2c_health` (`i2c_health is None`) |
 | E-103 | Console init failed — laser-power params didn't apply at connect | `_on_handle_state_changed_impl` console branch |
-| E-104 | Console not detected within startup timeout | connection watchdog (`_check_connection_watchdog`) |
+| E-104 | Console not detected within startup timeout | connection watchdog — **warning toast, not modal** |
 | E-105 | Camera power-on failed during init | `_run_sensor_init` |
-| E-106 | Fewer sensors than required within startup timeout | connection watchdog (`_check_connection_watchdog`) |
+| E-106 | Fewer sensors than required within startup timeout | connection watchdog — **warning toast, not modal** |
 | E-201 | Laser safety monitor unresponsive beyond transient window | safety_known streak block (issue #119) |
 | E-202 | Laser safety trip during scan | `_on_safety_trip_during_capture` |
 | E-301 | Capture aborted before laser fired (precondition fail) | `startCapture` abort (with reason) |
@@ -66,10 +66,17 @@ failed", which has a clean site. E-203 was merged into E-201; E-303 was dropped
 CONNECTED/DISCONNECTED (it retries enumeration internally, with no
 "failed attempt" event), E-104/E-106 are driven by a one-shot timer armed at
 startup. After `connectionTimeoutSec` (default 30 s) it checks the cached
-connection state and raises E-104 if the console is required but absent, and
-E-106 if fewer than `minSensors` (default 1) sensors connected. Config:
-`connectionTimeoutSec` / `requireConsole` / `minSensors`. Post-startup
-disconnects remain the job of the existing connection-status UI.
+connection state. Config: `connectionTimeoutSec` / `requireConsole` /
+`minSensors`. Post-startup disconnects remain the job of the existing
+connection-status UI.
+
+**Severity (updated):** E-104/E-106 are **non-blocking warnings**, not the
+critical modal — a missing system at startup is a "plug it in" situation. They
+surface as a single yellow toast (bottom-right, `tag="connection-watchdog"`,
+sticky); when both are missing it collapses to `"System not found"`. So they are
+**not** in the `error_codes.py` modal registry — `_check_connection_watchdog`
+calls `notify(..., "warning", ...)` directly and logs the codes for support. The
+modal registry holds 8 codes (E-101/102/103/105, E-201/202, E-301/302).
 
 ## Modal — `components/CriticalErrorModal.qml`
 

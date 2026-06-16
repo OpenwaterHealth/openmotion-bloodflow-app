@@ -1045,24 +1045,43 @@ class MotionConnector(QObject):
             )
 
     def _check_connection_watchdog(self) -> None:
-        """Flag devices that never connected within the startup timeout.
+        """Warn about devices that never connected within the startup timeout.
 
-        One-shot: reads the current cached connection state. If the console
-        and/or the required number of sensors still haven't enumerated, raise
-        the matching critical error. Disconnects that happen *after* startup
-        are handled by the normal connection-status UI, not here.
+        One-shot: reads the current cached connection state. A missing console
+        (E-104) and/or too few sensors (E-106) are non-blocking — they surface
+        as a single yellow warning toast (bottom-right), not the critical
+        modal, since the fix is usually just "plug it in". If *both* are
+        missing the toast collapses to a plain "System not found". Disconnects
+        that happen *after* startup are handled by the connection-status UI.
         """
         try:
-            if self._require_console and not self._consoleConnected:
-                self._raise_critical("E-104")
+            console_missing = self._require_console and not self._consoleConnected
             n_sensors = (int(bool(self._leftSensorConnected))
                          + int(bool(self._rightSensorConnected)))
-            if n_sensors < self._min_sensors:
-                self._raise_critical(
-                    "E-106",
-                    detail=f"{n_sensors} of {self._min_sensors} "
-                           f"required sensor(s) detected",
-                )
+            sensors_missing = n_sensors < self._min_sensors
+            if not console_missing and not sensors_missing:
+                return
+
+            if console_missing and sensors_missing:
+                logger.warning(
+                    "Connection watchdog: console and sensors missing "
+                    "(E-104/E-106: %d of %d sensors)", n_sensors, self._min_sensors)
+                msg = ("System not found. Check that the console and sensor "
+                       "are connected and powered on.")
+            elif console_missing:
+                logger.warning("Connection watchdog: console not detected (E-104)")
+                msg = ("Console not detected. Check the console USB cable and "
+                       "power, then reconnect.")
+            else:
+                logger.warning(
+                    "Connection watchdog: sensor not detected "
+                    "(E-106: %d of %d)", n_sensors, self._min_sensors)
+                msg = ("Sensor not detected. Check the sensor USB cable and "
+                       "power, then reconnect.")
+            # Sticky, single (tagged) yellow toast — the user must act, but it
+            # never blocks the UI like the critical modal.
+            self.notify(msg, "warning", duration_ms=0, dismissible=True,
+                        tag="connection-watchdog")
         except Exception:
             logger.exception("connection watchdog check failed")
 
