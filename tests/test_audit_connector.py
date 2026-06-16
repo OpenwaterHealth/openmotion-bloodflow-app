@@ -138,3 +138,27 @@ def test_calibration_complete_logs_ended(tmp_path):
           if e["event_type"] == "calibration_ended"]
     assert ev
     assert json.loads(ev[0]["details"])["outcome"] == "passed"
+
+
+def test_set_config_logs_settings_changed(tmp_path):
+    c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
+    c._save_app_config = lambda: None      # don't touch the real config
+    c.setConfig("plotWindowSec", 30)
+    ev = [e for e in c.auditLogEntries()
+          if e["event_type"] == "settings_changed"]
+    assert ev
+    d = json.loads(ev[0]["details"])
+    assert d["changes"]["plotWindowSec"]["new"] == 30
+
+
+def test_save_configs_logs_only_changed_keys(tmp_path):
+    c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
+    c._save_app_config = lambda: None
+    c._app_config["plotWindowSec"] = 15
+    c.saveConfigs({"plotWindowSec": 15, "bfiMax": 12.0})
+    ev = [e for e in c.auditLogEntries()
+          if e["event_type"] == "settings_changed"]
+    assert ev
+    d = json.loads(ev[-1]["details"])["changes"]
+    assert "bfiMax" in d
+    assert "plotWindowSec" not in d

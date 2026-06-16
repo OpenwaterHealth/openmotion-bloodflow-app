@@ -1887,18 +1887,29 @@ class MotionConnector(QObject):
     @pyqtSlot(str, 'QVariant')
     def setConfig(self, key: str, value):
         """Update a single config key, persist to disk, and notify QML."""
+        old = self._app_config.get(key)
         self._app_config[key] = value
         self._save_app_config()
         self.appConfigChanged.emit()
         logger.debug(f"[Connector] Config set: {key} = {value!r}")
+        if old != value:
+            self._audit.log("settings_changed",
+                            {"changes": {key: {"old": old, "new": value}}})
 
     @pyqtSlot('QVariantMap')
     def saveConfigs(self, configs: dict):
         """Update multiple config keys at once, persist to disk, and notify QML."""
+        changes = {}
+        for k, v in configs.items():
+            old = self._app_config.get(k)
+            if old != v:
+                changes[k] = {"old": old, "new": v}
         self._app_config.update(configs)
         self._save_app_config()
         self.appConfigChanged.emit()
         logger.debug(f"[Connector] Config saved: {sorted(configs.keys())}")
+        if changes:
+            self._audit.log("settings_changed", {"changes": changes})
 
     @pyqtSlot(bool)
     def setWriteRawCsv(self, enabled: bool) -> None:
