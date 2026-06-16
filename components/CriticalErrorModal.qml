@@ -88,7 +88,7 @@ Item {
 
     // Panel
     Rectangle {
-        width: 460
+        width: 520
         height: contentCol.implicitHeight + headerBar.height + 16 + 20
         radius: 14
         color: theme.bgContainer
@@ -159,9 +159,11 @@ Item {
         ColumnLayout {
             id: contentCol
             anchors.top: headerBar.bottom
-            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.left: parent.left
+            anchors.right: parent.right
             anchors.topMargin: 16
-            width: parent.width - 40
+            anchors.leftMargin: 20
+            anchors.rightMargin: 20
             spacing: 12
 
             Text {
