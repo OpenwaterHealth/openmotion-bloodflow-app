@@ -154,3 +154,10 @@ def test_delete_scans_empty_list_is_noop(tmp_path):
     c = _connector(tmp_path, db_path)
     assert c.deleteScans([]) == 0
     assert len(c.get_scan_sessions()) == 1
+
+
+def test_stats_and_delete_without_db_are_safe(tmp_path):
+    """No scan DB configured → both slots no-op rather than raise."""
+    c = _connector(tmp_path, None)
+    assert c.get_session_stats(1) == {"sampleCount": 0}
+    assert c.deleteScans([1, 2]) == 0

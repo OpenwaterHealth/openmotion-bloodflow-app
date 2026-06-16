@@ -1679,6 +1679,9 @@ class MotionConnector(QObject):
             from omotion.ScanDatabase import ScanDatabase
             db = ScanDatabase(db_path)
             try:
+                # Raw COUNT via the connection — ScanDatabase exposes no
+                # public row-count API; get_scan_details reaches for
+                # _connection() the same way for its EXISTS probe.
                 row = next(
                     db._connection().execute(
                         "SELECT COUNT(*) FROM session_data"
