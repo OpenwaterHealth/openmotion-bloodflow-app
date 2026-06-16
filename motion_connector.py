@@ -688,6 +688,14 @@ class MotionConnector(QObject):
         self._interface = interface
         self._scan_workflow = self._interface.scan_workflow
 
+        # Audit log constructed early — before connect_signals() — so the
+        # connect/disconnect handler and other instrumentation can call
+        # self._audit.log(...) safely. No-op if there's no scan_db_path.
+        # The system_startup / system_info events are logged later, once
+        # self._directory is resolved.
+        from audit_log import AuditLog
+        self._audit = AuditLog(getattr(self._interface, "scan_db_path", None))
+
         # Unpack operational settings from config
         self._force_laser_fail            = bool(cfg.get("forceLaserFail", False))
         self._camera_temp_alert_threshold_c = float(cfg.get("cameraTempAlertThresholdC", 105.0))
@@ -809,6 +817,7 @@ class MotionConnector(QObject):
         )
         self._calibration_status = ""  # "", "running", "passed", "failed", "aborted"
         self._calibration_failure_reason = ""  # populated only on FAIL in dev mode
+        self._calibration_target = None  # last runCalibration() target
         self._test_scan_status = ""              # "", "running", "done", "aborted", "failed"
         self._test_scan_failure_reason = ""
         self._test_scan_rows: list[dict] = []
@@ -849,6 +858,29 @@ class MotionConnector(QObject):
 
         os.makedirs(resolved_dir, exist_ok=True)
         self._directory = resolved_dir
+
+        # ── Audit log startup events (the AuditLog itself was constructed
+        #    earlier, before connect_signals). Logged here now that
+        #    self._directory is resolved.
+        from audit_log import gather_host_info
+        try:
+            from version import get_version as _get_app_version
+            _app_version = _get_app_version()
+        except Exception:
+            _app_version = ""
+        try:
+            _sdk_version = self._interface.get_sdk_version()
+            _sdk_version = (
+                _sdk_version if isinstance(_sdk_version, str) else ""
+            )
+        except Exception:
+            _sdk_version = ""
+        self._audit.log("system_startup", {
+            "app_version": _app_version,
+            "sdk_version": _sdk_version,
+            "data_dir": self._directory,
+        })
+        self._audit.log("system_info", gather_host_info())
         logger.info(f"[Connector] Directory initialized to: {self._directory}")
 
         self._user_label = self.generate_user_label()
@@ -1237,12 +1269,17 @@ class MotionConnector(QObject):
         if is_now_connected:
             logger.info("Handle %s -> CONNECTED (%s)", name, reason)
             self.signalConnected.emit(name, "")
+            self._audit.log("device_connected",
+                            {"device": name, "reason": str(reason)})
+            self._log_device_stats(name)
         elif is_now_lost:
             logger.info(
                 "Handle %s -> DISCONNECTED (%s) and state is %s",
                 name, reason, self._state,
             )
             self.signalDisconnected.emit(name, "")
+            self._audit.log("device_disconnected",
+                            {"device": name, "reason": str(reason)})
             # Abort an in-flight FPGA flash / sensor-configure pipeline.
             # The SDK does not subscribe to disconnect events for the
             # configure-cameras flow (only start_scan does), so without
@@ -1270,6 +1307,26 @@ class MotionConnector(QObject):
         if is_now_connected or is_now_lost:
             self.connectionStatusChanged.emit()
             self.update_state()
+
+    def _log_device_stats(self, name: str) -> None:
+        """Best-effort audit of a device's hardware + firmware IDs on
+        connect. Missing values are logged as empty strings."""
+        handle = getattr(self._interface, name, None)
+        hwid = ""
+        fw = ""
+        try:
+            if handle is not None and hasattr(handle, "get_hardware_id"):
+                hwid = str(handle.get_hardware_id() or "")
+        except Exception:
+            pass
+        try:
+            if handle is not None and hasattr(handle, "get_version"):
+                fw = str(handle.get_version() or "")
+        except Exception:
+            pass
+        self._audit.log("device_stats", {
+            "device": name, "hardware_id": hwid, "firmware_version": fw,
+        })
 
     def update_state(self):
         """Update system state based on connection and configuration."""
@@ -1363,6 +1420,11 @@ class MotionConnector(QObject):
         teardown) right after this returns."""
         logger.info("Shutting down MotionConnector...")
         self.stopCapture()
+        try:
+            self._audit.log("system_shutdown", {"clean": True})
+            self._audit.close()
+        except Exception:
+            logger.warning("audit shutdown log failed", exc_info=True)
         logger.info("MotionConnector shutdown complete.")
 
     # --- SCAN MANAGEMENT METHODS ---
@@ -1749,7 +1811,135 @@ class MotionConnector(QObject):
         except Exception:
             logger.warning(
                 "deleteScans: could not open scan DB", exc_info=True)
+        # Tolerate non-int ids the same way the delete loop above does —
+        # this comprehension runs outside AuditLog.log's fail-soft wrapper.
+        _ids = []
+        for s in session_ids:
+            try:
+                _ids.append(int(s))
+            except (TypeError, ValueError):
+                pass
+        self._audit.log("scan_deleted", {
+            "session_ids": _ids,
+            "count": deleted,
+        })
         return deleted
+
+    # ── Audit log (QML-facing) ───────────────────────────────────────────
+    @pyqtSlot(result="QVariantList")
+    @pyqtSlot(int, result="QVariantList")
+    def auditLogEntries(self, limit: int = 500):
+        """Audit-log rows (newest first) for the Logs modal. Pure read —
+        does not itself log, so refreshing never double-logs."""
+        try:
+            return self._audit.query(int(limit))
+        except Exception:
+            logger.warning("auditLogEntries failed", exc_info=True)
+            return []
+
+    @pyqtSlot()
+    def recordAuditLogViewed(self):
+        """Record that the audit log was opened. Called once from
+        LogsModal.open()."""
+        try:
+            n = self._audit.count()
+        except Exception:
+            n = 0
+        self._audit.log("audit_log_viewed", {"entry_count": n})
+
+    @pyqtSlot(str, result=str)
+    def exportAuditLogCsv(self, dest_path: str) -> str:
+        """Export the full audit log to CSV. Accepts a plain path or a
+        file:// URL. Records an ``audit_log_exported`` event. Returns the
+        written path, or '' on failure."""
+        if not dest_path:
+            return ""
+        path = dest_path.replace("file:///", "").replace("file://", "")
+        try:
+            n = self._audit.export_csv(path)
+            self._audit.log(
+                "audit_log_exported", {"dest": path, "row_count": n}
+            )
+            logger.info("exportAuditLogCsv: wrote %d rows -> %s", n, path)
+            return path
+        except Exception:
+            logger.exception("exportAuditLogCsv failed for %r", path)
+            self.errorOccurred.emit("Audit log export failed.")
+            return ""
+
+    @pyqtSlot(result=str)
+    def prepareDebugLogBundle(self) -> str:
+        """Zip the last 48h of app logs (+ config + system info) into
+        app-logs/debug-bundles/, reveal it in the file explorer, and toast
+        the support address. Returns the zip path, or '' on failure."""
+        try:
+            from debug_bundle import build_debug_bundle, WINDOW_HOURS
+            try:
+                from version import get_version as _gv
+                app_version = _gv()
+            except Exception:
+                app_version = ""
+            try:
+                sdk_version = self._interface.get_sdk_version()
+                sdk_version = (
+                    sdk_version if isinstance(sdk_version, str) else ""
+                )
+            except Exception:
+                sdk_version = ""
+            dest_dir = os.path.join(
+                self._directory, "app-logs", "debug-bundles"
+            )
+            meta = build_debug_bundle(
+                self._directory,
+                dest_dir,
+                time.time(),
+                config_path=resource_path("config", "app_config.json"),
+                extra_info={
+                    "app_version": app_version,
+                    "sdk_version": sdk_version,
+                },
+            )
+        except Exception:
+            logger.exception("prepareDebugLogBundle: failed to build bundle")
+            self.errorOccurred.emit("Could not create the debug log bundle.")
+            return ""
+
+        path = meta["path"]
+        self._reveal_in_explorer(path)
+        from audit_log import EV_DEBUG_BUNDLE_CREATED
+        self._audit.log(EV_DEBUG_BUNDLE_CREATED, {
+            "dest": path,
+            "file_count": meta["file_count"],
+            "log_count": meta["log_count"],
+            "bytes": meta["bytes"],
+            "window_hours": WINDOW_HOURS,
+        })
+        self.notify(
+            "Debug logs saved to " + path
+            + ". Please email this file to support@openwater.cc.",
+            type_="success", duration_ms=0, dismissible=True,
+            tag="debug-bundle",
+        )
+        return path
+
+    def _reveal_in_explorer(self, path: str) -> None:
+        """Best-effort: open the OS file browser with the file selected.
+        Never raises — a failed reveal must not lose the bundle."""
+        try:
+            import subprocess
+            import sys
+            if sys.platform.startswith("win"):
+                subprocess.Popen(
+                    ["explorer", "/select,", os.path.normpath(path)]
+                )
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", path])
+            else:
+                subprocess.Popen(["xdg-open", os.path.dirname(path)])
+        except Exception:
+            logger.warning(
+                "could not reveal %s in file explorer", path, exc_info=True
+            )
 
     @pyqtProperty(str, notify=directoryChanged)
     def directory(self):
@@ -1806,18 +1996,29 @@ class MotionConnector(QObject):
     @pyqtSlot(str, 'QVariant')
     def setConfig(self, key: str, value):
         """Update a single config key, persist to disk, and notify QML."""
+        old = self._app_config.get(key)
         self._app_config[key] = value
         self._save_app_config()
         self.appConfigChanged.emit()
         logger.debug(f"[Connector] Config set: {key} = {value!r}")
+        if old != value:
+            self._audit.log("settings_changed",
+                            {"changes": {key: {"old": old, "new": value}}})
 
     @pyqtSlot('QVariantMap')
     def saveConfigs(self, configs: dict):
         """Update multiple config keys at once, persist to disk, and notify QML."""
+        changes = {}
+        for k, v in configs.items():
+            old = self._app_config.get(k)
+            if old != v:
+                changes[k] = {"old": old, "new": v}
         self._app_config.update(configs)
         self._save_app_config()
         self.appConfigChanged.emit()
         logger.debug(f"[Connector] Config saved: {sorted(configs.keys())}")
+        if changes:
+            self._audit.log("settings_changed", {"changes": changes})
 
     @pyqtSlot(bool)
     def setWriteRawCsv(self, enabled: bool) -> None:
@@ -1949,6 +2150,7 @@ class MotionConnector(QObject):
             )
             self.pastScanLoadFinished.emit(session_label, False)
             return
+        self._audit.log("scan_viewed", {"label": session_label})
         # Per-cam corrected CSV ({scan_id}.csv, 82-col wide format)
         # is the only source of per-cam BFI/BVI/mean/contrast for
         # past replay — the DB's session_data only holds side-
@@ -2251,6 +2453,11 @@ class MotionConnector(QObject):
         self.scanNotesChanged.emit()
         self._capture_running = True
         self._capture_start_time = time.time()
+        self._audit.log("scan_started", {
+            "label": subject_id,
+            "left_mask": int(left_camera_mask),
+            "right_mask": int(right_camera_mask),
+        })
         # Per-scan monotonic zero for plot timestamps. sample.timestamp_s comes
         # from each sensor's firmware clock, which resets on sensor reboot — so
         # after a mid-scan unplug/replug, the two sides' clocks diverge and the
@@ -2395,6 +2602,21 @@ class MotionConnector(QObject):
             self._capture_running = False
             self._safety_cancel_scheduled = False
             self._capture_thread = None
+            try:
+                _outcome_kind = outcome.kind
+            except Exception:
+                _outcome_kind = None
+            try:
+                _dur = (time.time() - self._capture_start_time
+                        if self._capture_start_time else None)
+            except Exception:
+                _dur = None
+            self._audit.log("scan_ended", {
+                "label": subject_id,
+                "session_label": session_label or None,
+                "duration_s": round(_dur, 1) if _dur is not None else None,
+                "outcome": _outcome_kind,
+            })
             self.captureFinished.emit(True, "", "", "")
             self.scanNotesReady.emit()
 
@@ -3742,9 +3964,11 @@ class MotionConnector(QObject):
         )
 
         self._calibration_status = "running"
+        self._calibration_target = target
         self.calibrationStateChanged.emit()
         self.captureLog.emit("Calibration: starting…")
         self._calibration_t0 = time.monotonic()
+        self._audit.log("calibration_started", {"target": target})
         logger.info(
             "=== Calibration started: target=%s left=0x%02X right=0x%02X "
             "scan_duration=%ss ===",
@@ -4003,6 +4227,11 @@ class MotionConnector(QObject):
             "=== Calibration ended: %s after %.1fs ===",
             self._calibration_status, elapsed_s,
         )
+        self._audit.log("calibration_ended", {
+            "target": self._calibration_target,
+            "outcome": self._calibration_status,
+            "reason": self._calibration_failure_reason or None,
+        })
         self.calibrationStateChanged.emit()
 
     @property
