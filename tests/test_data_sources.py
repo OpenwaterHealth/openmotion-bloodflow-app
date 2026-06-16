@@ -668,60 +668,6 @@ def test_past_scan_source_masks_unknown_when_no_per_cam_streams():
     assert src.rightMask == -1
 
 
-# ── Replay mode awareness — source reports its recorded reduced/dev mode ──
-# The viewer renders in the mode the scan was recorded in. reducedMode is a
-# tri-state: -1 unknown, 0 per-camera, 1 reduced — derived from the loaded
-# buffer cam_ids (reduced scans store only cam_id=-1; per-camera store 0..7).
-
-from data_sources import _derive_reduced_from_buffers
-
-
-def _one_sample_buffer():
-    buf = _CameraBuffer(max_capacity=None)
-    buf.append(t=0.0, v=1.0, frame_id=0)
-    return buf
-
-
-def test_derive_reduced_per_camera():
-    buffers = {("left", 0, "bfi"): _one_sample_buffer(),
-               ("right", 7, "bfi"): _one_sample_buffer()}
-    assert _derive_reduced_from_buffers(buffers) == 0
-
-
-def test_derive_reduced_side_average():
-    buffers = {("left", -1, "bfi"): _one_sample_buffer(),
-               ("right", -1, "bfi"): _one_sample_buffer()}
-    assert _derive_reduced_from_buffers(buffers) == 1
-
-
-def test_derive_reduced_empty_is_unknown():
-    assert _derive_reduced_from_buffers({}) == -1
-    # A buffer dict whose buffers hold no samples is also "unknown".
-    empty_buf = {("left", -1, "bfi"): _CameraBuffer()}
-    assert _derive_reduced_from_buffers(empty_buf) == -1
-
-
-def test_past_scan_source_reduced_mode_for_side_average():
-    buffers = {}
-    for side in ("left", "right"):
-        buffers[(side, -1, "bfi")] = _one_sample_buffer()
-    src = PastScanSource(scan_db=None, session_id=1, preloaded_buffers=buffers)
-    assert src.reducedMode == 1
-
-
-def test_past_scan_source_reduced_mode_for_per_camera():
-    buffers = {}
-    for cam_id in (0, 1, 6, 7):
-        buffers[("left", cam_id, "bfi")] = _one_sample_buffer()
-    src = PastScanSource(scan_db=None, session_id=1, preloaded_buffers=buffers)
-    assert src.reducedMode == 0
-
-
-def test_live_scan_source_reduced_mode_unknown():
-    src = LiveScanSource(plot_t0=0.0)
-    assert src.reducedMode == -1
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # currentScanSource holder pattern — verified via a parallel mini-class
 # (MotionConnector uses the same pattern; see motion_connector.py)

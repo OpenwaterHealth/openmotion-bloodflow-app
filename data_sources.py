@@ -269,10 +269,6 @@ class ScanDataSource(QObject):
         # #175) so its grid doesn't inherit the current selection.
         self._left_mask: int = -1
         self._right_mask: int = -1
-        # Recorded display mode, tri-state: -1 unknown / 0 per-camera / 1
-        # reduced. -1 for live sources (viewer follows the live config);
-        # PastScanSource derives the real value from its buffer layout.
-        self._reduced_mode: int = -1
         self.buffers: dict[tuple[str, int, str], _CameraBuffer] = {}
         # Ring-trim threshold for buffers this source creates. Live sources
         # pass a finite value (config) to bound memory; past sources pass None
@@ -319,14 +315,6 @@ class ScanDataSource(QObject):
         """Right-sensor camera mask this source represents, or -1 if unknown.
         See ``leftMask``."""
         return self._right_mask
-
-    @pyqtProperty(int, constant=True)
-    def reducedMode(self) -> int:
-        """Recorded display mode this source represents: -1 unknown, 0
-        per-camera, 1 reduced. Exposed for QML (PlotViewer.effectiveReduced)
-        so a replayed scan renders in its own mode rather than the live config.
-        See ``leftMask`` for why this must be a pyqtProperty."""
-        return self._reduced_mode
 
     @pyqtProperty(float)
     def liveEdge(self) -> float:
@@ -935,21 +923,6 @@ def _derive_masks_from_buffers(buffers: dict) -> tuple[int, int]:
     return masks["left"], masks["right"]
 
 
-def _derive_reduced_from_buffers(buffers) -> int:
-    """Tri-state recorded display mode from a loaded scan's buffer cam_ids:
-    -1 unknown, 0 per-camera, 1 reduced. Reduced-mode scans store only the
-    cam_id=-1 side average; per-camera (dev) scans store cam_id 0..7. Mirrors
-    _derive_masks_from_buffers — the viewer prefers this over the live config
-    so replay renders in the mode the scan was captured in."""
-    if buffers_are_empty(buffers):
-        return -1
-    if any(0 <= key[1] < 8 for key in buffers):
-        return 0
-    if any(key[1] == -1 for key in buffers):
-        return 1
-    return -1
-
-
 def load_past_scan_buffers(
     scan_db,
     session_id: int,
@@ -1018,4 +991,3 @@ class PastScanSource(ScanDataSource):
         self._left_mask, self._right_mask = _derive_masks_from_buffers(
             self.buffers
         )
-        self._reduced_mode = _derive_reduced_from_buffers(self.buffers)
