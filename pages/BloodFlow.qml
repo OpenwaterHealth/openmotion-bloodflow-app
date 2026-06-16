@@ -191,7 +191,7 @@ Rectangle {
                 if (bloodFlow.reducedMode) {
                     reducedStartPending = true
                     contactQualityModal.preScanMode = true
-                    contactQualityModal.reset(true, 0)
+                    contactQualityModal.reset(true)
                     qualityCheckRunner.start()
                 } else {
                     beginScanWhenReady()
@@ -200,7 +200,7 @@ Rectangle {
         }
         onCheckClicked: {
             modalManager.closeCurrent()
-            contactQualityModal.reset(false, 0)
+            contactQualityModal.reset(false)
             qualityCheckRunner.start()
         }
 
@@ -381,7 +381,7 @@ Rectangle {
         }
         onRetestRequested: {
             contactQualityModal.preScanMode = bloodFlow.reducedStartPending
-            contactQualityModal.reset(bloodFlow.reducedStartPending, 0)
+            contactQualityModal.reset(bloodFlow.reducedStartPending)
             qualityCheckRunner.start()
         }
         onDismissed: {
@@ -530,8 +530,10 @@ Rectangle {
 
         // Contact-quality quick-check lifecycle
         function onContactQualityCheckStarted(seconds) {
+            // ``seconds`` is no longer shown as a countdown — the modal is
+            // now just an indeterminate spinner during the check.
             contactQualityModal.preScanMode = bloodFlow.reducedStartPending
-            contactQualityModal.reset(bloodFlow.reducedStartPending, seconds)
+            contactQualityModal.reset(bloodFlow.reducedStartPending)
         }
         function onContactQualityCheckFinished(ok, error, warnings) {
             if (bloodFlow.reducedStartPending) {
