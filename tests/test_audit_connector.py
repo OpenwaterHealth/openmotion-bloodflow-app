@@ -35,9 +35,16 @@ def test_construct_logs_startup_and_system_info(tmp_path):
 
 
 def test_shutdown_logs_system_shutdown(tmp_path):
-    c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
+    # shutdown() also closes the audit handle, so read the committed
+    # rows straight from the DB file rather than via the live connector.
+    import sqlite3
+    db = str(tmp_path / "scans.db")
+    c = _connector(tmp_path, scan_db_path=db)
     c.shutdown()
-    assert "system_shutdown" in _types(c)
+    conn = sqlite3.connect(db)
+    types = [r[0] for r in conn.execute("SELECT event_type FROM logs")]
+    conn.close()
+    assert "system_shutdown" in types
 
 
 def test_record_viewed_and_entries(tmp_path):

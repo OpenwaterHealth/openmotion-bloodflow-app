@@ -1367,6 +1367,7 @@ class MotionConnector(QObject):
         self.stopCapture()
         try:
             self._audit.log("system_shutdown", {"clean": True})
+            self._audit.close()
         except Exception:
             logger.warning("audit shutdown log failed", exc_info=True)
         logger.info("MotionConnector shutdown complete.")
