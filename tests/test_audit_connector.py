@@ -162,3 +162,28 @@ def test_save_configs_logs_only_changed_keys(tmp_path):
     d = json.loads(ev[-1]["details"])["changes"]
     assert "bfiMax" in d
     assert "plotWindowSec" not in d
+
+
+def test_delete_scans_logs_scan_deleted(tmp_path):
+    from omotion.ScanDatabase import ScanDatabase
+    db_path = str(tmp_path / "scans.db")
+    db = ScanDatabase(db_path=db_path)
+    sid = db.create_session(session_label="L1", session_start=1.0,
+                            session_meta={})
+    db.close()
+    c = _connector(tmp_path, scan_db_path=db_path)
+    c.deleteScans([sid])
+    ev = [e for e in c.auditLogEntries()
+          if e["event_type"] == "scan_deleted"]
+    assert ev
+    assert json.loads(ev[0]["details"])["count"] == 1
+
+
+def test_load_past_scan_logs_scan_viewed(tmp_path):
+    db_path = str(tmp_path / "scans.db")
+    c = _connector(tmp_path, scan_db_path=db_path)
+    c.loadPastScan("20260101_000000_owABC")
+    ev = [e for e in c.auditLogEntries()
+          if e["event_type"] == "scan_viewed"]
+    assert ev
+    assert json.loads(ev[0]["details"])["label"] == "20260101_000000_owABC"

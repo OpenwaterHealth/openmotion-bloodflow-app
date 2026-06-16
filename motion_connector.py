@@ -1788,6 +1788,10 @@ class MotionConnector(QObject):
         except Exception:
             logger.warning(
                 "deleteScans: could not open scan DB", exc_info=True)
+        self._audit.log("scan_deleted", {
+            "session_ids": [int(s) for s in session_ids],
+            "count": deleted,
+        })
         return deleted
 
     # ── Audit log (QML-facing) ───────────────────────────────────────────
@@ -2041,6 +2045,7 @@ class MotionConnector(QObject):
             )
             self.pastScanLoadFinished.emit(session_label, False)
             return
+        self._audit.log("scan_viewed", {"label": session_label})
         # Per-cam corrected CSV ({scan_id}.csv, 82-col wide format)
         # is the only source of per-cam BFI/BVI/mean/contrast for
         # past replay — the DB's session_data only holds side-
