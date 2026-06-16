@@ -389,12 +389,29 @@ class _TriggerStateSink:
             c._trigger_state = "ON"
             if c._trigger_on_mono is None:
                 c._trigger_on_mono = time.monotonic()
+                c._trigger_on_ts = payload.timestamp_s
             c.triggerStateChanged.emit()
         elif payload.state == "OFF":
             c._trigger_state = "OFF"
             if c._trigger_on_mono is not None:
-                c._trigger_cumulative_s += time.monotonic() - c._trigger_on_mono
+                # Prefer the SDK-stamped, scan-relative timestamps: the OFF
+                # event can sit queued behind histogram batches in the runner's
+                # diagnostics channel and be consumed ~1 s after it was emitted,
+                # which inflates a receive-time measurement (a 16:00 scan shows
+                # as 16:01 — issue #201). Fall back to host receive-time only
+                # if the timestamps are unusable (e.g. the SDK's t0-None path
+                # emits 0.0 for both edges, giving a non-positive delta).
+                ts_delta = (
+                    payload.timestamp_s - c._trigger_on_ts
+                    if c._trigger_on_ts is not None
+                    else 0.0
+                )
+                if ts_delta > 0:
+                    c._trigger_cumulative_s += ts_delta
+                else:
+                    c._trigger_cumulative_s += time.monotonic() - c._trigger_on_mono
                 c._trigger_on_mono = None
+                c._trigger_on_ts = None
             c.triggerStateChanged.emit()
 
     def on_complete(self) -> None:
@@ -684,6 +701,11 @@ class MotionConnector(QObject):
         # _on_dropout_check / _scan_elapsed_str can read them off the instance.
         self._trigger_cumulative_s: float = 0.0
         self._trigger_on_mono: float | None = None
+        # Scan-relative timestamp (from the SDK's TriggerStateEvent) of the
+        # current ON edge. Preferred over _trigger_on_mono for the final
+        # duration measurement because it is immune to host-side event-queue
+        # latency — see _TriggerStateSink (issue #201).
+        self._trigger_on_ts: float | None = None
         self._sensor_debug_logging        = bool(cfg.get("sensorDebugLogging", False))
         self._camera_fake_data            = bool(cfg.get("cameraFakeData", False))
         self._histo_throttle              = bool(cfg.get("histoThrottle", False))
@@ -2115,6 +2137,7 @@ class MotionConnector(QObject):
         # Reset trigger ON-time mirrors so _scan_elapsed_str starts from zero.
         self._trigger_cumulative_s = 0.0
         self._trigger_on_mono = None
+        self._trigger_on_ts = None
 
         # _CompletionSink calls this from its on_complete() method once the
         # ScanRunner finishes.
