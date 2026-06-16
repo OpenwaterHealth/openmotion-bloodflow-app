@@ -780,12 +780,20 @@ Item {
                             Layout.preferredWidth: 130
                             onClicked: logsPasswordModal.open()
                         }
+                        ActionButton {
+                            text: "Send Debug Logs"
+                            Layout.preferredWidth: 150
+                            // Direct action — zips the last 48h of app logs,
+                            // reveals the file, and toasts the support address.
+                            onClicked: MotionInterface.prepareDebugLogBundle()
+                        }
                         Item { Layout.fillWidth: true }
                     }
                     Text {
                         text: "Password-protected, machine-readable record of system "
                               + "events for auditors. Open the viewer to browse entries "
-                              + "or export them as CSV."
+                              + "or export them as CSV. Send Debug Logs zips the last "
+                              + "48 hours of app logs to email to support@openwater.cc."
                         color: root.colTextMuted
                         font.pixelSize: 11
                         wrapMode: Text.WordWrap
