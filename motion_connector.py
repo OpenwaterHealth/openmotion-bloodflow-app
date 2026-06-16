@@ -76,6 +76,23 @@ def developer_password_matches(pw) -> bool:
     return isinstance(pw, str) and pw == _DEVELOPER_PASSWORD
 
 
+# Camera-mask → human config name, mirroring CameraSelectionModal's
+# pattern table. Unmapped masks render as hex; -1 (unknown, e.g. a
+# reduced-mode scan whose meta lacks sdk_flags) renders as an em dash.
+_CONFIG_NAMES = {
+    0x00: "None", 0x5A: "Near", 0x66: "Middle", 0xC3: "Far",
+    0x99: "Outer", 0x0F: "Left", 0xF0: "Right", 0x42: "Third Row",
+    0xFF: "All",
+}
+
+
+def _config_name(mask) -> str:
+    if mask is None or mask < 0:
+        return "—"
+    m = int(mask) & 0xFF
+    return _CONFIG_NAMES.get(m, f"0x{m:02X}")
+
+
 logger = logging.getLogger("openmotion.bloodflow-app.connector")
 
 # Define system states
@@ -1579,6 +1596,160 @@ class MotionConnector(QObject):
             "notes": notes,
             "hasData": bool(has_db_rows or corrected or left or right),
         }
+
+    @staticmethod
+    def _friendly_ts(ts: str) -> str:
+        """'YYYYMMDD_HHMMSS' -> 'YYYY-MM-DD HH:MM:SS'; pass through."""
+        if not ts or len(ts) != 15:
+            return ts or "-"
+        return (f"{ts[0:4]}-{ts[4:6]}-{ts[6:8]} "
+                f"{ts[9:11]}:{ts[11:13]}:{ts[13:15]}")
+
+    def _session_to_row(self, s: dict) -> dict:
+        """Flatten one ScanDatabase session dict into the QVariantMap the
+        History table consumes. Masks/operator come from session_meta
+        (written by ScanDBSink); duration from session_start/end."""
+        label = (s.get("session_label") or "").strip()
+        meta = s.get("session_meta")
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except Exception:
+                meta = {}
+        if not isinstance(meta, dict):
+            meta = {}
+        flags = meta.get("sdk_flags") or {}
+
+        left_mask = flags.get("left_camera_mask", -1)
+        right_mask = flags.get("right_camera_mask", -1)
+        if left_mask is None:
+            left_mask = -1
+        if right_mask is None:
+            right_mask = -1
+
+        user_label = meta.get("subject_id") or ""
+        timestamp = ""
+        m = re.match(r"^(\d{8}_\d{6})_?(.*)$", label)
+        if m:
+            timestamp = m.group(1)
+            if not user_label:
+                user_label = m.group(2)
+
+        start = s.get("session_start")
+        end = s.get("session_end")
+        if start is not None and end is not None:
+            duration = float(end) - float(start)
+        else:
+            duration = -1.0
+
+        return {
+            "sessionId": int(s.get("id")),
+            "label": label,
+            "userLabel": user_label,
+            "operator": meta.get("operator") or "",
+            "timestamp": timestamp or label,
+            "dateTime": self._friendly_ts(timestamp),
+            "durationSec": duration,
+            "leftMask": int(left_mask),
+            "rightMask": int(right_mask),
+            "configL": _config_name(left_mask),
+            "configR": _config_name(right_mask),
+            "reducedMode": bool(flags.get("reduced_mode", False)),
+            "notes": s.get("session_notes") or "",
+            "interrupted": end is None,
+        }
+
+    @pyqtSlot(result="QVariantList")
+    def get_scan_sessions(self):
+        """Return one row per scan-DB session, newest first, for the
+        History table. DB-only — does not list CSV-derived scans.
+        Best-effort: a missing/unreadable DB yields []."""
+        db_path = getattr(self._interface, "scan_db_path", None)
+        if not db_path:
+            return []
+        rows = []
+        try:
+            from omotion.ScanDatabase import ScanDatabase
+            db = ScanDatabase(db_path)
+            try:
+                for s in db.iter_sessions():
+                    # Per-row guard: one malformed session must not blank the
+                    # whole History view — skip it and keep the rest.
+                    try:
+                        rows.append(self._session_to_row(s))
+                    except Exception:
+                        logger.warning(
+                            "get_scan_sessions: skipping malformed session %s",
+                            s.get("id"), exc_info=True)
+            finally:
+                db.close()
+        except Exception:
+            logger.warning("get_scan_sessions: could not read scan DB",
+                           exc_info=True)
+            return []
+        rows.sort(key=lambda r: r["timestamp"], reverse=True)
+        return rows
+
+    @pyqtSlot(int, result="QVariantMap")
+    def get_session_stats(self, session_id: int):
+        """Lazily fetch heavier per-scan stats (row count) when a History
+        row is focused, so the list query itself stays cheap."""
+        db_path = getattr(self._interface, "scan_db_path", None)
+        if not db_path:
+            return {"sampleCount": 0}
+        try:
+            from omotion.ScanDatabase import ScanDatabase
+            db = ScanDatabase(db_path)
+            try:
+                # Raw COUNT via the connection — ScanDatabase exposes no
+                # public row-count API; get_scan_details reaches for
+                # _connection() the same way for its EXISTS probe.
+                row = next(
+                    db._connection().execute(
+                        "SELECT COUNT(*) FROM session_data"
+                        " WHERE session_id = ?",
+                        (int(session_id),),
+                    ),
+                    None,
+                )
+                return {"sampleCount": int(row[0]) if row else 0}
+            finally:
+                db.close()
+        except Exception:
+            logger.warning(
+                "get_session_stats failed for %s", session_id,
+                exc_info=True)
+            return {"sampleCount": 0}
+
+    @pyqtSlot("QVariantList", result=int)
+    def deleteScans(self, session_ids):
+        """Delete the given scan-DB sessions (CASCADE removes their
+        session_data). Returns the count actually deleted. The developer-
+        password gate is enforced in QML before this is called."""
+        db_path = getattr(self._interface, "scan_db_path", None)
+        if not db_path:
+            return 0
+        deleted = 0
+        try:
+            from omotion.ScanDatabase import ScanDatabase
+            db = ScanDatabase(db_path)
+            try:
+                for sid in session_ids:
+                    try:
+                        if db.delete_session(int(sid)):
+                            deleted += 1
+                            logger.info(
+                                "deleteScans: removed session %s", sid)
+                    except Exception:
+                        logger.warning(
+                            "deleteScans: failed to delete %s", sid,
+                            exc_info=True)
+            finally:
+                db.close()
+        except Exception:
+            logger.warning(
+                "deleteScans: could not open scan DB", exc_info=True)
+        return deleted
 
     @pyqtProperty(str, notify=directoryChanged)
     def directory(self):
