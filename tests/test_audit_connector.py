@@ -198,3 +198,23 @@ def test_load_past_scan_logs_scan_viewed(tmp_path):
           if e["event_type"] == "scan_viewed"]
     assert ev
     assert json.loads(ev[0]["details"])["label"] == "20260101_000000_owABC"
+
+
+def test_prepare_debug_bundle_creates_zip_and_logs(tmp_path):
+    import os
+    import zipfile
+    db = str(tmp_path / "scans.db")
+    logs = tmp_path / "app-logs"
+    logs.mkdir()
+    (logs / "ow-bloodflowapp-x.log").write_text("hello", encoding="utf-8")
+    c = _connector(tmp_path, scan_db_path=db)
+    # Don't spawn a real file-explorer process during the test.
+    c._reveal_in_explorer = lambda p: None
+    path = c.prepareDebugLogBundle()
+    assert path and os.path.exists(path)
+    assert path.endswith(".zip")
+    with zipfile.ZipFile(path) as zf:
+        names = zf.namelist()
+    assert any(n.startswith("app-logs/") for n in names)
+    assert "system_info.txt" in names
+    assert "debug_bundle_created" in _types(c)

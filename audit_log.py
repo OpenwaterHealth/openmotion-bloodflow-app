@@ -42,6 +42,7 @@ EV_SCAN_VIEWED = "scan_viewed"
 EV_SCAN_DELETED = "scan_deleted"
 EV_AUDIT_LOG_VIEWED = "audit_log_viewed"
 EV_AUDIT_LOG_EXPORTED = "audit_log_exported"
+EV_DEBUG_BUNDLE_CREATED = "debug_bundle_created"
 
 # CSV export column order.
 _CSV_FIELDS = ["ts_iso", "ts_epoch", "event_type", "details"]

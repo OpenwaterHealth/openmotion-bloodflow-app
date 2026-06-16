@@ -1845,6 +1845,79 @@ class MotionConnector(QObject):
             self.errorOccurred.emit("Audit log export failed.")
             return ""
 
+    @pyqtSlot(result=str)
+    def prepareDebugLogBundle(self) -> str:
+        """Zip the last 48h of app logs (+ config + system info) into
+        app-logs/debug-bundles/, reveal it in the file explorer, and toast
+        the support address. Returns the zip path, or '' on failure."""
+        try:
+            from debug_bundle import build_debug_bundle, WINDOW_HOURS
+            try:
+                from version import get_version as _gv
+                app_version = _gv()
+            except Exception:
+                app_version = ""
+            try:
+                sdk_version = self._interface.get_sdk_version()
+                sdk_version = (
+                    sdk_version if isinstance(sdk_version, str) else ""
+                )
+            except Exception:
+                sdk_version = ""
+            dest_dir = os.path.join(
+                self._directory, "app-logs", "debug-bundles"
+            )
+            meta = build_debug_bundle(
+                self._directory,
+                dest_dir,
+                time.time(),
+                config_path=resource_path("config", "app_config.json"),
+                extra_info={
+                    "app_version": app_version,
+                    "sdk_version": sdk_version,
+                },
+            )
+        except Exception:
+            logger.exception("prepareDebugLogBundle: failed to build bundle")
+            self.errorOccurred.emit("Could not create the debug log bundle.")
+            return ""
+
+        path = meta["path"]
+        self._reveal_in_explorer(path)
+        from audit_log import EV_DEBUG_BUNDLE_CREATED
+        self._audit.log(EV_DEBUG_BUNDLE_CREATED, {
+            "dest": path,
+            "file_count": meta["file_count"],
+            "log_count": meta["log_count"],
+            "bytes": meta["bytes"],
+            "window_hours": WINDOW_HOURS,
+        })
+        self.notify(
+            "Debug logs saved to " + path
+            + ". Please email this file to support@openwater.cc.",
+            "success", 0, True, "debug-bundle",
+        )
+        return path
+
+    def _reveal_in_explorer(self, path: str) -> None:
+        """Best-effort: open the OS file browser with the file selected.
+        Never raises — a failed reveal must not lose the bundle."""
+        try:
+            import subprocess
+            import sys
+            if sys.platform.startswith("win"):
+                subprocess.Popen(
+                    ["explorer", "/select,", os.path.normpath(path)]
+                )
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", path])
+            else:
+                subprocess.Popen(["xdg-open", os.path.dirname(path)])
+        except Exception:
+            logger.warning(
+                "could not reveal %s in file explorer", path, exc_info=True
+            )
+
     @pyqtProperty(str, notify=directoryChanged)
     def directory(self):
         return self._directory
