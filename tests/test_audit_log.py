@@ -32,6 +32,7 @@ def test_reopen_is_idempotent(tmp_path):
     AuditLog(db).close()
     a = AuditLog(db)          # second open must not raise on CREATE
     a.log("system_info", None)
+    assert len(a.query()) == 1
     a.close()
 
 
@@ -101,3 +102,25 @@ def test_gather_host_info_has_core_fields():
     assert "hostname" in info
     assert "platform" in info
     assert "python" in info
+
+
+def test_log_and_query_after_close_do_not_raise(tmp_path):
+    a = AuditLog(str(tmp_path / "scans.db"))
+    a.log("scan_started", {"x": 1})
+    a.close()
+    # After close the instance must stay fail-soft.
+    a.log("scan_started", {"x": 2})   # must not raise
+    assert a.query() == []
+    assert a.export_csv(str(tmp_path / "after_close.csv")) == 0
+
+
+def test_empty_dict_details_is_serialized_not_null(tmp_path):
+    db = str(tmp_path / "scans.db")
+    a = AuditLog(db)
+    a.log("scan_ended", {})
+    a.close()
+    import sqlite3 as _sql
+    conn = _sql.connect(db)
+    val = conn.execute("SELECT details FROM logs").fetchone()[0]
+    conn.close()
+    assert val == "{}"

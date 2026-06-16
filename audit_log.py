@@ -126,7 +126,6 @@ class AuditLog:
             CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs(ts_epoch);
             """
         )
-        self._conn.commit()
 
     @property
     def enabled(self) -> bool:
@@ -135,22 +134,23 @@ class AuditLog:
     def log(
         self, event_type: str, details: Optional[Dict[str, Any]] = None
     ) -> None:
-        """Append one event. ``details`` (if truthy) is stored as compact,
+        """Append one event. ``details`` (if not None) is stored as compact,
         deterministic JSON. Never raises."""
-        if self._conn is None:
-            return
         ts_epoch = time.time()
-        ts_iso = datetime.datetime.fromtimestamp(ts_epoch).isoformat(
-            timespec="seconds"
+        ts_iso = (
+            datetime.datetime.fromtimestamp(ts_epoch)
+            .astimezone()
+            .isoformat(timespec="seconds")
         )
         details_json = (
-            json.dumps(
-                details, separators=(",", ":"), sort_keys=True, default=str
-            )
-            if details else None
+            json.dumps(details, separators=(",", ":"), sort_keys=True,
+                       default=str)
+            if details is not None else None
         )
         try:
             with self._lock:
+                if self._conn is None:
+                    return
                 self._conn.execute(
                     "INSERT INTO logs (ts_epoch, ts_iso, event_type, details)"
                     " VALUES (?, ?, ?, ?)",
@@ -164,10 +164,10 @@ class AuditLog:
 
     def query(self, limit: int = 500) -> List[Dict[str, Any]]:
         """Return up to ``limit`` rows, newest first, as plain dicts."""
-        if self._conn is None:
-            return []
         try:
             with self._lock:
+                if self._conn is None:
+                    return []
                 cur = self._conn.execute(
                     "SELECT id, ts_epoch, ts_iso, event_type, details"
                     " FROM logs ORDER BY id DESC LIMIT ?",
@@ -181,18 +181,28 @@ class AuditLog:
 
     def export_csv(self, dest_path: str | Path) -> int:
         """Write the full log (oldest first) to ``dest_path`` as CSV.
-        Returns the number of data rows written."""
-        if self._conn is None:
-            return 0
+        Returns the number of data rows written (0 on any failure)."""
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT ts_iso, ts_epoch, event_type, details"
-                " FROM logs ORDER BY id ASC"
-            ).fetchall()
-        with open(dest_path, "w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            w.writerow(_CSV_FIELDS)
-            w.writerows(rows)
+            if self._conn is None:
+                return 0
+            try:
+                rows = self._conn.execute(
+                    "SELECT ts_iso, ts_epoch, event_type, details"
+                    " FROM logs ORDER BY id ASC"
+                ).fetchall()
+            except Exception:
+                logger.warning("AuditLog: export_csv query failed",
+                               exc_info=True)
+                return 0
+        try:
+            with open(dest_path, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(_CSV_FIELDS)
+                w.writerows(rows)
+        except OSError:
+            logger.warning("AuditLog: export_csv write to %s failed",
+                           dest_path, exc_info=True)
+            return 0
         return len(rows)
 
     def close(self) -> None:
