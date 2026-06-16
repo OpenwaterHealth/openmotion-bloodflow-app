@@ -184,6 +184,17 @@ Rectangle {
             ? (viewer.scanSource.reducedMode === 1)
             : viewer.reducedMode
 
+    // ── Side break ─────────────────────────────────────────────────────
+    // A bit of extra margin between the left and right sensor modules in
+    // dev (non-reduced) mode. The grid reserves an empty spacer column
+    // (col 2) between them, but only when BOTH sides have active cameras —
+    // a single-sided scan keeps filling the width with no dangling gap.
+    readonly property bool _sideGapActive:
+        !viewer.effectiveReduced
+        && (viewer._effLeftMask & 0xFF) !== 0
+        && (viewer._effRightMask & 0xFF) !== 0
+    readonly property real _sideGapPx: 3
+
     // ── Grid model ─────────────────────────────────────────────────────
     // Dev mode (default) — one cell per active camera (bits set in
     // leftMask / rightMask), arranged to mirror the physical U-shape of
@@ -191,14 +202,15 @@ Rectangle {
     // run down one arm of the U and back up the other — 1|8 at the top
     // of the U, 4|5 at the bottom — so display row r pairs 1-based cams
     // (4-r | 5+r): row 0 is 4|5, row 3 is 1|8. Left module owns columns
-    // 0-1, right module 2-3 (a module with nothing selected gives up its
+    // 0-1, right module 3-4 — col 2 is the empty side-break spacer when
+    // both sides are active (a module with nothing selected gives up its
     // column pair). Rows empty on both sides are dropped and the rest
     // compact upward; an unselected camera in a kept row just leaves its
     // slot blank.
     readonly property var _devCellModel: {
         var masks = [viewer._effLeftMask & 0xFF, viewer._effRightMask & 0xFF]
         var sides = ["left", "right"]
-        var colBase = [0, masks[0] !== 0 ? 2 : 0]
+        var colBase = [0, masks[0] !== 0 ? 3 : 0]
         var entries = []
         var displayRow = 0
         for (var r = 0; r < 4; r++) {
@@ -681,10 +693,24 @@ Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 // Reduced mode: single column, 2 stacked cells. Dev mode:
-                // 4 columns, rows determined by active-cam count.
-                columns: viewer.effectiveReduced ? 1 : 4
+                // 4 columns; +1 spacer column (col 2) when both sides are
+                // active, for a visual break between the modules.
+                columns: viewer.effectiveReduced ? 1 : (viewer._sideGapActive ? 5 : 4)
                 rowSpacing: 6
                 columnSpacing: 6
+
+                // Side-break spacer — fixed-width empty column 2 between the
+                // left (cols 0-1) and right (cols 3-4) modules. fillWidth is
+                // false so it stays a fixed gap; the plot cells (fillWidth)
+                // absorb the rest of the row width around it.
+                Item {
+                    visible: viewer._sideGapActive
+                    Layout.row: 0
+                    Layout.column: 2
+                    Layout.fillWidth: false
+                    Layout.fillHeight: false
+                    Layout.preferredWidth: viewer._sideGapPx
+                }
 
                 Repeater {
                     model: viewer._activeCellModel
