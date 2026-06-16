@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 from omotion.pipeline.batch import TerminalDarkResult
 
-from scan_outcome import ScanOutcome, classify_scan_outcome, _ScanOutcomeSink
+from motion_connector import ScanOutcome, classify_scan_outcome, _ScanOutcomeSink
 
 pytestmark = pytest.mark.unit
 
