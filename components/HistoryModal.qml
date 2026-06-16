@@ -20,10 +20,14 @@ Item {
 
     property var scans: []
     property var selected: ({})
-    property bool visualizing: false
+    // True while an async "View in plot" load is in flight (issue #152):
+    // the heavy DB/CSV walk runs on a worker thread in the connector, and
+    // this drives the busy overlay until pastScanLoadFinished fires.
+    property bool loadingPlot: false
 
     function open() {
         refreshScans()
+        console.warn("[History] opened — " + scans.length + " scan(s) listed")
         root.visible = true
     }
     function close() {
@@ -32,10 +36,10 @@ Item {
 
     function refreshScans() {
         try {
-            scans = MOTIONInterface.get_scan_list() || []
+            scans = MotionInterface.get_scan_list() || []
             if (scans.length > 0) {
                 scanPicker.currentIndex = 0
-                selected = MOTIONInterface.get_scan_details(scans[0]) || {}
+                selected = MotionInterface.get_scan_details(scans[0]) || {}
             } else {
                 selected = {}
             }
@@ -100,7 +104,8 @@ Item {
             Text { anchors.centerIn: parent; text: "✕"; color: theme.textPrimary; font.pixelSize: 13 }
             MouseArea {
                 id: xArea; anchors.fill: parent; hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor; onClicked: root.close()
+                cursorShape: Qt.PointingHandCursor
+                onClicked: { console.warn("[History] close (✕) clicked"); root.close() }
             }
         }
 
@@ -135,7 +140,10 @@ Item {
                         color: parent.hovered ? theme.accentBlue : theme.bgInput
                         border.color: parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
                     }
-                    onClicked: Qt.openUrlExternally("file:///" + MOTIONInterface.directory)
+                    onClicked: {
+                        console.warn("[History] Open Folder clicked → " + MotionInterface.directory)
+                        Qt.openUrlExternally("file:///" + MotionInterface.directory)
+                    }
                 }
 
                 Button {
@@ -151,7 +159,10 @@ Item {
                         color: parent.hovered ? theme.accentBlue : theme.bgInput
                         border.color: parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
                     }
-                    onClicked: refreshScans()
+                    onClicked: {
+                        console.warn("[History] Refresh clicked")
+                        refreshScans()
+                    }
                 }
             }
 
@@ -159,7 +170,7 @@ Item {
             RowLayout {
                 Layout.fillWidth: true; spacing: 8
                 Text { text: "Data Directory:"; color: theme.textSecondary; font.pixelSize: 13 }
-                Text { text: MOTIONInterface.directory; color: theme.textPrimary; font.pixelSize: 13; elide: Text.ElideRight; Layout.fillWidth: true }
+                Text { text: MotionInterface.directory; color: theme.textPrimary; font.pixelSize: 13; elide: Text.ElideRight; Layout.fillWidth: true }
             }
 
             // Scan selector
@@ -172,6 +183,16 @@ Item {
                     Layout.preferredHeight: 36
                     model: scans
                     font.pixelSize: 13
+                    // Largest the dropdown popup may grow: the space between
+                    // the bottom of the field and the bottom of the modal,
+                    // less a small margin. Caps a long scan list so it stays
+                    // on-screen and the inner ListView scrolls instead of
+                    // running off the bottom of the window (issue #199).
+                    // Floored at ~3 rows so it's never uselessly small.
+                    readonly property real maxPopupHeight: {
+                        var below = root.height - mapToItem(root, 0, height).y - 12
+                        return Math.max(below, 96)
+                    }
                     contentItem: Text {
                         leftPadding: 10
                         text: scanPicker.displayText
@@ -211,12 +232,20 @@ Item {
                     popup: Popup {
                         y: scanPicker.height
                         width: scanPicker.width
-                        implicitHeight: contentItem.implicitHeight + 2
+                        // Cap the height so the popup never extends past the
+                        // bottom of the window; the ListView then overflows
+                        // and becomes scrollable (issue #199).
+                        height: Math.min(contentItem.implicitHeight + 2,
+                                         scanPicker.maxPopupHeight)
                         padding: 1
                         contentItem: ListView {
                             clip: true
                             implicitHeight: contentHeight
                             model: scanPicker.delegateModel
+                            // Keep the keyboard-highlighted row scrolled into
+                            // view so arrow-key navigation is visible — you can
+                            // tell which scan is selected (issue #199).
+                            currentIndex: scanPicker.highlightedIndex
                             ScrollIndicator.vertical: ScrollIndicator {}
                         }
                         background: Rectangle {
@@ -228,7 +257,8 @@ Item {
                     }
                     onCurrentIndexChanged: {
                         if (currentIndex >= 0 && currentIndex < scans.length) {
-                            try { selected = MOTIONInterface.get_scan_details(scans[currentIndex]) || {} }
+                            console.warn("[History] scan selected [" + currentIndex + "] " + scans[currentIndex])
+                            try { selected = MotionInterface.get_scan_details(scans[currentIndex]) || {} }
                             catch (e) { selected = {} }
                         } else { selected = {} }
                     }
@@ -267,6 +297,20 @@ Item {
                             Text { text: ""; } Text { text: ""; }
                         }
 
+                        // Interrupted-scan banner (empty scans used to load blank).
+                        // hasData === false only when the connector explicitly
+                        // reported no rows/CSV; undefined (legacy details) stays hidden.
+                        Text {
+                            visible: selected.hasData === false
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            text: "⚠ No data recorded — this scan was interrupted "
+                                  + "before any data could be saved."
+                            color: "#E67E22"
+                            font.pixelSize: 13
+                            font.weight: Font.Bold
+                        }
+
                         Text { text: "Notes:"; color: theme.textSecondary; font.pixelSize: 13 }
                         Rectangle {
                             Layout.fillWidth: true; Layout.fillHeight: true
@@ -287,11 +331,18 @@ Item {
 
                         Text { text: "Actions"; color: theme.textPrimary; font.pixelSize: 15 }
 
+                        // Opens the past scan inside the BloodFlow page's
+                        // PlotViewer (the matplotlib popout buttons that
+                        // lived here died with the legacy plots).
                         Button {
-                            text: "Visualize BFI/BVI (legacy)"
-                            visible: MOTIONInterface.appConfig.developerMode ? true : false
+                            text: "View in plot →"
                             Layout.fillWidth: true; Layout.preferredHeight: 36
-                            enabled: !!(selected.leftPath || selected.rightPath)
+                            // `currentIndex` lives on scanPicker (the ComboBox)
+                            // — referencing it bare here resolves to undefined
+                            // at the root scope and `undefined >= 0` is false,
+                            // which left this button perma-greyed.
+                            enabled: scans.length > 0 && scanPicker.currentIndex >= 0
+                                     && selected.hasData !== false
                             hoverEnabled: enabled
                             contentItem: Text {
                                 text: parent.text; font.pixelSize: 13
@@ -303,16 +354,21 @@ Item {
                                 border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
                             }
                             onClicked: {
-                                root.visualizing = true
-                                MOTIONInterface.visualize_bloodflow(selected.leftPath || "", selected.rightPath || "", 0.0, 0.0, false)
+                                console.warn("[History] View in plot → clicked → " + (scans[scanPicker.currentIndex] || "?"))
+                                // Async load (issue #152): the heavy DB/CSV walk runs on a
+                                // worker thread. Show the busy overlay and keep the modal
+                                // open; onPastScanLoadFinished clears it and closes the
+                                // modal only when the scan actually loaded.
+                                root.loadingPlot = true
+                                MotionInterface.loadPastScan(scans[scanPicker.currentIndex] || "")
                             }
                         }
 
                         Button {
-                            text: "Visualize Contrast/Mean (legacy)"
-                            visible: MOTIONInterface.appConfig.developerMode ? true : false
+                            text: "Export CSV"
                             Layout.fillWidth: true; Layout.preferredHeight: 36
-                            enabled: !!(selected.leftPath || selected.rightPath)
+                            enabled: scans.length > 0 && scanPicker.currentIndex >= 0
+                                     && selected.hasData !== false
                             hoverEnabled: enabled
                             contentItem: Text {
                                 text: parent.text; font.pixelSize: 13
@@ -324,49 +380,11 @@ Item {
                                 border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
                             }
                             onClicked: {
-                                root.visualizing = true
-                                MOTIONInterface.visualize_bloodflow(selected.leftPath || "", selected.rightPath || "", 0.0, 0.0, true)
-                            }
-                        }
-
-                        Button {
-                            text: "Visualize BFI/BVI"
-                            Layout.fillWidth: true; Layout.preferredHeight: 36
-                            enabled: !!(selected.correctedPath)
-                            hoverEnabled: enabled
-                            contentItem: Text {
-                                text: parent.text; font.pixelSize: 13
-                                color: parent.enabled ? theme.textSecondary : theme.textTertiary
-                                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-                            }
-                            background: Rectangle {
-                                color: !parent.enabled ? theme.bgInput : parent.hovered ? theme.accentBlue : theme.bgInput
-                                border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
-                            }
-                            onClicked: {
-                                root.visualizing = true
-                                MOTIONInterface.visualize_corrected(selected.correctedPath || "")
-                            }
-                        }
-
-                        Button {
-                            text: "Visualize Contrast/Mean"
-                            visible: MOTIONInterface.appConfig.reducedMode !== true
-                            Layout.fillWidth: true; Layout.preferredHeight: 36
-                            enabled: !!(selected.correctedPath)
-                            hoverEnabled: enabled
-                            contentItem: Text {
-                                text: parent.text; font.pixelSize: 13
-                                color: parent.enabled ? theme.textSecondary : theme.textTertiary
-                                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-                            }
-                            background: Rectangle {
-                                color: !parent.enabled ? theme.bgInput : parent.hovered ? theme.accentBlue : theme.bgInput
-                                border.color: !parent.enabled ? theme.textTertiary : parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
-                            }
-                            onClicked: {
-                                root.visualizing = true
-                                MOTIONInterface.visualize_corrected_signal(selected.correctedPath || "")
+                                var scanId = scans[scanPicker.currentIndex] || ""
+                                console.warn("[History] Export CSV clicked → " + scanId)
+                                exportDialog.selectedScanId = scanId
+                                exportDialog.selectedFile = "file:///" + MotionInterface.directory + "/" + scanId + "_export.csv"
+                                exportDialog.open()
                             }
                         }
 
@@ -377,15 +395,31 @@ Item {
 
         }
 
-        // Busy overlay
+        Dialogs.FileDialog {
+            id: exportDialog
+            title: "Export Scan CSV"
+            fileMode: Dialogs.FileDialog.SaveFile
+            nameFilters: ["CSV files (*.csv)", "All files (*)"]
+            property string selectedScanId: ""
+            onAccepted: {
+                var path = selectedFile.toString().replace("file:///", "")
+                console.warn("[History] exporting " + selectedScanId + " → " + path)
+                var ok = MotionInterface.exportScanCsv(selectedScanId, path)
+                if (ok) MotionInterface.notify("Exported to " + path, "success")
+            }
+        }
+
+        // Busy overlay while an async "View in plot" load is in flight
+        // (issue #152). Blocks clicks on the panel so the selection can't
+        // change under the in-flight load.
         Rectangle {
             anchors.fill: parent; color: "#000"; opacity: 0.45
-            visible: root.visualizing; z: 9999; radius: 12
+            visible: root.loadingPlot; z: 9999; radius: 12
             MouseArea { anchors.fill: parent }
             Column {
                 anchors.centerIn: parent; spacing: 12
-                BusyIndicator { running: root.visualizing; width: 48; height: 48 }
-                Text { text: "Processing..."; color: theme.textPrimary; font.pixelSize: 14 }
+                BusyIndicator { running: root.loadingPlot; width: 48; height: 48 }
+                Text { text: "Loading scan..."; color: theme.textPrimary; font.pixelSize: 14 }
             }
         }
 
@@ -400,17 +434,22 @@ Item {
 
     Dialogs.MessageDialog {
         id: histErrDialog
-        title: "Visualization Error"
+        title: "Error"
         text: ""
     }
 
     Connections {
-        target: MOTIONInterface
-        function onVizFinished() { root.visualizing = false }
-        function onVisualizingChanged(b) { root.visualizing = b }
+        target: MotionInterface
+        // Async "View in plot" completion (issue #152). On success the
+        // modal closes to reveal the PlotViewer; on failure it stays
+        // open (onErrorOccurred below pops the error dialog).
+        function onPastScanLoadFinished(label, ok) {
+            root.loadingPlot = false
+            if (ok) root.close()
+        }
         function onDirectoryChanged() { if (root.visible) refreshScans() }
         function onErrorOccurred(msg) {
-            root.visualizing = false
+            root.loadingPlot = false
             histErrDialog.text = msg || "Unknown error."
             histErrDialog.visible = true
         }

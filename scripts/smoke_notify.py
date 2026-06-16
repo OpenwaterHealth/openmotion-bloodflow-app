@@ -1,4 +1,4 @@
-"""Smoke test for MOTIONConnector notification slots & signals.
+"""Smoke test for MotionConnector notification slots & signals.
 
 Run from repo root:
     python scripts/smoke_notify.py
@@ -13,13 +13,13 @@ from unittest.mock import MagicMock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PyQt6.QtCore import QCoreApplication
-from motion_connector import MOTIONConnector
+from motion_connector import MotionConnector
 
 
 def _make_connector():
     iface = MagicMock()
     iface.is_device_connected.return_value = (False, False, False)
-    return MOTIONConnector(interface=iface, app_config={})
+    return MotionConnector(interface=iface, app_config={})
 
 
 def fail(msg: str) -> int:

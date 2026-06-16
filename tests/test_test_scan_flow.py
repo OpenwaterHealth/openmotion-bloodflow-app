@@ -17,12 +17,12 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture
 def connector(monkeypatch):
-    """Build a MOTIONConnector against a fake MotionInterface.
+    """Build a MotionConnector against a fake MotionInterface.
 
     Uses pytest.mark.unit so the autouse HIL fixtures in conftest.py
     short-circuit and no app launch / panel-button calibration happens.
     """
-    from motion_connector import MOTIONConnector
+    from motion_connector import MotionConnector
 
     fake_iface = MagicMock()
     fake_iface.console = MagicMock()
@@ -33,10 +33,10 @@ def connector(monkeypatch):
     fake_iface.start_calibration.return_value = True
     fake_iface.scan_workflow = MagicMock()
 
-    c = MOTIONConnector(
+    c = MotionConnector(
         interface=fake_iface,
         app_config={"developerMode": False},
-        output_path=".",
+        data_dir=".",
         config_dir="config",
     )
     c._consoleConnected = True

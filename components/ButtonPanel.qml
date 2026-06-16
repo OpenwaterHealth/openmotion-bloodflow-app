@@ -15,22 +15,21 @@ Rectangle {
     border.width: 1
 
     property bool scanning: false
-    property bool waiting: false       // true while cameras are flashing / scan is arming
-    property bool camerasReady: false  // true when camera flash is complete
+    property bool waiting: false       // true while a scan start is armed (pipeline-idle gate)
+    property bool camerasReady: false  // gates Start/Check enablement
     property bool reducedMode: false       // FDA mode hides scan-settings button
 
     // Connection state — drives start button icon and enablement.
     // A laser-safety trip is surfaced via a persistent NotificationCenter
     // toast (see motion_connector.safetyFailure setter), not by faking
     // a disconnect here.
-    property bool allConnected: MOTIONInterface.consoleConnected &&
-        (MOTIONInterface.leftSensorConnected || MOTIONInterface.rightSensorConnected)
+    property bool allConnected: MotionInterface.consoleConnected &&
+        (MotionInterface.leftSensorConnected || MotionInterface.rightSensorConnected)
     signal startStopClicked()
     signal scanSettingsClicked()
     signal notesClicked()
     signal checkClicked()
     signal historyClicked()
-    signal logClicked()
     signal settingsClicked()
 
     FontLoader {
@@ -176,14 +175,6 @@ Rectangle {
             iconText: "\uea31"  // graph-3 icon
             label: "Check"
             onClicked: panel.checkClicked()
-        }
-
-        // Log viewer (developer mode only)
-        PanelButton {
-            visible: MOTIONInterface.appConfig.developerMode ? true : false
-            iconText: "\uea65"  // list/log icon
-            label: "Log"
-            onClicked: panel.logClicked()
         }
 
         // ── spacer pushes bottom controls down ──

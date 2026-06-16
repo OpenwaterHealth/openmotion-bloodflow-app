@@ -32,6 +32,25 @@ import psutil
 import pygetwindow as gw
 from pywinauto import Desktop as UiaDesktop
 
+
+# ─────────────────────────────────────────────
+# QCoreApplication for unit tests
+# ─────────────────────────────────────────────
+# Unit tests that exercise pyqtSignal / QObject (e.g. ScanDataSource)
+# need a QCoreApplication to exist before instantiating QObjects. HIL
+# tests get a full QApplication via the bloodflow app launch; unit
+# tests don't, so create a bare QCoreApplication once per session.
+@pytest.fixture(scope="session", autouse=True)
+def _qcoreapplication():
+    from PyQt6.QtCore import QCoreApplication
+    import sys
+    app = QCoreApplication.instance()
+    if app is None:
+        app = QCoreApplication(sys.argv)
+    yield app
+    # Don't quit() — pytest-collected tests share this session-wide.
+
+
 # ─────────────────────────────────────────────
 # pyautogui defaults
 # ─────────────────────────────────────────────

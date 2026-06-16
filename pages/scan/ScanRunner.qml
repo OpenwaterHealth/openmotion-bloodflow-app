@@ -1,7 +1,7 @@
 // qml/scan/ScanRunner.qml
 //
 // Drives the shared scan pipeline:
-//   FlashSensorsTask -> SetTriggerLaserTask -> <final task>
+//   FlashSensorsTask -> SetTriggerTask -> <final task>
 //
 // ``mode`` selects the final task:
 //   * "capture" — CaptureDataTask  (normal user scan)
@@ -71,8 +71,8 @@ QtObject {
         interval: 5000     // trigger + laser are quick sync calls
         repeat: false
         onTriggered: {
-            runner.messageOut("SetTrigger/Laser step timed out.")
-            runner._finish(false, "SetTrigger/Laser step timed out", "", "")
+            runner.messageOut("SetTrigger step timed out.")
+            runner._finish(false, "SetTrigger step timed out", "", "")
         }
     }
 
@@ -109,20 +109,20 @@ QtObject {
             if (runner._done) return
             runner.flashWatchdog.stop()
             if (!ok) { runner._finish(false, err, "", ""); return }
-            runner.setTriggerLaserTask.run()
+            runner.setTriggerTask.run()
         }
     }
 
-    // --- Set trigger/laser --------------------------------------------------
+    // --- Set trigger ---------------------------------------------------------
 
-    property SetTriggerLaserTask setTriggerLaserTask: SetTriggerLaserTask {
+    property SetTriggerTask setTriggerTask: SetTriggerTask {
         connector: runner.connector
         laserOn: runner.laserOn
         triggerConfig: runner.triggerConfig
 
         onStarted: {
             runner._stage = "set"
-            runner.stageUpdate("Setting trigger & laser…")
+            runner.stageUpdate("Setting trigger…")
             runner.setTriggerWatchdog.restart()
         }
         onProgress: function(pct) { runner.progressUpdate(pct) }
@@ -159,7 +159,11 @@ QtObject {
         onFinished: function(ok, err) {
             if (runner._done) return
             if (!ok) { runner._finish(false, err, "", ""); return }
-            runner._stage = "post"
+            // The new SDK pipeline writes CSVs in real-time via CsvSink,
+            // so there's no post-process .raw→.csv conversion to do here —
+            // this is a finalization gesture: notes get written and the
+            // notes modal opens on scanNotesReady.
+            runner._stage = "finish"
             runner.stageUpdate("Scan complete")
             runner._finish(true, "", "", "")
         }
@@ -214,9 +218,9 @@ QtObject {
             else if (connector && connector.stopTrigger)
                 try { connector.stopTrigger() } catch(e) {}
             break
-        case "post":
-            if (connector && connector.cancelPostProcess)
-                try { connector.cancelPostProcess() } catch(e) {}
+        case "finish":
+            // No long-running work — scan-notes write is synchronous,
+            // and CSVs are already on disk. Nothing to cancel.
             break
         }
         runner._finish(false, "Canceled", "", "")

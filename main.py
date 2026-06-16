@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtQml import QQmlApplicationEngine, qmlRegisterSingletonInstance
 from PyQt6.QtCore import qInstallMessageHandler, QtMsgType
 
-from motion_connector import MOTIONConnector
+from motion_connector import MotionConnector
 from omotion import MotionInterface
 from utils.single_instance import check_single_instance, cleanup_single_instance
 from version import get_version
@@ -71,7 +71,6 @@ def _load_app_config() -> dict:
         "cameraTempAlertThresholdC": 105,
         "sensorDebugLogging": False,
         "cameraFakeData": False,
-        "output_path": None,  # None = use cwd; str = base directory for scan_data, app-logs, run-logs
         "histoThrottle": False,
         "histoCmp": False,
         "powerOffUnusedCameras": False,
@@ -91,7 +90,6 @@ def _load_app_config() -> dict:
         "leftMask": 0x66,   # 0b01100110 — cameras 2,3,6,7 (Middle pattern)
         "rightMask": 0x66,
         "uncorrectedOnly": False,
-        "autoConfigureOnStartup": True,
         "developerMode": False,
         "showBfiBvi": True,
         "bfiMin": 0.0,
@@ -105,8 +103,21 @@ def _load_app_config() -> dict:
         "dataDirectory": None,
         "writeRawCsv": True,
         "rawCsvDurationSec": None,
+        # Corrected per-cam CSV ({scan_id}.csv) is redundant now that
+        # per-cam BFI/BVI lands in scans.db (the new viewer + past replay
+        # read from there). Default off; set true to keep exporting it
+        # for external analysis tools.
+        "writeCorrectedCsv": False,
+        # Seconds of live data held in memory per plot buffer before the
+        # oldest half is ring-trimmed; older data then lazy-loads from the
+        # scan DB on pan-into-past. 60 s keeps memory tiny (~1 MB vs ~37 MB
+        # at 30 min) and leans on the verified DB tail for deep history.
+        # Raise it if synchronous DB queries on deep pan-back ever stutter.
+        "liveCacheMaxSeconds": 60,
         "autoScale": False,
         "autoScalePerPlot": False,
+        # Y-axis tick labels on plot cells; runtime toggle in the ⋯ popup.
+        "showAxisLabels": True,
         "reducedMode": False,
         "reducedModeLeftMask": 0xC3,
         "reducedModeRightMask": 0xC3,
@@ -124,10 +135,11 @@ def _load_app_config() -> dict:
         "cq_rolling_avg_window": 10,
         "cq_dark_threshold_per_camera": [3.0] * 8,
         "cq_light_threshold_per_camera": [15.0] * 8,
-        # Optional override for the SDK's DEFAULT_TRIGGER_CONFIG. Keys
-        # specified here shallow-merge over the SDK default at
-        # MotionInterface construction time. Absent → use SDK default.
-        "triggerConfig": None,
+        # Phase 2b: profile HUD overlay on the PlotViewer — sample
+        # rate, paint-tick ms, avg canvas-paint ms, total points
+        # painted. Gated on `developerMode && showProfiling` so clinical
+        # users never see it.
+        "showProfiling": False,
     }
     config_path = resource_path("config", "app_config.json")
     if not config_path.exists():
@@ -138,7 +150,7 @@ def _load_app_config() -> dict:
             loaded = json.load(f)
         out = {
             **defaults,
-            **{k: v for k, v in loaded.items() if k in defaults or k == "output_path"},
+            **{k: v for k, v in loaded.items() if k in defaults},
         }
         # Ensure mask fields are always integers (guard against float drift from JSON)
         for key in ("leftMask", "rightMask", "reducedModeLeftMask", "reducedModeRightMask"):
@@ -186,18 +198,21 @@ def main():
 
     # Configure file logging
     app_config = _load_app_config()
-    output_base = app_config.get("output_path")
-    if not output_base:
-        # Default to cwd, but fall back to ~/Documents/OpenWater Bloodflow
-        # if cwd is not writable (e.g. launched from Finder where cwd is "/")
+    # Single output root: dataDirectory. app-logs/, scan files,
+    # scans.db, ft-test-csvs/ all land under this directory. Falls back to
+    # cwd (when writable) or ~/Documents/OpenWater Bloodflow (e.g. macOS
+    # Finder launch where cwd is "/").
+    _data_dir = app_config.get("dataDirectory")
+    if not _data_dir:
         candidate = os.getcwd()
         if os.access(candidate, os.W_OK):
-            output_base = candidate
+            _data_dir = candidate
         else:
-            output_base = os.path.join(
+            _data_dir = os.path.join(
                 os.path.expanduser("~"), "Documents", "OpenWater Bloodflow"
             )
-    run_dir = os.path.join(output_base, "app-logs")
+    os.makedirs(_data_dir, exist_ok=True)
+    run_dir = os.path.join(_data_dir, "app-logs")
     os.makedirs(run_dir, exist_ok=True)
     ts = datetime.datetime.now().strftime(
         "%Y%m%d_%H%M%S"
@@ -208,7 +223,11 @@ def main():
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
-    logger.info(f"logging to {logfile_path}")
+    logger.info("=" * 64)
+    logger.info("Open-Motion Bloodflow App %s starting", APP_VERSION)
+    logger.info("Log file:       %s", logfile_path)
+    logger.info("Data directory: %s", _data_dir)
+    logger.info("=" * 64)
 
     # Configure the SDK logger hierarchy to use the same handlers
     sdk_logger = logging.getLogger("openmotion.sdk")
@@ -217,13 +236,14 @@ def main():
     sdk_logger.addHandler(file_handler)
     sdk_logger.propagate = False  # Don't propagate to root, use our handlers
 
-    # Construct the MotionInterface here and inject it into the connector
-    # below. The optional ``triggerConfig`` key in app_config.json is
-    # passed as ``default_trigger_config`` so app-level tweaks layer on
-    # top of the SDK defaults at construction time. Workflows resolve
-    # to (interface default ⊕ per-request override) thereafter.
+    # Construct the MotionInterface and inject into the connector below.
+    # data_dir + scan_db_path point the new pipeline's default CsvSink and
+    # ScanDBSink at the same directory the connector uses.
+    _scan_db_path = os.path.join(_data_dir, "scans.db")
     motion_interface = MotionInterface(
-        default_trigger_config=app_config.get("triggerConfig") or None,
+        data_dir=_data_dir,
+        scan_db_path=_scan_db_path,
+        operator_id="bloodflow-app",
     )
     motion_interface.log_system_info()
 
@@ -252,8 +272,8 @@ def main():
 
     engine = QQmlApplicationEngine()
 
-    connector = MOTIONConnector(motion_interface, app_config=app_config, output_path=output_base)
-    qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MOTIONInterface", connector)
+    connector = MotionConnector(motion_interface, app_config=app_config, data_dir=_data_dir)
+    qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MotionInterface", connector)
     engine.rootContext().setContextProperty("appVersion", APP_VERSION)
 
     # Load the QML file
@@ -265,7 +285,7 @@ def main():
 
     # Start the SDK's connection monitor synchronously — it owns its own
     # daemon thread, so the app's Qt event loop runs unblocked.
-    logger.info("Starting MOTION monitoring...")
+    logger.info("Starting Motion monitoring...")
     motion_interface.start(wait=True, wait_timeout=2.0)
 
     def handle_exit():
@@ -280,6 +300,9 @@ def main():
             logger.warning("Error stopping MotionInterface: %s", e)
         engine.deleteLater()
         cleanup_single_instance()
+        logger.info("=" * 64)
+        logger.info("Open-Motion Bloodflow App %s exited cleanly", APP_VERSION)
+        logger.info("=" * 64)
 
     app.aboutToQuit.connect(handle_exit)
 

@@ -21,21 +21,17 @@ from conftest import (
     read_combobox_values,
     require_focus,
     uia_window,
-    wait_with_log,
 )
 from hil_helpers import (
     SENSOR_OPTIONS,
     click_element_center,
     click_panel,
-    close_plot_window,
     force_app_config_value,
     selected_scan_text,
     write_app_config_value,
 )
 
 pytestmark = pytest.mark.dev
-
-VIZ_WAIT = 60  # seconds to leave each plot open
 
 # Same rationale as test_scan_settings: this module's seed scan opens
 # Scan Settings, which is hidden in reduced mode. Snapshot at module
@@ -279,7 +275,7 @@ def _ensure_history_open() -> None:
 
 @pytest.mark.incremental
 class TestHistory:
-    """History modal — scan listing and visualization."""
+    """History modal — scan listing and view-in-plot."""
 
     def test_01_open(self, app):
         _ensure_history_open()
@@ -305,14 +301,20 @@ class TestHistory:
         )
         log.info(f"  Scan ComboBox text: '{scan_text}'")
 
-    def test_03_visualize_bfi_bvi(self, app):
-        click_by_name("Visualize BFI/BVI")
-        wait_with_log(VIZ_WAIT, "BFI/BVI plot open")
+    def test_03_view_in_plot(self, app):
+        """'View in plot →' loads the scan into the embedded PlotViewer."""
+        click_by_name("View in plot →")
+        time.sleep(SLEEP)
 
-    def test_04_close_bfi_plot(self, app):
-        close_plot_window()
+    def test_04_history_closed_by_view(self, app):
+        """The button closes the History modal itself after loading."""
+        assert not _is_history_open(), (
+            "History modal still open after 'View in plot →' — expected "
+            "it to close itself after loading the scan."
+        )
 
     def test_05_close_history(self, app):
+        """Defensive: a stray Escape on the main page is a no-op."""
         require_focus()
         pyautogui.press("escape")
         time.sleep(SLEEP)

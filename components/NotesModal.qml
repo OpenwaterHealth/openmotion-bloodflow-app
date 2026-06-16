@@ -15,13 +15,25 @@ Item {
     readonly property string label: "Session Notes"
 
     function open() {
-        notesArea.text = MOTIONInterface.scanNotes
+        notesArea.text = MotionInterface.scanNotes
         root.visible = true
         notesArea.forceActiveFocus()
     }
+    // Open with a timestamped entry pre-inserted. `stamp` is the bracketed
+    // contents (e.g. "00:04:32 / 14:32:05"). Existing notes get a newline
+    // before the new entry; an empty note gets no leading blank line. Cursor
+    // is parked after the timestamp, ready for the operator to type.
+    function openWithTimestamp(stamp) {
+        var existing = MotionInterface.scanNotes
+        var prefix = existing.length > 0 ? existing.replace(/\s+$/, "") + "\n" : ""
+        notesArea.text = prefix + "[" + stamp + "] - "
+        root.visible = true
+        notesArea.forceActiveFocus()
+        notesArea.cursorPosition = notesArea.text.length
+    }
     function close() {
-        MOTIONInterface.scanNotes = notesArea.text
-        MOTIONInterface.notify("Note saved.", "success", 4000, true)
+        MotionInterface.scanNotes = notesArea.text
+        MotionInterface.notify("Note saved.", "success", 4000, true)
         root.visible = false
     }
 

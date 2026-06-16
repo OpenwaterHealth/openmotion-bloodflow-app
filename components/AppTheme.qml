@@ -7,12 +7,12 @@ import OpenMotion 1.0
  *      AppTheme { id: theme }
  *  Then reference: theme.bgBase, theme.textPrimary, etc.
  *
- *  All tokens react to MOTIONInterface.appConfig.darkMode so the
+ *  All tokens react to MotionInterface.appConfig.darkMode so the
  *  entire UI flips live when the toggle is changed.
  */
 QtObject {
     // ── convenience alias ──────────────────────────────────────────
-    readonly property bool dark: MOTIONInterface.appConfig.darkMode !== false
+    readonly property bool dark: MotionInterface.appConfig.darkMode !== false
 
     // ── backgrounds (lightest → darkest in dark mode) ─────────────
     readonly property color bgBase:       dark ? "#1C1C1E" : "#D5D5DA"
@@ -20,7 +20,7 @@ QtObject {
     readonly property color bgContainer:  dark ? "#1E1E20" : "#E0E0E4"
     readonly property color bgElevated:   dark ? "#252528" : "#C8C8CE"
     readonly property color bgInput:      dark ? "#2E2E33" : "#C0C0C6"
-    readonly property color bgPlot:       dark ? "#141417" : "#F0F0F3"
+    readonly property color bgPlot:       dark ? "#141417" : "#E7E7EC"
     readonly property color bgHover:      dark ? "#2E2E33" : "#BABAC0"
     readonly property color bgCard:       dark ? "#262630" : "#E4E4E8"
     readonly property color bgCardAlt:    dark ? "#232329" : "#DADADE"
@@ -57,4 +57,29 @@ QtObject {
     readonly property color plotGrid:     dark ? "#333333" : "#C0C0C5"
     readonly property color plotLabel:    dark ? "#999999" : "#555555"
     readonly property color plotText:     dark ? "#C9D1D9" : "#2A2A2A"
+    // Plot cell / scrubber track surface. In dark mode this matches the
+    // old bgPanel value (no visual change); in light mode it is white so
+    // cells read as raised paper on the recessed bgPlot surface instead
+    // of the muddier panel gray.
+    readonly property color plotCellBg:   dark ? "#1A1A1C" : "#FFFFFF"
+
+    // ── floating overlays (pills, popups, tooltips over the plot) ──
+    // Translucent in both modes; dark values match the previous
+    // hard-coded Qt.rgba constants so dark mode is unchanged.
+    readonly property color overlayBg:      dark ? Qt.rgba(0.10, 0.10, 0.12, 0.82)
+                                                 : Qt.rgba(1.0, 1.0, 1.0, 0.90)
+    readonly property color overlayBgSolid: dark ? Qt.rgba(0.12, 0.12, 0.14, 0.96)
+                                                 : Qt.rgba(1.0, 1.0, 1.0, 0.97)
+
+    // Guard a user-configured accent (e.g. trace colors) for legibility
+    // against the current plot background: colors too light to read in
+    // light mode (or too dark in dark mode) are replaced with a neutral
+    // ink; everything else passes through untouched.
+    function readableInk(c) {
+        var col = (typeof c === "string") ? Qt.color(c) : c
+        var lum = 0.299 * col.r + 0.587 * col.g + 0.114 * col.b
+        if (!dark && lum > 0.62) return Qt.color("#26262B")
+        if (dark && lum < 0.16) return Qt.color("#E8E8EC")
+        return col
+    }
 }

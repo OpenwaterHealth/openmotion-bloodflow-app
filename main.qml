@@ -21,14 +21,13 @@ ApplicationWindow {
     // to interrupt mid-flight by accident counts.
     readonly property bool _anyInProgress:
         bloodFlowPage.scanning ||
-        bloodFlowPage.configuring ||
         bloodFlowPage.checkRunning ||
-        MOTIONInterface.calibrationRunning ||
-        MOTIONInterface.testScanRunning
+        MotionInterface.calibrationRunning ||
+        MotionInterface.testScanRunning
 
     // Most-specific in-progress label for the warn-toast text. First
     // match wins — calibration is rarest + costliest to interrupt,
-    // scan next, configuration / contact-quality check after.
+    // scan next, contact-quality check after.
     //
     // If a non-dismissable modal is on screen at click time
     // (ContactQualityModal mid-check, etc.), prefer its declared
@@ -38,10 +37,9 @@ ApplicationWindow {
     function _inProgressLabel() {
         var m = bloodFlowPage.modalManager.current
         if (m && m.dismissable === false && m.label) return m.label
-        if (MOTIONInterface.calibrationRunning) return "Calibration"
-        if (MOTIONInterface.testScanRunning)    return "Test scan"
+        if (MotionInterface.calibrationRunning) return "Calibration"
+        if (MotionInterface.testScanRunning)    return "Test scan"
         if (bloodFlowPage.scanning)             return "Scan"
-        if (bloodFlowPage.configuring)          return "Camera configuration"
         if (bloodFlowPage.checkRunning)         return "Contact-quality check"
         return ""
     }
@@ -103,7 +101,7 @@ ApplicationWindow {
                     Qt.quit()
                     return
                 }
-                MOTIONInterface.notify(
+                MotionInterface.notify(
                     window._inProgressLabel()
                         + " in progress.\nClick X again to cancel and exit.",
                     "warning",
@@ -200,7 +198,7 @@ ApplicationWindow {
     }
 
     Connections {
-        target: MOTIONInterface
+        target: MotionInterface
     }
 
     TestResultsWindow {

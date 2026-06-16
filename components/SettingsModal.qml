@@ -18,7 +18,7 @@ Item {
     // ── Settings values — initialised from live config on creation ──────────
     property int    defaultLeftMaskIndex:  4
     property int    defaultRightMaskIndex: 4
-    property string dataOutputPath: MOTIONInterface.directory
+    property string dataOutputPath: MotionInterface.directory
     property bool   showBfiBvi:        true
     property bool   autoScale:         false
     property bool   autoScalePerPlot:  false
@@ -58,14 +58,14 @@ Item {
         title: "Calibration"
         description: "Enter the password to start calibration."
         confirmLabel: "Calibrate"
-        onAccepted: MOTIONInterface.runCalibration(
+        onAccepted: MotionInterface.runCalibration(
             calibrationTargetCombo.currentText.toLowerCase()
         )
     }
 
     // ── Lifecycle ───────────────────────────────────────────────────────────
     function _loadFromConfig() {
-        var cfg = MOTIONInterface.appConfig
+        var cfg = MotionInterface.appConfig
         defaultLeftMaskIndex  = maskToIndex(cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99)
         defaultRightMaskIndex = maskToIndex(cfg.rightMask !== undefined ? cfg.rightMask : 0x99)
         reducedMode        = cfg.reducedMode        !== undefined ? cfg.reducedMode        : false
@@ -105,14 +105,14 @@ Item {
 
     function open() {
         _loadFromConfig()
-        dataPathField.text = MOTIONInterface.directory
+        dataPathField.text = MotionInterface.directory
         root.visible = true
     }
     function close() {
         // Commit any in-progress text field edit before saving
         panel.forceActiveFocus()
-        MOTIONInterface.directory = dataPathField.text
-        MOTIONInterface.saveConfigs({
+        MotionInterface.directory = dataPathField.text
+        MotionInterface.saveConfigs({
             "leftMask":           maskFromIndex(defaultLeftMaskIndex),
             "rightMask":          maskFromIndex(defaultRightMaskIndex),
             "showBfiBvi":         showBfiBvi,
@@ -133,8 +133,8 @@ Item {
             "contrastMin": contrastMin,
             "contrastMax": contrastMax
         })
-        MOTIONInterface.setWriteRawCsv(writeRawCsv)
-        MOTIONInterface.setRawCsvDurationSec(rawCsvDurationSec)
+        MotionInterface.setWriteRawCsv(writeRawCsv)
+        MotionInterface.setRawCsvDurationSec(rawCsvDurationSec)
         settingsChanged()
         root.visible = false
     }
@@ -275,18 +275,35 @@ Item {
     }
 
     component StyledNumberField: TextField {
+        id: numFieldCtrl
+        // Decimal places this field accepts and displays — typing more
+        // is rejected by the validator, and commits round to match.
+        property int decimals: 1
         Layout.preferredWidth: 84
         Layout.preferredHeight: 30
         font.pixelSize: 13
         color: root.colTextPri
         horizontalAlignment: Text.AlignHCenter
         inputMethodHints: Qt.ImhFormattedNumbersOnly
+        validator: RegularExpressionValidator {
+            regularExpression: new RegExp(
+                "^-?\\d*" + (numFieldCtrl.decimals > 0
+                             ? "(\\.\\d{0," + numFieldCtrl.decimals + "})?"
+                             : "") + "$")
+        }
         background: Rectangle {
             color: root.colBgInput
             radius: 4
-            border.color: parent.activeFocus ? root.colAccent : root.colBorderSoft
+            border.color: numFieldCtrl.activeFocus ? root.colAccent : root.colBorderSoft
             border.width: 1
         }
+    }
+
+    // Round to the field's decimal precision before storing, so the
+    // persisted config value matches what the field displays.
+    function _roundTo(v, decimals) {
+        var f = Math.pow(10, decimals)
+        return Math.round(v * f) / f
     }
 
     component PillSwitch: Switch {
@@ -534,6 +551,7 @@ Item {
                     }
 
                     FieldRow {
+                        visible: !root.reducedMode
                         label: "Auto-scale Y-axes"
                         PillSwitch {
                             checked: root.autoScale
@@ -566,7 +584,7 @@ Item {
                     }
 
                     FieldRow {
-                        visible: MOTIONInterface.appConfig.developerMode ? true : false
+                        visible: MotionInterface.appConfig.developerMode ? true : false
                         label: "Trace colors"
                         Rectangle {
                             width: 26; height: 26; radius: 4
@@ -605,7 +623,10 @@ Item {
                     title: "Manual Plot Bounds"
 
                     Text {
-                        text: "Used when auto-scale is off."
+                        // Reduced mode hides the auto-scale toggle and always
+                        // uses these bounds, so don't reference it there.
+                        text: root.reducedMode ? "Y-axis range for the plots."
+                                               : "Used when auto-scale is off."
                         color: root.colTextMuted
                         font.pixelSize: 11
                         font.italic: true
@@ -624,64 +645,80 @@ Item {
                         Text { text: "Max"; color: root.colTextMuted; font.pixelSize: 12; font.weight: Font.DemiBold; Layout.alignment: Qt.AlignHCenter; Layout.preferredWidth: 90 }
                         Item { Layout.fillWidth: true }
 
-                        Text { text: "BFI"; color: "#E74C3C"; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
+                        Text { text: "BFI"; color: theme.readableInk(root.bfiColor); font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
                             Layout.preferredWidth: 90
+                            decimals: 1
                             text: root.bfiMin.toFixed(1)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bfiMin = v; text = root.bfiMin.toFixed(1) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bfiMin = root._roundTo(v, 1); text = root.bfiMin.toFixed(1) }
                         }
                         StyledNumberField {
                             Layout.preferredWidth: 90
+                            decimals: 1
                             text: root.bfiMax.toFixed(1)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bfiMax = v; text = root.bfiMax.toFixed(1) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bfiMax = root._roundTo(v, 1); text = root.bfiMax.toFixed(1) }
                         }
                         Item { Layout.fillWidth: true }
 
-                        Text { text: "BVI"; color: "#3498DB"; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
+                        Text { text: "BVI"; color: theme.readableInk(root.bviColor); font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
                             Layout.preferredWidth: 90
+                            decimals: 1
                             text: root.bviMin.toFixed(1)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bviMin = v; text = root.bviMin.toFixed(1) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bviMin = root._roundTo(v, 1); text = root.bviMin.toFixed(1) }
                         }
                         StyledNumberField {
                             Layout.preferredWidth: 90
+                            decimals: 1
                             text: root.bviMax.toFixed(1)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bviMax = v; text = root.bviMax.toFixed(1) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bviMax = root._roundTo(v, 1); text = root.bviMax.toFixed(1) }
                         }
                         Item { Layout.fillWidth: true }
 
-                        Text { text: "Mean"; color: "#2ECC71"; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
+                        // Mean / Contrast bounds only apply to the Mean/Contrast
+                        // display mode, which reduced mode never shows — hide
+                        // these two rows there. GridLayout skips invisible
+                        // children, so the grid reflows to just BFI / BVI.
+                        Text { visible: !root.reducedMode; text: "Mean"; color: "#2ECC71"; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
+                            visible: !root.reducedMode
                             Layout.preferredWidth: 90
+                            decimals: 0
                             text: root.meanMin.toFixed(0)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.meanMin = v; text = root.meanMin.toFixed(0) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.meanMin = Math.round(v); text = root.meanMin.toFixed(0) }
                         }
                         StyledNumberField {
+                            visible: !root.reducedMode
                             Layout.preferredWidth: 90
+                            decimals: 0
                             text: root.meanMax.toFixed(0)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.meanMax = v; text = root.meanMax.toFixed(0) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.meanMax = Math.round(v); text = root.meanMax.toFixed(0) }
                         }
-                        Item { Layout.fillWidth: true }
+                        Item { visible: !root.reducedMode; Layout.fillWidth: true }
 
-                        Text { text: "Contrast"; color: "#9B59B6"; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
+                        Text { visible: !root.reducedMode; text: "Contrast"; color: "#9B59B6"; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
+                            visible: !root.reducedMode
                             Layout.preferredWidth: 90
+                            decimals: 2
                             text: root.contrastMin.toFixed(2)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.contrastMin = v; text = root.contrastMin.toFixed(2) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.contrastMin = root._roundTo(v, 2); text = root.contrastMin.toFixed(2) }
                         }
                         StyledNumberField {
+                            visible: !root.reducedMode
                             Layout.preferredWidth: 90
+                            decimals: 2
                             text: root.contrastMax.toFixed(2)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.contrastMax = v; text = root.contrastMax.toFixed(2) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.contrastMax = root._roundTo(v, 2); text = root.contrastMax.toFixed(2) }
                         }
-                        Item { Layout.fillWidth: true }
+                        Item { visible: !root.reducedMode; Layout.fillWidth: true }
                     }
                 }
 
                 // ── Reduced Mode ─────────────────────────────────────────────
                 SectionCard {
                     title: "Reduced Mode"
-                    visible: !root.reducedMode || (MOTIONInterface.appConfig.developerMode ? true : false)
+                    visible: !root.reducedMode || (MotionInterface.appConfig.developerMode ? true : false)
 
                     FieldRow {
                         label: "Enable"
@@ -710,9 +747,9 @@ Item {
                             label: "Dark Mode"
                             PillSwitch {
                                 id: darkModeSwitch
-                                checked: MOTIONInterface.appConfig.darkMode !== false
+                                checked: MotionInterface.appConfig.darkMode !== false
                                 onToggled: {
-                                    MOTIONInterface.setConfig("darkMode", checked)
+                                    MotionInterface.setConfig("darkMode", checked)
                                 }
                             }
                         }
@@ -722,7 +759,7 @@ Item {
                 // ── Developer ────────────────────────────────────────────────
                 SectionCard {
                     title: "Developer"
-                    visible: MOTIONInterface.appConfig.developerMode ? true : false
+                    visible: MotionInterface.appConfig.developerMode ? true : false
 
                     FieldRow {
                         label: "Console"
@@ -730,7 +767,7 @@ Item {
                             text: "Soft Reset"
                             Layout.preferredWidth: 110
                             hoverColor: "#E67E22"
-                            onClicked: MOTIONInterface.softResetSensor("console")
+                            onClicked: MotionInterface.softResetSensor("console")
                         }
                         Item { Layout.fillWidth: true }
                     }
@@ -738,13 +775,13 @@ Item {
                     FieldRow {
                         label: "Console fans"
                         PillSwitch {
-                            checked: MOTIONInterface.consoleFanOn
-                            enabled: MOTIONInterface.consoleConnected
-                            onToggled: MOTIONInterface.setConsoleFan(checked)
+                            checked: MotionInterface.consoleFanOn
+                            enabled: MotionInterface.consoleConnected
+                            onToggled: MotionInterface.setConsoleFan(checked)
                         }
                         Text {
-                            text: MOTIONInterface.consoleFanOn ? "On" : "Off"
-                            color: MOTIONInterface.consoleFanOn ? root.colAccent : root.colTextMuted
+                            text: MotionInterface.consoleFanOn ? "On" : "Off"
+                            color: MotionInterface.consoleFanOn ? root.colAccent : root.colTextMuted
                             font.pixelSize: 12
                         }
                         Item { Layout.fillWidth: true }
@@ -816,8 +853,8 @@ Item {
                             Layout.preferredWidth: 130
                             model: ["Both", "Left", "Right"]
                             currentIndex: 0
-                            enabled: !MOTIONInterface.calibrationRunning
-                                  && !MOTIONInterface.testScanRunning
+                            enabled: !MotionInterface.calibrationRunning
+                                  && !MotionInterface.testScanRunning
                         }
                         Item { Layout.fillWidth: true }
                     }
@@ -838,9 +875,9 @@ Item {
                             text: "Calibrate"
                             Layout.preferredWidth: 130
                             Layout.preferredHeight: 34
-                            enabled: MOTIONInterface.consoleConnected
-                                  && !MOTIONInterface.calibrationRunning
-                                  && !MOTIONInterface.testScanRunning
+                            enabled: MotionInterface.consoleConnected
+                                  && !MotionInterface.calibrationRunning
+                                  && !MotionInterface.testScanRunning
                             onClicked: calibrationPasswordModal.open()
                         }
 
@@ -853,7 +890,7 @@ Item {
                             border.width: 1
                             border.color: root.colBorderSoft
                             color: {
-                                switch (MOTIONInterface.calibrationStatus) {
+                                switch (MotionInterface.calibrationStatus) {
                                 case "running": return "#2196F3"
                                 case "passed":  return "#4CAF50"
                                 case "failed":  return "#F44336"
@@ -884,13 +921,13 @@ Item {
                             color: root.colTextPri
                             font.pixelSize: 12
                             text: {
-                                switch (MOTIONInterface.calibrationStatus) {
+                                switch (MotionInterface.calibrationStatus) {
                                 case "running":
                                     return "Calibrating... (" + calibTimer.elapsedSec
-                                           + "s / " + MOTIONInterface.maxCalibrationTimeSec + "s)"
+                                           + "s / " + MotionInterface.maxCalibrationTimeSec + "s)"
                                 case "passed":  return "Calibration Passed"
                                 case "failed":
-                                    var reason = MOTIONInterface.calibrationFailureReason
+                                    var reason = MotionInterface.calibrationFailureReason
                                     return reason
                                         ? "Calibration Failed — " + reason
                                         : "Calibration Failed"
@@ -916,10 +953,10 @@ Item {
                             text: "Test"
                             Layout.preferredWidth: 130
                             Layout.preferredHeight: 34
-                            enabled: MOTIONInterface.consoleConnected
-                                  && !MOTIONInterface.calibrationRunning
-                                  && !MOTIONInterface.testScanRunning
-                            onClicked: MOTIONInterface.runTestScan(
+                            enabled: MotionInterface.consoleConnected
+                                  && !MotionInterface.calibrationRunning
+                                  && !MotionInterface.testScanRunning
+                            onClicked: MotionInterface.runTestScan(
                                 calibrationTargetCombo.currentText.toLowerCase()
                             )
                         }
@@ -933,23 +970,23 @@ Item {
                         property int elapsedSec: 0
                         interval: 1000
                         repeat: true
-                        running: MOTIONInterface.calibrationRunning
+                        running: MotionInterface.calibrationRunning
                         onTriggered: elapsedSec += 1
                     }
 
                     Connections {
-                        target: MOTIONInterface
+                        target: MotionInterface
                         function onCalibrationStateChanged() {
-                            if (MOTIONInterface.calibrationStatus === "running") {
+                            if (MotionInterface.calibrationStatus === "running") {
                                 calibTimer.elapsedSec = 0
                             }
                         }
                     }
 
                     Connections {
-                        target: MOTIONInterface
+                        target: MotionInterface
                         function onTestScanStateChanged() {
-                            var s = MOTIONInterface.testScanStatus
+                            var s = MotionInterface.testScanStatus
                             if (s === "running" || s === "done"
                                 || s === "failed" || s === "aborted") {
                                 testResultsWindow.show()
@@ -967,8 +1004,8 @@ Item {
                             Layout.preferredWidth: 200
                             hoverColor: "#C0392B"
                             onClicked: {
-                                MOTIONInterface.setConfig("developerMode", false)
-                                MOTIONInterface.notify("Developer mode disabled.", "info", 3000, false, "dev-mode")
+                                MotionInterface.setConfig("developerMode", false)
+                                MotionInterface.notify("Developer mode disabled.", "info", 3000, false, "dev-mode")
                             }
                         }
                         Item { Layout.fillWidth: true }
@@ -986,7 +1023,7 @@ Item {
                     }
                     FieldRow {
                         label: "SDK"
-                        Text { text: MOTIONInterface.get_sdk_version(); color: root.colTextPri; font.pixelSize: 13; font.family: "Consolas" }
+                        Text { text: MotionInterface.get_sdk_version(); color: root.colTextPri; font.pixelSize: 13; font.family: "Consolas" }
                         Item { Layout.fillWidth: true }
                     }
                     // Updates row is hidden in reduced (clinical) mode —
@@ -1003,7 +1040,7 @@ Item {
                             onClicked: {
                                 updateCheckBtn.text = "Checking..."
                                 updateCheckBtn.enabled = false
-                                MOTIONInterface.checkForUpdates()
+                                MotionInterface.checkForUpdates()
                             }
                         }
                         Text {
@@ -1016,7 +1053,7 @@ Item {
                     }
 
                     Connections {
-                        target: MOTIONInterface
+                        target: MotionInterface
                         enabled: !root.reducedMode
                         function onUpdateAvailable(version, url) {
                             updateCheckBtn.text = "Check for Updates"

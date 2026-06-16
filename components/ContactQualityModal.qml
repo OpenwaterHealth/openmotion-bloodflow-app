@@ -82,7 +82,7 @@ Item {
     // Each entry: { camera, typeKey, typeText, value }
     property var entries: []
 
-    readonly property bool developerMode: !!(MOTIONInterface.appConfig && MOTIONInterface.appConfig.developerMode)
+    readonly property bool developerMode: !!(MotionInterface.appConfig && MotionInterface.appConfig.developerMode)
 
     signal stopScanRequested()
     signal continueRequested()
@@ -210,7 +210,7 @@ Item {
         var prefix = (side === "left") ? "L" : "R"
         var label = prefix + camIndex1
         var lines = [label]
-        var showDn = !!(MOTIONInterface.appConfig && MOTIONInterface.appConfig.developerMode)
+        var showDn = !!(MotionInterface.appConfig && MotionInterface.appConfig.developerMode)
         if (root.liveScan && !cameraEnabled(side, camIndex1)) {
             lines.push("Inactive for current scan mask")
             return lines.join("\n")
@@ -383,7 +383,7 @@ Item {
 
                 // Left sensor
                 Rectangle {
-                    visible: MOTIONInterface.leftSensorConnected
+                    visible: MotionInterface.leftSensorConnected
                     width: 180; height: 210; radius: 22
                     color: theme.bgCard
                     border.color: theme.borderSubtle; border.width: 2
@@ -429,7 +429,7 @@ Item {
 
                 // Right sensor
                 Rectangle {
-                    visible: MOTIONInterface.rightSensorConnected
+                    visible: MotionInterface.rightSensorConnected
                     width: 180; height: 210; radius: 22
                     color: theme.bgCard
                     border.color: theme.borderSubtle; border.width: 2

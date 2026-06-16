@@ -15,8 +15,8 @@ incremental class:
      "Good signal quality" modal).
   4. Click Start, wait for the scan to complete (~5 min budget).
   5. Dismiss the auto-opened Session Notes modal.
-  6. Open History, verify the latest scan is selected, visualize
-     BFI/BVI, close everything.
+  6. Open History, verify the latest scan is selected, open it in
+     the embedded PlotViewer ("View in plot →"), close everything.
 
 Preconditions
 -------------
@@ -26,10 +26,9 @@ Preconditions
 
 Why this is in the release tier
 -------------------------------
-Real laser firing for 2 minutes plus FPGA configuration plus
-visualization windows. Roughly 10 min of wall-clock per run; not
-appropriate for the dev-tier HIL chain that fires on every push to
-``next``.
+Real laser firing for 2 minutes plus FPGA configuration. Roughly
+10 min of wall-clock per run; not appropriate for the dev-tier HIL
+chain that fires on every push to ``next``.
 """
 
 import time
@@ -50,7 +49,6 @@ from conftest import (
 )
 from hil_helpers import (
     click_panel,
-    close_plot_window,
     dismiss_signal_quality_modal,
     force_app_config_value,
     write_app_config_value,
@@ -74,7 +72,6 @@ def _restore_reduced_mode_on_module_teardown():
 
 SCAN_DURATION_MIN = 2
 WAIT_AFTER_SCAN = SCAN_DURATION_MIN * 60 + 180  # scan + 3-min buffer
-VIZ_WAIT = 30  # seconds to leave each plot open
 CHECK_WAIT_SEC = 120  # 2 minutes for Check to complete
 
 
@@ -97,7 +94,7 @@ def _run_check_step(label: str = ""):
 
 @pytest.mark.incremental
 class TestScanFlow:
-    """End-to-end scan flow: settings -> notes -> scan -> history -> visualize."""
+    """End-to-end scan flow: settings -> notes -> scan -> history -> view in plot."""
 
     def test_01_open_scan_settings(self, app):
         click_panel("Scan\nSettings")
@@ -174,16 +171,17 @@ class TestScanFlow:
 
     def test_11_latest_scan_selected(self, app):
         """History.open() sets scanPicker index 0 (latest scan) automatically."""
-        pass  # verified by subsequent visualize steps
+        pass  # verified by the subsequent view-in-plot step
 
-    def test_12_visualize_bfi_bvi(self, app):
-        click_by_name("Visualize BFI/BVI")
-        wait_with_log(VIZ_WAIT, "BFI/BVI plot open")
+    def test_12_view_in_plot(self, app):
+        """'View in plot →' loads the scan into the embedded PlotViewer
+        and closes the History modal itself."""
+        click_by_name("View in plot →")
+        time.sleep(SLEEP)
 
-    def test_13_close_bfi_plot(self, app):
-        close_plot_window()
-
-    def test_14_close_history(self, app):
+    def test_13_close_history(self, app):
+        """Defensive: History should already have closed itself on
+        'View in plot →'; a stray Escape on the main page is a no-op."""
         require_focus()
         pyautogui.press("escape")
         time.sleep(SLEEP)
