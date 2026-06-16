@@ -840,7 +840,9 @@ class MotionConnector(QObject):
             _app_version = ""
         try:
             _sdk_version = self._interface.get_sdk_version()
-            _sdk_version = _sdk_version if isinstance(_sdk_version, str) else ""
+            _sdk_version = (
+                _sdk_version if isinstance(_sdk_version, str) else ""
+            )
         except Exception:
             _sdk_version = ""
         self._audit.log("system_startup", {
@@ -1365,7 +1367,6 @@ class MotionConnector(QObject):
         self.stopCapture()
         try:
             self._audit.log("system_shutdown", {"clean": True})
-            self._audit.close()
         except Exception:
             logger.warning("audit shutdown log failed", exc_info=True)
         logger.info("MotionConnector shutdown complete.")
@@ -1755,6 +1756,48 @@ class MotionConnector(QObject):
             logger.warning(
                 "deleteScans: could not open scan DB", exc_info=True)
         return deleted
+
+    # ── Audit log (QML-facing) ───────────────────────────────────────────
+    @pyqtSlot(result="QVariantList")
+    @pyqtSlot(int, result="QVariantList")
+    def auditLogEntries(self, limit: int = 500):
+        """Audit-log rows (newest first) for the Logs modal. Pure read —
+        does not itself log, so refreshing never double-logs."""
+        try:
+            return self._audit.query(int(limit))
+        except Exception:
+            logger.warning("auditLogEntries failed", exc_info=True)
+            return []
+
+    @pyqtSlot()
+    def recordAuditLogViewed(self):
+        """Record that the audit log was opened. Called once from
+        LogsModal.open()."""
+        try:
+            n = len(self._audit.query())
+        except Exception:
+            n = 0
+        self._audit.log("audit_log_viewed", {"entry_count": n})
+
+    @pyqtSlot(str, result=str)
+    def exportAuditLogCsv(self, dest_path: str) -> str:
+        """Export the full audit log to CSV. Accepts a plain path or a
+        file:// URL. Records an ``audit_log_exported`` event. Returns the
+        written path, or '' on failure."""
+        if not dest_path:
+            return ""
+        path = dest_path.replace("file:///", "").replace("file://", "")
+        try:
+            n = self._audit.export_csv(path)
+            self._audit.log(
+                "audit_log_exported", {"dest": path, "row_count": n}
+            )
+            logger.info("exportAuditLogCsv: wrote %d rows -> %s", n, path)
+            return path
+        except Exception:
+            logger.exception("exportAuditLogCsv failed for %r", path)
+            self.errorOccurred.emit("Audit log export failed.")
+            return ""
 
     @pyqtProperty(str, notify=directoryChanged)
     def directory(self):

@@ -1,5 +1,4 @@
 """Unit tests for audit-log instrumentation in MotionConnector."""
-import json
 from unittest.mock import MagicMock
 
 import pytest
