@@ -157,6 +157,22 @@ Rectangle {
     // ── Source subscription ────────────────────────────────────────────
     readonly property var scanSource: MotionInterface.currentScanSource
 
+    // ── Effective camera masks ─────────────────────────────────────────
+    // The grid lays out from the camera config of whatever's being shown.
+    // A replayed past scan exposes the masks it actually recorded
+    // (leftMask/rightMask >= 0); use those so its layout doesn't inherit
+    // the operator's current Scan Settings selection (issue #175). A live
+    // source — or no source, before the first scan — reports -1 (unknown),
+    // so the grid keeps following the live leftMask/rightMask selection.
+    readonly property int _effLeftMask:
+        (viewer.scanSource && viewer.scanSource.leftMask !== undefined
+         && viewer.scanSource.leftMask >= 0)
+            ? viewer.scanSource.leftMask : viewer.leftMask
+    readonly property int _effRightMask:
+        (viewer.scanSource && viewer.scanSource.rightMask !== undefined
+         && viewer.scanSource.rightMask >= 0)
+            ? viewer.scanSource.rightMask : viewer.rightMask
+
     // ── Grid model ─────────────────────────────────────────────────────
     // Dev mode (default) — one cell per active camera (bits set in
     // leftMask / rightMask), arranged to mirror the physical U-shape of
@@ -169,7 +185,7 @@ Rectangle {
     // compact upward; an unselected camera in a kept row just leaves its
     // slot blank.
     readonly property var _devCellModel: {
-        var masks = [viewer.leftMask & 0xFF, viewer.rightMask & 0xFF]
+        var masks = [viewer._effLeftMask & 0xFF, viewer._effRightMask & 0xFF]
         var sides = ["left", "right"]
         var colBase = [0, masks[0] !== 0 ? 2 : 0]
         var entries = []
