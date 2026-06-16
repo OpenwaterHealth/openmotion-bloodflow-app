@@ -88,7 +88,7 @@ Schema:
 | `ts_epoch` | REAL | Event time as a Unix timestamp (seconds since 1970-01-01 UTC). |
 | `ts_iso` | TEXT | Event time as a local ISO-8601 string with UTC offset (unambiguous across DST), e.g. `2026-06-15T09:14:02-07:00`. |
 | `event_type` | TEXT | One of the event types in the table above. |
-| `details` | TEXT | Compact JSON object, or empty when the event has no payload. |
+| `details` | TEXT | Compact JSON object, or `NULL` when the event has no payload. |
 
 Because it's plain SQLite, auditors can also query the table directly with
 any SQLite tool, for example:
