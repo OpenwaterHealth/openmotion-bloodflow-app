@@ -1668,6 +1668,64 @@ class MotionConnector(QObject):
         rows.sort(key=lambda r: r["timestamp"], reverse=True)
         return rows
 
+    @pyqtSlot(int, result="QVariantMap")
+    def get_session_stats(self, session_id: int):
+        """Lazily fetch heavier per-scan stats (row count) when a History
+        row is focused, so the list query itself stays cheap."""
+        db_path = getattr(self._interface, "scan_db_path", None)
+        if not db_path:
+            return {"sampleCount": 0}
+        try:
+            from omotion.ScanDatabase import ScanDatabase
+            db = ScanDatabase(db_path)
+            try:
+                row = next(
+                    db._connection().execute(
+                        "SELECT COUNT(*) FROM session_data"
+                        " WHERE session_id = ?",
+                        (int(session_id),),
+                    ),
+                    None,
+                )
+                return {"sampleCount": int(row[0]) if row else 0}
+            finally:
+                db.close()
+        except Exception:
+            logger.warning(
+                "get_session_stats failed for %s", session_id,
+                exc_info=True)
+            return {"sampleCount": 0}
+
+    @pyqtSlot("QVariantList", result=int)
+    def deleteScans(self, session_ids):
+        """Delete the given scan-DB sessions (CASCADE removes their
+        session_data). Returns the count actually deleted. The developer-
+        password gate is enforced in QML before this is called."""
+        db_path = getattr(self._interface, "scan_db_path", None)
+        if not db_path:
+            return 0
+        deleted = 0
+        try:
+            from omotion.ScanDatabase import ScanDatabase
+            db = ScanDatabase(db_path)
+            try:
+                for sid in session_ids:
+                    try:
+                        if db.delete_session(int(sid)):
+                            deleted += 1
+                            logger.info(
+                                "deleteScans: removed session %s", sid)
+                    except Exception:
+                        logger.warning(
+                            "deleteScans: failed to delete %s", sid,
+                            exc_info=True)
+            finally:
+                db.close()
+        except Exception:
+            logger.warning(
+                "deleteScans: could not open scan DB", exc_info=True)
+        return deleted
+
     @pyqtProperty(str, notify=directoryChanged)
     def directory(self):
         return self._directory

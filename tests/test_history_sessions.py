@@ -110,3 +110,47 @@ def test_get_scan_sessions_interrupted_open_session(tmp_path):
 def test_get_scan_sessions_empty_without_db(tmp_path):
     c = _connector(tmp_path, None)
     assert c.get_scan_sessions() == []
+
+
+def _insert_rows(db_path, session_id, n):
+    db = ScanDatabase(db_path=db_path)
+    for i in range(n):
+        db.insert_session_data(
+            session_id=session_id, cam_id=0, side=0,
+            timestamp_s=float(i), frame_id=i, bfi=1.0, bvi=2.0,
+        )
+    db.close()
+
+
+def test_get_session_stats_counts_rows(tmp_path):
+    db_path = str(tmp_path / "scans.db")
+    sid = _make_session(
+        db_path, "20260612_092000_subjA", 100.0, 105.0, 0xC3, 0xC3)
+    _insert_rows(db_path, sid, 7)
+    c = _connector(tmp_path, db_path)
+    assert c.get_session_stats(sid)["sampleCount"] == 7
+
+
+def test_delete_scans_removes_session_and_cascades(tmp_path):
+    db_path = str(tmp_path / "scans.db")
+    keep = _make_session(
+        db_path, "20260612_092000_keep", 100.0, 105.0, 0xC3, 0xC3)
+    drop = _make_session(
+        db_path, "20260612_093000_drop", 200.0, 205.0, 0x5A, 0x5A)
+    _insert_rows(db_path, drop, 5)
+    c = _connector(tmp_path, db_path)
+
+    removed = c.deleteScans([drop])
+    assert removed == 1
+    remaining = [r["sessionId"] for r in c.get_scan_sessions()]
+    assert remaining == [keep]
+    # session_data cascade-deleted with the session
+    assert c.get_session_stats(drop)["sampleCount"] == 0
+
+
+def test_delete_scans_empty_list_is_noop(tmp_path):
+    db_path = str(tmp_path / "scans.db")
+    _make_session(db_path, "20260612_092000_keep", 100.0, 105.0, 0xC3, 0xC3)
+    c = _connector(tmp_path, db_path)
+    assert c.deleteScans([]) == 0
+    assert len(c.get_scan_sessions()) == 1
