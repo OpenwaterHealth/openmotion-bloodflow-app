@@ -202,11 +202,19 @@ Item {
         nameFilters: ["CSV files (*.csv)", "All files (*)"]
         onAccepted: {
             var path = selectedFile.toString().replace("file:///", "")
-            var ok = MotionInterface.exportAuditLogCsv(path)
-            if (ok) {
-                MotionInterface.notify("Audit log exported to " + ok, "success")
+            // exportAuditLogCsv returns the written path ("" on failure).
+            var dest = MotionInterface.exportAuditLogCsv(path)
+            if (dest) {
+                MotionInterface.notify("Audit log exported to " + dest, "success")
                 root.refresh()   // pick up the audit_log_exported entry
             }
         }
+    }
+
+    // Refresh if the data directory (and therefore the scan DB) changes
+    // while the viewer is open — mirrors HistoryModal's behavior.
+    Connections {
+        target: MotionInterface
+        function onDirectoryChanged() { if (root.visible) root.refresh() }
     }
 }
