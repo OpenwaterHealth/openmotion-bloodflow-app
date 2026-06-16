@@ -1246,12 +1246,17 @@ class MotionConnector(QObject):
         if is_now_connected:
             logger.info("Handle %s -> CONNECTED (%s)", name, reason)
             self.signalConnected.emit(name, "")
+            self._audit.log("device_connected",
+                            {"device": name, "reason": str(reason)})
+            self._log_device_stats(name)
         elif is_now_lost:
             logger.info(
                 "Handle %s -> DISCONNECTED (%s) and state is %s",
                 name, reason, self._state,
             )
             self.signalDisconnected.emit(name, "")
+            self._audit.log("device_disconnected",
+                            {"device": name, "reason": str(reason)})
             # Abort an in-flight FPGA flash / sensor-configure pipeline.
             # The SDK does not subscribe to disconnect events for the
             # configure-cameras flow (only start_scan does), so without
@@ -1279,6 +1284,26 @@ class MotionConnector(QObject):
         if is_now_connected or is_now_lost:
             self.connectionStatusChanged.emit()
             self.update_state()
+
+    def _log_device_stats(self, name: str) -> None:
+        """Best-effort audit of a device's hardware + firmware IDs on
+        connect. Missing values are logged as empty strings."""
+        handle = getattr(self._interface, name, None)
+        hwid = ""
+        fw = ""
+        try:
+            if handle is not None and hasattr(handle, "get_hardware_id"):
+                hwid = str(handle.get_hardware_id() or "")
+        except Exception:
+            pass
+        try:
+            if handle is not None and hasattr(handle, "get_version"):
+                fw = str(handle.get_version() or "")
+        except Exception:
+            pass
+        self._audit.log("device_stats", {
+            "device": name, "hardware_id": hwid, "firmware_version": fw,
+        })
 
     def update_state(self):
         """Update system state based on connection and configuration."""

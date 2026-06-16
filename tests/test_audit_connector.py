@@ -1,4 +1,5 @@
 """Unit tests for audit-log instrumentation in MotionConnector."""
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -82,3 +83,31 @@ def test_no_db_path_noop(tmp_path):
     dest = str(tmp_path / "out.csv")
     c.exportAuditLogCsv(dest)      # no raise; nothing written when disabled
     assert not os.path.exists(dest)
+
+
+def test_disconnect_logs_device_disconnected(tmp_path):
+    from omotion import ConnectionState
+    c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
+    handle = MagicMock()
+    handle.name = "left"
+    c._on_handle_state_changed_impl(
+        handle, ConnectionState.CONNECTED, ConnectionState.DISCONNECTED,
+        "unplugged",
+    )
+    assert "device_disconnected" in _types(c)
+
+
+def test_connect_logs_device_connected_and_stats(tmp_path):
+    from omotion import ConnectionState
+    c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
+    handle = MagicMock()
+    handle.name = "console"
+    handle.get_hardware_id.return_value = "DEADBEEF"
+    handle.get_version.return_value = "1.0.0"
+    c._on_handle_state_changed_impl(
+        handle, ConnectionState.DISCONNECTED, ConnectionState.CONNECTED,
+        "found",
+    )
+    t = _types(c)
+    assert "device_connected" in t
+    assert "device_stats" in t
