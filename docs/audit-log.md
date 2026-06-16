@@ -23,7 +23,7 @@ The viewer lists entries **newest first**, with three columns:
 
 | Column | Meaning |
 |---|---|
-| **Time** | Local timestamp the event was recorded (ISO-8601, e.g. `2026-06-15T09:14:02`). |
+| **Time** | Local timestamp the event was recorded (ISO-8601 with UTC offset, e.g. `2026-06-15T09:14:02-07:00`). |
 | **Event** | The event type (see the table below). |
 | **Details** | A compact JSON object with event-specific fields. |
 
@@ -86,7 +86,7 @@ Schema:
 |---|---|---|
 | `id` | INTEGER | Auto-incrementing primary key (also the insertion order). |
 | `ts_epoch` | REAL | Event time as a Unix timestamp (seconds since 1970-01-01 UTC). |
-| `ts_iso` | TEXT | Event time as a local ISO-8601 string, e.g. `2026-06-15T09:14:02`. |
+| `ts_iso` | TEXT | Event time as a local ISO-8601 string with UTC offset (unambiguous across DST), e.g. `2026-06-15T09:14:02-07:00`. |
 | `event_type` | TEXT | One of the event types in the table above. |
 | `details` | TEXT | Compact JSON object, or empty when the event has no payload. |
 
@@ -110,8 +110,8 @@ archiving), with one header row and one row per event:
 
 ```
 ts_iso,ts_epoch,event_type,details
-2026-06-15T09:14:02,1750000442.12,system_startup,"{""app_version"":""1.2.3"",""data_dir"":""C:\\…"",""sdk_version"":""…""}"
-2026-06-15T09:14:02,1750000442.13,system_info,"{""arch"":""AMD64"",""hostname"":""LAB-PC-01"",…}"
+2026-06-15T09:14:02-07:00,1750000442.12,system_startup,"{""app_version"":""1.2.3"",""data_dir"":""C:\\…"",""sdk_version"":""…""}"
+2026-06-15T09:14:02-07:00,1750000442.13,system_info,"{""arch"":""AMD64"",""hostname"":""LAB-PC-01"",…}"
 ```
 
 The `details` column holds the raw JSON for each event, quoted per standard
