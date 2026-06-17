@@ -55,7 +55,7 @@
   "forceLaserFail": false,
   "cameraFakeData": false,
   "cameraTempAlertThresholdC": 110,
-  "powerOffUnusedCameras": false,
+  "powerOffUnusedCameras": true,
   "sensorDebugLogging": false,
   "histoThrottle": false,
   "histoCmp": true,
