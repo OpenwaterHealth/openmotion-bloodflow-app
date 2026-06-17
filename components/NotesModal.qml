@@ -14,6 +14,14 @@ Item {
     // Modal interface — see HistoryModal.qml for rationale.
     readonly property string label: "Session Notes"
 
+    // Left-edge space to keep clear of the icon bar (BloodFlow's
+    // ButtonPanel — 80px wide + 8px margin, pinned left at z:10000, which
+    // is ABOVE this modal's z:9998). The card is centered in the region to
+    // the RIGHT of this inset so it never slides under the bar on narrow
+    // windows. Matches PlotViewer's left content edge (88 + 16 gutter).
+    // See HistoryModal.qml for the original fix.
+    readonly property int iconBarInset: 104
+
     function open() {
         notesArea.text = MotionInterface.scanNotes
         root.visible = true
@@ -45,13 +53,18 @@ Item {
     }
 
     Rectangle {
-        width: 600
+        width: Math.min(parent.width - root.iconBarInset - 40, 600)
         height: 450
         radius: 12
         color: theme.bgContainer
         border.color: theme.borderSubtle
         border.width: 2
-        anchors.centerIn: parent
+        // Center within [iconBarInset, parent.width] so the card clears the
+        // icon bar instead of bleeding under it. horizontalCenterOffset
+        // shifts the full-width center right by half the reserved inset.
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.horizontalCenterOffset: root.iconBarInset / 2
 
         // Absorb empty-space clicks inside the modal so they don't
         // propagate to the backdrop and close the modal (issue #106).

@@ -34,6 +34,13 @@ Item {
     // Async "Load in viewer" busy state (issue #152 pattern).
     property bool loadingPlot: false
 
+    // Left-edge space to keep clear of the icon bar (BloodFlow's
+    // ButtonPanel — 80px wide + 8px margin, pinned left at z:10000, which
+    // is ABOVE this modal's z:9998). The card is centered in the region to
+    // the RIGHT of this inset so it never slides under the bar on narrow
+    // windows. Matches PlotViewer's left content edge (88 + 16 gutter).
+    readonly property int iconBarInset: 104
+
     // ── data plumbing ──────────────────────────────────────────────
     function open() {
         refresh()
@@ -160,13 +167,18 @@ Item {
     }
 
     Rectangle {
-        width: Math.min(parent.width - 60, 1040)
+        width: Math.min(parent.width - root.iconBarInset - 40, 1040)
         height: Math.min(parent.height - 60, 680)
         radius: 12
         color: theme.bgContainer
         border.color: theme.borderSubtle
         border.width: 2
-        anchors.centerIn: parent
+        // Center within [iconBarInset, parent.width] so the card clears the
+        // icon bar instead of bleeding under it. horizontalCenterOffset
+        // shifts the full-width center right by half the reserved inset.
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.horizontalCenterOffset: root.iconBarInset / 2
 
         // Absorb empty-space clicks so they don't reach the backdrop.
         MouseArea { anchors.fill: parent }
