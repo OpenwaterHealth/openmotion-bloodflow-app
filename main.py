@@ -69,6 +69,10 @@ def _load_app_config() -> dict:
     defaults = {
         "forceLaserFail": False,
         "cameraTempAlertThresholdC": 105,
+        # Console over-temp trip (°C) pushed to the console user config on
+        # connect. 0/missing disables the firmware trip, so this is validated
+        # (1-60 °C) before any write; see motion_config.ensure_tec_trip.
+        "tecTripTempC": 40,
         "sensorDebugLogging": False,
         "cameraFakeData": False,
         "histoThrottle": False,

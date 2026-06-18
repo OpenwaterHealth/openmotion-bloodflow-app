@@ -75,6 +75,7 @@ Debug flags that are still useful when hardware **is** attached (`config/app_con
 | `cameraFakeData` | `false` | **Broken — do not use.** Was meant to request firmware fake histograms; see "Working without hardware". |
 | `histoThrottle` | `false` | Drop histograms to reduce log spam. |
 | `histoCmp` | `true` | Compare received vs expected histogram frame counts. |
+| `tecTripTempC` | `40` | Console over-temp trip (°C) pushed to the console user config on connect via `motion_config.ensure_tec_trip` (read-modify-write, preserves calibration + OPT/EE keys). Validated to 1–60 °C; absent/invalid values leave the device's existing trip untouched (never writes `0`, which would disable the firmware trip). |
 | `ft_min_mean_per_camera` | `[40,40,…]` | Calibration pass threshold — min pixel mean per camera (8-element array). |
 | `calibration_scan_duration_sec` | `15` | Calibration runtime. |
 | `test_scan_duration_sec` | `5` | "Test" scan runtime (feature #132). |
@@ -118,6 +119,7 @@ The `dataDirectory` config key controls the root (defaults to cwd if unset — f
 - **PyInstaller libusb mirror** (`openwater.spec` lines 61–95): if bundled app fails USB enumeration, the runtime hook can't find vendored libusb DLLs. Check the spec's mirror step.
 - **`laser_params.json` is not "tunable":** editing values risks laser-off, wrong pulse widths, safety failures. Treat as locked baseline.
 - **SDK is editable, not pinned to a wheel here** (unlike `openmotion-test-app`). Bumping the SDK requires no action; bugs in either repo are visible immediately.
+- **Don't track `docs/superpowers/`** — brainstorming specs, implementation plans, and session/status notes are local process artifacts, not repo deliverables. The directory is gitignored; keep it that way and never `git add -f` files under it into a PR.
 
 ## Branching and releases
 

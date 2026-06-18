@@ -55,6 +55,7 @@
   "forceLaserFail": false,
   "cameraFakeData": false,
   "cameraTempAlertThresholdC": 110,
+  "tecTripTempC": 40,
   "powerOffUnusedCameras": true,
   "sensorDebugLogging": false,
   "histoThrottle": false,
