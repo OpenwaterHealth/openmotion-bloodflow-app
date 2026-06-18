@@ -103,6 +103,16 @@ def test_invalid_values_never_write(bad):
     assert console.write_calls == 0
 
 
+@pytest.mark.parametrize("bound", [TEC_TRIP_MIN_C, TEC_TRIP_MAX_C])
+def test_inclusive_bounds_are_accepted(bound):
+    """The range is inclusive: the exact min/max are valid and get written
+    (the parametrized invalid test only covers values just past each end)."""
+    console = FakeConsole(_device_config(tec_trip=40))
+    assert ensure_tec_trip(console, bound) is TecTripOutcome.WROTE
+    assert console.write_calls == 1
+    assert float(console.written.json_data["TEC_TRIP"]) == float(bound)
+
+
 def test_read_config_none_is_failed():
     console = FakeConsole(None)
     assert ensure_tec_trip(console, 45) is TecTripOutcome.FAILED
