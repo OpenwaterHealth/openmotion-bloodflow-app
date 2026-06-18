@@ -16,7 +16,9 @@ from utils import app_paths
 
 logger = logging.getLogger(__name__)
 
-_INT_KEYS = ("leftMask", "rightMask", "reducedModeLeftMask", "reducedModeRightMask")
+_INT_KEYS = (
+    "leftMask", "rightMask", "reducedModeLeftMask", "reducedModeRightMask"
+)
 
 
 def _coerce_ints(cfg: dict) -> dict:
@@ -66,7 +68,9 @@ def load_app_config(defaults: dict):
 
 def save_overrides(current: dict, baseline: dict) -> None:
     """Persist only keys whose value differs from the baseline."""
-    diff = _coerce_ints({k: v for k, v in current.items() if baseline.get(k) != v})
+    diff = _coerce_ints(
+        {k: v for k, v in current.items() if baseline.get(k) != v}
+    )
     path = app_paths.local_config_path()
     try:
         with open(path, "w", encoding="utf-8") as f:

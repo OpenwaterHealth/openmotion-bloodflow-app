@@ -86,10 +86,10 @@ _REQUIRE_SIGNED_UPDATES = False
 
 
 def _select_update_asset(assets: list, is_ruo: bool):
-    """Return the download URL of the Setup bundle matching the running variant.
+    """Return download URL of the Setup bundle matching the running variant.
 
-    RUO builds match ``OpenWater-Setup-*_RUO.exe``; clinical builds match the
-    non-RUO ``OpenWater-Setup-*.exe``. Returns None if no matching .exe asset.
+    RUO builds match ``OpenWater-Setup-*_RUO.exe``; clinical builds match
+    the non-RUO ``OpenWater-Setup-*.exe``. Returns None if no match.
     """
     for asset in assets:
         name = (asset.get("name") or "")
@@ -129,7 +129,7 @@ def _authenticode_status(path: str) -> str:
 
 
 def _update_decision(status: str, require_signed: bool):
-    """Decide whether to launch the downloaded bundle given its signature status.
+    """Decide whether to launch the downloaded bundle given its signature.
 
     Returns (should_launch: bool, error_message: str | None).
     """
@@ -138,7 +138,7 @@ def _update_decision(status: str, require_signed: bool):
     if status == "NotSigned":
         if require_signed:
             return False, "Update is not signed; refusing to install."
-        return True, None  # transition period: allow with a warning logged by caller
+        return True, None  # transition period: allow with a warning logged
     return False, f"Update signature check failed: {status}"
 
 
@@ -4586,7 +4586,7 @@ class MotionConnector(QObject):
 
     @pyqtSlot(str)
     def applyUpdate(self, download_url: str):
-        """Download the update bundle, verify it, and launch the in-place upgrade."""
+        """Download the update bundle, verify it, and launch the upgrade."""
         t = threading.Thread(
             target=self._apply_update_worker, args=(download_url,), daemon=True
         )
@@ -4605,16 +4605,20 @@ class MotionConnector(QObject):
             urllib.request.urlretrieve(download_url, str(dest))
 
             status = _authenticode_status(str(dest))
-            should_launch, error = _update_decision(status, _REQUIRE_SIGNED_UPDATES)
+            should_launch, error = _update_decision(
+                status, _REQUIRE_SIGNED_UPDATES
+            )
             if not should_launch:
                 self.updateCheckFailed.emit(error)
                 return
             if status == "NotSigned":
-                logger.warning("Update bundle is not signed (transition period) — proceeding")
+                logger.warning(
+                    "Update bundle not signed (transition period) — proceeding"
+                )
 
-            # Launch the Burn bundle detached, then quit so our files unlock and
-            # the in-place major upgrade can replace them. Burn relaunches us.
-            logger.info("Launching installer; quitting app for in-place upgrade")
+            # Launch the Burn bundle detached, then quit so our files unlock
+            # and the in-place major upgrade can replace them. Burn relaunches.
+            logger.info("Launching installer; quitting app for upgrade")
             subprocess.Popen(
                 [str(dest)],
                 close_fds=True,

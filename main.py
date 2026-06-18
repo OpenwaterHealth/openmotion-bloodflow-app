@@ -156,7 +156,9 @@ def _load_app_config() -> dict:
     baseline, merged = config_store.load_app_config(defaults)
     _APP_CONFIG_BASELINE.clear()
     _APP_CONFIG_BASELINE.update(baseline)
-    logger.info("Loaded app config (overrides from %s)", app_paths.local_config_path())
+    logger.info(
+        "Loaded app config (overrides from %s)", app_paths.local_config_path()
+    )
     return merged
 
 
@@ -201,7 +203,10 @@ def main():
     if not _data_dir:
         # Installed (frozen) build → ProgramData; dev run → cwd (unchanged),
         # falling back to ~/Documents if cwd is not writable.
-        candidate = str(app_paths.writable_root()) if getattr(sys, "frozen", False) else os.getcwd()
+        candidate = (
+            str(app_paths.writable_root()) if getattr(sys, "frozen", False)
+            else os.getcwd()
+        )
         if os.access(candidate, os.W_OK):
             _data_dir = candidate
         else:
