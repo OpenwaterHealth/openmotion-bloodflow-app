@@ -1036,9 +1036,12 @@ class MotionConnector(QObject):
         except Exception as e:
             logger.debug("Could not refresh sensor ID cache for %s: %s", side, e)
 
-        # Log camera UIDs once per sensor connect (the cache above just
-        # filled), instead of re-logging them at every scan start.
-        self._read_and_log_camera_uids(side)
+        # Log the sensor's hardware identity (firmware, hw_id, serial, and
+        # all 8 camera UIDs) once per sensor connect, after the cache fill.
+        # The SDK's log_sensor_info emits the guarded LEFT/RIGHT block; this
+        # mirrors log_console_info on console connect and log_system_info at
+        # startup — the three "log the configuration" calls.
+        self._interface.log_sensor_info(side)
 
         self.connectionStatusChanged.emit()
 
@@ -3632,69 +3635,6 @@ class MotionConnector(QObject):
         return f"{h:02d}:{m:02d}:{s:02d}"
 
     # --- SENSOR COMMUNICATION METHODS ---
-    def _read_and_log_camera_uids(self, side: str):
-        """
-        Read and log security UIDs for the given sensor's cameras.
-
-        Called once per sensor connect (after the ID cache fill in
-        _run_sensor_init), not at every scan start.
-        """
-        try:
-            connected = (
-                self._leftSensorConnected
-                if side == "left"
-                else self._rightSensorConnected
-            )
-            sensor = getattr(self._interface, side, None) if self._interface else None
-            if not connected or sensor is None:
-                logger.warning("%s sensor not connected, cannot read camera UIDs", side)
-                return
-
-            # Prefer cached values (populated by refresh_id_cache) over
-            # per-camera hardware reads.
-            logger.info(f"Camera UIDs on {side} sensor:")
-            cache_populated = (
-                getattr(sensor, "_cached_camera_uids", None) is not None
-            )
-            get_cached = getattr(sensor, "get_cached_camera_security_uid", None)
-            read_uid = getattr(sensor, "read_camera_security_uid", None)
-            for camera_id in range(8):
-                try:
-                    if cache_populated and get_cached:
-                        uid_str = get_cached(camera_id)
-                        uid_hex = uid_str.replace("0x", "") if uid_str else ""
-                    elif read_uid:
-                        uid_bytes = read_uid(camera_id)
-                        time.sleep(0.05)
-                        uid_hex = "".join(f"{b:02X}" for b in uid_bytes)
-                    else:
-                        continue
-                    display_uid = (
-                        f"0x{uid_hex}"
-                        if uid_hex and not uid_hex.startswith("0x")
-                        else (uid_hex or "0x000000000000")
-                    )
-                    if not uid_hex or set(uid_hex.replace("0x", "").upper()) <= {
-                        "0"
-                    }:
-                        logger.info(
-                            f"  Camera {camera_id + 1}: Not present (UID: {display_uid})"
-                        )
-                        self.configLog.emit(f"Camera {camera_id + 1}: Not present")
-                    else:
-                        logger.info(
-                            f"  Camera {camera_id + 1}: UID = {display_uid}"
-                        )
-                        self.configLog.emit(
-                            f"Camera {camera_id + 1} UID: {display_uid}"
-                        )
-                except Exception as e:
-                    logger.error(
-                        f"Error reading UID for camera {camera_id + 1} on {side} sensor: {e}"
-                    )
-        except Exception as e:
-            logger.error(f"Error reading camera UIDs: {e}")
-
     @pyqtSlot(int, int, result=bool)
     def startConfigureCameraSensors(
         self, left_camera_mask: int, right_camera_mask: int
