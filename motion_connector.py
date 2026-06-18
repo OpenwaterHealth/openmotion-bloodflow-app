@@ -101,6 +101,32 @@ def _select_update_asset(assets: list, is_ruo: bool):
     return None
 
 
+def _authenticode_status(path: str) -> str:
+    """Return the Authenticode signature status of ``path``.
+
+    Uses PowerShell's Get-AuthenticodeSignature (always present on Windows).
+    Returns one of 'Valid', 'NotSigned', 'HashMismatch', 'UnknownError', ... or
+    'Error' if the check itself could not run.
+    """
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                f"(Get-AuthenticodeSignature -LiteralPath '{path}').Status",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return result.stdout.strip() or "Error"
+    except Exception:
+        return "Error"
+
+
 # Camera-mask → human config name, mirroring CameraSelectionModal's
 # pattern table. Unmapped masks render as hex; -1 (unknown, e.g. a
 # reduced-mode scan whose meta lacks sdk_flags) renders as an em dash.
