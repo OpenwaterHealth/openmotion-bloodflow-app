@@ -98,6 +98,36 @@ jobs:
           conda activate omotion
           python -m PyInstaller -y openwater.spec
 
+      - name: Install WiX v5
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix
+          wix extension add -g WixToolset.Bal.wixext
+          echo "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Build clinical installer
+        shell: pwsh
+        env:
+          CODESIGN_THUMBPRINT: ${{ secrets.CODESIGN_THUMBPRINT }}
+        run: |
+          powershell -NoProfile -File installer\build_installer.ps1 -Variant clinical
+
+      - name: Build RUO installer
+        shell: pwsh
+        env:
+          CODESIGN_THUMBPRINT: ${{ secrets.CODESIGN_THUMBPRINT }}
+        run: |
+          $cfg = "dist\OpenWaterApp\_internal\config\app_config.json"
+          $orig = Get-Content -Raw $cfg
+          $ruo = $orig -replace '"reducedMode"\s*:\s*true', '"reducedMode": false'
+          if ($ruo -eq $orig) { throw "RUO build: did not find reducedMode: true to flip" }
+          Set-Content -Path $cfg -Value $ruo -Encoding UTF8 -NoNewline
+          try {
+            powershell -NoProfile -File installer\build_installer.ps1 -Variant ruo
+          } finally {
+            Set-Content -Path $cfg -Value $orig -Encoding UTF8 -NoNewline
+          }
+
       # ── package ──────────────────────────────────────────────────
       - name: Determine version tag
         id: meta
@@ -202,6 +232,7 @@ jobs:
           files: |
             ${{ steps.meta.outputs.ARTIFACT_ZIP }}
             ${{ steps.meta.outputs.ARTIFACT_ZIP_RUO }}
+            build/installer/OpenWater-Setup-*.exe
             resources/OpenMotionDriver-x64.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
