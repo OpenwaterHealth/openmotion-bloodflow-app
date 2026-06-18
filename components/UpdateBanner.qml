@@ -58,7 +58,7 @@ Rectangle {
             Text {
                 id: downloadBtn
                 anchors.centerIn: parent
-                text: "Download"
+                text: "Update"
                 color: theme.accentBlue
                 font.pixelSize: 12
                 font.weight: Font.DemiBold
@@ -68,7 +68,7 @@ Rectangle {
                 anchors.fill: parent
                 cursorShape: Qt.PointingHandCursor
                 hoverEnabled: true
-                onClicked: MotionInterface.openDownloadUrl(banner.downloadUrl)
+                onClicked: MotionInterface.applyUpdate(banner.downloadUrl)
                 onContainsMouseChanged: parent.color = containsMouse ? "#E0E0E0" : "#FFFFFF"
             }
         }
