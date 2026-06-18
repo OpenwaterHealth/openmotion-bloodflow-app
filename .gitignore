@@ -102,3 +102,7 @@ tests/New_UI_TestScripts/scan_data/
 tests/New_UI_TestScripts/app-logs/
 tests/New_UI_TestScripts/debug_uia.py
 test_logs/
+
+# Runtime config overrides (written by setConfig; ProgramData in prod, cwd in dev)
+app_config.local.json
+data/
