@@ -79,6 +79,28 @@ def developer_password_matches(pw) -> bool:
     return isinstance(pw, str) and pw == _DEVELOPER_PASSWORD
 
 
+# Flip to True once release builds are Authenticode-signed; until then an
+# unsigned (NotSigned) update bundle is allowed through with a logged warning.
+_REQUIRE_SIGNED_UPDATES = False
+
+
+def _select_update_asset(assets: list, is_ruo: bool):
+    """Return the download URL of the Setup bundle matching the running variant.
+
+    RUO builds match ``OpenWater-Setup-*_RUO.exe``; clinical builds match the
+    non-RUO ``OpenWater-Setup-*.exe``. Returns None if no matching .exe asset.
+    """
+    for asset in assets:
+        name = (asset.get("name") or "")
+        low = name.lower()
+        if not low.endswith(".exe"):
+            continue
+        asset_is_ruo = low.endswith("_ruo.exe")
+        if asset_is_ruo == is_ruo:
+            return asset.get("browser_download_url")
+    return None
+
+
 # Camera-mask → human config name, mirroring CameraSelectionModal's
 # pattern table. Unmapped masks render as hex; -1 (unknown, e.g. a
 # reduced-mode scan whose meta lacks sdk_flags) renders as an em dash.
@@ -4461,12 +4483,12 @@ class MotionConnector(QObject):
                 self.updateCheckFailed.emit("Could not determine latest release tag.")
                 return
 
-            # Find the .zip asset download URL
-            download_url = data.get("html_url", "")
-            for asset in data.get("assets", []):
-                if asset["name"].endswith(".zip"):
-                    download_url = asset["browser_download_url"]
-                    break
+            # Find the Setup bundle matching this build's variant.
+            # reducedMode True = clinical build; False = RUO/full build.
+            is_ruo = not bool(self._app_config.get("reducedMode", False))
+            download_url = _select_update_asset(data.get("assets", []), is_ruo) or data.get(
+                "html_url", ""
+            )
 
             local_version = get_version()
             # Strip local metadata for comparison (e.g. "+3.gabc1234.dirty")
