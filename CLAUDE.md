@@ -75,6 +75,7 @@ Debug flags that are still useful when hardware **is** attached (`config/app_con
 | `cameraFakeData` | `false` | **Broken — do not use.** Was meant to request firmware fake histograms; see "Working without hardware". |
 | `histoThrottle` | `false` | Drop histograms to reduce log spam. |
 | `histoCmp` | `true` | Compare received vs expected histogram frame counts. |
+| `tecTripTempC` | `40` | Console over-temp trip (°C) pushed to the console user config on connect via `motion_config.ensure_tec_trip` (read-modify-write, preserves calibration + OPT/EE keys). Validated to 1–60 °C; absent/invalid values leave the device's existing trip untouched (never writes `0`, which would disable the firmware trip). |
 | `ft_min_mean_per_camera` | `[40,40,…]` | Calibration pass threshold — min pixel mean per camera (8-element array). |
 | `calibration_scan_duration_sec` | `15` | Calibration runtime. |
 | `test_scan_duration_sec` | `5` | "Test" scan runtime (feature #132). |
