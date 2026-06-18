@@ -1,6 +1,4 @@
-import os
 import pytest
-from pathlib import Path
 from utils import app_paths
 
 
@@ -13,11 +11,10 @@ def test_writable_root_honors_env_override(tmp_path, monkeypatch):
 
 
 @pytest.mark.unit
-def test_local_config_and_data_dir_under_root(tmp_path, monkeypatch):
+def test_local_config_path_under_root(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENWATER_DATA_ROOT", str(tmp_path / "ow"))
-    assert app_paths.local_config_path() == tmp_path / "ow" / "app_config.local.json"
-    assert app_paths.default_data_dir() == tmp_path / "ow" / "data"
-    assert (tmp_path / "ow" / "data").is_dir()
+    expected = tmp_path / "ow" / "app_config.local.json"
+    assert app_paths.local_config_path() == expected
 
 
 @pytest.mark.unit

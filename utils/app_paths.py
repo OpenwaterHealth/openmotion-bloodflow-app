@@ -33,10 +33,3 @@ def writable_root() -> Path:
 def local_config_path() -> Path:
     """Path to the writable config-overrides file."""
     return writable_root() / "app_config.local.json"
-
-
-def default_data_dir() -> Path:
-    """Default scan-data / logs root when dataDirectory is unset."""
-    d = writable_root() / "data"
-    d.mkdir(parents=True, exist_ok=True)
-    return d

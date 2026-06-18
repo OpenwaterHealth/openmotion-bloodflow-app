@@ -10,6 +10,7 @@ shipped defaults still reach keys the operator never touched.
 """
 import json
 import logging
+import os
 
 from utils.resource_path import resource_path
 from utils import app_paths
@@ -67,13 +68,25 @@ def load_app_config(defaults: dict):
 
 
 def save_overrides(current: dict, baseline: dict) -> None:
-    """Persist only keys whose value differs from the baseline."""
+    """Persist only keys whose value differs from the baseline.
+
+    Written atomically (temp file + os.replace) so a crash mid-write can't
+    leave a truncated, unparseable overrides file that silently drops all
+    of the operator's settings on the next load.
+    """
     diff = _coerce_ints(
         {k: v for k, v in current.items() if baseline.get(k) != v}
     )
     path = app_paths.local_config_path()
+    tmp = path.with_name(path.name + ".tmp")
     try:
-        with open(path, "w", encoding="utf-8") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(diff, f, indent=2)
+        os.replace(tmp, path)
     except OSError as e:
         logger.warning("Could not write overrides %s: %s", path, e)
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
