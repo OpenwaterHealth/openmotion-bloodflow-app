@@ -36,6 +36,10 @@ from omotion.MotionProcessing import process_bin_file
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
 from processing.visualize_bloodflow import VisualizeBloodflow
 from motion_config import (
+    TEC_TRIP_MAX_C,
+    TEC_TRIP_MIN_C,
+    TecTripOutcome,
+    ensure_tec_trip,
     load_tec_params,
 )
 import error_codes
@@ -1352,6 +1356,11 @@ class MotionConnector(QObject):
                         logger.error("Failed to apply laser power params from config")
                         self._raise_critical(
                             "E-103", detail="laser power params not applied")
+                    # Push the configured TEC over-temp trip (tecTripTempC, °C)
+                    # into the console user config. Read-modify-write that
+                    # preserves calibration + OPT/EE keys; non-fatal on a bad
+                    # value or write failure (device keeps its existing trip).
+                    self.apply_tec_trip_from_config(self._interface)
                 except Exception as e:
                     logger.warning(
                         f"Console connect-time setup interrupted "
@@ -3305,6 +3314,36 @@ class MotionConnector(QObject):
         # force_fault honors the forceLaserFail app flag (loads the
         # safety-trip param set to exercise the interlock).
         return interface.apply_laser_power(force_fault=self._force_laser_fail)
+
+    def apply_tec_trip_from_config(self, interface) -> TecTripOutcome:
+        """Push the configured TEC over-temp trip (tecTripTempC, °C) into the
+        console user config. Read-modify-write under _console_mutex so the
+        read+write pair can't interleave with another console-config writer;
+        only the TEC_TRIP key is touched (calibration + OPT_*/EE_* preserved).
+
+        Non-fatal: a bad config value or a device read/write failure is logged
+        at ERROR and the device keeps its existing trip — never blocks scanning
+        and never writes 0 (which would disable the firmware over-temp trip)."""
+        temp_c = self._app_config.get("tecTripTempC", 40)
+        self._console_mutex.lock()
+        try:
+            outcome = ensure_tec_trip(interface.console, temp_c)
+        finally:
+            self._console_mutex.unlock()
+
+        if outcome is TecTripOutcome.WROTE:
+            logger.info(f"Console TEC_TRIP set to {temp_c} °C")
+        elif outcome is TecTripOutcome.UNCHANGED:
+            logger.info(f"Console TEC_TRIP already {temp_c} °C, skipping write")
+        elif outcome is TecTripOutcome.SKIPPED_INVALID:
+            logger.error(
+                f"Invalid tecTripTempC={temp_c!r}; leaving console over-temp "
+                f"trip untouched (expected a number in "
+                f"{TEC_TRIP_MIN_C}-{TEC_TRIP_MAX_C} °C)"
+            )
+        else:  # TecTripOutcome.FAILED
+            logger.error(f"Failed to apply TEC_TRIP={temp_c} °C to console")
+        return outcome
 
     # ------------------------------------------------------------------
     # Contact-quality quick-check
