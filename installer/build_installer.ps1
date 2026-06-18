@@ -50,13 +50,28 @@ New-Item -ItemType Directory -Force $outDir | Out-Null
 $appMsi    = Join-Path $outDir "OpenWaterApp$($g.Suffix).msi"
 $bundleExe = Join-Path $outDir "OpenWater-Setup-$version$($g.Suffix).exe"
 
-# ── build the app MSI ──
+# -- build the app MSI --
+# Resolve the PyInstaller output to an ABSOLUTE path. WiX resolves the
+# <Files Include> harvest glob relative to the .wxs file's own directory
+# (installer\), NOT the cwd, so a relative SourceDir silently harvests
+# nothing (WIX8601 is only a warning, so the build would otherwise "succeed"
+# with an app-less MSI). Fail hard if the build output is not there.
+if (-not (Test-Path $DistDir)) { throw "PyInstaller output '$DistDir' not found; run PyInstaller first" }
+$DistAbs = (Resolve-Path -LiteralPath $DistDir).Path
+if (-not (Test-Path (Join-Path $DistAbs 'OpenWaterApp.exe'))) {
+    throw "OpenWaterApp.exe not found under $DistAbs; PyInstaller build looks incomplete"
+}
+
 wix build installer\app.wxs -o $appMsi `
     -d "ProductName=$($g.ProductName)" `
     -d "Version=$version" `
     -d "UpgradeCode=$($g.UpgradeCode)" `
-    -d "SourceDir=$DistDir"
+    -d "SourceDir=$DistAbs"
 if ($LASTEXITCODE -ne 0) { throw "app MSI build failed" }
+# Guard against the silent empty-harvest: a real app MSI is far larger than this.
+if ((Get-Item $appMsi).Length -lt 1MB) {
+    throw "app MSI is only $((Get-Item $appMsi).Length) bytes; file harvesting from $DistAbs produced an empty package"
+}
 
 # sign the app MSI (skippable)
 powershell -NoProfile -File installer\sign.ps1 -Files $appMsi
