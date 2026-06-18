@@ -146,8 +146,10 @@ def test_tec_trip_temp_default_is_registered(tmp_path, monkeypatch):
 
 
 def test_tec_trip_temp_present_in_shipped_config():
-    """The shipped config must carry tecTripTempC so field installs push a
-    trip on connect rather than leaving whatever the device last had."""
+    """The shipped config must carry tecTripTempC with a nonzero value so
+    field installs push a real over-temp trip on connect — a shipped 0 would
+    disable the firmware trip entirely."""
     shipped = app_main.resource_path("config", "app_config.json")
     with open(shipped, "r", encoding="utf-8") as f:
-        assert "tecTripTempC" in json.load(f)
+        data = json.load(f)
+    assert data["tecTripTempC"] == 40
