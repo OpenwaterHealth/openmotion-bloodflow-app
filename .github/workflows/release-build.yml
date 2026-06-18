@@ -101,8 +101,12 @@ jobs:
       - name: Install WiX v5
         shell: pwsh
         run: |
-          dotnet tool install --global wix
-          wix extension add -g WixToolset.Bal.wixext
+          # Pin to 5.0.2 — the last MIT-licensed WiX. v6/v7 require accepting the
+          # paid Open Source Maintenance Fee EULA (WIX7015) and would fail CI.
+          dotnet tool install --global wix --version 5.0.2
+          # In WiX v5 the standard bootstrapper application ships in this package
+          # (not WixToolset.Bal.wixext); the bal: namespace in bundle.wxs is unchanged.
+          wix extension add -g WixToolset.BootstrapperApplications.wixext/5.0.2
           echo "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Append
 
       - name: Build clinical installer

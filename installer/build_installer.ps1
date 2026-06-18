@@ -62,7 +62,7 @@ if ($LASTEXITCODE -ne 0) { throw "app MSI build failed" }
 powershell -NoProfile -File installer\sign.ps1 -Files $appMsi
 
 # ── build the Burn bundle ──
-wix build installer\bundle.wxs -o $bundleExe -ext WixToolset.Bal.wixext `
+wix build installer\bundle.wxs -o $bundleExe -ext WixToolset.BootstrapperApplications.wixext `
     -d "ProductName=$($g.ProductName)" `
     -d "Version=$version" `
     -d "BundleUpgradeCode=$($g.BundleUpgradeCode)" `
