@@ -32,10 +32,14 @@ from omotion import MotionInterface
 from utils.single_instance import check_single_instance, cleanup_single_instance
 from version import get_version
 from utils.resource_path import resource_path
+from utils import app_paths, config_store
 
 
 APP_VERSION = get_version()
 
+# Shipped baseline (defaults + read-only bundled config), captured at load so
+# the connector can diff runtime changes against it when saving overrides.
+_APP_CONFIG_BASELINE: dict = {}
 
 logger = logging.getLogger("openmotion.bloodflow-app")
 logger.setLevel(logging.INFO)  # or INFO depending on what you want to see
@@ -148,28 +152,12 @@ def _load_app_config() -> dict:
         "requireConsole": True,
         "minSensors": 1,
     }
-    config_path = resource_path("config", "app_config.json")
-    if not config_path.exists():
-        logger.info("No app_config.json found at %s, using defaults", config_path)
-        return defaults
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            loaded = json.load(f)
-        out = {
-            **defaults,
-            **{k: v for k, v in loaded.items() if k in defaults},
-        }
-        # Ensure mask fields are always integers (guard against float drift from JSON)
-        for key in ("leftMask", "rightMask", "reducedModeLeftMask", "reducedModeRightMask"):
-            if key in out and out[key] is not None:
-                out[key] = int(out[key])
-        logger.info("Loaded app config from %s", config_path)
-        return out
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning(
-            "Could not load app config from %s: %s; using defaults", config_path, e
-        )
-        return defaults
+    # (defaults = { ... } stays unchanged above this point)
+    baseline, merged = config_store.load_app_config(defaults)
+    _APP_CONFIG_BASELINE.clear()
+    _APP_CONFIG_BASELINE.update(baseline)
+    logger.info("Loaded app config (overrides from %s)", app_paths.local_config_path())
+    return merged
 
 
 def main():
@@ -211,7 +199,9 @@ def main():
     # Finder launch where cwd is "/").
     _data_dir = app_config.get("dataDirectory")
     if not _data_dir:
-        candidate = os.getcwd()
+        # Installed (frozen) build → ProgramData; dev run → cwd (unchanged),
+        # falling back to ~/Documents if cwd is not writable.
+        candidate = str(app_paths.writable_root()) if getattr(sys, "frozen", False) else os.getcwd()
         if os.access(candidate, os.W_OK):
             _data_dir = candidate
         else:
@@ -281,6 +271,7 @@ def main():
 
     connector = MotionConnector(
         motion_interface, app_config=app_config, data_dir=_data_dir,
+        baseline_config=_APP_CONFIG_BASELINE,
         app_version=APP_VERSION, log_path=logfile_path,
     )
     qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MotionInterface", connector)
