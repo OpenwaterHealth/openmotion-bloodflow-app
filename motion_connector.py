@@ -142,6 +142,54 @@ def _update_decision(status: str, require_signed: bool):
     return False, f"Update signature check failed: {status}"
 
 
+def _is_bundle_url(url) -> bool:
+    """True if ``url`` is a Setup .exe bundle, not the release HTML page.
+
+    Guards against the GitHub ``html_url`` fallback: without this, a release
+    with no matching installer asset would make the updater download an HTML
+    page and try to execute it.
+    """
+    return isinstance(url, str) and url.lower().endswith(".exe")
+
+
+def _looks_like_pe(head: bytes) -> bool:
+    """True if the bytes start with the 'MZ' signature of a Windows executable.
+
+    A truncated download or an HTML error page will not start with 'MZ', so
+    this rejects corrupt downloads before they are launched.
+    """
+    return head[:2] == b"MZ"
+
+
+def _build_update_helper_script(
+    app_pid: int, installer: str, app_exe: str
+) -> str:
+    """Return a PowerShell script that performs the in-place upgrade handoff.
+
+    The running app cannot upgrade its own files while it holds them, and the
+    Burn bundle does not relaunch the app. So the app spawns this detached
+    helper and then exits; the helper (1) waits for the app to fully exit to
+    avoid a FilesInUse conflict, (2) runs the bundle non-interactively
+    (one UAC elevation, no bootstrapper UI), then (3) relaunches the app.
+    """
+    return (
+        "# OpenWater in-app update helper (auto-generated; do not edit)\n"
+        "$ErrorActionPreference = 'SilentlyContinue'\n"
+        f"# 1. Wait for the running app (PID {app_pid}) to exit so the\n"
+        "#    installer can replace its files without a FilesInUse conflict.\n"
+        "$deadline = (Get-Date).AddSeconds(60)\n"
+        f"while (Get-Process -Id {app_pid} -ErrorAction SilentlyContinue) {{\n"
+        "    if ((Get-Date) -gt $deadline) { break }\n"
+        "    Start-Sleep -Milliseconds 250\n"
+        "}\n"
+        "# 2. Run the upgrade non-interactively (one UAC elevation).\n"
+        f"Start-Process -FilePath \"{installer}\" "
+        "-ArgumentList '/passive','/norestart' -Wait\n"
+        "# 3. Relaunch the (now-updated) app.\n"
+        f"Start-Process -FilePath \"{app_exe}\"\n"
+    )
+
+
 # Camera-mask → human config name, mirroring CameraSelectionModal's
 # pattern table. Unmapped masks render as hex; -1 (unknown, e.g. a
 # reduced-mode scan whose meta lacks sdk_flags) renders as an em dash.
@@ -723,6 +771,7 @@ class MotionConnector(QObject):
     updateAvailable = pyqtSignal(str, str)   # (latest_version, download_url)
     updateNotAvailable = pyqtSignal()
     updateCheckFailed = pyqtSignal(str)      # error message
+    updateProgress = pyqtSignal(str)         # human-readable progress status
 
     @staticmethod
     def _default_data_dir() -> str:
@@ -4527,20 +4576,30 @@ class MotionConnector(QObject):
             # Find the Setup bundle matching this build's variant.
             # reducedMode True = clinical build; False = RUO/full build.
             is_ruo = not bool(self._app_config.get("reducedMode", False))
-            download_url = _select_update_asset(data.get("assets", []), is_ruo) or data.get(
-                "html_url", ""
-            )
+            download_url = _select_update_asset(data.get("assets", []), is_ruo)
 
             local_version = get_version()
             # Strip local metadata for comparison (e.g. "+3.gabc1234.dirty")
             local_base = local_version.split("+")[0]
 
-            if self._version_newer(remote_tag, local_base):
-                logger.info(f"Update available: {remote_tag} (current: {local_base})")
-                self.updateAvailable.emit(remote_tag, download_url)
-            else:
+            if not self._version_newer(remote_tag, local_base):
                 logger.info(f"App is up to date ({local_base} >= {remote_tag})")
                 self.updateNotAvailable.emit()
+            elif not _is_bundle_url(download_url):
+                # Newer release exists but has no matching installer asset
+                # (e.g. assets still uploading) -- don't offer an in-place
+                # update we can't actually perform.
+                logger.warning(
+                    "Update %s available but no installer asset found",
+                    remote_tag,
+                )
+                self.updateNotAvailable.emit()
+            else:
+                logger.info(
+                    "Update available: %s (current: %s)",
+                    remote_tag, local_base,
+                )
+                self.updateAvailable.emit(remote_tag, download_url)
 
         except Exception as e:
             logger.warning(f"Update check failed: {e}")
@@ -4586,7 +4645,15 @@ class MotionConnector(QObject):
 
     @pyqtSlot(str)
     def applyUpdate(self, download_url: str):
-        """Download the update bundle, verify it, and launch the upgrade."""
+        """Download the update bundle, verify it, and launch the upgrade.
+
+        Guarded against re-entry so repeated clicks can't spawn racing
+        download threads against the same file.
+        """
+        if getattr(self, "_update_in_progress", False):
+            logger.info("Update already in progress; ignoring repeat request")
+            return
+        self._update_in_progress = True
         t = threading.Thread(
             target=self._apply_update_worker, args=(download_url,), daemon=True
         )
@@ -4595,14 +4662,36 @@ class MotionConnector(QObject):
     def _apply_update_worker(self, download_url: str):
         import urllib.request
         import subprocess
+        import sys
         from utils import app_paths
 
         try:
+            if not _is_bundle_url(download_url):
+                self.updateCheckFailed.emit("No installer for this update.")
+                return
+
             updates_dir = app_paths.writable_root() / "updates"
             updates_dir.mkdir(parents=True, exist_ok=True)
+            # Clear stale downloads so old installers don't accumulate.
+            for stale in updates_dir.glob("*"):
+                try:
+                    stale.unlink()
+                except OSError:
+                    pass
+
             dest = updates_dir / download_url.rsplit("/", 1)[-1]
+            self.updateProgress.emit("Downloading update…")
             logger.info("Downloading update %s -> %s", download_url, dest)
             urllib.request.urlretrieve(download_url, str(dest))
+
+            # Reject truncated / non-executable downloads before launching.
+            with open(dest, "rb") as f:
+                head = f.read(2)
+            if not _looks_like_pe(head):
+                self.updateCheckFailed.emit(
+                    "Downloaded update is not a valid installer."
+                )
+                return
 
             status = _authenticode_status(str(dest))
             should_launch, error = _update_decision(
@@ -4616,11 +4705,24 @@ class MotionConnector(QObject):
                     "Update bundle not signed (transition period) — proceeding"
                 )
 
-            # Launch the Burn bundle detached, then quit so our files unlock
-            # and the in-place major upgrade can replace them. Burn relaunches.
-            logger.info("Launching installer; quitting app for upgrade")
+            # The app cannot replace its own running files, and the Burn
+            # bundle does not relaunch the app. So write a detached helper
+            # that waits for us to exit, runs the bundle silently, then
+            # relaunches the (now-updated) app. Then quit.
+            helper = updates_dir / "update_helper.ps1"
+            helper.write_text(
+                _build_update_helper_script(
+                    os.getpid(), str(dest), sys.executable
+                ),
+                encoding="utf-8",
+            )
+            self.updateProgress.emit("Installing update…")
+            logger.info("Spawning update helper; quitting for upgrade")
             subprocess.Popen(
-                [str(dest)],
+                [
+                    "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                    "-File", str(helper),
+                ],
                 close_fds=True,
                 creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
             )
@@ -4628,3 +4730,7 @@ class MotionConnector(QObject):
         except Exception as e:
             logger.error("applyUpdate failed: %s", e)
             self.updateCheckFailed.emit(str(e))
+        finally:
+            # Cleared so a failed attempt can be retried (on success the app
+            # is already quitting).
+            self._update_in_progress = False
