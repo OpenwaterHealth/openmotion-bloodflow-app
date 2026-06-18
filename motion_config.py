@@ -15,7 +15,6 @@ from __future__ import annotations
 import enum
 import json
 import logging
-import math
 from pathlib import Path
 
 from utils.resource_path import resource_path
@@ -73,11 +72,9 @@ def load_tec_params(config_dir: str) -> float:
 
 
 # --- TEC over-temp trip (TEC_TRIP) -------------------------------------------
-# Guard rails around the configured TEC_TRIP value (°C). These are NOT a
-# precise safety envelope — they exist so a config typo can't disable the
-# firmware over-temp trip (TEC_TRIP == 0 turns it off) or set a wildly wrong
-# setpoint. Confirm the real safe envelope with firmware/SDK owners before
-# tightening.
+# Hardcoded guard rails (°C) for the configured TEC_TRIP. A value outside this
+# range is rejected so a config typo can't disable the firmware over-temp trip
+# (TEC_TRIP == 0 turns it off) or set a wildly wrong setpoint.
 TEC_TRIP_MIN_C = 1.0
 TEC_TRIP_MAX_C = 60.0
 
@@ -87,7 +84,7 @@ class TecTripOutcome(enum.Enum):
 
     WROTE = "wrote"           # valid, differed, written OK
     UNCHANGED = "unchanged"   # valid, already matches device
-    # absent/non-numeric/NaN/<=0/out-of-range:
+    # non-numeric or outside [TEC_TRIP_MIN_C, TEC_TRIP_MAX_C]:
     SKIPPED_INVALID = "skipped_invalid"
     FAILED = "failed"         # read_config or write_config failed/raised
 
@@ -100,19 +97,19 @@ def ensure_tec_trip(console, temp_c) -> TecTripOutcome:
     preserved. Returns an outcome; never raises and never logs (the caller
     owns logging).
 
-    - SKIPPED_INVALID: ``temp_c`` is None/non-numeric/NaN/<=0/outside
-      [TEC_TRIP_MIN_C, TEC_TRIP_MAX_C]. Nothing is read or written, so a bad
-      config value can never disable the firmware over-temp trip.
+    - SKIPPED_INVALID: ``temp_c`` is non-numeric or outside
+      [TEC_TRIP_MIN_C, TEC_TRIP_MAX_C] (so 0, negative, and NaN are all
+      rejected). Nothing is read or written, so a bad config value can never
+      disable the firmware over-temp trip.
     - FAILED: read_config or write_config returned None or raised.
     - UNCHANGED: the device already holds this value (no write performed).
     - WROTE: the value was valid, differed from the device, and was written.
     """
-    # 1. Validate — never let a bad value reach the device.
+    # 1. Validate — never let a bad value reach the device. The range check
+    #    alone rejects 0/negative/NaN/out-of-range (NaN fails any comparison).
     try:
         value = float(temp_c)
     except (TypeError, ValueError):
-        return TecTripOutcome.SKIPPED_INVALID
-    if math.isnan(value) or value <= 0.0:
         return TecTripOutcome.SKIPPED_INVALID
     if not (TEC_TRIP_MIN_C <= value <= TEC_TRIP_MAX_C):
         return TecTripOutcome.SKIPPED_INVALID
