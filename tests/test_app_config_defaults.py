@@ -126,3 +126,28 @@ def test_auto_configure_flag_is_gone():
             if "autoConfigureOnStartup" in text:
                 offenders.append(str(rel))
     assert offenders == []
+
+
+def test_tec_trip_temp_default_is_registered(tmp_path, monkeypatch):
+    """tecTripTempC must be in the in-code defaults whitelist, or
+    _load_app_config silently drops it and the connector never pushes the
+    configured over-temp trip."""
+    # Present in the pure in-code defaults (no file on disk).
+    _patch_config_path(monkeypatch, tmp_path / "app_config.json")
+    cfg = app_main._load_app_config()
+    assert cfg["tecTripTempC"] == 40
+
+    # A value supplied in the file survives the whitelist filter.
+    config_path = tmp_path / "app_config.json"
+    config_path.write_text(json.dumps({"tecTripTempC": 42}), encoding="utf-8")
+    _patch_config_path(monkeypatch, config_path)
+    cfg = app_main._load_app_config()
+    assert cfg["tecTripTempC"] == 42
+
+
+def test_tec_trip_temp_present_in_shipped_config():
+    """The shipped config must carry tecTripTempC so field installs push a
+    trip on connect rather than leaving whatever the device last had."""
+    shipped = app_main.resource_path("config", "app_config.json")
+    with open(shipped, "r", encoding="utf-8") as f:
+        assert "tecTripTempC" in json.load(f)
