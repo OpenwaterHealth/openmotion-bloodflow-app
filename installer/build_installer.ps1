@@ -1,4 +1,4 @@
-# installer/build_installer.ps1 — build the app MSI + Burn bundle for one variant.
+# installer/build_installer.ps1 - build the app MSI + Burn bundle for one variant.
 param(
     [ValidateSet("clinical", "ruo")][string]$Variant = "clinical",
     [string]$DistDir = "dist\OpenWaterApp"
@@ -7,8 +7,8 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Definition)
 Set-Location $root
 
-# ── constant, never-changing GUIDs (distinct per variant so they never
-#    cross-upgrade). Generated once with [guid]::NewGuid(). ──
+# -- constant, never-changing GUIDs (distinct per variant so they never
+#    cross-upgrade). Generated once with [guid]::NewGuid(). --
 $guids = @{
     clinical = @{
         ProductName       = "OpenWater Bloodflow"
@@ -25,7 +25,7 @@ $guids = @{
 }
 $g = $guids[$Variant]
 
-# ── numeric X.Y.Z from the git tag/describe (drop any -dev/-rc suffix) ──
+# -- numeric X.Y.Z from the git tag/describe (drop any -dev/-rc suffix) --
 try {
     $desc = (git describe --tags --always 2>$null).Trim()
 } catch { $desc = "" }
@@ -36,7 +36,7 @@ if ($desc -match '(\d+)\.(\d+)\.(\d+)') {
 }
 Write-Host "Variant=$Variant  Version=$version  Product='$($g.ProductName)'" -ForegroundColor Green
 
-# ── extract the driver MSI from the bundled zip ──
+# -- extract the driver MSI from the bundled zip --
 $drvZip = "resources\OpenMotionDriver-x64.zip"
 $drvDir = "build\driver"
 Remove-Item -Recurse -Force $drvDir -ErrorAction SilentlyContinue
@@ -44,7 +44,7 @@ Expand-Archive -Path $drvZip -DestinationPath $drvDir -Force
 $driverMsi = Join-Path $drvDir "OpenMotionDriver-x64.msi"
 if (-not (Test-Path $driverMsi)) { throw "driver MSI not found in $drvZip" }
 
-# ── output names ──
+# -- output names --
 $outDir = "build\installer"
 New-Item -ItemType Directory -Force $outDir | Out-Null
 $appMsi    = Join-Path $outDir "OpenWaterApp$($g.Suffix).msi"
@@ -76,7 +76,7 @@ if ((Get-Item $appMsi).Length -lt 1MB) {
 # sign the app MSI (skippable)
 powershell -NoProfile -File installer\sign.ps1 -Files $appMsi
 
-# ── build the Burn bundle ──
+# -- build the Burn bundle --
 wix build installer\bundle.wxs -o $bundleExe -ext WixToolset.BootstrapperApplications.wixext `
     -d "ProductName=$($g.ProductName)" `
     -d "Version=$version" `
@@ -85,7 +85,7 @@ wix build installer\bundle.wxs -o $bundleExe -ext WixToolset.BootstrapperApplica
     -d "AppMsi=$appMsi"
 if ($LASTEXITCODE -ne 0) { throw "bundle build failed" }
 
-# ── sign the bundle (insignia detach → sign engine → reattach → sign) ──
+# -- sign the bundle (insignia detach -> sign engine -> reattach -> sign) --
 if ($env:CODESIGN_THUMBPRINT) {
     $engine = Join-Path $outDir "engine.exe"
     wix burn detach $bundleExe -engine $engine
