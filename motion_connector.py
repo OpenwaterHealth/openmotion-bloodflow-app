@@ -6,6 +6,7 @@ from PyQt6.QtCore import (
     QVariant,
     QTimer,
     QRecursiveMutex,
+    QCoreApplication,
 )
 from pathlib import Path
 from typing import NamedTuple, Optional
@@ -125,6 +126,20 @@ def _authenticode_status(path: str) -> str:
         return result.stdout.strip() or "Error"
     except Exception:
         return "Error"
+
+
+def _update_decision(status: str, require_signed: bool):
+    """Decide whether to launch the downloaded bundle given its signature status.
+
+    Returns (should_launch: bool, error_message: str | None).
+    """
+    if status == "Valid":
+        return True, None
+    if status == "NotSigned":
+        if require_signed:
+            return False, "Update is not signed; refusing to install."
+        return True, None  # transition period: allow with a warning logged by caller
+    return False, f"Update signature check failed: {status}"
 
 
 # Camera-mask → human config name, mirroring CameraSelectionModal's
@@ -4568,3 +4583,44 @@ class MotionConnector(QObject):
         """Open the download URL in the system browser."""
         import webbrowser
         webbrowser.open(url)
+
+    @pyqtSlot(str)
+    def applyUpdate(self, download_url: str):
+        """Download the update bundle, verify it, and launch the in-place upgrade."""
+        t = threading.Thread(
+            target=self._apply_update_worker, args=(download_url,), daemon=True
+        )
+        t.start()
+
+    def _apply_update_worker(self, download_url: str):
+        import urllib.request
+        import subprocess
+        from utils import app_paths
+
+        try:
+            updates_dir = app_paths.writable_root() / "updates"
+            updates_dir.mkdir(parents=True, exist_ok=True)
+            dest = updates_dir / download_url.rsplit("/", 1)[-1]
+            logger.info("Downloading update %s -> %s", download_url, dest)
+            urllib.request.urlretrieve(download_url, str(dest))
+
+            status = _authenticode_status(str(dest))
+            should_launch, error = _update_decision(status, _REQUIRE_SIGNED_UPDATES)
+            if not should_launch:
+                self.updateCheckFailed.emit(error)
+                return
+            if status == "NotSigned":
+                logger.warning("Update bundle is not signed (transition period) — proceeding")
+
+            # Launch the Burn bundle detached, then quit so our files unlock and
+            # the in-place major upgrade can replace them. Burn relaunches us.
+            logger.info("Launching installer; quitting app for in-place upgrade")
+            subprocess.Popen(
+                [str(dest)],
+                close_fds=True,
+                creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
+            )
+            QCoreApplication.quit()
+        except Exception as e:
+            logger.error("applyUpdate failed: %s", e)
+            self.updateCheckFailed.emit(str(e))
