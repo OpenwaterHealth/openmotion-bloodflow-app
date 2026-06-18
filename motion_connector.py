@@ -3317,9 +3317,11 @@ class MotionConnector(QObject):
 
     def apply_tec_trip_from_config(self, interface) -> TecTripOutcome:
         """Push the configured TEC over-temp trip (tecTripTempC, °C) into the
-        console user config. Read-modify-write under _console_mutex so the
-        read+write pair can't interleave with another console-config writer;
-        only the TEC_TRIP key is touched (calibration + OPT_*/EE_* preserved).
+        console user config. Read-modify-write touching only the TEC_TRIP key
+        (calibration + OPT_*/EE_* preserved), serialized under _console_mutex.
+        Today this connect-time push is the only holder of that mutex (so it is
+        not yet load-bearing); a future concurrent console-config writer must
+        take the same mutex for the read+write pair to stay atomic.
 
         Non-fatal: a bad config value or a device read/write failure is logged
         at ERROR and the device keeps its existing trip — never blocks scanning
