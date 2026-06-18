@@ -11,7 +11,9 @@
 **Spec:** [docs/superpowers/specs/2026-06-17-msi-installer-in-app-update-design.md](../specs/2026-06-17-msi-installer-in-app-update-design.md)
 
 **Conventions for this plan:**
-- New unit tests are marked `@pytest.mark.unit` so conftest's autouse fixtures skip app launch (see `tests/conftest.py:575`). Run them with `python -m pytest -m unit <path> -v`.
+- **Symbol names (verified at tip-of-`next`):** the connector class is `MotionConnector` and the QML singleton is `MotionInterface` (registered in `main.py` via `qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MotionInterface", connector)`). Use these exact names in Python imports and QML.
+- **Line numbers are approximate.** `motion_connector.py` is ~4500 lines and grows; locate every edit site by the quoted symbol/code, not the line number.
+- New unit tests are marked `@pytest.mark.unit` so conftest's autouse fixtures skip app launch (see `tests/conftest.py`). Run them with `python -m pytest -m unit <path> -v`.
 - Tests redirect the writable root via the `OPENWATER_DATA_ROOT` env var (added in Task 1) to a `tmp_path`, never the real ProgramData.
 - WiX/installer/CI tasks cannot be unit-tested; their "test" is a successful build + the manual VM verification in Task 16.
 - Commit after every task.
@@ -221,9 +223,7 @@ def shipped_baseline(defaults: dict) -> dict:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
-            base.update(
-                {k: v for k, v in loaded.items() if k in defaults or k == "output_path"}
-            )
+            base.update({k: v for k, v in loaded.items() if k in defaults})
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Could not load %s: %s; using defaults", path, e)
     return _coerce_ints(base)
@@ -248,7 +248,7 @@ def load_app_config(defaults: dict):
     overrides = load_overrides()
     merged = {
         **baseline,
-        **{k: v for k, v in overrides.items() if k in baseline or k == "output_path"},
+        **{k: v for k, v in overrides.items() if k in baseline},
     }
     return baseline, _coerce_ints(merged)
 
@@ -281,7 +281,7 @@ git commit -m "feat: add config_store with layered load and overrides-diff save"
 ### Task 3: Wire `main.py` to the layered store + ProgramData log/data root
 
 **Files:**
-- Modify: `main.py:67-153` (`_load_app_config`), `main.py:188-200` (output_base default), `main.py:255` (connector construction)
+- Modify: `main.py` — `_load_app_config` (delegate to the store), the `_data_dir` default block in `main()`, and the `MotionConnector(...)` construction
 - Test: `tests/test_main_config_wiring.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -314,13 +314,13 @@ Expected: FAIL — `_load_app_config` does not consult overrides / `_APP_CONFIG_
 
 - [ ] **Step 3: Write minimal implementation**
 
-In `main.py`, add the import near the other `utils` imports (after line 34):
+In `main.py`, add the import near the other `utils` imports (next to `from utils.resource_path import resource_path`):
 
 ```python
 from utils import app_paths, config_store
 ```
 
-Add a module-level baseline stash (just below the imports / logger setup, before `_load_app_config`):
+Add a module-level baseline stash (just below the imports, before `_load_app_config`):
 
 ```python
 # Shipped baseline (defaults + read-only bundled config), captured at load so
@@ -328,7 +328,7 @@ Add a module-level baseline stash (just below the imports / logger setup, before
 _APP_CONFIG_BASELINE: dict = {}
 ```
 
-Replace the body of `_load_app_config` from the `config_path = resource_path(...)` line (line 132) through its `return` statements (line 153) with delegation to the store. Keep the big `defaults = {...}` dict (lines 69-131) exactly as-is; only the tail changes:
+Replace the body of `_load_app_config` from the `config_path = resource_path("config", "app_config.json")` line through its `return` statements with delegation to the store. Keep the big `defaults = {...}` dict exactly as-is; only the tail changes:
 
 ```python
     # (defaults = { ... } stays unchanged above this point)
@@ -339,30 +339,29 @@ Replace the body of `_load_app_config` from the `config_path = resource_path(...
     return merged
 ```
 
-Change the `output_base` default (lines 190-199) so a frozen install logs/scans under ProgramData instead of cwd:
+Change the data-dir default so a frozen install logs/scans under ProgramData instead of cwd. In `main()`, find the block that sets `_data_dir` (currently `_data_dir = app_config.get("dataDirectory")` followed by the `if not _data_dir:` fallback to `os.getcwd()`) and change the fallback line:
 
 ```python
-    output_base = app_config.get("output_path")
-    if not output_base:
+    _data_dir = app_config.get("dataDirectory")
+    if not _data_dir:
         # Installed (frozen) build → ProgramData; dev run → cwd (unchanged),
         # falling back to ~/Documents if cwd is not writable.
         candidate = str(app_paths.writable_root()) if getattr(sys, "frozen", False) else os.getcwd()
         if os.access(candidate, os.W_OK):
-            output_base = candidate
+            _data_dir = candidate
         else:
-            output_base = os.path.join(
+            _data_dir = os.path.join(
                 os.path.expanduser("~"), "Documents", "OpenWater Bloodflow"
             )
 ```
 
-Pass the baseline into the connector at line 255:
+Pass the baseline into the connector. Find the `connector = MotionConnector(...)` construction and add the `baseline_config` kwarg, preserving the existing `data_dir`, `app_version`, and `log_path` kwargs:
 
 ```python
-    connector = MOTIONConnector(
-        motion_interface,
-        app_config=app_config,
+    connector = MotionConnector(
+        motion_interface, app_config=app_config, data_dir=_data_dir,
         baseline_config=_APP_CONFIG_BASELINE,
-        output_path=output_base,
+        app_version=APP_VERSION, log_path=logfile_path,
     )
 ```
 
@@ -383,7 +382,7 @@ git commit -m "feat: load config via layered store; route logs/data to ProgramDa
 ### Task 4: Connector saves overrides instead of overwriting bundled config
 
 **Files:**
-- Modify: `motion_connector.py:346-356` (`__init__` signature + baseline capture), `motion_connector.py:1469-1481` (`_save_app_config`)
+- Modify: `motion_connector.py` — the `MotionConnector.__init__` signature + baseline capture, and the `_save_app_config` method
 - Test: `tests/test_connector_save_overrides.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -393,7 +392,7 @@ git commit -m "feat: load config via layered store; route logs/data to ProgramDa
 import json
 import pytest
 import motion_connector
-from motion_connector import MOTIONConnector
+from motion_connector import MotionConnector
 
 
 @pytest.mark.unit
@@ -404,9 +403,9 @@ def test_save_app_config_delegates_diff_to_store(tmp_path, monkeypatch):
     (tmp_path / "app_config.json").write_text("{}", encoding="utf-8")
     monkeypatch.setenv("OPENWATER_CONFIG_DIR", str(tmp_path))
 
-    # MOTIONConnector.__init__ wires hardware/telemetry, so bypass it with
+    # MotionConnector.__init__ wires hardware/telemetry, so bypass it with
     # __new__ and set only the attributes _save_app_config reads.
-    conn = MOTIONConnector.__new__(MOTIONConnector)
+    conn = MotionConnector.__new__(MotionConnector)
     conn._app_config = {"developerMode": True, "reducedMode": False}
     conn._baseline_config = {"developerMode": False, "reducedMode": False}
 
@@ -431,19 +430,19 @@ Expected: FAIL — `__init__` has no `baseline_config` kwarg.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Add the import near the top of `motion_connector.py` (after line 43's `from utils.resource_path import resource_path`):
+Add the import near the top of `motion_connector.py` (next to `from utils.resource_path import resource_path`):
 
 ```python
 from utils import config_store
 ```
 
-In `__init__` (around line 346-356), add the `baseline_config` parameter and capture it. The signature currently includes `app_config=None`; add `baseline_config=None` alongside it, and after `self._app_config = dict(cfg)` add:
+In `MotionConnector.__init__`, add the `baseline_config` parameter and capture it. The current signature is `def __init__(self, interface, app_config=None, data_dir=None, config_dir="config", parent=None, log_level=logging.INFO, app_version="", log_path="")` — add `baseline_config=None` after `app_config=None`. Then, right after `self._app_config = dict(cfg)`, add:
 
 ```python
         self._baseline_config = dict(baseline_config or {})
 ```
 
-Replace `_save_app_config` (lines 1469-1481) with:
+Replace the `_save_app_config` method (the one that does `config_path = resource_path("config", "app_config.json")` then `json.dump`) with:
 
 ```python
     def _save_app_config(self):
@@ -455,7 +454,7 @@ Replace `_save_app_config` (lines 1469-1481) with:
         config_store.save_overrides(self._app_config, self._baseline_config)
 ```
 
-The now-unused `_INT_CONFIG_KEYS` set (line 1467) is superseded by `config_store._INT_KEYS`; delete it if no other reference remains (grep `_INT_CONFIG_KEYS` first — if referenced elsewhere, leave it).
+The class attribute `_INT_CONFIG_KEYS = {"leftMask", "rightMask"}` is now superseded by `config_store._INT_KEYS`; delete it if no other reference remains (grep `_INT_CONFIG_KEYS` first — if referenced elsewhere, leave it).
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -505,7 +504,7 @@ git commit -m "chore: gitignore runtime config overrides + dev data dir"
 ### Task 6: Variant-aware update-asset selector
 
 **Files:**
-- Modify: `motion_connector.py` (add module-level `_select_update_asset` near the other module functions ~line 60-110, and a `_REQUIRE_SIGNED_UPDATES` flag), `motion_connector.py:3891-3896` (asset loop in `_check_for_updates_worker`)
+- Modify: `motion_connector.py` (add module-level `_select_update_asset` + a `_REQUIRE_SIGNED_UPDATES` flag near the other module functions, e.g. just after `developer_password_matches`), and the `.zip` asset loop inside `_check_for_updates_worker`
 - Test: `tests/test_update_asset_select.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -543,7 +542,7 @@ Expected: FAIL — `cannot import name '_select_update_asset'`
 
 - [ ] **Step 3: Write minimal implementation**
 
-Add near the other module-level helpers in `motion_connector.py` (e.g. just after the `_DEVELOPER_PASSWORD` block around line 72-77):
+Add near the other module-level helpers in `motion_connector.py` (e.g. just after the `developer_password_matches` function):
 
 ```python
 # Flip to True once release builds are Authenticode-signed; until then an
@@ -568,7 +567,7 @@ def _select_update_asset(assets: list, is_ruo: bool):
     return None
 ```
 
-Replace the `.zip` asset loop in `_check_for_updates_worker` (lines 3891-3896) with:
+Replace the `.zip` asset loop in `_check_for_updates_worker` (the `# Find the .zip asset download URL` block that loops over `data.get("assets", [])` and breaks on `asset["name"].endswith(".zip")`) with:
 
 ```python
             # Find the Setup bundle matching this build's variant.
@@ -836,10 +835,10 @@ In `components/UpdateBanner.qml`, change the download button text from `"Downloa
             }
 ```
 
-And change the click handler from `openDownloadUrl` to `applyUpdate`:
+And change the click handler from `openDownloadUrl` to `applyUpdate` (note the singleton is `MotionInterface`, the name the existing line already uses):
 
 ```qml
-                onClicked: MOTIONInterface.applyUpdate(banner.downloadUrl)
+                onClicked: MotionInterface.applyUpdate(banner.downloadUrl)
 ```
 
 - [ ] **Step 2: Verify the app still loads the QML**
