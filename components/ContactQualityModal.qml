@@ -234,9 +234,13 @@ Item {
         // Click-outside dismisses, but only when the modal opted in via
         // the `dismissable` property (false during checking / pre-scan
         // gating / live-scan warnings — see `dismissable` binding above).
+        // hoverEnabled + onWheel capture ALL pointer input so scroll/hover
+        // can't fall through to the plot viewer behind the modal (#214).
         MouseArea {
             anchors.fill: parent
+            hoverEnabled: true
             onClicked: { if (root.dismissable) root.close() }
+            onWheel: function(wheel) { wheel.accepted = true }
         }
     }
 
