@@ -371,7 +371,14 @@ Item {
     Rectangle {
         anchors.fill: parent
         color: "#000000B0"
-        MouseArea { anchors.fill: parent; onClicked: root.close() }
+        // Capture ALL pointer input so scroll/hover can't fall through to
+        // the interactive plot viewer behind the modal (issue #214).
+        MouseArea {
+            anchors.fill: parent
+            hoverEnabled: true
+            onClicked: root.close()
+            onWheel: function(wheel) { wheel.accepted = true }
+        }
     }
 
     // ── Modal panel ─────────────────────────────────────────────────────────
