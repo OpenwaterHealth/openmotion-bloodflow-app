@@ -1,0 +1,27 @@
+<!-- installer/bundle.wxs — one setup.exe: driver MSI then app MSI. -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+  <Bundle Name="$(var.ProductName)"
+          Manufacturer="Openwater"
+          Version="$(var.Version)"
+          UpgradeCode="$(var.BundleUpgradeCode)">
+
+    <BootstrapperApplication>
+      <bal:WixStandardBootstrapperApplication Theme="hyperlinkLicense"
+                                              LicenseUrl="" />
+    </BootstrapperApplication>
+
+    <Chain>
+      <!-- WinUSB driver. Vital but its absence on uninstall is fine (Permanent). -->
+      <MsiPackage Id="DriverMsi"
+                  SourceFile="$(var.DriverMsi)"
+                  Vital="yes"
+                  Permanent="yes"
+                  Visible="no" />
+      <!-- The app itself. -->
+      <MsiPackage Id="AppMsi"
+                  SourceFile="$(var.AppMsi)"
+                  Vital="yes" />
+    </Chain>
+  </Bundle>
+</Wix>
