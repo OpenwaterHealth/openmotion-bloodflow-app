@@ -579,6 +579,7 @@ class MotionConnector(QObject):
     laserStateChanged = pyqtSignal()  # Signal to notify QML of laser state changes
     safetyFailureStateChanged = pyqtSignal()  # Signal to notify QML of safety
     safetyTripDuringCaptureRequested = pyqtSignal()  # Emitted when safety trips while scan running (main-thread slot shows message & schedules cancel)
+    scanWorkerFailedDuringCapture = pyqtSignal(str)  # Emitted from the SDK scan worker thread when it aborts after start_scan returned True (main-thread slot raises E-301 & tears down capture). Issue #213.
     triggerStateChanged = pyqtSignal()  # Signal to notify QML of trigger state changes
     directoryChanged = pyqtSignal()  # Signal to notify QML of directory changes
     userLabelChanged = pyqtSignal()  # Signal to notify QML of user label changes
@@ -2790,6 +2791,12 @@ class MotionConnector(QObject):
                 outcome_sink,
                 _CompletionSink(connector=self, on_complete_cb=_on_pipeline_complete),
             ],
+            # Async backstop (#213): if the worker aborts after start_scan
+            # returned True (e.g. a critical sink dies because the scan DB
+            # became unwritable past the preflight), it can't ride the return
+            # value. Fires on the worker thread, so just hop to the main thread
+            # via a queued signal — see _on_scan_worker_failed.
+            on_error=lambda exc: self.scanWorkerFailedDuringCapture.emit(str(exc)),
         )
 
         started = self._interface.start_scan(req)
@@ -3010,6 +3017,29 @@ class MotionConnector(QObject):
         )
         self._raise_critical("E-202")
         QTimer.singleShot(5000, self.stopCapture)
+
+    @pyqtSlot(str)
+    def _on_scan_worker_failed(self, detail: str):
+        """Main-thread handler for an async scan-worker abort (#213).
+
+        The SDK worker invokes ScanRequest.on_error after start_scan already
+        returned True — typically a critical sink (ScanDBSink) dying because
+        the scan DB became unwritable in the race window past the synchronous
+        preflight. Surface E-301 and tear the capture down so the app doesn't
+        sit 'capturing' forever with a dead worker.
+        """
+        if not self._capture_running:
+            return  # already torn down (e.g. user cancelled first)
+        logger.warning("scan worker aborted mid-capture: %s", detail)
+        self.captureLog.emit(f"Scan aborted: {detail}")
+        self._raise_critical("E-301", detail=detail)
+        # Tear down: stop the dropout watchdog and cancel the (dead) scan, then
+        # clear running state and unblock QML, mirroring the completion path.
+        self.stopCapture()
+        self._capture_running = False
+        self._safety_cancel_scheduled = False
+        self._set_current_scan_source(None)
+        self.captureFinished.emit(False, detail, "", "")
 
     @pyqtSlot(result=QVariant)
     def tec_status(self, snap=None):
@@ -4058,6 +4088,13 @@ class MotionConnector(QObject):
             handle.signal_state_changed.connect(self._on_handle_state_changed)
         self.safetyTripDuringCaptureRequested.connect(
             self._on_safety_trip_during_capture
+        )
+        # Worker → Qt main thread for an async scan-worker abort (#213).
+        # Default (auto) connection like safetyTripDuringCaptureRequested above:
+        # resolves to a queued connection for the cross-thread emit, so the
+        # slot's QML-touching teardown runs on the main thread.
+        self.scanWorkerFailedDuringCapture.connect(
+            self._on_scan_worker_failed
         )
         # Worker → Qt main thread for the calibration completion callback.
         self._calibrationCompleteSignal.connect(self._on_calibration_complete)
