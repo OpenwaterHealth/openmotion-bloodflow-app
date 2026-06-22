@@ -852,6 +852,38 @@ Item {
                         Item { Layout.fillWidth: true }
                     }
 
+                    // Sensor firmware debug flags — persisted to config AND
+                    // pushed live to connected sensors via setSensorDebugFlag.
+                    // onToggled (not onCheckedChanged) so the appConfig rebind
+                    // after appConfigChanged can't feed back into the slot.
+                    FieldRow {
+                        label: "Histogram compression"
+                        PillSwitch {
+                            checked: MotionInterface.appConfig.histoCmp === true
+                            onToggled: MotionInterface.setSensorDebugFlag("histoCmp", checked)
+                        }
+                        Text {
+                            text: MotionInterface.appConfig.histoCmp === true ? "On" : "Off"
+                            color: MotionInterface.appConfig.histoCmp === true ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    FieldRow {
+                        label: "Sensor debug log"
+                        PillSwitch {
+                            checked: MotionInterface.appConfig.sensorDebugLogging === true
+                            onToggled: MotionInterface.setSensorDebugFlag("sensorDebugLogging", checked)
+                        }
+                        Text {
+                            text: MotionInterface.appConfig.sensorDebugLogging === true ? "On" : "Off"
+                            color: MotionInterface.appConfig.sensorDebugLogging === true ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
                     FieldRow {
                         label: "Save raw CSV"
                         PillSwitch {
