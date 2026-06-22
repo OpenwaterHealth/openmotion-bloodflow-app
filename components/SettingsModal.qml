@@ -1173,6 +1173,51 @@ Item {
                     }
                 }
 
+                // ── System Information ───────────────────────────────────────
+                // Firmware versions per device, cached on connect by the
+                // connector (_log_device_stats). Each row shows the live
+                // version when connected, or a muted "Not connected".
+                SectionCard {
+                    title: "System Information"
+
+                    FieldRow {
+                        label: "Console FW"
+                        Text {
+                            text: MotionInterface.consoleConnected
+                                  ? (MotionInterface.consoleFirmwareVersion || "—")
+                                  : "Not connected"
+                            color: MotionInterface.consoleConnected ? root.colTextPri : root.colTextMuted
+                            font.pixelSize: 13
+                            font.family: "Consolas"
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+                    FieldRow {
+                        label: "Left Sensor FW"
+                        Text {
+                            text: MotionInterface.leftSensorConnected
+                                  ? (MotionInterface.leftSensorFirmwareVersion || "—")
+                                  : "Not connected"
+                            color: MotionInterface.leftSensorConnected ? root.colTextPri : root.colTextMuted
+                            font.pixelSize: 13
+                            font.family: "Consolas"
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+                    FieldRow {
+                        label: "Right Sensor FW"
+                        Text {
+                            text: MotionInterface.rightSensorConnected
+                                  ? (MotionInterface.rightSensorFirmwareVersion || "—")
+                                  : "Not connected"
+                            color: MotionInterface.rightSensorConnected ? root.colTextPri : root.colTextMuted
+                            font.pixelSize: 13
+                            font.family: "Consolas"
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+                }
+
                 // Bottom padding
                 Item { Layout.fillWidth: true; height: 20 }
             }
