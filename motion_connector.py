@@ -659,6 +659,9 @@ class MotionConnector(QObject):
     tecDacChanged = pyqtSignal()
     appConfigChanged = pyqtSignal()
     consoleFanChanged = pyqtSignal()
+    # Per-device firmware versions, refreshed on every (dis)connect by
+    # _log_device_stats. Surfaced to Settings → System Information.
+    firmwareVersionsChanged = pyqtSignal()
 
     # App update signals
     updateAvailable = pyqtSignal(str, str)   # (latest_version, download_url)
@@ -801,6 +804,13 @@ class MotionConnector(QObject):
         # connect handler below). Surfaced to QML as ``consoleFanOn`` and
         # toggled via ``setConsoleFan``.
         self._console_fan_on: bool = True
+        # Per-device firmware version strings (e.g. "v1.2.3"), populated on
+        # connect by _log_device_stats and cleared on disconnect. Surfaced
+        # to QML as console/left/rightSensorFirmwareVersion for the Settings
+        # → System Information card.
+        self._firmware_versions: dict[str, str] = {
+            "console": "", "left": "", "right": "",
+        }
         # Track console connection time for safety grace period (issue #107 follow-up)
         self._console_connected_at: float | None = None
         # Real-time plot viewer source — assigned at scan start by startCapture.
@@ -1168,6 +1178,22 @@ class MotionConnector(QObject):
         """Expose Console connection status to QML."""
         return self._consoleConnected
 
+    @pyqtProperty(str, notify=firmwareVersionsChanged)
+    def consoleFirmwareVersion(self) -> str:
+        """Console firmware version cached at connect time (empty when
+        unknown / disconnected). Shown in Settings → System Information."""
+        return self._firmware_versions["console"]
+
+    @pyqtProperty(str, notify=firmwareVersionsChanged)
+    def leftSensorFirmwareVersion(self) -> str:
+        """Left sensor firmware version; see consoleFirmwareVersion."""
+        return self._firmware_versions["left"]
+
+    @pyqtProperty(str, notify=firmwareVersionsChanged)
+    def rightSensorFirmwareVersion(self) -> str:
+        """Right sensor firmware version; see consoleFirmwareVersion."""
+        return self._firmware_versions["right"]
+
     @pyqtProperty(bool, notify=consoleFanChanged)
     def consoleFanOn(self) -> bool:
         """Cached last-set console-fan state (True=on). Reflects the
@@ -1412,6 +1438,11 @@ class MotionConnector(QObject):
             self.signalDisconnected.emit(name, "")
             self._audit.log("device_disconnected",
                             {"device": name, "reason": str(reason)})
+            # Drop the cached firmware version so System Information no
+            # longer reports a stale value for the unplugged device.
+            if name in self._firmware_versions and self._firmware_versions[name]:
+                self._firmware_versions[name] = ""
+                self.firmwareVersionsChanged.emit()
             # Abort an in-flight FPGA flash / sensor-configure pipeline.
             # The SDK does not subscribe to disconnect events for the
             # configure-cameras flow (only start_scan does), so without
@@ -1459,6 +1490,12 @@ class MotionConnector(QObject):
         self._audit.log("device_stats", {
             "device": name, "hardware_id": hwid, "firmware_version": fw,
         })
+        # Cache for the Settings → System Information card. Fired from the
+        # SDK connection-monitor thread; the bound QML rows update via the
+        # queued firmwareVersionsChanged emit.
+        if name in self._firmware_versions:
+            self._firmware_versions[name] = fw
+            self.firmwareVersionsChanged.emit()
 
     def update_state(self):
         """Update system state based on connection and configuration."""
