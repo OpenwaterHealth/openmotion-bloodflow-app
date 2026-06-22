@@ -11,13 +11,13 @@ Set-Location $root
 #    cross-upgrade). Generated once with [guid]::NewGuid(). --
 $guids = @{
     clinical = @{
-        ProductName       = "OpenWater Bloodflow"
+        ProductName       = "Openwater Bloodflow"
         UpgradeCode       = "3d5dec27-6f62-484b-85f0-1b7b07076022"
         BundleUpgradeCode = "2e60deaa-8959-4f57-912b-71f60fc6ad5a"
         Suffix            = ""
     }
     ruo = @{
-        ProductName       = "OpenWater Bloodflow (RUO)"
+        ProductName       = "Openwater Bloodflow (RUO)"
         UpgradeCode       = "81f5e9b0-36d8-4aeb-8457-461fe4fe6c2f"
         BundleUpgradeCode = "e363d244-2161-4a28-a855-835643b14a10"
         Suffix            = "_RUO"
@@ -48,7 +48,7 @@ if (-not (Test-Path $driverMsi)) { throw "driver MSI not found in $drvZip" }
 $outDir = "build\installer"
 New-Item -ItemType Directory -Force $outDir | Out-Null
 $appMsi    = Join-Path $outDir "OpenWaterApp$($g.Suffix).msi"
-$bundleExe = Join-Path $outDir "OpenWater-Setup-$version$($g.Suffix).exe"
+$bundleExe = Join-Path $outDir "Openwater-Setup-$version$($g.Suffix).exe"
 
 # -- build the app MSI --
 # Resolve the PyInstaller output to an ABSOLUTE path. WiX resolves the

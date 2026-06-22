@@ -173,7 +173,7 @@ def main():
         app = QApplication(sys.argv)
         msg_box = QMessageBox()
         msg_box.setIcon(QMessageBox.Icon.Warning)
-        msg_box.setWindowTitle("OpenWater Bloodflow")
+        msg_box.setWindowTitle("Openwater Bloodflow")
         msg_box.setText("Another instance of the application is already running.")
         msg_box.setInformativeText(
             "Please close the existing instance before opening a new one."
@@ -201,7 +201,7 @@ def main():
     app_config = _load_app_config()
     # Single output root: dataDirectory. app-logs/, scan files,
     # scans.db, ft-test-csvs/ all land under this directory. Falls back to
-    # cwd (when writable) or ~/Documents/OpenWater Bloodflow (e.g. macOS
+    # cwd (when writable) or ~/Documents/Openwater Bloodflow (e.g. macOS
     # Finder launch where cwd is "/").
     _data_dir = app_config.get("dataDirectory")
     if not _data_dir:
@@ -216,7 +216,7 @@ def main():
             _data_dir = candidate
         else:
             _data_dir = os.path.join(
-                os.path.expanduser("~"), "Documents", "OpenWater Bloodflow"
+                os.path.expanduser("~"), "Documents", "Openwater Bloodflow"
             )
     os.makedirs(_data_dir, exist_ok=True)
     run_dir = os.path.join(_data_dir, "app-logs")
@@ -264,7 +264,7 @@ def main():
             import ctypes
 
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-                "OpenWaterHealth.BloodflowApp"
+                "OpenwaterHealth.BloodflowApp"
             )
         except Exception:
             pass  # Ignore if not available
@@ -273,9 +273,9 @@ def main():
     app.setWindowIcon(QIcon(icon_path))
 
     # Set application properties for Windows taskbar
-    app.setApplicationName("OpenWater Bloodflow")
+    app.setApplicationName("Openwater Bloodflow")
     app.setApplicationVersion(APP_VERSION)
-    app.setOrganizationName("OpenWater Health")
+    app.setOrganizationName("Openwater Health")
 
     engine = QQmlApplicationEngine()
 

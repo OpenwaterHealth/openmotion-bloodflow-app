@@ -236,7 +236,7 @@ jobs:
           files: |
             ${{ steps.meta.outputs.ARTIFACT_ZIP }}
             ${{ steps.meta.outputs.ARTIFACT_ZIP_RUO }}
-            build/installer/OpenWater-Setup-*.exe
+            build/installer/Openwater-Setup-*.exe
             resources/OpenMotionDriver-x64.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
