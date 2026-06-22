@@ -2,7 +2,7 @@
 
 When the app is installed to Program Files, its bundled files are read-only.
 Runtime-writable state (config overrides, logs, scan data) lives under
-%PROGRAMDATA%\\OpenWater\\ instead. In a dev (non-frozen) run, everything stays
+%PROGRAMDATA%\\Openwater\\ instead. In a dev (non-frozen) run, everything stays
 under the cwd so local development is unchanged.
 
 Override the root with the OPENWATER_DATA_ROOT env var (used by tests and as a
@@ -12,7 +12,7 @@ from pathlib import Path
 import os
 import sys
 
-_APP_DIRNAME = "OpenWater"
+_APP_DIRNAME = "Openwater"
 
 
 def writable_root() -> Path:
