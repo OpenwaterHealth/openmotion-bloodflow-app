@@ -98,6 +98,40 @@ jobs:
           conda activate omotion
           python -m PyInstaller -y openwater.spec
 
+      - name: Install WiX v5
+        shell: pwsh
+        run: |
+          # Pin to 5.0.2 — the last MIT-licensed WiX. v6/v7 require accepting the
+          # paid Open Source Maintenance Fee EULA (WIX7015) and would fail CI.
+          dotnet tool install --global wix --version 5.0.2
+          # In WiX v5 the standard bootstrapper application ships in this package
+          # (not WixToolset.Bal.wixext); the bal: namespace in bundle.wxs is unchanged.
+          wix extension add -g WixToolset.BootstrapperApplications.wixext/5.0.2
+          echo "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Build clinical installer
+        shell: pwsh
+        env:
+          CODESIGN_THUMBPRINT: ${{ secrets.CODESIGN_THUMBPRINT }}
+        run: |
+          powershell -NoProfile -File installer\build_installer.ps1 -Variant clinical
+
+      - name: Build RUO installer
+        shell: pwsh
+        env:
+          CODESIGN_THUMBPRINT: ${{ secrets.CODESIGN_THUMBPRINT }}
+        run: |
+          $cfg = "dist\OpenWaterApp\_internal\config\app_config.json"
+          $orig = Get-Content -Raw $cfg
+          $ruo = $orig -replace '"reducedMode"\s*:\s*true', '"reducedMode": false'
+          if ($ruo -eq $orig) { throw "RUO build: did not find reducedMode: true to flip" }
+          Set-Content -Path $cfg -Value $ruo -Encoding UTF8 -NoNewline
+          try {
+            powershell -NoProfile -File installer\build_installer.ps1 -Variant ruo
+          } finally {
+            Set-Content -Path $cfg -Value $orig -Encoding UTF8 -NoNewline
+          }
+
       # ── package ──────────────────────────────────────────────────
       - name: Determine version tag
         id: meta
@@ -202,6 +236,7 @@ jobs:
           files: |
             ${{ steps.meta.outputs.ARTIFACT_ZIP }}
             ${{ steps.meta.outputs.ARTIFACT_ZIP_RUO }}
+            build/installer/Openwater-Setup-*.exe
             resources/OpenMotionDriver-x64.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

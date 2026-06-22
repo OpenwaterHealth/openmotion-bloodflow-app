@@ -46,6 +46,7 @@ import error_codes
 import bug_report
 from nan_gap_tracker import NanGapTracker, gap_note_line
 from utils.resource_path import resource_path
+from utils import config_store
 from data_sources import (
     LiveScanSource, PastScanSource, ScanDataSource, buffers_are_empty,
 )
@@ -688,6 +689,7 @@ class MotionConnector(QObject):
         self,
         interface: MotionInterface,
         app_config=None,
+        baseline_config=None,
         data_dir=None,
         config_dir="config",
         parent=None,
@@ -700,6 +702,9 @@ class MotionConnector(QObject):
 
         # Store the full config dict — exposed to QML as appConfig property
         self._app_config = dict(cfg)
+        # Shipped baseline (defaults + read-only bundled config); runtime
+        # changes are persisted as a diff against this (see _save_app_config).
+        self._baseline_config = dict(baseline_config or {})
 
         # Bug-report context (see sendBugReport). app_version + log_path come
         # from main.py; support_email / bug_report_smtp from app config.
@@ -2155,22 +2160,13 @@ class MotionConnector(QObject):
     def appConfig(self):
         return self._app_config
 
-    # Config keys that must always be stored as plain integers
-    _INT_CONFIG_KEYS = {"leftMask", "rightMask"}
-
     def _save_app_config(self):
-        """Write the in-memory config dict back to app_config.json."""
-        config_path = resource_path("config", "app_config.json")
-        # Coerce mask fields to int — QML passes JS numbers as Python float
-        out = dict(self._app_config)
-        for key in self._INT_CONFIG_KEYS:
-            if key in out and out[key] is not None:
-                out[key] = int(out[key])
-        try:
-            with open(config_path, "w", encoding="utf-8") as f:
-                json.dump(out, f, indent=2)
-        except OSError as e:
-            logger.warning(f"[Connector] Could not write app_config.json: {e}")
+        """Persist runtime config changes as a diff vs the shipped baseline.
+
+        Writes only changed keys to the writable app_config.local.json under
+        %PROGRAMDATA%, never the read-only bundled config in Program Files.
+        """
+        config_store.save_overrides(self._app_config, self._baseline_config)
 
     @pyqtSlot(str, result=bool)
     def checkDeveloperPassword(self, pw: str) -> bool:

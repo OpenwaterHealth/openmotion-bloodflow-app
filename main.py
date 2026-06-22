@@ -32,9 +32,14 @@ from omotion import MotionInterface
 from utils.single_instance import check_single_instance, cleanup_single_instance
 from version import get_version
 from utils.resource_path import resource_path
+from utils import app_paths, config_store
 
 
 APP_VERSION = get_version()
+
+# Shipped baseline (defaults + read-only bundled config), captured at load so
+# the connector can diff runtime changes against it when saving overrides.
+_APP_CONFIG_BASELINE: dict = {}
 
 
 logger = logging.getLogger("openmotion.bloodflow-app")
@@ -152,28 +157,13 @@ def _load_app_config() -> dict:
         "requireConsole": True,
         "minSensors": 1,
     }
-    config_path = resource_path("config", "app_config.json")
-    if not config_path.exists():
-        logger.info("No app_config.json found at %s, using defaults", config_path)
-        return defaults
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            loaded = json.load(f)
-        out = {
-            **defaults,
-            **{k: v for k, v in loaded.items() if k in defaults},
-        }
-        # Ensure mask fields are always integers (guard against float drift from JSON)
-        for key in ("leftMask", "rightMask", "reducedModeLeftMask", "reducedModeRightMask"):
-            if key in out and out[key] is not None:
-                out[key] = int(out[key])
-        logger.info("Loaded app config from %s", config_path)
-        return out
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning(
-            "Could not load app config from %s: %s; using defaults", config_path, e
-        )
-        return defaults
+    baseline, merged = config_store.load_app_config(defaults)
+    _APP_CONFIG_BASELINE.clear()
+    _APP_CONFIG_BASELINE.update(baseline)
+    logger.info(
+        "Loaded app config (overrides from %s)", app_paths.local_config_path()
+    )
+    return merged
 
 
 def main():
@@ -183,7 +173,7 @@ def main():
         app = QApplication(sys.argv)
         msg_box = QMessageBox()
         msg_box.setIcon(QMessageBox.Icon.Warning)
-        msg_box.setWindowTitle("OpenWater Bloodflow")
+        msg_box.setWindowTitle("Openwater Bloodflow")
         msg_box.setText("Another instance of the application is already running.")
         msg_box.setInformativeText(
             "Please close the existing instance before opening a new one."
@@ -211,16 +201,22 @@ def main():
     app_config = _load_app_config()
     # Single output root: dataDirectory. app-logs/, scan files,
     # scans.db, ft-test-csvs/ all land under this directory. Falls back to
-    # cwd (when writable) or ~/Documents/OpenWater Bloodflow (e.g. macOS
+    # cwd (when writable) or ~/Documents/Openwater Bloodflow (e.g. macOS
     # Finder launch where cwd is "/").
     _data_dir = app_config.get("dataDirectory")
     if not _data_dir:
-        candidate = os.getcwd()
+        # Frozen (installed) build uses ProgramData; dev run uses cwd,
+        # falling back to ~/Documents if cwd is not writable.
+        candidate = (
+            str(app_paths.writable_root())
+            if getattr(sys, "frozen", False)
+            else os.getcwd()
+        )
         if os.access(candidate, os.W_OK):
             _data_dir = candidate
         else:
             _data_dir = os.path.join(
-                os.path.expanduser("~"), "Documents", "OpenWater Bloodflow"
+                os.path.expanduser("~"), "Documents", "Openwater Bloodflow"
             )
     os.makedirs(_data_dir, exist_ok=True)
     run_dir = os.path.join(_data_dir, "app-logs")
@@ -268,7 +264,7 @@ def main():
             import ctypes
 
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-                "OpenWaterHealth.BloodflowApp"
+                "OpenwaterHealth.BloodflowApp"
             )
         except Exception:
             pass  # Ignore if not available
@@ -277,14 +273,15 @@ def main():
     app.setWindowIcon(QIcon(icon_path))
 
     # Set application properties for Windows taskbar
-    app.setApplicationName("OpenWater Bloodflow")
+    app.setApplicationName("Openwater Bloodflow")
     app.setApplicationVersion(APP_VERSION)
-    app.setOrganizationName("OpenWater Health")
+    app.setOrganizationName("Openwater Health")
 
     engine = QQmlApplicationEngine()
 
     connector = MotionConnector(
         motion_interface, app_config=app_config, data_dir=_data_dir,
+        baseline_config=_APP_CONFIG_BASELINE,
         app_version=APP_VERSION, log_path=logfile_path,
     )
     qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MotionInterface", connector)
