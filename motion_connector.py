@@ -963,6 +963,29 @@ class MotionConnector(QObject):
             flags |= DEBUG_FLAG_HISTO_CMP
         return flags
 
+    def _apply_sensor_debug_flags(self) -> None:
+        """Re-push the recomputed debug-flag bitmask to every connected sensor.
+
+        Unlike ``_run_sensor_init``, this writes even when ``flags == 0`` so
+        that turning the last flag off actually clears it on the firmware.
+        Used by the live Settings → Developer toggles (``setSensorDebugFlag``)
+        so no reconnect/restart is needed.
+        """
+        flags = self._compute_sensor_debug_flags()
+        for side in ("left", "right"):
+            try:
+                sensor = (
+                    getattr(self._interface, side, None)
+                    if self._interface else None
+                )
+            except Exception:
+                sensor = None
+            if sensor is None or not sensor.is_connected():
+                continue
+            logger.info("Re-applying debug flags 0x%x on %s sensor", flags, side)
+            if not sensor.set_debug_flags(flags):
+                logger.warning("Failed to set debug flags on %s sensor", side)
+
     def _schedule_sensor_init(self, side: str):
         """Delay initial sensor commands to allow USB settle."""
         QTimer.singleShot(1000, lambda: self._run_sensor_init(side))
@@ -2151,6 +2174,39 @@ class MotionConnector(QObject):
         logger.debug(f"[Connector] Config saved: {sorted(configs.keys())}")
         if changes:
             self._audit.log("settings_changed", {"changes": changes})
+
+    # Sensor debug-flag config keys surfaced as live Settings → Developer
+    # toggles, mapped to the runtime cache attribute that
+    # _compute_sensor_debug_flags() reads.
+    _SENSOR_DEBUG_FLAG_ATTRS = {
+        "histoCmp": "_histo_cmp",
+        "sensorDebugLogging": "_sensor_debug_logging",
+    }
+
+    @pyqtSlot(str, bool)
+    def setSensorDebugFlag(self, key: str, enabled: bool) -> None:
+        """Toggle a sensor debug-flag config key, persist it, and re-push the
+        recomputed debug-flag bitmask to every connected sensor immediately.
+
+        Mirrors the live ``setConsoleFan`` developer toggle — no app restart
+        or reconnect needed. Unknown keys are ignored. When no sensor is
+        connected the value is still persisted and applies on the next
+        connect via ``_run_sensor_init``.
+        """
+        attr = self._SENSOR_DEBUG_FLAG_ATTRS.get(key)
+        if attr is None:
+            logger.warning("setSensorDebugFlag: unknown key %r", key)
+            return
+        enabled = bool(enabled)
+        old = self._app_config.get(key)
+        setattr(self, attr, enabled)
+        self._app_config[key] = enabled
+        self._save_app_config()
+        self.appConfigChanged.emit()
+        if old != enabled:
+            self._audit.log("settings_changed",
+                            {"changes": {key: {"old": old, "new": enabled}}})
+        self._apply_sensor_debug_flags()
 
     @pyqtSlot(bool)
     def setWriteRawCsv(self, enabled: bool) -> None:
