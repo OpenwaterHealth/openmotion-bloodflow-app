@@ -1562,6 +1562,10 @@ class MotionConnector(QObject):
             if name in self._firmware_versions and self._firmware_versions[name]:
                 self._firmware_versions[name] = ""
                 self.firmwareVersionsChanged.emit()
+            if self._firmware_update_available.get(name):
+                self._firmware_update_available[name] = False
+                self._firmware_latest[name] = ""
+                self.firmwareUpdateInfoChanged.emit()
             # Abort an in-flight FPGA flash / sensor-configure pipeline.
             # The SDK does not subscribe to disconnect events for the
             # configure-cameras flow (only start_scan does), so without
@@ -1615,6 +1619,60 @@ class MotionConnector(QObject):
         if name in self._firmware_versions:
             self._firmware_versions[name] = fw
             self.firmwareVersionsChanged.emit()
+        self._maybe_check_firmware_update(name)
+
+    @staticmethod
+    def _kind_for_device(name: str) -> FirmwareKind:
+        return FirmwareKind.CONSOLE if name == "console" else FirmwareKind.SENSOR
+
+    @staticmethod
+    def _devices_for_kind(kind: FirmwareKind) -> list:
+        return ["console"] if kind == FirmwareKind.CONSOLE else ["left", "right"]
+
+    def _maybe_check_firmware_update(self, name: str) -> None:
+        """If developerMode, ensure this device's firmware-update availability
+        is computed — reusing a cached 'latest' for the kind, or kicking one
+        background GitHub check per kind per session."""
+        if not self._app_config.get("developerMode", False):
+            return
+        if name not in self._firmware_versions or not self._firmware_versions[name]:
+            return
+        kind = self._kind_for_device(name)
+        if self._firmware_latest_by_kind.get(kind.value):
+            self._recompute_firmware_update(name)   # latest already known; no network
+            return
+        if kind in self._firmware_checking_kinds:
+            return                                  # a check is already in flight
+        self._firmware_checking_kinds.add(kind)
+        threading.Thread(
+            target=self._firmware_check_worker, args=(kind,), daemon=True
+        ).start()
+
+    def _firmware_check_worker(self, kind: FirmwareKind) -> None:
+        try:
+            info = check_latest(kind)
+        except Exception:                           # defensive; check_latest is fail-soft
+            info = None
+        finally:
+            self._firmware_checking_kinds.discard(kind)
+        if info is None:
+            return                                  # leave kind unchecked so it retries
+        self._firmware_latest_by_kind[kind.value] = info.tag
+        for dev in self._devices_for_kind(kind):
+            self._recompute_firmware_update(dev)
+
+    def _recompute_firmware_update(self, name: str) -> None:
+        kind = self._kind_for_device(name)
+        installed = self._firmware_versions.get(name, "")
+        latest = self._firmware_latest_by_kind.get(kind.value, "")
+        avail = bool(installed) and bool(latest) and is_update_available(installed, latest)
+        self._firmware_latest[name] = latest
+        self._firmware_update_available[name] = avail
+        self.firmwareUpdateInfoChanged.emit()
+        if avail:
+            logger.info("Firmware update available for %s: %s -> %s",
+                        name, installed, latest)
+            self.firmwareUpdateAvailable.emit(name, installed, latest)
 
     def update_state(self):
         """Update system state based on connection and configuration."""
