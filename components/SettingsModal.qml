@@ -884,6 +884,25 @@ Item {
                         Item { Layout.fillWidth: true }
                     }
 
+                    // Console USB-printf debug log — persisted to config AND
+                    // pushed live to a connected console via
+                    // setConsoleDebugLogging. Re-applied on connect (RAM-only
+                    // firmware flag). onToggled (not onCheckedChanged) so the
+                    // appConfig rebind can't feed back into the slot.
+                    FieldRow {
+                        label: "Console debug log"
+                        PillSwitch {
+                            checked: MotionInterface.appConfig.consoleDebugLogging === true
+                            onToggled: MotionInterface.setConsoleDebugLogging(checked)
+                        }
+                        Text {
+                            text: MotionInterface.appConfig.consoleDebugLogging === true ? "On" : "Off"
+                            color: MotionInterface.appConfig.consoleDebugLogging === true ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
                     FieldRow {
                         label: "Save raw CSV"
                         PillSwitch {
