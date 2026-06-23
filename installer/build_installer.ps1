@@ -1,7 +1,8 @@
 # installer/build_installer.ps1 - build the app MSI + Burn bundle for one variant.
 param(
     [ValidateSet("clinical", "ruo")][string]$Variant = "clinical",
-    [string]$DistDir = "dist\OpenWaterApp"
+    [string]$DistDir = "dist\OpenWaterApp",
+    [string]$Version = ""   # override the numeric X.Y.Z (else derived from git)
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Definition)
@@ -25,14 +26,18 @@ $guids = @{
 }
 $g = $guids[$Variant]
 
-# -- numeric X.Y.Z from the git tag/describe (drop any -dev/-rc suffix) --
-try {
-    $desc = (git describe --tags --always 2>$null).Trim()
-} catch { $desc = "" }
-if ($desc -match '(\d+)\.(\d+)\.(\d+)') {
-    $version = "$($matches[1]).$($matches[2]).$($matches[3])"
+# -- numeric X.Y.Z: explicit -Version override, else from the git tag/describe --
+if ($Version) {
+    $version = $Version
 } else {
-    $version = "0.0.0"
+    try {
+        $desc = (git describe --tags --always 2>$null).Trim()
+    } catch { $desc = "" }
+    if ($desc -match '(\d+)\.(\d+)\.(\d+)') {
+        $version = "$($matches[1]).$($matches[2]).$($matches[3])"
+    } else {
+        $version = "0.0.0"
+    }
 }
 Write-Host "Variant=$Variant  Version=$version  Product='$($g.ProductName)'" -ForegroundColor Green
 
