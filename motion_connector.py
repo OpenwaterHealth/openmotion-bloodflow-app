@@ -26,6 +26,11 @@ import re
 import string
 
 from omotion import MotionInterface
+from omotion.firmware_update import (
+    FirmwareKind,
+    check_latest,
+    is_update_available,
+)
 
 from omotion.config import (
     DEBUG_FLAG_USB_PRINTF,
@@ -816,6 +821,11 @@ class MotionConnector(QObject):
     # Per-device firmware versions, refreshed on every (dis)connect by
     # _log_device_stats. Surfaced to Settings → System Information.
     firmwareVersionsChanged = pyqtSignal()
+    # Firmware autoupdate (developerMode only)
+    firmwareUpdateInfoChanged = pyqtSignal()                # notify for the properties below
+    firmwareUpdateAvailable = pyqtSignal(str, str, str)     # deviceKey, current, latest
+    firmwareUpdateProgress = pyqtSignal(str, str, int, str) # deviceKey, stage, percent(-1=indeterminate), msg
+    firmwareUpdateFinished = pyqtSignal(str, bool, str)     # deviceKey, ok, msg
 
     # App update signals
     updateAvailable = pyqtSignal(str, str)   # (latest_version, download_url)
@@ -974,6 +984,14 @@ class MotionConnector(QObject):
         self._firmware_versions: dict[str, str] = {
             "console": "", "left": "", "right": "",
         }
+        # Firmware autoupdate state (developerMode only).
+        self._firmware_latest: dict[str, str] = {"console": "", "left": "", "right": ""}
+        self._firmware_update_available: dict[str, bool] = {
+            "console": False, "left": False, "right": False,
+        }
+        self._firmware_latest_by_kind: dict[str, str] = {}   # "console"/"sensor" -> tag
+        self._firmware_checking_kinds: set = set()           # in-flight network checks
+        self._firmware_update_in_progress: str | None = None # deviceKey being flashed
         # Track console connection time for safety grace period (issue #107 follow-up)
         self._console_connected_at: float | None = None
         # Real-time plot viewer source — assigned at scan start by startCapture.
@@ -1379,6 +1397,34 @@ class MotionConnector(QObject):
     def rightSensorFirmwareVersion(self) -> str:
         """Right sensor firmware version; see consoleFirmwareVersion."""
         return self._firmware_versions["right"]
+
+    @pyqtProperty(bool, notify=firmwareUpdateInfoChanged)
+    def anyFirmwareUpdateAvailable(self) -> bool:
+        return any(self._firmware_update_available.values())
+
+    @pyqtProperty(bool, notify=firmwareUpdateInfoChanged)
+    def consoleFirmwareUpdateAvailable(self) -> bool:
+        return self._firmware_update_available["console"]
+
+    @pyqtProperty(bool, notify=firmwareUpdateInfoChanged)
+    def leftSensorFirmwareUpdateAvailable(self) -> bool:
+        return self._firmware_update_available["left"]
+
+    @pyqtProperty(bool, notify=firmwareUpdateInfoChanged)
+    def rightSensorFirmwareUpdateAvailable(self) -> bool:
+        return self._firmware_update_available["right"]
+
+    @pyqtProperty(str, notify=firmwareUpdateInfoChanged)
+    def consoleFirmwareLatest(self) -> str:
+        return self._firmware_latest["console"]
+
+    @pyqtProperty(str, notify=firmwareUpdateInfoChanged)
+    def leftSensorFirmwareLatest(self) -> str:
+        return self._firmware_latest["left"]
+
+    @pyqtProperty(str, notify=firmwareUpdateInfoChanged)
+    def rightSensorFirmwareLatest(self) -> str:
+        return self._firmware_latest["right"]
 
     @pyqtProperty(bool, notify=consoleFanChanged)
     def consoleFanOn(self) -> bool:
