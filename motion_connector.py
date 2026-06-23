@@ -7,6 +7,8 @@ from PyQt6.QtCore import (
     QTimer,
     QRecursiveMutex,
     QCoreApplication,
+    QMetaObject,
+    Qt,
 )
 from pathlib import Path
 from typing import NamedTuple, Optional
@@ -173,17 +175,27 @@ def _build_update_helper_script(
     The running app cannot upgrade its own files while it holds them, and the
     Burn bundle does not relaunch the app. So the app spawns this detached
     helper and then exits; the helper (1) waits for the app to fully exit to
-    avoid a FilesInUse conflict, (2) runs the bundle non-interactively
-    (one UAC elevation, no bootstrapper UI), then (3) relaunches the app.
+    avoid a FilesInUse conflict — and force-kills it if it doesn't exit in
+    time, since a wedged GUI thread (e.g. a synchronous SDK/USB call blocking
+    the event loop) can otherwise leave the app alive and stall the whole
+    upgrade, (2) runs the bundle non-interactively (one UAC elevation, no
+    bootstrapper UI), then (3) relaunches the app.
     """
     return (
         "# OpenWater in-app update helper (auto-generated; do not edit)\n"
         "$ErrorActionPreference = 'SilentlyContinue'\n"
         f"# 1. Wait for the running app (PID {app_pid}) to exit so the\n"
         "#    installer can replace its files without a FilesInUse conflict.\n"
-        "$deadline = (Get-Date).AddSeconds(60)\n"
+        "#    If it doesn't exit in time (the app may not self-exit under\n"
+        "#    qasync), force-kill it - installing over a live app fails the\n"
+        "#    in-place file swap.\n"
+        "$deadline = (Get-Date).AddSeconds(10)\n"
         f"while (Get-Process -Id {app_pid} -ErrorAction SilentlyContinue) {{\n"
-        "    if ((Get-Date) -gt $deadline) { break }\n"
+        "    if ((Get-Date) -gt $deadline) {\n"
+        f"        Stop-Process -Id {app_pid} -Force -ErrorAction SilentlyContinue\n"
+        "        Start-Sleep -Milliseconds 500\n"
+        "        break\n"
+        "    }\n"
         "    Start-Sleep -Milliseconds 250\n"
         "}\n"
         "# 2. Run the upgrade non-interactively (one UAC elevation).\n"
@@ -4838,15 +4850,40 @@ class MotionConnector(QObject):
             )
             self.updateProgress.emit("Installing update…")
             logger.info("Spawning update helper; quitting for upgrade")
+            # NB: DETACHED_PROCESS leaves powershell with no console and no std
+            # handles, so it dies instantly WITHOUT running the script (verified
+            # in isolation — the helper never executed, which is why earlier
+            # upgrades silently never installed). CREATE_NO_WINDOW gives it a
+            # hidden console and DEVNULL std handles, so the detached helper
+            # actually runs.
             subprocess.Popen(
                 [
                     "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
                     "-File", str(helper),
                 ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
                 close_fds=True,
-                creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            QCoreApplication.quit()
+            # Ask Qt to shut down gracefully (aboutToQuit -> handle_exit stops
+            # the hardware monitor, releases the USB transport, flushes the
+            # audit log). This runs on a worker thread, so DO NOT call
+            # QCoreApplication.quit() directly: under qasync a cross-thread
+            # quit() blocks inside the C++ call while HOLDING the GIL, which
+            # freezes the whole process — every thread, including any hard-exit
+            # backstop, starves (confirmed via py-spy). Post the quit to the
+            # main thread instead; QueuedConnection just enqueues an event and
+            # returns immediately, so this worker never blocks. If graceful
+            # teardown stalls or qasync ignores the quit, the detached helper
+            # force-kills us after its grace window and the upgrade proceeds
+            # regardless — so we don't rely on the app exiting itself.
+            QMetaObject.invokeMethod(
+                QCoreApplication.instance(),
+                "quit",
+                Qt.ConnectionType.QueuedConnection,
+            )
         except Exception as e:
             logger.error("applyUpdate failed: %s", e)
             self.updateCheckFailed.emit(str(e))
