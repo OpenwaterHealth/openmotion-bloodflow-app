@@ -73,6 +73,11 @@ def _load_app_config() -> dict:
     """Load application config from config/app_config.json. Returns defaults if missing or invalid."""
     defaults = {
         "forceLaserFail": False,
+        # In-app updater source overrides (default None => production GitHub
+        # repo). updateRepo swaps the owner/repo; updateApiUrl fully overrides
+        # the releases-latest endpoint (used by the local update-test server).
+        "updateRepo": None,
+        "updateApiUrl": None,
         "cameraTempAlertThresholdC": 105,
         # Console over-temp trip (°C) pushed to the console user config on
         # connect. 0/missing disables the firmware trip, so this is validated
