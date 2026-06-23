@@ -1630,7 +1630,7 @@ class MotionConnector(QObject):
         return FirmwareKind.CONSOLE if name == "console" else FirmwareKind.SENSOR
 
     @staticmethod
-    def _devices_for_kind(kind: FirmwareKind) -> list:
+    def _devices_for_kind(kind: FirmwareKind) -> list[str]:
         return ["console"] if kind == FirmwareKind.CONSOLE else ["left", "right"]
 
     def _maybe_check_firmware_update(self, name: str) -> None:

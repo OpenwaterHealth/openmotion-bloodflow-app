@@ -4,12 +4,20 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import motion_connector
 from motion_connector import (
     MotionConnector, RUNNING, READY, DISCONNECTED,
 )
 from omotion import ConnectionState
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def _no_network_check(monkeypatch):
+    # Unit tests must not hit GitHub. _maybe_check_firmware_update may spawn a
+    # background thread; stub check_latest so it returns immediately with no emit.
+    monkeypatch.setattr(motion_connector, "check_latest", lambda kind: None)
 
 
 def _connector(tmp_path, dev_mode=True):
