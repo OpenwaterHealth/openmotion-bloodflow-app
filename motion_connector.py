@@ -1704,6 +1704,10 @@ class MotionConnector(QObject):
                             {"device": name, "reason": str(reason)})
             self._log_device_stats(name)
         elif is_now_lost:
+            if self._firmware_update_in_progress == name:
+                logger.info("Ignoring expected DFU disconnect for %s during "
+                            "firmware update", name)
+                return
             logger.info(
                 "Handle %s -> DISCONNECTED (%s) and state is %s",
                 name, reason, self._state,
@@ -1827,6 +1831,79 @@ class MotionConnector(QObject):
             logger.info("Firmware update available for %s: %s -> %s",
                         name, installed, latest)
             self.firmwareUpdateAvailable.emit(name, installed, latest)
+
+    @pyqtSlot(str, result=bool)
+    def startFirmwareUpdate(self, device_key: str) -> bool:
+        """Download the latest firmware for device_key and flash it over DFU.
+        developerMode-only; refused during a scan or while another update runs."""
+        if device_key not in ("console", "left", "right"):
+            return False
+        if not self._app_config.get("developerMode", False):
+            return False
+        if self._state == RUNNING or self._running:
+            self.firmwareUpdateFinished.emit(
+                device_key, False, "Cannot update firmware during a scan.")
+            return False
+        if self._firmware_update_in_progress is not None:
+            self.firmwareUpdateFinished.emit(
+                device_key, False, "Another firmware update is in progress.")
+            return False
+        if not self._firmware_update_available.get(device_key, False):
+            self.firmwareUpdateFinished.emit(
+                device_key, False, "No update available for this device.")
+            return False
+        self._firmware_update_in_progress = device_key
+        threading.Thread(
+            target=self._firmware_update_worker, args=(device_key,), daemon=True
+        ).start()
+        return True
+
+    def _firmware_update_worker(self, device_key: str) -> None:
+        import tempfile
+        from omotion.firmware_update import FirmwareUpdater, download_firmware
+
+        ok, msg = False, ""
+        try:
+            kind = self._kind_for_device(device_key)
+            self.firmwareUpdateProgress.emit(
+                device_key, "check", -1, "Checking latest release…")
+            info = check_latest(kind)
+            if info is None:
+                raise RuntimeError("Could not reach GitHub to fetch firmware.")
+            self.firmwareUpdateProgress.emit(
+                device_key, "download", -1, f"Downloading {info.tag}…")
+            dest = Path(tempfile.gettempdir()) / "om-firmware"
+            bin_path = download_firmware(info, dest)
+
+            handle = getattr(self._interface, device_key, None)
+            if handle is None:
+                raise RuntimeError("Device handle unavailable.")
+
+            def _prog(p) -> None:
+                pct = p.percent if p.percent is not None else -1
+                self.firmwareUpdateProgress.emit(device_key, p.phase, pct, p.message)
+
+            self.firmwareUpdateProgress.emit(
+                device_key, "flash", -1, "Entering DFU and flashing…")
+            result = FirmwareUpdater().update(handle, bin_path, progress_cb=_prog)
+            ok = bool(result.success)
+            # Phase 0 finding: dfu-util's leave does NOT reset the STM32 — the
+            # device hangs non-enumerating until a manual power-cycle, then
+            # reconnects (~20-30 s) and Task 7's connect-time check clears the
+            # banner. So success means "written; now power-cycle", not "done".
+            msg = ("Firmware written. Power-cycle the device now — it will "
+                   "reconnect with the new version shortly.") if ok else \
+                  "dfu-util reported a failure."
+        except Exception as e:                       # noqa: BLE001 - reported to UI
+            logger.exception("Firmware update failed for %s", device_key)
+            ok, msg = False, str(e)
+        finally:
+            self._firmware_update_in_progress = None
+            # Force re-detection so the banner/card clear once the new version
+            # is read back after the device re-enumerates.
+            self._firmware_latest_by_kind.pop(
+                self._kind_for_device(device_key).value, None)
+            self.firmwareUpdateFinished.emit(device_key, ok, msg)
 
     def update_state(self):
         """Update system state based on connection and configuration."""
