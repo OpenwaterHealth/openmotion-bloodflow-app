@@ -4675,11 +4675,14 @@ class MotionConnector(QObject):
         import urllib.request
         from version import get_version
 
-        # ``updateRepo`` config key lets a build point its update check at a
-        # staging/mirror repo (used for end-to-end update testing); absent =>
-        # the production repo.
+        # ``updateRepo`` points the check at a staging/mirror repo; the broader
+        # ``updateApiUrl`` fully overrides the releases-latest endpoint (used by
+        # the local fake-releases server for offline end-to-end update testing).
+        # Both absent => the production GitHub repo.
         repo = self._app_config.get("updateRepo") or self._GITHUB_REPO
-        api_url = f"https://api.github.com/repos/{repo}/releases/latest"
+        api_url = self._app_config.get("updateApiUrl") or (
+            f"https://api.github.com/repos/{repo}/releases/latest"
+        )
         try:
             req = urllib.request.Request(api_url, headers={"Accept": "application/vnd.github+json"})
             with urllib.request.urlopen(req, timeout=10) as resp:
