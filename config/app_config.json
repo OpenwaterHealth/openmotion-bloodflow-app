@@ -58,6 +58,7 @@
   "tecTripTempC": 40,
   "powerOffUnusedCameras": true,
   "sensorDebugLogging": false,
+  "consoleDebugLogging": false,
   "histoThrottle": false,
   "histoCmp": true,
   "commVerbose": false,
