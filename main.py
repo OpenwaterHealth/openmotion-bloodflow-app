@@ -79,6 +79,7 @@ def _load_app_config() -> dict:
         # (1-60 °C) before any write; see motion_config.ensure_tec_trip.
         "tecTripTempC": 40,
         "sensorDebugLogging": False,
+        "consoleDebugLogging": False,
         "cameraFakeData": False,
         "histoThrottle": False,
         "histoCmp": False,

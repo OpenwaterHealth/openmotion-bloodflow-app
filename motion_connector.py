@@ -771,6 +771,10 @@ class MotionConnector(QObject):
         self._histo_cmp                   = bool(cfg.get("histoCmp", False))
         self._comm_verbose                = bool(cfg.get("commVerbose", False))
         self._verbose_command_handling    = bool(cfg.get("verboseCommandHandling", False))
+        # Console USB-printf mirror (DEBUG_FLAG_USB_PRINTF). Separate from the
+        # sensor debug flags above — applied to self._interface.console, not the
+        # left/right sensors. See setConsoleDebugLogging.
+        self._console_debug_logging       = bool(cfg.get("consoleDebugLogging", False))
         # Single output root: caller-supplied (from main.py) wins, else
         # dataDirectory from app config, else default (cwd or ~/Documents).
         # All sub-paths (app-logs, scan files, scans.db,
@@ -1257,6 +1261,39 @@ class MotionConnector(QObject):
             logger.error("Error setting console fan: %s", e)
             return False
 
+    @pyqtSlot(bool)
+    def setConsoleDebugLogging(self, on: bool) -> None:
+        """Toggle the console USB-printf debug log (DEBUG_FLAG_USB_PRINTF).
+
+        Persists ``consoleDebugLogging`` and, when the console is connected,
+        pushes the bit live via ``console.enable_usb_printf`` (no restart) —
+        the console analogue of the sensor ``setSensorDebugFlag`` toggles. The
+        firmware flag is RAM-only, so it is also re-applied on every console
+        connect (see the connect handler). When no console is connected the
+        value is still persisted and applies on the next connect. Guarded like
+        ``setConsoleFan`` so a mid-flight disconnect can't raise out of the
+        slot.
+        """
+        on = bool(on)
+        old = self._app_config.get("consoleDebugLogging")
+        self._console_debug_logging = on
+        self._app_config["consoleDebugLogging"] = on
+        self._save_app_config()
+        self.appConfigChanged.emit()
+        if old != on:
+            self._audit.log("settings_changed",
+                            {"changes": {"consoleDebugLogging":
+                                         {"old": old, "new": on}}})
+        if not self._consoleConnected:
+            return
+        try:
+            logger.info("Setting console debug logging %s",
+                        "ON" if on else "OFF")
+            if not self._interface.console.enable_usb_printf(on):
+                logger.warning("Failed to set console debug logging")
+        except Exception as e:  # noqa: BLE001 — slot must not raise
+            logger.error("Error setting console debug logging: %s", e)
+
     @pyqtProperty(bool, notify=laserStateChanged)
     def laserOn(self):
         """Expose Console connection status to QML."""
@@ -1403,6 +1440,14 @@ class MotionConnector(QObject):
                         self.consoleFanChanged.emit()
                     else:
                         logger.error("Failed to set console fan speed")
+                    # Re-apply the console debug-log flag — it is RAM-only on
+                    # the MCU, so it resets across reconnects/power-cycles.
+                    # Default-off needs no action (firmware default is off).
+                    if self._console_debug_logging:
+                        if self._interface.console.enable_usb_printf(True):
+                            logger.info("Console debug logging re-enabled")
+                        else:
+                            logger.error("Failed to re-enable console debug logging")
                     # Apply laser-power params once per console connect —
                     # the FPGA registers are volatile across power cycles,
                     # so every (re)connect needs them. Scans no longer
