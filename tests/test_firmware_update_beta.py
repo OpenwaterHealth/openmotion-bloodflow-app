@@ -63,3 +63,16 @@ def test_toggle_invalidates_and_rechecks(tmp_path):
 
     assert c._firmware_latest_by_kind == {}      # cache invalidated
     assert "left" in called                      # re-check for the connected device
+    assert c._firmware_update_available["left"] is False
+
+
+def test_check_worker_discards_superseded_generation(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        motion_connector, "check_latest",
+        lambda kind, **_: LatestInfo(FirmwareKind.SENSOR, "1.8.1-dev.5", "motion-sensor-fw.bin"),
+    )
+    c = _connector(tmp_path, beta=True)
+    c._firmware_versions["left"] = "1.8.0"
+    c._firmware_check_generation = 5
+    c._firmware_check_worker(FirmwareKind.SENSOR, generation=4)   # stale generation
+    assert c._firmware_latest_by_kind == {}                       # result discarded
