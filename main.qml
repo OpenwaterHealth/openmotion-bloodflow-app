@@ -125,6 +125,15 @@ ApplicationWindow {
             anchors.right: parent.right
         }
 
+        // Firmware update banner (developerMode only)
+        FirmwareUpdateBanner {
+            id: firmwareUpdateBanner
+            anchors.top: updateBanner.bottom
+            anchors.left: parent.left
+            anchors.right: parent.right
+            onViewRequested: bloodFlowPage.openSettings()
+        }
+
         // Toast notification overlay — fills the window, positions toasts in its own bottom-right corner
         NotificationCenter {
             id: notificationCenter
@@ -135,6 +144,7 @@ ApplicationWindow {
         Item {
             anchors.fill: parent
             anchors.topMargin: 65 + (updateBanner.visible ? updateBanner.height : 0)
+                               + (firmwareUpdateBanner.visible ? firmwareUpdateBanner.height : 0)
             anchors.rightMargin: 8
             anchors.bottomMargin: 8
             anchors.leftMargin: 8

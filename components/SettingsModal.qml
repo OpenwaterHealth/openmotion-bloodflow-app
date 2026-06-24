@@ -1237,6 +1237,115 @@ Item {
                     }
                 }
 
+                // ── Firmware Update (developerMode only) ─────────────────────
+                SectionCard {
+                    title: "Firmware Update"
+                    visible: MotionInterface.appConfig.developerMode === true
+
+                    // One row per device. `dev` is the connector deviceKey.
+                    component FwRow: ColumnLayout {
+                        property string label: ""
+                        property string dev: ""
+                        property bool connected: false
+                        property string current: ""
+                        property string latest: ""
+                        property bool updateAvailable: false
+                        Layout.fillWidth: true
+                        spacing: 2
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Text {
+                                text: label
+                                color: root.colTextPri
+                                font.pixelSize: 13
+                                Layout.preferredWidth: 120
+                            }
+                            Text {
+                                text: connected ? (current || "—") : "Not connected"
+                                color: connected ? root.colTextPri : root.colTextMuted
+                                font.pixelSize: 13
+                                font.family: "Consolas"
+                            }
+                            Text {
+                                visible: updateAvailable
+                                text: "→ " + latest
+                                color: theme.accentBlue
+                                font.pixelSize: 13
+                                font.family: "Consolas"
+                            }
+                            Item { Layout.fillWidth: true }
+                            Rectangle {
+                                visible: updateAvailable
+                                width: updBtn.implicitWidth + 18; height: 24; radius: 4
+                                color: updArea.containsMouse ? Qt.lighter(theme.accentBlue, 1.1)
+                                                             : theme.accentBlue
+                                Text {
+                                    id: updBtn
+                                    anchors.centerIn: parent
+                                    text: "Update"
+                                    color: "#FFFFFF"
+                                    font.pixelSize: 12
+                                    font.weight: Font.DemiBold
+                                }
+                                MouseArea {
+                                    id: updArea
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: fwConfirm.openFor(label, dev)
+                                }
+                            }
+                        }
+                    }
+
+                    FwRow {
+                        label: "Console"; dev: "console"
+                        connected: MotionInterface.consoleConnected
+                        current: MotionInterface.consoleFirmwareVersion
+                        latest: MotionInterface.consoleFirmwareLatest
+                        updateAvailable: MotionInterface.consoleFirmwareUpdateAvailable
+                    }
+                    FwRow {
+                        label: "Left Sensor"; dev: "left"
+                        connected: MotionInterface.leftSensorConnected
+                        current: MotionInterface.leftSensorFirmwareVersion
+                        latest: MotionInterface.leftSensorFirmwareLatest
+                        updateAvailable: MotionInterface.leftSensorFirmwareUpdateAvailable
+                    }
+                    FwRow {
+                        label: "Right Sensor"; dev: "right"
+                        connected: MotionInterface.rightSensorConnected
+                        current: MotionInterface.rightSensorFirmwareVersion
+                        latest: MotionInterface.rightSensorFirmwareLatest
+                        updateAvailable: MotionInterface.rightSensorFirmwareUpdateAvailable
+                    }
+
+                    // Live progress, driven by the connector. Shows a clean
+                    // status line plus a real ProgressBar (determinate for the
+                    // dfu erase/write phases, indeterminate for the check/
+                    // download/DFU-entry phases that report no percent).
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 4
+                        visible: fwStatus.text.length > 0
+                        Text {
+                            id: fwStatus
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                            font.pixelSize: 12
+                            color: root.colTextMuted
+                        }
+                        ProgressBar {
+                            id: fwBar
+                            Layout.fillWidth: true
+                            from: 0; to: 100
+                            value: 0
+                            visible: false
+                        }
+                    }
+                }
+
                 // Bottom padding
                 Item { Layout.fillWidth: true; height: 20 }
             }
@@ -1244,6 +1353,55 @@ Item {
 
         Keys.onReleased: function(event) {
             if (event.key === Qt.Key_Escape) { root.close(); event.accepted = true }
+        }
+    }
+
+    // Confirm before flashing (device reboots into DFU).
+    Dialog {
+        id: fwConfirm
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        title: "Confirm Firmware Update"
+        property string _dev: ""
+        function openFor(lbl, dev) {
+            _dev = dev
+            fwConfirmText.text = lbl + " will reboot into DFU mode and be "
+                + "re-flashed. Do not unplug it until this completes."
+            open()
+        }
+        contentItem: Text {
+            id: fwConfirmText
+            wrapMode: Text.WordWrap
+            color: root.colTextPri
+            font.pixelSize: 13
+            padding: 16
+        }
+        footer: DialogButtonBox {
+            Button { text: "Cancel"; onClicked: fwConfirm.close() }
+            Button {
+                text: "Update"
+                onClicked: {
+                    fwConfirm.close()
+                    MotionInterface.startFirmwareUpdate(fwConfirm._dev)
+                }
+            }
+        }
+    }
+
+    Connections {
+        target: MotionInterface
+        function onFirmwareUpdateProgress(deviceKey, stage, percent, msg) {
+            fwStatus.text = deviceKey + " — " + msg
+                + (percent >= 0 ? "  " + percent + "%" : "")
+            fwStatus.color = root.colTextMuted
+            fwBar.visible = true
+            fwBar.indeterminate = (percent < 0)
+            fwBar.value = (percent < 0 ? 0 : percent)
+        }
+        function onFirmwareUpdateFinished(deviceKey, ok, msg) {
+            fwStatus.text = deviceKey + " — " + msg
+            fwStatus.color = ok ? theme.accentGreen : theme.accentRed
+            fwBar.visible = false
         }
     }
 }

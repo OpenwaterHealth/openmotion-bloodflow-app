@@ -221,6 +221,9 @@ Rectangle {
         onSettingsClicked: modalManager.toggle(settingsModal)
     }
 
+    // Allow external callers (firmware banner) to open the Settings overlay.
+    function openSettings() { modalManager.toggle(settingsModal) }
+
     // Single source of truth for which modal is on screen. See
     // ModalManager.qml for semantics. The list must include every
     // modal that should participate in click-outside / icon-bar

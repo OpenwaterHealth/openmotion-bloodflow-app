@@ -26,6 +26,11 @@ import re
 import string
 
 from omotion import MotionInterface
+from omotion.firmware_update import (
+    FirmwareKind,
+    check_latest,
+    is_update_available,
+)
 
 from omotion.config import (
     DEBUG_FLAG_USB_PRINTF,
@@ -786,6 +791,11 @@ class MotionConnector(QObject):
     # Per-device firmware versions, refreshed on every (dis)connect by
     # _log_device_stats. Surfaced to Settings → System Information.
     firmwareVersionsChanged = pyqtSignal()
+    # Firmware autoupdate (developerMode only)
+    firmwareUpdateInfoChanged = pyqtSignal()                # notify for the properties below
+    firmwareUpdateAvailable = pyqtSignal(str, str, str)     # deviceKey, current, latest
+    firmwareUpdateProgress = pyqtSignal(str, str, int, str) # deviceKey, stage, percent(-1=indeterminate), msg
+    firmwareUpdateFinished = pyqtSignal(str, bool, str)     # deviceKey, ok, msg
 
     # App update signals
     updateAvailable = pyqtSignal(str, str)   # (latest_version, download_url)
@@ -944,6 +954,15 @@ class MotionConnector(QObject):
         self._firmware_versions: dict[str, str] = {
             "console": "", "left": "", "right": "",
         }
+        # Firmware autoupdate state (developerMode only).
+        self._firmware_latest: dict[str, str] = {"console": "", "left": "", "right": ""}
+        self._firmware_update_available: dict[str, bool] = {
+            "console": False, "left": False, "right": False,
+        }
+        self._firmware_latest_by_kind: dict[str, str] = {}   # "console"/"sensor" -> tag
+        self._firmware_checking_kinds: set = set()           # in-flight network checks
+        self._firmware_check_lock = threading.Lock()         # guards check-then-add on _firmware_checking_kinds
+        self._firmware_update_in_progress: str | None = None # deviceKey being flashed
         # Track console connection time for safety grace period (issue #107 follow-up)
         self._console_connected_at: float | None = None
         # Real-time plot viewer source — assigned at scan start by startCapture.
@@ -1350,6 +1369,34 @@ class MotionConnector(QObject):
         """Right sensor firmware version; see consoleFirmwareVersion."""
         return self._firmware_versions["right"]
 
+    @pyqtProperty(bool, notify=firmwareUpdateInfoChanged)
+    def anyFirmwareUpdateAvailable(self) -> bool:
+        return any(self._firmware_update_available.values())
+
+    @pyqtProperty(bool, notify=firmwareUpdateInfoChanged)
+    def consoleFirmwareUpdateAvailable(self) -> bool:
+        return self._firmware_update_available["console"]
+
+    @pyqtProperty(bool, notify=firmwareUpdateInfoChanged)
+    def leftSensorFirmwareUpdateAvailable(self) -> bool:
+        return self._firmware_update_available["left"]
+
+    @pyqtProperty(bool, notify=firmwareUpdateInfoChanged)
+    def rightSensorFirmwareUpdateAvailable(self) -> bool:
+        return self._firmware_update_available["right"]
+
+    @pyqtProperty(str, notify=firmwareUpdateInfoChanged)
+    def consoleFirmwareLatest(self) -> str:
+        return self._firmware_latest["console"]
+
+    @pyqtProperty(str, notify=firmwareUpdateInfoChanged)
+    def leftSensorFirmwareLatest(self) -> str:
+        return self._firmware_latest["left"]
+
+    @pyqtProperty(str, notify=firmwareUpdateInfoChanged)
+    def rightSensorFirmwareLatest(self) -> str:
+        return self._firmware_latest["right"]
+
     @pyqtProperty(bool, notify=consoleFanChanged)
     def consoleFanOn(self) -> bool:
         """Cached last-set console-fan state (True=on). Reflects the
@@ -1535,6 +1582,16 @@ class MotionConnector(QObject):
         is_now_lost = (new == ConnectionState.DISCONNECTED)
         name = handle.name
 
+        # A device we are deliberately flashing drops into DFU and re-enumerates
+        # as a different USB device; that disconnect is expected. Suppress it
+        # entirely (no state mutation, no UI thrash) so the connector's
+        # connected-flags + _state stay consistent until the post-flash
+        # power-cycle reconnect re-runs normal connect handling.
+        if is_now_lost and self._firmware_update_in_progress == name:
+            logger.info("Ignoring expected DFU disconnect for %s during "
+                        "firmware update", name)
+            return
+
         if name == "console":
             self._consoleConnected = is_now_connected
             if is_now_connected:
@@ -1640,6 +1697,10 @@ class MotionConnector(QObject):
             if name in self._firmware_versions and self._firmware_versions[name]:
                 self._firmware_versions[name] = ""
                 self.firmwareVersionsChanged.emit()
+            if self._firmware_update_available.get(name):
+                self._firmware_update_available[name] = False
+                self._firmware_latest[name] = ""
+                self.firmwareUpdateInfoChanged.emit()
             # Abort an in-flight FPGA flash / sensor-configure pipeline.
             # The SDK does not subscribe to disconnect events for the
             # configure-cameras flow (only start_scan does), so without
@@ -1693,6 +1754,141 @@ class MotionConnector(QObject):
         if name in self._firmware_versions:
             self._firmware_versions[name] = fw
             self.firmwareVersionsChanged.emit()
+        self._maybe_check_firmware_update(name)
+
+    @staticmethod
+    def _kind_for_device(name: str) -> FirmwareKind:
+        return FirmwareKind.CONSOLE if name == "console" else FirmwareKind.SENSOR
+
+    @staticmethod
+    def _devices_for_kind(kind: FirmwareKind) -> list[str]:
+        return ["console"] if kind == FirmwareKind.CONSOLE else ["left", "right"]
+
+    def _maybe_check_firmware_update(self, name: str) -> None:
+        """If developerMode, ensure this device's firmware-update availability
+        is computed — reusing a cached 'latest' for the kind, or kicking one
+        background GitHub check per kind per session."""
+        if not self._app_config.get("developerMode", False):
+            return
+        if name not in self._firmware_versions or not self._firmware_versions[name]:
+            return
+        kind = self._kind_for_device(name)
+        if self._firmware_latest_by_kind.get(kind.value):
+            self._recompute_firmware_update(name)   # latest already known; no network
+            return
+        with self._firmware_check_lock:
+            if kind in self._firmware_checking_kinds:
+                return                              # a check is already in flight
+            self._firmware_checking_kinds.add(kind)
+        threading.Thread(
+            target=self._firmware_check_worker, args=(kind,), daemon=True
+        ).start()
+
+    def _firmware_check_worker(self, kind: FirmwareKind) -> None:
+        try:
+            info = check_latest(kind)
+        except Exception:                           # defensive; check_latest is fail-soft
+            info = None
+        finally:
+            self._firmware_checking_kinds.discard(kind)
+        if info is None:
+            return                                  # leave kind unchecked so it retries
+        self._firmware_latest_by_kind[kind.value] = info.tag
+        for dev in self._devices_for_kind(kind):
+            self._recompute_firmware_update(dev)
+
+    def _recompute_firmware_update(self, name: str) -> None:
+        if not self._firmware_versions.get(name):
+            return  # device not connected / version unknown — nothing to recompute
+        kind = self._kind_for_device(name)
+        installed = self._firmware_versions.get(name, "")
+        latest = self._firmware_latest_by_kind.get(kind.value, "")
+        avail = bool(installed) and bool(latest) and is_update_available(installed, latest)
+        self._firmware_latest[name] = latest
+        self._firmware_update_available[name] = avail
+        self.firmwareUpdateInfoChanged.emit()
+        if avail:
+            logger.info("Firmware update available for %s: %s -> %s",
+                        name, installed, latest)
+            self.firmwareUpdateAvailable.emit(name, installed, latest)
+
+    @pyqtSlot(str, result=bool)
+    def startFirmwareUpdate(self, device_key: str) -> bool:
+        """Download the latest firmware for device_key and flash it over DFU.
+        developerMode-only; refused during a scan or while another update runs."""
+        if device_key not in ("console", "left", "right"):
+            return False
+        if not self._app_config.get("developerMode", False):
+            return False
+        if self._state == RUNNING or self._running:
+            self.firmwareUpdateFinished.emit(
+                device_key, False, "Cannot update firmware during a scan.")
+            return False
+        if self._firmware_update_in_progress is not None:
+            self.firmwareUpdateFinished.emit(
+                device_key, False, "Another firmware update is in progress.")
+            return False
+        if not self._firmware_update_available.get(device_key, False):
+            self.firmwareUpdateFinished.emit(
+                device_key, False, "No update available for this device.")
+            return False
+        self._firmware_update_in_progress = device_key
+        threading.Thread(
+            target=self._firmware_update_worker, args=(device_key,), daemon=True
+        ).start()
+        return True
+
+    def _firmware_update_worker(self, device_key: str) -> None:
+        import tempfile
+        from omotion.firmware_update import FirmwareUpdater, download_firmware
+
+        ok, msg = False, ""
+        try:
+            kind = self._kind_for_device(device_key)
+            self.firmwareUpdateProgress.emit(
+                device_key, "check", -1, "Checking latest release…")
+            info = check_latest(kind)
+            if info is None:
+                raise RuntimeError("Could not reach GitHub to fetch firmware.")
+            self.firmwareUpdateProgress.emit(
+                device_key, "download", -1, f"Downloading {info.tag}…")
+            dest = Path(tempfile.gettempdir()) / "om-firmware"
+            bin_path = download_firmware(info, dest)
+
+            handle = getattr(self._interface, device_key, None)
+            if handle is None:
+                raise RuntimeError("Device handle unavailable.")
+
+            def _prog(p) -> None:
+                pct = p.percent if p.percent is not None else -1
+                # Emit a clean per-phase label — do NOT forward dfu-util's raw
+                # output line, which embeds an ASCII progress bar ("[===   ]")
+                # whose trailing text shifts as it fills and jitters in the UI.
+                label = {"erase": "Erasing", "download": "Writing"}.get(
+                    p.phase, str(p.phase).capitalize())
+                self.firmwareUpdateProgress.emit(device_key, p.phase, pct, label)
+
+            self.firmwareUpdateProgress.emit(
+                device_key, "flash", -1, "Entering DFU and flashing…")
+            result = FirmwareUpdater().update(handle, bin_path, progress_cb=_prog)
+            ok = bool(result.success)
+            # Phase 0 finding: dfu-util's leave does NOT reset the STM32 — the
+            # device hangs non-enumerating until a manual power-cycle, then
+            # reconnects (~20-30 s) and Task 7's connect-time check clears the
+            # banner. So success means "written; now power-cycle", not "done".
+            msg = ("Firmware written. Power-cycle the device now — it will "
+                   "reconnect with the new version shortly.") if ok else \
+                  "dfu-util reported a failure."
+        except Exception as e:                       # noqa: BLE001 - reported to UI
+            logger.exception("Firmware update failed for %s", device_key)
+            ok, msg = False, str(e)
+        finally:
+            self._firmware_update_in_progress = None
+            # Force re-detection so the banner/card clear once the new version
+            # is read back after the device re-enumerates.
+            self._firmware_latest_by_kind.pop(
+                self._kind_for_device(device_key).value, None)
+            self.firmwareUpdateFinished.emit(device_key, ok, msg)
 
     def update_state(self):
         """Update system state based on connection and configuration."""
