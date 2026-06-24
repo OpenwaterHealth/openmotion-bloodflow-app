@@ -1825,7 +1825,8 @@ class MotionConnector(QObject):
 
     def _firmware_check_worker(self, kind: FirmwareKind) -> None:
         try:
-            info = check_latest(kind)
+            beta = self._app_config.get("downloadBetaFirmware", False)
+            info = check_latest(kind, include_prerelease=beta)
         except Exception:                           # defensive; check_latest is fail-soft
             info = None
         finally:
@@ -1842,7 +1843,9 @@ class MotionConnector(QObject):
         kind = self._kind_for_device(name)
         installed = self._firmware_versions.get(name, "")
         latest = self._firmware_latest_by_kind.get(kind.value, "")
-        avail = bool(installed) and bool(latest) and is_update_available(installed, latest)
+        beta = self._app_config.get("downloadBetaFirmware", False)
+        avail = (bool(installed) and bool(latest)
+                 and is_update_available(installed, latest, prerelease=beta))
         self._firmware_latest[name] = latest
         self._firmware_update_available[name] = avail
         self.firmwareUpdateInfoChanged.emit()
@@ -1850,6 +1853,20 @@ class MotionConnector(QObject):
             logger.info("Firmware update available for %s: %s -> %s",
                         name, installed, latest)
             self.firmwareUpdateAvailable.emit(name, installed, latest)
+
+    def _refresh_firmware_update_check(self) -> None:
+        """Invalidate the firmware-latest caches and re-run detection for every
+        connected device — called when downloadBetaFirmware toggles so the
+        banner/Settings card reflect the new release pool immediately."""
+        self._firmware_latest_by_kind.clear()
+        self._firmware_checking_kinds.clear()
+        for name in ("console", "left", "right"):
+            self._firmware_latest[name] = ""
+            self._firmware_update_available[name] = False
+        self.firmwareUpdateInfoChanged.emit()
+        for name in ("console", "left", "right"):
+            if self._firmware_versions.get(name):
+                self._maybe_check_firmware_update(name)
 
     @pyqtSlot(str, result=bool)
     def startFirmwareUpdate(self, device_key: str) -> bool:
@@ -1886,7 +1903,8 @@ class MotionConnector(QObject):
             kind = self._kind_for_device(device_key)
             self.firmwareUpdateProgress.emit(
                 device_key, "check", -1, "Checking latest release…")
-            info = check_latest(kind)
+            beta = self._app_config.get("downloadBetaFirmware", False)
+            info = check_latest(kind, include_prerelease=beta)
             if info is None:
                 raise RuntimeError("Could not reach GitHub to fetch firmware.")
             self.firmwareUpdateProgress.emit(
@@ -2596,6 +2614,8 @@ class MotionConnector(QObject):
         if old != value:
             self._audit.log("settings_changed",
                             {"changes": {key: {"old": old, "new": value}}})
+        if key == "downloadBetaFirmware" and old != value:
+            self._refresh_firmware_update_check()
 
     @pyqtSlot('QVariantMap')
     def saveConfigs(self, configs: dict):
