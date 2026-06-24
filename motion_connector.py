@@ -1001,6 +1001,7 @@ class MotionConnector(QObject):
         self._firmware_latest_by_kind: dict[str, str] = {}   # "console"/"sensor" -> tag
         self._firmware_checking_kinds: set = set()           # in-flight network checks
         self._firmware_check_lock = threading.Lock()         # guards check-then-add on _firmware_checking_kinds
+        self._firmware_check_generation: int = 0
         self._firmware_update_in_progress: str | None = None # deviceKey being flashed
         # Track console connection time for safety grace period (issue #107 follow-up)
         self._console_connected_at: float | None = None
@@ -1820,10 +1821,12 @@ class MotionConnector(QObject):
                 return                              # a check is already in flight
             self._firmware_checking_kinds.add(kind)
         threading.Thread(
-            target=self._firmware_check_worker, args=(kind,), daemon=True
+            target=self._firmware_check_worker,
+            args=(kind, self._firmware_check_generation),
+            daemon=True,
         ).start()
 
-    def _firmware_check_worker(self, kind: FirmwareKind) -> None:
+    def _firmware_check_worker(self, kind: FirmwareKind, generation: int | None = None) -> None:
         try:
             beta = self._app_config.get("downloadBetaFirmware", False)
             info = check_latest(kind, include_prerelease=beta)
@@ -1833,6 +1836,11 @@ class MotionConnector(QObject):
             self._firmware_checking_kinds.discard(kind)
         if info is None:
             return                                  # leave kind unchecked so it retries
+        # A beta toggle (or other refresh) bumps the generation; a worker that
+        # started under an older generation captured a now-stale beta flag, so
+        # discard its result rather than clobber the fresh one.
+        if generation is not None and generation != self._firmware_check_generation:
+            return
         self._firmware_latest_by_kind[kind.value] = info.tag
         for dev in self._devices_for_kind(kind):
             self._recompute_firmware_update(dev)
@@ -1860,6 +1868,7 @@ class MotionConnector(QObject):
         banner/Settings card reflect the new release pool immediately."""
         self._firmware_latest_by_kind.clear()
         self._firmware_checking_kinds.clear()
+        self._firmware_check_generation += 1
         for name in ("console", "left", "right"):
             self._firmware_latest[name] = ""
             self._firmware_update_available[name] = False
@@ -2631,6 +2640,8 @@ class MotionConnector(QObject):
         logger.debug(f"[Connector] Config saved: {sorted(configs.keys())}")
         if changes:
             self._audit.log("settings_changed", {"changes": changes})
+        if "downloadBetaFirmware" in changes:
+            self._refresh_firmware_update_check()
 
     # Sensor debug-flag config keys surfaced as live Settings → Developer
     # toggles, mapped to the runtime cache attribute that
