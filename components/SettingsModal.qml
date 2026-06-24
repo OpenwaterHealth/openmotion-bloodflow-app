@@ -1321,14 +1321,28 @@ Item {
                         updateAvailable: MotionInterface.rightSensorFirmwareUpdateAvailable
                     }
 
-                    // Live progress / result line, driven by the connector.
-                    Text {
-                        id: fwStatus
+                    // Live progress, driven by the connector. Shows a clean
+                    // status line plus a real ProgressBar (determinate for the
+                    // dfu erase/write phases, indeterminate for the check/
+                    // download/DFU-entry phases that report no percent).
+                    ColumnLayout {
                         Layout.fillWidth: true
-                        visible: text.length > 0
-                        wrapMode: Text.WordWrap
-                        font.pixelSize: 12
-                        color: root.colTextMuted
+                        spacing: 4
+                        visible: fwStatus.text.length > 0
+                        Text {
+                            id: fwStatus
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                            font.pixelSize: 12
+                            color: root.colTextMuted
+                        }
+                        ProgressBar {
+                            id: fwBar
+                            Layout.fillWidth: true
+                            from: 0; to: 100
+                            value: 0
+                            visible: false
+                        }
                     }
                 }
 
@@ -1377,13 +1391,17 @@ Item {
     Connections {
         target: MotionInterface
         function onFirmwareUpdateProgress(deviceKey, stage, percent, msg) {
-            fwStatus.text = deviceKey + ": " + msg
-                + (percent >= 0 ? " (" + percent + "%)" : "")
+            fwStatus.text = deviceKey + " — " + msg
+                + (percent >= 0 ? "  " + percent + "%" : "")
             fwStatus.color = root.colTextMuted
+            fwBar.visible = true
+            fwBar.indeterminate = (percent < 0)
+            fwBar.value = (percent < 0 ? 0 : percent)
         }
         function onFirmwareUpdateFinished(deviceKey, ok, msg) {
-            fwStatus.text = deviceKey + ": " + msg
+            fwStatus.text = deviceKey + " — " + msg
             fwStatus.color = ok ? theme.accentGreen : theme.accentRed
+            fwBar.visible = false
         }
     }
 }

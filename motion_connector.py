@@ -1891,7 +1891,12 @@ class MotionConnector(QObject):
 
             def _prog(p) -> None:
                 pct = p.percent if p.percent is not None else -1
-                self.firmwareUpdateProgress.emit(device_key, p.phase, pct, p.message)
+                # Emit a clean per-phase label — do NOT forward dfu-util's raw
+                # output line, which embeds an ASCII progress bar ("[===   ]")
+                # whose trailing text shifts as it fills and jitters in the UI.
+                label = {"erase": "Erasing", "download": "Writing"}.get(
+                    p.phase, str(p.phase).capitalize())
+                self.firmwareUpdateProgress.emit(device_key, p.phase, pct, label)
 
             self.firmwareUpdateProgress.emit(
                 device_key, "flash", -1, "Entering DFU and flashing…")
