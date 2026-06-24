@@ -99,6 +99,29 @@ def _config_name(mask) -> str:
     return _CONFIG_NAMES.get(m, f"0x{m:02X}")
 
 
+def _sdk_flags_from_session(session) -> Optional[dict]:
+    """Pull the ``sdk_flags`` block out of a ScanDatabase session dict's
+    ``session_meta`` (the camera config / reduced-mode the scan was RUN with,
+    written by the SDK's ScanDBSink). Returns None when absent or unparseable.
+
+    ScanDatabase already json-decodes session_meta into a dict, but tolerate a
+    raw JSON string too — the same defensive parse the History list uses
+    (_session_to_row). Used to lay a replayed scan's plot grid out from its
+    recorded config rather than only the cameras that logged data (#175)."""
+    if not isinstance(session, dict):
+        return None
+    meta = session.get("session_meta")
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except Exception:
+            return None
+    if not isinstance(meta, dict):
+        return None
+    flags = meta.get("sdk_flags")
+    return flags if isinstance(flags, dict) else None
+
+
 logger = logging.getLogger("openmotion.bloodflow-app.connector")
 
 # Define system states
@@ -607,8 +630,12 @@ class MotionConnector(QObject):
     # to clear its busy overlay and close only on success (issue #152).
     pastScanLoadFinished = pyqtSignal(str, bool)
     # Private worker→main marshalling for loadPastScan results:
-    # (seq, session_label, session_id, buffers-or-None, source_tag)
-    _pastScanBuffersReady = pyqtSignal(int, str, int, object, str)
+    # (seq, session_label, session_id, buffers-or-None, source_tag,
+    #  recorded_flags-or-None). recorded_flags is the scan's stored
+    # session_meta.sdk_flags so the PastScanSource lays its grid out from the
+    # config the scan was RUN with, not just the cameras that logged data
+    # (issue #175 reopen).
+    _pastScanBuffersReady = pyqtSignal(int, str, int, object, str, object)
     # Worker->main: interrupted/empty-scan outcome toast (message, severity).
     # Emitted from _on_pipeline_complete (pipeline worker thread); delivered
     # on the GUI thread via the auto-queued connection wired in connect_signals.
@@ -2418,10 +2445,16 @@ class MotionConnector(QObject):
                         session_label,
                     )
                     self._pastScanBuffersReady.emit(
-                        seq, session_label, -1, None, ""
+                        seq, session_label, -1, None, "", None
                     )
                     return
                 session_id = int(session["id"])
+                # The camera config the scan was RUN with lives in
+                # session_meta.sdk_flags (written by ScanDBSink). Thread it to
+                # the GUI thread so PastScanSource lays its grid out from the
+                # recorded config, not just the cameras that logged data
+                # (issue #175 reopen). Same parse the History list uses.
+                recorded_flags = _sdk_flags_from_session(session)
                 buffers, _ = load_past_scan_buffers(
                     db, session_id, corrected_csv
                 )
@@ -2436,11 +2469,14 @@ class MotionConnector(QObject):
                 else ("csv" if corrected_csv else "db-only-sentinel")
             )
             self._pastScanBuffersReady.emit(
-                seq, session_label, session_id, buffers, source_tag
+                seq, session_label, session_id, buffers, source_tag,
+                recorded_flags,
             )
         except Exception:
             logger.exception("loadPastScan failed for label %r", session_label)
-            self._pastScanBuffersReady.emit(seq, session_label, -1, None, "")
+            self._pastScanBuffersReady.emit(
+                seq, session_label, -1, None, "", None
+            )
 
     @pyqtSlot(str, str)
     def _on_scan_outcome_warning(self, message: str, severity: str) -> None:
@@ -2456,6 +2492,7 @@ class MotionConnector(QObject):
         session_id: int,
         buffers,
         source_tag: str,
+        recorded_flags=None,
     ) -> None:
         """GUI thread: bind a worker-loaded past scan to the viewer.
         Results from a superseded request (user clicked another scan
@@ -2491,6 +2528,7 @@ class MotionConnector(QObject):
                 session_id=session_id,
                 parent=self,
                 preloaded_buffers=buffers,
+                recorded_flags=recorded_flags,
             )
             self._set_current_scan_source(past)
             # Diagnostic — left in for now so we can spot regressions
@@ -2498,11 +2536,23 @@ class MotionConnector(QObject):
             n_buffers = len(past.buffers)
             n_samples = sum(b.n for b in past.buffers.values())
             sample_keys = sorted(past.buffers.keys())[:8]
+            # Grid masks are what the viewer actually lays out from; log them
+            # next to the data shape so a config/data mismatch (issue #175) is
+            # diagnosable from one line. flags=no means an older scan with no
+            # stored sdk_flags (masks derived from data instead). -1 prints as
+            # "unknown" (viewer falls back to the live selection).
+            def _mstr(v):
+                return f"0x{v & 0xFF:02X}" if v >= 0 else "unknown"
             logger.info(
                 "[Plot] loaded past scan %r (session_id=%d) source=%s: "
-                "buffers=%d samples=%d liveEdge=%.3f sample_keys=%s",
+                "buffers=%d samples=%d liveEdge=%.3f gridMasks=L%s/R%s "
+                "reduced=%d flags=%s sample_keys=%s",
                 session_label, session_id, source_tag,
-                n_buffers, n_samples, past.liveEdge, sample_keys,
+                n_buffers, n_samples, past.liveEdge,
+                _mstr(past.leftMask), _mstr(past.rightMask),
+                past.reducedMode,
+                "yes" if recorded_flags else "no",
+                sample_keys,
             )
             self.pastScanLoadFinished.emit(session_label, True)
         except Exception:

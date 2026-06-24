@@ -950,6 +950,48 @@ def _derive_reduced_from_buffers(buffers) -> int:
     return -1
 
 
+def _masks_from_flags(flags) -> Optional[tuple[int, int]]:
+    """Authoritative (left_mask, right_mask) from a scan's stored
+    ``session_meta.sdk_flags`` (written by the SDK's ScanDBSink at scan start),
+    or None when the flags don't carry a usable per-side mask pair.
+
+    This is the configuration the scan was actually RUN with — preferred over
+    _derive_masks_from_buffers, which only reconstructs the cameras that
+    happened to log data and so under-represents a config whose outer cameras
+    recorded nothing (issue #175 reopen). Returns None — caller falls back to
+    the derived heuristic — when ``flags`` isn't a dict, either mask key is
+    missing/non-int, or BOTH masks are 0 (no real scan configures zero
+    cameras; mirrors _derive_masks_from_buffers' both-zero "unknown")."""
+    if not isinstance(flags, dict):
+        return None
+    lm = flags.get("left_camera_mask")
+    rm = flags.get("right_camera_mask")
+    # bool is an int subclass; a mask is never a bool, so reject it explicitly.
+    if not isinstance(lm, int) or isinstance(lm, bool):
+        return None
+    if not isinstance(rm, int) or isinstance(rm, bool):
+        return None
+    lm &= 0xFF
+    rm &= 0xFF
+    if lm == 0 and rm == 0:
+        return None
+    return lm, rm
+
+
+def _reduced_from_flags(flags) -> Optional[int]:
+    """Recorded display mode (0 per-camera / 1 reduced) from a scan's stored
+    ``session_meta.sdk_flags.reduced_mode``, or None when absent. Preferred
+    over _derive_reduced_from_buffers for the same reason as _masks_from_flags
+    — it reflects how the scan was captured, not what its data happens to
+    contain (issue #175 reopen)."""
+    if not isinstance(flags, dict):
+        return None
+    rv = flags.get("reduced_mode")
+    if rv is None:
+        return None
+    return 1 if rv else 0
+
+
 def load_past_scan_buffers(
     scan_db,
     session_id: int,
@@ -994,6 +1036,7 @@ class PastScanSource(ScanDataSource):
         corrected_csv_path: Optional[str] = None,
         parent: Optional[QObject] = None,
         preloaded_buffers: Optional[dict] = None,
+        recorded_flags: Optional[dict] = None,
     ) -> None:
         # Unbounded buffers: a past scan is a finite, already-known result set
         # loaded in bulk (DB rows and/or the corrected CSV). With a finite
@@ -1014,8 +1057,21 @@ class PastScanSource(ScanDataSource):
             )
 
         # Lay the plot grid out from THIS scan's recorded cameras, not the
-        # operator's live selection (issue #175).
+        # operator's live selection (issue #175). Prefer the authoritative
+        # config the scan was RUN with — stored in session_meta.sdk_flags by
+        # the SDK's ScanDBSink and threaded in as recorded_flags — over the
+        # data-derived heuristic below. Deriving from data alone collapses a
+        # config whose outer cameras logged nothing: an All/All scan where only
+        # the middle cameras produced rows would render a Middle grid, hiding
+        # the configured-but-empty cameras (issue #175 reopen). Fall back to
+        # the heuristic for older scans whose meta predates these flags.
         self._left_mask, self._right_mask = _derive_masks_from_buffers(
             self.buffers
         )
         self._reduced_mode = _derive_reduced_from_buffers(self.buffers)
+        recorded_masks = _masks_from_flags(recorded_flags)
+        if recorded_masks is not None:
+            self._left_mask, self._right_mask = recorded_masks
+        recorded_reduced = _reduced_from_flags(recorded_flags)
+        if recorded_reduced is not None:
+            self._reduced_mode = recorded_reduced

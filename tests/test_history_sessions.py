@@ -4,7 +4,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from motion_connector import MotionConnector, _config_name
+from motion_connector import (
+    MotionConnector,
+    _config_name,
+    _sdk_flags_from_session,
+)
+from data_sources import _CameraBuffer
 from omotion.ScanDatabase import ScanDatabase
 
 pytestmark = pytest.mark.unit
@@ -161,3 +166,78 @@ def test_stats_and_delete_without_db_are_safe(tmp_path):
     c = _connector(tmp_path, None)
     assert c.get_session_stats(1) == {"sampleCount": 0}
     assert c.deleteScans([1, 2]) == 0
+
+
+# ── Issue #175 reopen — replay uses the recorded config, not the data shape ──
+# The History list already reads sdk_flags; the plot viewer must too. These
+# cover the connector wiring: extracting sdk_flags from the session row, then
+# threading it into the PastScanSource the viewer binds to.
+
+
+def test_sdk_flags_from_session_reads_meta_block(tmp_path):
+    db_path = str(tmp_path / "scans.db")
+    _make_session(db_path, "20260101_000000_subjA", 100.0, 110.0,
+                  left_mask=0xFF, right_mask=0xC3, reduced=False)
+    db = ScanDatabase(db_path=db_path)
+    try:
+        session = db.get_session_by_label("20260101_000000_subjA")
+    finally:
+        db.close()
+    flags = _sdk_flags_from_session(session)
+    assert flags["left_camera_mask"] == 0xFF
+    assert flags["right_camera_mask"] == 0xC3
+    assert flags["reduced_mode"] is False
+
+
+def test_sdk_flags_from_session_none_when_absent_or_unparseable():
+    import json as _json
+    assert _sdk_flags_from_session(None) is None
+    assert _sdk_flags_from_session({}) is None
+    assert _sdk_flags_from_session({"session_meta": {}}) is None
+    assert _sdk_flags_from_session({"session_meta": "not json"}) is None
+    # A raw JSON string for session_meta is tolerated and parsed.
+    raw = {"session_meta": _json.dumps(
+        {"sdk_flags": {"left_camera_mask": 0x09, "right_camera_mask": 0x09}})}
+    assert _sdk_flags_from_session(raw)["left_camera_mask"] == 0x09
+
+
+def _middle_four_buffers():
+    """middle-4 cams per side (camIds 1,2,5,6 → derived mask 0x66)."""
+    buffers = {}
+    for side in ("left", "right"):
+        for cam_id in (1, 2, 5, 6):
+            buf = _CameraBuffer(max_capacity=None)
+            buf.append(t=0.0, v=1.0, frame_id=0)
+            buffers[(side, cam_id, "bfi")] = buf
+    return buffers
+
+
+def test_load_past_scan_slot_lays_grid_from_recorded_config(tmp_path):
+    """The GUI-thread slot must thread the scan's recorded sdk_flags into the
+    PastScanSource so an All/All scan whose data is only middle-4 still reports
+    All/All masks — the viewer then renders all 16 configured cells."""
+    c = _connector(tmp_path, str(tmp_path / "scans.db"))
+    c._on_past_scan_buffers_ready(
+        c._past_scan_load_seq, "20260101_000000_subjA", 1,
+        _middle_four_buffers(), "db",
+        {"left_camera_mask": 0xFF, "right_camera_mask": 0xFF,
+         "reduced_mode": False},
+    )
+    src = c.currentScanSource
+    assert src is not None
+    assert src.leftMask == 0xFF
+    assert src.rightMask == 0xFF
+
+
+def test_load_past_scan_slot_without_flags_falls_back_to_derived(tmp_path):
+    """Older scans deliver no flags (None) — the slot still binds a source,
+    derived from the data (backward compatibility)."""
+    c = _connector(tmp_path, str(tmp_path / "scans.db"))
+    c._on_past_scan_buffers_ready(
+        c._past_scan_load_seq, "20260101_000000_subjA", 1,
+        _middle_four_buffers(), "db", None,
+    )
+    src = c.currentScanSource
+    assert src is not None
+    assert src.leftMask == 0x66
+    assert src.rightMask == 0x66

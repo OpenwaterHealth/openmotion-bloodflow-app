@@ -722,6 +722,128 @@ def test_live_scan_source_reduced_mode_unknown():
     assert src.reducedMode == -1
 
 
+# ── Issue #175 reopen — stored config wins over the data-derived heuristic ──
+# Deriving the replay grid from which cameras produced data under-represents a
+# scan whose outer cameras recorded nothing: an All/All scan where only the
+# middle four cameras logged rows collapses to a Middle grid. The camera config
+# the scan was actually RUN with is persisted in session_meta.sdk_flags
+# (left_camera_mask / right_camera_mask / reduced_mode) by the SDK's ScanDBSink
+# and already drives the History list. PastScanSource must prefer those stored
+# flags, falling back to the derive-from-buffers heuristic only for older scans
+# whose meta predates them.
+
+
+def _middle_four_buffers():
+    """Buffers for the middle-4 cams per side (camIds 1,2,5,6 → 0x66), the
+    data pattern an All/All scan logged when only the middle cameras had
+    usable data (the issue #175 reopen repro)."""
+    buffers = {}
+    for side in ("left", "right"):
+        for cam_id in (1, 2, 5, 6):
+            buf = _CameraBuffer(max_capacity=None)
+            buf.append(t=0.0, v=1.0, frame_id=0)
+            buffers[(side, cam_id, "bfi")] = buf
+    return buffers
+
+
+def test_recorded_flags_masks_override_derived_masks():
+    """The bug: middle-4 data but the scan ran All/All. The stored masks
+    (0xFF/0xFF) must win over the derived Middle masks (0x66)."""
+    src = PastScanSource(
+        scan_db=None,
+        session_id=1,
+        preloaded_buffers=_middle_four_buffers(),
+        recorded_flags={
+            "left_camera_mask": 0xFF,
+            "right_camera_mask": 0xFF,
+            "reduced_mode": False,
+        },
+    )
+    assert src.leftMask == 0xFF
+    assert src.rightMask == 0xFF
+
+
+def test_recorded_flags_honor_one_sided_config():
+    """A right-only scan (left mask 0) is preserved from the stored flags
+    even though both sides' data happens to be present."""
+    src = PastScanSource(
+        scan_db=None,
+        session_id=1,
+        preloaded_buffers=_middle_four_buffers(),
+        recorded_flags={
+            "left_camera_mask": 0x00,
+            "right_camera_mask": 0xFF,
+            "reduced_mode": False,
+        },
+    )
+    assert src.leftMask == 0x00
+    assert src.rightMask == 0xFF
+
+
+def test_recorded_flags_reduced_mode_overrides_derived():
+    """Stored reduced_mode=True yields reducedMode==1 even though the
+    per-camera buffers would derive 0 (per-camera)."""
+    src = PastScanSource(
+        scan_db=None,
+        session_id=1,
+        preloaded_buffers=_middle_four_buffers(),
+        recorded_flags={
+            "left_camera_mask": 0xFF,
+            "right_camera_mask": 0xFF,
+            "reduced_mode": True,
+        },
+    )
+    assert src.reducedMode == 1
+
+
+def test_missing_recorded_flags_falls_back_to_derived():
+    """Older scans pass no flags (None) — the derive-from-buffers heuristic
+    still applies, preserving backward compatibility."""
+    src = PastScanSource(
+        scan_db=None,
+        session_id=1,
+        preloaded_buffers=_middle_four_buffers(),
+        recorded_flags=None,
+    )
+    assert src.leftMask == 0x66
+    assert src.rightMask == 0x66
+    assert src.reducedMode == 0
+
+
+def test_partial_recorded_flags_derive_only_the_missing_field():
+    """Flags present but without mask keys → masks derive; a present
+    reduced_mode is still honored. Mixed-vintage / partially-written meta."""
+    src = PastScanSource(
+        scan_db=None,
+        session_id=1,
+        preloaded_buffers=_middle_four_buffers(),
+        recorded_flags={"reduced_mode": False},
+    )
+    # No mask keys → fall back to derived Middle.
+    assert src.leftMask == 0x66
+    assert src.rightMask == 0x66
+    # reduced_mode present → honored (0 = per-camera).
+    assert src.reducedMode == 0
+
+
+def test_recorded_flags_both_masks_zero_falls_back_to_derived():
+    """Degenerate stored masks (both 0 — no real scan configures zero
+    cameras) fall back to the derived config rather than render an empty
+    grid, mirroring _derive_masks_from_buffers' own both-zero convention."""
+    src = PastScanSource(
+        scan_db=None,
+        session_id=1,
+        preloaded_buffers=_middle_four_buffers(),
+        recorded_flags={
+            "left_camera_mask": 0,
+            "right_camera_mask": 0,
+            "reduced_mode": False,
+        },
+    )
+    assert src.leftMask == 0x66
+    assert src.rightMask == 0x66
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # currentScanSource holder pattern — verified via a parallel mini-class
 # (MotionConnector uses the same pattern; see motion_connector.py)
