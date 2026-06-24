@@ -903,6 +903,24 @@ Item {
                         Item { Layout.fillWidth: true }
                     }
 
+                    // Beta firmware: when on, the autoupdater targets the
+                    // most-recently-published release (incl. dev/rc), not just
+                    // full releases. Plain config flag — the connector re-runs
+                    // the firmware check when it toggles (setConfig hook).
+                    FieldRow {
+                        label: "Download beta firmware"
+                        PillSwitch {
+                            checked: MotionInterface.appConfig.downloadBetaFirmware === true
+                            onToggled: MotionInterface.setConfig("downloadBetaFirmware", checked)
+                        }
+                        Text {
+                            text: MotionInterface.appConfig.downloadBetaFirmware === true ? "On" : "Off"
+                            color: MotionInterface.appConfig.downloadBetaFirmware === true ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
                     FieldRow {
                         label: "Save raw CSV"
                         PillSwitch {
