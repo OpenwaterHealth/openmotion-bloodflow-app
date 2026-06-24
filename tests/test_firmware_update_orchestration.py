@@ -17,7 +17,7 @@ pytestmark = pytest.mark.unit
 def _no_network_check(monkeypatch):
     # Unit tests must not hit GitHub. _maybe_check_firmware_update may spawn a
     # background thread; stub check_latest so it returns immediately with no emit.
-    monkeypatch.setattr(motion_connector, "check_latest", lambda kind: None)
+    monkeypatch.setattr(motion_connector, "check_latest", lambda kind, **_: None)
 
 
 def _connector(tmp_path, dev_mode=True):

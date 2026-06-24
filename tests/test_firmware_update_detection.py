@@ -37,7 +37,7 @@ def test_no_check_when_developer_mode_off(tmp_path, monkeypatch):
 def test_worker_flags_update_and_emits(tmp_path, monkeypatch):
     monkeypatch.setattr(
         motion_connector, "check_latest",
-        lambda k: LatestInfo(FirmwareKind.SENSOR, "1.5.0", "motion-sensor-fw.bin"),
+        lambda k, **_: LatestInfo(FirmwareKind.SENSOR, "1.5.0", "motion-sensor-fw.bin"),
     )
     c = _connector(tmp_path, dev_mode=True)
     c._firmware_versions["left"] = "v1.0.0"
@@ -54,7 +54,7 @@ def test_worker_flags_update_and_emits(tmp_path, monkeypatch):
 
 
 def test_worker_none_result_is_soft(tmp_path, monkeypatch):
-    monkeypatch.setattr(motion_connector, "check_latest", lambda k: None)
+    monkeypatch.setattr(motion_connector, "check_latest", lambda k, **_: None)
     c = _connector(tmp_path, dev_mode=True)
     c._firmware_versions["console"] = "v1.0.0"
     c._firmware_check_worker(FirmwareKind.CONSOLE)
