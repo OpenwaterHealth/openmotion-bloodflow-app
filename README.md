@@ -89,7 +89,7 @@ Both directories live under a single root, chosen in this order:
 
 1. `dataDirectory` from `config/app_config.json` (also settable from the UI directory picker)
 2. The current working directory, when writable
-3. `~/Documents/OpenWater Bloodflow/` as a last-resort fallback (e.g. when the .app is launched from Finder on macOS and cwd is `/`)
+3. `~/Documents/Openwater Bloodflow/` as a last-resort fallback (e.g. when the .app is launched from Finder on macOS and cwd is `/`)
 
 ## Configuration
 
