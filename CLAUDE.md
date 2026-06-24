@@ -104,7 +104,7 @@ Get-ChildItem C:\Users\ethan\Projects\scan_data\app-logs\ow-bloodflowapp-*.log |
   Get-Content | Select-String -Pattern "Calibration phase|procedure complete|samples captured"
 ```
 
-The `dataDirectory` config key controls the root (defaults to cwd if unset — falls back to `~/Documents/OpenWater Bloodflow` on macOS). Sibling output directories under the same root:
+The `dataDirectory` config key controls the root (defaults to cwd if unset — falls back to `~/Documents/Openwater Bloodflow` on macOS). Sibling output directories under the same root:
 - `app-logs/` — app log files (one per launch)
 - `app-logs/ft-test-csvs/` — factory-test CSVs
 - `calibrations/` — saved calibration JSONs (also written here)

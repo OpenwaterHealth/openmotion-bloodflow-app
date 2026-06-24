@@ -67,6 +67,25 @@ if (-not (Test-Path (Join-Path $DistAbs 'OpenWaterApp.exe'))) {
     throw "OpenWaterApp.exe not found under $DistAbs; PyInstaller build looks incomplete"
 }
 
+# -- stage the per-variant UI mode into the harvested config --
+# The MSI harvests dist\OpenWaterApp as-is, so clinical/RUO must be written
+# into the bundled config BEFORE wix runs. Mirrors build_and_zip.ps1's _RUO
+# flip: clinical keeps reducedMode=true (reduced clinical UI), RUO sets it
+# false (full research UI). We set it explicitly per variant so repeated
+# builds against one dist are always correct regardless of prior state.
+# Write UTF-8 *without* BOM — the app's json.load fails silently on a BOM and
+# falls back to defaults.
+$cfgPath = Join-Path $DistAbs "_internal\config\app_config.json"
+if (-not (Test-Path $cfgPath)) { throw "bundled config not found at $cfgPath" }
+$reduced = if ($Variant -eq "ruo") { "false" } else { "true" }
+$cfgText = [System.IO.File]::ReadAllText($cfgPath)
+if ($cfgText -notmatch '"reducedMode"\s*:\s*(true|false)') {
+    throw "reducedMode key not found in $cfgPath"
+}
+$cfgText = [regex]::Replace($cfgText, '("reducedMode"\s*:\s*)(true|false)', "`${1}$reduced")
+[System.IO.File]::WriteAllText($cfgPath, $cfgText, (New-Object System.Text.UTF8Encoding $false))
+Write-Host "Staged reducedMode=$reduced into bundled config" -ForegroundColor Green
+
 wix build installer\app.wxs -o $appMsi `
     -d "ProductName=$($g.ProductName)" `
     -d "Version=$version" `
