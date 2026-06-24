@@ -258,7 +258,7 @@ def find_app_log() -> Path | None:
     roots = [
         Path.cwd(),
         project_root,  # when launched via OPENWATER_FROM_SOURCE
-        home / "Documents" / "OpenWater Bloodflow",
+        home / "Documents" / "Openwater Bloodflow",
         home / "Documents" / "OpenMotion",
     ]
     candidates: list[Path] = []

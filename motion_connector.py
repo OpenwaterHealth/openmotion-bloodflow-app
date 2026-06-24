@@ -19,6 +19,7 @@ import threading
 import json
 import csv
 import os
+import sys
 import datetime
 import time
 import random
@@ -837,16 +838,24 @@ class MotionConnector(QObject):
     def _default_data_dir() -> str:
         """Return a writable directory for logs and scan data.
 
-        Uses the current working directory when it is writable (typical
-        for development runs).  When cwd is read-only — e.g. ``/`` on
-        macOS when the .app bundle is launched from Finder — falls back
-        to ``~/Documents/OpenWater Bloodflow``.
+        Mirrors ``main.py``: an installed (frozen) build writes under
+        ``%PROGRAMDATA%\\Openwater`` via :func:`app_paths.writable_root` —
+        the same root ``main.py`` uses for logs — instead of the read-only
+        Program Files install dir.  A dev run uses the current working
+        directory when it is writable, falling back to
+        ``~/Documents/Openwater Bloodflow`` when it is not (e.g. ``/`` on a
+        macOS Finder launch).
         """
-        cwd = os.getcwd()
-        if os.access(cwd, os.W_OK):
-            return cwd
+        from utils import app_paths
+        candidate = (
+            str(app_paths.writable_root())
+            if getattr(sys, "frozen", False)
+            else os.getcwd()
+        )
+        if os.access(candidate, os.W_OK):
+            return candidate
         return os.path.join(
-            os.path.expanduser("~"), "Documents", "OpenWater Bloodflow"
+            os.path.expanduser("~"), "Documents", "Openwater Bloodflow"
         )
 
     def __init__(
