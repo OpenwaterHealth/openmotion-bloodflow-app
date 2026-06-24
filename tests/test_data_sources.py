@@ -844,6 +844,45 @@ def test_recorded_flags_both_masks_zero_falls_back_to_derived():
     assert src.rightMask == 0x66
 
 
+# ── Issue #245 — viewer "Viewing" badge: the source names the replayed scan ──
+# The PlotViewer shows a top-center badge identifying the loaded past scan. The
+# source carries the operator's user label and the scan's date/time so the
+# viewer can render the badge without re-querying the DB. Base/live sources have
+# no viewing label and read blank — the badge is hidden during live monitoring.
+
+
+def test_past_scan_source_exposes_user_label_and_date_time():
+    src = PastScanSource(
+        scan_db=None,
+        session_id=1,
+        preloaded_buffers=_middle_four_buffers(),
+        user_label="Patient A",
+        date_time="2026-06-23 11:19:35",
+    )
+    assert src.userLabel == "Patient A"
+    assert src.dateTime == "2026-06-23 11:19:35"
+
+
+def test_past_scan_source_label_fields_default_blank():
+    """Omitting the kwargs (unlabeled scans / older call sites) yields empty
+    strings, never None — the viewer treats blank as 'nothing to show'."""
+    src = PastScanSource(
+        scan_db=None,
+        session_id=1,
+        preloaded_buffers=_middle_four_buffers(),
+    )
+    assert src.userLabel == ""
+    assert src.dateTime == ""
+
+
+def test_live_scan_source_has_blank_label_fields():
+    """Live sources never carry a viewing label — the badge is past-scan only,
+    so the viewer can gate on `live === false` and a non-empty label."""
+    src = LiveScanSource(plot_t0=0.0)
+    assert src.userLabel == ""
+    assert src.dateTime == ""
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # currentScanSource holder pattern — verified via a parallel mini-class
 # (MotionConnector uses the same pattern; see motion_connector.py)

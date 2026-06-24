@@ -966,6 +966,67 @@ Rectangle {
         }
     }
 
+    // ── Top-center overlay: "Viewing" scan badge (issue #245) ──────────
+    // Names the replayed past scan so it's always clear which scan the plots
+    // show. Past-scan only — hidden during live monitoring (live is the
+    // implied default) and when nothing is loaded. The source carries the
+    // identity (userLabel/dateTime), derived from the same session row the
+    // History list renders, so the badge can't disagree with the clicked row.
+    readonly property string _scanBadgeLabel:
+        (viewer.scanSource && viewer.scanSource.userLabel) || ""
+    readonly property string _scanBadgeDate: {
+        var d = (viewer.scanSource && viewer.scanSource.dateTime) || ""
+        // Trim "YYYY-MM-DD HH:MM:SS" → "YYYY-MM-DD HH:MM" for a tighter badge.
+        return d.length >= 16 ? d.substring(0, 16) : d
+    }
+    readonly property string _scanBadgeText:
+        viewer._scanBadgeLabel.length > 0
+            ? (viewer._scanBadgeLabel + " · " + viewer._scanBadgeDate)
+            : viewer._scanBadgeDate
+    readonly property bool _showScanBadge:
+        viewer.scanSource !== null
+        && viewer.scanSource.live === false
+        && viewer._scanBadgeText.length > 0
+
+    Rectangle {
+        id: scanBadge
+        // No MouseArea: a bare Rectangle doesn't consume pointer events, so
+        // plot interaction beneath the badge passes straight through (same
+        // as the profiler HUD overlay).
+        visible: viewer._showScanBadge
+        anchors.top: parent.top
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.topMargin: viewer._overlayEdgeMarginPx
+        z: 6
+        width: scanBadgeRow.implicitWidth + 28
+        height: 36
+        radius: 18
+        color: theme.overlayBg
+        border.color: theme.borderSubtle
+        border.width: 1
+
+        Row {
+            id: scanBadgeRow
+            anchors.centerIn: parent
+            spacing: 8
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "Viewing"
+                color: theme.textTertiary
+                font.pixelSize: 12
+                font.family: "Roboto Mono"
+            }
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: viewer._scanBadgeText
+                color: theme.textPrimary
+                font.pixelSize: 13
+                font.weight: Font.DemiBold
+                font.family: "Roboto Mono"
+            }
+        }
+    }
+
     // ── Bottom-right overlay: window-seconds pill + three-dot menu ────
     // Window-seconds pill shows the current zoom and opens a dropdown
     // menu of the canonical zoom options when clicked. The three-dot
