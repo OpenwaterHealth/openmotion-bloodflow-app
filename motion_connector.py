@@ -837,6 +837,7 @@ class MotionConnector(QObject):
         }
         self._firmware_latest_by_kind: dict[str, str] = {}   # "console"/"sensor" -> tag
         self._firmware_checking_kinds: set = set()           # in-flight network checks
+        self._firmware_check_lock = threading.Lock()         # guards check-then-add on _firmware_checking_kinds
         self._firmware_update_in_progress: str | None = None # deviceKey being flashed
         # Track console connection time for safety grace period (issue #107 follow-up)
         self._console_connected_at: float | None = None
@@ -1457,6 +1458,16 @@ class MotionConnector(QObject):
         is_now_lost = (new == ConnectionState.DISCONNECTED)
         name = handle.name
 
+        # A device we are deliberately flashing drops into DFU and re-enumerates
+        # as a different USB device; that disconnect is expected. Suppress it
+        # entirely (no state mutation, no UI thrash) so the connector's
+        # connected-flags + _state stay consistent until the post-flash
+        # power-cycle reconnect re-runs normal connect handling.
+        if is_now_lost and self._firmware_update_in_progress == name:
+            logger.info("Ignoring expected DFU disconnect for %s during "
+                        "firmware update", name)
+            return
+
         if name == "console":
             self._consoleConnected = is_now_connected
             if is_now_connected:
@@ -1550,10 +1561,6 @@ class MotionConnector(QObject):
                             {"device": name, "reason": str(reason)})
             self._log_device_stats(name)
         elif is_now_lost:
-            if self._firmware_update_in_progress == name:
-                logger.info("Ignoring expected DFU disconnect for %s during "
-                            "firmware update", name)
-                return
             logger.info(
                 "Handle %s -> DISCONNECTED (%s) and state is %s",
                 name, reason, self._state,
@@ -1645,9 +1652,10 @@ class MotionConnector(QObject):
         if self._firmware_latest_by_kind.get(kind.value):
             self._recompute_firmware_update(name)   # latest already known; no network
             return
-        if kind in self._firmware_checking_kinds:
-            return                                  # a check is already in flight
-        self._firmware_checking_kinds.add(kind)
+        with self._firmware_check_lock:
+            if kind in self._firmware_checking_kinds:
+                return                              # a check is already in flight
+            self._firmware_checking_kinds.add(kind)
         threading.Thread(
             target=self._firmware_check_worker, args=(kind,), daemon=True
         ).start()
@@ -1666,6 +1674,8 @@ class MotionConnector(QObject):
             self._recompute_firmware_update(dev)
 
     def _recompute_firmware_update(self, name: str) -> None:
+        if not self._firmware_versions.get(name):
+            return  # device not connected / version unknown — nothing to recompute
         kind = self._kind_for_device(name)
         installed = self._firmware_versions.get(name, "")
         latest = self._firmware_latest_by_kind.get(kind.value, "")

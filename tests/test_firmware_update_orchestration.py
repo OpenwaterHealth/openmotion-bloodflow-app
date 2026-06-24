@@ -6,7 +6,7 @@ import pytest
 
 import motion_connector
 from motion_connector import (
-    MotionConnector, RUNNING, READY, DISCONNECTED,
+    MotionConnector, RUNNING, READY, DISCONNECTED, CONSOLE_CONNECTED,
 )
 from omotion import ConnectionState
 
@@ -79,9 +79,13 @@ def test_disconnect_suppressed_during_flash(tmp_path):
     c._interface.console = handle
     # cache a version, then start "flashing"
     c._log_device_stats("console")
+    c._consoleConnected = True
+    c._state = CONSOLE_CONNECTED
     c._firmware_update_in_progress = "console"
 
     c._on_handle_state_changed_impl(
         handle, ConnectionState.CONNECTED, ConnectionState.DISCONNECTED, "dfu")
 
     assert c.consoleFirmwareVersion == "v1.0.0", "expected DFU drop must not clear version"
+    assert c._consoleConnected is True, "DFU disconnect must not clear the connected flag"
+    assert c._state != DISCONNECTED, "state machine must not transition during a flash"
