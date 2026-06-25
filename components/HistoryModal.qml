@@ -204,6 +204,12 @@ Item {
         return m + ":" + (s < 10 ? "0" + s : s)
     }
 
+    // Trim a scan label for display on the fixed-width Load button.
+    function shortLabel(s) {
+        s = "" + (s || "")
+        return s.length > 16 ? (s.substring(0, 15) + "…") : s
+    }
+
     // Format an 8-bit mask as "0xNN", or "—" when unknown (< 0). Keeps the
     // detail pane consistent with the Config cell, which also shows "—" for
     // an unknown mask (a -1 rendered as 0xFF would misread as "All").
@@ -549,13 +555,17 @@ Item {
                 }
                 Button {
                     id: loadBtn
-                    text: "Load in viewer  →"
-                    Layout.preferredWidth: 156; Layout.preferredHeight: 36
+                    text: root.focusedRow
+                          ? ("Load “" + root.shortLabel(root.focusedRow.userLabel
+                                             || root.focusedRow.label || "scan") + "”  →")
+                          : "Load in viewer  →"
+                    Layout.preferredWidth: 200; Layout.preferredHeight: 36
                     enabled: root.focusedRow !== null && !root.focusedRow.interrupted
                     hoverEnabled: enabled
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 13; font.weight: Font.DemiBold
                         color: loadBtn.enabled ? "#FFFFFF" : theme.textTertiary
+                        elide: Text.ElideRight
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
