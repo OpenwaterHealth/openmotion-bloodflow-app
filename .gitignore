@@ -90,6 +90,8 @@ OpenWaterApp*.zip
 
 .claude/
 .superpowers/
+# Local process artifacts (brainstorming specs, plans, session notes) — not deliverables
+docs/superpowers/
 tests/scan_data/*
 tests/run-logs/*
 tests/test_logs/*

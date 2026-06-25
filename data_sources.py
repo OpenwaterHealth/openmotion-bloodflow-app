@@ -269,6 +269,16 @@ class ScanDataSource(QObject):
         # #175) so its grid doesn't inherit the current selection.
         self._left_mask: int = -1
         self._right_mask: int = -1
+        # Recorded display mode, tri-state: -1 unknown / 0 per-camera / 1
+        # reduced. -1 for live sources (viewer follows the live config);
+        # PastScanSource derives the real value from its buffer layout.
+        self._reduced_mode: int = -1
+        # Human-readable identity for the viewer's "Viewing" badge (issue
+        # #245): the operator's user label and the scan's date/time. Empty
+        # on live sources — the badge is past-scan only. PastScanSource sets
+        # these from the same session row the History list shows.
+        self._user_label: str = ""
+        self._date_time: str = ""
         self.buffers: dict[tuple[str, int, str], _CameraBuffer] = {}
         # Ring-trim threshold for buffers this source creates. Live sources
         # pass a finite value (config) to bound memory; past sources pass None
@@ -315,6 +325,29 @@ class ScanDataSource(QObject):
         """Right-sensor camera mask this source represents, or -1 if unknown.
         See ``leftMask``."""
         return self._right_mask
+
+    @pyqtProperty(int, constant=True)
+    def reducedMode(self) -> int:
+        """Recorded display mode this source represents: -1 unknown, 0
+        per-camera, 1 reduced. Exposed for QML (PlotViewer.effectiveReduced)
+        so a replayed scan renders in its own mode rather than the live config.
+        See ``leftMask`` for why this must be a pyqtProperty."""
+        return self._reduced_mode
+
+    @pyqtProperty(str, constant=True)
+    def userLabel(self) -> str:
+        """Operator-entered label for the viewer's "Viewing" badge (issue
+        #245), or "" when none (live sources, unlabeled scans). Exposed as a
+        ``pyqtProperty`` so QML can read it; ``constant=True`` since it's set
+        once at construction. See ``leftMask`` for the plain-attribute caveat."""
+        return self._user_label
+
+    @pyqtProperty(str, constant=True)
+    def dateTime(self) -> str:
+        """The scan's date/time for the viewer badge (issue #245), formatted
+        as ``YYYY-MM-DD HH:MM:SS`` like the History list; "" when unknown. The
+        viewer trims it to minutes for display. See ``userLabel``."""
+        return self._date_time
 
     @pyqtProperty(float)
     def liveEdge(self) -> float:
@@ -923,6 +956,63 @@ def _derive_masks_from_buffers(buffers: dict) -> tuple[int, int]:
     return masks["left"], masks["right"]
 
 
+def _derive_reduced_from_buffers(buffers) -> int:
+    """Tri-state recorded display mode from a loaded scan's buffer cam_ids:
+    -1 unknown, 0 per-camera, 1 reduced. Reduced-mode scans store only the
+    cam_id=-1 side average; per-camera (dev) scans store cam_id 0..7. Mirrors
+    _derive_masks_from_buffers — the viewer prefers this over the live config
+    so replay renders in the mode the scan was captured in."""
+    if buffers_are_empty(buffers):
+        return -1
+    if any(0 <= key[1] < 8 for key in buffers):
+        return 0
+    if any(key[1] == -1 for key in buffers):
+        return 1
+    return -1
+
+
+def _masks_from_flags(flags) -> Optional[tuple[int, int]]:
+    """Authoritative (left_mask, right_mask) from a scan's stored
+    ``session_meta.sdk_flags`` (written by the SDK's ScanDBSink at scan start),
+    or None when the flags don't carry a usable per-side mask pair.
+
+    This is the configuration the scan was actually RUN with — preferred over
+    _derive_masks_from_buffers, which only reconstructs the cameras that
+    happened to log data and so under-represents a config whose outer cameras
+    recorded nothing (issue #175 reopen). Returns None — caller falls back to
+    the derived heuristic — when ``flags`` isn't a dict, either mask key is
+    missing/non-int, or BOTH masks are 0 (no real scan configures zero
+    cameras; mirrors _derive_masks_from_buffers' both-zero "unknown")."""
+    if not isinstance(flags, dict):
+        return None
+    lm = flags.get("left_camera_mask")
+    rm = flags.get("right_camera_mask")
+    # bool is an int subclass; a mask is never a bool, so reject it explicitly.
+    if not isinstance(lm, int) or isinstance(lm, bool):
+        return None
+    if not isinstance(rm, int) or isinstance(rm, bool):
+        return None
+    lm &= 0xFF
+    rm &= 0xFF
+    if lm == 0 and rm == 0:
+        return None
+    return lm, rm
+
+
+def _reduced_from_flags(flags) -> Optional[int]:
+    """Recorded display mode (0 per-camera / 1 reduced) from a scan's stored
+    ``session_meta.sdk_flags.reduced_mode``, or None when absent. Preferred
+    over _derive_reduced_from_buffers for the same reason as _masks_from_flags
+    — it reflects how the scan was captured, not what its data happens to
+    contain (issue #175 reopen)."""
+    if not isinstance(flags, dict):
+        return None
+    rv = flags.get("reduced_mode")
+    if rv is None:
+        return None
+    return 1 if rv else 0
+
+
 def load_past_scan_buffers(
     scan_db,
     session_id: int,
@@ -967,6 +1057,9 @@ class PastScanSource(ScanDataSource):
         corrected_csv_path: Optional[str] = None,
         parent: Optional[QObject] = None,
         preloaded_buffers: Optional[dict] = None,
+        recorded_flags: Optional[dict] = None,
+        user_label: str = "",
+        date_time: str = "",
     ) -> None:
         # Unbounded buffers: a past scan is a finite, already-known result set
         # loaded in bulk (DB rows and/or the corrected CSV). With a finite
@@ -975,6 +1068,10 @@ class PastScanSource(ScanDataSource):
         super().__init__(plot_t0=0.0, parent=parent, buffer_max_capacity=None)
         self._live = False
         self.session_id = int(session_id)
+        # Viewer "Viewing" badge identity (issue #245). Coerced to str so a
+        # stray None from the meta lookup can't reach QML as `undefined`.
+        self._user_label = str(user_label or "")
+        self._date_time = str(date_time or "")
 
         if preloaded_buffers is not None:
             # Already bulk-loaded on a worker thread — adopt as-is.
@@ -987,7 +1084,21 @@ class PastScanSource(ScanDataSource):
             )
 
         # Lay the plot grid out from THIS scan's recorded cameras, not the
-        # operator's live selection (issue #175).
+        # operator's live selection (issue #175). Prefer the authoritative
+        # config the scan was RUN with — stored in session_meta.sdk_flags by
+        # the SDK's ScanDBSink and threaded in as recorded_flags — over the
+        # data-derived heuristic below. Deriving from data alone collapses a
+        # config whose outer cameras logged nothing: an All/All scan where only
+        # the middle cameras produced rows would render a Middle grid, hiding
+        # the configured-but-empty cameras (issue #175 reopen). Fall back to
+        # the heuristic for older scans whose meta predates these flags.
         self._left_mask, self._right_mask = _derive_masks_from_buffers(
             self.buffers
         )
+        self._reduced_mode = _derive_reduced_from_buffers(self.buffers)
+        recorded_masks = _masks_from_flags(recorded_flags)
+        if recorded_masks is not None:
+            self._left_mask, self._right_mask = recorded_masks
+        recorded_reduced = _reduced_from_flags(recorded_flags)
+        if recorded_reduced is not None:
+            self._reduced_mode = recorded_reduced

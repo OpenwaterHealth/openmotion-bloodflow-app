@@ -14,6 +14,14 @@ Item {
     // Modal interface — see HistoryModal.qml for rationale.
     readonly property string label: "Scan Settings"
 
+    // Left-edge space to keep clear of the icon bar (BloodFlow's
+    // ButtonPanel — 80px wide + 8px margin, pinned left at z:10000, which
+    // is ABOVE this modal's z:9998). The card is centered in the region to
+    // the RIGHT of this inset so it never slides under the bar on narrow
+    // windows. Matches PlotViewer's left content edge (88 + 16 gutter).
+    // See HistoryModal.qml for the original fix.
+    readonly property int iconBarInset: 104
+
     // Camera selection
     signal selectionChanged(int leftMask, int rightMask)
 
@@ -135,17 +143,29 @@ Item {
     Rectangle {
         anchors.fill: parent
         color: "#000000AA"
-        MouseArea { anchors.fill: parent; onClicked: root.close() }
+        // Capture ALL pointer input so scroll/hover can't fall through to
+        // the interactive plot viewer behind the modal (issue #214).
+        MouseArea {
+            anchors.fill: parent
+            hoverEnabled: true
+            onClicked: root.close()
+            onWheel: function(wheel) { wheel.accepted = true }
+        }
     }
 
     Rectangle {
-        width: Math.min(parent.width - 80, 520)
+        width: Math.min(parent.width - root.iconBarInset - 40, 520)
         height: Math.min(parent.height - 60, 640)
         radius: 14
         color: theme.bgContainer
         border.color: theme.borderSubtle
         border.width: 2
-        anchors.centerIn: parent
+        // Center within [iconBarInset, parent.width] so the card clears the
+        // icon bar instead of bleeding under it. horizontalCenterOffset
+        // shifts the full-width center right by half the reserved inset.
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.horizontalCenterOffset: root.iconBarInset / 2
 
         // Absorb empty-space clicks inside the modal so they don't
         // propagate to the backdrop and close the modal (issue #106).

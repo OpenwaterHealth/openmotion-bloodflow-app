@@ -74,18 +74,25 @@ FAR_MASK = 0xC3  # cams 1,2,7,8 (1-based) → camIds 0,1,6,7
 class _StubPastScanSource(QObject):
     """Minimal past-scan source exposing the camera-config masks the way
     data_sources.PastScanSource does. live=False marks it as a replayed
-    scan; leftMask/rightMask carry the configuration that scan recorded."""
+    scan; leftMask/rightMask carry the configuration that scan recorded.
+    user_label/date_time back the viewer's "Viewing" badge (issue #245);
+    pass live=True to stand in for a live source (badge hidden)."""
 
     _neverEmitted = pyqtSignal()
 
-    def __init__(self, left_mask: int, right_mask: int, parent=None):
+    def __init__(self, left_mask: int, right_mask: int, parent=None,
+                 user_label: str = "", date_time: str = "",
+                 live: bool = False):
         super().__init__(parent)
         self._left = int(left_mask)
         self._right = int(right_mask)
+        self._user_label = str(user_label)
+        self._date_time = str(date_time)
+        self._live = bool(live)
 
     @pyqtProperty(bool, notify=_neverEmitted)
     def live(self):
-        return False
+        return self._live
 
     @pyqtProperty(int, notify=_neverEmitted)
     def leftMask(self):
@@ -94,6 +101,14 @@ class _StubPastScanSource(QObject):
     @pyqtProperty(int, notify=_neverEmitted)
     def rightMask(self):
         return self._right
+
+    @pyqtProperty(str, notify=_neverEmitted)
+    def userLabel(self):
+        return self._user_label
+
+    @pyqtProperty(str, notify=_neverEmitted)
+    def dateTime(self):
+        return self._date_time
 
     @pyqtProperty(float, notify=_neverEmitted)
     def liveEdge(self):
@@ -305,6 +320,56 @@ def test_past_scan_config_overrides_live_mask_selection(viewer_factory):
         viewer_factory.stub.setScanSource(None)
 
 
+# ── Issue #245 — "Viewing" badge names the replayed scan ───────────────
+# The viewer shows a top-center badge identifying the loaded past scan
+# (user label · date trimmed to minutes). It is hidden during live
+# monitoring and when no scan is loaded.
+
+
+def test_viewing_badge_names_loaded_past_scan(viewer_factory):
+    viewer = viewer_factory()
+    try:
+        past = _StubPastScanSource(
+            FAR_MASK, FAR_MASK,
+            user_label="Patient A", date_time="2026-06-23 11:19:35")
+        viewer_factory.stub.setScanSource(past)
+        assert viewer.property("_showScanBadge") is True
+        assert viewer.property("_scanBadgeText") == "Patient A · 2026-06-23 11:19"
+    finally:
+        viewer_factory.stub.setScanSource(None)
+
+
+def test_viewing_badge_collapses_to_date_when_unlabeled(viewer_factory):
+    viewer = viewer_factory()
+    try:
+        past = _StubPastScanSource(
+            FAR_MASK, FAR_MASK,
+            user_label="", date_time="2026-06-23 11:19:35")
+        viewer_factory.stub.setScanSource(past)
+        assert viewer.property("_showScanBadge") is True
+        assert viewer.property("_scanBadgeText") == "2026-06-23 11:19"
+    finally:
+        viewer_factory.stub.setScanSource(None)
+
+
+def test_viewing_badge_hidden_during_live(viewer_factory):
+    viewer = viewer_factory()
+    try:
+        live = _StubPastScanSource(
+            ALL_MASK, ALL_MASK,
+            user_label="ignored", date_time="2026-06-23 11:19:35", live=True)
+        viewer_factory.stub.setScanSource(live)
+        assert viewer.property("_showScanBadge") is False
+    finally:
+        viewer_factory.stub.setScanSource(None)
+
+
+def test_viewing_badge_hidden_without_source(viewer_factory):
+    viewer = viewer_factory()
+    viewer_factory.stub.setScanSource(None)
+    assert viewer.property("_showScanBadge") is False
+
+
 def test_unknown_source_masks_fall_back_to_live_selection(viewer_factory):
     """A source reporting -1 masks (e.g. a live source) leaves the grid
     following the operator's live Scan Settings selection."""
@@ -330,8 +395,11 @@ def test_zero_masks_render_empty_grid(viewer_factory):
 # A sensor module arranges cameras 1-8 in a U: 1 and 8 at the top of the
 # U, 4 and 5 at the bottom. The grid displays an upside-down U — row 0
 # pairs cams 4|5, then 3|6, 2|7, and 1|8 at the bottom. Left module owns
-# columns 0-1, right module columns 2-3; rows with no selected camera on
-# either side are dropped (the remaining rows compact upward).
+# columns 0-1. When BOTH sides have active cameras a fixed side-break
+# spacer occupies column 2 and the right module sits at columns 3-4; when
+# only one side is active there is no spacer and that side starts at
+# column 0. Rows with no selected camera on either side are dropped (the
+# remaining rows compact upward).
 
 
 def _pos(cells, side, cam_id):
@@ -349,11 +417,13 @@ def test_all_masks_lay_out_as_upside_down_u(viewer_factory):
     cells = _cells(viewer)
     assert len(cells) == 16
     # Row r pairs 1-based cams (4-r | 5+r): zero-based camIds 3-r | 4+r.
+    # Both sides active → the side-break spacer occupies column 2, so the
+    # right module sits at columns 3-4 (left stays at 0-1).
     for r in range(4):
         assert _pos(cells, "left", 3 - r) == (r, 0)
         assert _pos(cells, "left", 4 + r) == (r, 1)
-        assert _pos(cells, "right", 3 - r) == (r, 2)
-        assert _pos(cells, "right", 4 + r) == (r, 3)
+        assert _pos(cells, "right", 3 - r) == (r, 3)
+        assert _pos(cells, "right", 4 + r) == (r, 4)
 
 
 def test_middle_masks_compact_to_4x2(viewer_factory):
@@ -363,14 +433,15 @@ def test_middle_masks_compact_to_4x2(viewer_factory):
     cells = _cells(viewer)
     assert len(cells) == 8
     # Middle = cams 3,6 (U row 1) and 2,7 (U row 2) — rows compact to 0,1.
+    # Both sides active → right module shifts to columns 3-4 (spacer at 2).
     assert _pos(cells, "left", 2) == (0, 0)
     assert _pos(cells, "left", 5) == (0, 1)
-    assert _pos(cells, "right", 2) == (0, 2)
-    assert _pos(cells, "right", 5) == (0, 3)
+    assert _pos(cells, "right", 2) == (0, 3)
+    assert _pos(cells, "right", 5) == (0, 4)
     assert _pos(cells, "left", 1) == (1, 0)
     assert _pos(cells, "left", 6) == (1, 1)
-    assert _pos(cells, "right", 1) == (1, 2)
-    assert _pos(cells, "right", 6) == (1, 3)
+    assert _pos(cells, "right", 1) == (1, 3)
+    assert _pos(cells, "right", 6) == (1, 4)
 
 
 def test_right_module_alone_takes_first_column_pair(viewer_factory):
@@ -394,7 +465,8 @@ def test_unselected_slot_leaves_gap_in_its_row(viewer_factory):
     cells = _cells(viewer)
     assert len(cells) == 2
     assert _pos(cells, "left", 3) == (0, 0)
-    assert _pos(cells, "right", 4) == (0, 3)
+    # Both sides active → spacer at col 2 pushes the right module to col 3-4.
+    assert _pos(cells, "right", 4) == (0, 4)
 
 
 def test_row_compaction_is_shared_across_modules(viewer_factory):
@@ -406,14 +478,15 @@ def test_row_compaction_is_shared_across_modules(viewer_factory):
     viewer.setProperty("rightMask", MIDDLE_MASK)
     cells = _cells(viewer)
     assert len(cells) == 8
+    # Both sides have active cameras → spacer at col 2, right module at 3-4.
     # U row 1 (cams 3|6) → display row 0: right side only.
-    assert _pos(cells, "right", 2) == (0, 2)
-    assert _pos(cells, "right", 5) == (0, 3)
+    assert _pos(cells, "right", 2) == (0, 3)
+    assert _pos(cells, "right", 5) == (0, 4)
     # U row 2 (cams 2|7) → display row 1: both sides.
     assert _pos(cells, "left", 1) == (1, 0)
     assert _pos(cells, "left", 6) == (1, 1)
-    assert _pos(cells, "right", 1) == (1, 2)
-    assert _pos(cells, "right", 6) == (1, 3)
+    assert _pos(cells, "right", 1) == (1, 3)
+    assert _pos(cells, "right", 6) == (1, 4)
     # U row 3 (cams 1|8) → display row 2: left side only.
     assert _pos(cells, "left", 0) == (2, 0)
     assert _pos(cells, "left", 7) == (2, 1)

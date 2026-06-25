@@ -13,10 +13,7 @@ import OpenMotion 1.0
  *
  *  API:
  *      open() / close()
- *      reset(forLiveScan, durationEstimate)
- *                                -> enter "checking" state; durationEstimate
- *                                   (seconds, optional) drives the elapsed
- *                                   counter shown under the spinner
+ *      reset(forLiveScan)        -> enter "checking" state
  *      showOk()                  -> enter "ok" state
  *      showError(msg)            -> enter "error" state with message
  *      addWarning(cameraLabel, typeKey, typeText, value)
@@ -73,12 +70,6 @@ Item {
     property int rightMask: 0xFF
     property string errorText: ""
 
-    // Elapsed-time tracking for the "checking" state. ``durationEstimate``
-    // is purely cosmetic (shown as "~Ns"); the real completion signal comes
-    // from contactQualityCheckFinished.
-    property int durationEstimate: 0
-    property int elapsedMs: 0
-
     // Each entry: { camera, typeKey, typeText, value }
     property var entries: []
 
@@ -91,30 +82,24 @@ Item {
 
     // ── public API ───────────────────────────────────────────────────────
     function open()  { root.visible = true; panel.forceActiveFocus() }
-    function close() { root.visible = false; elapsedTimer.stop() }
+    function close() { root.visible = false }
 
-    function reset(forLiveScan, durationEstimateArg) {
+    function reset(forLiveScan) {
         liveScan = !!forLiveScan
         liveScanDismissable = !liveScan
         clearHoldoffTimer.stop()
         entries = []
         errorText = ""
         state_ = "checking"
-        durationEstimate = (durationEstimateArg !== undefined && durationEstimateArg !== null)
-                           ? Math.max(0, durationEstimateArg | 0) : 0
-        elapsedMs = 0
-        elapsedTimer.restart()
         if (!visible) open()
     }
 
     function showOk() {
-        elapsedTimer.stop()
         state_ = "ok"
         if (!visible) open()
     }
 
     function showError(msg) {
-        elapsedTimer.stop()
         errorText = msg || "Hardware error"
         state_ = "error"
         if (!visible) open()
@@ -132,7 +117,6 @@ Item {
                     value: value
                 }
                 entries = upd
-                elapsedTimer.stop()
                 state_ = "warnings"
                 liveScanDismissable = false
                 clearHoldoffTimer.stop()
@@ -148,7 +132,6 @@ Item {
             value: value
         })
         entries = copy
-        elapsedTimer.stop()
         state_ = "warnings"
         liveScanDismissable = false
         clearHoldoffTimer.stop()
@@ -231,19 +214,6 @@ Item {
         return ((mask >> bit) & 1) === 1
     }
 
-    // Ticks every 500 ms while in "checking" state to update the elapsed
-    // label. Stopped on every exit path (close / showOk / showError /
-    // addWarning) so it never leaks past the check.
-    Timer {
-        id: elapsedTimer
-        interval: 500
-        repeat: true
-        onTriggered: {
-            if (root.state_ !== "checking") { stop(); return }
-            root.elapsedMs += interval
-        }
-    }
-
     // Continue becomes available only after contact quality stays clear
     // for clearHoldoffMs continuously during a live warning state.
     Timer {
@@ -264,9 +234,13 @@ Item {
         // Click-outside dismisses, but only when the modal opted in via
         // the `dismissable` property (false during checking / pre-scan
         // gating / live-scan warnings — see `dismissable` binding above).
+        // hoverEnabled + onWheel capture ALL pointer input so scroll/hover
+        // can't fall through to the plot viewer behind the modal (#214).
         MouseArea {
             anchors.fill: parent
+            hoverEnabled: true
             onClicked: { if (root.dismissable) root.close() }
+            onWheel: function(wheel) { wheel.accepted = true }
         }
     }
 
@@ -306,37 +280,14 @@ Item {
                 text: root.label
             }
 
-            // Spinner for "checking" state
+            // Spinner for "checking" state. No countdown / status text:
+            // camera programming now happens once at startup, so both the
+            // old "Configuring sensor modules…" and "x / Ns" phases collapse
+            // into a single indeterminate spinner.
             BusyIndicator {
                 visible: root.state_ === "checking"
                 running: visible
                 Layout.alignment: Qt.AlignHCenter
-            }
-
-            // Elapsed / expected-duration counter under the spinner. Only
-            // shown while actively checking; hidden in ok/warnings/error.
-            Text {
-                visible: root.state_ === "checking"
-                Layout.alignment: Qt.AlignHCenter
-                horizontalAlignment: Text.AlignHCenter
-                color: theme.textSecondary
-                font.pixelSize: 13
-                text: {
-                    var secs = Math.floor(root.elapsedMs / 1000)
-                    if (root.durationEstimate > 0)
-                        return "Checking contact quality… (" + secs + "s / ~" + root.durationEstimate + "s)"
-                    return "Configuring sensor modules. Please wait up to 2 minutes (" + secs + " / 120sec)"
-                }
-            }
-
-            Text {
-                visible: root.state_ === "checking" && root.durationEstimate === 0
-                Layout.alignment: Qt.AlignHCenter
-                horizontalAlignment: Text.AlignHCenter
-                color: theme.textSecondary
-                font.pixelSize: 12
-                font.italic: true
-                text: "This initialization is performed once per session at startup."
             }
 
             // OK message

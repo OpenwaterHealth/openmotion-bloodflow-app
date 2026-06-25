@@ -27,7 +27,6 @@ from hil_helpers import (
     click_element_center,
     click_panel,
     force_app_config_value,
-    selected_scan_text,
     write_app_config_value,
 )
 
@@ -198,7 +197,13 @@ def _seed_with_short_scan(app):
     try:
         click_panel("History")
         time.sleep(SLEEP)
-        if selected_scan_text():
+        # A populated table shows the column header; an empty one shows
+        # "No scans yet." Either way the modal is open here.
+        has_data = (
+            _history_text_present("User Label")
+            and not _history_text_present("No scans yet")
+        )
+        if has_data:
             log.info("Skipping seed scan — History already has entries")
             require_focus()
             pyautogui.press("escape")
@@ -243,16 +248,24 @@ def _seed_with_short_scan(app):
     yield
 
 
-def _is_history_open() -> bool:
-    """True iff the History modal appears to be on top — detected via
-    the presence of any ComboBox in the UIA tree (the scan picker is
-    the only ComboBox the bloodflow page exposes when no other modal
-    is up)."""
+def _history_text_present(needle: str) -> bool:
+    """True iff any UIA element under the app window shows ``needle``."""
     try:
         win = uia_window()
-        return bool(win.descendants(control_type="ComboBox"))
+        for elem in win.descendants():
+            try:
+                if needle.lower() in (elem.window_text() or "").lower():
+                    return True
+            except Exception:
+                continue
     except Exception:
-        return False
+        pass
+    return False
+
+
+def _is_history_open() -> bool:
+    """The History modal is up iff its 'Scan History' title is visible."""
+    return _history_text_present("Scan History")
 
 
 def _ensure_history_open() -> None:
@@ -281,35 +294,39 @@ class TestHistory:
         _ensure_history_open()
 
     def test_02_latest_scan_listed(self, app):
-        # Defensive: re-ensure the modal is up before reading. The
-        # seed fixture's close-with-escape doesn't actually fire
-        # (HistoryModal has no Keys handler), so we can't trust the
-        # state coming into this test.
         _ensure_history_open()
-        # Poll for up to 5 s — the ComboBox can take a moment to
-        # populate on a slow runner.
+        # Poll up to 5 s for the table to populate (the seed scan was
+        # Middle/Middle, so its config cell reads "Middle / Middle").
         deadline = time.time() + 5.0
-        scan_text = ""
+        found = False
         while time.time() < deadline:
-            scan_text = selected_scan_text()
-            if scan_text:
+            no_data = _history_text_present("No scans yet")
+            if _history_text_present("Middle") or not no_data:
+                found = True
                 break
             time.sleep(0.3)
-        assert len(scan_text) > 0, (
-            "ComboBox is empty after 5 s -- no scans found. Run a "
+        assert found, (
+            "History table is empty after 5 s — no scans found. Run a "
             "scan first, or the History modal failed to open."
         )
-        log.info(f"  Scan ComboBox text: '{scan_text}'")
 
     def test_03_view_in_plot(self, app):
-        """'View in plot →' loads the scan into the embedded PlotViewer."""
-        click_by_name("View in plot →")
+        """Focus the first row, then 'Load in viewer →' loads it into the
+        embedded PlotViewer."""
+        # Click the first data row to focus it (just below the header).
+        win = uia_window()
+        rows = [e for e in win.descendants(control_type="Text")
+                if "Middle" in (e.window_text() or "")]
+        if rows:
+            click_element_center(rows[0], "first history row")
+            time.sleep(SLEEP)
+        click_by_name("Load in viewer →")
         time.sleep(SLEEP)
 
     def test_04_history_closed_by_view(self, app):
         """The button closes the History modal itself after loading."""
         assert not _is_history_open(), (
-            "History modal still open after 'View in plot →' — expected "
+            "History modal still open after 'Load in viewer →' — expected "
             "it to close itself after loading the scan."
         )
 

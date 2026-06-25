@@ -15,6 +15,14 @@ Item {
     // Modal interface — see HistoryModal.qml for rationale.
     readonly property string label: "Settings"
 
+    // Left-edge space to keep clear of the icon bar (BloodFlow's
+    // ButtonPanel — 80px wide + 8px margin, pinned left at z:10000, which
+    // is ABOVE this modal's z:9998). The card is centered in the region to
+    // the RIGHT of this inset so it never slides under the bar on narrow
+    // windows. Matches PlotViewer's left content edge (88 + 16 gutter).
+    // See HistoryModal.qml for the original fix.
+    readonly property int iconBarInset: 104
+
     // ── Settings values — initialised from live config on creation ──────────
     property int    defaultLeftMaskIndex:  4
     property int    defaultRightMaskIndex: 4
@@ -61,6 +69,19 @@ Item {
         onAccepted: MotionInterface.runCalibration(
             calibrationTargetCombo.currentText.toLowerCase()
         )
+    }
+
+    // Emitted when the user enters the correct password for the audit log.
+    // BloodFlow.qml opens the (ModalManager-governed) LogsModal in response.
+    signal logsRequested()
+
+    // Password gate for the audit Logs viewer.
+    PasswordPromptModal {
+        id: logsPasswordModal
+        title: "Audit Log"
+        description: "Enter the password to view the audit log."
+        confirmLabel: "View Logs"
+        onAccepted: root.logsRequested()
     }
 
     // ── Lifecycle ───────────────────────────────────────────────────────────
@@ -350,19 +371,31 @@ Item {
     Rectangle {
         anchors.fill: parent
         color: "#000000B0"
-        MouseArea { anchors.fill: parent; onClicked: root.close() }
+        // Capture ALL pointer input so scroll/hover can't fall through to
+        // the interactive plot viewer behind the modal (issue #214).
+        MouseArea {
+            anchors.fill: parent
+            hoverEnabled: true
+            onClicked: root.close()
+            onWheel: function(wheel) { wheel.accepted = true }
+        }
     }
 
     // ── Modal panel ─────────────────────────────────────────────────────────
     Rectangle {
         id: panel
-        width:  Math.min(parent.width - 80, 680)
+        width:  Math.min(parent.width - root.iconBarInset - 40, 680)
         height: Math.min(parent.height - 40, 800)
         radius: 14
         color:  root.colBgPanel
         border.color: root.colBorder
         border.width: 1
-        anchors.centerIn: parent
+        // Center within [iconBarInset, parent.width] so the card clears the
+        // icon bar instead of bleeding under it. horizontalCenterOffset
+        // shifts the full-width center right by half the reserved inset.
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.horizontalCenterOffset: root.iconBarInset / 2
 
         // Absorb empty-space clicks inside the modal so they don't
         // propagate to the backdrop and close the modal (issue #106).
@@ -756,6 +789,38 @@ Item {
                     }
                 }
 
+                // ── Audit Log ────────────────────────────────────────────────
+                SectionCard {
+                    title: "Audit Log"
+
+                    FieldRow {
+                        label: "Logs"
+                        ActionButton {
+                            text: "View Logs"
+                            Layout.preferredWidth: 130
+                            onClicked: logsPasswordModal.open()
+                        }
+                        ActionButton {
+                            text: "Send Debug Logs"
+                            Layout.preferredWidth: 150
+                            // Direct action — zips the last 48h of app logs,
+                            // reveals the file, and toasts the support address.
+                            onClicked: MotionInterface.prepareDebugLogBundle()
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+                    Text {
+                        text: "Password-protected, machine-readable record of system "
+                              + "events for auditors. Open the viewer to browse entries "
+                              + "or export them as CSV. Send Debug Logs zips the last "
+                              + "48 hours of app logs to email to support@openwater.cc."
+                        color: root.colTextMuted
+                        font.pixelSize: 11
+                        wrapMode: Text.WordWrap
+                        Layout.fillWidth: true
+                    }
+                }
+
                 // ── Developer ────────────────────────────────────────────────
                 SectionCard {
                     title: "Developer"
@@ -782,6 +847,38 @@ Item {
                         Text {
                             text: MotionInterface.consoleFanOn ? "On" : "Off"
                             color: MotionInterface.consoleFanOn ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    // Sensor firmware debug flags — persisted to config AND
+                    // pushed live to connected sensors via setSensorDebugFlag.
+                    // onToggled (not onCheckedChanged) so the appConfig rebind
+                    // after appConfigChanged can't feed back into the slot.
+                    FieldRow {
+                        label: "Histogram compression"
+                        PillSwitch {
+                            checked: MotionInterface.appConfig.histoCmp === true
+                            onToggled: MotionInterface.setSensorDebugFlag("histoCmp", checked)
+                        }
+                        Text {
+                            text: MotionInterface.appConfig.histoCmp === true ? "On" : "Off"
+                            color: MotionInterface.appConfig.histoCmp === true ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    FieldRow {
+                        label: "Sensor debug log"
+                        PillSwitch {
+                            checked: MotionInterface.appConfig.sensorDebugLogging === true
+                            onToggled: MotionInterface.setSensorDebugFlag("sensorDebugLogging", checked)
+                        }
+                        Text {
+                            text: MotionInterface.appConfig.sensorDebugLogging === true ? "On" : "Off"
+                            color: MotionInterface.appConfig.sensorDebugLogging === true ? root.colAccent : root.colTextMuted
                             font.pixelSize: 12
                         }
                         Item { Layout.fillWidth: true }
@@ -1073,6 +1170,51 @@ Item {
                             updateStatusText.text = "Check failed"
                             updateStatusText.color = theme.accentRed
                         }
+                    }
+                }
+
+                // ── System Information ───────────────────────────────────────
+                // Firmware versions per device, cached on connect by the
+                // connector (_log_device_stats). Each row shows the live
+                // version when connected, or a muted "Not connected".
+                SectionCard {
+                    title: "System Information"
+
+                    FieldRow {
+                        label: "Console FW"
+                        Text {
+                            text: MotionInterface.consoleConnected
+                                  ? (MotionInterface.consoleFirmwareVersion || "—")
+                                  : "Not connected"
+                            color: MotionInterface.consoleConnected ? root.colTextPri : root.colTextMuted
+                            font.pixelSize: 13
+                            font.family: "Consolas"
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+                    FieldRow {
+                        label: "Left Sensor FW"
+                        Text {
+                            text: MotionInterface.leftSensorConnected
+                                  ? (MotionInterface.leftSensorFirmwareVersion || "—")
+                                  : "Not connected"
+                            color: MotionInterface.leftSensorConnected ? root.colTextPri : root.colTextMuted
+                            font.pixelSize: 13
+                            font.family: "Consolas"
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+                    FieldRow {
+                        label: "Right Sensor FW"
+                        Text {
+                            text: MotionInterface.rightSensorConnected
+                                  ? (MotionInterface.rightSensorFirmwareVersion || "—")
+                                  : "Not connected"
+                            color: MotionInterface.rightSensorConnected ? root.colTextPri : root.colTextMuted
+                            font.pixelSize: 13
+                            font.family: "Consolas"
+                        }
+                        Item { Layout.fillWidth: true }
                     }
                 }
 

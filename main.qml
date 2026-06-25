@@ -204,4 +204,12 @@ ApplicationWindow {
     TestResultsWindow {
         id: testResultsWindow
     }
+
+    // Critical-error modal — top-level so it overlays every page and toast.
+    // Listens to MotionInterface.criticalErrorRaised; see docs/ERROR_CODES.md.
+    CriticalErrorModal {
+        id: criticalErrorModal
+        anchors.fill: parent
+        z: 100000
+    }
 }

@@ -30,7 +30,15 @@ Item {
     Rectangle {
         anchors.fill: parent
         color: "#000000AA"
-        MouseArea { anchors.fill: parent; onClicked: {} }
+        // Capture ALL pointer input so scroll/hover can't fall through to
+        // the interactive plot viewer behind the modal (issue #214). This
+        // backdrop intentionally does NOT close on click.
+        MouseArea {
+            anchors.fill: parent
+            hoverEnabled: true
+            onClicked: {}
+            onWheel: function(wheel) { wheel.accepted = true }
+        }
     }
 
     Rectangle {

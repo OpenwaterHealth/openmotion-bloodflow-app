@@ -36,8 +36,14 @@ from omotion.MotionProcessing import process_bin_file
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
 from processing.visualize_bloodflow import VisualizeBloodflow
 from motion_config import (
+    TEC_TRIP_MAX_C,
+    TEC_TRIP_MIN_C,
+    TecTripOutcome,
+    ensure_tec_trip,
     load_tec_params,
 )
+import error_codes
+import bug_report
 from nan_gap_tracker import NanGapTracker, gap_note_line
 from utils.resource_path import resource_path
 from data_sources import (
@@ -74,6 +80,46 @@ _DEVELOPER_PASSWORD = "OpenwaterHealth"
 def developer_password_matches(pw) -> bool:
     """Return True iff ``pw`` equals the developer-mode password."""
     return isinstance(pw, str) and pw == _DEVELOPER_PASSWORD
+
+
+# Camera-mask → human config name, mirroring CameraSelectionModal's
+# pattern table. Unmapped masks render as hex; -1 (unknown, e.g. a
+# reduced-mode scan whose meta lacks sdk_flags) renders as an em dash.
+_CONFIG_NAMES = {
+    0x00: "None", 0x5A: "Near", 0x66: "Middle", 0xC3: "Far",
+    0x99: "Outer", 0x0F: "Left", 0xF0: "Right", 0x42: "Third Row",
+    0xFF: "All",
+}
+
+
+def _config_name(mask) -> str:
+    if mask is None or mask < 0:
+        return "—"
+    m = int(mask) & 0xFF
+    return _CONFIG_NAMES.get(m, f"0x{m:02X}")
+
+
+def _sdk_flags_from_session(session) -> Optional[dict]:
+    """Pull the ``sdk_flags`` block out of a ScanDatabase session dict's
+    ``session_meta`` (the camera config / reduced-mode the scan was RUN with,
+    written by the SDK's ScanDBSink). Returns None when absent or unparseable.
+
+    ScanDatabase already json-decodes session_meta into a dict, but tolerate a
+    raw JSON string too — the same defensive parse the History list uses
+    (_session_to_row). Used to lay a replayed scan's plot grid out from its
+    recorded config rather than only the cameras that logged data (#175)."""
+    if not isinstance(session, dict):
+        return None
+    meta = session.get("session_meta")
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except Exception:
+            return None
+    if not isinstance(meta, dict):
+        return None
+    flags = meta.get("sdk_flags")
+    return flags if isinstance(flags, dict) else None
 
 
 logger = logging.getLogger("openmotion.bloodflow-app.connector")
@@ -556,6 +602,7 @@ class MotionConnector(QObject):
     laserStateChanged = pyqtSignal()  # Signal to notify QML of laser state changes
     safetyFailureStateChanged = pyqtSignal()  # Signal to notify QML of safety
     safetyTripDuringCaptureRequested = pyqtSignal()  # Emitted when safety trips while scan running (main-thread slot shows message & schedules cancel)
+    scanWorkerFailedDuringCapture = pyqtSignal(str)  # Emitted from the SDK scan worker thread when it aborts after start_scan returned True (main-thread slot raises E-301 & tears down capture). Issue #213.
     triggerStateChanged = pyqtSignal()  # Signal to notify QML of trigger state changes
     directoryChanged = pyqtSignal()  # Signal to notify QML of directory changes
     userLabelChanged = pyqtSignal()  # Signal to notify QML of user label changes
@@ -566,6 +613,10 @@ class MotionConnector(QObject):
     gyroscopeSensorUpdated = pyqtSignal(float, float, float)  # (x, y, z)
     rgbStateReceived = pyqtSignal(int, str)  # (state, state_text)
     errorOccurred = pyqtSignal(str)
+    # Critical/showstopper conditions surfaced to the user as a blocking,
+    # dismissible modal with a stable error code (see error_codes.py).
+    # Payload: (code, title, message, suggestedAction, detail).
+    criticalErrorRaised = pyqtSignal(str, str, str, str, str)
     notificationRequested = pyqtSignal('QVariant')  # toast notification payload dict
     notificationDismissByIdRequested = pyqtSignal(int)   # dismiss the toast with this id
     notificationDismissByTagRequested = pyqtSignal(str)  # dismiss the toast with this tag
@@ -579,8 +630,15 @@ class MotionConnector(QObject):
     # to clear its busy overlay and close only on success (issue #152).
     pastScanLoadFinished = pyqtSignal(str, bool)
     # Private worker→main marshalling for loadPastScan results:
-    # (seq, session_label, session_id, buffers-or-None, source_tag)
-    _pastScanBuffersReady = pyqtSignal(int, str, int, object, str)
+    # (seq, session_label, session_id, buffers-or-None, source_tag,
+    #  recorded_flags-or-None, display_meta-or-None). recorded_flags is the
+    # scan's stored session_meta.sdk_flags so the PastScanSource lays its grid
+    # out from the config the scan was RUN with, not just the cameras that
+    # logged data (issue #175 reopen). display_meta is {userLabel, dateTime}
+    # for the viewer's "Viewing" badge (issue #245), derived from the same
+    # session row the History list shows.
+    _pastScanBuffersReady = pyqtSignal(
+        int, str, int, object, str, object, object)
     # Worker->main: interrupted/empty-scan outcome toast (message, severity).
     # Emitted from _on_pipeline_complete (pipeline worker thread); delivered
     # on the GUI thread via the auto-queued connection wired in connect_signals.
@@ -631,6 +689,9 @@ class MotionConnector(QObject):
     tecDacChanged = pyqtSignal()
     appConfigChanged = pyqtSignal()
     consoleFanChanged = pyqtSignal()
+    # Per-device firmware versions, refreshed on every (dis)connect by
+    # _log_device_stats. Surfaced to Settings → System Information.
+    firmwareVersionsChanged = pyqtSignal()
 
     # App update signals
     updateAvailable = pyqtSignal(str, str)   # (latest_version, download_url)
@@ -661,6 +722,8 @@ class MotionConnector(QObject):
         config_dir="config",
         parent=None,
         log_level=logging.INFO,
+        app_version="",
+        log_path="",
     ):
         super().__init__(parent)
         cfg = app_config or {}
@@ -668,8 +731,29 @@ class MotionConnector(QObject):
         # Store the full config dict — exposed to QML as appConfig property
         self._app_config = dict(cfg)
 
+        # Bug-report context (see sendBugReport). app_version + log_path come
+        # from main.py; support_email / bug_report_smtp from app config.
+        self._app_version = app_version
+        self._log_path = log_path
+        self._support_email = cfg.get("support_email", "support@openwater.health")
+        self._bug_report_smtp = cfg.get("bug_report_smtp")
+
+        # Connection watchdog (E-104/E-106): one-shot check armed at startup
+        # that flags expected devices that never enumerated. 0 disables it.
+        self._connection_timeout_sec = float(cfg.get("connectionTimeoutSec", 30))
+        self._require_console = bool(cfg.get("requireConsole", True))
+        self._min_sensors = int(cfg.get("minSensors", 1))
+
         self._interface = interface
         self._scan_workflow = self._interface.scan_workflow
+
+        # Audit log constructed early — before connect_signals() — so the
+        # connect/disconnect handler and other instrumentation can call
+        # self._audit.log(...) safely. No-op if there's no scan_db_path.
+        # The system_startup / system_info events are logged later, once
+        # self._directory is resolved.
+        from audit_log import AuditLog
+        self._audit = AuditLog(getattr(self._interface, "scan_db_path", None))
 
         # Unpack operational settings from config
         self._force_laser_fail            = bool(cfg.get("forceLaserFail", False))
@@ -750,6 +834,13 @@ class MotionConnector(QObject):
         # connect handler below). Surfaced to QML as ``consoleFanOn`` and
         # toggled via ``setConsoleFan``.
         self._console_fan_on: bool = True
+        # Per-device firmware version strings (e.g. "v1.2.3"), populated on
+        # connect by _log_device_stats and cleared on disconnect. Surfaced
+        # to QML as console/left/rightSensorFirmwareVersion for the Settings
+        # → System Information card.
+        self._firmware_versions: dict[str, str] = {
+            "console": "", "left": "", "right": "",
+        }
         # Track console connection time for safety grace period (issue #107 follow-up)
         self._console_connected_at: float | None = None
         # Real-time plot viewer source — assigned at scan start by startCapture.
@@ -792,6 +883,7 @@ class MotionConnector(QObject):
         )
         self._calibration_status = ""  # "", "running", "passed", "failed", "aborted"
         self._calibration_failure_reason = ""  # populated only on FAIL in dev mode
+        self._calibration_target = None  # last runCalibration() target
         self._test_scan_status = ""              # "", "running", "done", "aborted", "failed"
         self._test_scan_failure_reason = ""
         self._test_scan_rows: list[dict] = []
@@ -832,6 +924,29 @@ class MotionConnector(QObject):
 
         os.makedirs(resolved_dir, exist_ok=True)
         self._directory = resolved_dir
+
+        # ── Audit log startup events (the AuditLog itself was constructed
+        #    earlier, before connect_signals). Logged here now that
+        #    self._directory is resolved.
+        from audit_log import gather_host_info
+        try:
+            from version import get_version as _get_app_version
+            _app_version = _get_app_version()
+        except Exception:
+            _app_version = ""
+        try:
+            _sdk_version = self._interface.get_sdk_version()
+            _sdk_version = (
+                _sdk_version if isinstance(_sdk_version, str) else ""
+            )
+        except Exception:
+            _sdk_version = ""
+        self._audit.log("system_startup", {
+            "app_version": _app_version,
+            "sdk_version": _sdk_version,
+            "data_dir": self._directory,
+        })
+        self._audit.log("system_info", gather_host_info())
         logger.info(f"[Connector] Directory initialized to: {self._directory}")
 
         self._user_label = self.generate_user_label()
@@ -848,6 +963,11 @@ class MotionConnector(QObject):
         # So every real connection arrives via _on_handle_state_changed.
 
         self._interface.console.telemetry.add_listener(self._on_telemetry_update)
+
+        # Arm the startup connection watchdog (E-104/E-106). The timer starts
+        # once the Qt event loop runs — by which point motion_interface.start()
+        # has had its window to enumerate already-attached devices.
+        self._arm_connection_watchdog()
 
     def set_ft_thresholds(
         self,
@@ -882,6 +1002,29 @@ class MotionConnector(QObject):
         if self._histo_cmp:
             flags |= DEBUG_FLAG_HISTO_CMP
         return flags
+
+    def _apply_sensor_debug_flags(self) -> None:
+        """Re-push the recomputed debug-flag bitmask to every connected sensor.
+
+        Unlike ``_run_sensor_init``, this writes even when ``flags == 0`` so
+        that turning the last flag off actually clears it on the firmware.
+        Used by the live Settings → Developer toggles (``setSensorDebugFlag``)
+        so no reconnect/restart is needed.
+        """
+        flags = self._compute_sensor_debug_flags()
+        for side in ("left", "right"):
+            try:
+                sensor = (
+                    getattr(self._interface, side, None)
+                    if self._interface else None
+                )
+            except Exception:
+                sensor = None
+            if sensor is None or not sensor.is_connected():
+                continue
+            logger.info("Re-applying debug flags 0x%x on %s sensor", flags, side)
+            if not sensor.set_debug_flags(flags):
+                logger.warning("Failed to set debug flags on %s sensor", side)
 
     def _schedule_sensor_init(self, side: str):
         """Delay initial sensor commands to allow USB settle."""
@@ -926,6 +1069,11 @@ class MotionConnector(QObject):
 
         self.getFanControlStatus(side)
 
+        # Surface the firmware's boot-time I2C self-check (E-101/E-102) — the
+        # canonical "I2C check at the beginning". Best-effort: never blocks
+        # init, just raises the modal if the sensor reports trouble.
+        self._check_sensor_i2c_health(side)
+
         # Power on all cameras, fill the ID cache (serial numbers, connection info), then power off
         try:
             sensor = getattr(self._interface, side, None) if self._interface else None
@@ -945,17 +1093,106 @@ class MotionConnector(QObject):
                             "Could not power on cameras on %s sensor for ID cache fill",
                             side,
                         )
+                        self._raise_critical("E-105", detail=f"{side} sensor")
                         refresh_cache()  # try anyway in case some cameras are already on
                 elif refresh_cache:
                     refresh_cache()  # fallback: fill cache without power cycle (may get zeros for off cameras)
         except Exception as e:
             logger.debug("Could not refresh sensor ID cache for %s: %s", side, e)
 
-        # Log camera UIDs once per sensor connect (the cache above just
-        # filled), instead of re-logging them at every scan start.
-        self._read_and_log_camera_uids(side)
+        # Log the sensor's hardware identity (firmware, hw_id, serial, and
+        # all 8 camera UIDs) once per sensor connect, after the cache fill.
+        # The SDK's log_sensor_info emits the guarded LEFT/RIGHT block; this
+        # mirrors log_console_info on console connect and log_system_info at
+        # startup — the three "log the configuration" calls.
+        self._interface.log_sensor_info(side)
 
         self.connectionStatusChanged.emit()
+
+    def _check_sensor_i2c_health(self, side: str) -> None:
+        """Raise E-101/E-102 if a sensor's boot-time I2C self-check is bad.
+
+        Reads the firmware's cached snapshot (no disruptive rescan). Never
+        raises out — it's a best-effort surfacing layer over the SDK's
+        ``MotionSensor.i2c_health``.
+        """
+        try:
+            sensor = getattr(self._interface, side, None) if self._interface else None
+            if sensor is None or not sensor.is_connected():
+                return
+            health = getattr(sensor, "i2c_health", None)
+            if health is None:
+                self._raise_critical("E-102", detail=f"{side} sensor")
+            elif not health.get("all_present", False):
+                missing = self._i2c_missing_devices(health)
+                self._raise_critical("E-101", detail=f"{side} sensor: {missing}")
+        except Exception:
+            logger.exception("I2C health check failed for %s sensor", side)
+
+    def _arm_connection_watchdog(self) -> None:
+        """Schedule the one-shot startup connection check (E-104/E-106)."""
+        if self._connection_timeout_sec > 0:
+            QTimer.singleShot(
+                int(self._connection_timeout_sec * 1000),
+                self._check_connection_watchdog,
+            )
+
+    def _check_connection_watchdog(self) -> None:
+        """Warn about devices that never connected within the startup timeout.
+
+        One-shot: reads the current cached connection state. A missing console
+        (E-104) and/or too few sensors (E-106) are non-blocking — they surface
+        as a single yellow warning toast (bottom-right), not the critical
+        modal, since the fix is usually just "plug it in". If *both* are
+        missing the toast collapses to a plain "System not found". Disconnects
+        that happen *after* startup are handled by the connection-status UI.
+        """
+        try:
+            console_missing = self._require_console and not self._consoleConnected
+            n_sensors = (int(bool(self._leftSensorConnected))
+                         + int(bool(self._rightSensorConnected)))
+            sensors_missing = n_sensors < self._min_sensors
+            if not console_missing and not sensors_missing:
+                return
+
+            if console_missing and sensors_missing:
+                logger.warning(
+                    "Connection watchdog: console and sensors missing "
+                    "(E-104/E-106: %d of %d sensors)", n_sensors, self._min_sensors)
+                msg = ("System not found. Check that the console and sensor "
+                       "are connected and powered on.")
+            elif console_missing:
+                logger.warning("Connection watchdog: console not detected (E-104)")
+                msg = ("Console not detected. Check the console USB cable and "
+                       "power, then reconnect.")
+            else:
+                logger.warning(
+                    "Connection watchdog: sensor not detected "
+                    "(E-106: %d of %d)", n_sensors, self._min_sensors)
+                msg = ("Sensor not detected. Check the sensor USB cable and "
+                       "power, then reconnect.")
+            # Sticky, single (tagged) yellow toast — the user must act, but it
+            # never blocks the UI like the critical modal.
+            self.notify(msg, "warning", duration_ms=0, dismissible=True,
+                        tag="connection-watchdog")
+        except Exception:
+            logger.exception("connection watchdog check failed")
+
+    @staticmethod
+    def _i2c_missing_devices(health: dict) -> str:
+        """Human-readable summary of which I2C devices didn't respond."""
+        parts = []
+        if not health.get("mux", True):
+            parts.append("mux")
+        if not health.get("imu", True):
+            parts.append("imu")
+        cams = [i for i, ok in enumerate(health.get("cameras", [])) if not ok]
+        if cams:
+            parts.append("cameras " + ",".join(str(i) for i in cams))
+        fpgas = [i for i, ok in enumerate(health.get("fpgas", [])) if not ok]
+        if fpgas:
+            parts.append("fpgas " + ",".join(str(i) for i in fpgas))
+        return "; ".join(parts) or "unknown device"
 
     # --- GETTERS/SETTERS FOR Qt PROPERTIES ---
     def getUserLabel(self) -> str:
@@ -993,6 +1230,22 @@ class MotionConnector(QObject):
     def consoleConnected(self):
         """Expose Console connection status to QML."""
         return self._consoleConnected
+
+    @pyqtProperty(str, notify=firmwareVersionsChanged)
+    def consoleFirmwareVersion(self) -> str:
+        """Console firmware version cached at connect time (empty when
+        unknown / disconnected). Shown in Settings → System Information."""
+        return self._firmware_versions["console"]
+
+    @pyqtProperty(str, notify=firmwareVersionsChanged)
+    def leftSensorFirmwareVersion(self) -> str:
+        """Left sensor firmware version; see consoleFirmwareVersion."""
+        return self._firmware_versions["left"]
+
+    @pyqtProperty(str, notify=firmwareVersionsChanged)
+    def rightSensorFirmwareVersion(self) -> str:
+        """Right sensor firmware version; see consoleFirmwareVersion."""
+        return self._firmware_versions["right"]
 
     @pyqtProperty(bool, notify=consoleFanChanged)
     def consoleFanOn(self) -> bool:
@@ -1184,6 +1437,13 @@ class MotionConnector(QObject):
                         logger.info("Laser power params applied from config")
                     else:
                         logger.error("Failed to apply laser power params from config")
+                        self._raise_critical(
+                            "E-103", detail="laser power params not applied")
+                    # Push the configured TEC over-temp trip (tecTripTempC, °C)
+                    # into the console user config. Read-modify-write that
+                    # preserves calibration + OPT/EE keys; non-fatal on a bad
+                    # value or write failure (device keeps its existing trip).
+                    self.apply_tec_trip_from_config(self._interface)
                 except Exception as e:
                     logger.warning(
                         f"Console connect-time setup interrupted "
@@ -1220,12 +1480,22 @@ class MotionConnector(QObject):
         if is_now_connected:
             logger.info("Handle %s -> CONNECTED (%s)", name, reason)
             self.signalConnected.emit(name, "")
+            self._audit.log("device_connected",
+                            {"device": name, "reason": str(reason)})
+            self._log_device_stats(name)
         elif is_now_lost:
             logger.info(
                 "Handle %s -> DISCONNECTED (%s) and state is %s",
                 name, reason, self._state,
             )
             self.signalDisconnected.emit(name, "")
+            self._audit.log("device_disconnected",
+                            {"device": name, "reason": str(reason)})
+            # Drop the cached firmware version so System Information no
+            # longer reports a stale value for the unplugged device.
+            if name in self._firmware_versions and self._firmware_versions[name]:
+                self._firmware_versions[name] = ""
+                self.firmwareVersionsChanged.emit()
             # Abort an in-flight FPGA flash / sensor-configure pipeline.
             # The SDK does not subscribe to disconnect events for the
             # configure-cameras flow (only start_scan does), so without
@@ -1253,6 +1523,32 @@ class MotionConnector(QObject):
         if is_now_connected or is_now_lost:
             self.connectionStatusChanged.emit()
             self.update_state()
+
+    def _log_device_stats(self, name: str) -> None:
+        """Best-effort audit of a device's hardware + firmware IDs on
+        connect. Missing values are logged as empty strings."""
+        handle = getattr(self._interface, name, None)
+        hwid = ""
+        fw = ""
+        try:
+            if handle is not None and hasattr(handle, "get_hardware_id"):
+                hwid = str(handle.get_hardware_id() or "")
+        except Exception:
+            pass
+        try:
+            if handle is not None and hasattr(handle, "get_version"):
+                fw = str(handle.get_version() or "")
+        except Exception:
+            pass
+        self._audit.log("device_stats", {
+            "device": name, "hardware_id": hwid, "firmware_version": fw,
+        })
+        # Cache for the Settings → System Information card. Fired from the
+        # SDK connection-monitor thread; the bound QML rows update via the
+        # queued firmwareVersionsChanged emit.
+        if name in self._firmware_versions:
+            self._firmware_versions[name] = fw
+            self.firmwareVersionsChanged.emit()
 
     def update_state(self):
         """Update system state based on connection and configuration."""
@@ -1346,6 +1642,11 @@ class MotionConnector(QObject):
         teardown) right after this returns."""
         logger.info("Shutting down MotionConnector...")
         self.stopCapture()
+        try:
+            self._audit.log("system_shutdown", {"clean": True})
+            self._audit.close()
+        except Exception:
+            logger.warning("audit shutdown log failed", exc_info=True)
         logger.info("MotionConnector shutdown complete.")
 
     # --- SCAN MANAGEMENT METHODS ---
@@ -1580,6 +1881,288 @@ class MotionConnector(QObject):
             "hasData": bool(has_db_rows or corrected or left or right),
         }
 
+    @staticmethod
+    def _friendly_ts(ts: str) -> str:
+        """'YYYYMMDD_HHMMSS' -> 'YYYY-MM-DD HH:MM:SS'; pass through."""
+        if not ts or len(ts) != 15:
+            return ts or "-"
+        return (f"{ts[0:4]}-{ts[4:6]}-{ts[6:8]} "
+                f"{ts[9:11]}:{ts[11:13]}:{ts[13:15]}")
+
+    def _session_to_row(self, s: dict) -> dict:
+        """Flatten one ScanDatabase session dict into the QVariantMap the
+        History table consumes. Masks/operator come from session_meta
+        (written by ScanDBSink); duration from session_start/end."""
+        label = (s.get("session_label") or "").strip()
+        meta = s.get("session_meta")
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except Exception:
+                meta = {}
+        if not isinstance(meta, dict):
+            meta = {}
+        flags = meta.get("sdk_flags") or {}
+
+        left_mask = flags.get("left_camera_mask", -1)
+        right_mask = flags.get("right_camera_mask", -1)
+        if left_mask is None:
+            left_mask = -1
+        if right_mask is None:
+            right_mask = -1
+
+        user_label = meta.get("subject_id") or ""
+        timestamp = ""
+        m = re.match(r"^(\d{8}_\d{6})_?(.*)$", label)
+        if m:
+            timestamp = m.group(1)
+            if not user_label:
+                user_label = m.group(2)
+
+        start = s.get("session_start")
+        end = s.get("session_end")
+        if start is not None and end is not None:
+            duration = float(end) - float(start)
+        else:
+            duration = -1.0
+
+        return {
+            "sessionId": int(s.get("id")),
+            "label": label,
+            "userLabel": user_label,
+            "operator": meta.get("operator") or "",
+            "timestamp": timestamp or label,
+            "dateTime": self._friendly_ts(timestamp),
+            "durationSec": duration,
+            "leftMask": int(left_mask),
+            "rightMask": int(right_mask),
+            "configL": _config_name(left_mask),
+            "configR": _config_name(right_mask),
+            "reducedMode": bool(flags.get("reduced_mode", False)),
+            "notes": s.get("session_notes") or "",
+            "interrupted": end is None,
+        }
+
+    @pyqtSlot(result="QVariantList")
+    def get_scan_sessions(self):
+        """Return one row per scan-DB session, newest first, for the
+        History table. DB-only — does not list CSV-derived scans.
+        Best-effort: a missing/unreadable DB yields []."""
+        db_path = getattr(self._interface, "scan_db_path", None)
+        if not db_path:
+            return []
+        rows = []
+        try:
+            from omotion.ScanDatabase import ScanDatabase
+            db = ScanDatabase(db_path)
+            try:
+                for s in db.iter_sessions():
+                    # Per-row guard: one malformed session must not blank the
+                    # whole History view — skip it and keep the rest.
+                    try:
+                        rows.append(self._session_to_row(s))
+                    except Exception:
+                        logger.warning(
+                            "get_scan_sessions: skipping malformed session %s",
+                            s.get("id"), exc_info=True)
+            finally:
+                db.close()
+        except Exception:
+            logger.warning("get_scan_sessions: could not read scan DB",
+                           exc_info=True)
+            return []
+        rows.sort(key=lambda r: r["timestamp"], reverse=True)
+        return rows
+
+    @pyqtSlot(int, result="QVariantMap")
+    def get_session_stats(self, session_id: int):
+        """Lazily fetch heavier per-scan stats (row count) when a History
+        row is focused, so the list query itself stays cheap."""
+        db_path = getattr(self._interface, "scan_db_path", None)
+        if not db_path:
+            return {"sampleCount": 0}
+        try:
+            from omotion.ScanDatabase import ScanDatabase
+            db = ScanDatabase(db_path)
+            try:
+                # Raw COUNT via the connection — ScanDatabase exposes no
+                # public row-count API; get_scan_details reaches for
+                # _connection() the same way for its EXISTS probe.
+                row = next(
+                    db._connection().execute(
+                        "SELECT COUNT(*) FROM session_data"
+                        " WHERE session_id = ?",
+                        (int(session_id),),
+                    ),
+                    None,
+                )
+                return {"sampleCount": int(row[0]) if row else 0}
+            finally:
+                db.close()
+        except Exception:
+            logger.warning(
+                "get_session_stats failed for %s", session_id,
+                exc_info=True)
+            return {"sampleCount": 0}
+
+    @pyqtSlot("QVariantList", result=int)
+    def deleteScans(self, session_ids):
+        """Delete the given scan-DB sessions (CASCADE removes their
+        session_data). Returns the count actually deleted. The developer-
+        password gate is enforced in QML before this is called."""
+        db_path = getattr(self._interface, "scan_db_path", None)
+        if not db_path:
+            return 0
+        deleted = 0
+        try:
+            from omotion.ScanDatabase import ScanDatabase
+            db = ScanDatabase(db_path)
+            try:
+                for sid in session_ids:
+                    try:
+                        if db.delete_session(int(sid)):
+                            deleted += 1
+                            logger.info(
+                                "deleteScans: removed session %s", sid)
+                    except Exception:
+                        logger.warning(
+                            "deleteScans: failed to delete %s", sid,
+                            exc_info=True)
+            finally:
+                db.close()
+        except Exception:
+            logger.warning(
+                "deleteScans: could not open scan DB", exc_info=True)
+        # Tolerate non-int ids the same way the delete loop above does —
+        # this comprehension runs outside AuditLog.log's fail-soft wrapper.
+        _ids = []
+        for s in session_ids:
+            try:
+                _ids.append(int(s))
+            except (TypeError, ValueError):
+                pass
+        self._audit.log("scan_deleted", {
+            "session_ids": _ids,
+            "count": deleted,
+        })
+        return deleted
+
+    # ── Audit log (QML-facing) ───────────────────────────────────────────
+    @pyqtSlot(result="QVariantList")
+    @pyqtSlot(int, result="QVariantList")
+    def auditLogEntries(self, limit: int = 500):
+        """Audit-log rows (newest first) for the Logs modal. Pure read —
+        does not itself log, so refreshing never double-logs."""
+        try:
+            return self._audit.query(int(limit))
+        except Exception:
+            logger.warning("auditLogEntries failed", exc_info=True)
+            return []
+
+    @pyqtSlot()
+    def recordAuditLogViewed(self):
+        """Record that the audit log was opened. Called once from
+        LogsModal.open()."""
+        try:
+            n = self._audit.count()
+        except Exception:
+            n = 0
+        self._audit.log("audit_log_viewed", {"entry_count": n})
+
+    @pyqtSlot(str, result=str)
+    def exportAuditLogCsv(self, dest_path: str) -> str:
+        """Export the full audit log to CSV. Accepts a plain path or a
+        file:// URL. Records an ``audit_log_exported`` event. Returns the
+        written path, or '' on failure."""
+        if not dest_path:
+            return ""
+        path = dest_path.replace("file:///", "").replace("file://", "")
+        try:
+            n = self._audit.export_csv(path)
+            self._audit.log(
+                "audit_log_exported", {"dest": path, "row_count": n}
+            )
+            logger.info("exportAuditLogCsv: wrote %d rows -> %s", n, path)
+            return path
+        except Exception:
+            logger.exception("exportAuditLogCsv failed for %r", path)
+            self.errorOccurred.emit("Audit log export failed.")
+            return ""
+
+    @pyqtSlot(result=str)
+    def prepareDebugLogBundle(self) -> str:
+        """Zip the last 48h of app logs (+ config + system info) into
+        app-logs/debug-bundles/, reveal it in the file explorer, and toast
+        the support address. Returns the zip path, or '' on failure."""
+        try:
+            from debug_bundle import build_debug_bundle, WINDOW_HOURS
+            try:
+                from version import get_version as _gv
+                app_version = _gv()
+            except Exception:
+                app_version = ""
+            try:
+                sdk_version = self._interface.get_sdk_version()
+                sdk_version = (
+                    sdk_version if isinstance(sdk_version, str) else ""
+                )
+            except Exception:
+                sdk_version = ""
+            dest_dir = os.path.join(
+                self._directory, "app-logs", "debug-bundles"
+            )
+            meta = build_debug_bundle(
+                self._directory,
+                dest_dir,
+                time.time(),
+                config_path=resource_path("config", "app_config.json"),
+                extra_info={
+                    "app_version": app_version,
+                    "sdk_version": sdk_version,
+                },
+            )
+        except Exception:
+            logger.exception("prepareDebugLogBundle: failed to build bundle")
+            self.errorOccurred.emit("Could not create the debug log bundle.")
+            return ""
+
+        path = meta["path"]
+        self._reveal_in_explorer(path)
+        from audit_log import EV_DEBUG_BUNDLE_CREATED
+        self._audit.log(EV_DEBUG_BUNDLE_CREATED, {
+            "dest": path,
+            "file_count": meta["file_count"],
+            "log_count": meta["log_count"],
+            "bytes": meta["bytes"],
+            "window_hours": WINDOW_HOURS,
+        })
+        self.notify(
+            "Debug logs saved to " + path
+            + ". Please email this file to support@openwater.cc.",
+            type_="success", duration_ms=0, dismissible=True,
+            tag="debug-bundle",
+        )
+        return path
+
+    def _reveal_in_explorer(self, path: str) -> None:
+        """Best-effort: open the OS file browser with the file selected.
+        Never raises — a failed reveal must not lose the bundle."""
+        try:
+            import subprocess
+            import sys
+            if sys.platform.startswith("win"):
+                subprocess.Popen(
+                    ["explorer", "/select,", os.path.normpath(path)]
+                )
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", path])
+            else:
+                subprocess.Popen(["xdg-open", os.path.dirname(path)])
+        except Exception:
+            logger.warning(
+                "could not reveal %s in file explorer", path, exc_info=True
+            )
+
     @pyqtProperty(str, notify=directoryChanged)
     def directory(self):
         return self._directory
@@ -1635,18 +2218,62 @@ class MotionConnector(QObject):
     @pyqtSlot(str, 'QVariant')
     def setConfig(self, key: str, value):
         """Update a single config key, persist to disk, and notify QML."""
+        old = self._app_config.get(key)
         self._app_config[key] = value
         self._save_app_config()
         self.appConfigChanged.emit()
         logger.debug(f"[Connector] Config set: {key} = {value!r}")
+        if old != value:
+            self._audit.log("settings_changed",
+                            {"changes": {key: {"old": old, "new": value}}})
 
     @pyqtSlot('QVariantMap')
     def saveConfigs(self, configs: dict):
         """Update multiple config keys at once, persist to disk, and notify QML."""
+        changes = {}
+        for k, v in configs.items():
+            old = self._app_config.get(k)
+            if old != v:
+                changes[k] = {"old": old, "new": v}
         self._app_config.update(configs)
         self._save_app_config()
         self.appConfigChanged.emit()
         logger.debug(f"[Connector] Config saved: {sorted(configs.keys())}")
+        if changes:
+            self._audit.log("settings_changed", {"changes": changes})
+
+    # Sensor debug-flag config keys surfaced as live Settings → Developer
+    # toggles, mapped to the runtime cache attribute that
+    # _compute_sensor_debug_flags() reads.
+    _SENSOR_DEBUG_FLAG_ATTRS = {
+        "histoCmp": "_histo_cmp",
+        "sensorDebugLogging": "_sensor_debug_logging",
+    }
+
+    @pyqtSlot(str, bool)
+    def setSensorDebugFlag(self, key: str, enabled: bool) -> None:
+        """Toggle a sensor debug-flag config key, persist it, and re-push the
+        recomputed debug-flag bitmask to every connected sensor immediately.
+
+        Mirrors the live ``setConsoleFan`` developer toggle — no app restart
+        or reconnect needed. Unknown keys are ignored. When no sensor is
+        connected the value is still persisted and applies on the next
+        connect via ``_run_sensor_init``.
+        """
+        attr = self._SENSOR_DEBUG_FLAG_ATTRS.get(key)
+        if attr is None:
+            logger.warning("setSensorDebugFlag: unknown key %r", key)
+            return
+        enabled = bool(enabled)
+        old = self._app_config.get(key)
+        setattr(self, attr, enabled)
+        self._app_config[key] = enabled
+        self._save_app_config()
+        self.appConfigChanged.emit()
+        if old != enabled:
+            self._audit.log("settings_changed",
+                            {"changes": {key: {"old": old, "new": enabled}}})
+        self._apply_sensor_debug_flags()
 
     @pyqtSlot(bool)
     def setWriteRawCsv(self, enabled: bool) -> None:
@@ -1778,6 +2405,7 @@ class MotionConnector(QObject):
             )
             self.pastScanLoadFinished.emit(session_label, False)
             return
+        self._audit.log("scan_viewed", {"label": session_label})
         # Per-cam corrected CSV ({scan_id}.csv, 82-col wide format)
         # is the only source of per-cam BFI/BVI/mean/contrast for
         # past replay — the DB's session_data only holds side-
@@ -1820,10 +2448,34 @@ class MotionConnector(QObject):
                         session_label,
                     )
                     self._pastScanBuffersReady.emit(
-                        seq, session_label, -1, None, ""
+                        seq, session_label, -1, None, "", None, None
                     )
                     return
                 session_id = int(session["id"])
+                # The camera config the scan was RUN with lives in
+                # session_meta.sdk_flags (written by ScanDBSink). Thread it to
+                # the GUI thread so PastScanSource lays its grid out from the
+                # recorded config, not just the cameras that logged data
+                # (issue #175 reopen). Same parse the History list uses.
+                recorded_flags = _sdk_flags_from_session(session)
+                # The viewer's "Viewing" badge (issue #245) names the scan with
+                # the user label + date/time. Derive them from the SAME row the
+                # History list renders (_session_to_row prefers subject_id over
+                # the label suffix) so the badge can't disagree with the row the
+                # user clicked. Best-effort: a parse failure just hides the
+                # badge — it must never block the load.
+                display_meta = None
+                try:
+                    row = self._session_to_row(session)
+                    display_meta = {
+                        "userLabel": row["userLabel"],
+                        "dateTime": row["dateTime"],
+                    }
+                except Exception:
+                    logger.warning(
+                        "loadPastScan: could not derive badge meta for %r",
+                        session_label, exc_info=True,
+                    )
                 buffers, _ = load_past_scan_buffers(
                     db, session_id, corrected_csv
                 )
@@ -1838,11 +2490,14 @@ class MotionConnector(QObject):
                 else ("csv" if corrected_csv else "db-only-sentinel")
             )
             self._pastScanBuffersReady.emit(
-                seq, session_label, session_id, buffers, source_tag
+                seq, session_label, session_id, buffers, source_tag,
+                recorded_flags, display_meta,
             )
         except Exception:
             logger.exception("loadPastScan failed for label %r", session_label)
-            self._pastScanBuffersReady.emit(seq, session_label, -1, None, "")
+            self._pastScanBuffersReady.emit(
+                seq, session_label, -1, None, "", None, None
+            )
 
     @pyqtSlot(str, str)
     def _on_scan_outcome_warning(self, message: str, severity: str) -> None:
@@ -1858,6 +2513,8 @@ class MotionConnector(QObject):
         session_id: int,
         buffers,
         source_tag: str,
+        recorded_flags=None,
+        display_meta=None,
     ) -> None:
         """GUI thread: bind a worker-loaded past scan to the viewer.
         Results from a superseded request (user clicked another scan
@@ -1888,11 +2545,15 @@ class MotionConnector(QObject):
             self.pastScanLoadFinished.emit(session_label, False)
             return
         try:
+            dm = display_meta or {}
             past = PastScanSource(
                 scan_db=None,
                 session_id=session_id,
                 parent=self,
                 preloaded_buffers=buffers,
+                recorded_flags=recorded_flags,
+                user_label=dm.get("userLabel", ""),
+                date_time=dm.get("dateTime", ""),
             )
             self._set_current_scan_source(past)
             # Diagnostic — left in for now so we can spot regressions
@@ -1900,11 +2561,23 @@ class MotionConnector(QObject):
             n_buffers = len(past.buffers)
             n_samples = sum(b.n for b in past.buffers.values())
             sample_keys = sorted(past.buffers.keys())[:8]
+            # Grid masks are what the viewer actually lays out from; log them
+            # next to the data shape so a config/data mismatch (issue #175) is
+            # diagnosable from one line. flags=no means an older scan with no
+            # stored sdk_flags (masks derived from data instead). -1 prints as
+            # "unknown" (viewer falls back to the live selection).
+            def _mstr(v):
+                return f"0x{v & 0xFF:02X}" if v >= 0 else "unknown"
             logger.info(
                 "[Plot] loaded past scan %r (session_id=%d) source=%s: "
-                "buffers=%d samples=%d liveEdge=%.3f sample_keys=%s",
+                "buffers=%d samples=%d liveEdge=%.3f gridMasks=L%s/R%s "
+                "reduced=%d flags=%s sample_keys=%s",
                 session_label, session_id, source_tag,
-                n_buffers, n_samples, past.liveEdge, sample_keys,
+                n_buffers, n_samples, past.liveEdge,
+                _mstr(past.leftMask), _mstr(past.rightMask),
+                past.reducedMode,
+                "yes" if recorded_flags else "no",
+                sample_keys,
             )
             self.pastScanLoadFinished.emit(session_label, True)
         except Exception:
@@ -1949,6 +2622,56 @@ class MotionConnector(QObject):
             logger.exception("exportScanCsv failed for %r", session_label)
             self.errorOccurred.emit(f"Export failed:\n{exc}")
             return False
+
+    @pyqtSlot('QStringList', str, result='QVariantMap')
+    def exportScansToFolder(self, labels, folder) -> dict:
+        """Export several scans, one CSV each, into ``folder``.
+
+        Writes ``<folder>/<label>_export.csv`` for every label. Opens
+        the scan DB once for the whole batch. Missing or failing scans
+        are counted as skipped and never raise. Returns
+        ``{"exported": int, "skipped": int}``. (Callers pre-filter
+        interrupted scans, which can't be materialized.)
+        """
+        result = {"exported": 0, "skipped": 0}
+        if not labels or not folder:
+            return result
+        try:
+            from omotion.ScanDatabase import ScanDatabase
+            from omotion.SessionPlayback import materialize_corrected_csv
+
+            db_path = getattr(self._interface, "scan_db_path", None)
+            if not db_path:
+                self.errorOccurred.emit("No scan database available.")
+                return result
+            with ScanDatabase(db_path) as db:
+                for label in labels:
+                    try:
+                        session = db.get_session_by_label(label)
+                        if not session:
+                            result["skipped"] += 1
+                            continue
+                        session_id = int(session["id"])
+                        out_path = os.path.join(
+                            folder, f"{label}_export.csv")
+                        materialize_corrected_csv(
+                            str(db_path), session_id, out_path,
+                            include_quality=True,
+                        )
+                        result["exported"] += 1
+                        logger.info(
+                            "exportScansToFolder: exported %r (sid=%d) -> %s",
+                            label, session_id, out_path,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "exportScansToFolder: failed for %r", label)
+                        result["skipped"] += 1
+            return result
+        except Exception as exc:
+            logger.exception("exportScansToFolder failed")
+            self.errorOccurred.emit(f"Export failed:\n{exc}")
+            return result
 
     @pyqtSlot(str, result=int)
     @pyqtSlot(str, str, result=int)
@@ -2080,6 +2803,11 @@ class MotionConnector(QObject):
         self.scanNotesChanged.emit()
         self._capture_running = True
         self._capture_start_time = time.time()
+        self._audit.log("scan_started", {
+            "label": subject_id,
+            "left_mask": int(left_camera_mask),
+            "right_mask": int(right_camera_mask),
+        })
         # Per-scan monotonic zero for plot timestamps. sample.timestamp_s comes
         # from each sensor's firmware clock, which resets on sensor reboot — so
         # after a mid-scan unplug/replug, the two sides' clocks diverge and the
@@ -2224,6 +2952,21 @@ class MotionConnector(QObject):
             self._capture_running = False
             self._safety_cancel_scheduled = False
             self._capture_thread = None
+            try:
+                _outcome_kind = outcome.kind
+            except Exception:
+                _outcome_kind = None
+            try:
+                _dur = (time.time() - self._capture_start_time
+                        if self._capture_start_time else None)
+            except Exception:
+                _dur = None
+            self._audit.log("scan_ended", {
+                "label": subject_id,
+                "session_label": session_label or None,
+                "duration_s": round(_dur, 1) if _dur is not None else None,
+                "outcome": _outcome_kind,
+            })
             self.captureFinished.emit(True, "", "", "")
             self.scanNotesReady.emit()
 
@@ -2266,6 +3009,12 @@ class MotionConnector(QObject):
                 outcome_sink,
                 _CompletionSink(connector=self, on_complete_cb=_on_pipeline_complete),
             ],
+            # Async backstop (#213): if the worker aborts after start_scan
+            # returned True (e.g. a critical sink dies because the scan DB
+            # became unwritable past the preflight), it can't ride the return
+            # value. Fires on the worker thread, so just hop to the main thread
+            # via a queued signal — see _on_scan_worker_failed.
+            on_error=lambda exc: self.scanWorkerFailedDuringCapture.emit(str(exc)),
         )
 
         started = self._interface.start_scan(req)
@@ -2299,12 +3048,14 @@ class MotionConnector(QObject):
                 logger.warning("startCapture aborted: %s", reason)
                 self.captureLog.emit(f"Scan aborted: {reason}")
                 self.errorOccurred.emit(reason)
+                self._raise_critical("E-301", detail=reason)
             else:
                 logger.warning(
                     "startCapture aborted: SDK refused to spawn a new scan "
                     "(usually a previous worker thread that didn't exit cleanly)."
                 )
                 self.captureLog.emit("Capture already running.")
+                self._raise_critical("E-302")
         return bool(started)
 
     def _log_scan_image_stats(self, left_csv: str, right_csv: str) -> None:
@@ -2482,7 +3233,31 @@ class MotionConnector(QObject):
         self.captureLog.emit(
             "Laser safety system tripped. Scan will be cancelled in 5 seconds."
         )
+        self._raise_critical("E-202")
         QTimer.singleShot(5000, self.stopCapture)
+
+    @pyqtSlot(str)
+    def _on_scan_worker_failed(self, detail: str):
+        """Main-thread handler for an async scan-worker abort (#213).
+
+        The SDK worker invokes ScanRequest.on_error after start_scan already
+        returned True — typically a critical sink (ScanDBSink) dying because
+        the scan DB became unwritable in the race window past the synchronous
+        preflight. Surface E-301 and tear the capture down so the app doesn't
+        sit 'capturing' forever with a dead worker.
+        """
+        if not self._capture_running:
+            return  # already torn down (e.g. user cancelled first)
+        logger.warning("scan worker aborted mid-capture: %s", detail)
+        self.captureLog.emit(f"Scan aborted: {detail}")
+        self._raise_critical("E-301", detail=detail)
+        # Tear down: stop the dropout watchdog and cancel the (dead) scan, then
+        # clear running state and unblock QML, mirroring the completion path.
+        self.stopCapture()
+        self._capture_running = False
+        self._safety_cancel_scheduled = False
+        self._set_current_scan_source(None)
+        self.captureFinished.emit(False, detail, "", "")
 
     @pyqtSlot(result=QVariant)
     def tec_status(self, snap=None):
@@ -2579,6 +3354,7 @@ class MotionConnector(QObject):
                     logger.error(f"Laser safety failure: {fault_detail}")
                     self.safetyFailure = True
                     self._fire_safety_notification(fault_detail)
+                    self._raise_critical("E-201", detail=fault_detail)
                     self.stopTrigger()
                     self._laserOn = False
                     self.laserStateChanged.emit()
@@ -2789,6 +3565,38 @@ class MotionConnector(QObject):
         # force_fault honors the forceLaserFail app flag (loads the
         # safety-trip param set to exercise the interlock).
         return interface.apply_laser_power(force_fault=self._force_laser_fail)
+
+    def apply_tec_trip_from_config(self, interface) -> TecTripOutcome:
+        """Push the configured TEC over-temp trip (tecTripTempC, °C) into the
+        console user config. Read-modify-write touching only the TEC_TRIP key
+        (calibration + OPT_*/EE_* preserved), serialized under _console_mutex.
+        Today this connect-time push is the only holder of that mutex (so it is
+        not yet load-bearing); a future concurrent console-config writer must
+        take the same mutex for the read+write pair to stay atomic.
+
+        Non-fatal: a bad config value or a device read/write failure is logged
+        at ERROR and the device keeps its existing trip — never blocks scanning
+        and never writes 0 (which would disable the firmware over-temp trip)."""
+        temp_c = self._app_config.get("tecTripTempC", 40)
+        self._console_mutex.lock()
+        try:
+            outcome = ensure_tec_trip(interface.console, temp_c)
+        finally:
+            self._console_mutex.unlock()
+
+        if outcome is TecTripOutcome.WROTE:
+            logger.info(f"Console TEC_TRIP set to {temp_c} °C")
+        elif outcome is TecTripOutcome.UNCHANGED:
+            logger.info(f"Console TEC_TRIP already {temp_c} °C, skipping write")
+        elif outcome is TecTripOutcome.SKIPPED_INVALID:
+            logger.error(
+                f"Invalid tecTripTempC={temp_c!r}; leaving console over-temp "
+                f"trip untouched (expected a number in "
+                f"{TEC_TRIP_MIN_C}-{TEC_TRIP_MAX_C} °C)"
+            )
+        else:  # TecTripOutcome.FAILED
+            logger.error(f"Failed to apply TEC_TRIP={temp_c} °C to console")
+        return outcome
 
     # ------------------------------------------------------------------
     # Contact-quality quick-check
@@ -3075,69 +3883,6 @@ class MotionConnector(QObject):
         return f"{h:02d}:{m:02d}:{s:02d}"
 
     # --- SENSOR COMMUNICATION METHODS ---
-    def _read_and_log_camera_uids(self, side: str):
-        """
-        Read and log security UIDs for the given sensor's cameras.
-
-        Called once per sensor connect (after the ID cache fill in
-        _run_sensor_init), not at every scan start.
-        """
-        try:
-            connected = (
-                self._leftSensorConnected
-                if side == "left"
-                else self._rightSensorConnected
-            )
-            sensor = getattr(self._interface, side, None) if self._interface else None
-            if not connected or sensor is None:
-                logger.warning("%s sensor not connected, cannot read camera UIDs", side)
-                return
-
-            # Prefer cached values (populated by refresh_id_cache) over
-            # per-camera hardware reads.
-            logger.info(f"Camera UIDs on {side} sensor:")
-            cache_populated = (
-                getattr(sensor, "_cached_camera_uids", None) is not None
-            )
-            get_cached = getattr(sensor, "get_cached_camera_security_uid", None)
-            read_uid = getattr(sensor, "read_camera_security_uid", None)
-            for camera_id in range(8):
-                try:
-                    if cache_populated and get_cached:
-                        uid_str = get_cached(camera_id)
-                        uid_hex = uid_str.replace("0x", "") if uid_str else ""
-                    elif read_uid:
-                        uid_bytes = read_uid(camera_id)
-                        time.sleep(0.05)
-                        uid_hex = "".join(f"{b:02X}" for b in uid_bytes)
-                    else:
-                        continue
-                    display_uid = (
-                        f"0x{uid_hex}"
-                        if uid_hex and not uid_hex.startswith("0x")
-                        else (uid_hex or "0x000000000000")
-                    )
-                    if not uid_hex or set(uid_hex.replace("0x", "").upper()) <= {
-                        "0"
-                    }:
-                        logger.info(
-                            f"  Camera {camera_id + 1}: Not present (UID: {display_uid})"
-                        )
-                        self.configLog.emit(f"Camera {camera_id + 1}: Not present")
-                    else:
-                        logger.info(
-                            f"  Camera {camera_id + 1}: UID = {display_uid}"
-                        )
-                        self.configLog.emit(
-                            f"Camera {camera_id + 1} UID: {display_uid}"
-                        )
-                except Exception as e:
-                    logger.error(
-                        f"Error reading UID for camera {camera_id + 1} on {side} sensor: {e}"
-                    )
-        except Exception as e:
-            logger.error(f"Error reading camera UIDs: {e}")
-
     @pyqtSlot(int, int, result=bool)
     def startConfigureCameraSensors(
         self, left_camera_mask: int, right_camera_mask: int
@@ -3470,6 +4215,87 @@ class MotionConnector(QObject):
         if cb is not None:
             cb.setText(text)
 
+    # --- CRITICAL ERROR SURFACING -----------------------------------------
+    def _raise_critical(self, code: str, detail: str = "") -> None:
+        """Surface a showstopper to the user via the critical-error modal.
+
+        Looks ``code`` up in :mod:`error_codes`, logs it, and emits
+        ``criticalErrorRaised``. Safe to call from worker threads — the QML
+        side connects with a queued connection. Never raises.
+        """
+        try:
+            err = error_codes.lookup(code)
+            logger.error("CRITICAL %s — %s%s", code, err.title,
+                         f" ({detail})" if detail else "")
+            self.criticalErrorRaised.emit(
+                code, err.title, err.message, err.suggested_action, detail)
+        except Exception:
+            logger.exception("Failed to raise critical error %s", code)
+
+    def _device_info_str(self) -> str:
+        """Best-effort one-line device identity for bug reports."""
+        try:
+            console, left, right = self._interface.is_device_connected()
+            return f"console={'yes' if console else 'no'} " \
+                   f"left={'yes' if left else 'no'} " \
+                   f"right={'yes' if right else 'no'}"
+        except Exception:
+            return "unknown"
+
+    @pyqtSlot(str)
+    def sendBugReport(self, code: str) -> None:
+        """Send the current session log + error context to Openwater support.
+
+        If a complete ``bug_report_smtp`` block is configured the email is sent
+        directly (with the log attached) on a background thread. Otherwise we
+        fall back to opening the user's mail client and revealing the log file
+        so they can attach it manually.
+        """
+        err = error_codes.lookup(code)
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        subject = f"BloodFlow Bug Report — {code} {err.title}"
+        body = bug_report.build_report_text(
+            code=code, title=err.title, message=err.message,
+            timestamp=timestamp, app_version=self._app_version or "unknown",
+            device_info=self._device_info_str(),
+            log_path=self._log_path or "(no log file)",
+        )
+        if bug_report.smtp_config_complete(self._bug_report_smtp):
+            self._send_bug_report_smtp(subject, body)
+        else:
+            self._send_bug_report_fallback(subject, body)
+
+    def _send_bug_report_smtp(self, subject: str, body: str) -> None:
+        """Send the report via SMTP on a daemon thread; toast the result."""
+        def _worker():
+            try:
+                bug_report.send_via_smtp(
+                    self._bug_report_smtp, to_addr=self._support_email,
+                    subject=subject, body=body, log_path=self._log_path or None,
+                )
+                self.notify("Bug report sent to Openwater.", "success")
+            except Exception as exc:
+                logger.exception("SMTP bug report failed")
+                self.notify(f"Could not send bug report: {exc}", "error")
+                # Fall back so the user can still get the report out.
+                self._send_bug_report_fallback(subject, body)
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _send_bug_report_fallback(self, subject: str, body: str) -> None:
+        """Open the mail client, copy the report, and reveal the log file."""
+        import webbrowser
+        self.copyToClipboard(body)
+        if self._log_path:
+            bug_report.reveal_in_file_manager(self._log_path)
+        try:
+            webbrowser.open(bug_report.build_mailto_url(
+                self._support_email, subject=subject, body=body))
+        except Exception:
+            logger.exception("Could not open mail client for bug report")
+        self.notify(
+            "Bug report copied to clipboard. Attach the highlighted log "
+            "file and send the email to Openwater.", "info", 8000, True)
+
     def connect_signals(self):
         """Subscribe to per-handle state changes on the SDK interface."""
         for handle in (
@@ -3480,6 +4306,13 @@ class MotionConnector(QObject):
             handle.signal_state_changed.connect(self._on_handle_state_changed)
         self.safetyTripDuringCaptureRequested.connect(
             self._on_safety_trip_during_capture
+        )
+        # Worker → Qt main thread for an async scan-worker abort (#213).
+        # Default (auto) connection like safetyTripDuringCaptureRequested above:
+        # resolves to a queued connection for the cross-thread emit, so the
+        # slot's QML-touching teardown runs on the main thread.
+        self.scanWorkerFailedDuringCapture.connect(
+            self._on_scan_worker_failed
         )
         # Worker → Qt main thread for the calibration completion callback.
         self._calibrationCompleteSignal.connect(self._on_calibration_complete)
@@ -3571,9 +4404,11 @@ class MotionConnector(QObject):
         )
 
         self._calibration_status = "running"
+        self._calibration_target = target
         self.calibrationStateChanged.emit()
         self.captureLog.emit("Calibration: starting…")
         self._calibration_t0 = time.monotonic()
+        self._audit.log("calibration_started", {"target": target})
         logger.info(
             "=== Calibration started: target=%s left=0x%02X right=0x%02X "
             "scan_duration=%ss ===",
@@ -3832,6 +4667,11 @@ class MotionConnector(QObject):
             "=== Calibration ended: %s after %.1fs ===",
             self._calibration_status, elapsed_s,
         )
+        self._audit.log("calibration_ended", {
+            "target": self._calibration_target,
+            "outcome": self._calibration_status,
+            "reason": self._calibration_failure_reason or None,
+        })
         self.calibrationStateChanged.emit()
 
     @property
