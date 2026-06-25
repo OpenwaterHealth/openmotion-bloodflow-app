@@ -63,3 +63,12 @@ def test_export_scans_to_folder_empty_inputs(tmp_path):
         "exported": 0, "skipped": 0}
     assert c.exportScansToFolder(["x"], "") == {
         "exported": 0, "skipped": 0}
+
+
+def test_export_scans_to_folder_no_db(tmp_path):
+    c = _connector(tmp_path, scan_db_path=None)
+    errors = []
+    c.errorOccurred.connect(errors.append)
+    res = c.exportScansToFolder(["scanA"], str(tmp_path))
+    assert res == {"exported": 0, "skipped": 0}
+    assert errors  # errorOccurred was emitted

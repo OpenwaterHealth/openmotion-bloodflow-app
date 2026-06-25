@@ -2637,7 +2637,6 @@ class MotionConnector(QObject):
         if not labels or not folder:
             return result
         try:
-            import os
             from omotion.ScanDatabase import ScanDatabase
             from omotion.SessionPlayback import materialize_corrected_csv
 
@@ -2645,29 +2644,29 @@ class MotionConnector(QObject):
             if not db_path:
                 self.errorOccurred.emit("No scan database available.")
                 return result
-            db = ScanDatabase(db_path)
-            for label in labels:
-                try:
-                    session = db.get_session_by_label(label)
-                    if not session:
+            with ScanDatabase(db_path) as db:
+                for label in labels:
+                    try:
+                        session = db.get_session_by_label(label)
+                        if not session:
+                            result["skipped"] += 1
+                            continue
+                        session_id = int(session["id"])
+                        out_path = os.path.join(
+                            folder, f"{label}_export.csv")
+                        materialize_corrected_csv(
+                            str(db_path), session_id, out_path,
+                            include_quality=True,
+                        )
+                        result["exported"] += 1
+                        logger.info(
+                            "exportScansToFolder: exported %r (sid=%d) -> %s",
+                            label, session_id, out_path,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "exportScansToFolder: failed for %r", label)
                         result["skipped"] += 1
-                        continue
-                    session_id = int(session["id"])
-                    out_path = os.path.join(
-                        folder, f"{label}_export.csv")
-                    materialize_corrected_csv(
-                        str(db_path), session_id, out_path,
-                        include_quality=True,
-                    )
-                    result["exported"] += 1
-                    logger.info(
-                        "exportScansToFolder: exported %r (sid=%d) -> %s",
-                        label, session_id, out_path,
-                    )
-                except Exception:
-                    logger.exception(
-                        "exportScansToFolder: failed for %r", label)
-                    result["skipped"] += 1
             return result
         except Exception as exc:
             logger.exception("exportScansToFolder failed")
