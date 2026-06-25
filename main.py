@@ -88,6 +88,7 @@ def _load_app_config() -> dict:
         "cameraFakeData": False,
         "histoThrottle": False,
         "histoCmp": False,
+        "deferHistoSend": False,
         "powerOffUnusedCameras": False,
         "commVerbose": False,  # Enable cmd id and "." prints from MCU
         "verboseCommandHandling": False,  # Enable printf in MCU command handlers
