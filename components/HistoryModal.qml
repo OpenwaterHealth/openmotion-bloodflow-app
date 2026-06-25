@@ -53,9 +53,8 @@ Item {
         try { scans = MotionInterface.get_scan_sessions() || [] }
         catch (e) { scans = [] }
         checked = ({}); checkedCount = 0
+        clearActive()
         rebuildView()
-        if (view.length > 0) focusRow(view[0].sessionId)
-        else { focusedSessionId = -1; focusedRow = null; focusedSampleCount = -1 }
     }
 
     function rebuildView() {
@@ -103,17 +102,51 @@ Item {
         }
     }
 
+    // Reset the active (detail-pane / Load + Export target) row.
+    function clearActive() {
+        focusedSessionId = -1; focusedRow = null; focusedSampleCount = -1
+    }
+
+    // Plain row-body click = standard single-select: replace the checked
+    // set with just this row and make it the active row.
+    function selectRow(sid) {
+        var c = {}; c[sid] = true
+        checked = c; checkedCount = 1
+        focusRow(sid)
+    }
+
+    // Keep the active row valid after a checkbox change: if it's no longer
+    // checked, move the highlight to the first checked row in view order,
+    // else clear it. (Invariant: the active row is always checked.)
+    function reconcileActive() {
+        if (focusedSessionId >= 0 && checked[focusedSessionId]) return
+        for (var i = 0; i < view.length; i++)
+            if (checked[view[i].sessionId]) { focusRow(view[i].sessionId); return }
+        clearActive()
+    }
+
+    // Every checked row, across the full list (ignores the search filter,
+    // matching Delete which also operates on all checked ids).
+    function checkedRows() {
+        var rows = []
+        for (var i = 0; i < scans.length; i++)
+            if (checked[scans[i].sessionId]) rows.push(scans[i])
+        return rows
+    }
+
     function toggleCheck(sid) {
         var c = Object.assign({}, checked)
         if (c[sid]) { delete c[sid]; checkedCount -= 1 }
         else { c[sid] = true; checkedCount += 1 }
         checked = c
+        reconcileActive()
     }
 
     function setAllChecked(on) {
         var c = {}, n = 0
         if (on) for (var i = 0; i < view.length; i++) { c[view[i].sessionId] = true; n++ }
         checked = c; checkedCount = n
+        reconcileActive()
     }
 
     function requestDelete() {
@@ -312,7 +345,7 @@ Item {
                         MouseArea {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: root.focusRow(modelData.sessionId)
+                            onClicked: root.selectRow(modelData.sessionId)
                         }
 
                         RowLayout {
