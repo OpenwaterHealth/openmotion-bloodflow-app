@@ -631,11 +631,14 @@ class MotionConnector(QObject):
     pastScanLoadFinished = pyqtSignal(str, bool)
     # Private worker→main marshalling for loadPastScan results:
     # (seq, session_label, session_id, buffers-or-None, source_tag,
-    #  recorded_flags-or-None). recorded_flags is the scan's stored
-    # session_meta.sdk_flags so the PastScanSource lays its grid out from the
-    # config the scan was RUN with, not just the cameras that logged data
-    # (issue #175 reopen).
-    _pastScanBuffersReady = pyqtSignal(int, str, int, object, str, object)
+    #  recorded_flags-or-None, display_meta-or-None). recorded_flags is the
+    # scan's stored session_meta.sdk_flags so the PastScanSource lays its grid
+    # out from the config the scan was RUN with, not just the cameras that
+    # logged data (issue #175 reopen). display_meta is {userLabel, dateTime}
+    # for the viewer's "Viewing" badge (issue #245), derived from the same
+    # session row the History list shows.
+    _pastScanBuffersReady = pyqtSignal(
+        int, str, int, object, str, object, object)
     # Worker->main: interrupted/empty-scan outcome toast (message, severity).
     # Emitted from _on_pipeline_complete (pipeline worker thread); delivered
     # on the GUI thread via the auto-queued connection wired in connect_signals.
@@ -2445,7 +2448,7 @@ class MotionConnector(QObject):
                         session_label,
                     )
                     self._pastScanBuffersReady.emit(
-                        seq, session_label, -1, None, "", None
+                        seq, session_label, -1, None, "", None, None
                     )
                     return
                 session_id = int(session["id"])
@@ -2455,6 +2458,24 @@ class MotionConnector(QObject):
                 # recorded config, not just the cameras that logged data
                 # (issue #175 reopen). Same parse the History list uses.
                 recorded_flags = _sdk_flags_from_session(session)
+                # The viewer's "Viewing" badge (issue #245) names the scan with
+                # the user label + date/time. Derive them from the SAME row the
+                # History list renders (_session_to_row prefers subject_id over
+                # the label suffix) so the badge can't disagree with the row the
+                # user clicked. Best-effort: a parse failure just hides the
+                # badge — it must never block the load.
+                display_meta = None
+                try:
+                    row = self._session_to_row(session)
+                    display_meta = {
+                        "userLabel": row["userLabel"],
+                        "dateTime": row["dateTime"],
+                    }
+                except Exception:
+                    logger.warning(
+                        "loadPastScan: could not derive badge meta for %r",
+                        session_label, exc_info=True,
+                    )
                 buffers, _ = load_past_scan_buffers(
                     db, session_id, corrected_csv
                 )
@@ -2470,12 +2491,12 @@ class MotionConnector(QObject):
             )
             self._pastScanBuffersReady.emit(
                 seq, session_label, session_id, buffers, source_tag,
-                recorded_flags,
+                recorded_flags, display_meta,
             )
         except Exception:
             logger.exception("loadPastScan failed for label %r", session_label)
             self._pastScanBuffersReady.emit(
-                seq, session_label, -1, None, "", None
+                seq, session_label, -1, None, "", None, None
             )
 
     @pyqtSlot(str, str)
@@ -2493,6 +2514,7 @@ class MotionConnector(QObject):
         buffers,
         source_tag: str,
         recorded_flags=None,
+        display_meta=None,
     ) -> None:
         """GUI thread: bind a worker-loaded past scan to the viewer.
         Results from a superseded request (user clicked another scan
@@ -2523,12 +2545,15 @@ class MotionConnector(QObject):
             self.pastScanLoadFinished.emit(session_label, False)
             return
         try:
+            dm = display_meta or {}
             past = PastScanSource(
                 scan_db=None,
                 session_id=session_id,
                 parent=self,
                 preloaded_buffers=buffers,
                 recorded_flags=recorded_flags,
+                user_label=dm.get("userLabel", ""),
+                date_time=dm.get("dateTime", ""),
             )
             self._set_current_scan_source(past)
             # Diagnostic — left in for now so we can spot regressions

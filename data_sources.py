@@ -273,6 +273,12 @@ class ScanDataSource(QObject):
         # reduced. -1 for live sources (viewer follows the live config);
         # PastScanSource derives the real value from its buffer layout.
         self._reduced_mode: int = -1
+        # Human-readable identity for the viewer's "Viewing" badge (issue
+        # #245): the operator's user label and the scan's date/time. Empty
+        # on live sources — the badge is past-scan only. PastScanSource sets
+        # these from the same session row the History list shows.
+        self._user_label: str = ""
+        self._date_time: str = ""
         self.buffers: dict[tuple[str, int, str], _CameraBuffer] = {}
         # Ring-trim threshold for buffers this source creates. Live sources
         # pass a finite value (config) to bound memory; past sources pass None
@@ -327,6 +333,21 @@ class ScanDataSource(QObject):
         so a replayed scan renders in its own mode rather than the live config.
         See ``leftMask`` for why this must be a pyqtProperty."""
         return self._reduced_mode
+
+    @pyqtProperty(str, constant=True)
+    def userLabel(self) -> str:
+        """Operator-entered label for the viewer's "Viewing" badge (issue
+        #245), or "" when none (live sources, unlabeled scans). Exposed as a
+        ``pyqtProperty`` so QML can read it; ``constant=True`` since it's set
+        once at construction. See ``leftMask`` for the plain-attribute caveat."""
+        return self._user_label
+
+    @pyqtProperty(str, constant=True)
+    def dateTime(self) -> str:
+        """The scan's date/time for the viewer badge (issue #245), formatted
+        as ``YYYY-MM-DD HH:MM:SS`` like the History list; "" when unknown. The
+        viewer trims it to minutes for display. See ``userLabel``."""
+        return self._date_time
 
     @pyqtProperty(float)
     def liveEdge(self) -> float:
@@ -1037,6 +1058,8 @@ class PastScanSource(ScanDataSource):
         parent: Optional[QObject] = None,
         preloaded_buffers: Optional[dict] = None,
         recorded_flags: Optional[dict] = None,
+        user_label: str = "",
+        date_time: str = "",
     ) -> None:
         # Unbounded buffers: a past scan is a finite, already-known result set
         # loaded in bulk (DB rows and/or the corrected CSV). With a finite
@@ -1045,6 +1068,10 @@ class PastScanSource(ScanDataSource):
         super().__init__(plot_t0=0.0, parent=parent, buffer_max_capacity=None)
         self._live = False
         self.session_id = int(session_id)
+        # Viewer "Viewing" badge identity (issue #245). Coerced to str so a
+        # stray None from the meta lookup can't reach QML as `undefined`.
+        self._user_label = str(user_label or "")
+        self._date_time = str(date_time or "")
 
         if preloaded_buffers is not None:
             # Already bulk-loaded on a worker thread — adopt as-is.

@@ -74,18 +74,25 @@ FAR_MASK = 0xC3  # cams 1,2,7,8 (1-based) → camIds 0,1,6,7
 class _StubPastScanSource(QObject):
     """Minimal past-scan source exposing the camera-config masks the way
     data_sources.PastScanSource does. live=False marks it as a replayed
-    scan; leftMask/rightMask carry the configuration that scan recorded."""
+    scan; leftMask/rightMask carry the configuration that scan recorded.
+    user_label/date_time back the viewer's "Viewing" badge (issue #245);
+    pass live=True to stand in for a live source (badge hidden)."""
 
     _neverEmitted = pyqtSignal()
 
-    def __init__(self, left_mask: int, right_mask: int, parent=None):
+    def __init__(self, left_mask: int, right_mask: int, parent=None,
+                 user_label: str = "", date_time: str = "",
+                 live: bool = False):
         super().__init__(parent)
         self._left = int(left_mask)
         self._right = int(right_mask)
+        self._user_label = str(user_label)
+        self._date_time = str(date_time)
+        self._live = bool(live)
 
     @pyqtProperty(bool, notify=_neverEmitted)
     def live(self):
-        return False
+        return self._live
 
     @pyqtProperty(int, notify=_neverEmitted)
     def leftMask(self):
@@ -94,6 +101,14 @@ class _StubPastScanSource(QObject):
     @pyqtProperty(int, notify=_neverEmitted)
     def rightMask(self):
         return self._right
+
+    @pyqtProperty(str, notify=_neverEmitted)
+    def userLabel(self):
+        return self._user_label
+
+    @pyqtProperty(str, notify=_neverEmitted)
+    def dateTime(self):
+        return self._date_time
 
     @pyqtProperty(float, notify=_neverEmitted)
     def liveEdge(self):
@@ -303,6 +318,56 @@ def test_past_scan_config_overrides_live_mask_selection(viewer_factory):
         assert len(cells) == 8
     finally:
         viewer_factory.stub.setScanSource(None)
+
+
+# ── Issue #245 — "Viewing" badge names the replayed scan ───────────────
+# The viewer shows a top-center badge identifying the loaded past scan
+# (user label · date trimmed to minutes). It is hidden during live
+# monitoring and when no scan is loaded.
+
+
+def test_viewing_badge_names_loaded_past_scan(viewer_factory):
+    viewer = viewer_factory()
+    try:
+        past = _StubPastScanSource(
+            FAR_MASK, FAR_MASK,
+            user_label="Patient A", date_time="2026-06-23 11:19:35")
+        viewer_factory.stub.setScanSource(past)
+        assert viewer.property("_showScanBadge") is True
+        assert viewer.property("_scanBadgeText") == "Patient A · 2026-06-23 11:19"
+    finally:
+        viewer_factory.stub.setScanSource(None)
+
+
+def test_viewing_badge_collapses_to_date_when_unlabeled(viewer_factory):
+    viewer = viewer_factory()
+    try:
+        past = _StubPastScanSource(
+            FAR_MASK, FAR_MASK,
+            user_label="", date_time="2026-06-23 11:19:35")
+        viewer_factory.stub.setScanSource(past)
+        assert viewer.property("_showScanBadge") is True
+        assert viewer.property("_scanBadgeText") == "2026-06-23 11:19"
+    finally:
+        viewer_factory.stub.setScanSource(None)
+
+
+def test_viewing_badge_hidden_during_live(viewer_factory):
+    viewer = viewer_factory()
+    try:
+        live = _StubPastScanSource(
+            ALL_MASK, ALL_MASK,
+            user_label="ignored", date_time="2026-06-23 11:19:35", live=True)
+        viewer_factory.stub.setScanSource(live)
+        assert viewer.property("_showScanBadge") is False
+    finally:
+        viewer_factory.stub.setScanSource(None)
+
+
+def test_viewing_badge_hidden_without_source(viewer_factory):
+    viewer = viewer_factory()
+    viewer_factory.stub.setScanSource(None)
+    assert viewer.property("_showScanBadge") is False
 
 
 def test_unknown_source_masks_fall_back_to_live_selection(viewer_factory):

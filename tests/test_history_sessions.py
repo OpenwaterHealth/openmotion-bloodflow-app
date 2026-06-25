@@ -241,3 +241,64 @@ def test_load_past_scan_slot_without_flags_falls_back_to_derived(tmp_path):
     assert src is not None
     assert src.leftMask == 0x66
     assert src.rightMask == 0x66
+
+
+# ── Issue #245 — viewer "Viewing" badge: thread the scan's identity to source ──
+# The viewer reads userLabel/dateTime off the bound source to render its badge.
+# The connector must (a) compute those in the worker from the same session row
+# the History list shows, and (b) thread them through the GUI-thread slot into
+# the PastScanSource.
+
+
+def test_load_past_scan_slot_threads_display_meta_to_source(tmp_path):
+    """The GUI-thread slot must pass the worker's display_meta into the
+    PastScanSource so the viewer badge can name the scan (issue #245)."""
+    c = _connector(tmp_path, str(tmp_path / "scans.db"))
+    c._on_past_scan_buffers_ready(
+        c._past_scan_load_seq, "20260623_111935_PatientA", 1,
+        _middle_four_buffers(), "db", None,
+        {"userLabel": "Patient A", "dateTime": "2026-06-23 11:19:35"},
+    )
+    src = c.currentScanSource
+    assert src is not None
+    assert src.userLabel == "Patient A"
+    assert src.dateTime == "2026-06-23 11:19:35"
+
+
+def test_load_past_scan_slot_missing_display_meta_leaves_label_blank(tmp_path):
+    """No display_meta (older worker path / failed lookup) → source label is
+    blank, so the viewer simply hides the badge. Backward compatible with the
+    existing 6-arg slot calls."""
+    c = _connector(tmp_path, str(tmp_path / "scans.db"))
+    c._on_past_scan_buffers_ready(
+        c._past_scan_load_seq, "20260101_000000_subjA", 1,
+        _middle_four_buffers(), "db", None,
+    )
+    src = c.currentScanSource
+    assert src is not None
+    assert src.userLabel == ""
+    assert src.dateTime == ""
+
+
+def test_load_past_scan_worker_emits_display_meta_from_session(tmp_path):
+    """The worker derives the badge's userLabel/dateTime from the same session
+    row the History list renders (prefers session_meta.subject_id over the label
+    suffix), so the badge can never disagree with the clicked row."""
+    db_path = str(tmp_path / "scans.db")
+    sid = _make_session(
+        db_path, "20260623_111935_PatientA", 100.0, 110.0,
+        left_mask=0xFF, right_mask=0xFF, reduced=False,
+        subject="Patient A",   # subject_id differs from the label suffix
+    )
+    _insert_rows(db_path, sid, 3)
+    c = _connector(tmp_path, db_path)
+
+    captured = []
+    c._pastScanBuffersReady.connect(lambda *a: captured.append(a))
+    c._load_past_scan_worker(
+        c._past_scan_load_seq, "20260623_111935_PatientA", db_path, None)
+
+    assert captured, "worker did not emit _pastScanBuffersReady"
+    display_meta = captured[-1][-1]
+    assert display_meta["userLabel"] == "Patient A"
+    assert display_meta["dateTime"] == "2026-06-23 11:19:35"
