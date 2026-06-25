@@ -615,8 +615,7 @@ Item {
     Dialogs.FolderDialog {
         id: exportFolderDialog
         title: "Export Scans to Folder"
-        currentFolder: MotionInterface.directory
-                       ? ("file:///" + MotionInterface.directory) : ""
+        currentFolder: "file:///" + (MotionInterface.directory || "")
         property var pendingLabels: []
         property int pendingSkipped: 0
         onAccepted: {
