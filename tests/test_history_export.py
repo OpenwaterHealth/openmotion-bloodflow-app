@@ -57,6 +57,33 @@ def test_export_scans_to_folder_writes_each_and_skips_missing(
     assert names == ["scanA_export.csv", "scanB_export.csv"]
 
 
+def test_export_scans_to_folder_isolates_per_label_failure(
+        tmp_path, monkeypatch):
+    """A scan whose materialize raises is counted skipped, and the batch
+    keeps going for the remaining scans."""
+    db_path = str(tmp_path / "scans.db")
+    _session(db_path, "scanA", 1.0)
+    _session(db_path, "scanB", 2.0)
+    c = _connector(tmp_path, scan_db_path=db_path)
+
+    exported = []
+    import omotion.SessionPlayback as sp
+
+    def _materialize(*a, **k):
+        # a[2] == output_path, ends with "<label>_export.csv"
+        if os.path.basename(a[2]) == "scanA_export.csv":
+            raise RuntimeError("boom")
+        exported.append(a[2])
+
+    monkeypatch.setattr(sp, "materialize_corrected_csv", _materialize)
+
+    res = c.exportScansToFolder(["scanA", "scanB"], str(tmp_path))
+
+    assert res == {"exported": 1, "skipped": 1}
+    assert len(exported) == 1  # scanB still ran after scanA failed
+    assert os.path.basename(exported[0]) == "scanB_export.csv"
+
+
 def test_export_scans_to_folder_empty_inputs(tmp_path):
     c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
     assert c.exportScansToFolder([], str(tmp_path)) == {
