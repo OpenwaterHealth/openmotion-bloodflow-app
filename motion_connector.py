@@ -2623,6 +2623,57 @@ class MotionConnector(QObject):
             self.errorOccurred.emit(f"Export failed:\n{exc}")
             return False
 
+    @pyqtSlot('QStringList', str, result='QVariantMap')
+    def exportScansToFolder(self, labels, folder) -> dict:
+        """Export several scans, one CSV each, into ``folder``.
+
+        Writes ``<folder>/<label>_export.csv`` for every label. Opens
+        the scan DB once for the whole batch. Missing or failing scans
+        are counted as skipped and never raise. Returns
+        ``{"exported": int, "skipped": int}``. (Callers pre-filter
+        interrupted scans, which can't be materialized.)
+        """
+        result = {"exported": 0, "skipped": 0}
+        if not labels or not folder:
+            return result
+        try:
+            import os
+            from omotion.ScanDatabase import ScanDatabase
+            from omotion.SessionPlayback import materialize_corrected_csv
+
+            db_path = getattr(self._interface, "scan_db_path", None)
+            if not db_path:
+                self.errorOccurred.emit("No scan database available.")
+                return result
+            db = ScanDatabase(db_path)
+            for label in labels:
+                try:
+                    session = db.get_session_by_label(label)
+                    if not session:
+                        result["skipped"] += 1
+                        continue
+                    session_id = int(session["id"])
+                    out_path = os.path.join(
+                        folder, f"{label}_export.csv")
+                    materialize_corrected_csv(
+                        str(db_path), session_id, out_path,
+                        include_quality=True,
+                    )
+                    result["exported"] += 1
+                    logger.info(
+                        "exportScansToFolder: exported %r (sid=%d) -> %s",
+                        label, session_id, out_path,
+                    )
+                except Exception:
+                    logger.exception(
+                        "exportScansToFolder: failed for %r", label)
+                    result["skipped"] += 1
+            return result
+        except Exception as exc:
+            logger.exception("exportScansToFolder failed")
+            self.errorOccurred.emit(f"Export failed:\n{exc}")
+            return result
+
     @pyqtSlot(str, result=int)
     @pyqtSlot(str, str, result=int)
     @pyqtSlot(str, str, int, result=int)
