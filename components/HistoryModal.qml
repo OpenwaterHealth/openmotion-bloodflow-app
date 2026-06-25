@@ -154,6 +154,39 @@ Item {
         deletePrompt.open()
     }
 
+    function requestExport() {
+        var rows = checkedRows()
+        if (rows.length === 0) return
+
+        if (rows.length === 1) {
+            // Single export keeps the Save As dialog (lets the user rename).
+            if (rows[0].interrupted) {
+                MotionInterface.notify("Interrupted scans can't be exported.", "warning")
+                return
+            }
+            exportDialog.selectedScanId = rows[0].label
+            exportDialog.selectedFile = "file:///" + MotionInterface.directory
+                                        + "/" + rows[0].label + "_export.csv"
+            exportDialog.open()
+            return
+        }
+
+        // 2+ checked -> pick a destination folder. Interrupted scans can't be
+        // exported, so drop them here and fold them into the skip count.
+        var labels = [], skipped = 0
+        for (var i = 0; i < rows.length; i++) {
+            if (rows[i].interrupted) { skipped += 1; continue }
+            labels.push(rows[i].label)
+        }
+        if (labels.length === 0) {
+            MotionInterface.notify("Interrupted scans can't be exported.", "warning")
+            return
+        }
+        exportFolderDialog.pendingLabels = labels
+        exportFolderDialog.pendingSkipped = skipped
+        exportFolderDialog.open()
+    }
+
     function doDelete() {
         var ids = []
         for (var k in checked) if (checked[k]) ids.push(parseInt(k))
@@ -497,9 +530,9 @@ Item {
 
                 Button {
                     id: exportBtn
-                    text: "Export CSV"
-                    Layout.preferredWidth: 112; Layout.preferredHeight: 36
-                    enabled: root.focusedRow !== null && !root.focusedRow.interrupted
+                    text: "Export CSV" + (root.checkedCount > 0 ? "  (" + root.checkedCount + ")" : "")
+                    Layout.preferredWidth: 128; Layout.preferredHeight: 36
+                    enabled: root.checkedCount > 0
                     hoverEnabled: enabled
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 13
@@ -512,12 +545,7 @@ Item {
                         border.color: exportBtn.enabled ? theme.borderStrong : theme.textTertiary
                         border.width: 1
                     }
-                    onClicked: {
-                        exportDialog.selectedScanId = root.focusedRow.label
-                        exportDialog.selectedFile = "file:///" + MotionInterface.directory
-                                                    + "/" + root.focusedRow.label + "_export.csv"
-                        exportDialog.open()
-                    }
+                    onClicked: root.requestExport()
                 }
                 Button {
                     id: loadBtn
@@ -581,6 +609,24 @@ Item {
             var path = selectedFile.toString().replace("file:///", "")
             var ok = MotionInterface.exportScanCsv(selectedScanId, path)
             if (ok) MotionInterface.notify("Exported to " + path, "success")
+        }
+    }
+
+    Dialogs.FolderDialog {
+        id: exportFolderDialog
+        title: "Export Scans to Folder"
+        currentFolder: MotionInterface.directory
+                       ? ("file:///" + MotionInterface.directory) : ""
+        property var pendingLabels: []
+        property int pendingSkipped: 0
+        onAccepted: {
+            var folder = selectedFolder.toString().replace("file:///", "")
+            var res = MotionInterface.exportScansToFolder(pendingLabels, folder)
+            var ok = (res && res.exported) ? res.exported : 0
+            var sk = pendingSkipped + ((res && res.skipped) ? res.skipped : 0)
+            var msg = "Exported " + ok + " scan(s) to " + folder
+            if (sk > 0) msg += " (" + sk + " skipped)"
+            MotionInterface.notify(msg, ok > 0 ? "success" : "warning")
         }
     }
 
