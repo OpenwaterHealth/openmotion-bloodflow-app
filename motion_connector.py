@@ -6,6 +6,9 @@ from PyQt6.QtCore import (
     QVariant,
     QTimer,
     QRecursiveMutex,
+    QCoreApplication,
+    QMetaObject,
+    Qt,
 )
 from pathlib import Path
 from typing import NamedTuple, Optional
@@ -16,6 +19,7 @@ import threading
 import json
 import csv
 import os
+import sys
 import datetime
 import time
 import random
@@ -23,6 +27,11 @@ import re
 import string
 
 from omotion import MotionInterface
+from omotion.firmware_update import (
+    FirmwareKind,
+    check_latest,
+    is_update_available,
+)
 
 from omotion.config import (
     DEBUG_FLAG_USB_PRINTF,
@@ -31,6 +40,7 @@ from omotion.config import (
     DEBUG_FLAG_HISTO_CMP,
     DEBUG_FLAG_COMM_VERBOSE,
     DEBUG_FLAG_CMD_VERBOSE,
+    DEBUG_FLAG_SEND_DEFER,
 )
 from omotion.MotionProcessing import process_bin_file
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
@@ -46,6 +56,7 @@ import error_codes
 import bug_report
 from nan_gap_tracker import NanGapTracker, gap_note_line
 from utils.resource_path import resource_path
+from utils import config_store
 from data_sources import (
     LiveScanSource, PastScanSource, ScanDataSource, buffers_are_empty,
 )
@@ -80,6 +91,126 @@ _DEVELOPER_PASSWORD = "OpenwaterHealth"
 def developer_password_matches(pw) -> bool:
     """Return True iff ``pw`` equals the developer-mode password."""
     return isinstance(pw, str) and pw == _DEVELOPER_PASSWORD
+
+
+# Flip to True once release builds are Authenticode-signed; until then an
+# unsigned (NotSigned) update bundle is allowed through with a logged warning.
+_REQUIRE_SIGNED_UPDATES = False
+
+
+def _select_update_asset(assets: list, is_ruo: bool):
+    """Return download URL of the Setup bundle matching the running variant.
+
+    RUO builds match ``Openwater-Setup-*_RUO.exe``; clinical builds match
+    the non-RUO ``Openwater-Setup-*.exe``. Returns None if no match.
+    """
+    for asset in assets:
+        name = (asset.get("name") or "")
+        low = name.lower()
+        if not low.endswith(".exe"):
+            continue
+        asset_is_ruo = low.endswith("_ruo.exe")
+        if asset_is_ruo == is_ruo:
+            return asset.get("browser_download_url")
+    return None
+
+
+def _authenticode_status(path: str) -> str:
+    """Return the Authenticode signature status of ``path``.
+
+    Uses PowerShell's Get-AuthenticodeSignature (always present on Windows).
+    Returns one of 'Valid', 'NotSigned', 'HashMismatch', 'UnknownError', ... or
+    'Error' if the check itself could not run.
+    """
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                f"(Get-AuthenticodeSignature -LiteralPath '{path}').Status",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return result.stdout.strip() or "Error"
+    except Exception:
+        return "Error"
+
+
+def _update_decision(status: str, require_signed: bool):
+    """Decide whether to launch the downloaded bundle given its signature.
+
+    Returns (should_launch: bool, error_message: str | None).
+    """
+    if status == "Valid":
+        return True, None
+    if status == "NotSigned":
+        if require_signed:
+            return False, "Update is not signed; refusing to install."
+        return True, None  # transition period: allow with a warning logged
+    return False, f"Update signature check failed: {status}"
+
+
+def _is_bundle_url(url) -> bool:
+    """True if ``url`` is a Setup .exe bundle, not the release HTML page.
+
+    Guards against the GitHub ``html_url`` fallback: without this, a release
+    with no matching installer asset would make the updater download an HTML
+    page and try to execute it.
+    """
+    return isinstance(url, str) and url.lower().endswith(".exe")
+
+
+def _looks_like_pe(head: bytes) -> bool:
+    """True if the bytes start with the 'MZ' signature of a Windows executable.
+
+    A truncated download or an HTML error page will not start with 'MZ', so
+    this rejects corrupt downloads before they are launched.
+    """
+    return head[:2] == b"MZ"
+
+
+def _build_update_helper_script(
+    app_pid: int, installer: str, app_exe: str
+) -> str:
+    """Return a PowerShell script that performs the in-place upgrade handoff.
+
+    The running app cannot upgrade its own files while it holds them, and the
+    Burn bundle does not relaunch the app. So the app spawns this detached
+    helper and then exits; the helper (1) waits for the app to fully exit to
+    avoid a FilesInUse conflict — and force-kills it if it doesn't exit in
+    time, since a wedged GUI thread (e.g. a synchronous SDK/USB call blocking
+    the event loop) can otherwise leave the app alive and stall the whole
+    upgrade, (2) runs the bundle non-interactively (one UAC elevation, no
+    bootstrapper UI), then (3) relaunches the app.
+    """
+    return (
+        "# OpenWater in-app update helper (auto-generated; do not edit)\n"
+        "$ErrorActionPreference = 'SilentlyContinue'\n"
+        f"# 1. Wait for the running app (PID {app_pid}) to exit so the\n"
+        "#    installer can replace its files without a FilesInUse conflict.\n"
+        "#    If it doesn't exit in time (the app may not self-exit under\n"
+        "#    qasync), force-kill it - installing over a live app fails the\n"
+        "#    in-place file swap.\n"
+        "$deadline = (Get-Date).AddSeconds(10)\n"
+        f"while (Get-Process -Id {app_pid} -ErrorAction SilentlyContinue) {{\n"
+        "    if ((Get-Date) -gt $deadline) {\n"
+        f"        Stop-Process -Id {app_pid} -Force -ErrorAction SilentlyContinue\n"
+        "        Start-Sleep -Milliseconds 500\n"
+        "        break\n"
+        "    }\n"
+        "    Start-Sleep -Milliseconds 250\n"
+        "}\n"
+        "# 2. Run the upgrade non-interactively (one UAC elevation).\n"
+        f"Start-Process -FilePath \"{installer}\" "
+        "-ArgumentList '/passive','/norestart' -Wait\n"
+        "# 3. Relaunch the (now-updated) app.\n"
+        f"Start-Process -FilePath \"{app_exe}\"\n"
+    )
 
 
 # Camera-mask → human config name, mirroring CameraSelectionModal's
@@ -692,32 +823,47 @@ class MotionConnector(QObject):
     # Per-device firmware versions, refreshed on every (dis)connect by
     # _log_device_stats. Surfaced to Settings → System Information.
     firmwareVersionsChanged = pyqtSignal()
+    # Firmware autoupdate (developerMode only)
+    firmwareUpdateInfoChanged = pyqtSignal()                # notify for the properties below
+    firmwareUpdateAvailable = pyqtSignal(str, str, str)     # deviceKey, current, latest
+    firmwareUpdateProgress = pyqtSignal(str, str, int, str) # deviceKey, stage, percent(-1=indeterminate), msg
+    firmwareUpdateFinished = pyqtSignal(str, bool, str)     # deviceKey, ok, msg
 
     # App update signals
     updateAvailable = pyqtSignal(str, str)   # (latest_version, download_url)
     updateNotAvailable = pyqtSignal()
     updateCheckFailed = pyqtSignal(str)      # error message
+    updateProgress = pyqtSignal(str)         # human-readable progress status
 
     @staticmethod
     def _default_data_dir() -> str:
         """Return a writable directory for logs and scan data.
 
-        Uses the current working directory when it is writable (typical
-        for development runs).  When cwd is read-only — e.g. ``/`` on
-        macOS when the .app bundle is launched from Finder — falls back
-        to ``~/Documents/OpenWater Bloodflow``.
+        Mirrors ``main.py``: an installed (frozen) build writes under
+        ``%PROGRAMDATA%\\Openwater`` via :func:`app_paths.writable_root` —
+        the same root ``main.py`` uses for logs — instead of the read-only
+        Program Files install dir.  A dev run uses the current working
+        directory when it is writable, falling back to
+        ``~/Documents/Openwater Bloodflow`` when it is not (e.g. ``/`` on a
+        macOS Finder launch).
         """
-        cwd = os.getcwd()
-        if os.access(cwd, os.W_OK):
-            return cwd
+        from utils import app_paths
+        candidate = (
+            str(app_paths.writable_root())
+            if getattr(sys, "frozen", False)
+            else os.getcwd()
+        )
+        if os.access(candidate, os.W_OK):
+            return candidate
         return os.path.join(
-            os.path.expanduser("~"), "Documents", "OpenWater Bloodflow"
+            os.path.expanduser("~"), "Documents", "Openwater Bloodflow"
         )
 
     def __init__(
         self,
         interface: MotionInterface,
         app_config=None,
+        baseline_config=None,
         data_dir=None,
         config_dir="config",
         parent=None,
@@ -730,6 +876,9 @@ class MotionConnector(QObject):
 
         # Store the full config dict — exposed to QML as appConfig property
         self._app_config = dict(cfg)
+        # Shipped baseline (defaults + read-only bundled config); runtime
+        # changes are persisted as a diff against this (see _save_app_config).
+        self._baseline_config = dict(baseline_config or {})
 
         # Bug-report context (see sendBugReport). app_version + log_path come
         # from main.py; support_email / bug_report_smtp from app config.
@@ -794,8 +943,13 @@ class MotionConnector(QObject):
         self._camera_fake_data            = bool(cfg.get("cameraFakeData", False))
         self._histo_throttle              = bool(cfg.get("histoThrottle", False))
         self._histo_cmp                   = bool(cfg.get("histoCmp", False))
+        self._send_data_defer             = bool(cfg.get("deferHistoSend", False))
         self._comm_verbose                = bool(cfg.get("commVerbose", False))
         self._verbose_command_handling    = bool(cfg.get("verboseCommandHandling", False))
+        # Console USB-printf mirror (DEBUG_FLAG_USB_PRINTF). Separate from the
+        # sensor debug flags above — applied to self._interface.console, not the
+        # left/right sensors. See setConsoleDebugLogging.
+        self._console_debug_logging       = bool(cfg.get("consoleDebugLogging", False))
         # Single output root: caller-supplied (from main.py) wins, else
         # dataDirectory from app config, else default (cwd or ~/Documents).
         # All sub-paths (app-logs, scan files, scans.db,
@@ -841,6 +995,16 @@ class MotionConnector(QObject):
         self._firmware_versions: dict[str, str] = {
             "console": "", "left": "", "right": "",
         }
+        # Firmware autoupdate state (developerMode only).
+        self._firmware_latest: dict[str, str] = {"console": "", "left": "", "right": ""}
+        self._firmware_update_available: dict[str, bool] = {
+            "console": False, "left": False, "right": False,
+        }
+        self._firmware_latest_by_kind: dict[str, str] = {}   # "console"/"sensor" -> tag
+        self._firmware_checking_kinds: set = set()           # in-flight network checks
+        self._firmware_check_lock = threading.Lock()         # guards check-then-add on _firmware_checking_kinds
+        self._firmware_check_generation: int = 0
+        self._firmware_update_in_progress: str | None = None # deviceKey being flashed
         # Track console connection time for safety grace period (issue #107 follow-up)
         self._console_connected_at: float | None = None
         # Real-time plot viewer source — assigned at scan start by startCapture.
@@ -1001,6 +1165,8 @@ class MotionConnector(QObject):
             flags |= DEBUG_FLAG_CMD_VERBOSE
         if self._histo_cmp:
             flags |= DEBUG_FLAG_HISTO_CMP
+        if self._send_data_defer:
+            flags |= DEBUG_FLAG_SEND_DEFER
         return flags
 
     def _apply_sensor_debug_flags(self) -> None:
@@ -1046,13 +1212,14 @@ class MotionConnector(QObject):
             logger.info(
                 "Setting debug flags 0x%x on %s sensor "
                 "(debug_logging=%s, fake_data=%s, histoThrottle=%s, histoCmp=%s, "
-                "commVerbose=%s, verboseCommand=%s)",
+                "deferHistoSend=%s, commVerbose=%s, verboseCommand=%s)",
                 flags,
                 side,
                 self._sensor_debug_logging,
                 self._camera_fake_data,
                 getattr(self, "_histo_throttle", False),
                 getattr(self, "_histo_cmp", False),
+                getattr(self, "_send_data_defer", False),
                 getattr(self, "_comm_verbose", False),
                 getattr(self, "_verbose_command_handling", False),
             )
@@ -1247,6 +1414,34 @@ class MotionConnector(QObject):
         """Right sensor firmware version; see consoleFirmwareVersion."""
         return self._firmware_versions["right"]
 
+    @pyqtProperty(bool, notify=firmwareUpdateInfoChanged)
+    def anyFirmwareUpdateAvailable(self) -> bool:
+        return any(self._firmware_update_available.values())
+
+    @pyqtProperty(bool, notify=firmwareUpdateInfoChanged)
+    def consoleFirmwareUpdateAvailable(self) -> bool:
+        return self._firmware_update_available["console"]
+
+    @pyqtProperty(bool, notify=firmwareUpdateInfoChanged)
+    def leftSensorFirmwareUpdateAvailable(self) -> bool:
+        return self._firmware_update_available["left"]
+
+    @pyqtProperty(bool, notify=firmwareUpdateInfoChanged)
+    def rightSensorFirmwareUpdateAvailable(self) -> bool:
+        return self._firmware_update_available["right"]
+
+    @pyqtProperty(str, notify=firmwareUpdateInfoChanged)
+    def consoleFirmwareLatest(self) -> str:
+        return self._firmware_latest["console"]
+
+    @pyqtProperty(str, notify=firmwareUpdateInfoChanged)
+    def leftSensorFirmwareLatest(self) -> str:
+        return self._firmware_latest["left"]
+
+    @pyqtProperty(str, notify=firmwareUpdateInfoChanged)
+    def rightSensorFirmwareLatest(self) -> str:
+        return self._firmware_latest["right"]
+
     @pyqtProperty(bool, notify=consoleFanChanged)
     def consoleFanOn(self) -> bool:
         """Cached last-set console-fan state (True=on). Reflects the
@@ -1281,6 +1476,39 @@ class MotionConnector(QObject):
         except Exception as e:  # noqa: BLE001 — slot must not raise
             logger.error("Error setting console fan: %s", e)
             return False
+
+    @pyqtSlot(bool)
+    def setConsoleDebugLogging(self, on: bool) -> None:
+        """Toggle the console USB-printf debug log (DEBUG_FLAG_USB_PRINTF).
+
+        Persists ``consoleDebugLogging`` and, when the console is connected,
+        pushes the bit live via ``console.enable_usb_printf`` (no restart) —
+        the console analogue of the sensor ``setSensorDebugFlag`` toggles. The
+        firmware flag is RAM-only, so it is also re-applied on every console
+        connect (see the connect handler). When no console is connected the
+        value is still persisted and applies on the next connect. Guarded like
+        ``setConsoleFan`` so a mid-flight disconnect can't raise out of the
+        slot.
+        """
+        on = bool(on)
+        old = self._app_config.get("consoleDebugLogging")
+        self._console_debug_logging = on
+        self._app_config["consoleDebugLogging"] = on
+        self._save_app_config()
+        self.appConfigChanged.emit()
+        if old != on:
+            self._audit.log("settings_changed",
+                            {"changes": {"consoleDebugLogging":
+                                         {"old": old, "new": on}}})
+        if not self._consoleConnected:
+            return
+        try:
+            logger.info("Setting console debug logging %s",
+                        "ON" if on else "OFF")
+            if not self._interface.console.enable_usb_printf(on):
+                logger.warning("Failed to set console debug logging")
+        except Exception as e:  # noqa: BLE001 — slot must not raise
+            logger.error("Error setting console debug logging: %s", e)
 
     @pyqtProperty(bool, notify=laserStateChanged)
     def laserOn(self):
@@ -1399,6 +1627,16 @@ class MotionConnector(QObject):
         is_now_lost = (new == ConnectionState.DISCONNECTED)
         name = handle.name
 
+        # A device we are deliberately flashing drops into DFU and re-enumerates
+        # as a different USB device; that disconnect is expected. Suppress it
+        # entirely (no state mutation, no UI thrash) so the connector's
+        # connected-flags + _state stay consistent until the post-flash
+        # power-cycle reconnect re-runs normal connect handling.
+        if is_now_lost and self._firmware_update_in_progress == name:
+            logger.info("Ignoring expected DFU disconnect for %s during "
+                        "firmware update", name)
+            return
+
         if name == "console":
             self._consoleConnected = is_now_connected
             if is_now_connected:
@@ -1428,6 +1666,14 @@ class MotionConnector(QObject):
                         self.consoleFanChanged.emit()
                     else:
                         logger.error("Failed to set console fan speed")
+                    # Re-apply the console debug-log flag — it is RAM-only on
+                    # the MCU, so it resets across reconnects/power-cycles.
+                    # Default-off needs no action (firmware default is off).
+                    if self._console_debug_logging:
+                        if self._interface.console.enable_usb_printf(True):
+                            logger.info("Console debug logging re-enabled")
+                        else:
+                            logger.error("Failed to re-enable console debug logging")
                     # Apply laser-power params once per console connect —
                     # the FPGA registers are volatile across power cycles,
                     # so every (re)connect needs them. Scans no longer
@@ -1496,6 +1742,10 @@ class MotionConnector(QObject):
             if name in self._firmware_versions and self._firmware_versions[name]:
                 self._firmware_versions[name] = ""
                 self.firmwareVersionsChanged.emit()
+            if self._firmware_update_available.get(name):
+                self._firmware_update_available[name] = False
+                self._firmware_latest[name] = ""
+                self.firmwareUpdateInfoChanged.emit()
             # Abort an in-flight FPGA flash / sensor-configure pipeline.
             # The SDK does not subscribe to disconnect events for the
             # configure-cameras flow (only start_scan does), so without
@@ -1549,6 +1799,167 @@ class MotionConnector(QObject):
         if name in self._firmware_versions:
             self._firmware_versions[name] = fw
             self.firmwareVersionsChanged.emit()
+        self._maybe_check_firmware_update(name)
+
+    @staticmethod
+    def _kind_for_device(name: str) -> FirmwareKind:
+        return FirmwareKind.CONSOLE if name == "console" else FirmwareKind.SENSOR
+
+    @staticmethod
+    def _devices_for_kind(kind: FirmwareKind) -> list[str]:
+        return ["console"] if kind == FirmwareKind.CONSOLE else ["left", "right"]
+
+    def _maybe_check_firmware_update(self, name: str) -> None:
+        """If developerMode, ensure this device's firmware-update availability
+        is computed — reusing a cached 'latest' for the kind, or kicking one
+        background GitHub check per kind per session."""
+        if not self._app_config.get("developerMode", False):
+            return
+        if name not in self._firmware_versions or not self._firmware_versions[name]:
+            return
+        kind = self._kind_for_device(name)
+        if self._firmware_latest_by_kind.get(kind.value):
+            self._recompute_firmware_update(name)   # latest already known; no network
+            return
+        with self._firmware_check_lock:
+            if kind in self._firmware_checking_kinds:
+                return                              # a check is already in flight
+            self._firmware_checking_kinds.add(kind)
+        threading.Thread(
+            target=self._firmware_check_worker,
+            args=(kind, self._firmware_check_generation),
+            daemon=True,
+        ).start()
+
+    def _firmware_check_worker(self, kind: FirmwareKind, generation: int | None = None) -> None:
+        try:
+            beta = self._app_config.get("downloadBetaFirmware", False)
+            info = check_latest(kind, include_prerelease=beta)
+        except Exception:                           # defensive; check_latest is fail-soft
+            info = None
+        finally:
+            self._firmware_checking_kinds.discard(kind)
+        if info is None:
+            return                                  # leave kind unchecked so it retries
+        # A beta toggle (or other refresh) bumps the generation; a worker that
+        # started under an older generation captured a now-stale beta flag, so
+        # discard its result rather than clobber the fresh one.
+        if generation is not None and generation != self._firmware_check_generation:
+            return
+        self._firmware_latest_by_kind[kind.value] = info.tag
+        for dev in self._devices_for_kind(kind):
+            self._recompute_firmware_update(dev)
+
+    def _recompute_firmware_update(self, name: str) -> None:
+        if not self._firmware_versions.get(name):
+            return  # device not connected / version unknown — nothing to recompute
+        kind = self._kind_for_device(name)
+        installed = self._firmware_versions.get(name, "")
+        latest = self._firmware_latest_by_kind.get(kind.value, "")
+        beta = self._app_config.get("downloadBetaFirmware", False)
+        avail = (bool(installed) and bool(latest)
+                 and is_update_available(installed, latest, prerelease=beta))
+        self._firmware_latest[name] = latest
+        self._firmware_update_available[name] = avail
+        self.firmwareUpdateInfoChanged.emit()
+        if avail:
+            logger.info("Firmware update available for %s: %s -> %s",
+                        name, installed, latest)
+            self.firmwareUpdateAvailable.emit(name, installed, latest)
+
+    def _refresh_firmware_update_check(self) -> None:
+        """Invalidate the firmware-latest caches and re-run detection for every
+        connected device — called when downloadBetaFirmware toggles so the
+        banner/Settings card reflect the new release pool immediately."""
+        self._firmware_latest_by_kind.clear()
+        self._firmware_checking_kinds.clear()
+        self._firmware_check_generation += 1
+        for name in ("console", "left", "right"):
+            self._firmware_latest[name] = ""
+            self._firmware_update_available[name] = False
+        self.firmwareUpdateInfoChanged.emit()
+        for name in ("console", "left", "right"):
+            if self._firmware_versions.get(name):
+                self._maybe_check_firmware_update(name)
+
+    @pyqtSlot(str, result=bool)
+    def startFirmwareUpdate(self, device_key: str) -> bool:
+        """Download the latest firmware for device_key and flash it over DFU.
+        developerMode-only; refused during a scan or while another update runs."""
+        if device_key not in ("console", "left", "right"):
+            return False
+        if not self._app_config.get("developerMode", False):
+            return False
+        if self._state == RUNNING or self._running:
+            self.firmwareUpdateFinished.emit(
+                device_key, False, "Cannot update firmware during a scan.")
+            return False
+        if self._firmware_update_in_progress is not None:
+            self.firmwareUpdateFinished.emit(
+                device_key, False, "Another firmware update is in progress.")
+            return False
+        if not self._firmware_update_available.get(device_key, False):
+            self.firmwareUpdateFinished.emit(
+                device_key, False, "No update available for this device.")
+            return False
+        self._firmware_update_in_progress = device_key
+        threading.Thread(
+            target=self._firmware_update_worker, args=(device_key,), daemon=True
+        ).start()
+        return True
+
+    def _firmware_update_worker(self, device_key: str) -> None:
+        import tempfile
+        from omotion.firmware_update import FirmwareUpdater, download_firmware
+
+        ok, msg = False, ""
+        try:
+            kind = self._kind_for_device(device_key)
+            self.firmwareUpdateProgress.emit(
+                device_key, "check", -1, "Checking latest release…")
+            beta = self._app_config.get("downloadBetaFirmware", False)
+            info = check_latest(kind, include_prerelease=beta)
+            if info is None:
+                raise RuntimeError("Could not reach GitHub to fetch firmware.")
+            self.firmwareUpdateProgress.emit(
+                device_key, "download", -1, f"Downloading {info.tag}…")
+            dest = Path(tempfile.gettempdir()) / "om-firmware"
+            bin_path = download_firmware(info, dest)
+
+            handle = getattr(self._interface, device_key, None)
+            if handle is None:
+                raise RuntimeError("Device handle unavailable.")
+
+            def _prog(p) -> None:
+                pct = p.percent if p.percent is not None else -1
+                # Emit a clean per-phase label — do NOT forward dfu-util's raw
+                # output line, which embeds an ASCII progress bar ("[===   ]")
+                # whose trailing text shifts as it fills and jitters in the UI.
+                label = {"erase": "Erasing", "download": "Writing"}.get(
+                    p.phase, str(p.phase).capitalize())
+                self.firmwareUpdateProgress.emit(device_key, p.phase, pct, label)
+
+            self.firmwareUpdateProgress.emit(
+                device_key, "flash", -1, "Entering DFU and flashing…")
+            result = FirmwareUpdater().update(handle, bin_path, progress_cb=_prog)
+            ok = bool(result.success)
+            # Phase 0 finding: dfu-util's leave does NOT reset the STM32 — the
+            # device hangs non-enumerating until a manual power-cycle, then
+            # reconnects (~20-30 s) and Task 7's connect-time check clears the
+            # banner. So success means "written; now power-cycle", not "done".
+            msg = ("Firmware written. Power-cycle the device now — it will "
+                   "reconnect with the new version shortly.") if ok else \
+                  "dfu-util reported a failure."
+        except Exception as e:                       # noqa: BLE001 - reported to UI
+            logger.exception("Firmware update failed for %s", device_key)
+            ok, msg = False, str(e)
+        finally:
+            self._firmware_update_in_progress = None
+            # Force re-detection so the banner/card clear once the new version
+            # is read back after the device re-enumerates.
+            self._firmware_latest_by_kind.pop(
+                self._kind_for_device(device_key).value, None)
+            self.firmwareUpdateFinished.emit(device_key, ok, msg)
 
     def update_state(self):
         """Update system state based on connection and configuration."""
@@ -2185,22 +2596,13 @@ class MotionConnector(QObject):
     def appConfig(self):
         return self._app_config
 
-    # Config keys that must always be stored as plain integers
-    _INT_CONFIG_KEYS = {"leftMask", "rightMask"}
-
     def _save_app_config(self):
-        """Write the in-memory config dict back to app_config.json."""
-        config_path = resource_path("config", "app_config.json")
-        # Coerce mask fields to int — QML passes JS numbers as Python float
-        out = dict(self._app_config)
-        for key in self._INT_CONFIG_KEYS:
-            if key in out and out[key] is not None:
-                out[key] = int(out[key])
-        try:
-            with open(config_path, "w", encoding="utf-8") as f:
-                json.dump(out, f, indent=2)
-        except OSError as e:
-            logger.warning(f"[Connector] Could not write app_config.json: {e}")
+        """Persist runtime config changes as a diff vs the shipped baseline.
+
+        Writes only changed keys to the writable app_config.local.json under
+        %PROGRAMDATA%, never the read-only bundled config in Program Files.
+        """
+        config_store.save_overrides(self._app_config, self._baseline_config)
 
     @pyqtSlot(str, result=bool)
     def checkDeveloperPassword(self, pw: str) -> bool:
@@ -2226,6 +2628,8 @@ class MotionConnector(QObject):
         if old != value:
             self._audit.log("settings_changed",
                             {"changes": {key: {"old": old, "new": value}}})
+        if key == "downloadBetaFirmware" and old != value:
+            self._refresh_firmware_update_check()
 
     @pyqtSlot('QVariantMap')
     def saveConfigs(self, configs: dict):
@@ -2241,6 +2645,8 @@ class MotionConnector(QObject):
         logger.debug(f"[Connector] Config saved: {sorted(configs.keys())}")
         if changes:
             self._audit.log("settings_changed", {"changes": changes})
+        if "downloadBetaFirmware" in changes:
+            self._refresh_firmware_update_check()
 
     # Sensor debug-flag config keys surfaced as live Settings → Developer
     # toggles, mapped to the runtime cache attribute that
@@ -4692,7 +5098,14 @@ class MotionConnector(QObject):
         import urllib.request
         from version import get_version
 
-        api_url = f"https://api.github.com/repos/{self._GITHUB_REPO}/releases/latest"
+        # ``updateRepo`` points the check at a staging/mirror repo; the broader
+        # ``updateApiUrl`` fully overrides the releases-latest endpoint (used by
+        # the local fake-releases server for offline end-to-end update testing).
+        # Both absent => the production GitHub repo.
+        repo = self._app_config.get("updateRepo") or self._GITHUB_REPO
+        api_url = self._app_config.get("updateApiUrl") or (
+            f"https://api.github.com/repos/{repo}/releases/latest"
+        )
         try:
             req = urllib.request.Request(api_url, headers={"Accept": "application/vnd.github+json"})
             with urllib.request.urlopen(req, timeout=10) as resp:
@@ -4703,23 +5116,33 @@ class MotionConnector(QObject):
                 self.updateCheckFailed.emit("Could not determine latest release tag.")
                 return
 
-            # Find the .zip asset download URL
-            download_url = data.get("html_url", "")
-            for asset in data.get("assets", []):
-                if asset["name"].endswith(".zip"):
-                    download_url = asset["browser_download_url"]
-                    break
+            # Find the Setup bundle matching this build's variant.
+            # reducedMode True = clinical build; False = RUO/full build.
+            is_ruo = not bool(self._app_config.get("reducedMode", False))
+            download_url = _select_update_asset(data.get("assets", []), is_ruo)
 
             local_version = get_version()
             # Strip local metadata for comparison (e.g. "+3.gabc1234.dirty")
             local_base = local_version.split("+")[0]
 
-            if self._version_newer(remote_tag, local_base):
-                logger.info(f"Update available: {remote_tag} (current: {local_base})")
-                self.updateAvailable.emit(remote_tag, download_url)
-            else:
+            if not self._version_newer(remote_tag, local_base):
                 logger.info(f"App is up to date ({local_base} >= {remote_tag})")
                 self.updateNotAvailable.emit()
+            elif not _is_bundle_url(download_url):
+                # Newer release exists but has no matching installer asset
+                # (e.g. assets still uploading) -- don't offer an in-place
+                # update we can't actually perform.
+                logger.warning(
+                    "Update %s available but no installer asset found",
+                    remote_tag,
+                )
+                self.updateNotAvailable.emit()
+            else:
+                logger.info(
+                    "Update available: %s (current: %s)",
+                    remote_tag, local_base,
+                )
+                self.updateAvailable.emit(remote_tag, download_url)
 
         except Exception as e:
             logger.warning(f"Update check failed: {e}")
@@ -4762,3 +5185,120 @@ class MotionConnector(QObject):
         """Open the download URL in the system browser."""
         import webbrowser
         webbrowser.open(url)
+
+    @pyqtSlot(str)
+    def applyUpdate(self, download_url: str):
+        """Download the update bundle, verify it, and launch the upgrade.
+
+        Guarded against re-entry so repeated clicks can't spawn racing
+        download threads against the same file.
+        """
+        if getattr(self, "_update_in_progress", False):
+            logger.info("Update already in progress; ignoring repeat request")
+            return
+        self._update_in_progress = True
+        t = threading.Thread(
+            target=self._apply_update_worker, args=(download_url,), daemon=True
+        )
+        t.start()
+
+    def _apply_update_worker(self, download_url: str):
+        import urllib.request
+        import subprocess
+        import sys
+        from utils import app_paths
+
+        try:
+            if not _is_bundle_url(download_url):
+                self.updateCheckFailed.emit("No installer for this update.")
+                return
+
+            updates_dir = app_paths.writable_root() / "updates"
+            updates_dir.mkdir(parents=True, exist_ok=True)
+            # Clear stale downloads so old installers don't accumulate.
+            for stale in updates_dir.glob("*"):
+                try:
+                    stale.unlink()
+                except OSError:
+                    pass
+
+            dest = updates_dir / download_url.rsplit("/", 1)[-1]
+            self.updateProgress.emit("Downloading update…")
+            logger.info("Downloading update %s -> %s", download_url, dest)
+            urllib.request.urlretrieve(download_url, str(dest))
+
+            # Reject truncated / non-executable downloads before launching.
+            with open(dest, "rb") as f:
+                head = f.read(2)
+            if not _looks_like_pe(head):
+                self.updateCheckFailed.emit(
+                    "Downloaded update is not a valid installer."
+                )
+                return
+
+            status = _authenticode_status(str(dest))
+            should_launch, error = _update_decision(
+                status, _REQUIRE_SIGNED_UPDATES
+            )
+            if not should_launch:
+                self.updateCheckFailed.emit(error)
+                return
+            if status == "NotSigned":
+                logger.warning(
+                    "Update bundle not signed (transition); proceeding"
+                )
+
+            # The app cannot replace its own running files, and the Burn
+            # bundle does not relaunch the app. So write a detached helper
+            # that waits for us to exit, runs the bundle silently, then
+            # relaunches the (now-updated) app. Then quit.
+            helper = updates_dir / "update_helper.ps1"
+            helper.write_text(
+                _build_update_helper_script(
+                    os.getpid(), str(dest), sys.executable
+                ),
+                encoding="utf-8",
+            )
+            self.updateProgress.emit("Installing update…")
+            logger.info("Spawning update helper; quitting for upgrade")
+            # NB: DETACHED_PROCESS leaves powershell with no console and no std
+            # handles, so it dies instantly WITHOUT running the script (verified
+            # in isolation — the helper never executed, which is why earlier
+            # upgrades silently never installed). CREATE_NO_WINDOW gives it a
+            # hidden console and DEVNULL std handles, so the detached helper
+            # actually runs.
+            subprocess.Popen(
+                [
+                    "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                    "-File", str(helper),
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            # Ask Qt to shut down gracefully (aboutToQuit -> handle_exit stops
+            # the hardware monitor, releases the USB transport, flushes the
+            # audit log). This runs on a worker thread, so DO NOT call
+            # QCoreApplication.quit() directly: under qasync a cross-thread
+            # quit() blocks inside the C++ call while HOLDING the GIL, which
+            # freezes the whole process — every thread, including any hard-exit
+            # backstop, starves (confirmed via py-spy). Post the quit to the
+            # main thread instead; QueuedConnection just enqueues an event and
+            # returns immediately, so this worker never blocks. If graceful
+            # teardown stalls or qasync ignores the quit, the detached helper
+            # force-kills us after its grace window and the upgrade proceeds
+            # regardless — so we don't rely on the app exiting itself.
+            QMetaObject.invokeMethod(
+                QCoreApplication.instance(),
+                "quit",
+                Qt.ConnectionType.QueuedConnection,
+            )
+        except Exception as e:
+            logger.error("applyUpdate failed: %s", e)
+            self.updateCheckFailed.emit(str(e))
+        finally:
+            # Cleared so a failed attempt can be retried (on success the app
+            # is already quitting).
+            self._update_in_progress = False

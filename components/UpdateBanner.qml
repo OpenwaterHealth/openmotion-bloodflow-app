@@ -23,6 +23,10 @@ Rectangle {
 
     property string latestVersion: ""
     property string downloadUrl: ""
+    // True from the moment Update is clicked until the download/install
+    // either fails or the app quits for the in-place upgrade.
+    property bool updating: false
+    property string statusText: "Update"
 
     color: theme.accentBlue
     radius: 0
@@ -58,7 +62,7 @@ Rectangle {
             Text {
                 id: downloadBtn
                 anchors.centerIn: parent
-                text: "Download"
+                text: banner.updating ? banner.statusText : "Update"
                 color: theme.accentBlue
                 font.pixelSize: 12
                 font.weight: Font.DemiBold
@@ -66,10 +70,18 @@ Rectangle {
 
             MouseArea {
                 anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
+                enabled: !banner.updating
+                cursorShape: banner.updating ? Qt.ArrowCursor : Qt.PointingHandCursor
                 hoverEnabled: true
-                onClicked: MotionInterface.openDownloadUrl(banner.downloadUrl)
-                onContainsMouseChanged: parent.color = containsMouse ? "#E0E0E0" : "#FFFFFF"
+                // Guard against double-clicks spawning racing downloads; the
+                // connector also guards re-entry, this just reflects it in UI.
+                onClicked: {
+                    banner.updating = true
+                    banner.statusText = "Starting…"
+                    MotionInterface.applyUpdate(banner.downloadUrl)
+                }
+                onContainsMouseChanged: parent.color =
+                    (containsMouse && !banner.updating) ? "#E0E0E0" : "#FFFFFF"
             }
         }
 
@@ -108,6 +120,15 @@ Rectangle {
             banner.latestVersion = version
             banner.downloadUrl = url
             banner.shown = true
+        }
+        // Reflect download/install progress on the button.
+        function onUpdateProgress(message) {
+            banner.statusText = message
+        }
+        // Re-enable the button so a failed update can be retried.
+        function onUpdateCheckFailed(error) {
+            banner.updating = false
+            banner.statusText = "Update"
         }
     }
 

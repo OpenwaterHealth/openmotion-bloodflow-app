@@ -1,0 +1,44 @@
+<!-- installer/app.wxs — packages dist\OpenWaterApp\ into Program Files. -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="$(var.ProductName)"
+           Manufacturer="Openwater"
+           Version="$(var.Version)"
+           UpgradeCode="$(var.UpgradeCode)"
+           Scope="perMachine"
+           Compressed="yes">
+
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="VENDORFOLDER" Name="Openwater">
+        <Directory Id="APPFOLDER" Name="Bloodflow" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="AppShortcutFolder" Name="$(var.ProductName)" />
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="$(var.ProductName)" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="AppShortcut" />
+    </Feature>
+
+    <!-- Harvest the entire PyInstaller one-folder output. -->
+    <ComponentGroup Id="AppFiles" Directory="APPFOLDER">
+      <Files Include="$(var.SourceDir)\**" />
+    </ComponentGroup>
+
+    <Component Id="AppShortcut" Directory="AppShortcutFolder" Guid="*">
+      <Shortcut Id="StartMenuShortcut"
+                Name="$(var.ProductName)"
+                Target="[APPFOLDER]OpenWaterApp.exe"
+                WorkingDirectory="APPFOLDER" />
+      <RemoveFolder Id="RemoveAppShortcutFolder" On="uninstall" />
+      <RegistryValue Root="HKLM" Key="Software\Openwater\Bloodflow"
+                     Name="installed" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+  </Package>
+</Wix>
