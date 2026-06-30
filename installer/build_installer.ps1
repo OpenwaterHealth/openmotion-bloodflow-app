@@ -101,7 +101,11 @@ if ((Get-Item $appMsi).Length -lt 1MB) {
 powershell -NoProfile -File installer\sign.ps1 -Files $appMsi
 
 # -- build the Burn bundle --
+# -bindpath installer so the custom BA ThemeFile/LocalizationFile payloads
+# (bundle-theme.xml/.wxl) resolve; WiX searches bind paths (default cwd=repo
+# root), NOT the .wxs directory, for payload source files.
 wix build installer\bundle.wxs -o $bundleExe -ext WixToolset.BootstrapperApplications.wixext `
+    -bindpath installer `
     -d "ProductName=$($g.ProductName)" `
     -d "Version=$version" `
     -d "BundleUpgradeCode=$($g.BundleUpgradeCode)" `
