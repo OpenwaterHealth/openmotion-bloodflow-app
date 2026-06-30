@@ -72,9 +72,12 @@ if (-not (Test-Path (Join-Path $DistAbs 'OpenWaterApp.exe'))) {
 # into the bundled config BEFORE wix runs. Mirrors build_and_zip.ps1's _RUO
 # flip: clinical keeps reducedMode=true (reduced clinical UI), RUO sets it
 # false (full research UI). We set it explicitly per variant so repeated
-# builds against one dist are always correct regardless of prior state.
-# Write UTF-8 *without* BOM — the app's json.load fails silently on a BOM and
-# falls back to defaults.
+# builds against one dist are always correct regardless of prior state —
+# including when scripts/package_artifacts.ps1 already staged the same value
+# before invoking us (the re-apply is an idempotent no-op, not a bug). This
+# self-contained flip is also what lets build_installer.ps1 be run standalone.
+# Set-ReducedMode writes UTF-8 *without* BOM — the app's json.load fails
+# silently on a BOM and falls back to defaults.
 $cfgPath = Join-Path $DistAbs "_internal\config\app_config.json"
 . (Join-Path $root "scripts\build_common.ps1")
 $reduced = ($Variant -ne "ruo")   # clinical => reducedMode true; ruo => false
