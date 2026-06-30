@@ -14,7 +14,16 @@ pip install -e ../openmotion-sdk
 python main.py                          # run the app
 
 python -m PyInstaller -y openwater.spec # package .exe → dist/OpenWaterApp/
-.\build_and_zip.ps1                     # CI packaging wrapper
+.\build_and_zip.ps1                     # build + package all 4 artifacts
+
+# 4 artifacts: Clinical/Research × Portable/Installer
+#   OpenMotion-Bloodflow-<ver>.zip      (Clinical portable)
+#   OpenMotion-Bloodflow-<ver>_RUO.zip  (Research portable)
+#   build/installer/Openwater-Setup-<ver>.exe      (Clinical installer)
+#   build/installer/Openwater-Setup-<ver>_RUO.exe  (Research installer)
+# build_and_zip.ps1 runs PyInstaller once, then scripts/package_artifacts.ps1
+# loops the variants. Installers are skipped with a warning if WiX isn't found;
+# scripts/package_artifacts.ps1 -SkipInstaller forces portable-only.
 ```
 
 - Tested on **Python 3.13.5**; `requirements.txt` pins PyQt6 6.8.0, qasync 0.27.1, pandas, numpy, matplotlib, pyusb, libusb1, PyInstaller 6.11.1, flake8 7.1.1.
