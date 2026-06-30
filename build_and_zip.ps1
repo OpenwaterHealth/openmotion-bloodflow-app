@@ -51,13 +51,9 @@ if (-not (Test-Path $SpecFile)) {
 
 Write-Host "=== Building with PyInstaller ===" -ForegroundColor Cyan
 
-# Determine version from git tags
-try {
-    $GitVersion = (git describe --tags --dirty --always --long 2>$null).Trim()
-    if (-not $GitVersion) { throw "empty" }
-} catch {
-    $GitVersion = "dev-$(Get-Date -Format 'yyyyMMdd_HHmmss')"
-}
+# Determine version from git tags (shared helper)
+. (Join-Path $PSScriptRoot "scripts\build_common.ps1")
+$GitVersion = (Get-BuildVersion).Full
 Write-Host "Version: $GitVersion" -ForegroundColor Yellow
 
 # Stamp _FALLBACK_VERSION in version.py so the frozen exe uses the right version
@@ -74,35 +70,13 @@ if (-not (Test-Path "dist\$AppName")) {
     throw "Build failed: dist\$AppName not found. Check your spec name and exe name."
 }
 
-$ZipName = "$AppName-$GitVersion.zip"
-
-Write-Host "=== Creating zip: $ZipName ===" -ForegroundColor Cyan
-Compress-Archive -Path "dist\$AppName\*" -DestinationPath $ZipName -Force
-
-# Build a second artifact with reducedMode flipped to false, for RUO distribution
-$RuoZipName = "$AppName-${GitVersion}_RUO.zip"
-$configPath = "dist\$AppName\_internal\config\app_config.json"
-if (-not (Test-Path $configPath)) {
-    throw "RUO build failed: bundled config not found at $configPath."
-}
-
-Write-Host "=== Creating RUO zip: $RuoZipName ===" -ForegroundColor Cyan
-$origConfig = Get-Content -Raw $configPath
-$ruoConfig = $origConfig -replace '"reducedMode"\s*:\s*true', '"reducedMode": false'
-if ($ruoConfig -eq $origConfig) {
-    throw "RUO build failed: did not find 'reducedMode: true' in $configPath to flip."
-}
-Set-Content -Path $configPath -Value $ruoConfig -Encoding UTF8 -NoNewline
-try {
-    Compress-Archive -Path "dist\$AppName\*" -DestinationPath $RuoZipName -Force
-} finally {
-    Set-Content -Path $configPath -Value $origConfig -Encoding UTF8 -NoNewline
-}
+# Package all 4 artifacts (Clinical/Research x Portable/Installer) via the shared
+# orchestrator. Installers are skipped with a warning if WiX isn't installed.
+& (Join-Path $PSScriptRoot "scripts\package_artifacts.ps1") -DistDir "dist\$AppName" -Version $GitVersion
+if ($LASTEXITCODE -ne 0) { throw "package_artifacts failed" }
 
 Write-Host "=== Build complete ===" -ForegroundColor Green
-Write-Host "ZIP file: $ZipName" -ForegroundColor Green
-Write-Host "RUO ZIP file: $RuoZipName" -ForegroundColor Green
 
 if ($OpenFolder) {
-    Start-Process explorer.exe "/select,$(Resolve-Path $ZipName)"
+    Start-Process explorer.exe (Split-Path -Parent $MyInvocation.MyCommand.Definition)
 }

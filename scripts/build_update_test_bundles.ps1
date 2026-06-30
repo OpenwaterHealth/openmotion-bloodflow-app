@@ -36,12 +36,17 @@ function Build-RuoBundle([string]$ver, [string]$apiUrl) {
     try {
         & conda run -n $CondaEnv python -m PyInstaller -y openwater.spec
         if (-not (Test-Path "dist\OpenWaterApp\OpenWaterApp.exe")) { throw "dist missing after PyInstaller" }
-        # RUO (reducedMode:false) + optional updateApiUrl injection, via JSON (no BOM)
-        $py = "import json; p='dist/OpenWaterApp/_internal/config/app_config.json'; " +
-              "d=json.load(open(p,encoding='utf-8')); d['reducedMode']=False; "
-        if ($apiUrl) { $py += "d['updateApiUrl']='$apiUrl'; " }
-        $py += "json.dump(d, open(p,'w',encoding='utf-8'), indent=2)"
-        & conda run -n $CondaEnv python -c $py
+        # RUO (reducedMode:false) via the shared helper; optional updateApiUrl
+        # injection stays a JSON round-trip (no BOM, preserves the false above).
+        $cfgPath = "dist\OpenWaterApp\_internal\config\app_config.json"
+        . (Join-Path $PSScriptRoot "build_common.ps1")
+        [void](Set-ReducedMode -ConfigPath $cfgPath -Reduced $false)
+        if ($apiUrl) {
+            $py = "import json; p='dist/OpenWaterApp/_internal/config/app_config.json'; " +
+                  "d=json.load(open(p,encoding='utf-8')); d['updateApiUrl']='$apiUrl'; " +
+                  "json.dump(d, open(p,'w',encoding='utf-8'), indent=2)"
+            & conda run -n $CondaEnv python -c $py
+        }
         & powershell -NoProfile -ExecutionPolicy Bypass -File installer\build_installer.ps1 -Variant ruo -Version $ver
         if ($LASTEXITCODE -ne 0) { throw "build_installer failed for $ver" }
     } finally {
