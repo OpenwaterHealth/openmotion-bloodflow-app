@@ -109,29 +109,6 @@ jobs:
           wix extension add -g WixToolset.BootstrapperApplications.wixext/5.0.2
           echo "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Append
 
-      - name: Build clinical installer
-        shell: pwsh
-        env:
-          CODESIGN_THUMBPRINT: ${{ secrets.CODESIGN_THUMBPRINT }}
-        run: |
-          powershell -NoProfile -File installer\build_installer.ps1 -Variant clinical
-
-      - name: Build RUO installer
-        shell: pwsh
-        env:
-          CODESIGN_THUMBPRINT: ${{ secrets.CODESIGN_THUMBPRINT }}
-        run: |
-          $cfg = "dist\OpenWaterApp\_internal\config\app_config.json"
-          $orig = Get-Content -Raw $cfg
-          $ruo = $orig -replace '"reducedMode"\s*:\s*true', '"reducedMode": false'
-          if ($ruo -eq $orig) { throw "RUO build: did not find reducedMode: true to flip" }
-          Set-Content -Path $cfg -Value $ruo -Encoding UTF8 -NoNewline
-          try {
-            powershell -NoProfile -File installer\build_installer.ps1 -Variant ruo
-          } finally {
-            Set-Content -Path $cfg -Value $orig -Encoding UTF8 -NoNewline
-          }
-
       # ── package ──────────────────────────────────────────────────
       - name: Determine version tag
         id: meta
@@ -158,30 +135,12 @@ jobs:
 
           echo "::notice ::Version tag resolved to: ${TAG}"
 
-      - name: Zip build output
+      - name: Package all artifacts (zips + installers, clinical + RUO)
         shell: pwsh
+        env:
+          CODESIGN_THUMBPRINT: ${{ secrets.CODESIGN_THUMBPRINT }}
         run: |
-          Compress-Archive -Path dist\* -DestinationPath "${{ steps.meta.outputs.ARTIFACT_ZIP }}"
-
-      # ── RUO variant: same bits with reducedMode flipped to false ─
-      - name: Zip RUO build output
-        shell: pwsh
-        run: |
-          $configPath = "dist\OpenWaterApp\_internal\config\app_config.json"
-          if (-not (Test-Path $configPath)) {
-              throw "RUO build failed: bundled config not found at $configPath."
-          }
-          $orig = Get-Content -Raw $configPath
-          $ruo = $orig -replace '"reducedMode"\s*:\s*true', '"reducedMode": false'
-          if ($ruo -eq $orig) {
-              throw "RUO build failed: did not find 'reducedMode: true' in $configPath to flip."
-          }
-          Set-Content -Path $configPath -Value $ruo -Encoding UTF8 -NoNewline
-          try {
-              Compress-Archive -Path dist\* -DestinationPath "${{ steps.meta.outputs.ARTIFACT_ZIP_RUO }}"
-          } finally {
-              Set-Content -Path $configPath -Value $orig -Encoding UTF8 -NoNewline
-          }
+          powershell -NoProfile -File scripts\package_artifacts.ps1 -Version "${{ steps.meta.outputs.TAG }}"
 
       # ── always upload workflow artifact ──────────────────────────
       - name: Upload workflow artifact
