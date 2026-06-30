@@ -174,6 +174,22 @@ def _load_app_config() -> dict:
 
 
 def main():
+    # Set the Windows AppUserModelID as the very first thing, before any
+    # QApplication (and thus any HWND) is created. Windows binds the taskbar
+    # button to the process identity when the first window appears; setting
+    # this after QApplication() races the shell and intermittently leaves the
+    # taskbar showing the generic Windows icon (Explorer caches one icon per
+    # AUMID). This must run before check_single_instance()'s message box too.
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "OpenwaterHealth.BloodflowApp"
+            )
+        except Exception:
+            pass  # Ignore if not available
+
     # Check if another instance is already running
     if not check_single_instance():
         # Create a minimal QApplication to show message box
@@ -265,17 +281,8 @@ def main():
 
     app = QApplication(sys.argv)
 
-    # Windows-specific: Set application user model ID for proper taskbar grouping
-    if sys.platform == "win32":
-        try:
-            import ctypes
-
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-                "OpenwaterHealth.BloodflowApp"
-            )
-        except Exception:
-            pass  # Ignore if not available
-
+    # AppUserModelID is set at the top of main() (before any QApplication /
+    # HWND exists) so the taskbar icon binds reliably.
     icon_path = str(resource_path("assets", "images", "favicon.ico"))
     app.setWindowIcon(QIcon(icon_path))
 
