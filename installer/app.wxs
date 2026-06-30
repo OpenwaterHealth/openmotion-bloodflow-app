@@ -21,9 +21,16 @@
       <Directory Id="AppShortcutFolder" Name="$(var.ProductName)" />
     </StandardDirectory>
 
+    <StandardDirectory Id="DesktopFolder" />
+
+    <!-- Desktop-shortcut opt-in. Set by the bundle's checkbox (default 1); the
+         default here also makes a direct MSI install create the shortcut. -->
+    <Property Id="INSTALLDESKTOPSHORTCUT" Value="1" />
+
     <Feature Id="Main" Title="$(var.ProductName)" Level="1">
       <ComponentGroupRef Id="AppFiles" />
       <ComponentRef Id="AppShortcut" />
+      <ComponentRef Id="DesktopShortcut" />
     </Feature>
 
     <!-- Harvest the entire PyInstaller one-folder output. -->
@@ -39,6 +46,18 @@
       <RemoveFolder Id="RemoveAppShortcutFolder" On="uninstall" />
       <RegistryValue Root="HKLM" Key="Software\Openwater\Bloodflow"
                      Name="installed" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <!-- Optional desktop shortcut (All Users desktop, since perMachine). Only
+         installed when the bundle checkbox / INSTALLDESKTOPSHORTCUT is set. -->
+    <Component Id="DesktopShortcut" Directory="DesktopFolder" Guid="*"
+               Condition="INSTALLDESKTOPSHORTCUT = &quot;1&quot;">
+      <Shortcut Id="DesktopShortcutLink"
+                Name="$(var.ProductName)"
+                Target="[APPFOLDER]OpenWaterApp.exe"
+                WorkingDirectory="APPFOLDER" />
+      <RegistryValue Root="HKLM" Key="Software\Openwater\Bloodflow"
+                     Name="desktopShortcut" Type="integer" Value="1" KeyPath="yes" />
     </Component>
   </Package>
 </Wix>
