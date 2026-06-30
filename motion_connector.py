@@ -1670,10 +1670,23 @@ class MotionConnector(QObject):
                     # the MCU, so it resets across reconnects/power-cycles.
                     # Default-off needs no action (firmware default is off).
                     if self._console_debug_logging:
-                        if self._interface.console.enable_usb_printf(True):
-                            logger.info("Console debug logging re-enabled")
-                        else:
-                            logger.error("Failed to re-enable console debug logging")
+                        # Optional debug-logging re-apply must never abort the
+                        # safety-critical laser-power application that follows.
+                        # Guard it independently (e.g. an omotion build lacking
+                        # console.enable_usb_printf would otherwise raise
+                        # AttributeError and skip set_laser_power_from_config,
+                        # leaving the laser dark — its FPGA drive registers are
+                        # volatile and reloaded only here).
+                        try:
+                            if self._interface.console.enable_usb_printf(True):
+                                logger.info("Console debug logging re-enabled")
+                            else:
+                                logger.error("Failed to re-enable console debug logging")
+                        except Exception as e:  # noqa: BLE001
+                            logger.warning(
+                                "Console debug logging re-apply failed; "
+                                "continuing connect-time setup: %s", e
+                            )
                     # Apply laser-power params once per console connect —
                     # the FPGA registers are volatile across power cycles,
                     # so every (re)connect needs them. Scans no longer
