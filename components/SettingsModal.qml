@@ -758,34 +758,6 @@ Item {
                     }
                 }
 
-                // ── Reduced Mode ─────────────────────────────────────────────
-                // Gated on clinicalLock (a build-time flag, true only for the
-                // Clinical variant), not on reducedMode itself — otherwise a
-                // Research/RUO build that ever ends up with reducedMode:true
-                // (e.g. a stale %PROGRAMDATA% override) hides the only way to
-                // turn it back off, trapping the user without the developer
-                // password.
-                SectionCard {
-                    title: "Reduced Mode"
-                    visible: !MotionInterface.appConfig.clinicalLock || (MotionInterface.appConfig.developerMode ? true : false)
-
-                    FieldRow {
-                        label: "Enable"
-                        PillSwitch {
-                            checked: root.reducedMode
-                            onCheckedChanged: root.reducedMode = checked
-                        }
-                        Item { Layout.fillWidth: true }
-                    }
-                    Text {
-                        text: "Simplified clinical view: forces Far camera configuration, enables free run mode, hides scan settings, and shows large left/right BFI and BVI panels."
-                        color: root.colTextMuted
-                        font.pixelSize: 11
-                        wrapMode: Text.WordWrap
-                        Layout.fillWidth: true
-                    }
-                }
-
                 // ── Appearance ───────────────────────────────────────────────
                 SectionCard {
                     title: "Appearance"

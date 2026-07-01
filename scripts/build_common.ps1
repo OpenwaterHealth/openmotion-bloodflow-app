@@ -30,15 +30,9 @@ function Get-BuildVersion {
 }
 
 function Set-ReducedMode {
-    # BOM-safe flip of "reducedMode" (and the paired "clinicalLock" build flag)
-    # in a bundled app_config.json. Returns the ORIGINAL file text so the
-    # caller can restore it. Writes UTF-8 WITHOUT BOM — the app's json.load
-    # fails silently on a BOM (memory: config_edit_bom_breaks_load).
-    #
-    # clinicalLock mirrors $Reduced: it's what gates the "Reduced Mode" toggle
-    # in Settings behind the developer password, so only the Clinical variant
-    # (Reduced=true) is locked — Research/RUO users can always self-service
-    # flip a stray reducedMode:true back off (see #<lockout fix>).
+    # BOM-safe flip of "reducedMode" in a bundled app_config.json. Returns the
+    # ORIGINAL file text so the caller can restore it. Writes UTF-8 WITHOUT BOM —
+    # the app's json.load fails silently on a BOM (memory: config_edit_bom_breaks_load).
     param(
         [Parameter(Mandatory)][string]$ConfigPath,
         [Parameter(Mandatory)][bool]$Reduced
@@ -50,9 +44,6 @@ function Set-ReducedMode {
     }
     $val = if ($Reduced) { "true" } else { "false" }
     $new = [regex]::Replace($orig, '("reducedMode"\s*:\s*)(true|false)', "`${1}$val")
-    if ($new -match '"clinicalLock"\s*:\s*(true|false)') {
-        $new = [regex]::Replace($new, '("clinicalLock"\s*:\s*)(true|false)', "`${1}$val")
-    }
     [System.IO.File]::WriteAllText($ConfigPath, $new, (New-Object System.Text.UTF8Encoding $false))
     return $orig
 }

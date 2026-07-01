@@ -7,7 +7,6 @@
   "leftMask": 102,
   "rightMask": 102,
   "reducedMode": true,
-  "clinicalLock": true,
   "reducedModeLeftMask": 195,
   "reducedModeRightMask": 195,
   "uncorrectedOnly": true,

@@ -79,8 +79,7 @@ Debug flags that are still useful when hardware **is** attached (`config/app_con
 | Flag | Default | Purpose |
 |---|---|---|
 | `developerMode` | `true` | Show debug telemetry, per-camera CQ dots, test buttons. |
-| `reducedMode` | `true` | Clinical UI: hide settings, large BFI/BVI panels. |
-| `clinicalLock` | `true` | Build-time flag (not user-facing): gates the Settings "Reduced Mode" toggle behind the developer password. Only the Clinical variant ships this `true` — RUO always ships `false` so a stray `reducedMode:true` can be self-service undone. Flipped alongside `reducedMode` in `Set-ReducedMode` (`scripts/build_common.ps1`). |
+| `reducedMode` | `true` | Clinical UI: hide settings, large BFI/BVI panels. Build-time only — there is no Settings toggle for it (removed; config-only now). |
 | `portableMode` | `false` | Build-time flag: `true` keeps all writable state (config overrides, logs, scan data/db) next to the exe (old un-installed layout); `false` scatters it to `%PROGRAMDATA%\Openwater`. Portable zips ship `true`, installers force `false` — see `Set-PortableMode` (`scripts/build_common.ps1`) and `utils/app_paths.py:writable_root`. |
 | `forceLaserFail` | `false` | Debug: simulate a laser safety trip. |
 | `cameraFakeData` | `false` | **Broken — do not use.** Was meant to request firmware fake histograms; see "Working without hardware". |

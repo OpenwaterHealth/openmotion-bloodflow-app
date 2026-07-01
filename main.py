@@ -141,12 +141,6 @@ def _load_app_config() -> dict:
         # (portable zip vs installer) — see scripts/build_common.ps1.
         "portableMode": False,
         "reducedMode": False,
-        # Gates the Settings "Reduced Mode" toggle behind the developer
-        # password (only the Clinical build ships this true). Without it,
-        # a Research/RUO build that ever picks up a stray reducedMode:true
-        # (e.g. a leftover %PROGRAMDATA% override) has no way for the user
-        # to self-service turn it back off.
-        "clinicalLock": False,
         "reducedModeLeftMask": 0xC3,
         "reducedModeRightMask": 0xC3,
         "plotWindowSec": 15,
