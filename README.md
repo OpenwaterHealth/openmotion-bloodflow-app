@@ -1,6 +1,6 @@
-# Open-Motion Bloodflow Application
+# Open-Motion
 
-Python Application UI for OpenMotion Bloodflow monitoring.
+Python Application UI for Open-Motion blood flow monitoring.
 
 ![App Image](assets/images/screenshot.png)
 

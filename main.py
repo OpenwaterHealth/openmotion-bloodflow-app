@@ -244,7 +244,7 @@ def main():
     ts = datetime.datetime.now().strftime(
         "%Y%m%d_%H%M%S"
     )  # Build timestamp like 20251029_124455
-    logfile_path = os.path.join(run_dir, f"ow-bloodflowapp-{ts}.log")
+    logfile_path = os.path.join(run_dir, f"open-motion-{ts}.log")
 
     file_handler = logging.FileHandler(logfile_path, mode="w", encoding="utf-8")
     file_handler.setLevel(logging.INFO)

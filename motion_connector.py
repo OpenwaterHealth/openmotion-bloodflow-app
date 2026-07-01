@@ -4666,7 +4666,7 @@ class MotionConnector(QObject):
         """
         err = error_codes.lookup(code)
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        subject = f"BloodFlow Bug Report — {code} {err.title}"
+        subject = f"Open-Motion Bug Report — {code} {err.title}"
         body = bug_report.build_report_text(
             code=code, title=err.title, message=err.message,
             timestamp=timestamp, app_version=self._app_version or "unknown",

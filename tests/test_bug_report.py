@@ -53,12 +53,12 @@ def test_smtp_config_incomplete_returns_false(cfg):
 def test_build_mailto_url_encodes_subject_and_body():
     url = bug_report.build_mailto_url(
         "support@openwater.health",
-        subject="BloodFlow Bug Report — E-101",
+        subject="Open-Motion Bug Report — E-101",
         body="line one\nline two & more",
     )
     split = urlsplit(url)
     assert split.scheme == "mailto"
     assert split.path == "support@openwater.health"
     q = parse_qs(split.query)
-    assert q["subject"] == ["BloodFlow Bug Report — E-101"]
+    assert q["subject"] == ["Open-Motion Bug Report — E-101"]
     assert q["body"] == ["line one\nline two & more"]

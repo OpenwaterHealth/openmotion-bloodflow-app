@@ -206,7 +206,7 @@ def test_prepare_debug_bundle_creates_zip_and_logs(tmp_path):
     db = str(tmp_path / "scans.db")
     logs = tmp_path / "logs"
     logs.mkdir()
-    (logs / "ow-bloodflowapp-x.log").write_text("hello", encoding="utf-8")
+    (logs / "open-motion-x.log").write_text("hello", encoding="utf-8")
     c = _connector(tmp_path, scan_db_path=db)
     # Don't spawn a real file-explorer process during the test.
     c._reveal_in_explorer = lambda p: None

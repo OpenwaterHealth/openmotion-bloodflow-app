@@ -152,7 +152,7 @@ Rectangle {
                 Item { Layout.fillWidth: true }
 
                 Text {
-                    text: "OpenMotion BloodFlow"
+                    text: "Open-Motion"
                     color: theme.textPrimary
                     font.pixelSize: 14
                     font.weight: Font.Bold

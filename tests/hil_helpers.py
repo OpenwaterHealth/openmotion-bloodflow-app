@@ -265,8 +265,8 @@ def find_app_log() -> Path | None:
     for root in roots:
         if not root.exists():
             continue
-        candidates.extend(root.glob("logs/ow-bloodflowapp-*.log"))
-        candidates.extend(root.glob("**/logs/ow-bloodflowapp-*.log"))
+        candidates.extend(root.glob("logs/open-motion-*.log"))
+        candidates.extend(root.glob("**/logs/open-motion-*.log"))
     if not candidates:
         return None
     return max(candidates, key=lambda p: p.stat().st_mtime)

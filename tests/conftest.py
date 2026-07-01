@@ -709,17 +709,17 @@ def _check_app_alive(request):
     global _app_dead_after
     if _app_dead_after is not None:
         pytest.fail(
-            f"Bloodflow app died — first noticed by '{_app_dead_after}'. "
-            f"Subsequent tests cannot run. Inspect the bloodflow app log "
-            f"(logs/ow-bloodflowapp-*.log) around that test for an "
+            f"Open-Motion app died — first noticed by '{_app_dead_after}'. "
+            f"Subsequent tests cannot run. Inspect the app log "
+            f"(logs/open-motion-*.log) around that test for an "
             f"unhandled Python exception."
         )
 
     if not ensure_visible():
         _app_dead_after = request.node.nodeid
         pytest.fail(
-            f"Bloodflow app window is gone — likely crashed during the "
-            f"previous test. See logs/ow-bloodflowapp-*.log for "
+            f"Open-Motion app window is gone — likely crashed during the "
+            f"previous test. See logs/open-motion-*.log for "
             f"diagnostics. (First detected at '{_app_dead_after}'.)"
         )
     yield
