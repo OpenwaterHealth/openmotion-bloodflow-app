@@ -41,7 +41,7 @@ Item {
     property string state_: "checking"
     // Whether the modal was opened during a live scan (controls footer).
     property bool liveScan: false
-    // True when this modal is being used as a reduced-mode pre-scan gate.
+    // True when this modal is being used as a clinical-mode pre-scan gate.
     property bool preScanMode: false
     // Live-scan modal is only dismissable when no CQ issues remain active.
     property bool liveScanDismissable: false
@@ -73,7 +73,7 @@ Item {
     // Each entry: { camera, typeKey, typeText, value }
     property var entries: []
 
-    readonly property bool developerMode: !!(MotionInterface.appConfig && MotionInterface.appConfig.developerMode)
+    readonly property bool engineeringMode: !!(MotionInterface.appConfig && MotionInterface.appConfig.engineeringMode)
 
     signal stopScanRequested()
     signal continueRequested()
@@ -193,7 +193,7 @@ Item {
         var prefix = (side === "left") ? "L" : "R"
         var label = prefix + camIndex1
         var lines = [label]
-        var showDn = !!(MotionInterface.appConfig && MotionInterface.appConfig.developerMode)
+        var showDn = !!(MotionInterface.appConfig && MotionInterface.appConfig.engineeringMode)
         if (root.liveScan && !cameraEnabled(side, camIndex1)) {
             lines.push("Inactive for current scan mask")
             return lines.join("\n")
@@ -425,10 +425,10 @@ Item {
                 }
             }
 
-            // Per-camera dot color legend (#128). Developer mode only —
-            // RUO operators just see a single orange and don't need this.
+            // Per-camera dot color legend (#128). Engineering mode only —
+            // Research operators just see a single orange and don't need this.
             RowLayout {
-                visible: root.developerMode
+                visible: root.engineeringMode
                          && (root.state_ === "ok" || root.state_ === "warnings")
                 Layout.alignment: Qt.AlignHCenter
                 spacing: 18
@@ -474,9 +474,9 @@ Item {
                 Layout.fillWidth: true
                 Layout.alignment: Qt.AlignHCenter
                 spacing: 12
-                visible: root.state_ !== "checking" || root.developerMode
+                visible: root.state_ !== "checking" || root.engineeringMode
 
-                // Reduced-mode pre-scan footer
+                // Clinical-mode pre-scan footer
                 Button {
                     visible: root.preScanMode
                     text: "Dismiss"
@@ -600,9 +600,9 @@ Item {
                     onClicked: { root.close(); root.retestRequested() }
                 }
 
-                // Developer-mode escape hatch: bypass all contact-quality gates
+                // Engineering-mode escape hatch: bypass all contact-quality gates
                 Button {
-                    visible: root.developerMode
+                    visible: root.engineeringMode
                     text: "Force Dismiss"
                     hoverEnabled: true
                     Layout.preferredHeight: 45
@@ -623,10 +623,10 @@ Item {
         }
 
         // ESC closes (unless we're mid-check, or awaiting Stop/Continue
-        // decision during a live scan). Developer mode bypasses all gates.
+        // decision during a live scan). Engineering mode bypasses all gates.
         Keys.onReleased: function(event) {
             if (event.key === Qt.Key_Escape
-                    && (root.developerMode
+                    && (root.engineeringMode
                         || (root.state_ !== "checking"
                             && !(root.liveScan && root.state_ === "warnings" && !root.liveScanDismissable && !root.preScanMode)))) {
                 root.close()

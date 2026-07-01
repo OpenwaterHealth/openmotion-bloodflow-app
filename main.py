@@ -106,7 +106,7 @@ def _load_app_config() -> dict:
         "leftMask": 0x66,   # 0b01100110 — cameras 2,3,6,7 (Middle pattern)
         "rightMask": 0x66,
         "uncorrectedOnly": False,
-        "developerMode": False,
+        "engineeringMode": False,
         "showBfiBvi": True,
         "bfiMin": 0.0,
         "bfiMax": 10.0,
@@ -140,9 +140,9 @@ def _load_app_config() -> dict:
         # installed/MSI layout). Set by the build system per artifact type
         # (portable zip vs installer) — see scripts/build_common.ps1.
         "portableMode": False,
-        "reducedMode": False,
-        "reducedModeLeftMask": 0xC3,
-        "reducedModeRightMask": 0xC3,
+        "clinicalMode": False,
+        "clinicalModeLeftMask": 0xC3,
+        "clinicalModeRightMask": 0xC3,
         "plotWindowSec": 15,
         "bfiColor": "#E74C3C",
         "bviColor": "#3498DB",
@@ -159,7 +159,7 @@ def _load_app_config() -> dict:
         "cq_light_threshold_per_camera": [15.0] * 8,
         # Phase 2b: profile HUD overlay on the PlotViewer — sample
         # rate, paint-tick ms, avg canvas-paint ms, total points
-        # painted. Gated on `developerMode && showProfiling` so clinical
+        # painted. Gated on `engineeringMode && showProfiling` so clinical
         # users never see it.
         "showProfiling": False,
         # Critical-error bug report (see error_codes.py / CriticalErrorModal).
@@ -192,7 +192,7 @@ def main():
             import ctypes
 
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-                "OpenwaterHealth.BloodflowApp"
+                "Openwater.OpenMotion"
             )
         except Exception:
             pass  # Ignore if not available
@@ -203,7 +203,7 @@ def main():
         app = QApplication(sys.argv)
         msg_box = QMessageBox()
         msg_box.setIcon(QMessageBox.Icon.Warning)
-        msg_box.setWindowTitle("Openwater Bloodflow")
+        msg_box.setWindowTitle("Open-Motion")
         msg_box.setText("Another instance of the application is already running.")
         msg_box.setInformativeText(
             "Please close the existing instance before opening a new one."
@@ -251,7 +251,7 @@ def main():
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
     logger.info("=" * 64)
-    logger.info("Open-Motion Bloodflow App %s starting", APP_VERSION)
+    logger.info("Open-Motion %s starting", APP_VERSION)
     logger.info("Log file:       %s", logfile_path)
     logger.info("Data directory: %s", _data_dir)
     logger.info("=" * 64)
@@ -286,10 +286,12 @@ def main():
     icon_path = str(resource_path("assets", "images", "favicon.ico"))
     app.setWindowIcon(QIcon(icon_path))
 
-    # Set application properties for Windows taskbar
-    app.setApplicationName("Openwater Bloodflow")
+    # Set application properties for Windows taskbar. Display name reflects
+    # the build variant: clinicalMode=false is the Research distribution.
+    app_display_name = "Open-Motion" if app_config.get("clinicalMode", False) else "Open-Motion Research"
+    app.setApplicationName(app_display_name)
     app.setApplicationVersion(APP_VERSION)
-    app.setOrganizationName("Openwater Health")
+    app.setOrganizationName("Openwater")
 
     engine = QQmlApplicationEngine()
 
@@ -326,7 +328,7 @@ def main():
         engine.deleteLater()
         cleanup_single_instance()
         logger.info("=" * 64)
-        logger.info("Open-Motion Bloodflow App %s exited cleanly", APP_VERSION)
+        logger.info("Open-Motion %s exited cleanly", APP_VERSION)
         logger.info("=" * 64)
 
     app.aboutToQuit.connect(handle_exit)

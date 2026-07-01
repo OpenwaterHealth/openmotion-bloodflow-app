@@ -30,7 +30,7 @@ Item {
     property bool   showBfiBvi:        true
     property bool   autoScale:         false
     property bool   autoScalePerPlot:  false
-    property bool   reducedMode:       false
+    property bool   clinicalMode:       false
     property int    plotWindowSec:     15
     property color  bfiColor:          "#E74C3C"
     property color  bviColor:          "#3498DB"
@@ -99,8 +99,8 @@ Item {
         var cfg = MotionInterface.appConfig
         defaultLeftMaskIndex  = maskToIndex(cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99)
         defaultRightMaskIndex = maskToIndex(cfg.rightMask !== undefined ? cfg.rightMask : 0x99)
-        reducedMode        = cfg.reducedMode        !== undefined ? cfg.reducedMode        : false
-        showBfiBvi         = reducedMode ? true : (cfg.showBfiBvi !== undefined ? cfg.showBfiBvi : true)
+        clinicalMode        = cfg.clinicalMode        !== undefined ? cfg.clinicalMode        : false
+        showBfiBvi         = clinicalMode ? true : (cfg.showBfiBvi !== undefined ? cfg.showBfiBvi : true)
         autoScale          = cfg.autoScale          !== undefined ? cfg.autoScale          : false
         autoScalePerPlot   = autoScale
         plotWindowSec      = cfg.plotWindowSec      !== undefined ? cfg.plotWindowSec      : 15
@@ -149,7 +149,7 @@ Item {
             "showBfiBvi":         showBfiBvi,
             "autoScale":          autoScale,
             "autoScalePerPlot":   autoScalePerPlot,
-            "reducedMode":        reducedMode,
+            "clinicalMode":        clinicalMode,
             "plotWindowSec":      plotWindowSec,
             "bfiColor":           "" + bfiColor,
             "bviColor":           "" + bviColor,
@@ -490,7 +490,7 @@ Item {
 
                 // ── Default Camera Configuration ─────────────────────────────
                 SectionCard {
-                    visible: !root.reducedMode
+                    visible: !root.clinicalMode
                     title: "Default Camera Configuration"
 
                     FieldRow {
@@ -556,7 +556,7 @@ Item {
                     title: "Realtime Plot Display"
 
                     FieldRow {
-                        visible: !root.reducedMode
+                        visible: !root.clinicalMode
                         label: "Display mode"
                         Text {
                             text: "Mean / Contrast"
@@ -594,7 +594,7 @@ Item {
                     }
 
                     FieldRow {
-                        visible: !root.reducedMode
+                        visible: !root.clinicalMode
                         label: "Auto-scale Y-axes"
                         PillSwitch {
                             checked: root.autoScale
@@ -612,7 +612,7 @@ Item {
                     }
 
                     FieldRow {
-                        visible: !root.reducedMode
+                        visible: !root.clinicalMode
                         label: "BVI low-pass filter"
                         PillSwitch {
                             checked: root.bviLowPassEnabled
@@ -627,7 +627,7 @@ Item {
                     }
 
                     FieldRow {
-                        visible: MotionInterface.appConfig.developerMode ? true : false
+                        visible: MotionInterface.appConfig.engineeringMode ? true : false
                         label: "Trace colors"
                         Rectangle {
                             width: 26; height: 26; radius: 4
@@ -666,9 +666,9 @@ Item {
                     title: "Manual Plot Bounds"
 
                     Text {
-                        // Reduced mode hides the auto-scale toggle and always
+                        // Clinical mode hides the auto-scale toggle and always
                         // uses these bounds, so don't reference it there.
-                        text: root.reducedMode ? "Y-axis range for the plots."
+                        text: root.clinicalMode ? "Y-axis range for the plots."
                                                : "Used when auto-scale is off."
                         color: root.colTextMuted
                         font.pixelSize: 11
@@ -719,42 +719,42 @@ Item {
                         Item { Layout.fillWidth: true }
 
                         // Mean / Contrast bounds only apply to the Mean/Contrast
-                        // display mode, which reduced mode never shows — hide
+                        // display mode, which clinical mode never shows — hide
                         // these two rows there. GridLayout skips invisible
                         // children, so the grid reflows to just BFI / BVI.
-                        Text { visible: !root.reducedMode; text: "Mean"; color: "#2ECC71"; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
+                        Text { visible: !root.clinicalMode; text: "Mean"; color: "#2ECC71"; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
-                            visible: !root.reducedMode
+                            visible: !root.clinicalMode
                             Layout.preferredWidth: 90
                             decimals: 0
                             text: root.meanMin.toFixed(0)
                             onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.meanMin = Math.round(v); text = root.meanMin.toFixed(0) }
                         }
                         StyledNumberField {
-                            visible: !root.reducedMode
+                            visible: !root.clinicalMode
                             Layout.preferredWidth: 90
                             decimals: 0
                             text: root.meanMax.toFixed(0)
                             onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.meanMax = Math.round(v); text = root.meanMax.toFixed(0) }
                         }
-                        Item { visible: !root.reducedMode; Layout.fillWidth: true }
+                        Item { visible: !root.clinicalMode; Layout.fillWidth: true }
 
-                        Text { visible: !root.reducedMode; text: "Contrast"; color: "#9B59B6"; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
+                        Text { visible: !root.clinicalMode; text: "Contrast"; color: "#9B59B6"; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
-                            visible: !root.reducedMode
+                            visible: !root.clinicalMode
                             Layout.preferredWidth: 90
                             decimals: 2
                             text: root.contrastMin.toFixed(2)
                             onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.contrastMin = root._roundTo(v, 2); text = root.contrastMin.toFixed(2) }
                         }
                         StyledNumberField {
-                            visible: !root.reducedMode
+                            visible: !root.clinicalMode
                             Layout.preferredWidth: 90
                             decimals: 2
                             text: root.contrastMax.toFixed(2)
                             onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.contrastMax = root._roundTo(v, 2); text = root.contrastMax.toFixed(2) }
                         }
-                        Item { visible: !root.reducedMode; Layout.fillWidth: true }
+                        Item { visible: !root.clinicalMode; Layout.fillWidth: true }
                     }
                 }
 
@@ -809,10 +809,10 @@ Item {
                     }
                 }
 
-                // ── Developer ────────────────────────────────────────────────
+                // ── Engineering ──────────────────────────────────────────────
                 SectionCard {
-                    title: "Developer"
-                    visible: MotionInterface.appConfig.developerMode ? true : false
+                    title: "Engineering"
+                    visible: MotionInterface.appConfig.engineeringMode ? true : false
 
                     FieldRow {
                         label: "Console"
@@ -937,7 +937,7 @@ Item {
                     }
 
                     // ── Calibration / Test (moved here from the former
-                    //    standalone Calibration card; now developer-only) ──
+                    //    standalone Calibration card; now engineering-only) ──
                     Rectangle { Layout.fillWidth: true; height: 1; color: root.colBorderSoft }
                     Text {
                         text: "Calibration"
@@ -1102,14 +1102,14 @@ Item {
 
                     Rectangle { Layout.fillWidth: true; height: 1; color: root.colBorderSoft }
                     FieldRow {
-                        label: "Developer mode"
+                        label: "Engineering mode"
                         ActionButton {
-                            text: "Disable developer mode"
+                            text: "Disable engineering mode"
                             Layout.preferredWidth: 200
                             hoverColor: "#C0392B"
                             onClicked: {
-                                MotionInterface.setConfig("developerMode", false)
-                                MotionInterface.notify("Developer mode disabled.", "info", 3000, false, "dev-mode")
+                                MotionInterface.setConfig("engineeringMode", false)
+                                MotionInterface.notify("Engineering mode disabled.", "info", 3000, false, "dev-mode")
                             }
                         }
                         Item { Layout.fillWidth: true }
@@ -1150,26 +1150,26 @@ Item {
 
                     // Auto-checked ~3s after launch by UpdateBanner.qml
                     // (Issue #96); this row just reflects that same
-                    // check's result. Hidden entirely in reduced (clinical)
-                    // mode — clinical users shouldn't see update prompts.
+                    // check's result. Hidden entirely in clinical mode —
+                    // clinical users shouldn't see update prompts.
                     FieldRow {
                         label: "Application"
                         Text { text: appVersion; color: root.colTextPri; font.pixelSize: 13; font.family: "Consolas" }
                         Item { Layout.fillWidth: true }
                         Text {
-                            visible: !root.reducedMode && root.appUpdateStatus === "uptodate"
+                            visible: !root.clinicalMode && root.appUpdateStatus === "uptodate"
                             text: "Up to date"
                             color: theme.statusGreen
                             font.pixelSize: 12
                         }
                         Text {
-                            visible: !root.reducedMode && root.appUpdateStatus === "failed"
+                            visible: !root.clinicalMode && root.appUpdateStatus === "failed"
                             text: "Check failed"
                             color: theme.accentRed
                             font.pixelSize: 12
                         }
                         UpdateChip {
-                            visible: !root.reducedMode && root.appUpdateStatus === "available"
+                            visible: !root.clinicalMode && root.appUpdateStatus === "available"
                             label: root.appUpdating ? root.appUpdateProgressText : "Update"
                             chipEnabled: !root.appUpdating
                             onChipClicked: {
@@ -1182,7 +1182,7 @@ Item {
 
                     Connections {
                         target: MotionInterface
-                        enabled: !root.reducedMode
+                        enabled: !root.clinicalMode
                         function onUpdateAvailable(version, url) {
                             root.appUpdateStatus = "available"
                             root.appLatestVersion = version
@@ -1291,14 +1291,14 @@ Item {
                     // most-recently-published release (incl. dev/rc), not just
                     // full releases. Plain config flag — the connector re-runs
                     // the firmware check when it toggles (setConfig hook).
-                    // Engineering (developer mode) only.
+                    // Engineering (engineering mode) only.
                     Rectangle {
                         Layout.fillWidth: true; height: 1; color: root.colBorderSoft
-                        visible: MotionInterface.appConfig.developerMode === true
+                        visible: MotionInterface.appConfig.engineeringMode === true
                     }
                     FieldRow {
                         label: "Beta Updates"
-                        visible: MotionInterface.appConfig.developerMode === true
+                        visible: MotionInterface.appConfig.engineeringMode === true
                         PillSwitch {
                             checked: MotionInterface.appConfig.downloadBetaFirmware === true
                             onToggled: MotionInterface.setConfig("downloadBetaFirmware", checked)

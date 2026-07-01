@@ -1,6 +1,6 @@
 # Audit Log — User & Auditor Guide
 
-The OpenWater Bloodflow app keeps an **audit log**: a machine-readable,
+The Open-Motion app keeps an **audit log**: a machine-readable,
 append-only record of significant system events. It exists primarily for
 **auditors** who need to reconstruct what the system and its operators did,
 and when. This guide explains how to open it, what it records, and how to

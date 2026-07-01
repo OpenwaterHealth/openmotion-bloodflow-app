@@ -48,7 +48,7 @@ source .venv/bin/activate
 ./build_macos.sh
 ```
 
-Produces `dist/OpenWater Bloodflow.app` and a DMG installer in `dist/`.
+Produces `dist/Open-Motion.app` and a DMG installer in `dist/`.
 
 > **Note:** macOS support is still a work in progress. The app builds and launches,
 > but end-to-end device communication with the console and sensor modules is not yet
@@ -89,7 +89,7 @@ Both directories live under a single root, chosen in this order:
 
 1. `dataDirectory` from `config/app_config.json` (also settable from the UI directory picker)
 2. `portableMode` (build-time flag): next to the exe for a portable build, `%PROGRAMDATA%\Openwater` for an installed build — or the current working directory in a dev run, when writable
-3. `~/Documents/Openwater Bloodflow/` as a last-resort fallback (e.g. when the .app is launched from Finder on macOS and cwd is `/`)
+3. `~/Documents/Open-Motion/` as a last-resort fallback (e.g. when the .app is launched from Finder on macOS and cwd is `/`)
 
 ## Configuration
 
@@ -98,8 +98,8 @@ Edit `config/app_config.json` to customize behavior:
 | Key | Default | Description |
 |-----|---------|-------------|
 | `dataDirectory` | `null` | Root directory for `logs/` and `data/` (null = auto-detect) |
-| `developerMode` | `false` | Enable developer UI features |
-| `reducedMode` | `false` | Simplified clinical UI: forces far camera config + free run, hides scan settings, shows large left/right BFI/BVI panels |
+| `engineeringMode` | `false` | Enable engineering UI features |
+| `clinicalMode` | `false` | Simplified clinical UI: forces far camera config + free run, hides scan settings, shows large left/right BFI/BVI panels |
 | `leftMask` / `rightMask` | `0x66` | Camera bitmask for left/right sensor modules |
 | `writeRawCsv` | `true` | Write raw histogram CSV during capture |
 | `rawCsvDurationSec` | `null` | Limit raw CSV capture duration (null = unlimited) |

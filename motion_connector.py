@@ -80,17 +80,17 @@ _CQ_DEFAULT_DARK_THRESHOLD_DN = 3.0
 _CQ_DEFAULT_LIGHT_THRESHOLD_DN = 15.0
 _CQ_DEFAULT_ROLLING_WINDOW = 10
 
-# ── Developer-mode unlock ────────────────────────────────────────────────
-# Hardcoded developer-mode password. Double-clicking the Openwater logo
-# opens a prompt; entering this value sets developerMode=true (persisted).
+# ── Engineering-mode unlock ──────────────────────────────────────────────
+# Hardcoded engineering-mode password. Double-clicking the Openwater logo
+# opens a prompt; entering this value sets engineeringMode=true (persisted).
 # This is the ONLY place the literal is defined. The check lives in Python
 # (not QML) so the literal never ships inside readable QML text.
-_DEVELOPER_PASSWORD = "OpenwaterHealth"
+_ENGINEERING_PASSWORD = "OpenwaterHealth"
 
 
-def developer_password_matches(pw) -> bool:
-    """Return True iff ``pw`` equals the developer-mode password."""
-    return isinstance(pw, str) and pw == _DEVELOPER_PASSWORD
+def engineering_password_matches(pw) -> bool:
+    """Return True iff ``pw`` equals the engineering-mode password."""
+    return isinstance(pw, str) and pw == _ENGINEERING_PASSWORD
 
 
 # Flip to True once release builds are Authenticode-signed; until then an
@@ -98,19 +98,20 @@ def developer_password_matches(pw) -> bool:
 _REQUIRE_SIGNED_UPDATES = False
 
 
-def _select_update_asset(assets: list, is_ruo: bool):
+def _select_update_asset(assets: list, is_research: bool):
     """Return download URL of the Setup bundle matching the running variant.
 
-    RUO builds match ``Openwater-Setup-*_RUO.exe``; clinical builds match
-    the non-RUO ``Openwater-Setup-*.exe``. Returns None if no match.
+    Research builds match ``Openwater-Setup-*_Research.exe``; clinical
+    builds match the non-Research ``Openwater-Setup-*.exe``. Returns None
+    if no match.
     """
     for asset in assets:
         name = (asset.get("name") or "")
         low = name.lower()
         if not low.endswith(".exe"):
             continue
-        asset_is_ruo = low.endswith("_ruo.exe")
-        if asset_is_ruo == is_ruo:
+        asset_is_research = low.endswith("_research.exe")
+        if asset_is_research == is_research:
             return asset.get("browser_download_url")
     return None
 
@@ -215,7 +216,7 @@ def _build_update_helper_script(
 
 # Camera-mask → human config name, mirroring CameraSelectionModal's
 # pattern table. Unmapped masks render as hex; -1 (unknown, e.g. a
-# reduced-mode scan whose meta lacks sdk_flags) renders as an em dash.
+# clinical-mode scan whose meta lacks sdk_flags) renders as an em dash.
 _CONFIG_NAMES = {
     0x00: "None", 0x5A: "Near", 0x66: "Middle", 0xC3: "Far",
     0x99: "Outer", 0x0F: "Left", 0xF0: "Right", 0x42: "Third Row",
@@ -232,7 +233,7 @@ def _config_name(mask) -> str:
 
 def _sdk_flags_from_session(session) -> Optional[dict]:
     """Pull the ``sdk_flags`` block out of a ScanDatabase session dict's
-    ``session_meta`` (the camera config / reduced-mode the scan was RUN with,
+    ``session_meta`` (the camera config / clinical-mode the scan was RUN with,
     written by the SDK's ScanDBSink). Returns None when absent or unparseable.
 
     ScanDatabase already json-decodes session_meta into a dict, but tolerate a
@@ -341,8 +342,8 @@ class _LivePlotSink:
     gate on the camera-dropout watchdog, and append to the source.
 
     The 'live_side' channel carries one SideAverageSample per capture per side
-    (from the SDK's LiveSideAverageStage, reduced mode) — the realtime per-side
-    average, appended under cam_id=-1 for the reduced-mode display.
+    (from the SDK's LiveSideAverageStage, clinical mode) — the realtime per-side
+    average, appended under cam_id=-1 for the clinical-mode display.
     """
 
     channels = {"live", "live_side"}
@@ -494,7 +495,7 @@ class _LivePlotSink:
                 )
 
     def _consume_side_avg(self, sample) -> None:
-        """Append one reduced-mode per-side average (SideAverageSample from the
+        """Append one clinical-mode per-side average (SideAverageSample from the
         SDK's LiveSideAverageStage) under cam_id=-1. The stage already emits one
         true spatial average per capture per side at ~40 Hz, so there's no dedup
         or skipping here — we just store what it emits."""
@@ -823,7 +824,7 @@ class MotionConnector(QObject):
     # Per-device firmware versions, refreshed on every (dis)connect by
     # _log_device_stats. Surfaced to Settings → System Information.
     firmwareVersionsChanged = pyqtSignal()
-    # Firmware autoupdate (developerMode only)
+    # Firmware autoupdate (engineeringMode only)
     firmwareUpdateInfoChanged = pyqtSignal()                # notify for the properties below
     firmwareUpdateAvailable = pyqtSignal(str, str, str)     # deviceKey, current, latest
     firmwareUpdateProgress = pyqtSignal(str, str, int, str) # deviceKey, stage, percent(-1=indeterminate), msg
@@ -937,7 +938,7 @@ class MotionConnector(QObject):
             or str(app_paths.writable_root(bool(cfg.get("portableMode", False))))
         )
         self._power_off_unused_cameras    = bool(cfg.get("powerOffUnusedCameras", False))
-        # Raw CSV is a developer feature (Settings → Developer → "Save raw
+        # Raw CSV is an engineering feature (Settings → Engineering → "Save raw
         # CSV"); default False so a config missing the key fails closed for
         # clinical use (#43).
         self._write_raw_csv               = bool(cfg.get("writeRawCsv", False))
@@ -976,7 +977,7 @@ class MotionConnector(QObject):
         self._firmware_versions: dict[str, str] = {
             "console": "", "left": "", "right": "",
         }
-        # Firmware autoupdate state (developerMode only).
+        # Firmware autoupdate state (engineeringMode only).
         self._firmware_latest: dict[str, str] = {"console": "", "left": "", "right": ""}
         self._firmware_update_available: dict[str, bool] = {
             "console": False, "left": False, "right": False,
@@ -1155,7 +1156,7 @@ class MotionConnector(QObject):
 
         Unlike ``_run_sensor_init``, this writes even when ``flags == 0`` so
         that turning the last flag off actually clears it on the firmware.
-        Used by the live Settings → Developer toggles (``setSensorDebugFlag``)
+        Used by the live Settings → Engineering toggles (``setSensorDebugFlag``)
         so no reconnect/restart is needed.
         """
         flags = self._compute_sensor_debug_flags()
@@ -1427,7 +1428,7 @@ class MotionConnector(QObject):
     def consoleFanOn(self) -> bool:
         """Cached last-set console-fan state (True=on). Reflects the
         connect-time 100% default and any setConsoleFan call. Read by the
-        Developer settings switch when the Settings modal opens."""
+        Engineering settings switch when the Settings modal opens."""
         return self._console_fan_on
 
     @pyqtSlot(bool, result=bool)
@@ -1518,15 +1519,15 @@ class MotionConnector(QObject):
         """Fire the persistent laser-safety toast.
 
         ``fault_detail`` is appended to the toast text only when
-        ``appConfig.developerMode`` is enabled, so end users see a
-        friendly message and developers see which fault bits tripped.
+        ``appConfig.engineeringMode`` is enabled, so end users see a
+        friendly message and engineers see which fault bits tripped.
         Tagged ``laser_safety`` so re-fires replace rather than stack.
         """
         msg = (
             "Laser safety warning detected. Please restart your "
             "console. If this error persists, please contact support."
         )
-        if fault_detail and self._app_config.get("developerMode", False):
+        if fault_detail and self._app_config.get("engineeringMode", False):
             msg += f"\n[dev] {fault_detail}"
         self.notify(
             msg,
@@ -1804,10 +1805,10 @@ class MotionConnector(QObject):
         return ["console"] if kind == FirmwareKind.CONSOLE else ["left", "right"]
 
     def _maybe_check_firmware_update(self, name: str) -> None:
-        """If developerMode, ensure this device's firmware-update availability
+        """If engineeringMode, ensure this device's firmware-update availability
         is computed — reusing a cached 'latest' for the kind, or kicking one
         background GitHub check per kind per session."""
-        if not self._app_config.get("developerMode", False):
+        if not self._app_config.get("engineeringMode", False):
             return
         if name not in self._firmware_versions or not self._firmware_versions[name]:
             return
@@ -1879,10 +1880,10 @@ class MotionConnector(QObject):
     @pyqtSlot(str, result=bool)
     def startFirmwareUpdate(self, device_key: str) -> bool:
         """Download the latest firmware for device_key and flash it over DFU.
-        developerMode-only; refused during a scan or while another update runs."""
+        engineeringMode-only; refused during a scan or while another update runs."""
         if device_key not in ("console", "left", "right"):
             return False
-        if not self._app_config.get("developerMode", False):
+        if not self._app_config.get("engineeringMode", False):
             return False
         if self._state == RUNNING or self._running:
             self.firmwareUpdateFinished.emit(
@@ -2113,7 +2114,7 @@ class MotionConnector(QObject):
         """Return sorted list of scan IDs from BOTH the corrected CSVs on disk
         and the scan database's sessions.
 
-        The scan DB is the system of record: reduced-mode scans (and any scan
+        The scan DB is the system of record: clinical-mode scans (and any scan
         with writeCorrectedCsv off) write no corrected CSV, so they exist only
         as DB sessions. A session_label has the same shape as the CSV-derived
         scan id (``YYYYMMDD_HHMMSS_userLabel``), so the two sources merge by id.
@@ -2343,7 +2344,7 @@ class MotionConnector(QObject):
             "rightMask": int(right_mask),
             "configL": _config_name(left_mask),
             "configR": _config_name(right_mask),
-            "reducedMode": bool(flags.get("reduced_mode", False)),
+            "clinicalMode": bool(flags.get("reduced_mode", False)),
             "notes": s.get("session_notes") or "",
             "interrupted": end is None,
         }
@@ -2413,7 +2414,7 @@ class MotionConnector(QObject):
     @pyqtSlot("QVariantList", result=int)
     def deleteScans(self, session_ids):
         """Delete the given scan-DB sessions (CASCADE removes their
-        session_data). Returns the count actually deleted. The developer-
+        session_data). Returns the count actually deleted. The engineering-
         password gate is enforced in QML before this is called."""
         db_path = getattr(self._interface, "scan_db_path", None)
         if not db_path:
@@ -2605,16 +2606,16 @@ class MotionConnector(QObject):
         config_store.save_overrides(self._app_config, self._baseline_config)
 
     @pyqtSlot(str, result=bool)
-    def checkDeveloperPassword(self, pw: str) -> bool:
-        """Return True if ``pw`` matches the developer-mode password.
+    def checkEngineeringPassword(self, pw: str) -> bool:
+        """Return True if ``pw`` matches the engineering-mode password.
 
         Comparison lives in Python so the literal is not present in
         shipped QML source. QML calls this from the unlock modal and,
-        on True, sets developerMode via setConfig.
+        on True, sets engineeringMode via setConfig.
         """
-        ok = developer_password_matches(pw)
+        ok = engineering_password_matches(pw)
         if not ok:
-            logger.info("[Connector] Developer unlock attempt failed")
+            logger.info("[Connector] Engineering unlock attempt failed")
         return ok
 
     @pyqtSlot(str, 'QVariant')
@@ -2648,7 +2649,7 @@ class MotionConnector(QObject):
         if "downloadBetaFirmware" in changes:
             self._refresh_firmware_update_check()
 
-    # Sensor debug-flag config keys surfaced as live Settings → Developer
+    # Sensor debug-flag config keys surfaced as live Settings → Engineering
     # toggles, mapped to the runtime cache attribute that
     # _compute_sensor_debug_flags() reads.
     _SENSOR_DEBUG_FLAG_ATTRS = {
@@ -2661,7 +2662,7 @@ class MotionConnector(QObject):
         """Toggle a sensor debug-flag config key, persist it, and re-push the
         recomputed debug-flag bitmask to every connected sensor immediately.
 
-        Mirrors the live ``setConsoleFan`` developer toggle — no app restart
+        Mirrors the live ``setConsoleFan`` engineering toggle — no app restart
         or reconnect needed. Unknown keys are ignored. When no sensor is
         connected the value is still persisted and applies on the next
         connect via ``_run_sensor_init``.
@@ -2977,11 +2978,11 @@ class MotionConnector(QObject):
             logger.info(
                 "[Plot] loaded past scan %r (session_id=%d) source=%s: "
                 "buffers=%d samples=%d liveEdge=%.3f gridMasks=L%s/R%s "
-                "reduced=%d flags=%s sample_keys=%s",
+                "clinical=%d flags=%s sample_keys=%s",
                 session_label, session_id, source_tag,
                 n_buffers, n_samples, past.liveEdge,
                 _mstr(past.leftMask), _mstr(past.rightMask),
-                past.reducedMode,
+                past.clinicalMode,
                 "yes" if recorded_flags else "no",
                 sample_keys,
             )
@@ -3375,9 +3376,9 @@ class MotionConnector(QObject):
             self.captureFinished.emit(True, "", "", "")
             self.scanNotesReady.emit()
 
-        # Issue #43: telemetry and raw CSVs are developer diagnostics —
+        # Issue #43: telemetry and raw CSVs are engineering diagnostics —
         # clinical users must not get them. Default False (fail closed).
-        developer_mode = self._app_config.get("developerMode", False)
+        engineering_mode = self._app_config.get("engineeringMode", False)
 
         req = ScanRequest(
             subject_id=subject_id,
@@ -3385,7 +3386,7 @@ class MotionConnector(QObject):
             left_camera_mask=left_camera_mask,
             right_camera_mask=right_camera_mask,
             disable_laser=disable_laser,
-            reduced_mode=self._app_config.get("reducedMode", False),
+            reduced_mode=self._app_config.get("clinicalMode", False),
             # Corrected CSV is opt-in now that per-cam BFI/BVI lands in
             # the scan DB (the new viewer + past replay read from there).
             # Default False to skip the redundant {scan_id}.csv; flip
@@ -3394,18 +3395,18 @@ class MotionConnector(QObject):
             write_corrected_csv=self._app_config.get("writeCorrectedCsv", False),
             # Issue #43 (regression): the SDK defaults write_telemetry_csv
             # to True, so the per-scan {scan_id}_{subject}_telemetry.csv
-            # must be explicitly gated on developerMode here. The original
+            # must be explicitly gated on engineeringMode here. The original
             # gate was dropped in the sink-refactor follow-up (93c2feb).
-            write_telemetry_csv=developer_mode,
+            write_telemetry_csv=engineering_mode,
             # Raw CSV duration forwarded to the pipeline's Tee("raw") gate
             # via raw_save_max_duration_s. None means unbounded (write entire
             # scan); 0 omits raw tee entirely. The writeRawCsv toggle lives
-            # in the developer-only Settings card, so its persisted value is
-            # additionally gated on developerMode (#43) — flipping dev mode
-            # off must stop raw output even if the toggle was left on.
+            # in the engineering-only Settings card, so its persisted value is
+            # additionally gated on engineeringMode (#43) — flipping engineering
+            # mode off must stop raw output even if the toggle was left on.
             raw_save_max_duration_s=(
                 self._raw_csv_duration_sec
-                if (developer_mode and self._write_raw_csv) else 0
+                if (engineering_mode and self._write_raw_csv) else 0
             ),
             sinks=[
                 _LivePlotSink(connector=self, plot_t0=plot_t0, live_source=live_source,
@@ -3771,7 +3772,7 @@ class MotionConnector(QObject):
                     self.safetyFailure = False
             else:
                 if not self._safetyFailure:
-                    # Decode which safety bits tripped so the developer-
+                    # Decode which safety bits tripped so the engineering-
                     # mode toast (and the log) can name them. The SDK
                     # owns the bit→label mapping in ConsoleTelemetry.
                     from omotion.ConsoleTelemetry import _decode_safety_faults
@@ -4963,7 +4964,7 @@ class MotionConnector(QObject):
             )
         else:
             self._test_scan_status = "failed"
-            if self._app_config.get("developerMode", False):
+            if self._app_config.get("engineeringMode", False):
                 tests = (("mean", "mean_test"), ("contrast", "contrast_test"),
                          ("ambient", "dark_test"))
                 breakdown = "; ".join(
@@ -5051,7 +5052,7 @@ class MotionConnector(QObject):
             )
         else:
             self._calibration_status = "failed"
-            if self._app_config.get("developerMode", False):
+            if self._app_config.get("engineeringMode", False):
                 tests = (("mean", "mean_test"), ("contrast", "contrast_test"),
                          ("bfi", "bfi_test"), ("bvi", "bvi_test"),
                          ("ambient", "dark_test"))
@@ -5123,9 +5124,9 @@ class MotionConnector(QObject):
                 return
 
             # Find the Setup bundle matching this build's variant.
-            # reducedMode True = clinical build; False = RUO/full build.
-            is_ruo = not bool(self._app_config.get("reducedMode", False))
-            download_url = _select_update_asset(data.get("assets", []), is_ruo)
+            # clinicalMode True = clinical build; False = Research/full build.
+            is_research = not bool(self._app_config.get("clinicalMode", False))
+            download_url = _select_update_asset(data.get("assets", []), is_research)
 
             local_version = get_version()
             # Strip local metadata for comparison (e.g. "+3.gabc1234.dirty")

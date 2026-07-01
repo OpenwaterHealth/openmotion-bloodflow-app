@@ -278,7 +278,7 @@ Item {
                         title: "Left Sensor"
                         sensorSide: "left"
                         connector: MotionInterface
-                        showFanControl: MotionInterface.appConfig.developerMode ? true : false
+                        showFanControl: MotionInterface.appConfig.engineeringMode ? true : false
                     }
 
                     ComboBox {
@@ -328,7 +328,7 @@ Item {
                         title: "Right Sensor"
                         sensorSide: "right"
                         connector: MotionInterface
-                        showFanControl: MotionInterface.appConfig.developerMode ? true : false
+                        showFanControl: MotionInterface.appConfig.engineeringMode ? true : false
                     }
 
                     ComboBox {

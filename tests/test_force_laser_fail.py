@@ -18,7 +18,7 @@ End-to-end check that:
 Steps (one method, full cleanup in ``finally``):
 
   1. Close the app if it is open.
-  2. On disk: turn reduced mode OFF and forceLaserFail ON.
+  2. On disk: turn clinical mode OFF and forceLaserFail ON.
   3. Open the app, calibrate panel buttons, wait for CONNECT.
   4. Click Check. Expect the 'Laser safety failure' line in the log.
   5. Close the app.
@@ -28,7 +28,7 @@ Steps (one method, full cleanup in ``finally``):
   7. Close the app, turn forceLaserFail OFF on disk.
   8. Power-cycle the console (clears the latched safety state).
   9. Open the app, click Check. Expect no safety-failure line.
- 10. Restore forceLaserFail and reducedMode to whatever was on disk
+ 10. Restore forceLaserFail and clinicalMode to whatever was on disk
      at test entry; relaunch the app one more time so the bench is
      clean for whatever follows.
 
@@ -129,10 +129,10 @@ def _find_exe() -> str | None:
     if env and os.path.exists(env):
         return env
     patterns = [
-        r"C:\Users\*\Documents\OpenMotion\**\OpenWaterApp.exe",
-        r"C:\Users\*\Desktop\**\OpenWaterApp.exe",
-        r"C:\Program Files\**\OpenWaterApp.exe",
-        r"C:\Program Files (x86)\**\OpenWaterApp.exe",
+        r"C:\Users\*\Documents\OpenMotion\**\Open-Motion.exe",
+        r"C:\Users\*\Desktop\**\Open-Motion.exe",
+        r"C:\Program Files\**\Open-Motion.exe",
+        r"C:\Program Files (x86)\**\Open-Motion.exe",
     ]
     matches: list[str] = []
     for p in patterns:
@@ -180,7 +180,7 @@ def _launch_app() -> None:
     else:
         exe = _find_exe()
         if not exe:
-            pytest.fail("OpenWaterApp.exe not found and OPENWATER_EXE unset")
+            pytest.fail("Open-Motion.exe not found and OPENWATER_EXE unset")
         log.info(f"  launching: {exe}")
         subprocess.Popen([exe])
 
@@ -276,13 +276,13 @@ class TestForceLaserFail:
         original_force_laser_fail = bool(
             read_app_config_value("forceLaserFail", False)
         )
-        original_reduced_mode = bool(
-            read_app_config_value("reducedMode", False)
+        original_clinical_mode = bool(
+            read_app_config_value("clinicalMode", False)
         )
         log.info(
             f"original config state: forceLaserFail="
-            f"{original_force_laser_fail}, reducedMode="
-            f"{original_reduced_mode}"
+            f"{original_force_laser_fail}, clinicalMode="
+            f"{original_clinical_mode}"
         )
 
         try:
@@ -293,13 +293,13 @@ class TestForceLaserFail:
             # its config at startup and won't reload.
             log.info("=" * 60)
             log.info(
-                "Step 1+2: killing app, then writing reducedMode=false "
+                "Step 1+2: killing app, then writing clinicalMode=false "
                 "+ forceLaserFail=true to disk"
             )
             log.info("=" * 60)
             _kill_bloodflow_processes()
             time.sleep(2)
-            write_app_config_value("reducedMode", False)
+            write_app_config_value("clinicalMode", False)
             write_app_config_value("forceLaserFail", True)
             log.info("  config staged for fault-trip launch")
 
@@ -464,14 +464,14 @@ class TestForceLaserFail:
             log.info("=" * 60)
             log.info(
                 f"Step 10 (cleanup): restoring forceLaserFail="
-                f"{original_force_laser_fail}, reducedMode="
-                f"{original_reduced_mode}"
+                f"{original_force_laser_fail}, clinicalMode="
+                f"{original_clinical_mode}"
             )
             log.info("=" * 60)
             _kill_bloodflow_processes()
             time.sleep(2)
             write_app_config_value("forceLaserFail", original_force_laser_fail)
-            write_app_config_value("reducedMode", original_reduced_mode)
+            write_app_config_value("clinicalMode", original_clinical_mode)
             _launch_app()
             if not _wait_for_app_window(timeout=30):
                 log.error(

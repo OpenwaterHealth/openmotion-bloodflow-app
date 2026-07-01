@@ -7,7 +7,7 @@ from PyInstaller.utils.hooks import (
 )
 from PyInstaller.building.build_main import Analysis, PYZ, EXE, COLLECT
 
-APP_NAME = "OpenWaterApp"
+APP_NAME = "Open-Motion"
 ENTRY = "main.py"
 ICON_FILE = os.path.abspath("assets/images/favicon.ico")
 

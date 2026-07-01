@@ -16,7 +16,7 @@ def _connector(tmp_path, app_config=None, connected=(True, True, True)):
     iface.scan_workflow.running = False
     iface.scan_workflow.config_running = False
     iface.scan_db_path = None
-    cfg = {"developerMode": False}
+    cfg = {"engineeringMode": False}
     if app_config:
         cfg.update(app_config)
     return MotionConnector(

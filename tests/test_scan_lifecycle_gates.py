@@ -22,7 +22,7 @@ def connector(tmp_path):
 
     c = MotionConnector(
         interface=iface,
-        app_config={"developerMode": False},
+        app_config={"engineeringMode": False},
         data_dir=str(tmp_path),
         config_dir="config",
     )

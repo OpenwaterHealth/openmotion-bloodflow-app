@@ -63,18 +63,18 @@ from hil_helpers import (
 pytestmark = pytest.mark.release
 
 # This test opens Scan Settings to configure the sensor masks +
-# duration before each iteration. Scan Settings is hidden in reduced
+# duration before each iteration. Scan Settings is hidden in clinical
 # mode, so force the on-disk flag false at module-import time
 # (before the session-scoped ``app`` fixture launches the app); a
 # module-scoped autouse fixture restores the original value on
 # teardown. Same pattern as test_history / test_scan_settings.
-_INITIAL_REDUCED_MODE = force_app_config_value("reducedMode", False)
+_INITIAL_CLINICAL_MODE = force_app_config_value("clinicalMode", False)
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _restore_reduced_mode_on_module_teardown():
+def _restore_clinical_mode_on_module_teardown():
     yield
-    write_app_config_value("reducedMode", _INITIAL_REDUCED_MODE)
+    write_app_config_value("clinicalMode", _INITIAL_CLINICAL_MODE)
 
 # ─────────────────────────────────────────────
 # Configuration

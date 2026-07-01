@@ -1,7 +1,7 @@
 # build_and_zip.ps1
 param(
     [string]$SpecFile = "openwater.spec",
-    [string]$AppName = "OpenWaterApp",
+    [string]$AppName = "Open-Motion",
     [string]$Entry = "main.py",
     [string]$CondaEnv = "ow-motion",
     [switch]$OpenFolder

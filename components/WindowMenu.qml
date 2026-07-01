@@ -16,7 +16,7 @@ Rectangle {
     signal closeRequested()
 
     // Emitted on double-click of the logo. main.qml owns the behavior
-    // (opens the developer-unlock prompt) — this component stays dumb.
+    // (opens the engineering-unlock prompt) — this component stays dumb.
     signal logoDoubleClicked()
 
     // Properties to configure the logo
@@ -26,7 +26,7 @@ Rectangle {
     property string sessionId: ""
     property bool   scanning: false
     property bool   freeRun: false
-    property bool   reducedMode: false
+    property bool   clinicalMode: false
     property int    elapsedSec: 0
     property int    durationSec: 3600
 
@@ -116,7 +116,7 @@ Rectangle {
                 }
             }
 
-            // Double-click → developer-mode unlock prompt (dev gate).
+            // Double-click → engineering-mode unlock prompt (eng gate).
             // Sits above the header drag MouseArea so only the logo area
             // captures the double-click; the rest of the bar still drags.
             MouseArea {
@@ -159,7 +159,7 @@ Rectangle {
                 }
 
                 Rectangle {
-                    visible: !windowMenu.reducedMode
+                    visible: !windowMenu.clinicalMode
                     width: betaLabel.implicitWidth + 12
                     height: betaLabel.implicitHeight + 4
                     radius: 4
@@ -180,7 +180,7 @@ Rectangle {
                 Text {
                     text: {
                         if (windowMenu.freeRun) {
-                            if (windowMenu.reducedMode) {
+                            if (windowMenu.clinicalMode) {
                                 return windowMenu.scanning
                                     ? windowMenu.formatSec(windowMenu.elapsedSec) : ""
                             }

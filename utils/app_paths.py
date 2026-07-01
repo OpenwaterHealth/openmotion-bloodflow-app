@@ -30,8 +30,8 @@ def writable_root(portable: bool = False) -> Path:
     a frozen build keeps everything next to the exe (the old un-installed
     behavior) instead of scattering it to %PROGRAMDATA%. An explicit
     OPENWATER_DATA_ROOT override is used as-is, no writability check. The
-    other branches fall back to ~/Documents/Openwater Bloodflow if the
-    resolved root isn't writable (e.g. cwd is "/" on a macOS Finder launch).
+    other branches fall back to ~/Documents/Open-Motion if the resolved
+    root isn't writable (e.g. cwd is "/" on a macOS Finder launch).
     """
     env = os.environ.get("OPENWATER_DATA_ROOT")
     if env:
@@ -50,7 +50,7 @@ def writable_root(portable: bool = False) -> Path:
     root.mkdir(parents=True, exist_ok=True)
 
     if not os.access(root, os.W_OK):
-        root = Path.home() / "Documents" / "Openwater Bloodflow"
+        root = Path.home() / "Documents" / "Open-Motion"
         root.mkdir(parents=True, exist_ok=True)
     return root
 

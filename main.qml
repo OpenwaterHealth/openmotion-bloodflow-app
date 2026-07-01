@@ -78,7 +78,7 @@ ApplicationWindow {
             sessionId:   bloodFlowPage.sessionId
             scanning:    bloodFlowPage.scanning
             freeRun:     bloodFlowPage.freeRun
-            reducedMode:     bloodFlowPage.reducedMode
+            clinicalMode:     bloodFlowPage.clinicalMode
             elapsedSec:  bloodFlowPage.elapsedSec
             durationSec: bloodFlowPage.durationSec
 
@@ -113,8 +113,8 @@ ApplicationWindow {
                 exitDisarmTimer.restart()
             }
 
-            // Hidden developer-mode entry point.
-            onLogoDoubleClicked: developerUnlockModal.open()
+            // Hidden engineering-mode entry point.
+            onLogoDoubleClicked: engineeringUnlockModal.open()
         }
 
         // Update available banner (slides in below header)
@@ -155,9 +155,9 @@ ApplicationWindow {
             }
         }
 
-        // Developer-mode unlock prompt (opened by logo double-click).
-        DeveloperUnlockModal {
-            id: developerUnlockModal
+        // Engineering-mode unlock prompt (opened by logo double-click).
+        EngineeringUnlockModal {
+            id: engineeringUnlockModal
         }
     }
 

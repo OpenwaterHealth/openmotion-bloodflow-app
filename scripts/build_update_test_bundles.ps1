@@ -1,5 +1,5 @@
 # scripts/build_update_test_bundles.ps1
-# Build the two RUO bundles for the in-app-update end-to-end test:
+# Build the two Research bundles for the in-app-update end-to-end test:
 #   OLD 1.3.0 -> the build under test; its update check points at -ServerUrl
 #   NEW 1.3.1 -> the upgrade target the fake-release server hands out
 #
@@ -30,24 +30,25 @@ if (Test-Path $dotnetDir) {
 $sdk = (& conda run -n $CondaEnv python -c "import omotion; print(omotion.__file__)").Trim()
 Write-Host "Building against SDK: $sdk" -ForegroundColor Cyan
 
-function Build-RuoBundle([string]$ver, [string]$apiUrl) {
+function Build-ResearchBundle([string]$ver, [string]$apiUrl) {
     (Get-Content version.py) -replace '^_FALLBACK_VERSION = .*', "_FALLBACK_VERSION = `"$ver`"" |
         Set-Content version.py -Encoding UTF8
     try {
         & conda run -n $CondaEnv python -m PyInstaller -y openwater.spec
-        if (-not (Test-Path "dist\OpenWaterApp\OpenWaterApp.exe")) { throw "dist missing after PyInstaller" }
-        # RUO (reducedMode:false) via the shared helper; optional updateApiUrl
-        # injection stays a JSON round-trip (no BOM, preserves the false above).
-        $cfgPath = "dist\OpenWaterApp\_internal\config\app_config.json"
+        if (-not (Test-Path "dist\Open-Motion\Open-Motion.exe")) { throw "dist missing after PyInstaller" }
+        # Research (clinicalMode:false) via the shared helper; optional
+        # updateApiUrl injection stays a JSON round-trip (no BOM, preserves
+        # the false above).
+        $cfgPath = "dist\Open-Motion\_internal\config\app_config.json"
         . (Join-Path $PSScriptRoot "build_common.ps1")
-        [void](Set-ReducedMode -ConfigPath $cfgPath -Reduced $false)
+        [void](Set-ClinicalMode -ConfigPath $cfgPath -Clinical $false)
         if ($apiUrl) {
-            $py = "import json; p='dist/OpenWaterApp/_internal/config/app_config.json'; " +
+            $py = "import json; p='dist/Open-Motion/_internal/config/app_config.json'; " +
                   "d=json.load(open(p,encoding='utf-8')); d['updateApiUrl']='$apiUrl'; " +
                   "json.dump(d, open(p,'w',encoding='utf-8'), indent=2)"
             & conda run -n $CondaEnv python -c $py
         }
-        & powershell -NoProfile -ExecutionPolicy Bypass -File installer\build_installer.ps1 -Variant ruo -Version $ver
+        & powershell -NoProfile -ExecutionPolicy Bypass -File installer\build_installer.ps1 -Variant research -Version $ver
         if ($LASTEXITCODE -ne 0) { throw "build_installer failed for $ver" }
     } finally {
         git checkout -- version.py
@@ -55,10 +56,10 @@ function Build-RuoBundle([string]$ver, [string]$apiUrl) {
 }
 
 Write-Host "=== OLD 1.3.0  (update check -> $ServerUrl) ===" -ForegroundColor Green
-Build-RuoBundle "1.3.0" $ServerUrl
+Build-ResearchBundle "1.3.0" $ServerUrl
 Write-Host "=== NEW 1.3.1  (upgrade target) ===" -ForegroundColor Green
-Build-RuoBundle "1.3.1" ""
+Build-ResearchBundle "1.3.1" ""
 
 Write-Host "=== Artifacts (build\installer) ===" -ForegroundColor Green
-Get-ChildItem "build\installer\Openwater-Setup-1.3.*_RUO.exe" |
+Get-ChildItem "build\installer\Openwater-Setup-1.3.*_Research.exe" |
     Select-Object Name, @{N='MB';E={[math]::Round($_.Length/1MB,1)}} | Format-Table -AutoSize

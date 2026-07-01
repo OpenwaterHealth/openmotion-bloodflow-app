@@ -43,7 +43,7 @@ def _make_connector(tmp_path, app_config=None):
 
     c = MotionConnector(
         interface=iface,
-        app_config=app_config or {"developerMode": False},
+        app_config=app_config or {"engineeringMode": False},
         data_dir=str(tmp_path),
         config_dir="config",
     )

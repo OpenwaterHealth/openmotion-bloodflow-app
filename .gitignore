@@ -85,8 +85,7 @@ junit/
 
 local_notes.md
 /scan_data/
-OpenWaterApp*.zip
-OpenMotion-Bloodflow*.zip
+Open-Motion*.zip
 /run-logs/
 
 .claude/

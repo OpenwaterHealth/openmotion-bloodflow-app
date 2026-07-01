@@ -1,7 +1,7 @@
 # HIL Test Style Guide
 
-Conventions for writing pytest-based UI tests against the OpenWater
-BloodFlow app. Distilled from the patterns we've converged on after
+Conventions for writing pytest-based UI tests against the Open-Motion
+app. Distilled from the patterns we've converged on after
 real-world failures in this repo and from public best-practice
 references (links at the bottom).
 
@@ -15,7 +15,7 @@ ends with the symptom you'll see if you don't follow it — so the
 
 These are **hardware-in-the-loop end-to-end UI tests**. They:
 
-- launch the real BloodFlow app (frozen `OpenWaterApp.exe` or
+- launch the real BloodFlow app (frozen `Open-Motion.exe` or
   `python main.py` with `OPENWATER_FROM_SOURCE=1`),
 - drive the QML UI with `pyautogui` mouse and keyboard input,
 - inspect window state via `pywinauto` UI Automation (UIA),
@@ -67,7 +67,7 @@ Two tiers, set per-file via `pytestmark = pytest.mark.<tier>`:
 | Marker | Runtime | When it fires | Examples |
 |---|---|---|---|
 | `dev` | < ~5 min total | Every push to `next` | `test_history`, `test_notes`, `test_scan_settings` |
-| `release` | up to ~70 min | Tag pushes only (release-pattern tags) | `test_scan_flow`, `test_reducedmode`, `test_scan_auto_stop_bug` |
+| `release` | up to ~70 min | Tag pushes only (release-pattern tags) | `test_scan_flow`, `test_clinicalmode`, `test_scan_auto_stop_bug` |
 
 Rules of thumb:
 

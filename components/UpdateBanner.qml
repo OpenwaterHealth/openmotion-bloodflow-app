@@ -13,10 +13,10 @@ Rectangle {
     height: visible ? 36 : 0
     // Imperative latch: set true when an update is detected, false on
     // dismiss. Visibility is the AND of "has been shown" and "not
-    // reduced mode" so a runtime flip of reducedMode hides the banner
+    // clinical mode" so a runtime flip of clinicalMode hides the banner
     // even after it was already shown. Issue #96 follow-up.
     property bool shown: false
-    visible: shown && !_reducedMode
+    visible: shown && !_clinicalMode
     clip: true
 
     AppTheme { id: theme }
@@ -106,17 +106,17 @@ Rectangle {
         }
     }
 
-    // Reduced (clinical) mode: clinical users shouldn't see update
+    // Clinical mode: clinical users shouldn't see update
     // prompts. Skip the auto-check on launch and refuse to show the
     // banner even if MotionInterface.checkForUpdates() is somehow
-    // triggered (e.g. via developer-mode-only Settings row that
-    // shouldn't be reachable in reduced mode anyway). Issue #96.
-    readonly property bool _reducedMode: MotionInterface.appConfig.reducedMode === true
+    // triggered (e.g. via engineering-mode-only Settings row that
+    // shouldn't be reachable in clinical mode anyway). Issue #96.
+    readonly property bool _clinicalMode: MotionInterface.appConfig.clinicalMode === true
 
     Connections {
         target: MotionInterface
         function onUpdateAvailable(version, url) {
-            if (banner._reducedMode) return
+            if (banner._clinicalMode) return
             banner.latestVersion = version
             banner.downloadUrl = url
             banner.shown = true
@@ -133,11 +133,11 @@ Rectangle {
     }
 
     // Auto-check on creation (after a brief delay to let the app settle).
-    // Disabled in reduced mode so clinical sessions don't make outbound
+    // Disabled in clinical mode so clinical sessions don't make outbound
     // GitHub API calls or surface upgrade prompts.
     Timer {
         interval: 3000
-        running: !banner._reducedMode
+        running: !banner._clinicalMode
         repeat: false
         onTriggered: MotionInterface.checkForUpdates()
     }

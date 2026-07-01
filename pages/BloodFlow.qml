@@ -31,9 +31,9 @@ Rectangle {
 
     // FDA mode (read from app config). Forces Far camera pattern + free run,
     // hides scan-settings button, and swaps in the FDA plot view.
-    property bool reducedMode: MotionInterface.appConfig.reducedMode === true
-    // In reduced mode, Start first runs a contact-quality preflight check.
-    property bool reducedStartPending: false
+    property bool clinicalMode: MotionInterface.appConfig.clinicalMode === true
+    // In clinical mode, Start first runs a contact-quality preflight check.
+    property bool clinicalStartPending: false
     // Prevent late CQ callbacks from re-opening the modal while a stop/cancel
     // is in flight.
     property bool suppressLiveCqModal: false
@@ -53,16 +53,16 @@ Rectangle {
     property string sessionId: MotionInterface.userLabel || ""
 
     // Duration from scan time modal
-    property bool freeRun: reducedMode
-    property int durationSec: reducedMode ? 43200 : 3600  // 12h in FDA mode, 1h default
+    property bool freeRun: clinicalMode
+    property int durationSec: clinicalMode ? 43200 : 3600  // 12h in FDA mode, 1h default
 
-    onReducedModeChanged: {
-        if (reducedMode) {
+    onClinicalModeChanged: {
+        if (clinicalMode) {
             freeRun = true
             durationSec = 43200
             var _cfg = MotionInterface.appConfig;
-            leftMask  = _cfg.reducedModeLeftMask  !== undefined ? _cfg.reducedModeLeftMask  : 0xC3
-            rightMask = _cfg.reducedModeRightMask !== undefined ? _cfg.reducedModeRightMask : 0xC3
+            leftMask  = _cfg.clinicalModeLeftMask  !== undefined ? _cfg.clinicalModeLeftMask  : 0xC3
+            rightMask = _cfg.clinicalModeRightMask !== undefined ? _cfg.clinicalModeRightMask : 0xC3
         }
     }
     property int elapsedSec: 0
@@ -93,8 +93,8 @@ Rectangle {
     // Apply default cameras from config
     function applyDefaultCameras() {
         var cfg      = MotionInterface.appConfig;
-        var defLeft  = reducedMode ? (cfg.reducedModeLeftMask  !== undefined ? cfg.reducedModeLeftMask  : 0xC3) : (cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99);
-        var defRight = reducedMode ? (cfg.reducedModeRightMask !== undefined ? cfg.reducedModeRightMask : 0xC3) : (cfg.rightMask !== undefined ? cfg.rightMask : 0x99);
+        var defLeft  = clinicalMode ? (cfg.clinicalModeLeftMask  !== undefined ? cfg.clinicalModeLeftMask  : 0xC3) : (cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99);
+        var defRight = clinicalMode ? (cfg.clinicalModeRightMask !== undefined ? cfg.clinicalModeRightMask : 0xC3) : (cfg.rightMask !== undefined ? cfg.rightMask : 0x99);
         if (MotionInterface.leftSensorConnected && !_leftMaskInitialApplied) {
             leftMask = defLeft;
             _leftMaskInitialApplied = true;
@@ -112,7 +112,7 @@ Rectangle {
     function beginScanNow() {
         bloodFlow.scanning = true
         bloodFlow.suppressLiveCqModal = false
-        reducedStartPending = false
+        clinicalStartPending = false
         // Drop any stale CQ warning entries from a previous scan/check.
         // The connector creates a fresh _ContactQualityState per scan, so
         // it never re-emits "cleared" for a camera that wasn't latched in
@@ -169,7 +169,7 @@ Rectangle {
         scanning: bloodFlow.scanning
         waiting: bloodFlow.scanStartPending
         camerasReady: bloodFlow.camerasReady
-        reducedMode: bloodFlow.reducedMode
+        clinicalMode: bloodFlow.clinicalMode
 
         // Action buttons — close any open modal first (which by
         // convention saves), then perform the action. If the open
@@ -188,8 +188,8 @@ Rectangle {
                 // has been appended to scanNotes. Opening it here would
                 // race the append and pop an empty modal.
             } else {
-                if (bloodFlow.reducedMode) {
-                    reducedStartPending = true
+                if (bloodFlow.clinicalMode) {
+                    clinicalStartPending = true
                     contactQualityModal.preScanMode = true
                     contactQualityModal.reset(true)
                     qualityCheckRunner.start()
@@ -243,11 +243,11 @@ Rectangle {
         anchors.right: parent.right
         anchors.margins: 8
         anchors.leftMargin: 16
-        reducedMode: bloodFlow.reducedMode
-        // Reduced mode never autoscales: the toggle is hidden in both the
+        clinicalMode: bloodFlow.clinicalMode
+        // Clinical mode never autoscales: the toggle is hidden in both the
         // Settings modal and the viewer's three-dot popup, so a stale
         // autoScale=true in config must not leave it stuck on.
-        autoScale: bloodFlow.reducedMode ? false : settingsModal.autoScale
+        autoScale: bloodFlow.clinicalMode ? false : settingsModal.autoScale
         displayMode: settingsModal.showBfiBvi ? "bfi_bvi" : "mean_contrast"
         leftMask:  bloodFlow.leftMask
         rightMask: bloodFlow.rightMask
@@ -354,10 +354,10 @@ Rectangle {
         anchors.fill: parent
         // Pre-scan check always evaluates all physically-present cameras,
         // regardless of the active scan mask.
-        leftMask: bloodFlow.reducedStartPending
+        leftMask: bloodFlow.clinicalStartPending
                   ? (MotionInterface.leftSensorConnected ? 0xFF : 0x00)
                   : bloodFlow.leftMask
-        rightMask: bloodFlow.reducedStartPending
+        rightMask: bloodFlow.clinicalStartPending
                    ? (MotionInterface.rightSensorConnected ? 0xFF : 0x00)
                    : bloodFlow.rightMask
         onStopScanRequested: {
@@ -370,10 +370,10 @@ Rectangle {
             } else {
                 MotionInterface.stopCapture()
             }
-            reducedStartPending = false
+            clinicalStartPending = false
         }
         onContinueRequested: {
-            if (bloodFlow.reducedStartPending) {
+            if (bloodFlow.clinicalStartPending) {
                 contactQualityModal.close()
                 // Gated, not direct: the CQ check's worker is often still
                 // unwinding when the user clicks Start Scan, and an
@@ -383,14 +383,14 @@ Rectangle {
             // Otherwise (live-scan warning modal), Continue just dismisses.
         }
         onRetestRequested: {
-            contactQualityModal.preScanMode = bloodFlow.reducedStartPending
-            contactQualityModal.reset(bloodFlow.reducedStartPending)
+            contactQualityModal.preScanMode = bloodFlow.clinicalStartPending
+            contactQualityModal.reset(bloodFlow.clinicalStartPending)
             qualityCheckRunner.start()
         }
         onDismissed: {
             if (!bloodFlow.scanning)
-                reducedStartPending = false
-            if (!bloodFlow.reducedStartPending)
+                clinicalStartPending = false
+            if (!bloodFlow.clinicalStartPending)
                 contactQualityModal.preScanMode = false
         }
     }
@@ -489,8 +489,8 @@ Rectangle {
                 Qt.callLater(function() {
                     if (!bloodFlow.scanning) {
                         var cfg      = MotionInterface.appConfig;
-                        var defLeft  = bloodFlow.reducedMode ? (cfg.reducedModeLeftMask  !== undefined ? cfg.reducedModeLeftMask  : 0xC3) : (cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99);
-                        var defRight = bloodFlow.reducedMode ? (cfg.reducedModeRightMask !== undefined ? cfg.reducedModeRightMask : 0xC3) : (cfg.rightMask !== undefined ? cfg.rightMask : 0x99);
+                        var defLeft  = bloodFlow.clinicalMode ? (cfg.clinicalModeLeftMask  !== undefined ? cfg.clinicalModeLeftMask  : 0xC3) : (cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99);
+                        var defRight = bloodFlow.clinicalMode ? (cfg.clinicalModeRightMask !== undefined ? cfg.clinicalModeRightMask : 0xC3) : (cfg.rightMask !== undefined ? cfg.rightMask : 0x99);
                         // First connect this session per side: apply cfg
                         // default. Subsequent reconnects (e.g. console power
                         // cycle) preserve whatever's already in *Mask —
@@ -540,12 +540,12 @@ Rectangle {
         function onContactQualityCheckStarted(seconds) {
             // ``seconds`` is no longer shown as a countdown — the modal is
             // now just an indeterminate spinner during the check.
-            contactQualityModal.preScanMode = bloodFlow.reducedStartPending
-            contactQualityModal.reset(bloodFlow.reducedStartPending)
+            contactQualityModal.preScanMode = bloodFlow.clinicalStartPending
+            contactQualityModal.reset(bloodFlow.clinicalStartPending)
         }
         function onContactQualityCheckFinished(ok, error, warnings) {
-            if (bloodFlow.reducedStartPending) {
-                // Reduced-mode preflight: always land in live-style footer so
+            if (bloodFlow.clinicalStartPending) {
+                // Clinical-mode preflight: always land in live-style footer so
                 // user can explicitly Continue into the main scan.
                 contactQualityModal.liveScan = true
             }
@@ -562,7 +562,7 @@ Rectangle {
                 return
             }
             contactQualityModal.showOk()
-            if (bloodFlow.reducedStartPending)
+            if (bloodFlow.clinicalStartPending)
                 contactQualityModal.liveScanDismissable = true
         }
         // Live-scan warnings (ContactQualityMonitor via SciencePipeline)
@@ -586,12 +586,12 @@ Rectangle {
     }
 
     Component.onCompleted: {
-        if (reducedMode) {
+        if (clinicalMode) {
             freeRun = true
             durationSec = 43200
             var _cfg = MotionInterface.appConfig;
-            leftMask  = _cfg.reducedModeLeftMask  !== undefined ? _cfg.reducedModeLeftMask  : 0xC3
-            rightMask = _cfg.reducedModeRightMask !== undefined ? _cfg.reducedModeRightMask : 0xC3
+            leftMask  = _cfg.clinicalModeLeftMask  !== undefined ? _cfg.clinicalModeLeftMask  : 0xC3
+            rightMask = _cfg.clinicalModeRightMask !== undefined ? _cfg.clinicalModeRightMask : 0xC3
         }
         applyDefaultCameras()
     }
