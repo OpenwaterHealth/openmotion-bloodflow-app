@@ -354,7 +354,7 @@ _pdu_vals = [float] * 16  # scaled voltage values
 
 ### Data Growth
 - **Scan data**: ~20 MB CSV per minute per camera on disk. Extended sessions or many subjects will fill local storage.
-- **App logs**: Modest (KB per session), but accumulate indefinitely in the `app-logs/` directory. No automatic cleanup or rotation.
+- **App logs**: Modest (KB per session), but accumulate indefinitely in the `logs/` directory. No automatic cleanup or rotation.
 - **No data lifecycle management**: Old scans, logs, and results persist until manually deleted.
 
 ### Assumptions Made

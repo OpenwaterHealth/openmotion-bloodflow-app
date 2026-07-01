@@ -711,7 +711,7 @@ def _check_app_alive(request):
         pytest.fail(
             f"Bloodflow app died — first noticed by '{_app_dead_after}'. "
             f"Subsequent tests cannot run. Inspect the bloodflow app log "
-            f"(app-logs/ow-bloodflowapp-*.log) around that test for an "
+            f"(logs/ow-bloodflowapp-*.log) around that test for an "
             f"unhandled Python exception."
         )
 
@@ -719,9 +719,34 @@ def _check_app_alive(request):
         _app_dead_after = request.node.nodeid
         pytest.fail(
             f"Bloodflow app window is gone — likely crashed during the "
-            f"previous test. See app-logs/ow-bloodflowapp-*.log for "
+            f"previous test. See logs/ow-bloodflowapp-*.log for "
             f"diagnostics. (First detected at '{_app_dead_after}'.)"
         )
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_writable_root(request, tmp_path, monkeypatch):
+    """Route utils.app_paths.writable_root() to a per-test tmp dir for
+    every unit test.
+
+    Without this, a non-frozen (dev-mode) writable_root() falls through to
+    cwd — the repo root when pytest runs from there. Any unit test that
+    triggers a config save (e.g. via setConfig/_save_app_config) without
+    its own OPENWATER_DATA_ROOT override then writes a real
+    app_config.local.json into the checked-out worktree, which persists
+    across test runs and corrupts later tests that load the shipped
+    config expecting no overrides present (seen: test_app_config_defaults
+    failures that changed shape between runs depending on prior state).
+
+    A test that needs its own root (e.g. to assert on the exact path)
+    still wins — monkeypatch.setenv/delenv in the test body simply
+    overrides this fixture's value, same monkeypatch instance either way.
+    """
+    if request.node.get_closest_marker("unit") is None:
+        yield
+        return
+    monkeypatch.setenv("OPENWATER_DATA_ROOT", str(tmp_path / "_app_paths_root"))
     yield
 
 

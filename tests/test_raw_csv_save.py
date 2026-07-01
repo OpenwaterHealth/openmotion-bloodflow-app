@@ -683,8 +683,10 @@ class TestRawCsvSave:
         log.info(f"original config snapshot: {original}")
 
         # Pin a known data directory so the diff-after-scan step
-        # doesn't have to chase a default that depends on cwd.
+        # doesn't have to chase a default that depends on cwd. The app
+        # writes scan CSVs under <dataDirectory>/data/, not the root itself.
         test_data_dir = PROJECT_ROOT / "scan_data"
+        scan_output_dir = test_data_dir / "data"
 
         try:
             # ─── Step 1+2+3: kill app, write pre-launch flags ───
@@ -714,7 +716,8 @@ class TestRawCsvSave:
 
             # Snapshot the data dir BEFORE the scan so we can diff
             # afterwards. Files written before this set don't count.
-            files_before = {p.name for p in test_data_dir.iterdir() if p.is_file()}
+            scan_output_dir.mkdir(parents=True, exist_ok=True)
+            files_before = {p.name for p in scan_output_dir.iterdir() if p.is_file()}
 
             # ─── Step 5: open Settings, toggle raw CSV, set duration ─
             log.info("=" * 60)
@@ -801,7 +804,7 @@ class TestRawCsvSave:
             log.info("=" * 60)
             log.info("Step 8: verifying CSV durations against assertions")
             log.info("=" * 60)
-            scan_files = _new_csvs_in(test_data_dir, files_before)
+            scan_files = _new_csvs_in(scan_output_dir, files_before)
             log.info(
                 f"  canonical={scan_files['canonical'].name}\n"
                 f"  left_raw ={scan_files['left_raw'].name}\n"

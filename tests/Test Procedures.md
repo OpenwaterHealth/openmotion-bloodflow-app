@@ -181,8 +181,8 @@ If none match, the fixture `pytest.skip`s.
 | `tests/test_logs/pytest.log` | full pytest log for the run |
 | `tests/test_logs/HIL_Report_<ts>.json` | structured V&V report (per-test results, env, summary) |
 | `tests/test_logs/HIL_Report_<ts>.md` | human-readable V&V report with sign-off block |
-| `tests/app-logs/` | bloodflow app logs captured during tests |
-| `app-logs/` | bloodflow app logs captured outside the tests dir (varies by working dir) |
+| `tests/logs/` | bloodflow app logs captured during tests |
+| `logs/` | bloodflow app logs captured outside the tests dir (varies by working dir) |
 
 ---
 

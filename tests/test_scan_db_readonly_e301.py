@@ -53,8 +53,8 @@ def _make_connector(tmp_path, app_config=None):
     return c
 
 
-def _captured_request(connector, tmp_path):
-    ok = connector.startCapture("subj", 5, 0x66, 0x66, str(tmp_path), False)
+def _captured_request(connector):
+    ok = connector.startCapture("subj", 5, 0x66, 0x66, False)
     assert ok is True
     connector._interface.start_scan.assert_called_once()
     return connector._interface.start_scan.call_args.args[0]
@@ -74,7 +74,7 @@ def test_startcapture_raises_e301_when_preflight_reports_db_unavailable(tmp_path
     received = []
     connector.criticalErrorRaised.connect(lambda *a: received.append(a))
 
-    ok = connector.startCapture("subj", 5, 0x66, 0x66, str(tmp_path), False)
+    ok = connector.startCapture("subj", 5, 0x66, 0x66, False)
 
     assert ok is False
     assert len(received) == 1
@@ -89,7 +89,7 @@ def test_scan_request_carries_on_error_handler(tmp_path):
     """The connector must give the SDK an on_error callback so an async worker
     abort (start_scan already returned True) can still be surfaced."""
     connector = _make_connector(tmp_path)
-    req = _captured_request(connector, tmp_path)
+    req = _captured_request(connector)
     assert callable(req.on_error)
 
 
@@ -98,7 +98,7 @@ def test_worker_on_error_surfaces_e301_and_stops_capture(tmp_path):
     critical sink dies mid-scan) raises E-301 and clears the running state so
     the app isn't wedged 'capturing' forever."""
     connector = _make_connector(tmp_path)
-    req = _captured_request(connector, tmp_path)
+    req = _captured_request(connector)
     assert connector._capture_running is True  # start_scan returned True
 
     received = []

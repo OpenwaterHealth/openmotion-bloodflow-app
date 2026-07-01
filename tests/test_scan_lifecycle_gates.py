@@ -44,10 +44,10 @@ def test_start_configure_refuses_while_scan_workflow_running(connector):
     assert seen == [(False, "Scan already running")]
 
 
-def test_start_capture_refuses_while_scan_workflow_running(connector, tmp_path):
+def test_start_capture_refuses_while_scan_workflow_running(connector):
     connector._scan_workflow.running = True
 
-    ok = connector.startCapture("subject", 5, 0x66, 0x66, str(tmp_path), False)
+    ok = connector.startCapture("subject", 5, 0x66, 0x66, False)
 
     assert ok is False
     connector._interface.start_scan.assert_not_called()

@@ -153,7 +153,7 @@ jobs:
           name: hil-test-logs-${{ steps.resolve.outputs.set }}-${{ github.run_id }}
           path: |
             tests/test_logs/**
-            tests/app-logs/**
-            app-logs/**
+            tests/logs/**
+            logs/**
           if-no-files-found: warn
           retention-days: 14

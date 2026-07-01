@@ -8,8 +8,8 @@
 //   * "check"   — ContactQualityCheckTask  (contact-quality quick check)
 //
 // Properties irrelevant to a given mode are ignored (e.g. ``durationSec``
-// / ``dataDir`` for "check"; ``leftPath``/``rightPath`` in ``scanFinished``
-// are empty strings in "check" mode).
+// for "check"; ``leftPath``/``rightPath`` in ``scanFinished`` are empty
+// strings in "check" mode).
 import QtQuick 6.5
 import "."
 
@@ -35,7 +35,6 @@ QtObject {
 
     property int durationSec: 60
     property string subjectId: ""
-    property string dataDir: ""
     property bool disableLaser: false
     property bool laserOn: true
     property int laserPower: 50
@@ -157,7 +156,6 @@ QtObject {
         rightCameraMask: runner.rightMask
         durationSec: runner.durationSec
         subjectId: runner.subjectId
-        dataDir: runner.dataDir
         disableLaser: runner.disableLaser
 
         onStarted: {
