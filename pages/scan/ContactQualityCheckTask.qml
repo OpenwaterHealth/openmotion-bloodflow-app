@@ -10,6 +10,11 @@ import QtQuick 6.5
 QtObject {
     id: task
     property var connector
+    // Configured scan mask (cameras the user actually selected — a camera
+    // set to "None" is cleared here) so the CQ pass/fail verdict only
+    // requires contact on cameras that will actually be used.
+    property int leftCameraMask: 0
+    property int rightCameraMask: 0
 
     signal started()
     signal progress(int pct)
@@ -43,7 +48,7 @@ QtObject {
         connector.contactQualityCheckFinished.connect(_onDone)
 
         try {
-            connector.runContactQualityCheck()
+            connector.runContactQualityCheck(task.leftCameraMask, task.rightCameraMask)
         } catch (e) {
             try { connector.contactQualityCheckFinished.disconnect(_onDone) } catch(e2) {}
             finished(false, "runContactQualityCheck exception: " + e)
