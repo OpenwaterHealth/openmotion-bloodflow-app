@@ -33,7 +33,6 @@ datas   += qt_datas
 binaries += qt_bins
 hidden  += qt_hidden
 hidden  += collect_submodules("PyQt6")
-hidden  += ["qasync"]
 
 # --- ✅ add omotion explicitly ---
 om_datas, om_bins, om_hidden = collect_all("omotion")
