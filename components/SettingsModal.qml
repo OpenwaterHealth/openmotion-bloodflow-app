@@ -758,28 +758,6 @@ Item {
                     }
                 }
 
-                // ── Reduced Mode ─────────────────────────────────────────────
-                SectionCard {
-                    title: "Reduced Mode"
-                    visible: !root.reducedMode || (MotionInterface.appConfig.developerMode ? true : false)
-
-                    FieldRow {
-                        label: "Enable"
-                        PillSwitch {
-                            checked: root.reducedMode
-                            onCheckedChanged: root.reducedMode = checked
-                        }
-                        Item { Layout.fillWidth: true }
-                    }
-                    Text {
-                        text: "Simplified clinical view: forces Far camera configuration, enables free run mode, hides scan settings, and shows large left/right BFI and BVI panels."
-                        color: root.colTextMuted
-                        font.pixelSize: 11
-                        wrapMode: Text.WordWrap
-                        Layout.fillWidth: true
-                    }
-                }
-
                 // ── Appearance ───────────────────────────────────────────────
                 SectionCard {
                     title: "Appearance"

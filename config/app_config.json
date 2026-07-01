@@ -1,4 +1,5 @@
 {
+  "portableMode": false,
   "dataDirectory": null,
   "writeRawCsv": false,
   "rawCsvDurationSec": null,

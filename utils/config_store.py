@@ -43,9 +43,9 @@ def shipped_baseline(defaults: dict) -> dict:
     return _coerce_ints(base)
 
 
-def load_overrides() -> dict:
+def load_overrides(portable: bool = False) -> dict:
     """Read the writable overrides file (empty dict if absent/invalid)."""
-    path = app_paths.local_config_path()
+    path = app_paths.local_config_path(portable)
     if not path.exists():
         return {}
     try:
@@ -57,9 +57,15 @@ def load_overrides() -> dict:
 
 
 def load_app_config(defaults: dict):
-    """Return (baseline, merged); merged = baseline + writable overrides."""
+    """Return (baseline, merged); merged = baseline + writable overrides.
+
+    ``portableMode`` is read off the shipped baseline itself (it's a
+    build-time flag, never a runtime override) to decide where the writable
+    overrides file lives before we go looking for it.
+    """
     baseline = shipped_baseline(defaults)
-    overrides = load_overrides()
+    portable = bool(baseline.get("portableMode", False))
+    overrides = load_overrides(portable)
     merged = {
         **baseline,
         **{k: v for k, v in overrides.items() if k in baseline},
@@ -77,7 +83,7 @@ def save_overrides(current: dict, baseline: dict) -> None:
     diff = _coerce_ints(
         {k: v for k, v in current.items() if baseline.get(k) != v}
     )
-    path = app_paths.local_config_path()
+    path = app_paths.local_config_path(bool(baseline.get("portableMode", False)))
     tmp = path.with_name(path.name + ".tmp")
     try:
         with open(tmp, "w", encoding="utf-8") as f:

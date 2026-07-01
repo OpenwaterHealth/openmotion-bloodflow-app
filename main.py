@@ -134,6 +134,12 @@ def _load_app_config() -> dict:
         "autoScalePerPlot": False,
         # Y-axis tick labels on plot cells; runtime toggle in the ⋯ popup.
         "showAxisLabels": True,
+        # Build-time flag: true keeps ALL writable state (config overrides,
+        # logs, scan data/db) next to the exe, like the old un-installed
+        # layout; false scatters it to %PROGRAMDATA%\Openwater (the
+        # installed/MSI layout). Set by the build system per artifact type
+        # (portable zip vs installer) — see scripts/build_common.ps1.
+        "portableMode": False,
         "reducedMode": False,
         "reducedModeLeftMask": 0xC3,
         "reducedModeRightMask": 0xC3,
@@ -168,7 +174,8 @@ def _load_app_config() -> dict:
     _APP_CONFIG_BASELINE.clear()
     _APP_CONFIG_BASELINE.update(baseline)
     logger.info(
-        "Loaded app config (overrides from %s)", app_paths.local_config_path()
+        "Loaded app config (overrides from %s)",
+        app_paths.local_config_path(bool(baseline.get("portableMode", False))),
     )
     return merged
 
@@ -228,10 +235,11 @@ def main():
     # Finder launch where cwd is "/").
     _data_dir = app_config.get("dataDirectory")
     if not _data_dir:
-        # Frozen (installed) build uses ProgramData; dev run uses cwd,
-        # falling back to ~/Documents if cwd is not writable.
+        # Frozen + non-portable uses ProgramData; frozen + portable (or a
+        # dev run) keeps everything next to the exe / cwd, falling back to
+        # ~/Documents if that's not writable.
         candidate = (
-            str(app_paths.writable_root())
+            str(app_paths.writable_root(bool(app_config.get("portableMode", False))))
             if getattr(sys, "frozen", False)
             else os.getcwd()
         )

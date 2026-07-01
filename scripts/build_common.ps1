@@ -48,6 +48,29 @@ function Set-ReducedMode {
     return $orig
 }
 
+function Set-PortableMode {
+    # BOM-safe flip of "portableMode" in a bundled app_config.json. Portable
+    # zips keep all writable state (config overrides, logs, scan data) next
+    # to the exe; installers scatter it to %PROGRAMDATA% instead — see
+    # utils/app_paths.py:writable_root. Does NOT return the original text —
+    # callers should already hold that from an earlier Set-ReducedMode call
+    # (or capture it themselves) since Restore-ConfigText only needs to run
+    # once per artifact regardless of how many flags got flipped.
+    param(
+        [Parameter(Mandatory)][string]$ConfigPath,
+        [Parameter(Mandatory)][bool]$Portable
+    )
+    if (-not (Test-Path $ConfigPath)) { throw "config not found at $ConfigPath" }
+    $orig = [System.IO.File]::ReadAllText($ConfigPath)
+    if ($orig -notmatch '"portableMode"\s*:\s*(true|false)') {
+        throw "portableMode key not found in $ConfigPath"
+    }
+    $val = if ($Portable) { "true" } else { "false" }
+    $new = [regex]::Replace($orig, '("portableMode"\s*:\s*)(true|false)', "`${1}$val")
+    [System.IO.File]::WriteAllText($ConfigPath, $new, (New-Object System.Text.UTF8Encoding $false))
+    return $orig
+}
+
 function Restore-ConfigText {
     # Write back the original text captured by Set-ReducedMode (no BOM).
     param(

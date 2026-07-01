@@ -57,7 +57,11 @@ foreach ($variant in $Variants) {
 
     $orig = Set-ReducedMode -ConfigPath $cfgPath -Reduced $m.Reduced
     try {
-        # portable zip (full version)
+        # portable zip (full version) — portableMode:true so it keeps all
+        # writable state next to the exe, matching the old un-installed layout.
+        # build_installer.ps1 below independently forces portableMode:false
+        # onto the same file before harvesting it for the MSI.
+        [void](Set-PortableMode -ConfigPath $cfgPath -Portable $true)
         $zip = Join-Path $OutDir "OpenMotion-Bloodflow-$verFull$($m.Suffix).zip"
         Write-Host "=== Portable ($variant): $zip ===" -ForegroundColor Cyan
         New-PortableZip -DistDir $DistDir -OutZip $zip
