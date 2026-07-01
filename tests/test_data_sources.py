@@ -1718,3 +1718,73 @@ def test_released_source_buffers_stay_readable():
     src.release()
     pts = src.points_for_window("left", 0, "bfi", 0.0, 1.0, 100)
     assert pts and pts[0][1] == 1.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# _CameraBuffer.value_near + cross-thread locking
+# ─────────────────────────────────────────────────────────────────────────────
+
+import threading
+import time
+
+
+def test_value_near_returns_nearest_sample():
+    buf = _CameraBuffer(initial_capacity=8)
+    buf.append(t=0.0, v=1.0, frame_id=0)
+    buf.append(t=1.0, v=2.0, frame_id=1)
+    assert buf.value_near(0.4) == 1.0
+    assert buf.value_near(0.6) == 2.0
+    assert buf.value_near(5.0) == 2.0   # clamped to newest
+    assert buf.value_near(-5.0) == 1.0  # clamped to oldest
+
+
+def test_value_near_empty_and_nonfinite_are_nan():
+    buf = _CameraBuffer(initial_capacity=8)
+    assert math.isnan(buf.value_near(0.0))
+    buf.append(t=0.0, v=float("nan"), frame_id=0)
+    assert math.isnan(buf.value_near(0.0))
+
+
+def test_source_value_at_matches_buffer_value_near():
+    src = LiveScanSource(plot_t0=0.0)
+    src.append_uncorrected("left", 0, frame_id=1, t=0.5, bfi=3.0, bvi=4.0)
+    assert src.value_at("left", 0, "bfi", 0.5) == 3.0
+    assert math.isnan(src.value_at("left", 0, "missing", 0.5))
+
+
+def test_concurrent_append_and_read_do_not_crash():
+    """Pipeline thread appends (with ring-trims) while the GUI thread
+    reads — the _CameraBuffer lock must keep every read in-bounds. A tiny
+    max_capacity forces a ring-trim every few appends, maximizing the
+    chance of catching an unguarded shift (issue: torn reads previously
+    caused IndexErrors in value_at; _ring_trim shifting under a reader
+    was the remaining unguarded case)."""
+    buf = _CameraBuffer(max_capacity=64)
+    stop = threading.Event()
+    errors = []
+
+    def writer():
+        i = 0
+        while not stop.is_set():
+            buf.append(t=float(i), v=float(i), frame_id=i)
+            i += 1
+
+    def reader():
+        while not stop.is_set():
+            try:
+                buf.window_decimated(0.0, 1e12, 50)
+                buf.window_decimated(0.0, 1e12, 100000)  # stride==1 path
+                buf.value_near(1e12)
+            except Exception as e:  # pragma: no cover - failure path
+                errors.append(e)
+                stop.set()
+
+    threads = [threading.Thread(target=writer),
+               threading.Thread(target=reader)]
+    for t in threads:
+        t.start()
+    time.sleep(0.3)
+    stop.set()
+    for t in threads:
+        t.join(timeout=5)
+    assert not errors
