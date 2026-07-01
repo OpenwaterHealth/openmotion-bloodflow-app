@@ -76,19 +76,19 @@ The OpenMotion sensor modules require platform-specific USB driver setup. See th
 
 ## Data & Log Directories
 
-The application creates the following directories for output:
+The application creates two directories for output:
 
 | Directory | Contents |
 |-----------|----------|
-| `app-logs/` | Application log files (timestamped) |
-| `scan_data/` | Captured histogram data and processed CSV files |
+| `logs/` | Application log files (timestamped) |
+| `data/` | Scan CSVs, `scans.db`, calibrations, ft-test exports, debug bundles, in-app-updater downloads |
 
 **Where these are created:**
 
 Both directories live under a single root, chosen in this order:
 
 1. `dataDirectory` from `config/app_config.json` (also settable from the UI directory picker)
-2. The current working directory, when writable
+2. `portableMode` (build-time flag): next to the exe for a portable build, `%PROGRAMDATA%\Openwater` for an installed build — or the current working directory in a dev run, when writable
 3. `~/Documents/Openwater Bloodflow/` as a last-resort fallback (e.g. when the .app is launched from Finder on macOS and cwd is `/`)
 
 ## Configuration
@@ -97,7 +97,7 @@ Edit `config/app_config.json` to customize behavior:
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `dataDirectory` | `null` | Root directory for scan data and app-logs (null = auto-detect) |
+| `dataDirectory` | `null` | Root directory for `logs/` and `data/` (null = auto-detect) |
 | `developerMode` | `false` | Enable developer UI features |
 | `reducedMode` | `false` | Simplified clinical UI: forces far camera config + free run, hides scan settings, shows large left/right BFI/BVI panels |
 | `leftMask` / `rightMask` | `0x66` | Camera bitmask for left/right sensor modules |

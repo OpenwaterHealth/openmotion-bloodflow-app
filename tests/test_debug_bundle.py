@@ -21,26 +21,26 @@ def test_window_hours_default_is_48():
 
 
 def test_includes_recent_logs_excludes_old(tmp_path):
-    data = tmp_path / "data"
-    logs = data / "app-logs"
+    root = tmp_path / "root"
+    logs = root / "logs"
     for name in ("ow-bloodflowapp-A.log", "ow-bloodflowapp-B.log"):
         _write(logs / name, "log")
         os.utime(logs / name, (_NOW - 3600, _NOW - 3600))   # 1h ago
     old = logs / "ow-bloodflowapp-OLD.log"
     _write(old, "old")
     os.utime(old, (_NOW - 49 * 3600, _NOW - 49 * 3600))     # 49h ago
-    _write(data / "app_config.json", '{"k":1}')
+    _write(root / "app_config.json", '{"k":1}')
 
     meta = build_debug_bundle(
-        str(data), str(tmp_path / "out"), now_epoch=_NOW,
+        str(root), str(tmp_path / "out"), now_epoch=_NOW,
         extra_info={"app_version": "1.2.3", "sdk_version": "9.9"},
     )
 
     with zipfile.ZipFile(meta["path"]) as zf:
         names = zf.namelist()
-    assert "app-logs/ow-bloodflowapp-A.log" in names
-    assert "app-logs/ow-bloodflowapp-B.log" in names
-    assert "app-logs/ow-bloodflowapp-OLD.log" not in names
+    assert "logs/ow-bloodflowapp-A.log" in names
+    assert "logs/ow-bloodflowapp-B.log" in names
+    assert "logs/ow-bloodflowapp-OLD.log" not in names
     assert "app_config.json" in names
     assert "system_info.txt" in names
     assert meta["log_count"] == 2
@@ -50,9 +50,9 @@ def test_includes_recent_logs_excludes_old(tmp_path):
 
 
 def test_empty_window_still_writes_system_info(tmp_path):
-    data = tmp_path / "data"
-    (data / "app-logs").mkdir(parents=True)
-    meta = build_debug_bundle(str(data), str(tmp_path / "out"), now_epoch=_NOW)
+    root = tmp_path / "root"
+    (root / "logs").mkdir(parents=True)
+    meta = build_debug_bundle(str(root), str(tmp_path / "out"), now_epoch=_NOW)
     with zipfile.ZipFile(meta["path"]) as zf:
         names = zf.namelist()
     assert names == ["system_info.txt"]   # no logs, no config present
@@ -61,10 +61,10 @@ def test_empty_window_still_writes_system_info(tmp_path):
 
 
 def test_system_info_contains_versions_and_host(tmp_path):
-    data = tmp_path / "data"
-    (data / "app-logs").mkdir(parents=True)
+    root = tmp_path / "root"
+    (root / "logs").mkdir(parents=True)
     meta = build_debug_bundle(
-        str(data), str(tmp_path / "out"), now_epoch=_NOW,
+        str(root), str(tmp_path / "out"), now_epoch=_NOW,
         extra_info={"app_version": "1.2.3", "sdk_version": "9.9"},
     )
     with zipfile.ZipFile(meta["path"]) as zf:
@@ -76,24 +76,24 @@ def test_system_info_contains_versions_and_host(tmp_path):
 
 
 def test_explicit_config_path_is_used(tmp_path):
-    data = tmp_path / "data"
-    (data / "app-logs").mkdir(parents=True)
+    root = tmp_path / "root"
+    (root / "logs").mkdir(parents=True)
     cfg = tmp_path / "elsewhere" / "app_config.json"
     _write(cfg, '{"x":2}')
     meta = build_debug_bundle(
-        str(data), str(tmp_path / "out"), now_epoch=_NOW, config_path=str(cfg),
+        str(root), str(tmp_path / "out"), now_epoch=_NOW, config_path=str(cfg),
     )
     with zipfile.ZipFile(meta["path"]) as zf:
         names = zf.namelist()
     assert "app_config.json" in names
 
 
-def test_missing_app_logs_dir_still_produces_zip(tmp_path):
-    # No app-logs/ directory at all — must still produce a valid zip
+def test_missing_logs_dir_still_produces_zip(tmp_path):
+    # No logs/ directory at all — must still produce a valid zip
     # containing just system_info.txt, no exception.
-    data = tmp_path / "data"
-    data.mkdir()
-    meta = build_debug_bundle(str(data), str(tmp_path / "out"), now_epoch=_NOW)
+    root = tmp_path / "root"
+    root.mkdir()
+    meta = build_debug_bundle(str(root), str(tmp_path / "out"), now_epoch=_NOW)
     with zipfile.ZipFile(meta["path"]) as zf:
         names = zf.namelist()
     assert names == ["system_info.txt"]
@@ -104,8 +104,8 @@ def test_unreadable_log_is_skipped_not_fatal(tmp_path, monkeypatch):
     # A log that passes the mtime filter but fails zf.write must be
     # skipped (counted in log_count, absent from the zip) rather than
     # aborting the bundle.
-    data = tmp_path / "data"
-    logs = data / "app-logs"
+    root = tmp_path / "root"
+    logs = root / "logs"
     _write(logs / "ow-bloodflowapp-good.log", "ok")
     os.utime(logs / "ow-bloodflowapp-good.log", (_NOW - 3600, _NOW - 3600))
     _write(logs / "ow-bloodflowapp-bad.log", "bad")
@@ -119,11 +119,11 @@ def test_unreadable_log_is_skipped_not_fatal(tmp_path, monkeypatch):
         return real_write(self, filename, arcname, *a, **k)
 
     monkeypatch.setattr(zipfile.ZipFile, "write", flaky_write)
-    meta = build_debug_bundle(str(data), str(tmp_path / "out"), now_epoch=_NOW)
+    meta = build_debug_bundle(str(root), str(tmp_path / "out"), now_epoch=_NOW)
     with zipfile.ZipFile(meta["path"]) as zf:
         names = zf.namelist()
-    assert "app-logs/ow-bloodflowapp-good.log" in names
-    assert "app-logs/ow-bloodflowapp-bad.log" not in names
+    assert "logs/ow-bloodflowapp-good.log" in names
+    assert "logs/ow-bloodflowapp-bad.log" not in names
     assert "system_info.txt" in names
     assert meta["log_count"] == 2          # both matched the window
     assert meta["file_count"] == 2         # good log + system_info only

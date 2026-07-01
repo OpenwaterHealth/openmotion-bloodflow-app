@@ -229,28 +229,17 @@ def main():
 
     # Configure file logging
     app_config = _load_app_config()
-    # Single output root: dataDirectory. app-logs/, scan files,
-    # scans.db, ft-test-csvs/ all land under this directory. Falls back to
-    # cwd (when writable) or ~/Documents/Openwater Bloodflow (e.g. macOS
-    # Finder launch where cwd is "/").
-    _data_dir = app_config.get("dataDirectory")
-    if not _data_dir:
-        # Frozen + non-portable uses ProgramData; frozen + portable (or a
-        # dev run) keeps everything next to the exe / cwd, falling back to
-        # ~/Documents if that's not writable.
-        candidate = (
-            str(app_paths.writable_root(bool(app_config.get("portableMode", False))))
-            if getattr(sys, "frozen", False)
-            else os.getcwd()
-        )
-        if os.access(candidate, os.W_OK):
-            _data_dir = candidate
-        else:
-            _data_dir = os.path.join(
-                os.path.expanduser("~"), "Documents", "Openwater Bloodflow"
-            )
+    # Single output root: dataDirectory, or app_paths.writable_root() (which
+    # already applies the frozen/portable/dev-cwd precedence + the
+    # ~/Documents fallback for an unwritable candidate — e.g. macOS Finder
+    # launch where cwd is "/"). Two fixed children live under it: logs/
+    # (this run's log file) and data/ (scans.db, scan CSVs, calibrations,
+    # ft-test-csvs, debug-bundles, downloaded updates).
+    _data_dir = app_config.get("dataDirectory") or str(
+        app_paths.writable_root(bool(app_config.get("portableMode", False)))
+    )
     os.makedirs(_data_dir, exist_ok=True)
-    run_dir = os.path.join(_data_dir, "app-logs")
+    run_dir = os.path.join(_data_dir, app_paths.LOGS_DIRNAME)
     os.makedirs(run_dir, exist_ok=True)
     ts = datetime.datetime.now().strftime(
         "%Y%m%d_%H%M%S"
@@ -276,10 +265,13 @@ def main():
 
     # Construct the MotionInterface and inject into the connector below.
     # data_dir + scan_db_path point the new pipeline's default CsvSink and
-    # ScanDBSink at the same directory the connector uses.
-    _scan_db_path = os.path.join(_data_dir, "scans.db")
+    # ScanDBSink at <_data_dir>/data — the same folder the connector uses
+    # for calibrations/ft-test-csvs/debug-bundles (self._data_root).
+    _scan_data_dir = os.path.join(_data_dir, app_paths.DATA_DIRNAME)
+    os.makedirs(_scan_data_dir, exist_ok=True)
+    _scan_db_path = os.path.join(_scan_data_dir, "scans.db")
     motion_interface = MotionInterface(
-        data_dir=_data_dir,
+        data_dir=_scan_data_dir,
         scan_db_path=_scan_db_path,
         operator_id="bloodflow-app",
     )

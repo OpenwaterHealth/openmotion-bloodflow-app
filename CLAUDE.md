@@ -93,33 +93,31 @@ Debug flags that are still useful when hardware **is** attached (`config/app_con
 | `cq_dark_threshold_per_camera` | `[3.0,…]` | Contact-quality dark threshold. |
 | `bfiClampLow` / `bfiClampHigh` | `0.0` / `10.0` | Display clamps (values outside show `--`). |
 | `bviLowPassEnabled` | `true` | 1-pole LPF on BVI (cutoff 40 Hz). |
-| `dataDirectory` | `C:\Users\ethan\Projects\scan_data` | Single output root — scan CSVs/DB, `app-logs/`, `app-logs/ft-test-csvs/` all land under here. |
+| `dataDirectory` | `C:\Users\ethan\Projects\scan_data` | Single output root — `logs/` and `data/` (scan CSVs/DB, calibrations, ft-test-csvs) land under here. |
 
 ## Reading the app log
 
-Every launch writes a timestamped log to `<dataDirectory>/app-logs/ow-bloodflowapp-<YYYYMMDD_HHMMSS>.log`. Use it as the first stop when diagnosing scan / calibration / connect failures — it captures every SDK + connector log line, including pipeline-stage exceptions that are caught and silently swallowed by `ScanRunner._safe_consume`.
+Every launch writes a timestamped log to `<dataDirectory>/logs/ow-bloodflowapp-<YYYYMMDD_HHMMSS>.log`. Use it as the first stop when diagnosing scan / calibration / connect failures — it captures every SDK + connector log line, including pipeline-stage exceptions that are caught and silently swallowed by `ScanRunner._safe_consume`.
 
 ```powershell
 # Latest log, full contents:
-Get-ChildItem C:\Users\ethan\Projects\scan_data\app-logs\ow-bloodflowapp-*.log |
+Get-ChildItem C:\Users\ethan\Projects\scan_data\logs\ow-bloodflowapp-*.log |
   Sort-Object LastWriteTime -Descending | Select-Object -First 1 | Get-Content
 
 # Filter the latest log for failure-shaped lines (most common starting point):
-Get-ChildItem C:\Users\ethan\Projects\scan_data\app-logs\ow-bloodflowapp-*.log |
+Get-ChildItem C:\Users\ethan\Projects\scan_data\logs\ow-bloodflowapp-*.log |
   Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
   Get-Content | Select-String -Pattern "WARNING|ERROR|raised|exception|Traceback|FAIL|aborted" -Context 0,3
 
 # Just the calibration outcome:
-Get-ChildItem C:\Users\ethan\Projects\scan_data\app-logs\ow-bloodflowapp-*.log |
+Get-ChildItem C:\Users\ethan\Projects\scan_data\logs\ow-bloodflowapp-*.log |
   Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
   Get-Content | Select-String -Pattern "Calibration phase|procedure complete|samples captured"
 ```
 
-The `dataDirectory` config key controls the root (defaults to cwd if unset — falls back to `~/Documents/Openwater Bloodflow` on macOS). When unset on a frozen build, the default instead follows `portableMode`: next to the exe (portable zip) or `%PROGRAMDATA%\Openwater` (installer). Sibling output directories under the same root:
-- `app-logs/` — app log files (one per launch)
-- `app-logs/ft-test-csvs/` — factory-test CSVs
-- `calibrations/` — saved calibration JSONs (also written here)
-- The scan output files (raw / corrected / telemetry CSV + `scans.db`) land directly in the root. Scan notes live in `scans.db` (`sessions.session_notes`), not as files; `*_notes.txt` files are legacy read-only fallbacks.
+The `dataDirectory` config key controls the root (defaults to cwd if unset — falls back to `~/Documents/Openwater Bloodflow` on macOS). When unset on a frozen build, the default instead follows `portableMode`: next to the exe (portable zip) or `%PROGRAMDATA%\Openwater` (installer). Two fixed children live under that root:
+- `logs/` — app log files (one per launch)
+- `data/` — everything else: scan output files (raw / corrected / telemetry CSV + `scans.db`) land directly here; `data/calibrations/` holds saved calibration JSONs; `data/ft-test-csvs/` holds factory-test exports; `data/debug-bundles/` holds "Send Debug Logs" zips; `data/updates/` holds in-app-updater downloads. Scan notes live in `scans.db` (`sessions.session_notes`), not as files; `*_notes.txt` files are legacy read-only fallbacks.
 
 **Important:** the runner is fail-soft. `ScanRunner._safe_consume` catches sink exceptions and logs them as `sink %r raised on channel ...` at ERROR; `pipeline.process` exceptions log as `pipeline.process raised — resetting and continuing` at ERROR. **Neither aborts the scan**, so the app may report "complete" while every interval was actually broken. Always grep for `raised|exception` even on apparent successes when something downstream looks wrong.
 
