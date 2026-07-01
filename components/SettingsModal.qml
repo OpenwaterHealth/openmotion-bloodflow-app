@@ -47,6 +47,16 @@ Item {
     property bool   writeRawCsv:       false
     property var    rawCsvDurationSec: 60
 
+    // ── App update state — driven by MotionInterface's auto-check on
+    // launch (UpdateBanner.qml fires it ~3s after startup). "idle" until
+    // that first check resolves; onUpdateCheckFailed is reused by both the
+    // check and applyUpdate, so appUpdating disambiguates which failed.
+    property string appUpdateStatus:       "idle"   // idle | uptodate | available | failed
+    property string appLatestVersion:      ""
+    property string appDownloadUrl:        ""
+    property bool   appUpdating:           false
+    property string appUpdateProgressText: "Update"
+
     // ── Theme tokens (aliased from AppTheme) ──────────────────────────────
     readonly property color colBgPanel:    theme.bgContainer
     readonly property color colBgCard:     theme.bgCard
@@ -903,24 +913,6 @@ Item {
                         Item { Layout.fillWidth: true }
                     }
 
-                    // Beta firmware: when on, the autoupdater targets the
-                    // most-recently-published release (incl. dev/rc), not just
-                    // full releases. Plain config flag — the connector re-runs
-                    // the firmware check when it toggles (setConfig hook).
-                    FieldRow {
-                        label: "Download beta firmware"
-                        PillSwitch {
-                            checked: MotionInterface.appConfig.downloadBetaFirmware === true
-                            onToggled: MotionInterface.setConfig("downloadBetaFirmware", checked)
-                        }
-                        Text {
-                            text: MotionInterface.appConfig.downloadBetaFirmware === true ? "On" : "Off"
-                            color: MotionInterface.appConfig.downloadBetaFirmware === true ? root.colAccent : root.colTextMuted
-                            font.pixelSize: 12
-                        }
-                        Item { Layout.fillWidth: true }
-                    }
-
                     FieldRow {
                         label: "Save raw CSV"
                         PillSwitch {
@@ -1146,203 +1138,157 @@ Item {
                     }
                 }
 
-                // ── Version Info ─────────────────────────────────────────────
+                // ── About ─────────────────────────────────────────────────────
                 SectionCard {
                     title: "About"
 
+                    // Small pill button reused for the Application row and
+                    // each device firmware row.
+                    component UpdateChip: Rectangle {
+                        id: chip
+                        signal chipClicked()
+                        property string label: "Update"
+                        property bool chipEnabled: true
+                        width: chipText.implicitWidth + 18; height: 24; radius: 4
+                        color: chipArea.containsMouse ? Qt.lighter(theme.accentBlue, 1.1) : theme.accentBlue
+                        opacity: chipEnabled ? 1.0 : 0.6
+                        Text {
+                            id: chipText
+                            anchors.centerIn: parent
+                            text: chip.label
+                            color: "#FFFFFF"
+                            font.pixelSize: 12
+                            font.weight: Font.DemiBold
+                        }
+                        MouseArea {
+                            id: chipArea
+                            anchors.fill: parent
+                            enabled: chip.chipEnabled
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: chip.chipClicked()
+                        }
+                    }
+
+                    // Auto-checked ~3s after launch by UpdateBanner.qml
+                    // (Issue #96); this row just reflects that same
+                    // check's result. Hidden entirely in reduced (clinical)
+                    // mode — clinical users shouldn't see update prompts.
                     FieldRow {
                         label: "Application"
                         Text { text: appVersion; color: root.colTextPri; font.pixelSize: 13; font.family: "Consolas" }
                         Item { Layout.fillWidth: true }
-                    }
-                    FieldRow {
-                        label: "SDK"
-                        Text { text: MotionInterface.get_sdk_version(); color: root.colTextPri; font.pixelSize: 13; font.family: "Consolas" }
-                        Item { Layout.fillWidth: true }
-                    }
-                    // Updates row is hidden in reduced (clinical) mode —
-                    // clinical users shouldn't see update prompts. The
-                    // auto-check banner is gated separately in
-                    // UpdateBanner.qml. Issue #96.
-                    FieldRow {
-                        label: "Updates"
-                        visible: !root.reducedMode
-                        ActionButton {
-                            id: updateCheckBtn
-                            text: "Check for Updates"
-                            Layout.preferredWidth: 150
-                            onClicked: {
-                                updateCheckBtn.text = "Checking..."
-                                updateCheckBtn.enabled = false
-                                MotionInterface.checkForUpdates()
-                            }
-                        }
                         Text {
-                            id: updateStatusText
-                            text: ""
-                            color: root.colTextMuted
+                            visible: !root.reducedMode && root.appUpdateStatus === "uptodate"
+                            text: "Up to date"
+                            color: theme.statusGreen
                             font.pixelSize: 12
                         }
-                        Item { Layout.fillWidth: true }
+                        Text {
+                            visible: !root.reducedMode && root.appUpdateStatus === "failed"
+                            text: "Check failed"
+                            color: theme.accentRed
+                            font.pixelSize: 12
+                        }
+                        UpdateChip {
+                            visible: !root.reducedMode && root.appUpdateStatus === "available"
+                            label: root.appUpdating ? root.appUpdateProgressText : "Update"
+                            chipEnabled: !root.appUpdating
+                            onChipClicked: {
+                                root.appUpdating = true
+                                root.appUpdateProgressText = "Starting…"
+                                MotionInterface.applyUpdate(root.appDownloadUrl)
+                            }
+                        }
                     }
 
                     Connections {
                         target: MotionInterface
                         enabled: !root.reducedMode
                         function onUpdateAvailable(version, url) {
-                            updateCheckBtn.text = "Check for Updates"
-                            updateCheckBtn.enabled = true
-                            updateStatusText.text = "v" + version + " available!"
-                            updateStatusText.color = root.colAccent
+                            root.appUpdateStatus = "available"
+                            root.appLatestVersion = version
+                            root.appDownloadUrl = url
                         }
                         function onUpdateNotAvailable() {
-                            updateCheckBtn.text = "Check for Updates"
-                            updateCheckBtn.enabled = true
-                            updateStatusText.text = "Up to date"
-                            updateStatusText.color = theme.statusGreen
+                            root.appUpdateStatus = "uptodate"
                         }
+                        function onUpdateProgress(message) {
+                            root.appUpdateProgressText = message
+                        }
+                        // Shared by both the background check and applyUpdate —
+                        // an in-progress update failing should fall back to a
+                        // retryable "Update" chip, not a dead-end "Check failed".
                         function onUpdateCheckFailed(msg) {
-                            updateCheckBtn.text = "Check for Updates"
-                            updateCheckBtn.enabled = true
-                            updateStatusText.text = "Check failed"
-                            updateStatusText.color = theme.accentRed
+                            if (root.appUpdating) {
+                                root.appUpdating = false
+                                root.appUpdateProgressText = "Update"
+                            } else {
+                                root.appUpdateStatus = "failed"
+                            }
                         }
                     }
-                }
-
-                // ── System Information ───────────────────────────────────────
-                // Firmware versions per device, cached on connect by the
-                // connector (_log_device_stats). Each row shows the live
-                // version when connected, or a muted "Not connected".
-                SectionCard {
-                    title: "System Information"
 
                     FieldRow {
-                        label: "Console FW"
-                        Text {
-                            text: MotionInterface.consoleConnected
-                                  ? (MotionInterface.consoleFirmwareVersion || "—")
-                                  : "Not connected"
-                            color: MotionInterface.consoleConnected ? root.colTextPri : root.colTextMuted
-                            font.pixelSize: 13
-                            font.family: "Consolas"
-                        }
+                        label: "SDK"
+                        Text { text: MotionInterface.get_sdk_version(); color: root.colTextPri; font.pixelSize: 13; font.family: "Consolas" }
                         Item { Layout.fillWidth: true }
                     }
-                    FieldRow {
-                        label: "Left Sensor FW"
-                        Text {
-                            text: MotionInterface.leftSensorConnected
-                                  ? (MotionInterface.leftSensorFirmwareVersion || "—")
-                                  : "Not connected"
-                            color: MotionInterface.leftSensorConnected ? root.colTextPri : root.colTextMuted
-                            font.pixelSize: 13
-                            font.family: "Consolas"
-                        }
-                        Item { Layout.fillWidth: true }
-                    }
-                    FieldRow {
-                        label: "Right Sensor FW"
-                        Text {
-                            text: MotionInterface.rightSensorConnected
-                                  ? (MotionInterface.rightSensorFirmwareVersion || "—")
-                                  : "Not connected"
-                            color: MotionInterface.rightSensorConnected ? root.colTextPri : root.colTextMuted
-                            font.pixelSize: 13
-                            font.family: "Consolas"
-                        }
-                        Item { Layout.fillWidth: true }
-                    }
-                }
 
-                // ── Firmware Update (developerMode only) ─────────────────────
-                SectionCard {
-                    title: "Firmware Update"
-                    visible: MotionInterface.appConfig.developerMode === true
+                    // Firmware versions per device, cached on connect by the
+                    // connector (_log_device_stats). Each row shows the live
+                    // version when connected, or a muted "Not connected", plus
+                    // an "Up to date" / "Update" indicator once the connector's
+                    // connect-time availability check resolves.
+                    Rectangle { Layout.fillWidth: true; height: 1; color: root.colBorderSoft }
 
-                    // One row per device. `dev` is the connector deviceKey.
-                    component FwRow: ColumnLayout {
-                        property string label: ""
+                    component DeviceRow: FieldRow {
                         property string dev: ""
                         property bool connected: false
                         property string current: ""
-                        property string latest: ""
                         property bool updateAvailable: false
-                        Layout.fillWidth: true
-                        spacing: 2
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            Text {
-                                text: label
-                                color: root.colTextPri
-                                font.pixelSize: 13
-                                Layout.preferredWidth: 120
-                            }
-                            Text {
-                                text: connected ? (current || "—") : "Not connected"
-                                color: connected ? root.colTextPri : root.colTextMuted
-                                font.pixelSize: 13
-                                font.family: "Consolas"
-                            }
-                            Text {
-                                visible: updateAvailable
-                                text: "→ " + latest
-                                color: theme.accentBlue
-                                font.pixelSize: 13
-                                font.family: "Consolas"
-                            }
-                            Item { Layout.fillWidth: true }
-                            Rectangle {
-                                visible: updateAvailable
-                                width: updBtn.implicitWidth + 18; height: 24; radius: 4
-                                color: updArea.containsMouse ? Qt.lighter(theme.accentBlue, 1.1)
-                                                             : theme.accentBlue
-                                Text {
-                                    id: updBtn
-                                    anchors.centerIn: parent
-                                    text: "Update"
-                                    color: "#FFFFFF"
-                                    font.pixelSize: 12
-                                    font.weight: Font.DemiBold
-                                }
-                                MouseArea {
-                                    id: updArea
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: fwConfirm.openFor(label, dev)
-                                }
-                            }
+                        Text {
+                            text: connected ? (current || "—") : "Not connected"
+                            color: connected ? root.colTextPri : root.colTextMuted
+                            font.pixelSize: 13
+                            font.family: "Consolas"
+                        }
+                        Item { Layout.fillWidth: true }
+                        Text {
+                            visible: connected && !updateAvailable
+                            text: "Up to date"
+                            color: theme.statusGreen
+                            font.pixelSize: 12
+                        }
+                        UpdateChip {
+                            visible: connected && updateAvailable
+                            onChipClicked: fwConfirm.openFor(label, dev)
                         }
                     }
 
-                    FwRow {
-                        label: "Console"; dev: "console"
+                    DeviceRow {
+                        label: "Console FW"; dev: "console"
                         connected: MotionInterface.consoleConnected
                         current: MotionInterface.consoleFirmwareVersion
-                        latest: MotionInterface.consoleFirmwareLatest
                         updateAvailable: MotionInterface.consoleFirmwareUpdateAvailable
                     }
-                    FwRow {
-                        label: "Left Sensor"; dev: "left"
+                    DeviceRow {
+                        label: "Left Sensor FW"; dev: "left"
                         connected: MotionInterface.leftSensorConnected
                         current: MotionInterface.leftSensorFirmwareVersion
-                        latest: MotionInterface.leftSensorFirmwareLatest
                         updateAvailable: MotionInterface.leftSensorFirmwareUpdateAvailable
                     }
-                    FwRow {
-                        label: "Right Sensor"; dev: "right"
+                    DeviceRow {
+                        label: "Right Sensor FW"; dev: "right"
                         connected: MotionInterface.rightSensorConnected
                         current: MotionInterface.rightSensorFirmwareVersion
-                        latest: MotionInterface.rightSensorFirmwareLatest
                         updateAvailable: MotionInterface.rightSensorFirmwareUpdateAvailable
                     }
 
-                    // Live progress, driven by the connector. Shows a clean
-                    // status line plus a real ProgressBar (determinate for the
-                    // dfu erase/write phases, indeterminate for the check/
-                    // download/DFU-entry phases that report no percent).
+                    // Live flashing progress, driven by the connector. Shows a
+                    // clean status line plus a real ProgressBar (determinate
+                    // for the dfu erase/write phases, indeterminate for the
+                    // check/download/DFU-entry phases that report no percent).
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 4
@@ -1361,6 +1307,30 @@ Item {
                             value: 0
                             visible: false
                         }
+                    }
+
+                    // Beta firmware: when on, the autoupdater targets the
+                    // most-recently-published release (incl. dev/rc), not just
+                    // full releases. Plain config flag — the connector re-runs
+                    // the firmware check when it toggles (setConfig hook).
+                    // Engineering (developer mode) only.
+                    Rectangle {
+                        Layout.fillWidth: true; height: 1; color: root.colBorderSoft
+                        visible: MotionInterface.appConfig.developerMode === true
+                    }
+                    FieldRow {
+                        label: "Beta Updates"
+                        visible: MotionInterface.appConfig.developerMode === true
+                        PillSwitch {
+                            checked: MotionInterface.appConfig.downloadBetaFirmware === true
+                            onToggled: MotionInterface.setConfig("downloadBetaFirmware", checked)
+                        }
+                        Text {
+                            text: MotionInterface.appConfig.downloadBetaFirmware === true ? "On" : "Off"
+                            color: MotionInterface.appConfig.downloadBetaFirmware === true ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
                     }
                 }
 
