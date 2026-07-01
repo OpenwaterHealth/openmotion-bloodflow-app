@@ -17,7 +17,7 @@ def test_build_report_text_includes_code_and_context():
         timestamp="2026-06-15 23:00:00",
         app_version="1.2.3",
         device_info="left=ABC123 console=XYZ",
-        log_path=r"C:\scan_data\app-logs\ow.log",
+        log_path=r"C:\scan_data\logs\ow.log",
     )
     assert "E-101" in text
     assert "Sensor self-check failed" in text
@@ -25,7 +25,7 @@ def test_build_report_text_includes_code_and_context():
     assert "2026-06-15 23:00:00" in text
     assert "1.2.3" in text
     assert "ABC123" in text
-    assert r"C:\scan_data\app-logs\ow.log" in text
+    assert r"C:\scan_data\logs\ow.log" in text
 
 
 def test_smtp_config_complete_true_when_all_fields_present():

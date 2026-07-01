@@ -56,7 +56,7 @@ import error_codes
 import bug_report
 from nan_gap_tracker import NanGapTracker, gap_note_line
 from utils.resource_path import resource_path
-from utils import config_store
+from utils import app_paths, config_store
 from data_sources import (
     LiveScanSource, PastScanSource, ScanDataSource, buffers_are_empty,
 )
@@ -835,30 +835,6 @@ class MotionConnector(QObject):
     updateCheckFailed = pyqtSignal(str)      # error message
     updateProgress = pyqtSignal(str)         # human-readable progress status
 
-    @staticmethod
-    def _default_data_dir() -> str:
-        """Return a writable directory for logs and scan data.
-
-        Mirrors ``main.py``: an installed (frozen) build writes under
-        ``%PROGRAMDATA%\\Openwater`` via :func:`app_paths.writable_root` —
-        the same root ``main.py`` uses for logs — instead of the read-only
-        Program Files install dir.  A dev run uses the current working
-        directory when it is writable, falling back to
-        ``~/Documents/Openwater Bloodflow`` when it is not (e.g. ``/`` on a
-        macOS Finder launch).
-        """
-        from utils import app_paths
-        candidate = (
-            str(app_paths.writable_root())
-            if getattr(sys, "frozen", False)
-            else os.getcwd()
-        )
-        if os.access(candidate, os.W_OK):
-            return candidate
-        return os.path.join(
-            os.path.expanduser("~"), "Documents", "Openwater Bloodflow"
-        )
-
     def __init__(
         self,
         interface: MotionInterface,
@@ -950,11 +926,16 @@ class MotionConnector(QObject):
         # sensor debug flags above — applied to self._interface.console, not the
         # left/right sensors. See setConsoleDebugLogging.
         self._console_debug_logging       = bool(cfg.get("consoleDebugLogging", False))
-        # Single output root: caller-supplied (from main.py) wins, else
-        # dataDirectory from app config, else default (cwd or ~/Documents).
-        # All sub-paths (app-logs, scan files, scans.db,
-        # ft-test-csvs) live under self._directory.
-        resolved_dir = data_dir or cfg.get("dataDirectory") or self._default_data_dir()
+        # Root directory: caller-supplied (from main.py) wins, else
+        # dataDirectory from app config, else the resolved default (see
+        # app_paths.writable_root). Scan files, calibrations, ft-test-csvs,
+        # debug-bundles, and scans.db all live under self._data_root
+        # (self._directory/data — see that property).
+        resolved_dir = (
+            data_dir
+            or cfg.get("dataDirectory")
+            or str(app_paths.writable_root(bool(cfg.get("portableMode", False))))
+        )
         self._power_off_unused_cameras    = bool(cfg.get("powerOffUnusedCameras", False))
         # Raw CSV is a developer feature (Settings → Developer → "Save raw
         # CSV"); default False so a config missing the key fails closed for
@@ -2145,7 +2126,7 @@ class MotionConnector(QObject):
         seen: set[str] = set()
         ids: list[str] = []
 
-        base_path = Path(self._directory)
+        base_path = Path(self._data_root)
         if base_path.exists():
             for f in base_path.glob("*.csv"):
                 if not f.is_file():
@@ -2212,7 +2193,7 @@ class MotionConnector(QObject):
           New:    {scan_id}_(left|right)_mask*_raw.csv
           Legacy: {scan_id}_(left|right)_mask*.csv
         """
-        base = Path(self._directory)
+        base = Path(self._data_root)
 
         # Detect format by checking if it starts with a date
         if re.match(r'^\d{8}_\d{6}_', scan_id):
@@ -2516,7 +2497,7 @@ class MotionConnector(QObject):
     @pyqtSlot(result=str)
     def prepareDebugLogBundle(self) -> str:
         """Zip the last 48h of app logs (+ config + system info) into
-        app-logs/debug-bundles/, reveal it in the file explorer, and toast
+        data/debug-bundles/, reveal it in the file explorer, and toast
         the support address. Returns the zip path, or '' on failure."""
         try:
             from debug_bundle import build_debug_bundle, WINDOW_HOURS
@@ -2532,9 +2513,7 @@ class MotionConnector(QObject):
                 )
             except Exception:
                 sdk_version = ""
-            dest_dir = os.path.join(
-                self._directory, "app-logs", "debug-bundles"
-            )
+            dest_dir = os.path.join(self._data_root, "debug-bundles")
             meta = build_debug_bundle(
                 self._directory,
                 dest_dir,
@@ -2602,6 +2581,14 @@ class MotionConnector(QObject):
         logger.debug(f"[Connector] Directory set to: {self._directory}")
         self.directoryChanged.emit()
         self.appConfigChanged.emit()
+
+    @property
+    def _data_root(self) -> str:
+        """Where scan files, calibrations, ft-test-csvs, debug-bundles, and
+        the scan DB live: self._directory/data. A sibling of the app-wide
+        logs/ folder (main.py's concern only — the connector never touches
+        it)."""
+        return os.path.join(self._directory, app_paths.DATA_DIRNAME)
 
     # ── App config — generic read/write API ──────────────────────────────────
 
@@ -3172,21 +3159,20 @@ class MotionConnector(QObject):
         except Exception as e:
             logger.error(f"Error querying device info: {e}")
 
-    @pyqtSlot(str, int, int, int, str, bool, result=bool)
+    @pyqtSlot(str, int, int, int, bool, result=bool)
     def startCapture(
         self,
         subject_id: str,
         duration_sec: int,
         left_camera_mask: int,
         right_camera_mask: int,
-        data_dir: str,
         disable_laser: bool,
     ) -> bool:
         """Start capture asynchronously; returns True if kicked off."""
         logger.info(
             f"startCapture(subject_id={subject_id}, dur={duration_sec}s, "
             f"left_mask=0x{left_camera_mask:02X}, right_mask=0x{right_camera_mask:02X}, "
-            f"dir={data_dir}, disable_laser={disable_laser})"
+            f"disable_laser={disable_laser})"
         )
 
         if duration_sec <= 0:
@@ -3210,7 +3196,7 @@ class MotionConnector(QObject):
             return False
 
         try:
-            os.makedirs(data_dir, exist_ok=True)
+            os.makedirs(self._data_root, exist_ok=True)
         except Exception as e:
             self.captureLog.emit(f"Failed to create data dir: {e}")
             return False
@@ -3606,9 +3592,9 @@ class MotionConnector(QObject):
                 }
             )
 
-        # Write CSV to app-logs/ft-test-csvs
+        # Write CSV to data/ft-test-csvs
         try:
-            ft_dir = os.path.join(self._directory, "app-logs", "ft-test-csvs")
+            ft_dir = os.path.join(self._data_root, "ft-test-csvs")
             os.makedirs(ft_dir, exist_ok=True)
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             ft_path = os.path.join(ft_dir, f"ft-test-{ts}.csv")
@@ -4804,7 +4790,7 @@ class MotionConnector(QObject):
                 if self._ft_max_dark_per_camera is not None else None
             ),
         )
-        output_dir = os.path.join(self._directory, "calibrations")
+        output_dir = os.path.join(self._data_root, "calibrations")
         os.makedirs(output_dir, exist_ok=True)
         # CalibrationWorkflow resolves the trigger config to the
         # interface's default (SDK ⊕ app override at construction)
@@ -4911,7 +4897,7 @@ class MotionConnector(QObject):
                 if self._ft_max_dark_per_camera is not None else None
             ),
         )
-        output_dir = os.path.join(self._directory, "calibrations")
+        output_dir = os.path.join(self._data_root, "calibrations")
         os.makedirs(output_dir, exist_ok=True)
         req = CalibrationRequest(
             operator_id="bloodflow-app",
@@ -5219,14 +5205,14 @@ class MotionConnector(QObject):
         import urllib.request
         import subprocess
         import sys
-        from utils import app_paths
 
         try:
             if not _is_bundle_url(download_url):
                 self.updateCheckFailed.emit("No installer for this update.")
                 return
 
-            updates_dir = app_paths.writable_root() / "updates"
+            portable = bool(self._app_config.get("portableMode", False))
+            updates_dir = app_paths.writable_root(portable) / app_paths.DATA_DIRNAME / "updates"
             updates_dir.mkdir(parents=True, exist_ok=True)
             # Clear stale downloads so old installers don't accumulate.
             for stale in updates_dir.glob("*"):

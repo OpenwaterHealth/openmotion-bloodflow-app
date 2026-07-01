@@ -404,7 +404,6 @@ Rectangle {
         rightMask: bloodFlow.rightMask
         durationSec: bloodFlow.durationSec
         subjectId: MotionInterface.userLabel
-        dataDir: MotionInterface.directory
         disableLaser: false
         laserOn: true
         laserPower: 50

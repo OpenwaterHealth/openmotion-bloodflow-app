@@ -8,7 +8,6 @@ QtObject {
     property int rightCameraMask: 0x00
     property int durationSec: 60
     property string subjectId: ""
-    property string dataDir: ""
     property bool disableLaser: false
 
     property string leftPath: ""
@@ -68,7 +67,7 @@ QtObject {
         // kick off async capture
         var startedOk = false
         try {
-            startedOk = connector.startCapture(subjectId, durationSec, leftCameraMask, rightCameraMask, dataDir, disableLaser)
+            startedOk = connector.startCapture(subjectId, durationSec, leftCameraMask, rightCameraMask, disableLaser)
         } catch(e) {}
         if (!startedOk) {
             // cleanup if start failed

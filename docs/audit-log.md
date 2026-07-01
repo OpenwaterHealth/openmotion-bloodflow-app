@@ -107,7 +107,7 @@ LIMIT 50;
 
 The **Send Debug Logs** button (top of the audit-log viewer) packages the
 app's diagnostic logs for support. It writes a zip to
-`<dataDirectory>/app-logs/debug-bundles/debug-bundle-<timestamp>.zip`
+`<dataDirectory>/data/debug-bundles/debug-bundle-<timestamp>.zip`
 containing the app log files from the last 48 hours, `app_config.json`,
 and a `system_info.txt` (app/SDK version + host details). The file
 explorer opens with the zip selected, and a message shows the path —

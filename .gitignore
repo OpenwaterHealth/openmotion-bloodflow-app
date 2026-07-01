@@ -104,6 +104,9 @@ tests/New_UI_TestScripts/app-logs/
 tests/New_UI_TestScripts/debug_uia.py
 test_logs/
 
-# Runtime config overrides (written by setConfig; ProgramData in prod, cwd in dev)
+# Runtime-writable app state (ProgramData/exe-folder in prod, cwd in dev):
+# app_config.local.json (config overrides) and data/ (scans, calibrations,
+# ft-test-csvs, debug-bundles, updates). logs/ isn't listed separately —
+# the *.log glob above already covers the files inside it.
 app_config.local.json
 data/

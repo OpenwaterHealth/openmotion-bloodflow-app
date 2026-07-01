@@ -46,8 +46,8 @@ def _make_connector(tmp_path, app_config):
     return c
 
 
-def _captured_request(connector, tmp_path):
-    ok = connector.startCapture("subj", 5, 0x66, 0x66, str(tmp_path), False)
+def _captured_request(connector):
+    ok = connector.startCapture("subj", 5, 0x66, 0x66, False)
     assert ok is True
     connector._interface.start_scan.assert_called_once()
     return connector._interface.start_scan.call_args.args[0]
@@ -60,7 +60,7 @@ def test_clinical_mode_disables_telemetry_and_raw_csv(tmp_path):
         tmp_path,
         {"developerMode": False, "writeRawCsv": True},
     )
-    req = _captured_request(connector, tmp_path)
+    req = _captured_request(connector)
     assert req.write_telemetry_csv is False
     assert req.raw_save_max_duration_s == 0
 
@@ -68,7 +68,7 @@ def test_clinical_mode_disables_telemetry_and_raw_csv(tmp_path):
 def test_missing_developer_mode_key_fails_closed(tmp_path):
     """No developerMode key at all → same as clinical mode (fail closed)."""
     connector = _make_connector(tmp_path, {"writeRawCsv": True})
-    req = _captured_request(connector, tmp_path)
+    req = _captured_request(connector)
     assert req.write_telemetry_csv is False
     assert req.raw_save_max_duration_s == 0
 
@@ -83,7 +83,7 @@ def test_developer_mode_enables_telemetry_and_raw_csv(tmp_path):
             "rawCsvDurationSec": 60,
         },
     )
-    req = _captured_request(connector, tmp_path)
+    req = _captured_request(connector)
     assert req.write_telemetry_csv is True
     assert req.raw_save_max_duration_s == 60.0
 
@@ -94,7 +94,7 @@ def test_developer_mode_respects_raw_csv_toggle_off(tmp_path):
         tmp_path,
         {"developerMode": True, "writeRawCsv": False},
     )
-    req = _captured_request(connector, tmp_path)
+    req = _captured_request(connector)
     assert req.write_telemetry_csv is True
     assert req.raw_save_max_duration_s == 0
 
@@ -103,5 +103,5 @@ def test_write_raw_csv_defaults_false(tmp_path):
     """writeRawCsv missing from config → fail closed (no raw output)."""
     connector = _make_connector(tmp_path, {"developerMode": True})
     assert connector._write_raw_csv is False
-    req = _captured_request(connector, tmp_path)
+    req = _captured_request(connector)
     assert req.raw_save_max_duration_s == 0
