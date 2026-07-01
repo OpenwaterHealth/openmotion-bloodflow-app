@@ -912,7 +912,7 @@ class MotionConnector(QObject):
         self._console_debug_logging       = bool(cfg.get("consoleDebugLogging", False))
         # Root directory: caller-supplied (from main.py) wins, else
         # dataDirectory from app config, else the resolved default (see
-        # app_paths.writable_root). Scan files, calibrations, ft-test-csvs,
+        # app_paths.writable_root). Scan files, calibrations,
         # debug-bundles, and scans.db all live under self._data_root
         # (self._directory/data — see that property).
         resolved_dir = (
@@ -2582,7 +2582,7 @@ class MotionConnector(QObject):
 
     @property
     def _data_root(self) -> str:
-        """Where scan files, calibrations, ft-test-csvs, debug-bundles, and
+        """Where scan files, calibrations, debug-bundles, and
         the scan DB live: self._directory/data. A sibling of the app-wide
         logs/ folder (main.py's concern only — the connector never touches
         it)."""

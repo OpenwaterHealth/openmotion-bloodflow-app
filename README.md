@@ -81,7 +81,7 @@ The application creates two directories for output:
 | Directory | Contents |
 |-----------|----------|
 | `logs/` | Application log files (timestamped) |
-| `data/` | Scan CSVs, `scans.db`, calibrations, ft-test exports, debug bundles, in-app-updater downloads |
+| `data/` | Scan CSVs, `scans.db`, calibrations, debug bundles, in-app-updater downloads |
 
 **Where these are created:**
 
