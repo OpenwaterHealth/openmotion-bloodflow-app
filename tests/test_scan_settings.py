@@ -41,19 +41,19 @@ pytestmark = pytest.mark.dev
 # inside the modal, not the calibrated sidebar panel.
 SCAN_MODAL_CLOSE = (0.360, 0.119)
 
-# Every test in this module assumes reducedMode is off — in reduced
+# Every test in this module assumes clinicalMode is off — in clinical
 # mode the BloodFlow page forces freeRun + a 12-hour duration and the
-# Reduced Mode toggle in Settings hides itself, so the modal layout
+# Clinical Mode toggle in Settings hides itself, so the modal layout
 # the tab walks rely on isn't there. Snapshot at module import (before
 # the session-scoped ``app`` fixture spins up the app) and restore on
 # teardown via the autouse fixture below.
-_INITIAL_REDUCED_MODE = force_app_config_value("reducedMode", False)
+_INITIAL_CLINICAL_MODE = force_app_config_value("clinicalMode", False)
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _restore_reduced_mode_on_module_teardown():
+def _restore_clinical_mode_on_module_teardown():
     yield
-    write_app_config_value("reducedMode", _INITIAL_REDUCED_MODE)
+    write_app_config_value("clinicalMode", _INITIAL_CLINICAL_MODE)
 
 
 # ─────────────────────────────────────────────

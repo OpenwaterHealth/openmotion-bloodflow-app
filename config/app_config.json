@@ -6,9 +6,9 @@
 
   "leftMask": 102,
   "rightMask": 102,
-  "reducedMode": true,
-  "reducedModeLeftMask": 195,
-  "reducedModeRightMask": 195,
+  "clinicalMode": true,
+  "clinicalModeLeftMask": 195,
+  "clinicalModeRightMask": 195,
   "uncorrectedOnly": true,
 
   "showBfiBvi": true,
@@ -52,7 +52,7 @@
   "cq_dark_threshold_per_camera":  [3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0],
   "cq_light_threshold_per_camera": [15.0, 15.0, 15.0, 15.0, 15.0, 15.0, 15.0, 15.0],
 
-  "developerMode": false,
+  "engineeringMode": false,
   "downloadBetaFirmware": false,
   "forceLaserFail": false,
   "cameraFakeData": false,

@@ -18,7 +18,7 @@ def _connector(tmp_path, scan_db_path=None, app_config=None):
     iface.get_sdk_version.return_value = "9.9.9"
     return MotionConnector(
         interface=iface,
-        app_config=app_config or {"developerMode": False},
+        app_config=app_config or {"engineeringMode": False},
         data_dir=str(tmp_path),
         config_dir="config",
     )
@@ -206,7 +206,7 @@ def test_prepare_debug_bundle_creates_zip_and_logs(tmp_path):
     db = str(tmp_path / "scans.db")
     logs = tmp_path / "logs"
     logs.mkdir()
-    (logs / "ow-bloodflowapp-x.log").write_text("hello", encoding="utf-8")
+    (logs / "open-motion-x.log").write_text("hello", encoding="utf-8")
     c = _connector(tmp_path, scan_db_path=db)
     # Don't spawn a real file-explorer process during the test.
     c._reveal_in_explorer = lambda p: None

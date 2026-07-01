@@ -4,7 +4,7 @@ import QtQuick.Layouts 6.0
 import OpenMotion 1.0
 
 /*  FirmwareUpdateBanner — slides in below the header when newer device
- *  firmware is available. developerMode-gated (technician task). The "View"
+ *  firmware is available. engineeringMode-gated (technician task). The "View"
  *  button asks the host to open the Settings overlay (firmware card).
  */
 Rectangle {
@@ -17,7 +17,7 @@ Rectangle {
 
     signal viewRequested()
 
-    readonly property bool _devMode: MotionInterface.appConfig.developerMode === true
+    readonly property bool _devMode: MotionInterface.appConfig.engineeringMode === true
     property bool _dismissed: false
     visible: _devMode && MotionInterface.anyFirmwareUpdateAvailable && !_dismissed
 

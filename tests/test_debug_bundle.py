@@ -23,10 +23,10 @@ def test_window_hours_default_is_48():
 def test_includes_recent_logs_excludes_old(tmp_path):
     root = tmp_path / "root"
     logs = root / "logs"
-    for name in ("ow-bloodflowapp-A.log", "ow-bloodflowapp-B.log"):
+    for name in ("open-motion-A.log", "open-motion-B.log"):
         _write(logs / name, "log")
         os.utime(logs / name, (_NOW - 3600, _NOW - 3600))   # 1h ago
-    old = logs / "ow-bloodflowapp-OLD.log"
+    old = logs / "open-motion-OLD.log"
     _write(old, "old")
     os.utime(old, (_NOW - 49 * 3600, _NOW - 49 * 3600))     # 49h ago
     _write(root / "app_config.json", '{"k":1}')
@@ -38,9 +38,9 @@ def test_includes_recent_logs_excludes_old(tmp_path):
 
     with zipfile.ZipFile(meta["path"]) as zf:
         names = zf.namelist()
-    assert "logs/ow-bloodflowapp-A.log" in names
-    assert "logs/ow-bloodflowapp-B.log" in names
-    assert "logs/ow-bloodflowapp-OLD.log" not in names
+    assert "logs/open-motion-A.log" in names
+    assert "logs/open-motion-B.log" in names
+    assert "logs/open-motion-OLD.log" not in names
     assert "app_config.json" in names
     assert "system_info.txt" in names
     assert meta["log_count"] == 2
@@ -106,15 +106,15 @@ def test_unreadable_log_is_skipped_not_fatal(tmp_path, monkeypatch):
     # aborting the bundle.
     root = tmp_path / "root"
     logs = root / "logs"
-    _write(logs / "ow-bloodflowapp-good.log", "ok")
-    os.utime(logs / "ow-bloodflowapp-good.log", (_NOW - 3600, _NOW - 3600))
-    _write(logs / "ow-bloodflowapp-bad.log", "bad")
-    os.utime(logs / "ow-bloodflowapp-bad.log", (_NOW - 3600, _NOW - 3600))
+    _write(logs / "open-motion-good.log", "ok")
+    os.utime(logs / "open-motion-good.log", (_NOW - 3600, _NOW - 3600))
+    _write(logs / "open-motion-bad.log", "bad")
+    os.utime(logs / "open-motion-bad.log", (_NOW - 3600, _NOW - 3600))
 
     real_write = zipfile.ZipFile.write
 
     def flaky_write(self, filename, arcname=None, *a, **k):
-        if str(filename).endswith("ow-bloodflowapp-bad.log"):
+        if str(filename).endswith("open-motion-bad.log"):
             raise OSError("simulated read failure")
         return real_write(self, filename, arcname, *a, **k)
 
@@ -122,8 +122,8 @@ def test_unreadable_log_is_skipped_not_fatal(tmp_path, monkeypatch):
     meta = build_debug_bundle(str(root), str(tmp_path / "out"), now_epoch=_NOW)
     with zipfile.ZipFile(meta["path"]) as zf:
         names = zf.namelist()
-    assert "logs/ow-bloodflowapp-good.log" in names
-    assert "logs/ow-bloodflowapp-bad.log" not in names
+    assert "logs/open-motion-good.log" in names
+    assert "logs/open-motion-bad.log" not in names
     assert "system_info.txt" in names
     assert meta["log_count"] == 2          # both matched the window
     assert meta["file_count"] == 2         # good log + system_info only

@@ -1,4 +1,4 @@
-<!-- installer/app.wxs — packages dist\OpenWaterApp\ into Program Files. -->
+<!-- installer/app.wxs — packages dist\Open-Motion\ into Program Files. -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package Name="$(var.ProductName)"
            Manufacturer="Openwater"
@@ -13,7 +13,7 @@
 
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="VENDORFOLDER" Name="Openwater">
-        <Directory Id="APPFOLDER" Name="Bloodflow" />
+        <Directory Id="APPFOLDER" Name="Open-Motion" />
       </Directory>
     </StandardDirectory>
 
@@ -41,10 +41,10 @@
     <Component Id="AppShortcut" Directory="AppShortcutFolder" Guid="*">
       <Shortcut Id="StartMenuShortcut"
                 Name="$(var.ProductName)"
-                Target="[APPFOLDER]OpenWaterApp.exe"
+                Target="[APPFOLDER]Open-Motion.exe"
                 WorkingDirectory="APPFOLDER" />
       <RemoveFolder Id="RemoveAppShortcutFolder" On="uninstall" />
-      <RegistryValue Root="HKLM" Key="Software\Openwater\Bloodflow"
+      <RegistryValue Root="HKLM" Key="Software\Openwater\Open-Motion"
                      Name="installed" Type="integer" Value="1" KeyPath="yes" />
     </Component>
 
@@ -54,9 +54,9 @@
                Condition="INSTALLDESKTOPSHORTCUT = &quot;1&quot;">
       <Shortcut Id="DesktopShortcutLink"
                 Name="$(var.ProductName)"
-                Target="[APPFOLDER]OpenWaterApp.exe"
+                Target="[APPFOLDER]Open-Motion.exe"
                 WorkingDirectory="APPFOLDER" />
-      <RegistryValue Root="HKLM" Key="Software\Openwater\Bloodflow"
+      <RegistryValue Root="HKLM" Key="Software\Openwater\Open-Motion"
                      Name="desktopShortcut" Type="integer" Value="1" KeyPath="yes" />
     </Component>
   </Package>

@@ -13,14 +13,14 @@ pip install -e ../openmotion-sdk
 
 python main.py                          # run the app
 
-python -m PyInstaller -y openwater.spec # package .exe → dist/OpenWaterApp/
+python -m PyInstaller -y openwater.spec # package .exe → dist/Open-Motion/
 .\build_and_zip.ps1                     # build + package all 4 artifacts
 
 # 4 artifacts: Clinical/Research × Portable/Installer
-#   OpenMotion-Bloodflow-<ver>.zip      (Clinical portable)
-#   OpenMotion-Bloodflow-<ver>_RUO.zip  (Research portable)
-#   build/installer/Openwater-Setup-<ver>.exe      (Clinical installer)
-#   build/installer/Openwater-Setup-<ver>_RUO.exe  (Research installer)
+#   Open-Motion-<ver>.zip                (Clinical portable)
+#   Open-Motion-Research-<ver>.zip       (Research portable)
+#   build/installer/Openwater-Setup-<ver>.exe          (Clinical installer)
+#   build/installer/Openwater-Setup-<ver>_Research.exe (Research installer)
 # build_and_zip.ps1 runs PyInstaller once, then scripts/package_artifacts.ps1
 # loops the variants. Installers are skipped with a warning if WiX isn't found;
 # scripts/package_artifacts.ps1 -SkipInstaller forces portable-only.
@@ -71,20 +71,20 @@ To exercise app logic without hardware, write unit tests that mock the hardware 
 
 Debug flags that are still useful when hardware **is** attached (`config/app_config.json`):
 
-- `developerMode: true` — show per-camera CQ dots, test buttons, debug telemetry.
+- `engineeringMode: true` — show per-camera CQ dots, test buttons, debug telemetry.
 - `commVerbose: true` + `verboseCommandHandling: true` — SDK logs all UART packets + MCU printf output.
 
 ## Notable config flags (`config/app_config.json`)
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `developerMode` | `true` | Show debug telemetry, per-camera CQ dots, test buttons. |
-| `reducedMode` | `true` | Clinical UI: hide settings, large BFI/BVI panels. Build-time only — there is no Settings toggle for it (removed; config-only now). |
+| `engineeringMode` | `true` | Show debug telemetry, per-camera CQ dots, test buttons. |
+| `clinicalMode` | `true` | Clinical UI: hide settings, large BFI/BVI panels. Build-time only — there is no Settings toggle for it (removed; config-only now). |
 | `portableMode` | `false` | Build-time flag: `true` keeps all writable state (config overrides, logs, scan data/db) next to the exe (old un-installed layout); `false` scatters it to `%PROGRAMDATA%\Openwater`. Portable zips ship `true`, installers force `false` — see `Set-PortableMode` (`scripts/build_common.ps1`) and `utils/app_paths.py:writable_root`. |
 | `forceLaserFail` | `false` | Debug: simulate a laser safety trip. |
 | `cameraFakeData` | `false` | **Broken — do not use.** Was meant to request firmware fake histograms; see "Working without hardware". |
 | `histoThrottle` | `false` | Drop histograms to reduce log spam. |
-| `histoCmp` | `true` | Histogram compression (firmware `DEBUG_FLAG_HISTO_CMP`, bit `0x40` — firmware logs it as "histo compress"). Toggle live from Settings → Developer → "Histogram compression". |
+| `histoCmp` | `true` | Histogram compression (firmware `DEBUG_FLAG_HISTO_CMP`, bit `0x40` — firmware logs it as "histo compress"). Toggle live from Settings → Engineering → "Histogram compression". |
 | `deferHistoSend` | `true` | Defer the per-frame histogram send out of the FSIN ISR into the firmware main loop (firmware `DEBUG_FLAG_SEND_DEFER`, bit `0x80`; sensor-fw#68). Config-only (no Settings UI); pushed to connected sensors at connect via `_compute_sensor_debug_flags`. Requires the PR-branch sensor firmware — stock firmware ignores bit 7. |
 | `tecTripTempC` | `40` | Console over-temp trip (°C) pushed to the console user config on connect via `motion_config.ensure_tec_trip` (read-modify-write, preserves calibration + OPT/EE keys). Validated to 1–60 °C; absent/invalid values leave the device's existing trip untouched (never writes `0`, which would disable the firmware trip). |
 | `ft_min_mean_per_camera` | `[40,40,…]` | Calibration pass threshold — min pixel mean per camera (8-element array). |
@@ -97,25 +97,25 @@ Debug flags that are still useful when hardware **is** attached (`config/app_con
 
 ## Reading the app log
 
-Every launch writes a timestamped log to `<dataDirectory>/logs/ow-bloodflowapp-<YYYYMMDD_HHMMSS>.log`. Use it as the first stop when diagnosing scan / calibration / connect failures — it captures every SDK + connector log line, including pipeline-stage exceptions that are caught and silently swallowed by `ScanRunner._safe_consume`.
+Every launch writes a timestamped log to `<dataDirectory>/logs/open-motion-<YYYYMMDD_HHMMSS>.log`. Use it as the first stop when diagnosing scan / calibration / connect failures — it captures every SDK + connector log line, including pipeline-stage exceptions that are caught and silently swallowed by `ScanRunner._safe_consume`.
 
 ```powershell
 # Latest log, full contents:
-Get-ChildItem C:\Users\ethan\Projects\scan_data\logs\ow-bloodflowapp-*.log |
+Get-ChildItem C:\Users\ethan\Projects\scan_data\logs\open-motion-*.log |
   Sort-Object LastWriteTime -Descending | Select-Object -First 1 | Get-Content
 
 # Filter the latest log for failure-shaped lines (most common starting point):
-Get-ChildItem C:\Users\ethan\Projects\scan_data\logs\ow-bloodflowapp-*.log |
+Get-ChildItem C:\Users\ethan\Projects\scan_data\logs\open-motion-*.log |
   Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
   Get-Content | Select-String -Pattern "WARNING|ERROR|raised|exception|Traceback|FAIL|aborted" -Context 0,3
 
 # Just the calibration outcome:
-Get-ChildItem C:\Users\ethan\Projects\scan_data\logs\ow-bloodflowapp-*.log |
+Get-ChildItem C:\Users\ethan\Projects\scan_data\logs\open-motion-*.log |
   Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
   Get-Content | Select-String -Pattern "Calibration phase|procedure complete|samples captured"
 ```
 
-The `dataDirectory` config key controls the root (defaults to cwd if unset — falls back to `~/Documents/Openwater Bloodflow` on macOS). When unset on a frozen build, the default instead follows `portableMode`: next to the exe (portable zip) or `%PROGRAMDATA%\Openwater` (installer). Two fixed children live under that root:
+The `dataDirectory` config key controls the root (defaults to cwd if unset — falls back to `~/Documents/Open-Motion` on macOS). When unset on a frozen build, the default instead follows `portableMode`: next to the exe (portable zip) or `%PROGRAMDATA%\Openwater` (installer). Two fixed children live under that root:
 - `logs/` — app log files (one per launch)
 - `data/` — everything else: scan output files (raw / corrected / telemetry CSV + `scans.db`) land directly here; `data/calibrations/` holds saved calibration JSONs; `data/ft-test-csvs/` holds factory-test exports; `data/debug-bundles/` holds "Send Debug Logs" zips; `data/updates/` holds in-app-updater downloads. Scan notes live in `scans.db` (`sessions.session_notes`), not as files; `*_notes.txt` files are legacy read-only fallbacks.
 

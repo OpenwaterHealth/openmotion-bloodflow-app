@@ -1,5 +1,5 @@
 """
-Shared fixtures and helpers for OpenWater BloodFlow UI tests.
+Shared fixtures and helpers for Open-Motion UI tests.
 
 Provides:
   - App launch/discovery as a session-scoped fixture
@@ -88,7 +88,7 @@ def pytest_addoption(parser):
         default=False,
         help=(
             "Launch the OpenWater app from source via 'python main.py' instead "
-            "of discovering an installed OpenWaterApp.exe. Equivalent to setting "
+            "of discovering an installed Open-Motion.exe. Equivalent to setting "
             "$OPENWATER_FROM_SOURCE=1; the env var is honoured either way."
         ),
     )
@@ -140,7 +140,7 @@ def _find_main_py() -> str:
 
 
 def _find_exe() -> str:
-    """Locate the latest OpenWaterApp.exe, including pre-release builds.
+    """Locate the latest Open-Motion.exe, including pre-release builds.
 
     Collects all matches across every search pattern and returns the most
     recently modified file, so a newer pre-release build is always preferred
@@ -150,19 +150,19 @@ def _find_exe() -> str:
     if env and os.path.exists(env):
         return env
     patterns = [
-        r"C:\Users\*\Documents\OpenMotion\**\OpenWaterApp.exe",
-        r"C:\Users\*\Desktop\**\OpenWaterApp.exe",
-        r"C:\Program Files\**\OpenWaterApp.exe",
-        r"C:\Program Files (x86)\**\OpenWaterApp.exe",
+        r"C:\Users\*\Documents\OpenMotion\**\Open-Motion.exe",
+        r"C:\Users\*\Desktop\**\Open-Motion.exe",
+        r"C:\Program Files\**\Open-Motion.exe",
+        r"C:\Program Files (x86)\**\Open-Motion.exe",
     ]
     all_matches = []
     for pattern in patterns:
         all_matches.extend(_glob.glob(pattern, recursive=True))
     if all_matches:
         latest = max(all_matches, key=os.path.getmtime)
-        log.info(f"  Found {len(all_matches)} OpenWaterApp.exe candidate(s) — using latest: {latest}")
+        log.info(f"  Found {len(all_matches)} Open-Motion.exe candidate(s) — using latest: {latest}")
         return latest
-    local = os.path.join(os.path.dirname(os.path.abspath(__file__)), "OpenWaterApp.exe")
+    local = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Open-Motion.exe")
     if os.path.exists(local):
         return local
     return ""
@@ -171,11 +171,11 @@ def _find_exe() -> str:
 # ─────────────────────────────────────────────
 # Window helpers
 # ─────────────────────────────────────────────
-# Process names accepted as the bloodflow app. ``OpenWaterApp.exe`` is
+# Process names accepted as the bloodflow app. ``Open-Motion.exe`` is
 # the packaged build; ``python.exe`` / ``pythonw.exe`` covers the
 # from-source mode (verified by also checking ``main.py`` in the
 # command line, since plenty of other things run under python.exe).
-_APP_PROCESS_NAMES = ("openwaterapp.exe", "python.exe", "pythonw.exe")
+_APP_PROCESS_NAMES = ("open-motion.exe", "python.exe", "pythonw.exe")
 
 
 def _window_process_name(w) -> str | None:
@@ -243,7 +243,7 @@ def _is_bloodflow_window(w) -> bool:
 def ensure_visible():
     """Bring the bloodflow app window to the foreground.
 
-    Identifies the right window by owning-process name (OpenWaterApp.exe
+    Identifies the right window by owning-process name (Open-Motion.exe
     or python main.py with the bloodflow project on the command line),
     so a sibling File Explorer window pointed at the project folder
     can't masquerade as the app. Otherwise every subsequent
@@ -270,7 +270,7 @@ def uia_window(retries: int = 3):
         ensure_visible()
         desktop = UiaDesktop(backend="uia")
         try:
-            spec = desktop.window(title="OpenWater Bloodflow")
+            spec = desktop.window(title="Open-Motion")
             if spec.exists(timeout=5):
                 return spec
         except Exception as e:
@@ -539,10 +539,10 @@ def get_clipboard() -> str:
 # ─────────────────────────────────────────────
 @pytest.fixture(scope="session")
 def app():
-    """Launch or connect to the OpenWater app. Session-scoped — runs once.
+    """Launch or connect to the Open-Motion app. Session-scoped — runs once.
 
     Set ``OPENWATER_FROM_SOURCE=1`` to run the in-tree dev branch via
-    ``python main.py`` instead of discovering an installed ``OpenWaterApp.exe``.
+    ``python main.py`` instead of discovering an installed ``Open-Motion.exe``.
     """
     from_source = _from_source_mode()
 
@@ -586,7 +586,7 @@ def app():
         return True
 
     pytest.skip(
-        "OpenWaterApp.exe not found -- set OPENWATER_EXE, or set "
+        "Open-Motion.exe not found -- set OPENWATER_EXE, or set "
         "OPENWATER_FROM_SOURCE=1 to launch via python main.py"
     )
 
@@ -709,17 +709,17 @@ def _check_app_alive(request):
     global _app_dead_after
     if _app_dead_after is not None:
         pytest.fail(
-            f"Bloodflow app died — first noticed by '{_app_dead_after}'. "
-            f"Subsequent tests cannot run. Inspect the bloodflow app log "
-            f"(logs/ow-bloodflowapp-*.log) around that test for an "
+            f"Open-Motion app died — first noticed by '{_app_dead_after}'. "
+            f"Subsequent tests cannot run. Inspect the app log "
+            f"(logs/open-motion-*.log) around that test for an "
             f"unhandled Python exception."
         )
 
     if not ensure_visible():
         _app_dead_after = request.node.nodeid
         pytest.fail(
-            f"Bloodflow app window is gone — likely crashed during the "
-            f"previous test. See logs/ow-bloodflowapp-*.log for "
+            f"Open-Motion app window is gone — likely crashed during the "
+            f"previous test. See logs/open-motion-*.log for "
             f"diagnostics. (First detected at '{_app_dead_after}'.)"
         )
     yield
@@ -768,7 +768,7 @@ def _isolate_writable_root(request, tmp_path, monkeypatch):
 #   - Generic across all test files — no per-file class filter.
 #
 # Originally adapted from a per-file version on origin/Varun-Test
-# (commits ba05bd0 + e3a017a in tests/test_reducedmode.py).
+# (commits ba05bd0 + e3a017a in tests/test_clinicalmode.py).
 
 _REPORT_SESSION_START: datetime | None = None
 
@@ -776,12 +776,12 @@ _REPORT_SESSION_START: datetime | None = None
 def _report_get_app_version() -> str:
     """Best-effort guess at the bundled bloodflow build version.
 
-    Reads it from the running OpenWaterApp.exe path (the build script
+    Reads it from the running Open-Motion.exe path (the build script
     lays the version into the parent-directory name). Falls back to
     ``$OPENWATER_VERSION`` if no app process is detected.
     """
     try:
-        for proc_name in ("OpenWaterApp.exe", "OpenWaterApp_console.exe"):
+        for proc_name in ("Open-Motion.exe", "Open-Motion_console.exe"):
             try:
                 result = subprocess.run(
                     ["wmic", "process", "where", f"name='{proc_name}'",
@@ -895,7 +895,7 @@ def _write_hil_report() -> None:
 
     # ── JSON ──
     report_data = {
-        "report_title": "OpenWater BloodFlow — HIL Test Session Report",
+        "report_title": "Open-Motion — HIL Test Session Report",
         "purpose":      "Verification & validation evidence for the HIL "
                         "test suite.",
         "session_start": _REPORT_SESSION_START.isoformat(timespec="seconds")

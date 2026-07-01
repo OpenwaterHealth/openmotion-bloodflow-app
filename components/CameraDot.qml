@@ -13,7 +13,7 @@ import QtQuick.Controls as Controls
  *      camIndex1  : 1..8
  *      modal      : the ContactQualityModal root (required — used to
  *                   call cameraStatus / cameraWarningTypes / cameraTooltip
- *                   and to read developerMode)
+ *                   and to read engineeringMode)
  *      size       : pixel size of the dot (default 18).
  */
 Item {
@@ -30,7 +30,7 @@ Item {
     AppTheme { id: theme }
 
     readonly property string status: modal.cameraStatus(side, camIndex1)
-    readonly property var    types: status === "bad" && modal.developerMode
+    readonly property var    types: status === "bad" && modal.engineeringMode
                                     ? modal.cameraWarningTypes(side, camIndex1)
                                     : []
     readonly property bool   hasAmbient: types.indexOf("ambient_light") >= 0
@@ -42,7 +42,7 @@ Item {
         if (status === "checking") return "#666666"
         if (status === "inactive") return "#666666"
         // status === "bad" past this point
-        if (!modal.developerMode)  return "#E67E22"
+        if (!modal.engineeringMode)  return "#E67E22"
         if (isSplit)                return theme.accentOrangeAmbient  // unused at render time (splitFrame handles it); kept so singleColor is never undefined
         if (hasAmbient)             return theme.accentOrangeAmbient
         if (hasContact)             return theme.accentOrangeContact

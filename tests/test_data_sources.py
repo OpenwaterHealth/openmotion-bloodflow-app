@@ -386,7 +386,7 @@ def test_past_scan_source_bucketizes_rows_into_per_metric_buffers(session_data_d
 
     # This fixture is a normal-mode scan: 4 (side, cam) combos × 4 metrics =
     # 16 per-cam buffers, each holding its 5 rows. No cam_id=-1 (that's the
-    # reduced-mode side average, read straight from the DB when present).
+    # clinical-mode side average, read straight from the DB when present).
     expected_keys = {
         (side, cam, metric)
         for side in ("left", "right")
@@ -433,10 +433,10 @@ def test_past_scan_source_empty_session_yields_empty_source(tmp_path):
 
 
 def test_past_scan_source_reads_cam_id_minus_1_from_db(tmp_path):
-    """A reduced-mode scan stores the corrected per-side average at cam_id=-1
+    """A clinical-mode scan stores the corrected per-side average at cam_id=-1
     (cam_id=-1 frames on the 'final' channel, persisted by ScanDBSink).
     PastScanSource exposes those directly —
-    no derivation — so reduced-mode replay reads the corrected trace verbatim."""
+    no derivation — so clinical-mode replay reads the corrected trace verbatim."""
     db_path = tmp_path / "scan.db"
     conn = sqlite3.connect(str(db_path))
     conn.executescript(_SESSION_DATA_DDL)
@@ -457,7 +457,7 @@ def test_past_scan_source_reads_cam_id_minus_1_from_db(tmp_path):
     db = _FakeScanDatabase(conn)
 
     src = PastScanSource(scan_db=db, session_id=9)
-    # Only cam_id=-1 buffers (reduced-mode scan persists average only).
+    # Only cam_id=-1 buffers (clinical-mode scan persists average only).
     assert all(cam == -1 for (_s, cam, _m) in src.buffers.keys())
     left_bfi = src.buffers[("left", -1, "bfi")]
     assert left_bfi.n == 3
@@ -476,7 +476,7 @@ def test_past_scan_source_buffers_are_unbounded(session_data_db):
 
 
 def test_past_scan_source_csv_fallback_when_db_has_no_bfi(tmp_path):
-    """A pre-pipeline scan with no BFI/BVI in the DB falls back to the reduced
+    """A pre-pipeline scan with no BFI/BVI in the DB falls back to the clinical
     corrected CSV, which populates the cam_id=-1 side buffers."""
     db_path = tmp_path / "scan.db"
     conn = sqlite3.connect(str(db_path))
@@ -484,7 +484,7 @@ def test_past_scan_source_csv_fallback_when_db_has_no_bfi(tmp_path):
     conn.commit()
     db = _FakeScanDatabase(conn)  # empty DB → no BFI → CSV fallback
 
-    csv_path = tmp_path / "reduced.csv"
+    csv_path = tmp_path / "clinical.csv"
     csv_path.write_text(
         "frame_id,timestamp_s,bfi_left,bfi_right,bvi_left,bvi_right\n"
         "0,0.0,2.5,3.5,12.0,13.0\n"
@@ -549,14 +549,14 @@ def test_load_past_scan_buffers_matches_sync_constructor(session_data_db):
 
 def test_load_past_scan_buffers_csv_fallback(tmp_path):
     """No BFI/BVI in the DB → the corrected-CSV fallback populates the
-    reduced-mode cam_id=-1 side buffers, same as the sync path."""
+    clinical-mode cam_id=-1 side buffers, same as the sync path."""
     db_path = tmp_path / "scan.db"
     conn = sqlite3.connect(str(db_path))
     conn.executescript(_SESSION_DATA_DDL)
     conn.commit()
     db = _FakeScanDatabase(conn)  # empty DB → no BFI → CSV fallback
 
-    csv_path = tmp_path / "reduced.csv"
+    csv_path = tmp_path / "clinical.csv"
     csv_path.write_text(
         "frame_id,timestamp_s,bfi_left,bfi_right,bvi_left,bvi_right\n"
         "0,0.0,2.5,3.5,12.0,13.0\n"
@@ -655,7 +655,7 @@ def test_live_scan_source_masks_unknown():
 
 
 def test_past_scan_source_masks_unknown_when_no_per_cam_streams():
-    """Reduced-mode scans only carry the cam_id=-1 side average; with no
+    """Clinical-mode scans only carry the cam_id=-1 side average; with no
     per-camera streams there is no normal-mode mask to derive, so the
     masks read -1 (unknown) and the viewer falls back to its live masks."""
     buffers = {}
@@ -668,12 +668,12 @@ def test_past_scan_source_masks_unknown_when_no_per_cam_streams():
     assert src.rightMask == -1
 
 
-# ── Replay mode awareness — source reports its recorded reduced/dev mode ──
-# The viewer renders in the mode the scan was recorded in. reducedMode is a
-# tri-state: -1 unknown, 0 per-camera, 1 reduced — derived from the loaded
-# buffer cam_ids (reduced scans store only cam_id=-1; per-camera store 0..7).
+# ── Replay mode awareness — source reports its recorded clinical/engineering mode ──
+# The viewer renders in the mode the scan was recorded in. clinicalMode is a
+# tri-state: -1 unknown, 0 per-camera, 1 clinical — derived from the loaded
+# buffer cam_ids (clinical scans store only cam_id=-1; per-camera store 0..7).
 
-from data_sources import _derive_reduced_from_buffers
+from data_sources import _derive_clinical_from_buffers
 
 
 def _one_sample_buffer():
@@ -685,20 +685,20 @@ def _one_sample_buffer():
 def test_derive_reduced_per_camera():
     buffers = {("left", 0, "bfi"): _one_sample_buffer(),
                ("right", 7, "bfi"): _one_sample_buffer()}
-    assert _derive_reduced_from_buffers(buffers) == 0
+    assert _derive_clinical_from_buffers(buffers) == 0
 
 
 def test_derive_reduced_side_average():
     buffers = {("left", -1, "bfi"): _one_sample_buffer(),
                ("right", -1, "bfi"): _one_sample_buffer()}
-    assert _derive_reduced_from_buffers(buffers) == 1
+    assert _derive_clinical_from_buffers(buffers) == 1
 
 
 def test_derive_reduced_empty_is_unknown():
-    assert _derive_reduced_from_buffers({}) == -1
+    assert _derive_clinical_from_buffers({}) == -1
     # A buffer dict whose buffers hold no samples is also "unknown".
     empty_buf = {("left", -1, "bfi"): _CameraBuffer()}
-    assert _derive_reduced_from_buffers(empty_buf) == -1
+    assert _derive_clinical_from_buffers(empty_buf) == -1
 
 
 def test_past_scan_source_reduced_mode_for_side_average():
@@ -706,7 +706,7 @@ def test_past_scan_source_reduced_mode_for_side_average():
     for side in ("left", "right"):
         buffers[(side, -1, "bfi")] = _one_sample_buffer()
     src = PastScanSource(scan_db=None, session_id=1, preloaded_buffers=buffers)
-    assert src.reducedMode == 1
+    assert src.clinicalMode == 1
 
 
 def test_past_scan_source_reduced_mode_for_per_camera():
@@ -714,12 +714,12 @@ def test_past_scan_source_reduced_mode_for_per_camera():
     for cam_id in (0, 1, 6, 7):
         buffers[("left", cam_id, "bfi")] = _one_sample_buffer()
     src = PastScanSource(scan_db=None, session_id=1, preloaded_buffers=buffers)
-    assert src.reducedMode == 0
+    assert src.clinicalMode == 0
 
 
 def test_live_scan_source_reduced_mode_unknown():
     src = LiveScanSource(plot_t0=0.0)
-    assert src.reducedMode == -1
+    assert src.clinicalMode == -1
 
 
 # ── Issue #175 reopen — stored config wins over the data-derived heuristic ──
@@ -781,7 +781,7 @@ def test_recorded_flags_honor_one_sided_config():
 
 
 def test_recorded_flags_reduced_mode_overrides_derived():
-    """Stored reduced_mode=True yields reducedMode==1 even though the
+    """Stored reduced_mode=True yields clinicalMode==1 even though the
     per-camera buffers would derive 0 (per-camera)."""
     src = PastScanSource(
         scan_db=None,
@@ -793,7 +793,7 @@ def test_recorded_flags_reduced_mode_overrides_derived():
             "reduced_mode": True,
         },
     )
-    assert src.reducedMode == 1
+    assert src.clinicalMode == 1
 
 
 def test_missing_recorded_flags_falls_back_to_derived():
@@ -807,7 +807,7 @@ def test_missing_recorded_flags_falls_back_to_derived():
     )
     assert src.leftMask == 0x66
     assert src.rightMask == 0x66
-    assert src.reducedMode == 0
+    assert src.clinicalMode == 0
 
 
 def test_partial_recorded_flags_derive_only_the_missing_field():
@@ -823,7 +823,7 @@ def test_partial_recorded_flags_derive_only_the_missing_field():
     assert src.leftMask == 0x66
     assert src.rightMask == 0x66
     # reduced_mode present → honored (0 = per-camera).
-    assert src.reducedMode == 0
+    assert src.clinicalMode == 0
 
 
 def test_recorded_flags_both_masks_zero_falls_back_to_derived():

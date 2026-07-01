@@ -142,7 +142,7 @@ def test_record_ignores_non_finite_t():
 
 
 def test_side_average_keys_work_like_camera_keys():
-    # Reduced mode records under cam_id=-1 — just another key.
+    # Clinical mode records under cam_id=-1 — just another key.
     tr = NanGapTracker()
     _feed(tr, ("left", -1), [0.0, 0.025, 2.0, 2.025])
     assert tr.merged_gaps() == [(pytest.approx(0.025), pytest.approx(2.0))]

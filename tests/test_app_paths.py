@@ -47,7 +47,7 @@ def test_frozen_portable_uses_exe_folder(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     exe_dir = tmp_path / "install_dir"
     exe_dir.mkdir()
-    monkeypatch.setattr(sys, "executable", str(exe_dir / "OpenWaterApp.exe"), raising=False)
+    monkeypatch.setattr(sys, "executable", str(exe_dir / "Open-Motion.exe"), raising=False)
 
     root = app_paths.writable_root(portable=True)
 
@@ -57,14 +57,13 @@ def test_frozen_portable_uses_exe_folder(tmp_path, monkeypatch):
 @pytest.mark.unit
 def test_falls_back_to_documents_when_root_unwritable(monkeypatch):
     """When the resolved root isn't writable (e.g. cwd is "/" on a macOS
-    Finder launch) writable_root falls back to ~/Documents/Openwater
-    Bloodflow — note the "Openwater" casing."""
+    Finder launch) writable_root falls back to ~/Documents/Open-Motion."""
     monkeypatch.delenv("OPENWATER_DATA_ROOT", raising=False)
     monkeypatch.setattr(sys, "frozen", False, raising=False)
     monkeypatch.setattr(os, "access", lambda path, mode: False)
 
     result = app_paths.writable_root()
 
-    expected = os.path.expanduser(os.path.join("~", "Documents", "Openwater Bloodflow"))
+    expected = os.path.expanduser(os.path.join("~", "Documents", "Open-Motion"))
     assert str(result) == expected
     assert "OpenWater" not in str(result)  # casing must be "Openwater"

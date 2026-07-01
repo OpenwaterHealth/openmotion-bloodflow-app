@@ -33,17 +33,17 @@ from hil_helpers import (
 pytestmark = pytest.mark.dev
 
 # Same rationale as test_scan_settings: this module's seed scan opens
-# Scan Settings, which is hidden in reduced mode. Snapshot at module
+# Scan Settings, which is hidden in clinical mode. Snapshot at module
 # import (before the session-scoped ``app`` fixture spins up the app)
-# so any fresh launch in this session boots in non-reduced mode;
+# so any fresh launch in this session boots in non-clinical mode;
 # restore on teardown via the autouse fixture below.
-_INITIAL_REDUCED_MODE = force_app_config_value("reducedMode", False)
+_INITIAL_CLINICAL_MODE = force_app_config_value("clinicalMode", False)
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _restore_reduced_mode_on_module_teardown():
+def _restore_clinical_mode_on_module_teardown():
     yield
-    write_app_config_value("reducedMode", _INITIAL_REDUCED_MODE)
+    write_app_config_value("clinicalMode", _INITIAL_CLINICAL_MODE)
 
 # How long to seed the history with at the start. Short to keep
 # the dev-tier suite snappy, but long enough that the SDK actually

@@ -4,7 +4,7 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 from PyInstaller.building.build_main import Analysis, PYZ, EXE, COLLECT, BUNDLE
 
-APP_NAME = "OpenWater Bloodflow"
+APP_NAME = "Open-Motion"
 ENTRY = "main.py"
 ICNS_FILE = "build/AppIcon.icns"
 

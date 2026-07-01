@@ -17,7 +17,7 @@ def _connector(tmp_path, scan_db_path=None):
     iface.scan_workflow.config_running = False
     iface.scan_db_path = scan_db_path  # explicit: MagicMock default would be truthy
     return MotionConnector(
-        interface=iface, app_config={"developerMode": False},
+        interface=iface, app_config={"engineeringMode": False},
         data_dir=str(tmp_path), config_dir="config",
     )
 
@@ -37,7 +37,7 @@ def _write_csv(tmp_path, name, text="x\n"):
 
 
 def test_get_scan_list_includes_db_session_without_csv(tmp_path):
-    """A reduced-mode scan writes no corrected CSV — it must still appear,
+    """A clinical-mode scan writes no corrected CSV — it must still appear,
     sourced from the scan DB's sessions."""
     db_path = str(tmp_path / "scans.db")
     _session(db_path, "20260528_211930_ow6I2NJL", 1.0)

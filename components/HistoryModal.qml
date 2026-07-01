@@ -59,12 +59,13 @@ Item {
 
     function rebuildView() {
         var q = (searchText || "").toLowerCase()
-        // In reduced (clinical) mode, omit scans not shot in reduced mode —
-        // the reduced viewer can't render their per-camera data. Dev mode
-        // lists everything. A scan with no recorded mode counts as non-reduced.
-        var appReduced = MotionInterface.appConfig.reducedMode === true
+        // In clinical mode, omit scans not shot in clinical mode — the
+        // clinical viewer can't render their per-camera data. Engineering
+        // mode lists everything. A scan with no recorded mode counts as
+        // non-clinical.
+        var appClinical = MotionInterface.appConfig.clinicalMode === true
         var arr = scans.filter(function(r) {
-            if (appReduced && !r.reducedMode)
+            if (appClinical && !r.clinicalMode)
                 return false
             if (q.length > 0
                 && (r.userLabel || "").toLowerCase().indexOf(q) < 0
@@ -599,11 +600,11 @@ Item {
         }
     }
 
-    // Reused developer-password prompt for delete confirmation.
+    // Reused engineering-password prompt for delete confirmation.
     PasswordPromptModal {
         id: deletePrompt
         title: "Confirm Delete"
-        description: "Enter the developer password to permanently delete the "
+        description: "Enter the engineering password to permanently delete the "
                      + "selected scan(s) from the database. This cannot be undone."
         confirmLabel: "Delete"
         onAccepted: root.doDelete()
@@ -648,7 +649,7 @@ Item {
             if (ok) root.close()
         }
         function onDirectoryChanged() { if (root.visible) root.refresh() }
-        // Re-apply the reduced-mode row filter if the app's mode changes
+        // Re-apply the clinical-mode row filter if the app's mode changes
         // while History is open.
         function onAppConfigChanged() { if (root.visible) root.rebuildView() }
         function onErrorOccurred(msg) {

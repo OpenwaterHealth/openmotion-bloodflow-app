@@ -17,7 +17,7 @@ Rectangle {
     property bool scanning: false
     property bool waiting: false       // true while a scan start is armed (pipeline-idle gate)
     property bool camerasReady: false  // gates Start/Check enablement
-    property bool reducedMode: false       // FDA mode hides scan-settings button
+    property bool clinicalMode: false       // FDA mode hides scan-settings button
 
     // Connection state — drives start button icon and enablement.
     // A laser-safety trip is surfaced via a persistent NotificationCenter
@@ -129,7 +129,7 @@ Rectangle {
         }
 
         // Divider between Start and Scan Settings (or between Start and Notes
-        // in reduced mode where Scan Settings is hidden).
+        // in clinical mode where Scan Settings is hidden).
         Rectangle {
             Layout.preferredWidth: 52; Layout.preferredHeight: 1
             Layout.topMargin: 4; Layout.bottomMargin: 4
@@ -138,7 +138,7 @@ Rectangle {
 
         // Scan Settings (camera + duration)
         PanelButton {
-            visible: !panel.reducedMode
+            visible: !panel.clinicalMode
             enabled: !panel.scanning
             iconText: "\ueabf"  // setting-3 icon
             label: "Scan\nSettings"
@@ -146,9 +146,9 @@ Rectangle {
         }
 
         // Divider between Scan Settings and Notes — only in normal mode so
-        // reduced mode doesn't get two consecutive dividers.
+        // clinical mode doesn't get two consecutive dividers.
         Rectangle {
-            visible: !panel.reducedMode
+            visible: !panel.clinicalMode
             Layout.preferredWidth: 52; Layout.preferredHeight: 1
             Layout.topMargin: 4; Layout.bottomMargin: 4
             Layout.alignment: Qt.AlignHCenter; color: theme.borderSubtle
@@ -162,7 +162,7 @@ Rectangle {
         }
 
         Rectangle {
-            visible: !panel.reducedMode
+            visible: !panel.clinicalMode
             Layout.preferredWidth: 52; Layout.preferredHeight: 1
             Layout.topMargin: 4; Layout.bottomMargin: 4
             Layout.alignment: Qt.AlignHCenter; color: theme.borderSubtle
@@ -170,7 +170,7 @@ Rectangle {
 
         // Check (contact quality quick-check)
         PanelButton {
-            visible: !panel.reducedMode
+            visible: !panel.clinicalMode
             enabled: !panel.scanning && panel.camerasReady
             iconText: "\uea31"  // graph-3 icon
             label: "Check"

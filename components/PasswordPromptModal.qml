@@ -3,7 +3,7 @@ import QtQuick.Controls 6.0
 import QtQuick.Layouts 6.0
 import OpenMotion 1.0
 
-// Reusable password prompt modal. Checks against the developer password
+// Reusable password prompt modal. Checks against the engineering password
 // and emits accepted() on success. Caller sets title, description, and
 // confirmLabel to customise the appearance.
 Item {
@@ -31,7 +31,7 @@ Item {
     }
 
     function _submit() {
-        if (MotionInterface.checkDeveloperPassword(pwField.text)) {
+        if (MotionInterface.checkEngineeringPassword(pwField.text)) {
             root.accepted()
             root.close()
         } else {

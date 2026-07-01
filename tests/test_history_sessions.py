@@ -22,7 +22,7 @@ def _connector(tmp_path, scan_db_path):
     iface.scan_workflow.config_running = False
     iface.scan_db_path = scan_db_path
     return MotionConnector(
-        interface=iface, app_config={"developerMode": False},
+        interface=iface, app_config={"engineeringMode": False},
         data_dir=str(tmp_path), config_dir="config",
     )
 

@@ -1,5 +1,5 @@
 """
-Shared test utilities for the OpenWater BloodFlow UI test suite.
+Shared test utilities for the Open-Motion UI test suite.
 
 This module is for plain helper functions — not pytest fixtures or hooks.
 Fixtures live in ``conftest.py``; helpers that previously got copy-pasted
@@ -83,7 +83,7 @@ _PANEL_BUTTON_HALF   = 34   # half of 68 px button
 _PANEL_SLOT_PX       = 85   # vertical spacing between button centers
 
 # Slot index for each top-of-panel button (counted from Start = 0)
-# in normal (non-reduced) mode.
+# in normal (non-clinical) mode.
 PANEL_BUTTON_SLOTS = {
     "Start":         0,
     "Scan\nSettings": 1,
@@ -91,13 +91,13 @@ PANEL_BUTTON_SLOTS = {
     "Check":          3,
 }
 
-# In reduced mode, ``Scan\nSettings`` and ``Check`` are hidden
-# (``visible: !panel.reducedMode`` in components/ButtonPanel.qml),
+# In clinical mode, ``Scan\nSettings`` and ``Check`` are hidden
+# (``visible: !panel.clinicalMode`` in components/ButtonPanel.qml),
 # so the QML ColumnLayout collapses and Notes slides up into the
 # former Scan Settings slot. The fallback screen-pos math needs to
-# know this or it computes Notes at its non-reduced y coordinate
-# and every click on Notes in reduced mode misses by one slot.
-PANEL_BUTTON_SLOTS_REDUCED = {
+# know this or it computes Notes at its non-clinical y coordinate
+# and every click on Notes in clinical mode misses by one slot.
+PANEL_BUTTON_SLOTS_CLINICAL = {
     "Start": 0,
     "Notes": 1,
 }
@@ -163,10 +163,10 @@ def _resolve_app_config_path() -> Path:
     else:
         import glob as _glob
         for pattern in (
-            r"C:\Users\*\Documents\OpenMotion\**\OpenWaterApp.exe",
-            r"C:\Users\*\Desktop\**\OpenWaterApp.exe",
-            r"C:\Program Files\**\OpenWaterApp.exe",
-            r"C:\Program Files (x86)\**\OpenWaterApp.exe",
+            r"C:\Users\*\Documents\OpenMotion\**\Open-Motion.exe",
+            r"C:\Users\*\Desktop\**\Open-Motion.exe",
+            r"C:\Program Files\**\Open-Motion.exe",
+            r"C:\Program Files (x86)\**\Open-Motion.exe",
         ):
             candidates.extend(_glob.glob(pattern, recursive=True))
     if candidates:
@@ -182,17 +182,17 @@ def _resolve_app_config_path() -> Path:
 # ─────────────────────────────────────────────
 #
 # Test modules that need to pin a specific app_config.json value before
-# the bloodflow app launches (e.g. reducedMode=false, so the modal
+# the bloodflow app launches (e.g. clinicalMode=false, so the modal
 # layout matches what tab walks expect) can:
 #
 #     from hil_helpers import force_app_config_value, write_app_config_value
 #
-#     _INITIAL_REDUCED_MODE = force_app_config_value("reducedMode", False)
+#     _INITIAL_CLINICAL_MODE = force_app_config_value("clinicalMode", False)
 #
 #     @pytest.fixture(scope="module", autouse=True)
-#     def _restore_reduced_mode():
+#     def _restore_clinical_mode():
 #         yield
-#         write_app_config_value("reducedMode", _INITIAL_REDUCED_MODE)
+#         write_app_config_value("clinicalMode", _INITIAL_CLINICAL_MODE)
 #
 # Caveat: the connector caches its config at startup, so writes only
 # affect the *next* app launch. Force calls happen at module-import
@@ -258,15 +258,15 @@ def find_app_log() -> Path | None:
     roots = [
         Path.cwd(),
         project_root,  # when launched via OPENWATER_FROM_SOURCE
-        home / "Documents" / "Openwater Bloodflow",
+        home / "Documents" / "Open-Motion",
         home / "Documents" / "OpenMotion",
     ]
     candidates: list[Path] = []
     for root in roots:
         if not root.exists():
             continue
-        candidates.extend(root.glob("logs/ow-bloodflowapp-*.log"))
-        candidates.extend(root.glob("**/logs/ow-bloodflowapp-*.log"))
+        candidates.extend(root.glob("logs/open-motion-*.log"))
+        candidates.extend(root.glob("**/logs/open-motion-*.log"))
     if not candidates:
         return None
     return max(candidates, key=lambda p: p.stat().st_mtime)
@@ -545,16 +545,16 @@ def panel_button_screen_pos(label: str) -> tuple[int, int] | None:
     grows the page-Item's topMargin when the banner appears, leaving
     the bottom anchored to parent.bottom.
 
-    When ``reducedMode`` is enabled in ``app_config.json`` we use the
-    reduced slot map — Notes moves up into slot 1, and
+    When ``clinicalMode`` is enabled in ``app_config.json`` we use the
+    clinical slot map — Notes moves up into slot 1, and
     ``Scan\\nSettings`` / ``Check`` have no slot at all (they are
     ``visible: false`` in ButtonPanel.qml and shouldn't be clicked).
     """
     w = get_app_window()
     x = w.left + _PANEL_OUTER_LEFT + _PANEL_INNER_LEFT + _PANEL_CONTENT_MARG + _PANEL_BUTTON_HALF
 
-    if read_app_config_value("reducedMode", False):
-        top_slots = PANEL_BUTTON_SLOTS_REDUCED
+    if read_app_config_value("clinicalMode", False):
+        top_slots = PANEL_BUTTON_SLOTS_CLINICAL
     else:
         top_slots = PANEL_BUTTON_SLOTS
 
@@ -790,7 +790,7 @@ def click_panel_button(label: str, fallback: tuple[float, float] | None = None) 
 # ─────────────────────────────────────────────
 # Each modal in the bloodflow app is a QML ``Item`` overlay
 # (anchors.fill: parent, visible toggle, z-index) inside the main
-# OpenWater Bloodflow window — not a Qt Dialog or separate Window —
+# Open-Motion window — not a Qt Dialog or separate Window —
 # so they don't surface as distinct UIA windows. We detect which
 # modal(s) are open with two passes per fingerprint:
 #
@@ -846,7 +846,7 @@ def visible_modals() -> set[str]:
     no modal is open.
 
     Used by tests that need to assert mutual exclusivity — see
-    ``test_reducedmode.TestModalExclusivity``.
+    ``test_clinicalmode.TestModalExclusivity``.
     """
     found: set[str] = set()
     try:
@@ -900,7 +900,7 @@ def dismiss_signal_quality_modal() -> bool:
     click its ``Dismiss`` button.
 
     Two-pass detection (mirrors ``_find_modal_state`` in
-    test_reducedmode):
+    test_clinicalmode):
 
       1. **Targeted title query** for each post-``checking`` state
          title. Uses ``descendants(title=...)`` instead of an
@@ -914,7 +914,7 @@ def dismiss_signal_quality_modal() -> bool:
          surface in UIA even when sibling Text elements don't.
 
     Without the button fallback this helper returns False even when
-    the modal is clearly on screen, which is what test_reducedmode
+    the modal is clearly on screen, which is what test_clinicalmode
     hit + fixed earlier and what test_usb_disconnect_freeze burns
     its 120 s Check polling on.
 

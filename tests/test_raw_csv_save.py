@@ -1,11 +1,11 @@
 """
-test_raw_csv_save.py — verify the developer-mode raw-CSV truncation.
+test_raw_csv_save.py — verify the engineering-mode raw-CSV truncation.
 
 Issue: OpenwaterHealth/openmotion-bloodflow-app#105
 
 What this exercises
 -------------------
-When the user enables ``writeRawCsv`` in the Settings → Developer
+When the user enables ``writeRawCsv`` in the Settings → Engineering
 section and sets ``Raw CSV duration`` to N seconds, the SDK's
 ScanWorkflow writes per-side raw histogram CSVs (``*_left_mask*_raw.csv`` /
 ``*_right_mask*_raw.csv``) for the first N seconds of the scan, then
@@ -17,11 +17,11 @@ Lifecycle
   1. Snapshot the on-disk values of every config key the test
      mutates.
   2. Kill the bloodflow app.
-  3. Force on disk: ``developerMode=true`` (so the Save raw CSV
-     toggle and duration field are visible), ``reducedMode=false``
+  3. Force on disk: ``engineeringMode=true`` (so the Save raw CSV
+     toggle and duration field are visible), ``clinicalMode=false``
      (so the Scan Settings panel button is visible).
   4. Launch the app, calibrate panel buttons, wait for CONNECTED.
-  5. Open Settings, scroll to the Developer section, toggle
+  5. Open Settings, scroll to the Engineering section, toggle
      ``Save raw CSV`` ON via the UI, type ``30`` into
      ``Raw CSV duration``, escape out.
   6. Open Scan Settings, set duration to 1 minute, escape out.
@@ -87,7 +87,7 @@ SESSION_NOTES_TIMEOUT = 200  # camera config (~75s) + 1-min scan + buffer
 
 # Test parameters (also baked into the assertions below)
 SCAN_DURATION_SEC      = 60    # 1 min, set in Scan Settings
-RAW_CSV_DURATION_SEC   = 30    # 30 s, typed into Settings → Developer
+RAW_CSV_DURATION_SEC   = 30    # 30 s, typed into Settings → Engineering
 DURATION_TOLERANCE_SEC = 8     # how far off the timestamps can drift
 
 # Column name in both raw and canonical CSVs.
@@ -126,10 +126,10 @@ def _find_exe() -> Optional[str]:
     if env and os.path.exists(env):
         return env
     patterns = [
-        r"C:\Users\*\Documents\OpenMotion\**\OpenWaterApp.exe",
-        r"C:\Users\*\Desktop\**\OpenWaterApp.exe",
-        r"C:\Program Files\**\OpenWaterApp.exe",
-        r"C:\Program Files (x86)\**\OpenWaterApp.exe",
+        r"C:\Users\*\Documents\OpenMotion\**\Open-Motion.exe",
+        r"C:\Users\*\Desktop\**\Open-Motion.exe",
+        r"C:\Program Files\**\Open-Motion.exe",
+        r"C:\Program Files (x86)\**\Open-Motion.exe",
     ]
     matches: list[str] = []
     for p in patterns:
@@ -176,7 +176,7 @@ def _launch_app() -> None:
     else:
         exe = _find_exe()
         if not exe:
-            pytest.fail("OpenWaterApp.exe not found and OPENWATER_EXE unset")
+            pytest.fail("Open-Motion.exe not found and OPENWATER_EXE unset")
         log.info(f"  launching: {exe}")
         subprocess.Popen([exe])
 
@@ -367,15 +367,15 @@ def _find_control_aligned_with_label(
 
 
 def _focus_soft_reset_button() -> None:
-    """Set keyboard focus to the Developer section's 'Soft Reset' button
+    """Set keyboard focus to the Engineering section's 'Soft Reset' button
     *without invoking it*.
 
     Why this anchor: Qt's a11y bridge doesn't surface FieldRow's plain
-    QML Text labels (verified by UIA-text dump — the Developer section
+    QML Text labels (verified by UIA-text dump — the Engineering section
     has 'Soft Reset', 'Run Calibration', 'Check for Updates' visible
     but no 'Save raw CSV' / 'Raw CSV duration' / 'Console' labels).
     The 'Soft Reset' Button IS surfaced and is the FIRST focusable
-    element in the Developer SectionCard. Tab order from there hits
+    element in the Engineering SectionCard. Tab order from there hits
     the Save raw CSV PillSwitch next, then the Raw CSV duration
     TextField. That gives us a deterministic path to both controls.
 
@@ -396,8 +396,8 @@ def _focus_soft_reset_button() -> None:
     if not matches:
         pytest.fail(
             "Could not locate the 'Soft Reset' button to anchor "
-            "focus on. The Developer section may be hidden "
-            "(developerMode flag not applied?) or the button was "
+            "focus on. The Engineering section may be hidden "
+            "(engineeringMode flag not applied?) or the button was "
             "renamed."
         )
     btn = matches[0]
@@ -417,7 +417,7 @@ def _focus_soft_reset_button() -> None:
 def _toggle_raw_csv_save_on() -> None:
     """Toggle the Save raw CSV PillSwitch via Tab+Space from Soft Reset.
 
-    Plain Text labels in the Developer section don't surface in UIA,
+    Plain Text labels in the Engineering section don't surface in UIA,
     so we can't click by label-rect. Instead we anchor on the
     'Soft Reset' Button (the section's first focusable child),
     set_focus on it without invoking, then Tab once to land on the
@@ -435,7 +435,7 @@ def _set_raw_csv_duration_sec(seconds: int) -> None:
     """Type ``seconds`` into the Raw CSV duration TextField via
     Tab-from-Soft-Reset navigation.
 
-    Tab order in the Developer SectionCard:
+    Tab order in the Engineering SectionCard:
         Soft Reset -> Save raw CSV PillSwitch -> Raw CSV duration TextField
 
     So two Tab presses from Soft Reset focus lands on the duration
@@ -664,7 +664,7 @@ def _new_csvs_in(dir_path: Path, before: set[str]) -> dict[str, Path]:
 # Test
 # ─────────────────────────────────────────────
 class TestRawCsvSave:
-    """End-to-end verification of the developer-mode raw-CSV truncation."""
+    """End-to-end verification of the engineering-mode raw-CSV truncation."""
 
     def test_raw_csv_truncates_at_configured_duration(self, app):
         """Walk through the lifecycle in the module docstring and
@@ -674,8 +674,8 @@ class TestRawCsvSave:
         """
         # ─── Step 0: snapshot config we will mutate ──────────────
         original = {
-            "developerMode":     bool(read_app_config_value("developerMode", False)),
-            "reducedMode":       bool(read_app_config_value("reducedMode", False)),
+            "engineeringMode":     bool(read_app_config_value("engineeringMode", False)),
+            "clinicalMode":       bool(read_app_config_value("clinicalMode", False)),
             "writeRawCsv":       bool(read_app_config_value("writeRawCsv", False)),
             "rawCsvDurationSec": read_app_config_value("rawCsvDurationSec", None),
             "dataDirectory":     read_app_config_value("dataDirectory", None),
@@ -692,16 +692,16 @@ class TestRawCsvSave:
             # ─── Step 1+2+3: kill app, write pre-launch flags ───
             log.info("=" * 60)
             log.info(
-                "Step 1+2+3: killing app, writing developerMode=true, "
-                "reducedMode=false, writeRawCsv=false (will toggle ON "
+                "Step 1+2+3: killing app, writing engineeringMode=true, "
+                "clinicalMode=false, writeRawCsv=false (will toggle ON "
                 "via UI), pinning dataDirectory"
             )
             log.info("=" * 60)
             _kill_bloodflow_processes()
             time.sleep(2)
             test_data_dir.mkdir(parents=True, exist_ok=True)
-            write_app_config_value("developerMode",     True)
-            write_app_config_value("reducedMode",       False)
+            write_app_config_value("engineeringMode",     True)
+            write_app_config_value("clinicalMode",       False)
             # Start with writeRawCsv off so we can prove the UI toggle
             # actually changed it (rather than walking past a no-op).
             write_app_config_value("writeRawCsv",       False)
@@ -728,17 +728,17 @@ class TestRawCsvSave:
             log.info("=" * 60)
             click_panel("Settings")
             time.sleep(SLEEP)
-            # Developer section is at the bottom of a long modal.
+            # Engineering section is at the bottom of a long modal.
             # Anchor scroll on 'Soft Reset' (the first focusable
-            # control in the Developer SectionCard) rather than the
+            # control in the Engineering SectionCard) rather than the
             # 'Save raw CSV' label — the latter is a plain QML Text
             # which Qt's a11y bridge doesn't surface in UIA, but the
             # Soft Reset Button is reliably exposed.
             assert _scroll_until_label_visible("Soft Reset"), (
-                "Could not bring the Developer section into view "
+                "Could not bring the Engineering section into view "
                 "after scrolling the Settings modal. Either the modal "
-                "didn't open or the Developer section is hidden "
-                "(developerMode flag not applied?)."
+                "didn't open or the Engineering section is hidden "
+                "(engineeringMode flag not applied?)."
             )
             _toggle_raw_csv_save_on()
             _set_raw_csv_duration_sec(RAW_CSV_DURATION_SEC)
@@ -915,7 +915,7 @@ class TestRawCsvSave:
             # No kill / relaunch needed: the running app already
             # consumed our config (writeRawCsv / rawCsvDurationSec /
             # dataDirectory take effect immediately via the connector
-            # slots; developerMode / reducedMode were captured at
+            # slots; engineeringMode / clinicalMode were captured at
             # launch and won't change for THIS app instance regardless
             # of what we write back). Whatever runs next is responsible
             # for its own kill+relaunch if it needs the disk values

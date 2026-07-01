@@ -1,11 +1,11 @@
 """Issue #43 (regression): telemetry / raw CSV output must be gated on
-developerMode.
+engineeringMode.
 
 The SDK's ``ScanRequest`` defaults ``write_telemetry_csv=True``, so the
-connector must explicitly pass ``developerMode`` (default False — fail
+connector must explicitly pass ``engineeringMode`` (default False — fail
 closed for clinical use) when building the main scan request. The raw
-histogram CSV tee is a developer-only Settings toggle, so its persisted
-``writeRawCsv`` value must additionally be gated on developerMode.
+histogram CSV tee is a engineering-only Settings toggle, so its persisted
+``writeRawCsv`` value must additionally be gated on engineeringMode.
 
 These tests mock the hardware seam (``interface.start_scan``) and assert
 on the captured ``ScanRequest`` — no hardware, no app launch.
@@ -54,11 +54,11 @@ def _captured_request(connector):
 
 
 def test_clinical_mode_disables_telemetry_and_raw_csv(tmp_path):
-    """developerMode=False → no telemetry CSV, no raw CSV tee — even if a
-    prior developer session left writeRawCsv enabled in the config."""
+    """engineeringMode=False → no telemetry CSV, no raw CSV tee — even if a
+    prior engineering session left writeRawCsv enabled in the config."""
     connector = _make_connector(
         tmp_path,
-        {"developerMode": False, "writeRawCsv": True},
+        {"engineeringMode": False, "writeRawCsv": True},
     )
     req = _captured_request(connector)
     assert req.write_telemetry_csv is False
@@ -66,7 +66,7 @@ def test_clinical_mode_disables_telemetry_and_raw_csv(tmp_path):
 
 
 def test_missing_developer_mode_key_fails_closed(tmp_path):
-    """No developerMode key at all → same as clinical mode (fail closed)."""
+    """No engineeringMode key at all → same as clinical mode (fail closed)."""
     connector = _make_connector(tmp_path, {"writeRawCsv": True})
     req = _captured_request(connector)
     assert req.write_telemetry_csv is False
@@ -74,11 +74,11 @@ def test_missing_developer_mode_key_fails_closed(tmp_path):
 
 
 def test_developer_mode_enables_telemetry_and_raw_csv(tmp_path):
-    """developerMode=True restores both developer outputs."""
+    """engineeringMode=True restores both engineering outputs."""
     connector = _make_connector(
         tmp_path,
         {
-            "developerMode": True,
+            "engineeringMode": True,
             "writeRawCsv": True,
             "rawCsvDurationSec": 60,
         },
@@ -89,10 +89,10 @@ def test_developer_mode_enables_telemetry_and_raw_csv(tmp_path):
 
 
 def test_developer_mode_respects_raw_csv_toggle_off(tmp_path):
-    """developerMode=True but writeRawCsv off → raw tee still omitted."""
+    """engineeringMode=True but writeRawCsv off → raw tee still omitted."""
     connector = _make_connector(
         tmp_path,
-        {"developerMode": True, "writeRawCsv": False},
+        {"engineeringMode": True, "writeRawCsv": False},
     )
     req = _captured_request(connector)
     assert req.write_telemetry_csv is True
@@ -101,7 +101,7 @@ def test_developer_mode_respects_raw_csv_toggle_off(tmp_path):
 
 def test_write_raw_csv_defaults_false(tmp_path):
     """writeRawCsv missing from config → fail closed (no raw output)."""
-    connector = _make_connector(tmp_path, {"developerMode": True})
+    connector = _make_connector(tmp_path, {"engineeringMode": True})
     assert connector._write_raw_csv is False
     req = _captured_request(connector)
     assert req.raw_save_max_duration_s == 0

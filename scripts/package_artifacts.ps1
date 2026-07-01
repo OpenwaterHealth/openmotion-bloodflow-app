@@ -7,9 +7,9 @@
 #   powershell -File scripts\package_artifacts.ps1 -SkipInstaller  # 2 portable zips
 #   powershell -File scripts\package_artifacts.ps1 -Version 1.4.0-dev.0
 param(
-    [string]$DistDir    = "dist\OpenWaterApp",
+    [string]$DistDir    = "dist\Open-Motion",
     [string]$Version    = "",
-    [string[]]$Variants = @("clinical", "ruo"),
+    [string[]]$Variants = @("clinical", "research"),
     [switch]$SkipInstaller,
     [string]$OutDir     = ""
 )
@@ -32,8 +32,8 @@ Write-Host "Packaging version: Full=$verFull Numeric=$verNumeric" -ForegroundCol
 
 # -- validate the dist --
 if (-not (Test-Path $DistDir)) { throw "PyInstaller output '$DistDir' not found; run PyInstaller first" }
-if (-not (Test-Path (Join-Path $DistDir 'OpenWaterApp.exe'))) {
-    throw "OpenWaterApp.exe not found under $DistDir; PyInstaller build looks incomplete"
+if (-not (Test-Path (Join-Path $DistDir 'Open-Motion.exe'))) {
+    throw "Open-Motion.exe not found under $DistDir; PyInstaller build looks incomplete"
 }
 $cfgPath = Join-Path $DistDir "_internal\config\app_config.json"
 
@@ -44,25 +44,25 @@ if ($buildInstallers -and -not (Test-WixAvailable)) {
     $buildInstallers = $false
 }
 
-# -- per-variant suffix + reducedMode value --
+# -- per-variant suffix + clinicalMode value --
 $variantMap = @{
-    clinical = @{ Suffix = "";     Reduced = $true  }
-    ruo      = @{ Suffix = "_RUO";  Reduced = $false }
+    clinical = @{ Suffix = "";          Clinical = $true  }
+    research = @{ Suffix = "_Research"; Clinical = $false }
 }
 
 $produced = @()
 foreach ($variant in $Variants) {
-    if (-not $variantMap.ContainsKey($variant)) { throw "unknown variant '$variant' (expected clinical|ruo)" }
+    if (-not $variantMap.ContainsKey($variant)) { throw "unknown variant '$variant' (expected clinical|research)" }
     $m = $variantMap[$variant]
 
-    $orig = Set-ReducedMode -ConfigPath $cfgPath -Reduced $m.Reduced
+    $orig = Set-ClinicalMode -ConfigPath $cfgPath -Clinical $m.Clinical
     try {
         # portable zip (full version) — portableMode:true so it keeps all
         # writable state next to the exe, matching the old un-installed layout.
         # build_installer.ps1 below independently forces portableMode:false
         # onto the same file before harvesting it for the MSI.
         [void](Set-PortableMode -ConfigPath $cfgPath -Portable $true)
-        $zip = Join-Path $OutDir "OpenMotion-Bloodflow-$verFull$($m.Suffix).zip"
+        $zip = Join-Path $OutDir "Open-Motion-$verFull$($m.Suffix).zip"
         Write-Host "=== Portable ($variant): $zip ===" -ForegroundColor Cyan
         New-PortableZip -DistDir $DistDir -OutZip $zip
         $produced += $zip

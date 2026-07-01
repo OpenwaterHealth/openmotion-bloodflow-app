@@ -16,8 +16,8 @@ directory drives the outlet; see ``tests/shelly.py``.
 
 Verification
 ------------
-Connection events are detected by tailing the bloodflow app log
-(``logs/ow-bloodflowapp-*.log``). The SDK emits one info-level line
+Connection events are detected by tailing the app log
+(``logs/open-motion-*.log``). The SDK emits one info-level line
 per state transition in the form ``<name> state <OLD> -> <NEW> (<reason>)``.
 """
 

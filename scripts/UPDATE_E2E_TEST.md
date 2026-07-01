@@ -28,9 +28,9 @@ powershell -File scripts\build_update_test_bundles.ps1
 
 Produces (in `build\installer\`):
 
-- `Openwater-Setup-1.3.0_RUO.exe` — **OLD**, the build under test (its update
+- `Openwater-Setup-1.3.0_Research.exe` — **OLD**, the build under test (its update
   check points at `http://127.0.0.1:8077/releases/latest`).
-- `Openwater-Setup-1.3.1_RUO.exe` — **NEW**, the upgrade target.
+- `Openwater-Setup-1.3.1_Research.exe` — **NEW**, the upgrade target.
 
 The script prints the SDK path it built against — confirm it's a clean `next`.
 
@@ -38,7 +38,7 @@ The script prints the SDK path it built against — confirm it's a clean `next`.
 
 ```powershell
 conda run -n pylib python scripts\fake_release_server.py `
-    --bundle build\installer\Openwater-Setup-1.3.1_RUO.exe --tag 1.3.1 --port 8077
+    --bundle build\installer\Openwater-Setup-1.3.1_Research.exe --tag 1.3.1 --port 8077
 ```
 
 It serves `releases/latest` (advertising 1.3.1) and the bundle file. Watch its
@@ -46,9 +46,9 @@ log — you'll see the app's requests, confirming nothing goes to the internet.
 
 ## 3. Install the OLD bundle + run the test
 
-1. Double-click `Openwater-Setup-1.3.0_RUO.exe` → SmartScreen "More info → Run
-   anyway" + UAC. Installs to `C:\Program Files\Openwater\Bloodflow\`.
-2. Launch **Openwater Bloodflow (RUO)** from the Start menu.
+1. Double-click `Openwater-Setup-1.3.0_Research.exe` → SmartScreen "More info → Run
+   anyway" + UAC. Installs to `C:\Program Files\Openwater\Open-Motion\`.
+2. Launch **Open-Motion Research** from the Start menu.
 3. Within ~3 s the banner appears: *"A new version is available: 1.3.1."*
    (the server log shows `GET /releases/latest`).
 4. Click **Update**. Expect: button → "Downloading…" → "Installing…", the app
@@ -65,7 +65,7 @@ during the in-place file swap (the scenario the relaunch-helper was built for).
 
 ## Cleanup
 
-- Uninstall via Apps & Features (single RUO entry).
+- Uninstall via Apps & Features (single Research entry).
 - Stop the server (Ctrl+C).
 
 ## Notes

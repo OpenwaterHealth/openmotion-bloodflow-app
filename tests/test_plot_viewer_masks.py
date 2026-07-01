@@ -154,7 +154,7 @@ class _StubMotionInterface(QObject):
         return {
             "leftMask": MIDDLE_MASK,
             "rightMask": MIDDLE_MASK,
-            "developerMode": False,
+            "engineeringMode": False,
             "showProfiling": False,
         }
 

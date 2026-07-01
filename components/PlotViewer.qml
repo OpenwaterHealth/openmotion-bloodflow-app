@@ -5,7 +5,7 @@ import OpenMotion 1.0
 
 // Phase 2b-i — multi-cell viewer. Always renders 16 cells (2 sides × 8 cams).
 // Inactive cameras just render an empty Canvas + label; no per-mask branching.
-// Reduced-mode 2-cell layout is Phase 2b-ii. Toolbar + autoscale arrive in
+// Clinical-mode 2-cell layout is Phase 2b-ii. Toolbar + autoscale arrive in
 // Task 5; the current header text is the Phase 2a placeholder.
 // Geometry is owned by the instantiation site (BloodFlow.qml anchors the
 // viewer beside the icon bar) — no anchors here. A root-level
@@ -65,13 +65,13 @@ Rectangle {
     AppTheme { id: theme }
 
     // ── Inputs ─────────────────────────────────────────────────────────
-    property bool reducedMode: false   // honored in Phase 2b-ii
-    // Per-cell top-left value labels. Default off in reduced mode — the
+    property bool clinicalMode: false   // honored in Phase 2b-ii
+    // Per-cell top-left value labels. Default off in clinical mode — the
     // large side panels show the same numbers there — and toggleable at
     // runtime from the bottom-right ⋯ popup.
-    property bool showCellValues: !viewer.effectiveReduced
+    property bool showCellValues: !viewer.effectiveClinical
     // Y-axis tick labels (max/mid/min per metric). Config is the single
-    // source of truth: the ⋯ popup toggle (hidden in reduced mode) writes
+    // source of truth: the ⋯ popup toggle (hidden in clinical mode) writes
     // through MotionInterface.setConfig, which persists to app_config.json
     // and notifies appConfigChanged — this binding then updates.
     property bool showAxisLabels: MotionInterface.appConfig.showAxisLabels === true
@@ -174,23 +174,23 @@ Rectangle {
             ? viewer.scanSource.rightMask : viewer.rightMask
 
     // Replay adopts the loaded scan's recorded mode: when the source reports a
-    // known mode (reducedMode >= 0) use it, else fall back to the live-config
-    // `reducedMode` input. Mirrors _effLeftMask/_effRightMask (#175). Note:
-    // scanSource.reducedMode is an int tri-state (-1/0/1) from Python;
-    // viewer.reducedMode is the bool live-config input.
-    readonly property bool effectiveReduced:
-        (viewer.scanSource && viewer.scanSource.reducedMode !== undefined
-         && viewer.scanSource.reducedMode >= 0)
-            ? (viewer.scanSource.reducedMode === 1)
-            : viewer.reducedMode
+    // known mode (clinicalMode >= 0) use it, else fall back to the live-config
+    // `clinicalMode` input. Mirrors _effLeftMask/_effRightMask (#175). Note:
+    // scanSource.clinicalMode is an int tri-state (-1/0/1) from Python;
+    // viewer.clinicalMode is the bool live-config input.
+    readonly property bool effectiveClinical:
+        (viewer.scanSource && viewer.scanSource.clinicalMode !== undefined
+         && viewer.scanSource.clinicalMode >= 0)
+            ? (viewer.scanSource.clinicalMode === 1)
+            : viewer.clinicalMode
 
     // ── Side break ─────────────────────────────────────────────────────
     // A bit of extra margin between the left and right sensor modules in
-    // dev (non-reduced) mode. The grid reserves an empty spacer column
+    // dev (non-clinical) mode. The grid reserves an empty spacer column
     // (col 2) between them, but only when BOTH sides have active cameras —
     // a single-sided scan keeps filling the width with no dangling gap.
     readonly property bool _sideGapActive:
-        !viewer.effectiveReduced
+        !viewer.effectiveClinical
         && (viewer._effLeftMask & 0xFF) !== 0
         && (viewer._effRightMask & 0xFF) !== 0
     readonly property real _sideGapPx: 3
@@ -233,16 +233,16 @@ Rectangle {
         return entries
     }
 
-    // Reduced mode — 2 cells, one per side, each rendering the
+    // Clinical mode — 2 cells, one per side, each rendering the
     // side-averaged stream (cam_id=-1, fed by SDK's SideAveragingStage
     // via _LivePlotSink.consume). Stacked vertically in a single column.
-    readonly property var _reducedCellModel: [
+    readonly property var _clinicalCellModel: [
         { side: "left",  camId: -1, row: 0, col: 0 },
         { side: "right", camId: -1, row: 1, col: 0 }
     ]
 
-    readonly property var _activeCellModel: viewer.effectiveReduced
-        ? _reducedCellModel
+    readonly property var _activeCellModel: viewer.effectiveClinical
+        ? _clinicalCellModel
         : _devCellModel
 
     // ── Autoscale recompute (shared by Timer + displayMode change) ────
@@ -424,7 +424,7 @@ Rectangle {
     }
 
     // ── Profile HUD state ──────────────────────────────────────────────
-    // Hidden behind developerMode && showProfiling — clinical users
+    // Hidden behind engineeringMode && showProfiling — clinical users
     // never see this overlay. Counters accumulate per tick; the 1 Hz
     // _profHudTimer below converts them to display values.
     property int _profSamplesAccum: 0        // samples since last 1Hz roll-up
@@ -486,11 +486,11 @@ Rectangle {
 
     // Runtime toggle — initialized from app_config.showProfiling but
     // flippable from the PlotToolbar's Profiler checkbox at runtime.
-    // The toolbar checkbox itself is hidden outside developer mode,
-    // and _hudVisible further gates on developerMode so the HUD can't
+    // The toolbar checkbox itself is hidden outside engineering mode,
+    // and _hudVisible further gates on engineeringMode so the HUD can't
     // appear in clinical builds even if showProfiling is flipped.
     property bool showProfiling: MotionInterface.appConfig.showProfiling === true
-    readonly property bool _hudVisible: MotionInterface.appConfig.developerMode === true
+    readonly property bool _hudVisible: MotionInterface.appConfig.engineeringMode === true
                                         && viewer.showProfiling
 
     Timer {
@@ -587,7 +587,7 @@ Rectangle {
         console.info("[Plot] windowSeconds → " + s + " s")
     }
 
-    // Large per-side BFI/BVI readout panel — reduced (clinical) mode
+    // Large per-side BFI/BVI readout panel — clinical mode
     // only, one per plot row, sitting to the left of the plot. Mirrors
     // the legacy ReducedPlotView side column: side label up top, big
     // mono values beneath. Values are the side-averaged stream
@@ -663,13 +663,13 @@ Rectangle {
             Layout.fillHeight: true
             spacing: 8
 
-            // Reduced mode: large readouts beside the plots, one panel
+            // Clinical mode: large readouts beside the plots, one panel
             // per stacked plot row. Equal fillHeight keeps each panel
             // aligned with its row. fillWidth must be EXPLICITLY false:
             // nested layouts default it to true, which would make this
             // column compete with the grid for the whole row width.
             ColumnLayout {
-                visible: viewer.effectiveReduced
+                visible: viewer.effectiveClinical
                 Layout.fillWidth: false
                 Layout.fillHeight: true
                 Layout.preferredWidth: 250
@@ -692,10 +692,10 @@ Rectangle {
                 visible: viewer._activeCellModel.length > 0
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                // Reduced mode: single column, 2 stacked cells. Dev mode:
+                // Clinical mode: single column, 2 stacked cells. Engineering mode:
                 // 4 columns; +1 spacer column (col 2) when both sides are
                 // active, for a visual break between the modules.
-                columns: viewer.effectiveReduced ? 1 : (viewer._sideGapActive ? 5 : 4)
+                columns: viewer.effectiveClinical ? 1 : (viewer._sideGapActive ? 5 : 4)
                 rowSpacing: 6
                 columnSpacing: 6
 
@@ -735,7 +735,7 @@ Rectangle {
                         secondaryColor: viewer._traceColorForMetric(viewer._displayPair.secondary)
                         showValueLabels: viewer.showCellValues
                         showAxisLabels: viewer.showAxisLabels
-                        showTemperature: MotionInterface.appConfig.developerMode === true
+                        showTemperature: MotionInterface.appConfig.engineeringMode === true
                         paintTick: viewer.paintTick
                         liveEdgeSnapshot: viewer.liveEdgeSnapshot
                         panZoomTarget: viewer
@@ -830,7 +830,7 @@ Rectangle {
                     viewer.scanSource.value_at(c.side, c.camId, primMetric, t))
                 var sv = viewer.clampForDisplay(secMetric,
                     viewer.scanSource.value_at(c.side, c.camId, secMetric, t))
-                // Reduced mode uses camId=-1 for the side-averaged stream;
+                // Clinical mode uses camId=-1 for the side-averaged stream;
                 // (c.camId + 1) would render "L0"/"R0" instead of the
                 // cell's own "LEFT AVG" / "RIGHT AVG" label.
                 var label = c.camId === -1
@@ -1108,12 +1108,12 @@ Rectangle {
 
         Rectangle {
             id: settingsMenuButton
-            // In reduced mode the popup's only rows (display mode +
+            // In clinical mode the popup's only rows (display mode +
             // autoscale) are hidden and Cell values is gone, leaving the
             // dev-only Profiler as the sole possible entry. Hide the
             // button entirely when it would open an empty card.
-            visible: !viewer.effectiveReduced
-                     || MotionInterface.appConfig.developerMode === true
+            visible: !viewer.effectiveClinical
+                     || MotionInterface.appConfig.engineeringMode === true
             width: 36
             height: 36
             radius: 18
@@ -1188,10 +1188,10 @@ Rectangle {
                     padding: 12
 
                     Row {
-                        // Hidden in reduced (clinical) mode — that view only
+                        // Hidden in clinical mode — that view only
                         // ever shows the BFI/BVI side averages, so the
                         // Mean/Contrast alternative isn't offered there.
-                        visible: !viewer.effectiveReduced
+                        visible: !viewer.effectiveClinical
                         spacing: 8
                         PopupPillSwitch {
                             id: bfiBviSwitch
@@ -1207,10 +1207,10 @@ Rectangle {
                         }
                     }
                     Row {
-                        // Hidden in reduced (clinical) mode — autoscale is
+                        // Hidden in clinical mode — autoscale is
                         // not offered there; the view always uses the
                         // configured manual bounds.
-                        visible: !viewer.effectiveReduced
+                        visible: !viewer.effectiveClinical
                         spacing: 8
                         PopupPillSwitch {
                             id: autoScaleSwitch
@@ -1226,7 +1226,7 @@ Rectangle {
                         }
                     }
                     Row {
-                        visible: !viewer.effectiveReduced
+                        visible: !viewer.effectiveClinical
                         spacing: 8
                         PopupPillSwitch {
                             id: axisLabelsSwitch
@@ -1242,7 +1242,7 @@ Rectangle {
                         }
                     }
                     Row {
-                        visible: MotionInterface.appConfig.developerMode === true
+                        visible: MotionInterface.appConfig.engineeringMode === true
                         spacing: 8
                         PopupPillSwitch {
                             id: profilerSwitch
@@ -1263,13 +1263,13 @@ Rectangle {
     }
 
     // ── Bottom-left overlay: profiler HUD ─────────────────────────────
-    // Developer-only HUD; toggled from the bottom-right settings menu's
+    // Engineering-only HUD; toggled from the bottom-right settings menu's
     // Profiler switch. Renders as a static overlay anchored at the
     // bottom-left corner of the plot grid, with the same rim margin as
     // the other overlays.
     Rectangle {
         id: profileHud
-        visible: MotionInterface.appConfig.developerMode === true
+        visible: MotionInterface.appConfig.engineeringMode === true
                  && viewer.showProfiling
                  && viewer.scanSource !== null
         anchors.left: parent.left

@@ -270,9 +270,9 @@ class ScanDataSource(QObject):
         self._left_mask: int = -1
         self._right_mask: int = -1
         # Recorded display mode, tri-state: -1 unknown / 0 per-camera / 1
-        # reduced. -1 for live sources (viewer follows the live config);
+        # clinical. -1 for live sources (viewer follows the live config);
         # PastScanSource derives the real value from its buffer layout.
-        self._reduced_mode: int = -1
+        self._clinical_mode: int = -1
         # Human-readable identity for the viewer's "Viewing" badge (issue
         # #245): the operator's user label and the scan's date/time. Empty
         # on live sources — the badge is past-scan only. PastScanSource sets
@@ -327,12 +327,12 @@ class ScanDataSource(QObject):
         return self._right_mask
 
     @pyqtProperty(int, constant=True)
-    def reducedMode(self) -> int:
+    def clinicalMode(self) -> int:
         """Recorded display mode this source represents: -1 unknown, 0
-        per-camera, 1 reduced. Exposed for QML (PlotViewer.effectiveReduced)
+        per-camera, 1 clinical. Exposed for QML (PlotViewer.effectiveClinical)
         so a replayed scan renders in its own mode rather than the live config.
         See ``leftMask`` for why this must be a pyqtProperty."""
-        return self._reduced_mode
+        return self._clinical_mode
 
     @pyqtProperty(str, constant=True)
     def userLabel(self) -> str:
@@ -956,12 +956,12 @@ def _derive_masks_from_buffers(buffers: dict) -> tuple[int, int]:
     return masks["left"], masks["right"]
 
 
-def _derive_reduced_from_buffers(buffers) -> int:
+def _derive_clinical_from_buffers(buffers) -> int:
     """Tri-state recorded display mode from a loaded scan's buffer cam_ids:
-    -1 unknown, 0 per-camera, 1 reduced. Reduced-mode scans store only the
-    cam_id=-1 side average; per-camera (dev) scans store cam_id 0..7. Mirrors
-    _derive_masks_from_buffers — the viewer prefers this over the live config
-    so replay renders in the mode the scan was captured in."""
+    -1 unknown, 0 per-camera, 1 clinical. Clinical-mode scans store only the
+    cam_id=-1 side average; per-camera (engineering) scans store cam_id 0..7.
+    Mirrors _derive_masks_from_buffers — the viewer prefers this over the live
+    config so replay renders in the mode the scan was captured in."""
     if buffers_are_empty(buffers):
         return -1
     if any(0 <= key[1] < 8 for key in buffers):
@@ -999,10 +999,10 @@ def _masks_from_flags(flags) -> Optional[tuple[int, int]]:
     return lm, rm
 
 
-def _reduced_from_flags(flags) -> Optional[int]:
-    """Recorded display mode (0 per-camera / 1 reduced) from a scan's stored
+def _clinical_from_flags(flags) -> Optional[int]:
+    """Recorded display mode (0 per-camera / 1 clinical) from a scan's stored
     ``session_meta.sdk_flags.reduced_mode``, or None when absent. Preferred
-    over _derive_reduced_from_buffers for the same reason as _masks_from_flags
+    over _derive_clinical_from_buffers for the same reason as _masks_from_flags
     — it reflects how the scan was captured, not what its data happens to
     contain (issue #175 reopen)."""
     if not isinstance(flags, dict):
@@ -1095,10 +1095,10 @@ class PastScanSource(ScanDataSource):
         self._left_mask, self._right_mask = _derive_masks_from_buffers(
             self.buffers
         )
-        self._reduced_mode = _derive_reduced_from_buffers(self.buffers)
+        self._clinical_mode = _derive_clinical_from_buffers(self.buffers)
         recorded_masks = _masks_from_flags(recorded_flags)
         if recorded_masks is not None:
             self._left_mask, self._right_mask = recorded_masks
-        recorded_reduced = _reduced_from_flags(recorded_flags)
-        if recorded_reduced is not None:
-            self._reduced_mode = recorded_reduced
+        recorded_clinical = _clinical_from_flags(recorded_flags)
+        if recorded_clinical is not None:
+            self._clinical_mode = recorded_clinical

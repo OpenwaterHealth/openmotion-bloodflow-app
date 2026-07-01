@@ -3,7 +3,7 @@
 Layers (lowest to highest precedence):
   1. code defaults (passed in by the caller)
   2. shipped, read-only config/app_config.json (PyInstaller bundle)
-  3. writable overrides: %PROGRAMDATA%\\OpenWater\\app_config.local.json
+  3. writable overrides: %PROGRAMDATA%\\Openwater\\app_config.local.json
 
 Runtime changes are written as a *diff* against layers 1+2 so future changes to
 shipped defaults still reach keys the operator never touched.
@@ -18,7 +18,7 @@ from utils import app_paths
 logger = logging.getLogger(__name__)
 
 _INT_KEYS = (
-    "leftMask", "rightMask", "reducedModeLeftMask", "reducedModeRightMask"
+    "leftMask", "rightMask", "clinicalModeLeftMask", "clinicalModeRightMask"
 )
 
 

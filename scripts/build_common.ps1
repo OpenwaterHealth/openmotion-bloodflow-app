@@ -1,7 +1,7 @@
 # scripts/build_common.ps1
 # Shared helpers for the unified build/packaging path. Dot-source this:
 #   . (Join-Path $PSScriptRoot build_common.ps1)
-# Single source of truth for the reducedMode flip + version derivation + zip,
+# Single source of truth for the clinicalMode flip + version derivation + zip,
 # so the logic isn't copy-pasted across build_and_zip.ps1, package_artifacts.ps1,
 # installer/build_installer.ps1, and scripts/build_update_test_bundles.ps1.
 
@@ -29,21 +29,21 @@ function Get-BuildVersion {
     return [pscustomobject]@{ Full = $full; Numeric = (Get-NumericVersion -Version $full) }
 }
 
-function Set-ReducedMode {
-    # BOM-safe flip of "reducedMode" in a bundled app_config.json. Returns the
+function Set-ClinicalMode {
+    # BOM-safe flip of "clinicalMode" in a bundled app_config.json. Returns the
     # ORIGINAL file text so the caller can restore it. Writes UTF-8 WITHOUT BOM —
     # the app's json.load fails silently on a BOM (memory: config_edit_bom_breaks_load).
     param(
         [Parameter(Mandatory)][string]$ConfigPath,
-        [Parameter(Mandatory)][bool]$Reduced
+        [Parameter(Mandatory)][bool]$Clinical
     )
     if (-not (Test-Path $ConfigPath)) { throw "config not found at $ConfigPath" }
     $orig = [System.IO.File]::ReadAllText($ConfigPath)
-    if ($orig -notmatch '"reducedMode"\s*:\s*(true|false)') {
-        throw "reducedMode key not found in $ConfigPath"
+    if ($orig -notmatch '"clinicalMode"\s*:\s*(true|false)') {
+        throw "clinicalMode key not found in $ConfigPath"
     }
-    $val = if ($Reduced) { "true" } else { "false" }
-    $new = [regex]::Replace($orig, '("reducedMode"\s*:\s*)(true|false)', "`${1}$val")
+    $val = if ($Clinical) { "true" } else { "false" }
+    $new = [regex]::Replace($orig, '("clinicalMode"\s*:\s*)(true|false)', "`${1}$val")
     [System.IO.File]::WriteAllText($ConfigPath, $new, (New-Object System.Text.UTF8Encoding $false))
     return $orig
 }
@@ -72,7 +72,7 @@ function Set-PortableMode {
 }
 
 function Restore-ConfigText {
-    # Write back the original text captured by Set-ReducedMode (no BOM).
+    # Write back the original text captured by Set-ClinicalMode (no BOM).
     param(
         [Parameter(Mandatory)][string]$ConfigPath,
         [Parameter(Mandatory)][string]$Text
@@ -81,9 +81,9 @@ function Restore-ConfigText {
 }
 
 function New-PortableZip {
-    # Zip the whole dist tree so the archive contains a top-level OpenWaterApp\
+    # Zip the whole dist tree so the archive contains a top-level Open-Motion\
     # folder (the released structure — matches CI's `Compress-Archive dist\*`).
-    # $DistDir is dist\OpenWaterApp; zip its PARENT's contents.
+    # $DistDir is dist\Open-Motion; zip its PARENT's contents.
     param(
         [Parameter(Mandatory)][string]$DistDir,
         [Parameter(Mandatory)][string]$OutZip

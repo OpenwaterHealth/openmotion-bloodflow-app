@@ -48,7 +48,7 @@ def test_missing_config_falls_back_to_defaults(tmp_path, monkeypatch):
     _patch_config_path(monkeypatch, tmp_path / "app_config.json")
     cfg = app_main._load_app_config()
     assert cfg["leftMask"] == 0x66
-    assert cfg["developerMode"] is False
+    assert cfg["engineeringMode"] is False
 
 
 def test_corrupt_config_falls_back_to_defaults(tmp_path, monkeypatch):
@@ -58,7 +58,7 @@ def test_corrupt_config_falls_back_to_defaults(tmp_path, monkeypatch):
     _patch_config_path(monkeypatch, config_path)
     cfg = app_main._load_app_config()
     assert cfg["leftMask"] == 0x66
-    assert cfg["developerMode"] is False
+    assert cfg["engineeringMode"] is False
 
 
 def test_unknown_keys_are_dropped(tmp_path, monkeypatch):
@@ -70,12 +70,12 @@ def test_unknown_keys_are_dropped(tmp_path, monkeypatch):
     """
     config_path = tmp_path / "app_config.json"
     config_path.write_text(
-        json.dumps({"developerMode": True, "autoConfigureOnStartup": True}),
+        json.dumps({"engineeringMode": True, "autoConfigureOnStartup": True}),
         encoding="utf-8",
     )
     _patch_config_path(monkeypatch, config_path)
     cfg = app_main._load_app_config()
-    assert cfg["developerMode"] is True
+    assert cfg["engineeringMode"] is True
     assert "autoConfigureOnStartup" not in cfg
 
 

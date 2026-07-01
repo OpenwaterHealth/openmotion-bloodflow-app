@@ -51,11 +51,11 @@ def test_looks_like_pe_rejects_non_executables():
 @pytest.mark.unit
 def test_helper_script_waits_installs_silently_and_relaunches():
     s = _build_update_helper_script(
-        1234, r"C:\Users\u\updates\OpenWater-Setup-1.2.3.exe",
-        r"C:\Program Files\OpenWater\Bloodflow\OpenWaterApp.exe",
+        1234, r"C:\Users\u\updates\Openwater-Setup-1.2.3.exe",
+        r"C:\Program Files\Open-Motion\Open-Motion.exe",
     )
     assert "1234" in s                              # waits for our PID
     assert "Get-Process" in s
     assert "/passive" in s                          # non-interactive install
-    assert "OpenWater-Setup-1.2.3.exe" in s         # runs the installer
-    assert "OpenWaterApp.exe" in s                  # relaunches the app
+    assert "Openwater-Setup-1.2.3.exe" in s         # runs the installer
+    assert "Open-Motion.exe" in s                   # relaunches the app

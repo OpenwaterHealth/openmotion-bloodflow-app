@@ -22,7 +22,7 @@ def _connector(tmp_path):
     iface.get_sdk_version.return_value = "9.9.9"
     return MotionConnector(
         interface=iface,
-        app_config={"developerMode": False},
+        app_config={"engineeringMode": False},
         data_dir=str(tmp_path),
         config_dir="config",
     )

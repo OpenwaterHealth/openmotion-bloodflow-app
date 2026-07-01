@@ -50,7 +50,7 @@ Item {
     // to every cell so the vertical line stays synced across the grid.
     property real cursorT: NaN
 
-    // Top-left live value labels — toggleable so reduced mode (which
+    // Top-left live value labels — toggleable so clinical mode (which
     // shows the same numbers on the large side panels) can hide them.
     property bool showValueLabels: true
 
@@ -58,8 +58,8 @@ Item {
     // default comes from appConfig.showAxisLabels (false = labels off).
     property bool showAxisLabels: true
 
-    // Top-right temperature readout — developer mode only; the viewer
-    // binds this from appConfig.developerMode (issue #165).
+    // Top-right temperature readout — engineering mode only; the viewer
+    // binds this from appConfig.engineeringMode (issue #165).
     property bool showTemperature: false
 
     AppTheme { id: theme }
@@ -277,7 +277,7 @@ Item {
 
         Text {
             // cam_id = -1 is the side-averaged stream fed by the SDK's
-            // SideAveragingStage in reduced mode — hide the label there;
+            // SideAveragingStage in clinical mode — hide the label there;
             // the large side panel next to the plot already names the side.
             visible: cell.camId !== -1
             text: cell.side.toUpperCase() + " " + (cell.camId + 1)
@@ -324,7 +324,7 @@ Item {
     }
 
     // Camera temperature — top-right, orange, dev mode only. Reads the
-    // "temp" metric stream (light frames only; absent for the reduced-
+    // "temp" metric stream (light frames only; absent for the clinical-
     // mode cam_id=-1 average and for past scans) and hides itself when
     // no finite reading exists.
     Text {

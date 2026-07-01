@@ -167,7 +167,7 @@ def test_live_plot_sink_live_channel_appends_no_side_average():
 
 def test_live_plot_sink_live_channel_updates_dropout_heartbeat():
     """Per-camera BFI arrival on the 'live' channel still updates the
-    dropout-watchdog heartbeat — reduced mode shows only the average, but
+    dropout-watchdog heartbeat — clinical mode shows only the average, but
     liveness detection must keep seeing each camera."""
     conn = _connector()
     sink, _ = _make_sink(conn)
