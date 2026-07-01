@@ -125,7 +125,7 @@ ApplicationWindow {
             anchors.right: parent.right
         }
 
-        // Firmware update banner (developerMode only)
+        // Firmware update banner (engineeringMode only)
         FirmwareUpdateBanner {
             id: firmwareUpdateBanner
             anchors.top: updateBanner.bottom

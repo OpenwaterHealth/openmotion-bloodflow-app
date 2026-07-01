@@ -1,5 +1,5 @@
 # tests/test_firmware_update_detection.py
-"""developerMode-gated firmware update detection on the connector."""
+"""engineeringMode-gated firmware update detection on the connector."""
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -20,7 +20,7 @@ def _connector(tmp_path, dev_mode):
     iface.scan_db_path = str(tmp_path / "scans.db")
     iface.get_sdk_version.return_value = "9.9.9"
     return MotionConnector(
-        interface=iface, app_config={"developerMode": dev_mode},
+        interface=iface, app_config={"engineeringMode": dev_mode},
         data_dir=str(tmp_path), config_dir="config",
     )
 
@@ -31,7 +31,7 @@ def test_no_check_when_developer_mode_off(tmp_path, monkeypatch):
     c = _connector(tmp_path, dev_mode=False)
     c._firmware_versions["left"] = "v1.0.0"
     c._maybe_check_firmware_update("left")
-    assert called == [], "must not hit GitHub when developerMode is off"
+    assert called == [], "must not hit GitHub when engineeringMode is off"
 
 
 def test_worker_flags_update_and_emits(tmp_path, monkeypatch):

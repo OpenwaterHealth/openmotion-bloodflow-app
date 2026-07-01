@@ -14,8 +14,8 @@ def test_save_app_config_delegates_diff_to_store(tmp_path, monkeypatch):
     # MotionConnector.__init__ wires hardware/telemetry, so bypass it with
     # __new__ and set only the attributes _save_app_config reads.
     conn = MotionConnector.__new__(MotionConnector)
-    conn._app_config = {"developerMode": True, "reducedMode": False}
-    conn._baseline_config = {"developerMode": False, "reducedMode": False}
+    conn._app_config = {"engineeringMode": True, "clinicalMode": False}
+    conn._baseline_config = {"engineeringMode": False, "clinicalMode": False}
 
     captured = {}
     monkeypatch.setattr(

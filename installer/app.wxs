@@ -13,7 +13,7 @@
 
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="VENDORFOLDER" Name="Openwater">
-        <Directory Id="APPFOLDER" Name="Bloodflow" />
+        <Directory Id="APPFOLDER" Name="Open-Motion" />
       </Directory>
     </StandardDirectory>
 
@@ -44,7 +44,7 @@
                 Target="[APPFOLDER]Open-Motion.exe"
                 WorkingDirectory="APPFOLDER" />
       <RemoveFolder Id="RemoveAppShortcutFolder" On="uninstall" />
-      <RegistryValue Root="HKLM" Key="Software\Openwater\Bloodflow"
+      <RegistryValue Root="HKLM" Key="Software\Openwater\Open-Motion"
                      Name="installed" Type="integer" Value="1" KeyPath="yes" />
     </Component>
 
@@ -56,7 +56,7 @@
                 Name="$(var.ProductName)"
                 Target="[APPFOLDER]Open-Motion.exe"
                 WorkingDirectory="APPFOLDER" />
-      <RegistryValue Root="HKLM" Key="Software\Openwater\Bloodflow"
+      <RegistryValue Root="HKLM" Key="Software\Openwater\Open-Motion"
                      Name="desktopShortcut" Type="integer" Value="1" KeyPath="yes" />
     </Component>
   </Package>

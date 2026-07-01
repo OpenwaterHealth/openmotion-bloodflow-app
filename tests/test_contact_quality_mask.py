@@ -56,7 +56,7 @@ def connector(monkeypatch):
 
     c = MotionConnector(
         interface=fake_iface,
-        app_config={"developerMode": False},
+        app_config={"engineeringMode": False},
         data_dir=".",
         config_dir="config",
     )
