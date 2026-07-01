@@ -84,6 +84,12 @@ $reduced = ($Variant -ne "ruo")   # clinical => reducedMode true; ruo => false
 [void](Set-ReducedMode -ConfigPath $cfgPath -Reduced $reduced)
 Write-Host "Staged reducedMode=$reduced into bundled config" -ForegroundColor Green
 
+# Installed (MSI) apps always scatter writable state to %PROGRAMDATA% —
+# portableMode is a portable-zip-only concept. Force it off here too so this
+# script stays correct when run standalone, not just via package_artifacts.ps1.
+[void](Set-PortableMode -ConfigPath $cfgPath -Portable $false)
+Write-Host "Staged portableMode=false into bundled config" -ForegroundColor Green
+
 wix build installer\app.wxs -o $appMsi `
     -d "ProductName=$($g.ProductName)" `
     -d "Version=$version" `

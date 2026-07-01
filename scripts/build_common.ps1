@@ -30,9 +30,15 @@ function Get-BuildVersion {
 }
 
 function Set-ReducedMode {
-    # BOM-safe flip of "reducedMode" in a bundled app_config.json. Returns the
-    # ORIGINAL file text so the caller can restore it. Writes UTF-8 WITHOUT BOM —
-    # the app's json.load fails silently on a BOM (memory: config_edit_bom_breaks_load).
+    # BOM-safe flip of "reducedMode" (and the paired "clinicalLock" build flag)
+    # in a bundled app_config.json. Returns the ORIGINAL file text so the
+    # caller can restore it. Writes UTF-8 WITHOUT BOM — the app's json.load
+    # fails silently on a BOM (memory: config_edit_bom_breaks_load).
+    #
+    # clinicalLock mirrors $Reduced: it's what gates the "Reduced Mode" toggle
+    # in Settings behind the developer password, so only the Clinical variant
+    # (Reduced=true) is locked — Research/RUO users can always self-service
+    # flip a stray reducedMode:true back off (see #<lockout fix>).
     param(
         [Parameter(Mandatory)][string]$ConfigPath,
         [Parameter(Mandatory)][bool]$Reduced
@@ -44,6 +50,32 @@ function Set-ReducedMode {
     }
     $val = if ($Reduced) { "true" } else { "false" }
     $new = [regex]::Replace($orig, '("reducedMode"\s*:\s*)(true|false)', "`${1}$val")
+    if ($new -match '"clinicalLock"\s*:\s*(true|false)') {
+        $new = [regex]::Replace($new, '("clinicalLock"\s*:\s*)(true|false)', "`${1}$val")
+    }
+    [System.IO.File]::WriteAllText($ConfigPath, $new, (New-Object System.Text.UTF8Encoding $false))
+    return $orig
+}
+
+function Set-PortableMode {
+    # BOM-safe flip of "portableMode" in a bundled app_config.json. Portable
+    # zips keep all writable state (config overrides, logs, scan data) next
+    # to the exe; installers scatter it to %PROGRAMDATA% instead — see
+    # utils/app_paths.py:writable_root. Does NOT return the original text —
+    # callers should already hold that from an earlier Set-ReducedMode call
+    # (or capture it themselves) since Restore-ConfigText only needs to run
+    # once per artifact regardless of how many flags got flipped.
+    param(
+        [Parameter(Mandatory)][string]$ConfigPath,
+        [Parameter(Mandatory)][bool]$Portable
+    )
+    if (-not (Test-Path $ConfigPath)) { throw "config not found at $ConfigPath" }
+    $orig = [System.IO.File]::ReadAllText($ConfigPath)
+    if ($orig -notmatch '"portableMode"\s*:\s*(true|false)') {
+        throw "portableMode key not found in $ConfigPath"
+    }
+    $val = if ($Portable) { "true" } else { "false" }
+    $new = [regex]::Replace($orig, '("portableMode"\s*:\s*)(true|false)', "`${1}$val")
     [System.IO.File]::WriteAllText($ConfigPath, $new, (New-Object System.Text.UTF8Encoding $false))
     return $orig
 }

@@ -759,9 +759,15 @@ Item {
                 }
 
                 // ── Reduced Mode ─────────────────────────────────────────────
+                // Gated on clinicalLock (a build-time flag, true only for the
+                // Clinical variant), not on reducedMode itself — otherwise a
+                // Research/RUO build that ever ends up with reducedMode:true
+                // (e.g. a stale %PROGRAMDATA% override) hides the only way to
+                // turn it back off, trapping the user without the developer
+                // password.
                 SectionCard {
                     title: "Reduced Mode"
-                    visible: !root.reducedMode || (MotionInterface.appConfig.developerMode ? true : false)
+                    visible: !MotionInterface.appConfig.clinicalLock || (MotionInterface.appConfig.developerMode ? true : false)
 
                     FieldRow {
                         label: "Enable"

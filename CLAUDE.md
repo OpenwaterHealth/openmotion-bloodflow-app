@@ -80,6 +80,8 @@ Debug flags that are still useful when hardware **is** attached (`config/app_con
 |---|---|---|
 | `developerMode` | `true` | Show debug telemetry, per-camera CQ dots, test buttons. |
 | `reducedMode` | `true` | Clinical UI: hide settings, large BFI/BVI panels. |
+| `clinicalLock` | `true` | Build-time flag (not user-facing): gates the Settings "Reduced Mode" toggle behind the developer password. Only the Clinical variant ships this `true` — RUO always ships `false` so a stray `reducedMode:true` can be self-service undone. Flipped alongside `reducedMode` in `Set-ReducedMode` (`scripts/build_common.ps1`). |
+| `portableMode` | `false` | Build-time flag: `true` keeps all writable state (config overrides, logs, scan data/db) next to the exe (old un-installed layout); `false` scatters it to `%PROGRAMDATA%\Openwater`. Portable zips ship `true`, installers force `false` — see `Set-PortableMode` (`scripts/build_common.ps1`) and `utils/app_paths.py:writable_root`. |
 | `forceLaserFail` | `false` | Debug: simulate a laser safety trip. |
 | `cameraFakeData` | `false` | **Broken — do not use.** Was meant to request firmware fake histograms; see "Working without hardware". |
 | `histoThrottle` | `false` | Drop histograms to reduce log spam. |
@@ -114,7 +116,7 @@ Get-ChildItem C:\Users\ethan\Projects\scan_data\app-logs\ow-bloodflowapp-*.log |
   Get-Content | Select-String -Pattern "Calibration phase|procedure complete|samples captured"
 ```
 
-The `dataDirectory` config key controls the root (defaults to cwd if unset — falls back to `~/Documents/Openwater Bloodflow` on macOS). Sibling output directories under the same root:
+The `dataDirectory` config key controls the root (defaults to cwd if unset — falls back to `~/Documents/Openwater Bloodflow` on macOS). When unset on a frozen build, the default instead follows `portableMode`: next to the exe (portable zip) or `%PROGRAMDATA%\Openwater` (installer). Sibling output directories under the same root:
 - `app-logs/` — app log files (one per launch)
 - `app-logs/ft-test-csvs/` — factory-test CSVs
 - `calibrations/` — saved calibration JSONs (also written here)
