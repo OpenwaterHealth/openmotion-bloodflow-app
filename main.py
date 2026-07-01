@@ -171,6 +171,19 @@ def _load_app_config() -> dict:
         "minSensors": 1,
     }
     baseline, merged = config_store.load_app_config(defaults)
+
+    # Dev-only launch overrides (e.g. Zed tasks for Clinical/Research x
+    # always-portable). Packaged builds never set these env vars, so this
+    # is a no-op in production; the build-time flip in build_common.ps1
+    # remains the source of truth for shipped artifacts.
+    if os.environ.get("OPENMOTION_PORTABLE") == "1":
+        baseline["portableMode"] = True
+        merged["portableMode"] = True
+    if "OPENMOTION_CLINICAL" in os.environ:
+        clinical = os.environ["OPENMOTION_CLINICAL"] == "1"
+        baseline["clinicalMode"] = clinical
+        merged["clinicalMode"] = clinical
+
     _APP_CONFIG_BASELINE.clear()
     _APP_CONFIG_BASELINE.update(baseline)
     logger.info(
