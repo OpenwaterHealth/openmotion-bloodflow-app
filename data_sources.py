@@ -921,7 +921,10 @@ def _load_corrected_csv_into(buffers: dict, csv_path: str) -> None:
                             )
                             buf.append(t=t, v=v, frame_id=frame_id)
     except OSError:
-        pass
+        # Best-effort by contract (see docstring), but never silent — a
+        # missing/unreadable corrected CSV means the viewer shows less data.
+        logger.warning("corrected-CSV fallback load failed: %s",
+                       csv_path, exc_info=True)
 
 
 def buffers_are_empty(buffers: Optional[dict]) -> bool:

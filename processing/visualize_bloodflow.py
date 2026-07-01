@@ -279,7 +279,8 @@ class VisualizeBloodflow:
     def get_results(
         self,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Return (BFI, BVI, camera_inds). Call after compute()."""
+        """Return (BFI, BVI, camera_inds, contrast, mean). Call after
+        compute()."""
         if self._BFI is None:
             raise RuntimeError("Call compute() before get_results().")
         return self._BFI, self._BVI, self._camera_inds, self._contrast, self._mean

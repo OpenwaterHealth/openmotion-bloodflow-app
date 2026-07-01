@@ -550,7 +550,7 @@ class _TriggerStateSink:
         # SDK version pre-dates TriggerStateEvent.
         try:
             from omotion.pipeline.batch import TriggerStateEvent
-        except Exception:
+        except ImportError:
             return
         if not isinstance(payload, TriggerStateEvent):
             return
@@ -686,7 +686,7 @@ class _ScanOutcomeSink:
             # that pre-dates TerminalDarkResult (mirrors _TriggerStateSink).
             try:
                 from omotion.pipeline.batch import TerminalDarkResult
-            except Exception:
+            except ImportError:
                 return
             if isinstance(payload, TerminalDarkResult) and not payload.found:
                 self.terminal_dark_missing = True
@@ -1468,12 +1468,12 @@ class MotionConnector(QObject):
 
     @pyqtProperty(bool, notify=laserStateChanged)
     def laserOn(self):
-        """Expose Console connection status to QML."""
+        """Expose the laser-on state to QML."""
         return self._laserOn
 
     @pyqtProperty(bool, notify=safetyFailureStateChanged)
     def safetyFailure(self):
-        """Expose Console connection status to QML."""
+        """Expose the laser-safety-failure state to QML."""
         return self._safetyFailure
 
     @safetyFailure.setter
@@ -1692,7 +1692,7 @@ class MotionConnector(QObject):
                     if getattr(self._interface.left, "clear_id_cache", None):
                         self._interface.left.clear_id_cache()
                 except Exception:
-                    pass
+                    logger.debug("clear_id_cache failed for left", exc_info=True)
         elif name == "right":
             if is_now_connected:
                 self._rightSensorConnected = True
@@ -1704,7 +1704,7 @@ class MotionConnector(QObject):
                     if getattr(self._interface.right, "clear_id_cache", None):
                         self._interface.right.clear_id_cache()
                 except Exception:
-                    pass
+                    logger.debug("clear_id_cache failed for right", exc_info=True)
 
         if is_now_connected:
             logger.info("Handle %s -> CONNECTED (%s)", name, reason)
@@ -1767,12 +1767,14 @@ class MotionConnector(QObject):
             if handle is not None and hasattr(handle, "get_hardware_id"):
                 hwid = str(handle.get_hardware_id() or "")
         except Exception:
-            pass
+            logger.debug("device_stats: %s hardware-id lookup failed",
+                         name, exc_info=True)
         try:
             if handle is not None and hasattr(handle, "get_version"):
                 fw = str(handle.get_version() or "")
         except Exception:
-            pass
+            logger.debug("device_stats: %s firmware-version lookup failed",
+                         name, exc_info=True)
         self._audit.log("device_stats", {
             "device": name, "hardware_id": hwid, "firmware_version": fw,
         })
@@ -2219,8 +2221,10 @@ class MotionConnector(QObject):
         if not notes:
             try:
                 notes = notes_path.read_text(encoding="utf-8")
-            except Exception:
-                pass
+            except OSError:
+                # No legacy *_notes.txt fallback for this scan — expected
+                # for anything recorded since notes moved into scans.db.
+                logger.debug("no legacy notes file at %s", notes_path)
 
         return {
             "userLabel": subject,
@@ -3739,7 +3743,7 @@ class MotionConnector(QObject):
 
     @pyqtSlot(result=int)
     def getLsyncCount(self):
-        """Get the Fsync count from the console."""
+        """Get the Lsync count from the console."""
         try:
             lsync_count = self._interface.console.get_lsync_pulsecount()
             logger.debug(f"Lsync Count: {lsync_count}")
@@ -4205,7 +4209,7 @@ class MotionConnector(QObject):
         except Exception as e:
             logger.error(f"Error querying Accelerometer data: {e}")
 
-    @pyqtSlot()
+    @pyqtSlot(str)
     def querySensorGyroscope(self, target: str):
         """Fetch and emit Gyroscope data. ``target`` is "left" or "right"."""
         try:
