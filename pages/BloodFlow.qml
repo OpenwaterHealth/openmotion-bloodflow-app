@@ -440,14 +440,20 @@ Rectangle {
     // ===== SCAN RUNNER (check mode) =====
     // Shares flash + trigger/laser plumbing with scanRunner; final stage is
     // the contact-quality check instead of capture. Always flashes 0xFF so
-    // every physically-present camera participates — absent cameras are
-    // skipped by the configure workflow.
+    // every physically-present camera participates (lets the live CQ view
+    // show a dot for every camera) — absent cameras are skipped by the
+    // configure workflow. The pass/fail *evaluation* is narrower: only the
+    // user's currently configured scan mask (evalLeftMask/evalRightMask)
+    // is required to pass — a camera set to "None" in scan settings is
+    // flashed/shown but never blocks the check.
     ScanRunner {
         id: qualityCheckRunner
         mode: "check"
         connector: MotionInterface
         leftMask: MotionInterface.leftSensorConnected  ? 0xFF : 0x00
         rightMask: MotionInterface.rightSensorConnected ? 0xFF : 0x00
+        evalLeftMask: bloodFlow.leftMask
+        evalRightMask: bloodFlow.rightMask
         laserOn: true
         laserPower: 50
         // See note on the scanRunner triggerConfig above — same here.

@@ -3647,8 +3647,8 @@ class MotionConnector(QObject):
         return self._ensure_idle() is None
 
     # ──────────────────────────────────────────────────────────────────
-    @pyqtSlot()
-    def runContactQualityCheck(self):
+    @pyqtSlot(int, int)
+    def runContactQualityCheck(self, left_camera_mask: int, right_camera_mask: int):
         """Run the contact-quality check via the SDK's ContactQualityWorkflow.
 
         Delegates to interface.contact_quality_workflow.check(), which runs
@@ -3656,6 +3656,13 @@ class MotionConnector(QObject):
         per-camera BFI statistics. The SDK call is synchronous/blocking, so
         we run it in a background thread and marshal results back via a
         private signal.
+
+        left_camera_mask / right_camera_mask: the *configured scan* mask
+        (bloodFlow.leftMask/rightMask — cameras the user actually selected,
+        with any camera set to "None" cleared). Only these cameras are
+        evaluated; a camera excluded from the scan must not be required to
+        pass contact quality. Still AND-gated on sensor-connected state
+        below, matching the pre-existing safety check.
         """
         err = self._ensure_idle()
         if err is not None:
@@ -3680,8 +3687,8 @@ class MotionConnector(QObject):
         self.contactQualityScanInProgress.emit(True)
         self.contactQualityCheckStarted.emit(int(round(duration_s + 3)))
 
-        left_mask = 0xFF if self._leftSensorConnected else 0x00
-        right_mask = 0xFF if self._rightSensorConnected else 0x00
+        left_mask = int(left_camera_mask) if self._leftSensorConnected else 0x00
+        right_mask = int(right_camera_mask) if self._rightSensorConnected else 0x00
 
         self._cq_t0 = time.monotonic()
         logger.info(
