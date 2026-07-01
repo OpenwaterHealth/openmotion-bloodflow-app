@@ -291,6 +291,10 @@ class ScanDataSource(QObject):
         # Pending dirty bookkeeping: (side, cam, metric) -> accumulated count.
         self._pending: dict[tuple[str, int, str], int] = {}
 
+        # Set by release() when the connector retires this source; guards
+        # against double-release and marks the flush timer as stopped.
+        self._released = False
+
         # Throttle timer — fires every 100 ms while the source is alive.
         # Tests can call _flush() directly and ignore the timer entirely.
         self._flush_timer = QTimer(self)
@@ -299,6 +303,20 @@ class ScanDataSource(QObject):
         self._flush_timer.start()
 
     # ── public ────────────────────────────────────────────────────────────
+
+    def release(self) -> None:
+        """Stop the flush timer and drop external resources. Idempotent.
+
+        Called by the connector right before deleteLater() when this source
+        is no longer reachable from QML (superseded by a newer scan or
+        another History view). Buffers stay readable — a late paint during
+        the deleteLater window must not crash — but no further
+        samplesAppended fires."""
+        if self._released:
+            return
+        self._released = True
+        self._flush_timer.stop()
+        self._pending.clear()
 
     @pyqtProperty(bool, constant=True)
     def live(self) -> bool:
@@ -540,6 +558,24 @@ class LiveScanSource(ScanDataSource):
         self._db_window_buffers: dict = {}     # transient (side,cam,metric)->buffer
         self._db_window_lo = float("inf")     # loaded range, exclusive sentinel
         self._db_window_hi = float("-inf")
+
+    def release(self) -> None:
+        """Base release plus DB-tail teardown: close the read handle and
+        drop the transient window buffers so a retired live source can't
+        hold the scan DB open for the app's lifetime."""
+        if self._released:
+            return
+        super().release()
+        db = self._db
+        self._db = None
+        self._db_unavailable = True  # never reopen after release
+        self._db_window_buffers = {}
+        if db is not None:
+            try:
+                db.close()
+            except Exception:
+                logger.warning("scan DB close failed on release",
+                               exc_info=True)
 
     def set_scan_label(self, label: Optional[str]) -> None:
         """Bind this live source to a specific scan-DB session by label

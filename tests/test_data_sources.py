@@ -1658,3 +1658,63 @@ def test_buffers_are_empty_false_when_any_sample_present():
     buf = _CameraBuffer(max_capacity=None)
     buf.append(t=0.0, v=1.0, frame_id=0)
     assert buffers_are_empty({("left", -1, "bfi"): buf}) is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# release() — retirement of superseded sources (leak fix)
+# ─────────────────────────────────────────────────────────────────────────────
+
+from data_sources import LiveScanSource, PastScanSource
+
+
+def test_release_stops_flush_timer_and_is_idempotent():
+    src = LiveScanSource(plot_t0=0.0)
+    assert src._flush_timer.isActive()
+    src.release()
+    assert not src._flush_timer.isActive()
+    src.release()  # idempotent — second call must not raise
+    assert not src._flush_timer.isActive()
+
+
+def test_release_drops_pending_notifications():
+    src = LiveScanSource(plot_t0=0.0)
+    src.append_uncorrected("left", 0, frame_id=1, t=0.025, bfi=1.0, bvi=2.0)
+    assert src._pending
+    src.release()
+    assert not src._pending
+
+
+def test_live_release_closes_db_handle():
+    src = LiveScanSource(plot_t0=0.0, scan_db_path="unused.db")
+
+    class FakeDb:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    db = FakeDb()
+    src._db = db
+    src._db_window_buffers = {("left", 0, "bfi"): _CameraBuffer()}
+    src.release()
+    assert db.closed
+    assert src._db is None
+    assert src._db_unavailable  # a released source must never reopen the DB
+    assert src._db_window_buffers == {}
+
+
+def test_past_release_stops_timer():
+    src = PastScanSource(scan_db=None, session_id=1, preloaded_buffers={})
+    assert src._flush_timer.isActive()
+    src.release()
+    assert not src._flush_timer.isActive()
+
+
+def test_released_source_buffers_stay_readable():
+    """A late paint during the deleteLater window must not crash: reads
+    still work after release, they just serve the frozen data."""
+    src = LiveScanSource(plot_t0=0.0)
+    src.append_uncorrected("left", 0, frame_id=1, t=0.025, bfi=1.0, bvi=2.0)
+    src.release()
+    pts = src.points_for_window("left", 0, "bfi", 0.0, 1.0, 100)
+    assert pts and pts[0][1] == 1.0

@@ -2721,13 +2721,34 @@ class MotionConnector(QObject):
         the "Back to live" button should switch sources back to live."""
         return self._live_scan_source is not None
 
+    def _retire_scan_source(self, source: ScanDataSource | None) -> None:
+        """Tear down a source QML can no longer reach: stop its flush
+        timer, close any scan-DB handle, and queue C++ deletion. Sources
+        are parented to the connector, so without this every superseded
+        source (one per scan / History view) stays alive for the app's
+        lifetime — up to ~46 MB of buffers plus a running 10 Hz timer
+        each. deleteLater (not a direct delete) so any in-flight QML
+        paint against the old source finishes before the object dies."""
+        if source is None:
+            return
+        try:
+            source.release()
+        except Exception:
+            logger.warning("scan source release failed", exc_info=True)
+        source.deleteLater()
+
     def _set_current_scan_source(self, source: ScanDataSource | None) -> None:
         """Replace the active source. Dedupes identical-instance assignments
-        so the notify signal only fires on real transitions."""
+        so the notify signal only fires on real transitions. The previous
+        source is retired unless it is the held live source, which must
+        survive History navigation for "Back to live"."""
         if source is self._current_scan_source:
             return
+        prev = self._current_scan_source
         self._current_scan_source = source
         self.currentScanSourceChanged.emit()
+        if prev is not None and prev is not self._live_scan_source:
+            self._retire_scan_source(prev)
 
     @pyqtSlot()
     def showLiveSource(self) -> None:
@@ -3193,12 +3214,16 @@ class MotionConnector(QObject):
         )
         # Track the live source separately so the user can navigate
         # to a past scan and return; emit so QML rebinds the
-        # PlotToolbar's "Back to live" visibility.
-        first_live = self._live_scan_source is None
+        # PlotToolbar's "Back to live" visibility. The previous scan's
+        # live source is retired below — release() is idempotent, so it
+        # doesn't matter if _set_current_scan_source already retired it
+        # as the outgoing current source.
+        prev_live = self._live_scan_source
         self._live_scan_source = live_source
-        if first_live:
+        if prev_live is None:
             self.liveSourceAvailableChanged.emit()
         self._set_current_scan_source(live_source)
+        self._retire_scan_source(prev_live)
         self._capture_left_path = ""
         self._capture_right_path = ""
 
@@ -3398,7 +3423,11 @@ class MotionConnector(QObject):
                 live_source.set_scan_label(label)
         if not started:
             self._capture_running = False
-            self._set_current_scan_source(None)  # release the orphaned LiveScanSource — scan never started
+            # Unbind the viewer. The orphaned LiveScanSource itself stays
+            # held as _live_scan_source (it is NOT freed by dropping the
+            # current-source reference — it's parented to the connector)
+            # until the next startCapture retires it.
+            self._set_current_scan_source(None)
             # start_scan refuses for two reasons: a prior worker still alive,
             # or a pre-flight failure (e.g. the scan DB couldn't be opened, in
             # which case the scan is aborted before the laser fires so its data
