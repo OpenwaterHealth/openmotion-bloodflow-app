@@ -565,31 +565,11 @@ class _TriggerStateSink:
         c = self._connector
         if payload.state == "ON":
             c._trigger_state = "ON"
-            if c._trigger_on_mono is None:
-                c._trigger_on_mono = time.monotonic()
-                c._trigger_on_ts = payload.timestamp_s
+            c._trigger_clock_open(payload.timestamp_s)
             c.triggerStateChanged.emit()
         elif payload.state == "OFF":
             c._trigger_state = "OFF"
-            if c._trigger_on_mono is not None:
-                # Prefer the SDK-stamped, scan-relative timestamps: the OFF
-                # event can sit queued behind histogram batches in the runner's
-                # diagnostics channel and be consumed ~1 s after it was emitted,
-                # which inflates a receive-time measurement (a 16:00 scan shows
-                # as 16:01 — issue #201). Fall back to host receive-time only
-                # if the timestamps are unusable (e.g. the SDK's t0-None path
-                # emits 0.0 for both edges, giving a non-positive delta).
-                ts_delta = (
-                    payload.timestamp_s - c._trigger_on_ts
-                    if c._trigger_on_ts is not None
-                    else 0.0
-                )
-                if ts_delta > 0:
-                    c._trigger_cumulative_s += ts_delta
-                else:
-                    c._trigger_cumulative_s += time.monotonic() - c._trigger_on_mono
-                c._trigger_on_mono = None
-                c._trigger_on_ts = None
+            c._trigger_clock_close(payload.timestamp_s)
             c.triggerStateChanged.emit()
 
     def on_complete(self) -> None:
@@ -907,8 +887,11 @@ class MotionConnector(QObject):
         self._dropout_timer.timeout.connect(self._on_dropout_check)
         self._plot_t0: float = 0.0  # set at scan start; consumed by _on_dropout_check
 
-        # Trigger-ON elapsed mirrors — populated from start_capture locals so
-        # _on_dropout_check / _scan_elapsed_str can read them off the instance.
+        # Trigger-ON clock (issue #201) — the single scan-time source of
+        # truth for the notes duration line, the header elapsed counter and
+        # the dropout log timestamps. Managed exclusively through the
+        # _trigger_clock_reset/_open/_close helpers; read via
+        # _trigger_elapsed_s / scanElapsedSec / scanElapsedStr.
         self._trigger_cumulative_s: float = 0.0
         self._trigger_on_mono: float | None = None
         # Scan-relative timestamp (from the SDK's TriggerStateEvent) of the
@@ -1693,6 +1676,20 @@ class MotionConnector(QObject):
             elif is_now_lost:
                 # Clear connection timestamp on disconnect
                 self._console_connected_at = None
+                # A dead console can't be driving the laser trigger, and it
+                # can't deliver the SDK's trigger-OFF event either (its
+                # stop_trigger raises during teardown). Close the trigger
+                # clock at detection time so the notes duration line and the
+                # header counter stop here instead of counting several more
+                # seconds of scan teardown (issue #201).
+                if self._trigger_state == "ON" or self._trigger_on_mono is not None:
+                    logger.warning(
+                        "Console lost while trigger ON — closing the trigger "
+                        "clock at disconnect detection (%s)", reason,
+                    )
+                    self._trigger_clock_close()
+                    self._trigger_state = "OFF"
+                    self.triggerStateChanged.emit()
         elif name == "left":
             if is_now_connected:
                 self._leftSensorConnected = True
@@ -3268,10 +3265,8 @@ class MotionConnector(QObject):
         # instance (same pattern as nan_gap_tracker above).
         outcome_sink = _ScanOutcomeSink()
 
-        # Reset trigger ON-time mirrors so _scan_elapsed_str starts from zero.
-        self._trigger_cumulative_s = 0.0
-        self._trigger_on_mono = None
-        self._trigger_on_ts = None
+        # Reset the trigger-ON clock so _scan_elapsed_str starts from zero.
+        self._trigger_clock_reset()
 
         # _CompletionSink calls this from its on_complete() method once the
         # ScanRunner finishes.
@@ -3290,9 +3285,17 @@ class MotionConnector(QObject):
             # pre-scan setup + post-scan USB drain). Falls back to wall-clock
             # if the sink never saw a TriggerStateEvent (e.g. cancel before
             # trigger fired).
-            trigger_elapsed = self._trigger_cumulative_s
             if self._trigger_on_mono is not None:
-                trigger_elapsed += time.monotonic() - self._trigger_on_mono
+                # No OFF event and no disconnect-close reached us before
+                # completion — close here as a last resort, knowing the
+                # measurement now includes scan-teardown time.
+                logger.warning(
+                    "Scan completed with the trigger clock still open "
+                    "(no TriggerStateEvent OFF received); duration may "
+                    "include teardown time."
+                )
+                self._trigger_clock_close()
+            trigger_elapsed = self._trigger_cumulative_s
             if trigger_elapsed > 0:
                 elapsed = trigger_elapsed
             else:
@@ -4279,6 +4282,70 @@ class MotionConnector(QObject):
                 if src is not None and getattr(src, "live", False):
                     src.mark_dropped(side=side, cam_id=cam_id, t=now - self._plot_t0)
 
+    # --- TRIGGER-ON CLOCK (issue #201) ---
+    # Single scan-time clock backing the notes duration line, the header
+    # elapsed counter (scanElapsedSec) and dropout log timestamps. Opened /
+    # closed by _TriggerStateSink from SDK TriggerStateEvents; also closed
+    # by the console-disconnect handler because a dead console can't deliver
+    # its OFF event (stop_trigger raises before _emit_trigger_event runs).
+
+    def _trigger_clock_reset(self) -> None:
+        """Zero the clock. Called once per scan from startCapture."""
+        self._trigger_cumulative_s = 0.0
+        self._trigger_on_mono = None
+        self._trigger_on_ts = None
+
+    def _trigger_clock_open(self, ts_s: float | None) -> None:
+        """Start an ON interval. No-op if one is already open."""
+        if self._trigger_on_mono is None:
+            self._trigger_on_mono = time.monotonic()
+            self._trigger_on_ts = ts_s
+
+    def _trigger_clock_close(self, ts_s: float | None = None) -> None:
+        """Bank the open ON interval into the cumulative total.
+
+        Prefers the SDK-stamped, scan-relative timestamp pair: the OFF event
+        can sit queued behind histogram batches in the runner's diagnostics
+        channel and be consumed ~1 s after it was emitted, which inflates a
+        receive-time measurement (a 16:00 scan shows as 16:01 — issue #201).
+        Falls back to host receive-time when the timestamps are unusable
+        (the SDK's t0-None path emits 0.0 for both edges, giving a
+        non-positive delta) or when closing without an event (console lost).
+        No-op when the clock is already closed, so a late OFF event after a
+        disconnect-close can't double-count.
+        """
+        if self._trigger_on_mono is None:
+            return
+        ts_delta = (
+            ts_s - self._trigger_on_ts
+            if ts_s is not None and self._trigger_on_ts is not None
+            else 0.0
+        )
+        if ts_delta > 0:
+            self._trigger_cumulative_s += ts_delta
+        else:
+            self._trigger_cumulative_s += time.monotonic() - self._trigger_on_mono
+        self._trigger_on_mono = None
+        self._trigger_on_ts = None
+
+    def _trigger_elapsed_s(self) -> float:
+        """Trigger-ON seconds so far this scan, including any open interval."""
+        elapsed = self._trigger_cumulative_s
+        if self._trigger_on_mono is not None:
+            elapsed += time.monotonic() - self._trigger_on_mono
+        return elapsed
+
+    @pyqtSlot(result=int)
+    def scanElapsedSec(self) -> int:
+        """QML-facing accessor for trigger-ON elapsed whole seconds.
+
+        The header counter polls this once a second instead of counting its
+        own Timer ticks — a QML Timer fires late under GUI load and a
+        tick-counting clock drifts behind real time, disagreeing with the
+        notes duration line written from this same clock.
+        """
+        return int(self._trigger_elapsed_s())
+
     @pyqtSlot(result=str)
     def scanElapsedStr(self) -> str:
         """QML-facing accessor for trigger-ON elapsed time (HH:MM:SS)."""
@@ -4286,10 +4353,7 @@ class MotionConnector(QObject):
 
     def _scan_elapsed_str(self) -> str:
         """Return current scan elapsed trigger-ON time as HH:MM:SS."""
-        elapsed = self._trigger_cumulative_s
-        if self._trigger_on_mono is not None:
-            elapsed += time.monotonic() - self._trigger_on_mono
-        total_s = int(elapsed)
+        total_s = int(self._trigger_elapsed_s())
         h = total_s // 3600
         m = (total_s % 3600) // 60
         s = total_s % 60
