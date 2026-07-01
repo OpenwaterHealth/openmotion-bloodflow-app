@@ -206,7 +206,7 @@ def _build_update_helper_script(
     )
 
 
-# Camera-mask → human config name, mirroring CameraSelectionModal's
+# Camera-mask → human config name, mirroring ScanSettingsModal's
 # pattern table. Unmapped masks render as hex; -1 (unknown, e.g. a
 # clinical-mode scan whose meta lacks sdk_flags) renders as an em dash.
 _CONFIG_NAMES = {
@@ -1520,7 +1520,7 @@ class MotionConnector(QObject):
     def triggerState(self):
         return self._trigger_state
 
-    # --- Calibration procedure properties (consumed by Settings.qml) ---
+    # --- Calibration procedure properties (consumed by SettingsModal.qml) ---
     @pyqtProperty(bool, notify=calibrationStateChanged)
     def calibrationRunning(self) -> bool:
         return self._calibration_status == "running"
