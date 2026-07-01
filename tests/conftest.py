@@ -102,6 +102,13 @@ def pytest_configure(config):
     # _from_source_mode() helper picks it up without further plumbing.
     if config.getoption("--from-source"):
         os.environ["OPENWATER_FROM_SOURCE"] = "1"
+    # Snapshot the tracked repo config before collection imports any test
+    # module, so pytest_collection_finish can detect import-time writes.
+    global _repo_app_config_snapshot
+    try:
+        _repo_app_config_snapshot = _REPO_APP_CONFIG.read_bytes()
+    except OSError:
+        _repo_app_config_snapshot = None
 
 
 _class_failures = {}
@@ -126,6 +133,141 @@ def pytest_runtest_setup(item):
 # App discovery
 # ─────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+# ─────────────────────────────────────────────
+# app_config.json hygiene + FORCE_APP_CONFIG
+# ─────────────────────────────────────────────
+# pytest imports EVERY test module during collection, even when `-m unit`
+# deselects all of a module's tests — so module-level code that writes
+# app_config.json fires on every run, and a module-scoped restore fixture
+# never runs for a fully-deselected module. That combination used to leave
+# the tracked config/app_config.json dirty (clinicalMode/engineeringMode
+# flipped, file re-serialized) after plain `pytest -m unit` runs.
+#
+# The sanctioned replacement: a module that needs an app-config value forced
+# on disk before the session `app` fixture launches declares
+#
+#     FORCE_APP_CONFIG = {"clinicalMode": False}
+#
+# at module level (a plain dict — no side effect at import). After
+# collection and `-m` deselection, pytest_collection_finish applies the
+# declarations of modules that actually have selected tests, targeting the
+# same file hil_helpers._resolve_app_config_path() resolves (repo config in
+# from-source mode, the exe's bundled copy otherwise). The file's original
+# bytes are restored at session end, so even the json.dump re-serialization
+# is undone.
+_REPO_APP_CONFIG = PROJECT_ROOT / "config" / "app_config.json"
+_repo_app_config_snapshot: bytes | None = None
+_forced_config_target: Path | None = None
+_forced_config_snapshot: bytes | None = None
+
+
+def _read_repo_app_config() -> bytes | None:
+    try:
+        return _REPO_APP_CONFIG.read_bytes()
+    except OSError:
+        return None
+
+
+def pytest_collection_finish(session):
+    """Guard the tracked repo config, then apply FORCE_APP_CONFIG.
+
+    Runs after collection + ``-m`` deselection but before any fixture, so
+    forced values are on disk before the session ``app`` fixture launches
+    the bloodflow app.
+    """
+    global _forced_config_target, _forced_config_snapshot
+
+    # 1. Fail loudly if merely importing the test modules dirtied the
+    #    tracked repo config — that's a module-level write sneaking back in.
+    if _repo_app_config_snapshot is not None:
+        current = _read_repo_app_config()
+        if current != _repo_app_config_snapshot:
+            _REPO_APP_CONFIG.write_bytes(_repo_app_config_snapshot)
+            raise pytest.UsageError(
+                "config/app_config.json was modified while importing test "
+                "modules. A test module writes the app config at import time "
+                "(e.g. a module-level force_app_config_value(...) call). That "
+                "fires during collection of every run — including `-m unit` "
+                "runs that never execute the module — and leaves the tracked "
+                "file dirty. Declare FORCE_APP_CONFIG = {...} at module level "
+                "instead; conftest applies it only when the module has "
+                "selected tests. (Original file contents were restored.)"
+            )
+
+    if session.config.option.collectonly:
+        return
+
+    # 2. Gather FORCE_APP_CONFIG from modules with selected tests.
+    forced: dict = {}
+    forced_by: dict = {}
+    for item in session.items:
+        module = getattr(item, "module", None)
+        declared = getattr(module, "FORCE_APP_CONFIG", None) or {}
+        for key, value in declared.items():
+            if key in forced and forced[key] != value:
+                log.warning(
+                    f"FORCE_APP_CONFIG conflict on {key!r}: "
+                    f"{forced_by[key]} wants {forced[key]!r}, "
+                    f"{module.__name__} wants {value!r}; using {value!r}"
+                )
+            forced[key] = value
+            forced_by[key] = module.__name__
+    if not forced:
+        return
+
+    # Deferred import — hil_helpers imports conftest, so importing it at
+    # module level here would be circular.
+    from hil_helpers import _resolve_app_config_path, force_app_config_value
+
+    target = _resolve_app_config_path()
+    try:
+        _forced_config_snapshot = target.read_bytes()
+    except OSError:
+        _forced_config_snapshot = None
+    _forced_config_target = target
+    for key, value in forced.items():
+        force_app_config_value(key, value)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Byte-exact restore of the app config we force-wrote at collection."""
+    if _forced_config_target is not None and _forced_config_snapshot is not None:
+        try:
+            _forced_config_target.write_bytes(_forced_config_snapshot)
+        except OSError as e:
+            log.warning(
+                f"could not restore {_forced_config_target} after forcing "
+                f"app-config values: {e}"
+            )
+
+
+@pytest.fixture(autouse=True)
+def _guard_tracked_app_config(request):
+    """Fail loudly if a unit test dirties the tracked config/app_config.json.
+
+    Unit tests must point config IO at tmp_path (monkeypatch
+    OPENWATER_DATA_ROOT / config_store.resource_path — see the pattern in
+    tests/test_app_config_defaults.py). HIL tests are exempt: several
+    legitimately write the on-disk config mid-session and restore it
+    themselves.
+    """
+    if request.node.get_closest_marker("unit") is None:
+        yield
+        return
+    before = _read_repo_app_config()
+    yield
+    after = _read_repo_app_config()
+    if before != after:
+        if before is not None:
+            _REPO_APP_CONFIG.write_bytes(before)
+        pytest.fail(
+            "this test modified the tracked config/app_config.json — unit "
+            "tests must redirect config reads/writes to tmp_path "
+            "(monkeypatch OPENWATER_DATA_ROOT / config_store.resource_path). "
+            "The original file contents were restored."
+        )
 
 
 def _from_source_mode() -> bool:

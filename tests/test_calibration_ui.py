@@ -43,20 +43,16 @@ import pytest
 from pywinauto import findwindows
 
 from conftest import SLEEP, ensure_visible, log, uia_window
-from hil_helpers import click_panel, force_app_config_value, write_app_config_value
+from hil_helpers import click_panel
 
 pytestmark = pytest.mark.dev
 
 # Calibration controls live in the engineeringMode-gated "Engineering" card
 # of the Settings modal. The app ships with engineeringMode=false, so force
-# it true before the session ``app`` fixture launches; restore afterward.
-_INITIAL_ENGINEERING_MODE = force_app_config_value("engineeringMode", True)
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _restore_engineering_mode():
-    yield
-    write_app_config_value("engineeringMode", _INITIAL_ENGINEERING_MODE)
+# it true before the session ``app`` fixture launches. Applied by conftest's
+# pytest_collection_finish only when this module has selected tests;
+# restored byte-exact at session end.
+FORCE_APP_CONFIG = {"engineeringMode": True}
 
 # Calibration on real hardware: phase-0 flash (~5-15 s) + 2 sub-scans
 # of ~6 s each + compute + write_calibration. Field runs settle around

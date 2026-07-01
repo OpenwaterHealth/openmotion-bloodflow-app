@@ -183,21 +183,25 @@ def _resolve_app_config_path() -> Path:
 #
 # Test modules that need to pin a specific app_config.json value before
 # the bloodflow app launches (e.g. clinicalMode=false, so the modal
-# layout matches what tab walks expect) can:
+# layout matches what tab walks expect) declare it at module level:
 #
-#     from hil_helpers import force_app_config_value, write_app_config_value
+#     FORCE_APP_CONFIG = {"clinicalMode": False}
 #
-#     _INITIAL_CLINICAL_MODE = force_app_config_value("clinicalMode", False)
+# conftest's pytest_collection_finish applies the declarations (via
+# ``force_app_config_value``) after collection + ``-m`` deselection —
+# only for modules that actually have selected tests — and restores the
+# file byte-exact at session end.
 #
-#     @pytest.fixture(scope="module", autouse=True)
-#     def _restore_clinical_mode():
-#         yield
-#         write_app_config_value("clinicalMode", _INITIAL_CLINICAL_MODE)
+# NEVER call ``force_app_config_value`` at module level yourself: pytest
+# imports every test module during collection, so the write would fire
+# on every run (including ``-m unit`` runs that never execute the
+# module) and leave the tracked config dirty, with no fixture teardown
+# to restore it. conftest fails the run loudly if it detects that.
 #
 # Caveat: the connector caches its config at startup, so writes only
-# affect the *next* app launch. Force calls happen at module-import
-# time (before the session-scoped ``app`` fixture runs) precisely so
-# any fresh launch in this session boots with the desired value. If
+# affect the *next* app launch. Declarations are applied before any
+# fixture runs (so before the session-scoped ``app`` fixture) precisely
+# so any fresh launch in this session boots with the desired value. If
 # the app was already running before pytest started, see
 # ``force_app_config_value``'s warning log.
 
