@@ -35,29 +35,22 @@ from hil_helpers import (
     click_panel_button,
     dismiss_signal_quality_modal,
     find_app_log,
-    force_app_config_value,
     is_app_alive,
     log_size,
     move_window_on_screen,
     wait_for_pattern,
-    write_app_config_value,
 )
 
 pytestmark = pytest.mark.release
 
 # Each iteration opens Scan Settings to set sensor masks + duration.
 # Scan Settings is hidden in clinical mode, so force the on-disk flag
-# false at module-import time (before the session-scoped ``app``
-# fixture launches the app); a module-scoped autouse fixture restores
-# the original value on teardown. Same pattern as test_history /
-# test_scan_settings / test_usb_disconnect_freeze / test_scan_flow.
-_INITIAL_CLINICAL_MODE = force_app_config_value("clinicalMode", False)
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _restore_clinical_mode_on_module_teardown():
-    yield
-    write_app_config_value("clinicalMode", _INITIAL_CLINICAL_MODE)
+# false before the session-scoped ``app`` fixture launches the app.
+# Applied by conftest's pytest_collection_finish only when this module
+# has selected tests; restored byte-exact at session end. Same pattern
+# as test_history / test_scan_settings / test_usb_disconnect_freeze /
+# test_scan_flow.
+FORCE_APP_CONFIG = {"clinicalMode": False}
 
 # ─────────────────────────────────────────────
 # Configuration

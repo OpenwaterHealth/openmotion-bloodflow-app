@@ -38,30 +38,24 @@ from conftest import (
 )
 from hil_helpers import (
     click_panel,
-    force_app_config_value,
     move_window_on_screen,
     selected_scan_text,
     visible_modals,
-    write_app_config_value,
 )
 
 pytestmark = pytest.mark.release
 
-# Force ``clinicalMode = true`` on disk at module-import time so any
-# fresh launch in this session boots directly into Clinical Mode.
-# Restored on module teardown via the autouse fixture below.
+# Force ``clinicalMode = true`` on disk so any fresh launch in this
+# session boots directly into Clinical Mode. Applied by conftest's
+# pytest_collection_finish only when this module has selected tests
+# (never a module-level write — that fires during collection of every
+# run, including `-m unit`); restored byte-exact at session end.
 #
-# Caveat (see utils.force_app_config_value): the app caches its
+# Caveat (see hil_helpers.force_app_config_value): the app caches its
 # config at startup, so if the app was already running with
-# clinicalMode=false when this module is imported, the running
-# instance will stay in non-clinical mode until it is relaunched.
-_INITIAL_CLINICAL_MODE = force_app_config_value("clinicalMode", True)
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _restore_clinical_mode_on_module_teardown():
-    yield
-    write_app_config_value("clinicalMode", _INITIAL_CLINICAL_MODE)
+# clinicalMode=false, the running instance will stay in non-clinical
+# mode until it is relaunched.
+FORCE_APP_CONFIG = {"clinicalMode": True}
 
 
 SCAN_WAIT       = 200   # seconds to run the long scan (3 min 20 s)
