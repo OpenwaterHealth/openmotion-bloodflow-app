@@ -72,12 +72,17 @@ Rectangle {
     // instant triggerState flips to "OFF" (top of the SDK teardown, right
     // after stop_trigger) rather than when captureFinished arrives 2-4s later
     // after all the camera-disable / USB-drain / writer-join work is done.
+    //
+    // Each tick PULLS the connector's trigger-ON clock rather than counting
+    // ticks (issue #201): a QML Timer fires late under GUI load and never
+    // catches up, so a += 1 counter drifts behind real time and disagrees
+    // with the notes duration line written from the connector's clock.
     Timer {
         id: scanTimer
         interval: 1000
         repeat: true
         running: bloodFlow.scanning && MotionInterface.triggerState === "ON"
-        onTriggered: bloodFlow.elapsedSec += 1
+        onTriggered: bloodFlow.elapsedSec = MotionInterface.scanElapsedSec()
     }
 
     // Convert mask to active array for camera selection modal
@@ -327,6 +332,16 @@ Rectangle {
     Connections {
         target: MotionInterface
         function onScanNotesReady() { notesModal.open() }
+        // Snap the header counter to the authoritative value on every
+        // trigger edge. The OFF edge matters most: it carries the SDK
+        // timestamp correction, so the final displayed value lands on
+        // exactly the duration the notes line will report — without this,
+        // the counter keeps the value of its last 1 s tick, which can sit
+        // a second high while the queued OFF event was in flight.
+        function onTriggerStateChanged() {
+            if (bloodFlow.scanning)
+                bloodFlow.elapsedSec = MotionInterface.scanElapsedSec()
+        }
     }
 
     HistoryModal {
