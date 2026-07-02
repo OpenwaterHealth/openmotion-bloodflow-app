@@ -163,14 +163,25 @@ Rectangle {
     // the operator's current Scan Settings selection (issue #175). A live
     // source — or no source, before the first scan — reports -1 (unknown),
     // so the grid keeps following the live leftMask/rightMask selection.
+    //
+    // For the live fallback, additionally gate each side on its sensor
+    // actually being connected (issue #298): the live leftMask/rightMask
+    // carry the config default (e.g. 0x99 = 4 cams) regardless of which
+    // ports are populated, so a single sensor on the right port would
+    // otherwise draw 4 phantom left plots. A disconnected side contributes
+    // no cells; the binding re-flows on connect/disconnect because
+    // leftSensorConnected/rightSensorConnected notify connectionStatusChanged.
+    // Past scans are unaffected — their recorded masks win before this gate.
     readonly property int _effLeftMask:
         (viewer.scanSource && viewer.scanSource.leftMask !== undefined
          && viewer.scanSource.leftMask >= 0)
-            ? viewer.scanSource.leftMask : viewer.leftMask
+            ? viewer.scanSource.leftMask
+            : (MotionInterface.leftSensorConnected ? viewer.leftMask : 0x00)
     readonly property int _effRightMask:
         (viewer.scanSource && viewer.scanSource.rightMask !== undefined
          && viewer.scanSource.rightMask >= 0)
-            ? viewer.scanSource.rightMask : viewer.rightMask
+            ? viewer.scanSource.rightMask
+            : (MotionInterface.rightSensorConnected ? viewer.rightMask : 0x00)
 
     // Replay adopts the loaded scan's recorded mode: when the source reports a
     // known mode (clinicalMode >= 0) use it, else fall back to the live-config
@@ -232,13 +243,21 @@ Rectangle {
         return entries
     }
 
-    // Clinical mode — 2 cells, one per side, each rendering the
+    // Clinical mode — one cell per ACTIVE side, each rendering the
     // side-averaged stream (cam_id=-1, fed by SDK's SideAveragingStage
     // via _LivePlotSink.consume). Stacked vertically in a single column.
-    readonly property var _clinicalCellModel: [
-        { side: "left",  camId: -1, row: 0, col: 0 },
-        { side: "right", camId: -1, row: 1, col: 0 }
-    ]
+    // A side with no active cameras (disconnected sensor / recorded mask 0)
+    // is dropped and the survivor compacts to row 0 so a single-sided
+    // clinical scan doesn't reserve a blank row (issue #298).
+    readonly property var _clinicalCellModel: {
+        var entries = []
+        var displayRow = 0
+        if ((viewer._effLeftMask & 0xFF) !== 0)
+            entries.push({ side: "left", camId: -1, row: displayRow++, col: 0 })
+        if ((viewer._effRightMask & 0xFF) !== 0)
+            entries.push({ side: "right", camId: -1, row: displayRow++, col: 0 })
+        return entries
+    }
 
     readonly property var _activeCellModel: viewer.effectiveClinical
         ? _clinicalCellModel
@@ -715,15 +734,23 @@ Rectangle {
                 Layout.preferredWidth: 250
                 spacing: 6
 
+                // Each side's readout panel is shown only when that side
+                // has active cameras, mirroring _clinicalCellModel — a
+                // disconnected sensor (or a single-sided recorded scan)
+                // leaves no dead "--" panel behind (issue #298).
                 SideMetricPanel {
                     panelSide: "left"
+                    visible: (viewer._effLeftMask & 0xFF) !== 0
                     Layout.fillWidth: true
-                    Layout.fillHeight: true
+                    Layout.fillHeight: visible
+                    Layout.preferredHeight: visible ? -1 : 0
                 }
                 SideMetricPanel {
                     panelSide: "right"
+                    visible: (viewer._effRightMask & 0xFF) !== 0
                     Layout.fillWidth: true
-                    Layout.fillHeight: true
+                    Layout.fillHeight: visible
+                    Layout.preferredHeight: visible ? -1 : 0
                 }
             }
 
