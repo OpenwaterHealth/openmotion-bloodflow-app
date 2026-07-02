@@ -78,9 +78,9 @@ Debug flags that are still useful when hardware **is** attached (`config/app_con
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `engineeringMode` | `true` | Show debug telemetry, per-camera CQ dots, test buttons. |
-| `clinicalMode` | `true` | Clinical UI: hide settings, large BFI/BVI panels. Build-time only — there is no Settings toggle for it (removed; config-only now). |
-| `portableMode` | `false` | Build-time flag: `true` keeps all writable state (config overrides, logs, scan data/db) next to the exe (old un-installed layout); `false` scatters it to `%PROGRAMDATA%\Openwater`. Portable zips ship `true`, installers force `false` — see `Set-PortableMode` (`scripts/build_common.ps1`) and `utils/app_paths.py:writable_root`. |
+| `engineeringMode` | `false` | Engineering UI + diagnostics: debug telemetry, per-camera CQ dots, test buttons, Force Dismiss in the CQ modal footer, firmware-update banner, profiling HUD. Also gates the per-scan telemetry and raw CSVs (issue #43 — clinical users must not get them). Unlockable at runtime via `EngineeringUnlockModal`. |
+| `clinicalMode` | `true` (repo config) | Clinical UI: hide settings, large BFI/BVI panels. `main.py` baseline default is `false` (= Research distribution; window title "Open-Motion Research"). The build flips it per artifact variant (`scripts/build_common.ps1`); env override `OPENMOTION_CLINICAL=1/0` beats both. No Settings toggle. |
+| `portableMode` | `false` | Build-time flag: `true` keeps all writable state (config overrides, logs, scan data/db) next to the exe (old un-installed layout); `false` scatters it to `%PROGRAMDATA%\Openwater`. Portable zips ship `true`, installers force `false` — see `Set-PortableMode` (`scripts/build_common.ps1`) and `utils/app_paths.py:writable_root`. Env override `OPENMOTION_PORTABLE=1` for dev testing. |
 | `forceLaserFail` | `false` | Debug: simulate a laser safety trip. |
 | `cameraFakeData` | `false` | **Broken — do not use.** Was meant to request firmware fake histograms; see "Working without hardware". |
 | `histoThrottle` | `false` | Drop histograms to reduce log spam. |
@@ -93,31 +93,36 @@ Debug flags that are still useful when hardware **is** attached (`config/app_con
 | `cq_dark_threshold_per_camera` | `[3.0,…]` | Contact-quality dark threshold. |
 | `bfiClampLow` / `bfiClampHigh` | `0.0` / `10.0` | Display clamps (values outside show `--`). |
 | `bviLowPassEnabled` | `true` | 1-pole LPF on BVI (cutoff 40 Hz). |
-| `dataDirectory` | `C:\Users\ethan\Projects\scan_data` | Single output root — `logs/` and `data/` (scan CSVs/DB, calibrations) land under here. |
+| `writeRawCsv` | `false` | Opt-in raw histogram CSVs (`{scan_id}_(left\|right)_mask*_raw.csv`). Settings → Engineering toggle; additionally gated on `engineeringMode` — flipping engineering mode off stops raw output even if the toggle was left on. `rawCsvDurationSec` caps seconds written (`null` = whole scan). |
+| `writeCorrectedCsv` | `false` | Opt-in corrected per-cam CSV (`{scan_id}.csv`) — redundant now that per-cam BFI/BVI lands in `scans.db`. Config-only, no Settings UI. |
+| `dataDirectory` | `null` | Single output root — `logs/` and `data/` (`scans.db`, calibrations) live under it. `null` = `app_paths.writable_root()`: cwd for dev runs, exe-adjacent or `%PROGRAMDATA%\Openwater` per `portableMode` when frozen. |
 
 ## Reading the app log
 
 Every launch writes a timestamped log to `<dataDirectory>/logs/open-motion-<YYYYMMDD_HHMMSS>.log`. Use it as the first stop when diagnosing scan / calibration / connect failures — it captures every SDK + connector log line, including pipeline-stage exceptions that are caught and silently swallowed by `ScanRunner._safe_consume`.
 
 ```powershell
+# Dev runs (dataDirectory null) log to <repo>/logs/. If dataDirectory is set
+# in config/app_config.json, substitute <dataDirectory>\logs\ below.
+
 # Latest log, full contents:
-Get-ChildItem C:\Users\ethan\Projects\scan_data\logs\open-motion-*.log |
+Get-ChildItem C:\Users\ethan\Projects\openmotion-bloodflow-app\logs\open-motion-*.log |
   Sort-Object LastWriteTime -Descending | Select-Object -First 1 | Get-Content
 
 # Filter the latest log for failure-shaped lines (most common starting point):
-Get-ChildItem C:\Users\ethan\Projects\scan_data\logs\open-motion-*.log |
+Get-ChildItem C:\Users\ethan\Projects\openmotion-bloodflow-app\logs\open-motion-*.log |
   Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
   Get-Content | Select-String -Pattern "WARNING|ERROR|raised|exception|Traceback|FAIL|aborted" -Context 0,3
 
 # Just the calibration outcome:
-Get-ChildItem C:\Users\ethan\Projects\scan_data\logs\open-motion-*.log |
+Get-ChildItem C:\Users\ethan\Projects\openmotion-bloodflow-app\logs\open-motion-*.log |
   Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
   Get-Content | Select-String -Pattern "Calibration phase|procedure complete|samples captured"
 ```
 
 The `dataDirectory` config key controls the root (defaults to cwd if unset — falls back to `~/Documents/Open-Motion` on macOS). When unset on a frozen build, the default instead follows `portableMode`: next to the exe (portable zip) or `%PROGRAMDATA%\Openwater` (installer). Two fixed children live under that root:
 - `logs/` — app log files (one per launch)
-- `data/` — everything else: scan output files (raw / corrected / telemetry CSV + `scans.db`) land directly here; `data/calibrations/` holds saved calibration JSONs plus the SDK's per-camera PASS/FAIL CSVs (`calibration-<ts>.csv` / `test-<ts>.csv`); `data/debug-bundles/` holds "Send Debug Logs" zips; `data/updates/` holds in-app-updater downloads. Scan notes live in `scans.db` (`sessions.session_notes`), not as files; `*_notes.txt` files are legacy read-only fallbacks. (`data/ft-test-csvs/` was a legacy per-scan factory-test export — dead since May 2026 and retired; the Test/Calibrate flows' CSVs are its superset.)
+- `data/` — everything else. **Scan output is DB-only by default**: everything lands in `scans.db` (per-cam BFI/BVI, sessions, notes in `sessions.session_notes`); no per-scan CSVs are written unless opted in. User-facing CSVs are export-time artifacts: History → Export CSV (`exportScanCsv`). The opt-in engineering per-scan CSVs land directly in `data/`: telemetry CSV (`{scan_id}_{subject}_telemetry.csv`, gated on `engineeringMode` — issue #43), raw histogram CSVs (`engineeringMode && writeRawCsv`), corrected per-cam CSV (`writeCorrectedCsv`). `data/calibrations/` holds saved calibration JSONs plus the SDK's per-camera PASS/FAIL CSVs (`calibration-<ts>.csv` / `test-<ts>.csv`); `data/debug-bundles/` holds "Send Debug Logs" zips; `data/updates/` holds in-app-updater downloads. `*_notes.txt` files are legacy read-only fallbacks. (`data/ft-test-csvs/` was a legacy per-scan factory-test export — dead since May 2026 and retired; the Test/Calibrate flows' CSVs are its superset.)
 
 **Important:** the runner is fail-soft. `ScanRunner._safe_consume` catches sink exceptions and logs them as `sink %r raised on channel ...` at ERROR; `pipeline.process` exceptions log as `pipeline.process raised — resetting and continuing` at ERROR. **Neither aborts the scan**, so the app may report "complete" while every interval was actually broken. Always grep for `raised|exception` even on apparent successes when something downstream looks wrong.
 
