@@ -207,10 +207,6 @@ ApplicationWindow {
         }
     }
 
-    Connections {
-        target: MotionInterface
-    }
-
     TestResultsWindow {
         id: testResultsWindow
     }

@@ -548,9 +548,6 @@ Rectangle {
             }
         }
 
-        function onLaserStateChanged() {}
-        function onSafetyFailureStateChanged() {}
-
         // Contact-quality quick-check lifecycle
         function onContactQualityCheckStarted(seconds) {
             // ``seconds`` is no longer shown as a countdown — the modal is

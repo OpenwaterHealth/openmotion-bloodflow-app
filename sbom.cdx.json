@@ -193,31 +193,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:pypi/qasync@0.27.1",
-      "name": "qasync",
-      "version": "0.27.1",
-      "description": "asyncio event loop integration with PyQt/PySide",
-      "purl": "pkg:pypi/qasync@0.27.1",
-      "licenses": [
-        {
-          "license": {
-            "id": "BSD-2-Clause"
-          }
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://pypi.org/project/qasync/"
-        },
-        {
-          "type": "vcs",
-          "url": "https://github.com/CabbageDevelopment/qasync"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "pkg:pypi/base58@2.1.1",
       "name": "base58",
       "version": "2.1.1",
@@ -582,7 +557,6 @@
         "pkg:pypi/pyqt6-sip@13.9.1",
         "pkg:pypi/pyqt6-qt6@6.8.1",
         "pkg:pypi/pyqt6-charts@6.8.0",
-        "pkg:pypi/qasync@0.27.1",
         "pkg:pypi/base58@2.1.1",
         "pkg:pypi/pandas@2.3.1",
         "pkg:pypi/numpy@2.2.5",

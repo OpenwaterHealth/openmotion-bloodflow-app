@@ -63,12 +63,10 @@ def check_single_instance(app_name: str = "OpenWaterBloodflowApp") -> bool:
         atexit.register(cleanup_single_instance)
         return True
 
-    except Exception as e:
-        # Logging may not be configured yet, so use print as fallback
-        try:
-            logger.error(f"Failed to create mutex: {e}")
-        except:
-            print(f"Error: Failed to create mutex: {e}")
+    except Exception:
+        # Logging may not be configured yet; a handler-less logger still
+        # swallows this safely, so no print fallback is needed.
+        logger.error("Failed to create single-instance mutex", exc_info=True)
         # On error, allow the instance to proceed (fail open)
         return True
 
@@ -84,4 +82,5 @@ def cleanup_single_instance():
             ctypes.windll.kernel32.CloseHandle(_mutex)
             _mutex = None
         except Exception:
-            pass
+            logger.debug("single-instance mutex cleanup failed",
+                         exc_info=True)

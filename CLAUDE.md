@@ -26,7 +26,7 @@ python -m PyInstaller -y openwater.spec # package .exe → dist/Open-Motion/
 # scripts/package_artifacts.ps1 -SkipInstaller forces portable-only.
 ```
 
-- Tested on **Python 3.13.5**; `requirements.txt` pins PyQt6 6.8.0, qasync 0.27.1, pandas, numpy, matplotlib, pyusb, libusb1, PyInstaller 6.11.1, flake8 7.1.1.
+- Tested on **Python 3.13.5**; `requirements.txt` pins PyQt6 6.8.0, pandas, numpy, matplotlib, pyusb, libusb1, PyInstaller 6.11.1, flake8 7.1.1.
 - No `pyproject.toml`; pure `requirements.txt`.
 - QML does **not** hot-reload — restart the app to pick up `.qml` changes.
 
@@ -35,13 +35,13 @@ python -m PyInstaller -y openwater.spec # package .exe → dist/Open-Motion/
 | Path | What lives here |
 |---|---|
 | `main.py` | Entry point. PyQt app, QML engine, logging. Registers `MotionInterface` as a QML singleton. |
-| `motion_connector.py` | **4031 lines.** Single `MotionConnector` QObject — all UI⇄hardware glue, 135 signals/slots. State machine constants at lines 72–76; transitions at 1076–1084. |
+| `motion_connector.py` | **~4,700 lines.** Single `MotionConnector` QObject — all UI⇄hardware glue, ~64 signals / ~80 slots. State machine constants around line 252; transitions in `update_state` (~line 1947). |
 | `motion_config.py` | FPGA model + laser-parameter helpers (extracted in May 2025 for reuse). |
-| `pages/BloodFlow.qml` | Main scan page: patient info, sensor config, trigger. |
-| `pages/DataAnalysis.qml` | Post-processing + BFI/BVI visualization. |
-| `pages/Settings.qml` | Settings overlay. |
+| `pages/BloodFlow.qml` | Main scan page: patient info, sensor config, trigger. The only page `main.qml` loads. |
+| `components/PlotViewer.qml` | Real-time + replay BFI/BVI plot viewer (pan/zoom DVR, autoscale). |
+| `components/SettingsModal.qml` | Settings overlay (opened from BloodFlow — there is no `pages/Settings.qml`). |
 | `pages/scan/` | `ScanRunner.qml` plus task QMLs: `CaptureDataTask`, `ContactQualityCheckTask`, `FlashSensorsTask`, `PostProcessTask`, `SetTriggerTask`. Newer orchestration suite. |
-| `components/` | 29 reusable QML components — `SettingsModal`, `ContactQualityModal`, `CameraDot`, `TestResultsWindow`, etc. |
+| `components/` | 25 reusable QML components — `SettingsModal`, `ContactQualityModal`, `CameraDot`, `TestResultsWindow`, etc. |
 | `processing/visualize_bloodflow.py` | BFI/BVI computation from CSV histograms. |
 | `config/app_config.json` | 56 feature flags / thresholds, grouped by topic: output paths, scan/camera masks, plot/UI, calibration + FT thresholds, contact quality, developer/debug. |
 | `config/laser_params.json` | 18 laser I2C register sets (TA / SEED / EE / OPT variants). **Not user-tunable calibration data** — init/baseline commands for the laser driver chips. |
@@ -50,13 +50,13 @@ python -m PyInstaller -y openwater.spec # package .exe → dist/Open-Motion/
 
 **Note:** the old `motion_singleton.py` no longer exists — connector logic was consolidated into `motion_connector.py` and registered as a QML singleton in `main.py`.
 
-## State machine (motion_connector.py:72)
+## State machine (motion_connector.py:252)
 
 ```
 DISCONNECTED (0) → SENSOR_CONNECTED (1) → CONSOLE_CONNECTED (2) → READY (3) → RUNNING (4)
 ```
 
-No FSM class — integer enum + conditional branches on `self._state`. Transitions in `motion_connector.py` around line 1076.
+No FSM class — integer enum + conditional branches on `self._state`. Transitions in `update_state` (`motion_connector.py`, ~line 1947).
 
 QML↔Python wiring: `main.py:256` registers the connector as a QML singleton (`qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MotionInterface", connector)`). QML calls `MotionInterface.slotName()`; Python emits signals QML connects to with `onSignalNameChanged`.
 
@@ -123,7 +123,7 @@ The `dataDirectory` config key controls the root (defaults to cwd if unset — f
 
 ## Gotchas
 
-- **`motion_connector.py` is 4031 lines** — the file is doing too much. Don't add to it without considering extraction; recent precedent is `motion_config.py` (May 2025).
+- **`motion_connector.py` is ~4,700 lines** — the file is doing too much. Don't add to it without considering extraction; recent precedent is `motion_config.py` (May 2025).
 - **Cross-thread signals:** 135+ signals; several (e.g. `_calibrationCompleteSignal`, `safetyTripDuringCaptureRequested`) fire from USB I/O / scanner worker threads. Use `Qt.QueuedConnection` or you'll race QML.
 - **PyInstaller libusb mirror** (`openwater.spec` lines 61–95): if bundled app fails USB enumeration, the runtime hook can't find vendored libusb DLLs. Check the spec's mirror step.
 - **`laser_params.json` is not "tunable":** editing values risks laser-off, wrong pulse widths, safety failures. Treat as locked baseline.

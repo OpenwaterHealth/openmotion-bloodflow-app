@@ -17,7 +17,6 @@ import math
 import base58
 import threading
 import json
-import csv
 import os
 import sys
 import datetime
@@ -44,7 +43,6 @@ from omotion.config import (
 )
 from omotion.MotionProcessing import process_bin_file
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
-from processing.visualize_bloodflow import VisualizeBloodflow
 from motion_config import (
     TEC_TRIP_MAX_C,
     TEC_TRIP_MIN_C,
@@ -60,16 +58,10 @@ from utils import app_paths, config_store
 from data_sources import (
     LiveScanSource, PastScanSource, ScanDataSource, buffers_are_empty,
 )
-import numpy as np
-import pandas as pd
 
 # constants for calculations
 SCALE_V = 0.0909
 SCALE_I = 0.25
-R230 = 300e3
-R234 = 300e3
-TEC_VOLTAGE_DEFAULT = -0.07  # volts (DVT1a=-0.07, EVT2=1.16)
-DATA_ACQ_INTERVAL = 1.0
 # TEC ADC conversion constants + RT lookup moved to omotion.console_telemetry_conversions
 # (V_REF / R_1 / R_2 / R_3 / R_s / 10K3CG_R-T.csv).
 
@@ -194,8 +186,8 @@ def _build_update_helper_script(
         "$ErrorActionPreference = 'SilentlyContinue'\n"
         f"# 1. Wait for the running app (PID {app_pid}) to exit so the\n"
         "#    installer can replace its files without a FilesInUse conflict.\n"
-        "#    If it doesn't exit in time (the app may not self-exit under\n"
-        "#    qasync), force-kill it - installing over a live app fails the\n"
+        "#    If it doesn't exit in time (the app may not self-exit if the\n"
+        "#    GUI thread is wedged), force-kill it - installing over a live app fails the\n"
         "#    in-place file swap.\n"
         "$deadline = (Get-Date).AddSeconds(10)\n"
         f"while (Get-Process -Id {app_pid} -ErrorAction SilentlyContinue) {{\n"
@@ -214,7 +206,7 @@ def _build_update_helper_script(
     )
 
 
-# Camera-mask → human config name, mirroring CameraSelectionModal's
+# Camera-mask → human config name, mirroring ScanSettingsModal's
 # pattern table. Unmapped masks render as hex; -1 (unknown, e.g. a
 # clinical-mode scan whose meta lacks sdk_flags) renders as an em dash.
 _CONFIG_NAMES = {
@@ -558,7 +550,7 @@ class _TriggerStateSink:
         # SDK version pre-dates TriggerStateEvent.
         try:
             from omotion.pipeline.batch import TriggerStateEvent
-        except Exception:
+        except ImportError:
             return
         if not isinstance(payload, TriggerStateEvent):
             return
@@ -694,7 +686,7 @@ class _ScanOutcomeSink:
             # that pre-dates TerminalDarkResult (mirrors _TriggerStateSink).
             try:
                 from omotion.pipeline.batch import TerminalDarkResult
-            except Exception:
+            except ImportError:
                 return
             if isinstance(payload, TerminalDarkResult) and not payload.found:
                 self.terminal_dark_missing = True
@@ -707,7 +699,6 @@ class MotionConnector(QObject):
     # Ensure signals are correctly defined
     signalConnected = pyqtSignal(str, str)  # (descriptor, port)
     signalDisconnected = pyqtSignal(str, str)  # (descriptor, port)
-    signalDataReceived = pyqtSignal(str, str)  # (descriptor, data)
 
     connectionStatusChanged = pyqtSignal()  # 🔹 New signal for connection updates
     stateChanged = pyqtSignal()  # Signal to notify QML of state changes
@@ -1477,12 +1468,12 @@ class MotionConnector(QObject):
 
     @pyqtProperty(bool, notify=laserStateChanged)
     def laserOn(self):
-        """Expose Console connection status to QML."""
+        """Expose the laser-on state to QML."""
         return self._laserOn
 
     @pyqtProperty(bool, notify=safetyFailureStateChanged)
     def safetyFailure(self):
-        """Expose Console connection status to QML."""
+        """Expose the laser-safety-failure state to QML."""
         return self._safetyFailure
 
     @safetyFailure.setter
@@ -1529,7 +1520,7 @@ class MotionConnector(QObject):
     def triggerState(self):
         return self._trigger_state
 
-    # --- Calibration procedure properties (consumed by Settings.qml) ---
+    # --- Calibration procedure properties (consumed by SettingsModal.qml) ---
     @pyqtProperty(bool, notify=calibrationStateChanged)
     def calibrationRunning(self) -> bool:
         return self._calibration_status == "running"
@@ -1701,7 +1692,7 @@ class MotionConnector(QObject):
                     if getattr(self._interface.left, "clear_id_cache", None):
                         self._interface.left.clear_id_cache()
                 except Exception:
-                    pass
+                    logger.debug("clear_id_cache failed for left", exc_info=True)
         elif name == "right":
             if is_now_connected:
                 self._rightSensorConnected = True
@@ -1713,7 +1704,7 @@ class MotionConnector(QObject):
                     if getattr(self._interface.right, "clear_id_cache", None):
                         self._interface.right.clear_id_cache()
                 except Exception:
-                    pass
+                    logger.debug("clear_id_cache failed for right", exc_info=True)
 
         if is_now_connected:
             logger.info("Handle %s -> CONNECTED (%s)", name, reason)
@@ -1776,12 +1767,14 @@ class MotionConnector(QObject):
             if handle is not None and hasattr(handle, "get_hardware_id"):
                 hwid = str(handle.get_hardware_id() or "")
         except Exception:
-            pass
+            logger.debug("device_stats: %s hardware-id lookup failed",
+                         name, exc_info=True)
         try:
             if handle is not None and hasattr(handle, "get_version"):
                 fw = str(handle.get_version() or "")
         except Exception:
-            pass
+            logger.debug("device_stats: %s firmware-version lookup failed",
+                         name, exc_info=True)
         self._audit.log("device_stats", {
             "device": name, "hardware_id": hwid, "firmware_version": fw,
         })
@@ -2053,45 +2046,6 @@ class MotionConnector(QObject):
         logger.info("MotionConnector shutdown complete.")
 
     # --- SCAN MANAGEMENT METHODS ---
-    @pyqtSlot(result=list)
-    def _load_tec_params(self, config_dir):
-        """Load TEC parameters from tec_params.json and return the voltage value."""
-        config_path = (
-            resource_path("config", "tec_params.json")
-            if config_dir == "config"
-            else Path(config_dir) / "tec_params.json"
-        )
-
-        if not config_path.exists():
-            logger.warning(
-                f"[Connector] TEC parameter file not found: {config_path}, using default value {TEC_VOLTAGE_DEFAULT}V"
-            )
-            return TEC_VOLTAGE_DEFAULT
-
-        try:
-            with open(config_path, "r") as f:
-                params = json.load(f)
-            voltage = params.get("TEC_VOLTAGE_DEFAULT", TEC_VOLTAGE_DEFAULT)
-            logger.info(
-                f"[Connector] Loaded TEC voltage from {config_path}: {voltage}V"
-            )
-            return voltage
-        except FileNotFoundError:
-            logger.warning(
-                f"[Connector] TEC parameter file not found: {config_path}, using default value {TEC_VOLTAGE_DEFAULT}V"
-            )
-            return TEC_VOLTAGE_DEFAULT
-        except json.JSONDecodeError as e:
-            logger.error(
-                f"[Connector] Invalid JSON in {config_path}: {e}, using default value {TEC_VOLTAGE_DEFAULT}V"
-            )
-            return TEC_VOLTAGE_DEFAULT
-        except Exception as e:
-            logger.error(
-                f"[Connector] Error loading TEC parameters: {e}, using default value {TEC_VOLTAGE_DEFAULT}V"
-            )
-            return TEC_VOLTAGE_DEFAULT
-
     # Suffix patterns that distinguish the corrected (canonical) CSV
     # from per-scan auxiliary CSVs (raw histo, telemetry). Issue #44:
     # the canonical file dropped its ``_corrected`` suffix so the
@@ -2267,8 +2221,10 @@ class MotionConnector(QObject):
         if not notes:
             try:
                 notes = notes_path.read_text(encoding="utf-8")
-            except Exception:
-                pass
+            except OSError:
+                # No legacy *_notes.txt fallback for this scan — expected
+                # for anything recorded since notes moved into scans.db.
+                logger.debug("no legacy notes file at %s", notes_path)
 
         return {
             "userLabel": subject,
@@ -2550,7 +2506,6 @@ class MotionConnector(QObject):
         Never raises — a failed reveal must not lose the bundle."""
         try:
             import subprocess
-            import sys
             if sys.platform.startswith("win"):
                 subprocess.Popen(
                     ["explorer", "/select,", os.path.normpath(path)]
@@ -2766,13 +2721,34 @@ class MotionConnector(QObject):
         the "Back to live" button should switch sources back to live."""
         return self._live_scan_source is not None
 
+    def _retire_scan_source(self, source: ScanDataSource | None) -> None:
+        """Tear down a source QML can no longer reach: stop its flush
+        timer, close any scan-DB handle, and queue C++ deletion. Sources
+        are parented to the connector, so without this every superseded
+        source (one per scan / History view) stays alive for the app's
+        lifetime — up to ~46 MB of buffers plus a running 10 Hz timer
+        each. deleteLater (not a direct delete) so any in-flight QML
+        paint against the old source finishes before the object dies."""
+        if source is None:
+            return
+        try:
+            source.release()
+        except Exception:
+            logger.warning("scan source release failed", exc_info=True)
+        source.deleteLater()
+
     def _set_current_scan_source(self, source: ScanDataSource | None) -> None:
         """Replace the active source. Dedupes identical-instance assignments
-        so the notify signal only fires on real transitions."""
+        so the notify signal only fires on real transitions. The previous
+        source is retired unless it is the held live source, which must
+        survive History navigation for "Back to live"."""
         if source is self._current_scan_source:
             return
+        prev = self._current_scan_source
         self._current_scan_source = source
         self.currentScanSourceChanged.emit()
+        if prev is not None and prev is not self._live_scan_source:
+            self._retire_scan_source(prev)
 
     @pyqtSlot()
     def showLiveSource(self) -> None:
@@ -3238,12 +3214,16 @@ class MotionConnector(QObject):
         )
         # Track the live source separately so the user can navigate
         # to a past scan and return; emit so QML rebinds the
-        # PlotToolbar's "Back to live" visibility.
-        first_live = self._live_scan_source is None
+        # PlotToolbar's "Back to live" visibility. The previous scan's
+        # live source is retired below — release() is idempotent, so it
+        # doesn't matter if _set_current_scan_source already retired it
+        # as the outgoing current source.
+        prev_live = self._live_scan_source
         self._live_scan_source = live_source
-        if first_live:
+        if prev_live is None:
             self.liveSourceAvailableChanged.emit()
         self._set_current_scan_source(live_source)
+        self._retire_scan_source(prev_live)
         self._capture_left_path = ""
         self._capture_right_path = ""
 
@@ -3443,7 +3423,11 @@ class MotionConnector(QObject):
                 live_source.set_scan_label(label)
         if not started:
             self._capture_running = False
-            self._set_current_scan_source(None)  # release the orphaned LiveScanSource — scan never started
+            # Unbind the viewer. The orphaned LiveScanSource itself stays
+            # held as _live_scan_source (it is NOT freed by dropping the
+            # current-source reference — it's parented to the connector)
+            # until the next startCapture retires it.
+            self._set_current_scan_source(None)
             # start_scan refuses for two reasons: a prior worker still alive,
             # or a pre-flight failure (e.g. the scan DB couldn't be opened, in
             # which case the scan is aborted before the laser fires so its data
@@ -3466,173 +3450,6 @@ class MotionConnector(QObject):
                 self.captureLog.emit("Capture already running.")
                 self._raise_critical("E-302")
         return bool(started)
-
-    def _log_scan_image_stats(self, left_csv: str, right_csv: str) -> None:
-        left_csv = (left_csv or "").strip()
-        right_csv = (right_csv or "").strip()
-        if left_csv.lower().endswith(".raw"):
-            left_csv = left_csv[:-4] + ".csv"
-        if right_csv.lower().endswith(".raw"):
-            right_csv = right_csv[:-4] + ".csv"
-
-        if left_csv and not Path(left_csv).exists():
-            logger.warning(f"Scan stats skipped; left CSV not found: {left_csv}")
-            left_csv = ""
-        if right_csv and not Path(right_csv).exists():
-            logger.warning(f"Scan stats skipped; right CSV not found: {right_csv}")
-            right_csv = ""
-
-        if not left_csv and not right_csv:
-            logger.warning("Scan stats skipped; no CSV files available.")
-            return
-
-        try:
-            viz = VisualizeBloodflow(left_csv, right_csv)
-            viz.compute()
-        except Exception:
-            logger.exception("Scan stats failed during VisualizeBloodflow.compute()")
-            return
-        _, _, camera_inds, contrast, mean = viz.get_results()
-        if mean is None or mean.size == 0:
-            logger.warning("Scan stats skipped; mean array was empty.")
-            return
-
-        per_cam_mean = np.mean(mean, axis=1)
-        per_cam_contrast = np.mean(contrast, axis=1) if contrast is not None else None
-        sides = getattr(viz, "_sides", None)
-
-        logger.info("Scan image stats per camera:")
-
-        # Build rows for CSV export (same data as log output)
-        ft_rows = []
-
-        for idx in range(len(per_cam_mean)):
-            cam_id = None
-            if camera_inds is not None and idx < len(camera_inds):
-                try:
-                    cam_id = int(camera_inds[idx])
-                except Exception:
-                    cam_id = None
-            side = None
-            if sides is not None and idx < len(sides):
-                side = str(sides[idx])
-
-            if cam_id is None:
-                label = f"camera[{idx}]"
-            elif side:
-                label = f"camera {cam_id} ({side})"
-            else:
-                label = f"camera {cam_id}"
-
-            mean_val = float(per_cam_mean[idx])
-            avg_contrast = (
-                float(per_cam_contrast[idx]) if per_cam_contrast is not None else None
-            )
-
-            if per_cam_contrast is None:
-                logger.info("  %s mean: %.0f", label, mean_val)
-            else:
-                logger.info(
-                    "  %s mean: %.0f, avg contrast: %.3f",
-                    label,
-                    mean_val,
-                    avg_contrast,
-                )
-
-            # Get cached security UID and HWID from SDK (sensor retains these)
-            side_key = (side or "").lower()
-            cid = int(cam_id) if cam_id is not None and cam_id != "" else -1
-            sensor = getattr(self._interface, side_key, None) if self._interface else None
-            if (
-                sensor is not None
-                and hasattr(sensor, "get_cached_camera_security_uid")
-                and hasattr(sensor, "get_cached_hardware_id")
-            ):
-                security_id = (
-                    sensor.get_cached_camera_security_uid(cid) if cid >= 0 else ""
-                )
-                hwid = sensor.get_cached_hardware_id()
-            else:
-                security_id = ""
-                hwid = ""
-
-            # FT thresholds: use cam_id (0-7) to index per-camera minimums
-            cam_idx = cid if cid >= 0 else idx
-            min_mean = None
-            min_contrast = None
-            if self._ft_min_mean_per_camera and cam_idx < len(
-                self._ft_min_mean_per_camera
-            ):
-                min_mean = self._ft_min_mean_per_camera[cam_idx]
-            if self._ft_min_contrast_per_camera and cam_idx < len(
-                self._ft_min_contrast_per_camera
-            ):
-                min_contrast = self._ft_min_contrast_per_camera[cam_idx]
-
-            if min_mean is not None and not isinstance(min_mean, (int, float)):
-                min_mean = None
-            if min_contrast is not None and not isinstance(min_contrast, (int, float)):
-                min_contrast = None
-
-            mean_test = "PASS" if (min_mean is None or mean_val >= min_mean) else "FAIL"
-            if min_contrast is None:
-                contrast_test = "PASS"
-            elif avg_contrast is None:
-                contrast_test = "FAIL"
-            else:
-                contrast_test = "PASS" if avg_contrast >= min_contrast else "FAIL"
-
-            ft_rows.append(
-                {
-                    "camera_index": idx,
-                    "side": side or "",
-                    "cam_id": cam_id if cam_id is not None else "",
-                    "mean": mean_val,
-                    "avg_contrast": avg_contrast if avg_contrast is not None else "",
-                    "mean_test": mean_test,
-                    "contrast_test": contrast_test,
-                    "security_id": security_id or "",
-                    "hwid": hwid or "",
-                }
-            )
-
-        # Write CSV to data/ft-test-csvs
-        try:
-            ft_dir = os.path.join(self._data_root, "ft-test-csvs")
-            os.makedirs(ft_dir, exist_ok=True)
-            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            ft_path = os.path.join(ft_dir, f"ft-test-{ts}.csv")
-            with open(ft_path, "w", newline="", encoding="utf-8") as f:
-                w = csv.DictWriter(
-                    f,
-                    fieldnames=[
-                        "camera_index",
-                        "side",
-                        "cam_id",
-                        "mean",
-                        "avg_contrast",
-                        "mean_test",
-                        "contrast_test",
-                        "security_id",
-                        "hwid",
-                    ],
-                )
-                w.writeheader()
-                w.writerows(ft_rows)
-            logger.info(f"Scan image stats CSV written to {ft_path}")
-        except Exception as e:
-            logger.warning(f"Failed to write FT CSV: {e}")
-
-        # Emit a single end-of-scan FT verdict to the Qt capture log window.
-        overall_ft_pass = bool(ft_rows) and all(
-            row.get("mean_test") == "PASS" and row.get("contrast_test") == "PASS"
-            for row in ft_rows
-        )
-        ft_result = "PASS" if overall_ft_pass else "FAIL"
-        status_emoji = "✅" if overall_ft_pass else "❌"
-        ft_msg = f"{status_emoji} FT criteria result: {ft_result}"
-        self.captureLog.emit(ft_msg)
-        logger.info(ft_msg)
 
     def _on_safety_trip_during_capture(self):
         """Called on main thread when safety tripped while scan was running: show message and cancel scan in 5 s."""
@@ -3820,10 +3637,6 @@ class MotionConnector(QObject):
     ):
         """Send i2c read to device"""
         try:
-            # logger.info(f"I2C Read Request -> target={target}, mux_idx={mux_idx}, channel={channel}, "
-            # f"i2c_addr=0x{int(i2c_addr):02X}, offset=0x{int(offset):02X}, read_len={int(data_len)}"
-            # )
-
             if target == "console":
                 fpga_data, fpga_data_len = (
                     self._interface.console.read_i2c_packet(
@@ -3959,7 +3772,7 @@ class MotionConnector(QObject):
 
     @pyqtSlot(result=int)
     def getLsyncCount(self):
-        """Get the Fsync count from the console."""
+        """Get the Lsync count from the console."""
         try:
             lsync_count = self._interface.console.get_lsync_pulsecount()
             logger.debug(f"Lsync Count: {lsync_count}")
@@ -4425,7 +4238,7 @@ class MotionConnector(QObject):
         except Exception as e:
             logger.error(f"Error querying Accelerometer data: {e}")
 
-    @pyqtSlot()
+    @pyqtSlot(str)
     def querySensorGyroscope(self, target: str):
         """Fetch and emit Gyroscope data. ``target`` is "left" or "right"."""
         try:
@@ -5276,7 +5089,6 @@ class MotionConnector(QObject):
     def _apply_update_worker(self, download_url: str):
         import urllib.request
         import subprocess
-        import sys
 
         try:
             if not _is_bundle_url(download_url):
@@ -5352,13 +5164,15 @@ class MotionConnector(QObject):
             # Ask Qt to shut down gracefully (aboutToQuit -> handle_exit stops
             # the hardware monitor, releases the USB transport, flushes the
             # audit log). This runs on a worker thread, so DO NOT call
-            # QCoreApplication.quit() directly: under qasync a cross-thread
-            # quit() blocks inside the C++ call while HOLDING the GIL, which
-            # freezes the whole process — every thread, including any hard-exit
-            # backstop, starves (confirmed via py-spy). Post the quit to the
-            # main thread instead; QueuedConnection just enqueues an event and
-            # returns immediately, so this worker never blocks. If graceful
-            # teardown stalls or qasync ignores the quit, the detached helper
+            # QCoreApplication.quit() directly: a cross-thread quit() can
+            # block inside the C++ call while HOLDING the GIL, which freezes
+            # the whole process — every thread, including any hard-exit
+            # backstop, starves (observed under the old qasync event loop via
+            # py-spy; the queued post is the safe pattern under the plain Qt
+            # loop too). Post the quit to the main thread instead;
+            # QueuedConnection just enqueues an event and returns immediately,
+            # so this worker never blocks. If graceful
+            # teardown stalls or the quit is ignored, the detached helper
             # force-kills us after its grace window and the upgrade proceeds
             # regardless — so we don't rely on the app exiting itself.
             QMetaObject.invokeMethod(

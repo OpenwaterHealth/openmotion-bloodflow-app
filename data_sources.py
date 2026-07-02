@@ -17,6 +17,7 @@ Nothing in QML consumes these yet — Phase 1 is purely additive.
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Optional
 
 import numpy as np
@@ -48,7 +49,7 @@ class _CameraBuffer:
     """
 
     __slots__ = ("t", "v", "frame_id", "n", "dropped_at",
-                 "ring_trimmed", "_max_capacity")
+                 "ring_trimmed", "_max_capacity", "_lock")
 
     def __init__(
         self,
@@ -68,6 +69,13 @@ class _CameraBuffer:
         self.v = np.empty(initial_capacity, dtype=np.float32)
         self.frame_id = np.empty(initial_capacity, dtype=np.int64)
         self.n = 0
+        # Guards n + the arrays against a torn read: the SDK pipeline
+        # thread appends (and _ring_trim shifts data in place, rewriting
+        # n) while the GUI thread reads via window_decimated/value_near.
+        # RLock because window_decimated calls window_indices. Held only
+        # for short numpy ops, so contention at 40 Hz × ~32 buffers is
+        # negligible.
+        self._lock = threading.RLock()
         self.dropped_at: Optional[float] = None
         # True once _ring_trim has dropped older samples — i.e. data
         # below t[0] now lives only in the DB, not memory. LiveScanSource
@@ -90,7 +98,8 @@ class _CameraBuffer:
     def _ring_trim(self) -> None:
         """At-cap: drop the oldest half of the buffer in-place so new
         appends keep landing at index n without unbounded growth.
-        Called when capacity has already reached max_capacity."""
+        Called when capacity has already reached max_capacity.
+        Caller (append) holds _lock."""
         half = self._max_capacity // 2
         # Keep the most recent `half` samples (parity-safe — works for
         # odd max_capacity too, e.g. a test-configured small cache).
@@ -104,19 +113,21 @@ class _CameraBuffer:
     def append(self, t: float, v: float, frame_id: int) -> None:
         """Append one sample. Grows capacity (doubling) on overflow up
         to max_capacity; at the cap, ring-trims the oldest half."""
-        if self.n >= self.t.shape[0]:
-            # Unbounded (max_capacity=None): always grow, never trim — these
-            # buffers bulk-load a finite, already-known result set (a past scan
-            # or a DB-tail window) and must never drop their own loaded rows.
-            if self._max_capacity is not None and self.t.shape[0] >= self._max_capacity:
-                self._ring_trim()
-            else:
-                self._grow()
-        idx = self.n
-        self.t[idx] = t
-        self.v[idx] = v
-        self.frame_id[idx] = frame_id
-        self.n += 1
+        with self._lock:
+            if self.n >= self.t.shape[0]:
+                # Unbounded (max_capacity=None): always grow, never trim —
+                # these buffers bulk-load a finite, already-known result set
+                # (a past scan or a DB-tail window) and must never drop their
+                # own loaded rows.
+                if self._max_capacity is not None and self.t.shape[0] >= self._max_capacity:
+                    self._ring_trim()
+                else:
+                    self._grow()
+            idx = self.n
+            self.t[idx] = t
+            self.v[idx] = v
+            self.frame_id[idx] = frame_id
+            self.n += 1
 
     def window_indices(self, t_lo: float, t_hi: float) -> tuple[int, int]:
         """Return (i_lo, i_hi) such that t[i_lo:i_hi] covers [t_lo, t_hi].
@@ -126,12 +137,13 @@ class _CameraBuffer:
         appends in timestamp order at 40 Hz; PastScanSource reads rows ordered
         by timestamp_s ASC from the SDK query. Out-of-order append silently
         returns wrong indices — np.searchsorted does not validate."""
-        if self.n == 0:
-            return 0, 0
-        t_slice = self.t[: self.n]
-        i_lo = int(np.searchsorted(t_slice, t_lo, side="left"))
-        i_hi = int(np.searchsorted(t_slice, t_hi, side="right"))
-        return i_lo, i_hi
+        with self._lock:
+            if self.n == 0:
+                return 0, 0
+            t_slice = self.t[: self.n]
+            i_lo = int(np.searchsorted(t_slice, t_lo, side="left"))
+            i_hi = int(np.searchsorted(t_slice, t_hi, side="right"))
+            return i_lo, i_hi
 
     def window_decimated(
         self,
@@ -143,6 +155,10 @@ class _CameraBuffer:
         max_points samples. When decimation is required, samples are
         mean-binned (each output value = mean of `stride` consecutive
         input samples) rather than stride-subsampled.
+
+        Thread-safe: the whole read runs under _lock and the returned
+        arrays are fresh allocations, so a concurrent append/_ring_trim
+        on the pipeline thread can't shift data under the caller.
 
         Mean-binning matters: simple stride subsampling at e.g.
         stride=2 causes the rendered trace to alternate between odd-
@@ -157,6 +173,17 @@ class _CameraBuffer:
 
         Empty arrays returned when the window contains no samples or
         the buffer is empty."""
+        with self._lock:
+            return self._window_decimated_locked(t_lo, t_hi, max_points)
+
+    def _window_decimated_locked(
+        self,
+        t_lo: float,
+        t_hi: float,
+        max_points: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """window_decimated body. Caller holds _lock (RLock — the
+        window_indices call below re-enters it)."""
         i_lo, i_hi = self.window_indices(t_lo, t_hi)
         n_window = i_hi - i_lo
         if n_window <= 0:
@@ -192,8 +219,10 @@ class _CameraBuffer:
         # always forced a 2-sample average even when not needed, which
         # was the source of "looks filtered" at 5 s zoom.)
         if stride == 1:
-            t_out = self.t[i_lo:i_hi]
-            v_out = self.v[i_lo:i_hi]
+            # Copies, not views — a view would escape the lock and read
+            # memory a concurrent _ring_trim is shifting.
+            t_out = self.t[i_lo:i_hi].copy()
+            v_out = self.v[i_lo:i_hi].copy()
             return t_out, v_out
 
         window = stride
@@ -230,6 +259,26 @@ class _CameraBuffer:
             v_out = np.where(counts > 0, sums / np.maximum(counts, 1), np.nan)
         t_out = self.t[abs_idxs]
         return t_out, v_out.astype(np.float32)
+
+    def value_near(self, t: float) -> float:
+        """Value of the sample nearest to time `t`; NaN when the buffer
+        is empty or the nearest sample is itself non-finite.
+
+        Lock-protected: the GUI hover tooltip reads while the pipeline
+        thread appends/ring-trims. A torn read of `n` previously caused
+        IndexErrors when a searchsorted idx passed a stale-n clamp."""
+        with self._lock:
+            n = self.n
+            if n == 0:
+                return float("nan")
+            t_slice = self.t[:n]
+            idx = int(np.searchsorted(t_slice, t, side="left"))
+            if idx >= n:
+                idx = n - 1
+            elif idx > 0 and abs(t_slice[idx - 1] - t) < abs(t_slice[idx] - t):
+                idx -= 1
+            v = float(self.v[idx])
+            return v if np.isfinite(v) else float("nan")
 
     def mark_dropped(self, t: float) -> None:
         """Record the first dropout timestamp for this stream. Idempotent —
@@ -291,6 +340,10 @@ class ScanDataSource(QObject):
         # Pending dirty bookkeeping: (side, cam, metric) -> accumulated count.
         self._pending: dict[tuple[str, int, str], int] = {}
 
+        # Set by release() when the connector retires this source; guards
+        # against double-release and marks the flush timer as stopped.
+        self._released = False
+
         # Throttle timer — fires every 100 ms while the source is alive.
         # Tests can call _flush() directly and ignore the timer entirely.
         self._flush_timer = QTimer(self)
@@ -299,6 +352,20 @@ class ScanDataSource(QObject):
         self._flush_timer.start()
 
     # ── public ────────────────────────────────────────────────────────────
+
+    def release(self) -> None:
+        """Stop the flush timer and drop external resources. Idempotent.
+
+        Called by the connector right before deleteLater() when this source
+        is no longer reachable from QML (superseded by a newer scan or
+        another History view). Buffers stay readable — a late paint during
+        the deleteLater window must not crash — but no further
+        samplesAppended fires."""
+        if self._released:
+            return
+        self._released = True
+        self._flush_timer.stop()
+        self._pending.clear()
 
     @pyqtProperty(bool, constant=True)
     def live(self) -> bool:
@@ -408,25 +475,14 @@ class ScanDataSource(QObject):
         NaN if the buffer doesn't exist, is empty, or the nearest sample
         is itself non-finite. Used by the viewer's hover tooltip.
 
-        Concurrency: snapshots buf.n locally because the SDK pipeline
-        thread may call _CameraBuffer.append (incrementing n) between
-        our reads. Without the snapshot, a torn read of n caused
-        IndexErrors when the searchsorted-returned idx happened to
-        equal the captured slice size but failed the (stale-n) clamp."""
+        Concurrency handled inside _CameraBuffer.value_near — the lookup
+        runs under the buffer lock so a pipeline-thread append/ring-trim
+        can't shift data mid-read (a torn read of n used to cause
+        IndexErrors here)."""
         buf = self.buffers.get((side, int(cam_id), metric))
         if buf is None:
             return float("nan")
-        n = buf.n
-        if n == 0:
-            return float("nan")
-        t_slice = buf.t[:n]
-        idx = int(np.searchsorted(t_slice, t, side="left"))
-        if idx >= n:
-            idx = n - 1
-        elif idx > 0 and abs(t_slice[idx - 1] - t) < abs(t_slice[idx] - t):
-            idx -= 1
-        v = float(buf.v[idx])
-        return v if np.isfinite(v) else float("nan")
+        return buf.value_near(t)
 
     @pyqtSlot(str, int, result=float)
     def dropped_at_for(self, side: str, cam_id: int) -> float:
@@ -540,6 +596,24 @@ class LiveScanSource(ScanDataSource):
         self._db_window_buffers: dict = {}     # transient (side,cam,metric)->buffer
         self._db_window_lo = float("inf")     # loaded range, exclusive sentinel
         self._db_window_hi = float("-inf")
+
+    def release(self) -> None:
+        """Base release plus DB-tail teardown: close the read handle and
+        drop the transient window buffers so a retired live source can't
+        hold the scan DB open for the app's lifetime."""
+        if self._released:
+            return
+        super().release()
+        db = self._db
+        self._db = None
+        self._db_unavailable = True  # never reopen after release
+        self._db_window_buffers = {}
+        if db is not None:
+            try:
+                db.close()
+            except Exception:
+                logger.warning("scan DB close failed on release",
+                               exc_info=True)
 
     def set_scan_label(self, label: Optional[str]) -> None:
         """Bind this live source to a specific scan-DB session by label
@@ -672,7 +746,15 @@ class LiveScanSource(ScanDataSource):
         return t_lo < float(buf.t[0])
 
     @pyqtSlot(str, int, str, float, float, int, result="QVariantList")
-    def points_for_window(self, side, cam_id, metric, t_lo, t_hi, max_points):
+    def points_for_window(
+        self,
+        side: str,
+        cam_id: int,
+        metric: str,
+        t_lo: float,
+        t_hi: float,
+        max_points: int,
+    ) -> list:
         # Fast path: whole window in memory, or buffer not yet trimmed.
         # Only reach for the DB once data has actually been ring-trimmed.
         if not self._needs_db_tail(side, int(cam_id), metric, t_lo) or not self._db_ready():
@@ -717,23 +799,14 @@ class LiveScanSource(ScanDataSource):
         return db_pts + mem_pts
 
     @pyqtSlot(str, int, str, float, result=float)
-    def value_at(self, side, cam_id, metric, t):
+    def value_at(self, side: str, cam_id: int, metric: str, t: float) -> float:
         if not self._needs_db_tail(side, int(cam_id), metric, t) or not self._db_ready():
             return super().value_at(side, cam_id, metric, t)
         self._ensure_db_window(t, t)
         buf = self._db_window_buffers.get((side, int(cam_id), metric))
-        if buf is None or buf.n == 0:
+        if buf is None:
             return float("nan")
-        n = buf.n
-        t_slice = buf.t[:n]
-        import numpy as _np
-        idx = int(_np.searchsorted(t_slice, t, side="left"))
-        if idx >= n:
-            idx = n - 1
-        elif idx > 0 and abs(t_slice[idx - 1] - t) < abs(t_slice[idx] - t):
-            idx -= 1
-        v = float(buf.v[idx])
-        return v if _np.isfinite(v) else float("nan")
+        return buf.value_near(t)
 
     def append_uncorrected(
         self,
@@ -921,7 +994,10 @@ def _load_corrected_csv_into(buffers: dict, csv_path: str) -> None:
                             )
                             buf.append(t=t, v=v, frame_id=frame_id)
     except OSError:
-        pass
+        # Best-effort by contract (see docstring), but never silent — a
+        # missing/unreadable corrected CSV means the viewer shows less data.
+        logger.warning("corrected-CSV fallback load failed: %s",
+                       csv_path, exc_info=True)
 
 
 def buffers_are_empty(buffers: Optional[dict]) -> bool:

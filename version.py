@@ -1,4 +1,4 @@
-﻿"""
+"""
 Dynamic version derived from git tags.
 
 Tag format expected:  0.4.3  or  pre-0.4.3
@@ -7,13 +7,14 @@ git describe output:  0.4.3           (on tag)
                       0.4.3-3-gabc1234-dirty (uncommitted changes)
 
 Resulting APP_VERSION:
-    "0.4.3"                   â€“ exact tag
-    "0.4.3+3.gabc1234"        â€“ incremental build
-    "0.4.3+3.gabc1234.dirty"  â€“ dirty working tree
+    "0.4.3"                   - exact tag
+    "0.4.3+3.gabc1234"        - incremental build
+    "0.4.3+3.gabc1234.dirty"  - dirty working tree
 """
 
-import subprocess
 import os
+import subprocess
+import sys
 
 # Fallback used when: no git, no tags, or running from a frozen PyInstaller bundle
 _FALLBACK_VERSION = "1.0-pre3-0-g2b7a8aa"
@@ -24,8 +25,6 @@ def get_version() -> str:
 
     # Inside a PyInstaller bundle there is no .git directory;
     # return whatever was stamped at build time.
-    import sys
-
     if getattr(sys, "frozen", False):
         return _FALLBACK_VERSION
 
@@ -74,7 +73,7 @@ def get_version() -> str:
         if dirty:
             version += ".dirty" if "+" in version else "+dirty"
     else:
-        # No recognizable tag â€” just a commit hash
+        # No recognizable tag - just a commit hash
         version = _FALLBACK_VERSION + f"+{raw}"
         if dirty:
             version += ".dirty"
