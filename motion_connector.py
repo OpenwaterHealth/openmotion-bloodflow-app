@@ -795,6 +795,11 @@ class MotionConnector(QObject):
     signalDisconnected = pyqtSignal(str, str)  # (descriptor, port)
 
     connectionStatusChanged = pyqtSignal()  # 🔹 New signal for connection updates
+    # Notify for ``sensorInitBusy`` (issue #303): a connect-time sensor init
+    # (debug flags, camera power/ID cache, info reads) is scheduled or
+    # running. The drain-side emit fires on the init worker thread; Qt
+    # auto-queues the cross-thread delivery to QML/main-thread consumers.
+    sensorInitBusyChanged = pyqtSignal()
     stateChanged = pyqtSignal()  # Signal to notify QML of state changes
     laserStateChanged = pyqtSignal()  # Signal to notify QML of laser state changes
     safetyFailureStateChanged = pyqtSignal()  # Signal to notify QML of safety
@@ -1063,6 +1068,13 @@ class MotionConnector(QObject):
         self._rightSensorConnected = right_sensor_connected
         self._consoleConnected = console_connected
         self._config_running = False
+        # Per-side count of connect-time sensor inits scheduled or running
+        # (issue #303). Guarded by _sensor_init_lock: +1 on the GUI thread
+        # when _schedule_sensor_init arms the init, -1 on the init worker
+        # thread when it drains (success OR failure). Non-zero blocks
+        # pipeline starts via _ensure_idle / sensorInitBusy.
+        self._sensor_init_pending: dict[str, int] = {"left": 0, "right": 0}
+        self._sensor_init_lock = threading.Lock()
         self._laserOn = False
         self._safetyFailure = False
         self._safety_unknown_streak = 0  # see SAFETY_UNKNOWN_STREAK_THRESHOLD
@@ -1285,12 +1297,43 @@ class MotionConnector(QObject):
             if not sensor.set_debug_flags(flags):
                 logger.warning("Failed to set debug flags on %s sensor", side)
 
+    def _sensor_init_note(self, side: str, delta: int) -> None:
+        """Adjust the per-side init-in-flight counter (issue #303).
+
+        +1 when a connect-time init is scheduled (GUI thread), -1 when the
+        worker drains — success or failure alike, so a failed init can't
+        leak the busy state. Emits sensorInitBusyChanged only on the
+        busy/idle edge; the drain-side emission happens on the init worker
+        thread and Qt auto-queues it to main-thread/QML consumers.
+        """
+        with self._sensor_init_lock:
+            before = any(v > 0 for v in self._sensor_init_pending.values())
+            new = self._sensor_init_pending.get(side, 0) + delta
+            self._sensor_init_pending[side] = max(0, new)
+            after = any(v > 0 for v in self._sensor_init_pending.values())
+        if before != after:
+            self.sensorInitBusyChanged.emit()
+
+    @pyqtProperty(bool, notify=sensorInitBusyChanged)
+    def sensorInitBusy(self) -> bool:
+        """True while any sensor's connect-time init is scheduled/running
+        (issue #303). QML holds Start/Check disabled on this; _ensure_idle
+        refuses pipeline starts with it up. Re-engages on every sensor
+        (re)connect because _schedule_sensor_init re-runs then."""
+        with self._sensor_init_lock:
+            return any(v > 0 for v in self._sensor_init_pending.values())
+
     def _schedule_sensor_init(self, side: str):
         """Delay initial sensor commands to allow USB settle, then run
         them on a daemon worker thread. The init sequence is a multi-
         command USB conversation with a built-in 0.5 s camera-power
         settle sleep — on the GUI thread it froze the app for >0.5 s on
         every sensor (re)connect."""
+        # Raise the init-in-flight gate immediately at schedule time
+        # (issue #303) — a Start clicked during the 1 s settle delay or the
+        # init sequence itself collides with the connect-time USB
+        # conversation and can wedge a camera until DUT power-cycle.
+        self._sensor_init_note(side, +1)
         QTimer.singleShot(
             1000, lambda: self._start_sensor_init_worker(side)
         )
@@ -1315,6 +1358,10 @@ class MotionConnector(QObject):
             self._run_sensor_init_impl(side)
         except Exception:
             logger.exception("sensor init failed for %s sensor", side)
+        finally:
+            # Drop the init-in-flight gate on success AND failure — a
+            # leaked busy state would lock Start/Check forever (issue #303).
+            self._sensor_init_note(side, -1)
 
     def _run_sensor_init_impl(self, side: str):
         if side == "left" and not self._leftSensorConnected:
@@ -4068,6 +4115,15 @@ class MotionConnector(QObject):
 
     def _ensure_idle(self) -> str | None:
         """Gate for pipeline-starting slots (capture / configure / check)."""
+        # Issue #303: the post-connect sensor init (debug flags, camera
+        # power masks, info reads) runs async for a few seconds after the
+        # handles report READY. A capture/CQ/configure started inside that
+        # window collides with the in-flight init — "Failed to program
+        # FPGA" on both sensors, camera wedged until power-cycle. The UI
+        # start gate polls isPipelineIdle and defers past this.
+        if self.sensorInitBusy:
+            return ("Sensors are still initializing — wait a few seconds "
+                    "and try again")
         if self._cq_quick_running:
             return "Contact-quality check already in progress"
         if self._capture_running or self._capture_thread is not None:
