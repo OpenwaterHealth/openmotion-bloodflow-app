@@ -13,6 +13,8 @@ Provides:
 
 import atexit
 import getpass
+import importlib
+import inspect
 import json
 import platform
 import socket
@@ -373,7 +375,9 @@ def _is_bloodflow_window(w) -> bool:
         # rather than locking out tests on systems where the Win32
         # call is unavailable (CI containers etc).
         return any(k in title.lower() for k in APP_KEYWORDS)
-    if proc_name not in _APP_PROCESS_NAMES:
+    # Accept every packaged variant: the windowed OpenWaterApp.exe and the
+    # OpenWaterApp_console.exe console build shipped alongside it (1.2.x+).
+    if not (proc_name.startswith("openwaterapp") or proc_name in _APP_PROCESS_NAMES):
         return False
     if proc_name in ("python.exe", "pythonw.exe"):
         # In from-source mode several python.exe windows can co-exist
@@ -1114,6 +1118,70 @@ def _report_get_environment() -> dict:
     }
 
 
+def _first_doc_or_inline_comment(obj, def_keyword: str) -> str:
+    """Return a one-line description of ``obj`` (a class or function).
+
+    Prefers the first non-empty line of the object's docstring; if there
+    is none, falls back to a trailing inline comment on the object's
+    ``class``/``def`` line, e.g. ``def test_foo(self):  # what it does``.
+    Returns "" when neither is available.
+    """
+    doc = inspect.getdoc(obj)
+    if doc:
+        for line in doc.splitlines():
+            line = line.strip()
+            if line:
+                return line
+    # Fall back to a trailing inline comment on the definition line,
+    # skipping any decorator lines that precede it.
+    for src_line in inspect.getsourcelines(obj)[0]:
+        stripped = src_line.lstrip()
+        if stripped.startswith(def_keyword):
+            if "#" in src_line:
+                comment = src_line.split("#", 1)[1].strip()
+                if comment:
+                    return comment
+            break
+    return ""
+
+
+def _resolve_test_description(module_name: str, class_name: str,
+                             test_name: str) -> str:
+    """Return a one-line description of a single test.
+
+    Resolves the test method by ``module_name``/``class_name``/``test_name``
+    (preferring an already-imported module in ``sys.modules`` so we don't
+    re-run import side effects, falling back to ``importlib``) and returns
+    its docstring's first line — or a trailing inline comment on the ``def``
+    line. If the method has neither, falls back to the enclosing class's
+    docstring/inline comment so the report still says something useful.
+    Returns "" when nothing can be resolved, so the report degrades
+    gracefully.
+    """
+    if not module_name or not test_name:
+        return ""
+    # Strip any parametrize id, e.g. ``test_scan_auto_stop[loop-1]``.
+    method_name = test_name.split("[", 1)[0]
+    try:
+        module = sys.modules.get(module_name)
+        if module is None:
+            module = importlib.import_module(module_name)
+        cls = getattr(module, class_name, None) if class_name else None
+        container = cls if cls is not None else module
+        method = getattr(container, method_name, None)
+        if method is not None:
+            desc = _first_doc_or_inline_comment(method, "def ")
+            if desc:
+                return desc
+        # No per-test description — fall back to the class-level one.
+        if cls is not None:
+            return _first_doc_or_inline_comment(cls, "class ")
+    except Exception as e:
+        log.warning(f"  test description lookup failed for "
+                    f"{module_name}.{class_name}.{test_name}: {e}")
+    return ""
+
+
 def _parse_junit_xml(xml_path: Path) -> list[dict]:
     """Parse pytest's JUnit XML into a list of per-test result dicts.
 
@@ -1193,6 +1261,17 @@ def _write_hil_report() -> None:
     else:
         module_slug = "unknown"
 
+    # One-line description per unique test, taken from the test's docstring
+    # (or a trailing inline comment). Keyed by test id, first-seen order so
+    # the report reads in run order.
+    tests: dict[str, str] = {}
+    for r in results:
+        tid = r["test_id"]
+        if tid and tid not in tests:
+            tests[tid] = _resolve_test_description(
+                r["test_module"], r["test_class"], tid
+            )
+
     env = _report_get_environment()
     duration = (
         (datetime.now() - _REPORT_SESSION_START).total_seconds()
@@ -1212,6 +1291,7 @@ def _write_hil_report() -> None:
         "purpose":      "Verification & validation evidence for the HIL "
                         "test suite.",
         "test_scripts":  test_modules,
+        "tests":         tests,
         "session_start": _REPORT_SESSION_START.isoformat(timespec="seconds")
                          if _REPORT_SESSION_START else "",
         "session_end":   datetime.now().isoformat(timespec="seconds"),
@@ -1235,6 +1315,16 @@ def _write_hil_report() -> None:
     if test_modules:
         for mod in test_modules:
             lines.append(f"- `{mod}.py`")
+    else:
+        lines.append("- _n/a_")
+    lines += [
+        "",
+        "## Tests",
+        "",
+    ]
+    if tests:
+        for tid, desc in tests.items():
+            lines.append(f"- `{tid}` — {desc or '_no description_'}")
     else:
         lines.append("- _n/a_")
     lines += [
