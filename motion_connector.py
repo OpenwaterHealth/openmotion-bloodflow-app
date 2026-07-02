@@ -41,6 +41,7 @@ from omotion.config import (
     DEBUG_FLAG_COMM_VERBOSE,
     DEBUG_FLAG_CMD_VERBOSE,
     DEBUG_FLAG_SEND_DEFER,
+    DEBUG_FLAG_HISTO_STALL,
 )
 from omotion.MotionProcessing import process_bin_file
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
@@ -1023,6 +1024,7 @@ class MotionConnector(QObject):
         self._camera_fake_data            = bool(cfg.get("cameraFakeData", False))
         self._histo_throttle              = bool(cfg.get("histoThrottle", False))
         self._histo_cmp                   = bool(cfg.get("histoCmp", False))
+        self._histo_stall_test           = bool(cfg.get("debugHistoStallTest", False))
         self._send_data_defer             = bool(cfg.get("deferHistoSend", False))
         self._comm_verbose                = bool(cfg.get("commVerbose", False))
         self._verbose_command_handling    = bool(cfg.get("verboseCommandHandling", False))
@@ -1256,6 +1258,8 @@ class MotionConnector(QObject):
             flags |= DEBUG_FLAG_HISTO_CMP
         if self._send_data_defer:
             flags |= DEBUG_FLAG_SEND_DEFER
+        if self._histo_stall_test:
+            flags |= DEBUG_FLAG_HISTO_STALL
         return flags
 
     def _apply_sensor_debug_flags(self) -> None:
