@@ -9,7 +9,7 @@ detect -> download -> verify -> install -> relaunch flow runs over loopback.
 
 Usage:
     python scripts/fake_release_server.py \
-        --bundle build/installer/Openwater-Setup-1.3.1_RUO.exe \
+        --bundle build/installer/Open-Motion-Research-Setup-1.3.1.exe \
         --tag 1.3.1 --port 8077
 
 Then the old build's bundled config/app_config.json must contain:

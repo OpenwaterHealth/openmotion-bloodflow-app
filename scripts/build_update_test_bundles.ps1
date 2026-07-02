@@ -61,5 +61,5 @@ Write-Host "=== NEW 1.3.1  (upgrade target) ===" -ForegroundColor Green
 Build-ResearchBundle "1.3.1" ""
 
 Write-Host "=== Artifacts (build\installer) ===" -ForegroundColor Green
-Get-ChildItem "build\installer\Openwater-Setup-1.3.*_Research.exe" |
+Get-ChildItem "build\installer\Open-Motion-Research-Setup-1.3.*.exe" |
     Select-Object Name, @{N='MB';E={[math]::Round($_.Length/1MB,1)}} | Format-Table -AutoSize

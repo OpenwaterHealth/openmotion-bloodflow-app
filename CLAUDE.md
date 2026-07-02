@@ -19,8 +19,8 @@ python -m PyInstaller -y openwater.spec # package .exe → dist/Open-Motion/
 # 4 artifacts: Clinical/Research × Portable/Installer
 #   Open-Motion-<ver>.zip                (Clinical portable)
 #   Open-Motion-Research-<ver>.zip       (Research portable)
-#   build/installer/Openwater-Setup-<ver>.exe          (Clinical installer)
-#   build/installer/Openwater-Setup-<ver>_Research.exe (Research installer)
+#   build/installer/Open-Motion-Setup-<ver>.exe          (Clinical installer)
+#   build/installer/Open-Motion-Research-Setup-<ver>.exe (Research installer)
 # build_and_zip.ps1 runs PyInstaller once, then scripts/package_artifacts.ps1
 # loops the variants. Installers are skipped with a warning if WiX isn't found;
 # scripts/package_artifacts.ps1 -SkipInstaller forces portable-only.

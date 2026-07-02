@@ -33,8 +33,8 @@ def test_unsigned_rejected_when_required():
 
 @pytest.mark.unit
 def test_is_bundle_url_accepts_only_exe():
-    assert _is_bundle_url("https://x/OpenWater-Setup-1.2.3.exe")
-    assert _is_bundle_url("https://x/OpenWater-Setup-1.2.3_RUO.EXE")
+    assert _is_bundle_url("https://x/Open-Motion-Setup-1.2.3.exe")
+    assert _is_bundle_url("https://x/Open-Motion-Research-Setup-1.2.3.EXE")
     assert not _is_bundle_url("https://github.com/o/r/releases/tag/1.2.3")
     assert not _is_bundle_url("")
     assert not _is_bundle_url(None)
@@ -51,11 +51,11 @@ def test_looks_like_pe_rejects_non_executables():
 @pytest.mark.unit
 def test_helper_script_waits_installs_silently_and_relaunches():
     s = _build_update_helper_script(
-        1234, r"C:\Users\u\updates\Openwater-Setup-1.2.3.exe",
+        1234, r"C:\Users\u\updates\Open-Motion-Setup-1.2.3.exe",
         r"C:\Program Files\Open-Motion\Open-Motion.exe",
     )
     assert "1234" in s                              # waits for our PID
     assert "Get-Process" in s
     assert "/passive" in s                          # non-interactive install
-    assert "Openwater-Setup-1.2.3.exe" in s         # runs the installer
+    assert "Open-Motion-Setup-1.2.3.exe" in s       # runs the installer
     assert "Open-Motion.exe" in s                   # relaunches the app
