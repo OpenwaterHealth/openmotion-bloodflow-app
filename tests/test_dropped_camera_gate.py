@@ -1,17 +1,22 @@
 """
-Unit tests for _check_dropped_camera_emit (issue #85 + follow-up).
+Unit tests for _rearm_dropped_camera (issue #85 follow-up).
 
 What this exercises
 -------------------
-The pure-function gate that the per-frame and corrected-batch emit
-paths in ``MotionConnector`` consult before pushing a sample to the
-UI:
+The pure-function helper the per-frame emit path in ``MotionConnector``
+consults when a frame arrives for a camera:
 
-  - Alive cameras pass through (return ``(True, None)``).
-  - Dropped cameras are suppressed (return ``(False, ...)``).
-  - The first suppression for a given dropped camera key returns a
-    non-None warning string AND inserts the key into ``already_logged``;
-    subsequent suppressions for the same key return ``(False, None)``.
+  - Alive cameras (not in ``dropped``) are a no-op (return ``None``).
+  - A camera in ``dropped`` is RE-ARMED: removed from the set, and the
+    helper returns a recovery message for the caller to log. Dropout
+    marking is no longer permanent for the scan — frames resuming is
+    proof the camera is back, so display resumes and the watchdog can
+    re-fire if the camera goes silent again.
+
+This replaced the old ``_check_dropped_camera_emit`` gate, which
+suppressed a recovered camera's samples for the rest of the scan —
+turning any transient stall (or a covered sensor, back when liveness was
+keyed to finite BFI instead of frame arrival) into a dead display.
 
 Marker
 ------
@@ -32,86 +37,74 @@ import pytest
 # turning the project into an installed package.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from motion_connector import _check_dropped_camera_emit  # noqa: E402
+from motion_connector import _rearm_dropped_camera  # noqa: E402
 
 pytestmark = pytest.mark.unit
 
 
-def test_alive_camera_passes_through():
-    should, msg = _check_dropped_camera_emit("left", 0, set(), set())
-    assert should is True
+def test_alive_camera_is_noop():
+    dropped = set()
+    msg = _rearm_dropped_camera("left", 0, dropped)
     assert msg is None
+    assert dropped == set()
 
 
-def test_alive_camera_does_not_touch_already_logged():
-    already = set()
-    _check_dropped_camera_emit("left", 0, set(), already)
-    assert already == set()
-
-
-def test_dropped_camera_first_sample_returns_recovery_message():
-    dropped = {("left", 0)}
-    already_logged = set()
-    should, msg = _check_dropped_camera_emit(
-        "left", 0, dropped, already_logged,
-    )
-    assert should is False
-    assert msg is not None
-    # Message identifies the camera (1-indexed, side uppercased) and
-    # includes the 'UNEXPECTED' / 'Connection Lost' framing so an
-    # operator skimming the logs can find it.
-    assert "UNEXPECTED" in msg
-    assert "LEFT 1" in msg
-    assert "Connection Lost" in msg
-
-
-def test_dropped_camera_first_sample_marks_already_logged():
+def test_alive_camera_does_not_touch_other_keys():
     dropped = {("right", 3)}
-    already_logged = set()
-    _check_dropped_camera_emit("right", 3, dropped, already_logged)
-    # The helper mutates already_logged so the caller gets one-per-
-    # dropout semantics for free — no need to track this externally.
-    assert ("right", 3) in already_logged
+    msg = _rearm_dropped_camera("left", 0, dropped)
+    assert msg is None
+    assert dropped == {("right", 3)}
 
 
-def test_dropped_camera_second_sample_silent():
+def test_dropped_camera_is_rearmed_and_returns_message():
     dropped = {("left", 0)}
-    already_logged = {("left", 0)}
-    should, msg = _check_dropped_camera_emit(
-        "left", 0, dropped, already_logged,
-    )
-    assert should is False
-    assert msg is None  # already logged once, don't re-emit
+    msg = _rearm_dropped_camera("left", 0, dropped)
+    assert msg is not None
+    # Camera has been un-marked — display resumes, watchdog re-armed.
+    assert dropped == set()
+    # Message identifies the camera (1-indexed, side uppercased) and the
+    # re-arm framing so an operator skimming the logs can find it.
+    assert "LEFT 1" in msg
+    assert "resumed" in msg
+    assert "re-arming" in msg
 
 
-def test_dropped_camera_repeated_calls_log_only_once():
-    """The 40 Hz uncorrected stream calls the gate per sample. A
-    dropped, flapping camera must produce exactly one warning per
-    dropout — not 40/sec."""
+def test_second_frame_after_rearm_is_silent():
+    """The 40 Hz stream calls the helper per frame. Only the frame that
+    performs the re-arm returns a message — the camera is out of the set
+    afterwards, so subsequent frames are the alive-camera no-op."""
     dropped = {("left", 5)}
-    already_logged = set()
     messages = []
     for _ in range(50):
-        _, msg = _check_dropped_camera_emit(
-            "left", 5, dropped, already_logged,
-        )
+        msg = _rearm_dropped_camera("left", 5, dropped)
         if msg is not None:
             messages.append(msg)
     assert len(messages) == 1
+    assert dropped == set()
 
 
-def test_separate_dropped_cameras_each_log_once():
-    """Each (side, cam_id) key gets its own one-time slot."""
+def test_camera_can_drop_and_recover_repeatedly():
+    """A flapping camera produces one recovery message per dropout
+    episode — the watchdog re-adds the key when frames stop again."""
+    dropped = set()
+    messages = []
+    for _ in range(3):
+        dropped.add(("right", 2))          # watchdog fires
+        msg = _rearm_dropped_camera("right", 2, dropped)
+        if msg is not None:
+            messages.append(msg)
+        assert ("right", 2) not in dropped  # re-armed each time
+    assert len(messages) == 3
+
+
+def test_separate_dropped_cameras_each_rearm_independently():
     dropped = {("left", 0), ("right", 7)}
-    already_logged = set()
-    _, m1 = _check_dropped_camera_emit("left",  0, dropped, already_logged)
-    _, m2 = _check_dropped_camera_emit("right", 7, dropped, already_logged)
-    _, m3 = _check_dropped_camera_emit("left",  0, dropped, already_logged)
-    _, m4 = _check_dropped_camera_emit("right", 7, dropped, already_logged)
-    assert m1 is not None and "LEFT 1"  in m1
+    m1 = _rearm_dropped_camera("left", 0, dropped)
+    assert m1 is not None and "LEFT 1" in m1
+    assert dropped == {("right", 7)}
+    m2 = _rearm_dropped_camera("right", 7, dropped)
     assert m2 is not None and "RIGHT 8" in m2
-    assert m3 is None
-    assert m4 is None
+    assert dropped == set()
 
 
 def test_cam_id_accepts_numeric_strings():
@@ -119,20 +112,15 @@ def test_cam_id_accepts_numeric_strings():
     value off the SDK; the helper must coerce so set membership uses
     a canonical int in the tuple key."""
     dropped = {("left", 4)}
-    already_logged = set()
-    should, msg = _check_dropped_camera_emit(
-        "left", "4", dropped, already_logged,
-    )
-    assert should is False
+    msg = _rearm_dropped_camera("left", "4", dropped)
     assert msg is not None
+    assert dropped == set()
 
 
 def test_cam_id_one_indexed_in_message():
     """Internal cam_id is 0..7, but the operator-facing label is 1..8
     to match the physical camera numbering on the modules."""
-    dropped = {("left", 0)}
-    _, msg = _check_dropped_camera_emit("left", 0, dropped, set())
+    msg = _rearm_dropped_camera("left", 0, {("left", 0)})
     assert "LEFT 1" in msg
-    dropped = {("right", 7)}
-    _, msg = _check_dropped_camera_emit("right", 7, dropped, set())
+    msg = _rearm_dropped_camera("right", 7, {("right", 7)})
     assert "RIGHT 8" in msg
