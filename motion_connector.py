@@ -3104,28 +3104,30 @@ class MotionConnector(QObject):
             logger.exception("loadPastScan failed for label %r", session_label)
             self.pastScanLoadFinished.emit(session_label, False)
 
-    @pyqtSlot(str, str)
-    def exportScanCsv(self, session_label: str, output_path: str) -> None:
+    @pyqtSlot(int, str)
+    def exportScanCsv(self, session_id: int, output_path: str) -> None:
         """Export a scan's session_data to a corrected-format CSV, on a
         worker thread. Called from the History modal's "Export CSV"
         button after the user picks a save path; the result arrives via
         scanCsvExportFinished(ok, path) — materializing a long scan is
-        multi-second and used to freeze the GUI for the duration."""
-        if not session_label or not output_path:
+        multi-second and used to freeze the GUI for the duration.
+        Resolves the scan by its unique DB id — a by-label lookup can
+        silently pick a different session when labels collide (#254)."""
+        if session_id < 0 or not output_path:
             self.scanCsvExportFinished.emit(False, output_path or "")
             return
         threading.Thread(
             target=self._export_scan_csv_worker,
-            args=(session_label, output_path),
+            args=(int(session_id), output_path),
             name="scan-csv-export", daemon=True,
         ).start()
 
-    def _export_scan_csv_worker(self, session_label: str,
+    def _export_scan_csv_worker(self, session_id: int,
                                 output_path: str) -> None:
-        ok = self._export_scan_csv_sync(session_label, output_path)
+        ok = self._export_scan_csv_sync(session_id, output_path)
         self.scanCsvExportFinished.emit(ok, output_path)
 
-    def _export_scan_csv_sync(self, session_label: str,
+    def _export_scan_csv_sync(self, session_id: int,
                               output_path: str) -> bool:
         """Worker body of exportScanCsv; unit tests call it directly."""
         try:
@@ -3136,60 +3138,61 @@ class MotionConnector(QObject):
             if not db_path:
                 self.errorOccurred.emit("No scan database available.")
                 return False
-            db = ScanDatabase(db_path)
-            session = db.get_session_by_label(session_label)
+            with ScanDatabase(db_path) as db:
+                session = db.get_session(int(session_id))
             if not session:
                 self.errorOccurred.emit(
-                    f"No database session found for '{session_label}'."
+                    f"No database session found for id {session_id}."
                 )
                 return False
-            session_id = int(session["id"])
             materialize_corrected_csv(
-                str(db_path), session_id, output_path,
+                str(db_path), int(session_id), output_path,
                 include_quality=True,
             )
             logger.info(
                 "exportScanCsv: exported %r (sid=%d) → %s",
-                session_label, session_id, output_path,
+                session.get("session_label"), session_id, output_path,
             )
             return True
         except Exception as exc:
-            logger.exception("exportScanCsv failed for %r", session_label)
+            logger.exception("exportScanCsv failed for sid %s", session_id)
             self.errorOccurred.emit(f"Export failed:\n{exc}")
             return False
 
-    @pyqtSlot('QStringList', str)
-    def exportScansToFolder(self, labels, folder) -> None:
+    @pyqtSlot('QVariantList', str)
+    def exportScansToFolder(self, session_ids, folder) -> None:
         """Export several scans, one CSV each, into ``folder`` — on a
         worker thread. Completion arrives via
         scansExportFinished(exported, skipped, folder); a big batch used
-        to freeze the GUI for its whole materialize loop. (Callers
-        pre-filter interrupted scans, which can't be materialized.)"""
-        labels = [str(x) for x in (labels or [])]
-        if not labels or not folder:
+        to freeze the GUI for its whole materialize loop. Takes each
+        label from the id-resolved DB session (ids are unique; labels
+        can collide — #254). (Callers pre-filter interrupted scans,
+        which can't be materialized.)"""
+        session_ids = [int(x) for x in (session_ids or [])]
+        if not session_ids or not folder:
             self.scansExportFinished.emit(0, 0, str(folder or ""))
             return
-        self.notify(f"Exporting {len(labels)} scan(s)…", type_="info",
+        self.notify(f"Exporting {len(session_ids)} scan(s)…", type_="info",
                     tag="scan-export")
         threading.Thread(
-            target=self._export_scans_worker, args=(labels, str(folder)),
+            target=self._export_scans_worker, args=(session_ids, str(folder)),
             name="scan-batch-export", daemon=True,
         ).start()
 
-    def _export_scans_worker(self, labels, folder) -> None:
-        result = self._export_scans_sync(labels, folder)
+    def _export_scans_worker(self, session_ids, folder) -> None:
+        result = self._export_scans_sync(session_ids, folder)
         self.scansExportFinished.emit(
             result["exported"], result["skipped"], folder)
 
-    def _export_scans_sync(self, labels, folder) -> dict:
+    def _export_scans_sync(self, session_ids, folder) -> dict:
         """Worker body of exportScansToFolder. Writes
-        ``<folder>/<label>_export.csv`` for every label; opens the scan
-        DB once for the whole batch. Missing or failing scans are counted
-        as skipped and never raise. Returns
+        ``<folder>/<label>_export.csv`` for every session id; opens the
+        scan DB once for the whole batch. Missing or failing scans are
+        counted as skipped and never raise. Returns
         ``{"exported": int, "skipped": int}``. Unit tests call it
         directly."""
         result = {"exported": 0, "skipped": 0}
-        if not labels or not folder:
+        if not session_ids or not folder:
             return result
         try:
             from omotion.ScanDatabase import ScanDatabase
@@ -3200,27 +3203,28 @@ class MotionConnector(QObject):
                 self.errorOccurred.emit("No scan database available.")
                 return result
             with ScanDatabase(db_path) as db:
-                for label in labels:
+                for sid in session_ids:
                     try:
-                        session = db.get_session_by_label(label)
+                        sid = int(sid)
+                        session = db.get_session(sid)
                         if not session:
                             result["skipped"] += 1
                             continue
-                        session_id = int(session["id"])
+                        label = session.get("session_label") or f"scan_{sid}"
                         out_path = os.path.join(
                             folder, f"{label}_export.csv")
                         materialize_corrected_csv(
-                            str(db_path), session_id, out_path,
+                            str(db_path), sid, out_path,
                             include_quality=True,
                         )
                         result["exported"] += 1
                         logger.info(
                             "exportScansToFolder: exported %r (sid=%d) -> %s",
-                            label, session_id, out_path,
+                            label, sid, out_path,
                         )
                     except Exception:
                         logger.exception(
-                            "exportScansToFolder: failed for %r", label)
+                            "exportScansToFolder: failed for %r", sid)
                         result["skipped"] += 1
             return result
         except Exception as exc:
