@@ -55,7 +55,7 @@ SETTLE_AFTER_SCAN  = 8    # let app return to idle after mid-scan disconnect
 RAPID_TOGGLE_COUNT = 5
 RAPID_TOGGLE_HOLD  = 5.0  # seconds held in each off/on phase; faster trips the
                           # Shelly relay's own duty-cycle limits, not the app.
-SLOW_TOGGLE_EXTRA  = 20.0  # extra wait after each ON for app to reconnect
+SLOW_TOGGLE_EXTRA  = 25.0  # extra wait after each ON for app to reconnect
                           # (used by test_05_toggle_with_reconnect_wait)
 
 

@@ -302,10 +302,15 @@ def outlet():
 class TestScanAutoStopBug: # (1) Repro scan auto-stop bug, (2) Verify fix, (3) Regression test multiple iterations
 
 
-    @pytest.mark.parametrize("iteration", range(1, LOOP + 1),
-                             ids=[f"loop-{i}" for i in range(1, LOOP + 1)])
+    @pytest.mark.parametrize(
+        "iteration", range(1, LOOP + 1),
+        ids=[f"all-all-{SCAN_DURATION_MIN}min-loop-{i}"
+             for i in range(1, LOOP + 1)],
+    )
     def test_scan_auto_stop(self, app, outlet, iteration):
-        """Full scan cycle — configure, start, monitor for early stop."""
+        """All/All sensors, 10-min scan: configure, run Check, Start, and
+        assert the scan does not auto-stop early (repros GitHub #47 by
+        loop 5)."""
         log.info(f"{'='*60}")
         log.info(f"  ITERATION {iteration}/{LOOP}")
         log.info(f"{'='*60}")
