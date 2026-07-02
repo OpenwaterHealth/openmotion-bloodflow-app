@@ -174,9 +174,15 @@ Rectangle {
             }
             elapsedMs += interval
             // A config in flight legitimately blocks for ~50 s — match
-            // ScanRunner's flash watchdog bound. Anything else holding the
-            // pipeline past 8 s is stuck; give up loudly.
-            var deadline = MotionInterface.isConfigInFlight() ? 250000 : 8000
+            // ScanRunner's flash watchdog bound. The post-connect sensor
+            // init (issue #303) legitimately holds the pipeline for a few
+            // seconds after a (re)connect — wait that out on its own bound
+            // so a start armed just as a sensor replugs defers instead of
+            // erroring. Anything else holding the pipeline past 8 s is
+            // stuck; give up loudly.
+            var deadline = MotionInterface.isConfigInFlight() ? 250000
+                         : MotionInterface.sensorInitBusy ? 30000
+                         : 8000
             if (elapsedMs >= deadline) {
                 stop()
                 if (action === "scan") {
@@ -204,7 +210,13 @@ Rectangle {
 
         scanning: bloodFlow.scanning
         waiting: bloodFlow.scanStartPending
-        camerasReady: bloodFlow.camerasReady
+        // Issue #303: hold Start/Check disabled while the connector's async
+        // post-connect sensor init (debug flags, camera power masks, info
+        // reads) is still in flight — a start in that window collides with
+        // the init sequence ("Failed to program FPGA" on both sensors) and
+        // can wedge a camera until DUT power-cycle. sensorInitBusy re-arms
+        // on every sensor (re)connect, so a mid-session replug re-gates too.
+        camerasReady: bloodFlow.camerasReady && !MotionInterface.sensorInitBusy
         clinicalMode: bloodFlow.clinicalMode
 
         // Action buttons — close any open modal first (which by
