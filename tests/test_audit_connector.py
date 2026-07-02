@@ -210,7 +210,9 @@ def test_prepare_debug_bundle_creates_zip_and_logs(tmp_path):
     c = _connector(tmp_path, scan_db_path=db)
     # Don't spawn a real file-explorer process during the test.
     c._reveal_in_explorer = lambda p: None
-    path = c.prepareDebugLogBundle()
+    # Call the worker body directly — the prepareDebugLogBundle slot is
+    # fire-and-forget (spawns a daemon thread) since the GUI-freeze fix.
+    path = c._prepare_debug_bundle_sync()
     assert path and os.path.exists(path)
     assert path.endswith(".zip")
     with zipfile.ZipFile(path) as zf:
@@ -231,5 +233,5 @@ def test_prepare_debug_bundle_failure_returns_empty(tmp_path, monkeypatch):
         raise RuntimeError("disk full")
 
     monkeypatch.setattr(debug_bundle, "build_debug_bundle", boom)
-    assert c.prepareDebugLogBundle() == ""
+    assert c._prepare_debug_bundle_sync() == ""
     assert "debug_bundle_created" not in _types(c)

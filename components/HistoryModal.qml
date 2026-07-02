@@ -618,8 +618,9 @@ Item {
         property string selectedScanId: ""
         onAccepted: {
             var path = selectedFile.toString().replace("file:///", "")
-            var ok = MotionInterface.exportScanCsv(selectedScanId, path)
-            if (ok) MotionInterface.notify("Exported to " + path, "success")
+            // Async: runs on a worker thread; the success toast fires
+            // from onScanCsvExportFinished below.
+            MotionInterface.exportScanCsv(selectedScanId, path)
         }
     }
 
@@ -631,12 +632,10 @@ Item {
         property int pendingSkipped: 0
         onAccepted: {
             var folder = selectedFolder.toString().replace("file:///", "")
-            var res = MotionInterface.exportScansToFolder(pendingLabels, folder)
-            var ok = (res && res.exported) ? res.exported : 0
-            var sk = pendingSkipped + ((res && res.skipped) ? res.skipped : 0)
-            var msg = "Exported " + ok + " scan(s) to " + folder
-            if (sk > 0) msg += " (" + sk + " skipped)"
-            MotionInterface.notify(msg, ok > 0 ? "success" : "warning")
+            // Async: the batch runs on a worker thread; the summary
+            // toast fires from onScansExportFinished below, which folds
+            // in pendingSkipped (interrupted scans filtered pre-dialog).
+            MotionInterface.exportScansToFolder(pendingLabels, folder)
         }
     }
 
@@ -649,6 +648,18 @@ Item {
             if (ok) root.close()
         }
         function onDirectoryChanged() { if (root.visible) root.refresh() }
+        function onScanCsvExportFinished(ok, path) {
+            if (ok) MotionInterface.notify("Exported to " + path, "success")
+            // Failure toast comes from errorOccurred (handler below).
+        }
+        function onScansExportFinished(exported, skipped, folder) {
+            var sk = exportFolderDialog.pendingSkipped + skipped
+            exportFolderDialog.pendingSkipped = 0
+            var msg = "Exported " + exported + " scan(s) to " + folder
+            if (sk > 0) msg += " (" + sk + " skipped)"
+            MotionInterface.notify(msg, exported > 0 ? "success" : "warning",
+                                   4000, true, "scan-export")
+        }
         // Re-apply the clinical-mode row filter if the app's mode changes
         // while History is open.
         function onAppConfigChanged() { if (root.visible) root.rebuildView() }

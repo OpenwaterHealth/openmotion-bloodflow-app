@@ -12,6 +12,7 @@ from PyQt6.QtCore import (
 )
 from pathlib import Path
 from typing import NamedTuple, Optional
+import itertools
 import logging
 import math
 import base58
@@ -732,6 +733,13 @@ class MotionConnector(QObject):
     # loadPastScan completes. (session_label, ok). HistoryModal uses it
     # to clear its busy overlay and close only on success (issue #152).
     pastScanLoadFinished = pyqtSignal(str, bool)
+    # History → "Export CSV" / "Export to folder": fire on the GUI thread
+    # when the async export workers finish. (ok, path) for the single-scan
+    # export; (exported, skipped, folder) for the batch. HistoryModal shows
+    # the summary toast from these instead of a synchronous return value —
+    # a big batch used to freeze the GUI for its whole materialize loop.
+    scanCsvExportFinished = pyqtSignal(bool, str)
+    scansExportFinished = pyqtSignal(int, int, str)
     # Private worker→main marshalling for loadPastScan results:
     # (seq, session_label, session_id, buffers-or-None, source_tag,
     #  recorded_flags-or-None, display_meta-or-None). recorded_flags is the
@@ -1015,7 +1023,11 @@ class MotionConnector(QObject):
         self._capture_stop = threading.Event()
         self._capture_running = False
         self._cq_quick_running = False
-        self._notification_id_counter = 0  # monotonic id assigned to each notify() call
+        # Monotonic id assigned to each notify() call. itertools.count is a
+        # single atomic step under the GIL — notify() is reachable from
+        # several worker threads (export/bundle/update workers), where a
+        # read-modify-write `+= 1` could hand out duplicate ids.
+        self._notification_ids = itertools.count(1)
         self._safety_cancel_scheduled = False  # True after scheduling cancel-due-to-safety; cleared when capture ends
         self._capture_left_path = ""
         self._capture_right_path = ""
@@ -2475,11 +2487,28 @@ class MotionConnector(QObject):
             self.errorOccurred.emit("Audit log export failed.")
             return ""
 
-    @pyqtSlot(result=str)
-    def prepareDebugLogBundle(self) -> str:
+    @pyqtSlot()
+    def prepareDebugLogBundle(self) -> None:
         """Zip the last 48h of app logs (+ config + system info) into
         data/debug-bundles/, reveal it in the file explorer, and toast
-        the support address. Returns the zip path, or '' on failure."""
+        the support address — on a worker thread. Zipping 48 h of logs
+        is multi-second and used to freeze the GUI for the whole build.
+
+        Fire-and-forget: Settings never used the old return value. The
+        immediate toast gives feedback while the worker runs; the
+        success toast (same tag) replaces it. notify/errorOccurred emit
+        queued signals, so the worker path is safe."""
+        self.notify("Preparing debug logs…", type_="info",
+                    tag="debug-bundle")
+        threading.Thread(
+            target=self._prepare_debug_bundle_sync,
+            name="debug-bundle", daemon=True,
+        ).start()
+
+    def _prepare_debug_bundle_sync(self) -> str:
+        """Build + reveal + audit + toast the debug bundle. Returns the
+        zip path, or '' on failure. Worker body of prepareDebugLogBundle;
+        unit tests call it synchronously."""
         try:
             from debug_bundle import build_debug_bundle, WINDOW_HOURS
             try:
@@ -2508,6 +2537,7 @@ class MotionConnector(QObject):
         except Exception:
             logger.exception("prepareDebugLogBundle: failed to build bundle")
             self.errorOccurred.emit("Could not create the debug log bundle.")
+            self.dismissNotification("debug-bundle")
             return ""
 
         path = meta["path"]
@@ -2991,15 +3021,30 @@ class MotionConnector(QObject):
             logger.exception("loadPastScan failed for label %r", session_label)
             self.pastScanLoadFinished.emit(session_label, False)
 
-    @pyqtSlot(str, str, result=bool)
-    def exportScanCsv(self, session_label: str, output_path: str) -> bool:
-        """Export a scan's session_data to a corrected-format CSV.
-
-        Called from the History modal's "Export CSV" button after the user
-        picks a save path via FileDialog.
-        """
+    @pyqtSlot(str, str)
+    def exportScanCsv(self, session_label: str, output_path: str) -> None:
+        """Export a scan's session_data to a corrected-format CSV, on a
+        worker thread. Called from the History modal's "Export CSV"
+        button after the user picks a save path; the result arrives via
+        scanCsvExportFinished(ok, path) — materializing a long scan is
+        multi-second and used to freeze the GUI for the duration."""
         if not session_label or not output_path:
-            return False
+            self.scanCsvExportFinished.emit(False, output_path or "")
+            return
+        threading.Thread(
+            target=self._export_scan_csv_worker,
+            args=(session_label, output_path),
+            name="scan-csv-export", daemon=True,
+        ).start()
+
+    def _export_scan_csv_worker(self, session_label: str,
+                                output_path: str) -> None:
+        ok = self._export_scan_csv_sync(session_label, output_path)
+        self.scanCsvExportFinished.emit(ok, output_path)
+
+    def _export_scan_csv_sync(self, session_label: str,
+                              output_path: str) -> bool:
+        """Worker body of exportScanCsv; unit tests call it directly."""
         try:
             from omotion.ScanDatabase import ScanDatabase
             from omotion.SessionPlayback import materialize_corrected_csv
@@ -3030,16 +3075,36 @@ class MotionConnector(QObject):
             self.errorOccurred.emit(f"Export failed:\n{exc}")
             return False
 
-    @pyqtSlot('QStringList', str, result='QVariantMap')
-    def exportScansToFolder(self, labels, folder) -> dict:
-        """Export several scans, one CSV each, into ``folder``.
+    @pyqtSlot('QStringList', str)
+    def exportScansToFolder(self, labels, folder) -> None:
+        """Export several scans, one CSV each, into ``folder`` — on a
+        worker thread. Completion arrives via
+        scansExportFinished(exported, skipped, folder); a big batch used
+        to freeze the GUI for its whole materialize loop. (Callers
+        pre-filter interrupted scans, which can't be materialized.)"""
+        labels = [str(x) for x in (labels or [])]
+        if not labels or not folder:
+            self.scansExportFinished.emit(0, 0, str(folder or ""))
+            return
+        self.notify(f"Exporting {len(labels)} scan(s)…", type_="info",
+                    tag="scan-export")
+        threading.Thread(
+            target=self._export_scans_worker, args=(labels, str(folder)),
+            name="scan-batch-export", daemon=True,
+        ).start()
 
-        Writes ``<folder>/<label>_export.csv`` for every label. Opens
-        the scan DB once for the whole batch. Missing or failing scans
-        are counted as skipped and never raise. Returns
-        ``{"exported": int, "skipped": int}``. (Callers pre-filter
-        interrupted scans, which can't be materialized.)
-        """
+    def _export_scans_worker(self, labels, folder) -> None:
+        result = self._export_scans_sync(labels, folder)
+        self.scansExportFinished.emit(
+            result["exported"], result["skipped"], folder)
+
+    def _export_scans_sync(self, labels, folder) -> dict:
+        """Worker body of exportScansToFolder. Writes
+        ``<folder>/<label>_export.csv`` for every label; opens the scan
+        DB once for the whole batch. Missing or failing scans are counted
+        as skipped and never raise. Returns
+        ``{"exported": int, "skipped": int}``. Unit tests call it
+        directly."""
         result = {"exported": 0, "skipped": 0}
         if not labels or not folder:
             return result
@@ -3106,8 +3171,7 @@ class MotionConnector(QObject):
         if type_ not in ("info", "success", "warning", "error"):
             logger.warning(f"notify: unknown type '{type_}', falling back to 'info'")
             type_ = "info"
-        self._notification_id_counter += 1
-        nid = self._notification_id_counter
+        nid = next(self._notification_ids)
         self.notificationRequested.emit({
             "id": nid,
             "tag": str(tag),
