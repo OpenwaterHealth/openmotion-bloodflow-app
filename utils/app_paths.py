@@ -10,7 +10,7 @@ Override the root with the OPENWATER_DATA_ROOT env var (used by tests and as a
 power-user escape hatch).
 
 Two fixed children live under the writable root: LOGS_DIRNAME (this run's log
-file) and DATA_DIRNAME (scans.db, scan CSVs, calibrations, ft-test-csvs,
+file) and DATA_DIRNAME (scans.db, scan CSVs, calibrations,
 debug-bundles, downloaded updates).
 """
 from pathlib import Path
