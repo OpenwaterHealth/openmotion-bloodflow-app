@@ -2,7 +2,8 @@
 param(
     [ValidateSet("clinical", "research")][string]$Variant = "clinical",
     [string]$DistDir = "dist\Open-Motion",
-    [string]$Version = ""   # override the numeric X.Y.Z (else derived from git)
+    [string]$Version = "",      # override the numeric X.Y.Z (else derived from git)
+    [string]$FullVersion = ""   # full semver for the bundle filename, e.g. 1.4.0-dev.2 (else $Version)
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Definition)
@@ -15,13 +16,13 @@ $guids = @{
         ProductName       = "Open-Motion"
         UpgradeCode       = "3d5dec27-6f62-484b-85f0-1b7b07076022"
         BundleUpgradeCode = "2e60deaa-8959-4f57-912b-71f60fc6ad5a"
-        Suffix            = ""
+        FileBase          = "Open-Motion"
     }
     research = @{
         ProductName       = "Open-Motion Research"
         UpgradeCode       = "81f5e9b0-36d8-4aeb-8457-461fe4fe6c2f"
         BundleUpgradeCode = "e363d244-2161-4a28-a855-835643b14a10"
-        Suffix            = "_Research"
+        FileBase          = "Open-Motion-Research"
     }
 }
 $g = $guids[$Variant]
@@ -39,7 +40,9 @@ if ($Version) {
         $version = "0.0.0"
     }
 }
-Write-Host "Variant=$Variant  Version=$version  Product='$($g.ProductName)'" -ForegroundColor Green
+# -- full semver for the bundle filename (MSI/Burn internals stay numeric) --
+if (-not $FullVersion) { $FullVersion = $version }
+Write-Host "Variant=$Variant  Version=$version  Bundle=$FullVersion  Product='$($g.ProductName)'" -ForegroundColor Green
 
 # -- extract the driver MSI from the bundled zip --
 $drvZip = "resources\OpenMotionDriver-x64.zip"
@@ -52,8 +55,8 @@ if (-not (Test-Path $driverMsi)) { throw "driver MSI not found in $drvZip" }
 # -- output names --
 $outDir = "build\installer"
 New-Item -ItemType Directory -Force $outDir | Out-Null
-$appMsi    = Join-Path $outDir "Open-Motion$($g.Suffix).msi"
-$bundleExe = Join-Path $outDir "Openwater-Setup-$version$($g.Suffix).exe"
+$appMsi    = Join-Path $outDir "$($g.FileBase).msi"
+$bundleExe = Join-Path $outDir "$($g.FileBase)-Setup-$FullVersion.exe"
 
 # -- build the app MSI --
 # Resolve the PyInstaller output to an ABSOLUTE path. WiX resolves the

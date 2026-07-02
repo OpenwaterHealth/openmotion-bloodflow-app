@@ -44,10 +44,10 @@ if ($buildInstallers -and -not (Test-WixAvailable)) {
     $buildInstallers = $false
 }
 
-# -- per-variant suffix + clinicalMode value --
+# -- per-variant file base + clinicalMode value --
 $variantMap = @{
-    clinical = @{ Suffix = "";          Clinical = $true  }
-    research = @{ Suffix = "_Research"; Clinical = $false }
+    clinical = @{ FileBase = "Open-Motion";          Clinical = $true  }
+    research = @{ FileBase = "Open-Motion-Research"; Clinical = $false }
 }
 
 $produced = @()
@@ -62,18 +62,19 @@ foreach ($variant in $Variants) {
         # build_installer.ps1 below independently forces portableMode:false
         # onto the same file before harvesting it for the MSI.
         [void](Set-PortableMode -ConfigPath $cfgPath -Portable $true)
-        $zip = Join-Path $OutDir "Open-Motion-$verFull$($m.Suffix).zip"
+        $zip = Join-Path $OutDir "$($m.FileBase)-$verFull.zip"
         Write-Host "=== Portable ($variant): $zip ===" -ForegroundColor Cyan
         New-PortableZip -DistDir $DistDir -OutZip $zip
         $produced += $zip
 
-        # installer (numeric version)
+        # installer (numeric version inside the MSI/Burn metadata, full
+        # version in the bundle filename)
         if ($buildInstallers) {
             Write-Host "=== Installer ($variant) ===" -ForegroundColor Cyan
             & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "installer\build_installer.ps1") `
-                -Variant $variant -DistDir $DistDir -Version $verNumeric
+                -Variant $variant -DistDir $DistDir -Version $verNumeric -FullVersion $verFull
             if ($LASTEXITCODE -ne 0) { throw "build_installer failed for $variant" }
-            $produced += (Join-Path $root "build\installer\Openwater-Setup-$verNumeric$($m.Suffix).exe")
+            $produced += (Join-Path $root "build\installer\$($m.FileBase)-Setup-$verFull.exe")
         }
     } finally {
         Restore-ConfigText -ConfigPath $cfgPath -Text $orig

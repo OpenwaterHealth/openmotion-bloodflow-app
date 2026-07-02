@@ -122,8 +122,8 @@ jobs:
           echo "TAG=${TAG}" >> "$GITHUB_OUTPUT"
           echo "ARTIFACT_NAME=Open-Motion-${TAG}" >> "$GITHUB_OUTPUT"
           echo "ARTIFACT_ZIP=Open-Motion-${TAG}.zip" >> "$GITHUB_OUTPUT"
-          echo "ARTIFACT_NAME_RESEARCH=Open-Motion-${TAG}_Research" >> "$GITHUB_OUTPUT"
-          echo "ARTIFACT_ZIP_RESEARCH=Open-Motion-${TAG}_Research.zip" >> "$GITHUB_OUTPUT"
+          echo "ARTIFACT_NAME_RESEARCH=Open-Motion-Research-${TAG}" >> "$GITHUB_OUTPUT"
+          echo "ARTIFACT_ZIP_RESEARCH=Open-Motion-Research-${TAG}.zip" >> "$GITHUB_OUTPUT"
 
           # pre-release flag — X.Y.Z-dev.N (dev) and X.Y.Z-rc.N (release
           # candidate) tags both mark prerelease in the GitHub release UI.
@@ -195,7 +195,8 @@ jobs:
           files: |
             ${{ steps.meta.outputs.ARTIFACT_ZIP }}
             ${{ steps.meta.outputs.ARTIFACT_ZIP_RESEARCH }}
-            build/installer/Openwater-Setup-*.exe
+            build/installer/Open-Motion-Setup-*.exe
+            build/installer/Open-Motion-Research-Setup-*.exe
             resources/OpenMotionDriver-x64.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

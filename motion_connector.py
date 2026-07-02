@@ -94,16 +94,18 @@ _REQUIRE_SIGNED_UPDATES = False
 def _select_update_asset(assets: list, is_research: bool):
     """Return download URL of the Setup bundle matching the running variant.
 
-    Research builds match ``Openwater-Setup-*_Research.exe``; clinical
-    builds match the non-Research ``Openwater-Setup-*.exe``. Returns None
-    if no match.
+    Research builds match ``Open-Motion-Research-Setup-*.exe``; clinical
+    builds match ``Open-Motion-Setup-*.exe``. Variant detection is a
+    case-insensitive "research" substring check so the pre-1.4.0 asset
+    names (``Openwater-Setup-*[_Research].exe``) still match. Returns
+    None if no match.
     """
     for asset in assets:
         name = (asset.get("name") or "")
         low = name.lower()
         if not low.endswith(".exe"):
             continue
-        asset_is_research = low.endswith("_research.exe")
+        asset_is_research = "research" in low
         if asset_is_research == is_research:
             return asset.get("browser_download_url")
     return None
