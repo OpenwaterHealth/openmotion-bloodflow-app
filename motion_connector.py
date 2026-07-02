@@ -934,7 +934,7 @@ class MotionConnector(QObject):
         self._dropout_timer = QTimer(self)
         self._dropout_timer.setInterval(1000)
         self._dropout_timer.timeout.connect(self._on_dropout_check)
-        self._plot_t0: float = 0.0  # set at scan start; consumed by _on_dropout_check
+        self._plot_t0: float = 0.0  # set at scan start; scan-start monotonic anchor
 
         # Trigger-ON clock (issue #201) — the single scan-time source of
         # truth for the notes duration line, the header elapsed counter and
@@ -3250,7 +3250,9 @@ class MotionConnector(QObject):
         # after a mid-scan unplug/replug, the two sides' clocks diverge and the
         # QML plot's shared `latestTimestamp` prunes the lagging side to empty.
         plot_t0 = time.monotonic()
-        self._plot_t0 = plot_t0  # used by _on_dropout_check to compute dropout-marker t
+        self._plot_t0 = plot_t0  # scan-start anchor (NOT the sample t axis —
+        # samples carry SDK-normalized timestamps, t=0 at the first frame,
+        # which arrives seconds after this line; see issue #284)
         # Real-time plot viewer: construct a fresh LiveScanSource for this scan
         # and install it on the connector. Phase 1 has no QML consumer yet —
         # the sinks (added in subsequent tasks) accumulate samples here in
@@ -4144,13 +4146,23 @@ class MotionConnector(QObject):
                 )
                 self._camera_dropped.add(key)
                 self.cameraDropoutDetected.emit(side, cam_id, elapsed_str)
-                # Also feed the new LiveScanSource so Phase 2+'s PlotViewer can
-                # render a dropout bar. Time is relative to plot_t0 to match the
-                # per-sample t axis (sample timestamps from the SDK use the same
-                # plot_t0-anchored monotonic origin).
+                # Also feed the LiveScanSource so the PlotViewer renders a
+                # dropout bar. The marker must live on the SAME time axis
+                # as the plotted samples — SDK-normalized timestamps, t=0
+                # at the scan's FIRST FRAME. (`now - self._plot_t0` counted
+                # from startCapture instead, which runs seconds of sensor
+                # setup before the first frame, so the marker landed past
+                # the live edge — clipped invisible while following live —
+                # and at a wrong x afterwards; issue #284.) Anchor at the
+                # camera's own newest sample: exactly where its trace
+                # stops. NaN (no plottable samples ever, e.g. a covered
+                # camera) means there is no trace to mark — skip the bar,
+                # the toast/signal above still surface the dropout.
                 src = self._current_scan_source
                 if src is not None and getattr(src, "live", False):
-                    src.mark_dropped(side=side, cam_id=cam_id, t=now - self._plot_t0)
+                    drop_t = src.last_sample_t(side, cam_id)
+                    if math.isfinite(drop_t):
+                        src.mark_dropped(side=side, cam_id=cam_id, t=drop_t)
 
     def _on_camera_dropout_recovered(self, side: str, cam_id: int) -> None:
         """Frames resumed for a camera the watchdog had flagged Connection

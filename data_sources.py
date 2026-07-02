@@ -17,6 +17,7 @@ Nothing in QML consumes these yet — Phase 1 is purely additive.
 from __future__ import annotations
 
 import logging
+import math
 import threading
 from typing import Optional
 
@@ -496,6 +497,31 @@ class ScanDataSource(QObject):
             if buf is not None and buf.dropped_at is not None:
                 return float(buf.dropped_at)
         return float("nan")
+
+    def last_sample_t(self, side: str, cam_id: int) -> float:
+        """Newest sample timestamp across this (side, cam)'s metric
+        buffers, or NaN when the camera has no samples yet.
+
+        This is where the camera's trace visibly ends — the dropout
+        watchdog anchors the plot's dropout marker here so the marker
+        lives on the SAME time axis as the samples (SDK-normalized,
+        t=0 at the scan's first frame). See issue #284: a marker
+        computed on any other clock lands off the sample axis and
+        renders clipped or at the wrong x."""
+        latest = float("nan")
+        for metric in ("bfi", "bvi", "mean", "contrast"):
+            buf = self.buffers.get((side, int(cam_id), metric))
+            if buf is None:
+                continue
+            # Under the buffer lock: the pipeline thread appends (and
+            # ring-trims, shifting data + rewriting n) concurrently.
+            with buf._lock:
+                if buf.n == 0:
+                    continue
+                t = float(buf.t[buf.n - 1])
+            if math.isnan(latest) or t > latest:
+                latest = t
+        return latest
 
     @pyqtSlot(str, result="QVariantMap")
     @pyqtSlot(str, float, float, float, result="QVariantMap")
