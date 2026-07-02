@@ -125,10 +125,15 @@ def _load_app_config() -> dict:
         "writeCorrectedCsv": False,
         # Seconds of live data held in memory per plot buffer before the
         # oldest half is ring-trimmed; older data then lazy-loads from the
-        # scan DB on pan-into-past. 60 s keeps memory tiny (~1 MB vs ~37 MB
-        # at 30 min) and leans on the verified DB tail for deep history.
-        # Raise it if synchronous DB queries on deep pan-back ever stutter.
-        "liveCacheMaxSeconds": 60,
+        # scan DB (async, off the GUI thread) on pan-into-past. The old
+        # 60 s default put the in-memory boundary a mere 30–60 s behind
+        # live, so nearly EVERY zoom/pan interaction fell through to the
+        # DB tail — with 16 cams × 40 Hz that re-bucketized ~10⁵ rows per
+        # interaction and froze the app for seconds (issue #256). 900 s
+        # keeps even the largest preset window (5 min) fully in memory
+        # after trims (post-trim floor = 450 s) at a bounded cost of
+        # ~0.7 MB per buffer (~58 MB for an All/All scan).
+        "liveCacheMaxSeconds": 900,
         "autoScale": False,
         "autoScalePerPlot": False,
         # Y-axis tick labels on plot cells; runtime toggle in the ⋯ popup.
