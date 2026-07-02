@@ -420,6 +420,13 @@ Rectangle {
             viewer._dirty = true
             viewer._profSamplesAccum += n
         }
+        // Live source only (ignoreUnknownSignals covers PastScanSource):
+        // an async DB-tail window finished loading off-thread — repaint so
+        // the history appears even when no live samples are ticking the
+        // throttle (e.g. panned back after the scan ended).
+        function onHistoryWindowLoaded() {
+            viewer._dirty = true
+        }
     }
 
     // ── Profile HUD state ──────────────────────────────────────────────

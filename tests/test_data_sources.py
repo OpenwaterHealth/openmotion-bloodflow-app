@@ -343,7 +343,9 @@ def session_data_db(tmp_path):
     """Returns a (db, session_id) pair pre-populated with synthetic rows
     spanning two sides × two cameras × 5 timestamps each."""
     db_path = tmp_path / "scan.db"
-    conn = sqlite3.connect(str(db_path))
+    # check_same_thread=False matches the real ScanDatabase read handle —
+    # the async DB-window loader queries it from a worker thread.
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.executescript(_SESSION_DATA_DDL)
     session_id = 7
 
@@ -1375,6 +1377,7 @@ def test_live_scan_source_pans_into_db_tail(session_data_db):
         buf.ring_trimmed = True
     src._db = db
     src._db_session_id = sid
+    src._db_load_async = False  # inline loads: assert on first call
 
     pts = src.points_for_window("left", 0, "bfi", 0.0, 0.1, max_points=100)
     assert len(pts) > 0
@@ -1427,6 +1430,7 @@ def test_live_scan_source_straddle_stitches_db_and_memory(session_data_db):
         buf.ring_trimmed = True
     src._db = db
     src._db_session_id = sid
+    src._db_load_async = False  # inline loads: assert on first call
 
     pts = src.points_for_window("left", 0, "bfi", 0.0, 10.1, max_points=200)
     vals = [p[1] for p in pts]
@@ -1447,6 +1451,7 @@ def test_live_scan_source_db_window_not_padded_into_future(session_data_db):
         buf.ring_trimmed = True
     src._db = db
     src._db_session_id = sid
+    src._db_load_async = False  # inline loads: assert on first call
 
     src.points_for_window("left", 0, "bfi", 0.0, 10.1, max_points=200)
     # The DB window's claimed upper bound never exceeds the newest sample.
@@ -1484,6 +1489,7 @@ def test_live_scan_source_negative_t_lo_paint_loop_hits_cache(session_data_db):
         buf.ring_trimmed = True
     src._db = counting
     src._db_session_id = sid
+    src._db_load_async = False  # inline loads: count real query calls
 
     # Simulate the followLive paint loop: windowSeconds=600 ≫ liveEdge,
     # so t_lo is negative and creeps up as the live edge advances.
@@ -1520,6 +1526,7 @@ def test_live_scan_source_value_at_negative_t_cache_valid(session_data_db):
         buf.ring_trimmed = True
     src._db = db
     src._db_session_id = sid
+    src._db_load_async = False  # inline loads: assert on first call
 
     v = src.value_at("left", 0, "bfi", -5.0)
     # Cache bounds remain a valid (lo <= hi), non-negative range.
@@ -1542,10 +1549,71 @@ def test_live_scan_source_value_at_uses_db_tail(session_data_db):
         buf.ring_trimmed = True
     src._db = db
     src._db_session_id = sid
+    src._db_load_async = False  # inline loads: assert on first call
 
     v = src.value_at("left", 0, "bfi", 0.0)
     assert isfinite_or_nan(v)
     assert v < 50  # DB value, not in-memory 99.0
+
+
+def test_live_scan_source_db_window_load_is_async_by_default(session_data_db):
+    """Issue #256: the DB-window load must NOT run on the calling (GUI)
+    thread. The first pan-into-past paint returns immediately with only
+    the in-memory portion; once the worker lands, a later paint serves
+    the DB rows. (The synchronous query + bucketize used to freeze the
+    app for seconds per zoom step on long All-camera scans.)"""
+    db, sid = session_data_db
+    src = LiveScanSource(plot_t0=0.0)
+    for i in range(5):
+        src.append_uncorrected(side="left", cam_id=0, frame_id=2000 + i,
+                               t=10.0 + i * 0.025, bfi=99.0, bvi=99.0)
+    for buf in src.buffers.values():
+        buf.ring_trimmed = True
+    src._db = db
+    src._db_session_id = sid
+    assert src._db_load_async  # production default
+
+    # First call: pure-past window, load only just scheduled -> no DB
+    # rows yet (in-memory has nothing below t=10 either).
+    pts = src.points_for_window("left", 0, "bfi", 0.0, 0.1, max_points=100)
+    assert pts == []
+
+    # The load ran on a worker thread; wait for it to land.
+    thread = src._db_load_thread
+    assert thread is not None
+    thread.join(timeout=10.0)
+    assert not thread.is_alive()
+
+    # Next paint serves the freshly-loaded history (~1.0..1.4, not 99.0).
+    pts = src.points_for_window("left", 0, "bfi", 0.0, 0.1, max_points=100)
+    assert len(pts) > 0
+    assert all(p[1] < 50 for p in pts)
+
+
+def test_live_scan_source_db_window_load_emits_history_window_loaded(
+        session_data_db):
+    """A landed DB-window load pings historyWindowLoaded so the viewer
+    repaints even when no live samples are ticking the throttle (e.g. the
+    user pans back after the scan ended). Inline mode keeps the emission
+    on the test thread -> synchronous direct-connection delivery."""
+    db, sid = session_data_db
+    src = LiveScanSource(plot_t0=0.0)
+    for i in range(5):
+        src.append_uncorrected(side="left", cam_id=0, frame_id=2000 + i,
+                               t=10.0 + i * 0.025, bfi=99.0, bvi=99.0)
+    for buf in src.buffers.values():
+        buf.ring_trimmed = True
+    src._db = db
+    src._db_session_id = sid
+    src._db_load_async = False
+    hits = []
+    src.historyWindowLoaded.connect(lambda: hits.append(1))
+
+    src.points_for_window("left", 0, "bfi", 0.0, 0.1, max_points=100)
+    assert hits == [1]
+    # Covered window -> cache hit -> no reload, no second ping.
+    src.points_for_window("left", 0, "bfi", 0.0, 0.1, max_points=100)
+    assert hits == [1]
 
 
 def test_live_scan_source_db_ready_resolve_path_no_nameerror(tmp_path):

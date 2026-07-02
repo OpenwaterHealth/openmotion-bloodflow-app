@@ -599,9 +599,18 @@ class LiveScanSource(ScanDataSource):
     BEFORE the in-memory window, points_for_window / value_at lazily
     load the requested range from the DB into a transient window so the
     full scan history stays navigable without unbounded memory growth.
+    The load runs on a worker thread (issue #256) — until it lands,
+    reads serve the in-memory portion plus whatever the previous cached
+    window covers, then historyWindowLoaded triggers a repaint.
 
     Pass scan_db_path to enable the DB tail; None (the default, e.g. in
     unit tests) keeps the legacy in-memory-only behavior."""
+
+    # Emitted (from the loader thread — PyQt queues it to the GUI thread)
+    # when an async DB-window load lands. PlotViewer marks itself dirty on
+    # this so the newly-available history paints even when no live samples
+    # are arriving to tick the paint throttle.
+    historyWindowLoaded = pyqtSignal()
 
     def __init__(self, plot_t0: float, parent: Optional[QObject] = None,
                  scan_db_path: Optional[str] = None,
@@ -622,6 +631,15 @@ class LiveScanSource(ScanDataSource):
         self._db_window_buffers: dict = {}     # transient (side,cam,metric)->buffer
         self._db_window_lo = float("inf")     # loaded range, exclusive sentinel
         self._db_window_hi = float("-inf")
+        # Async DB-window loader (issue #256): the query + bucketize run on
+        # a worker thread; the GUI thread only checks coverage and schedules.
+        # _db_load_lock guards the window bounds/buffers install and the
+        # thread handle. One load in flight at a time — a stale request is
+        # simply re-issued by a later paint if still uncovered.
+        self._db_load_lock = threading.Lock()
+        self._db_load_thread: Optional[threading.Thread] = None
+        # Test hook: False runs loads inline so assertions are deterministic.
+        self._db_load_async = True
 
     def release(self) -> None:
         """Base release plus DB-tail teardown: close the read handle and
@@ -714,10 +732,18 @@ class LiveScanSource(ScanDataSource):
         return int(row[0]) if row is not None else None
 
     def _ensure_db_window(self, t_lo: float, t_hi: float) -> None:
-        """Materialize session_data rows for [t_lo, t_hi] (padded) into
-        the transient DB-window buffers, if not already covered. Padding
-        by one window each side means small pans reuse the cached load
-        instead of re-querying every paint.
+        """Make sure the transient DB-window buffers cover [t_lo, t_hi]
+        (padded), scheduling an ASYNC load when they don't. Never blocks
+        the GUI thread on the SQLite query + bucketize — loading the
+        window synchronously here froze the whole app for seconds per
+        zoom/pan step on long All-camera scans (issue #256: 16 cams ×
+        40 Hz ≈ 640 rows/s of history, so one padded 60 s window is
+        ~10⁵ rows re-bucketized per interaction). Until the load lands,
+        callers serve the in-memory portion plus whatever the previous
+        cached window still covers; historyWindowLoaded then triggers a
+        repaint with the fresh history. Padding by one window each side
+        means small pans reuse the cached load instead of re-querying
+        every paint.
 
         want_hi is capped at the newest available sample (liveEdge) so the
         cached window never claims to cover future/nonexistent rows — that
@@ -733,12 +759,19 @@ class LiveScanSource(ScanDataSource):
         "Back to live" mid-scan — requests t_lo = liveEdge - windowSeconds
         < 0 on EVERY paint; unclamped, that request can never be satisfied
         by the cache, so every points_for_window call (cells × metrics,
-        ~30 Hz) re-queried and re-bucketized the whole DB window on the GUI
-        thread, freezing the app until liveEdge outgrew the window or the
-        scan ended (issue #151)."""
+        ~30 Hz) re-queried and re-bucketized the whole DB window
+        (issue #151)."""
         t_lo = max(0.0, float(t_lo))
         t_hi = max(t_lo, float(t_hi))
-        if t_lo >= self._db_window_lo and t_hi <= self._db_window_hi:
+        with self._db_load_lock:
+            if t_lo >= self._db_window_lo and t_hi <= self._db_window_hi:
+                return
+            loader_busy = (self._db_load_thread is not None
+                           and self._db_load_thread.is_alive())
+        if loader_busy:
+            # One load in flight at a time. If this request is still
+            # uncovered when the in-flight load lands, the next paint
+            # re-issues it — the range converges without a queue.
             return
         span = max(1.0, t_hi - t_lo)
         want_lo = max(0.0, t_lo - span)
@@ -746,15 +779,46 @@ class LiveScanSource(ScanDataSource):
         want_hi = t_hi + span
         if edge > 0.0:
             want_hi = min(want_hi, edge)
+        if not self._db_load_async:
+            self._db_window_load(want_lo, want_hi)
+            return
+        thread = threading.Thread(
+            target=self._db_window_load, args=(want_lo, want_hi),
+            name="plot-db-window-load", daemon=True,
+        )
+        with self._db_load_lock:
+            self._db_load_thread = thread
+        thread.start()
+
+    def _db_window_load(self, want_lo: float, want_hi: float) -> None:
+        """Loader body — worker thread in the app, inline when
+        _db_load_async is False (tests). Queries + bucketizes the padded
+        range, installs the fresh window under the lock, and pings the
+        viewer. Sharing the sqlite handle with the GUI thread is safe:
+        it's opened check_same_thread=False, the GUI only touches it for
+        the one-shot session-id resolve in _db_ready (before any load can
+        be scheduled), and the single-inflight rule serializes loads."""
         try:
-            self._db_window_buffers, _ = _bucketize_session_rows(
+            buffers, _ = _bucketize_session_rows(
                 self._db, self._db_session_id, t_lo=want_lo, t_hi=want_hi
             )
+        except Exception:
+            if self._released:
+                # release() closed the DB under an in-flight load — the
+                # result would have been discarded anyway.
+                logger.debug("LiveScanSource: DB window load aborted by "
+                             "release", exc_info=True)
+            else:
+                logger.exception("LiveScanSource: DB window load failed")
+            # Leave the previous window in place; a later paint retries.
+            return
+        if self._released:
+            return
+        with self._db_load_lock:
+            self._db_window_buffers = buffers
             self._db_window_lo = want_lo
             self._db_window_hi = want_hi
-        except Exception:
-            logger.exception("LiveScanSource: DB window load failed")
-            # Leave the previous window in place; a later paint retries.
+        self.historyWindowLoaded.emit()
 
     def _needs_db_tail(self, side: str, cam_id: int, metric: str, t_lo: float) -> bool:
         """True iff the requested t_lo is below the oldest IN-MEMORY
@@ -811,6 +875,10 @@ class LiveScanSource(ScanDataSource):
 
         db_pts: list = []
         if db_span > 0.0:
+            # Non-blocking: schedules an async load when the cached window
+            # doesn't cover the range. Until it lands we render whatever
+            # overlap the previous cached window still has (possibly
+            # nothing) — historyWindowLoaded repaints with the fresh rows.
             self._ensure_db_window(float(t_lo), db_hi)
             dbuf = self._db_window_buffers.get((side, int(cam_id), metric))
             if dbuf is not None:
