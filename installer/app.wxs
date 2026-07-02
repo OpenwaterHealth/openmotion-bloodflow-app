@@ -39,10 +39,16 @@
     </ComponentGroup>
 
     <Component Id="AppShortcut" Directory="AppShortcutFolder" Guid="*">
+      <!-- The app sets an explicit AppUserModelID at startup (main.py);
+           every shortcut to it must carry the same ID or the taskbar
+           can't match the pin to the running window and falls back to
+           the default icon (issue #223). -->
       <Shortcut Id="StartMenuShortcut"
                 Name="$(var.ProductName)"
                 Target="[APPFOLDER]Open-Motion.exe"
-                WorkingDirectory="APPFOLDER" />
+                WorkingDirectory="APPFOLDER">
+        <ShortcutProperty Key="System.AppUserModel.ID" Value="Openwater.OpenMotion.1" />
+      </Shortcut>
       <RemoveFolder Id="RemoveAppShortcutFolder" On="uninstall" />
       <RegistryValue Root="HKLM" Key="Software\Openwater\Open-Motion"
                      Name="installed" Type="integer" Value="1" KeyPath="yes" />
@@ -55,7 +61,9 @@
       <Shortcut Id="DesktopShortcutLink"
                 Name="$(var.ProductName)"
                 Target="[APPFOLDER]Open-Motion.exe"
-                WorkingDirectory="APPFOLDER" />
+                WorkingDirectory="APPFOLDER">
+        <ShortcutProperty Key="System.AppUserModel.ID" Value="Openwater.OpenMotion.1" />
+      </Shortcut>
       <RegistryValue Root="HKLM" Key="Software\Openwater\Open-Motion"
                      Name="desktopShortcut" Type="integer" Value="1" KeyPath="yes" />
     </Component>

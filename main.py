@@ -201,6 +201,20 @@ def _load_app_config() -> dict:
     return merged
 
 
+def _app_icon() -> QIcon:
+    """Application icon with a PNG fallback.
+
+    Prefer the multi-size .ico (the taskbar wants the 16-48px frames).
+    If the ICO fails to load — e.g. a packaged build missing Qt's ico
+    image-format plugin — fall back to the 1024px PNG so the window
+    never shows the generic Windows icon.
+    """
+    icon = QIcon(str(resource_path("assets", "images", "favicon.ico")))
+    if icon.isNull() or not icon.availableSizes():
+        icon = QIcon(str(resource_path("assets", "images", "favicon.png")))
+    return icon
+
+
 def main():
     # Set the Windows AppUserModelID as the very first thing, before any
     # QApplication (and thus any HWND) is created. Windows binds the taskbar
@@ -208,12 +222,19 @@ def main():
     # this after QApplication() races the shell and intermittently leaves the
     # taskbar showing the generic Windows icon (Explorer caches one icon per
     # AUMID). This must run before check_single_instance()'s message box too.
+    #
+    # The ".1" suffix retires the original "Openwater.OpenMotion" AUMID:
+    # machines that ever ran a pre-1.4.0-dev.1 build (which set the AUMID
+    # after QApplication and could lose the race) have the generic icon
+    # cached under the old ID, and Explorer keeps serving that cached icon
+    # to fixed builds forever. A new AUMID gets a fresh cache entry.
+    # Keep in sync with the ShortcutProperty in installer/app.wxs.
     if sys.platform == "win32":
         try:
             import ctypes
 
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-                "Openwater.OpenMotion"
+                "Openwater.OpenMotion.1"
             )
         except Exception:
             pass  # Ignore if not available
@@ -222,6 +243,7 @@ def main():
     if not check_single_instance():
         # Create a minimal QApplication to show message box
         app = QApplication(sys.argv)
+        app.setWindowIcon(_app_icon())
         msg_box = QMessageBox()
         msg_box.setIcon(QMessageBox.Icon.Warning)
         msg_box.setWindowTitle("Open-Motion")
@@ -304,8 +326,7 @@ def main():
 
     # AppUserModelID is set at the top of main() (before any QApplication /
     # HWND exists) so the taskbar icon binds reliably.
-    icon_path = str(resource_path("assets", "images", "favicon.ico"))
-    app.setWindowIcon(QIcon(icon_path))
+    app.setWindowIcon(_app_icon())
 
     # Set application properties for Windows taskbar. Display name reflects
     # the build variant: clinicalMode=false is the Research distribution.
