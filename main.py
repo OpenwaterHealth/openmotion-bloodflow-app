@@ -85,7 +85,7 @@ def _load_app_config() -> dict:
         # Whole-scan data-stall watchdog (issue #248): abort the scan with
         # E-303 when no camera delivers a frame for this many seconds while
         # the trigger is ON. <= 0 disables the abort.
-        "scanDataStallTimeoutSec": 15,
+        "scanDataStallTimeoutSec": 3,
         # Console over-temp trip (°C) pushed to the console user config on
         # connect. 0/missing disables the firmware trip, so this is validated
         # (1-60 °C) before any write; see motion_config.ensure_tec_trip.

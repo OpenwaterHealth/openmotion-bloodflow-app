@@ -87,7 +87,7 @@ again. Reconnect if the system stays busy.
 Every camera stopped delivering data and acquisition could not continue, so the
 scan was stopped. Data captured before the loss was saved. Fired by the scan
 data-stall watchdog when no camera has delivered a frame for
-`scanDataStallTimeoutSec` (default 15 s) while the trigger is ON.
+`scanDataStallTimeoutSec` (default 3 s) while the trigger is ON.
 
 **What to do:** Check the sensor cables and power, then reconnect and start a
 new scan. If it happens repeatedly, send a bug report.

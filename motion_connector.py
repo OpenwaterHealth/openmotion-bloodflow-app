@@ -968,7 +968,7 @@ class MotionConnector(QObject):
         # aborted with E-303 instead of running to completion on air. Must be
         # comfortably above cameraDropoutThresholdSec (per-camera toast) and
         # the sensor warmup window. <= 0 disables the abort.
-        self._scan_data_stall_timeout_sec = float(cfg.get("scanDataStallTimeoutSec", 15.0))
+        self._scan_data_stall_timeout_sec = float(cfg.get("scanDataStallTimeoutSec", 3.0))
 
         # Camera dropout watchdog state — reset at start of each scan.
         # _camera_last_seen is refreshed on every FRAME ARRIVAL for the
