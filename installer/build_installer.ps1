@@ -72,9 +72,10 @@ if (-not (Test-Path (Join-Path $DistAbs 'Open-Motion.exe'))) {
 
 # -- stage the per-variant UI mode into the harvested config --
 # The MSI harvests dist\Open-Motion as-is, so clinical/Research must be
-# written into the bundled config BEFORE wix runs. Mirrors build_and_zip.ps1's
-# _Research flip: clinical keeps clinicalMode=true (reduced clinical UI),
-# Research sets it false (full research UI). We set it explicitly per variant
+# written into the bundled config BEFORE wix runs. Mirrors the per-variant
+# flip in scripts/package_artifacts.ps1: clinical keeps clinicalMode=true
+# (reduced clinical UI), Research sets it false (full research UI). We set it
+# explicitly per variant
 # so repeated builds against one dist are always correct regardless of prior
 # state — including when scripts/package_artifacts.ps1 already staged the
 # same value before invoking us (the re-apply is an idempotent no-op, not a
