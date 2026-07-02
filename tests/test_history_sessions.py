@@ -296,7 +296,8 @@ def test_load_past_scan_worker_emits_display_meta_from_session(tmp_path):
     captured = []
     c._pastScanBuffersReady.connect(lambda *a: captured.append(a))
     c._load_past_scan_worker(
-        c._past_scan_load_seq, "20260623_111935_PatientA", db_path, None)
+        c._past_scan_load_seq, sid, "20260623_111935_PatientA", db_path,
+        None)
 
     assert captured, "worker did not emit _pastScanBuffersReady"
     display_meta = captured[-1][-1]

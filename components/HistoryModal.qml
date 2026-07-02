@@ -578,7 +578,12 @@ Item {
                     }
                     onClicked: {
                         root.loadingPlot = true
-                        MotionInterface.loadPastScan(root.focusedRow.label)
+                        // Load by the unique DB session id — labels can
+                        // collide, and a by-label lookup silently loads
+                        // the newest match (issue #254). The label still
+                        // names the scan's CSVs and log lines.
+                        MotionInterface.loadPastScan(root.focusedRow.sessionId,
+                                                     root.focusedRow.label)
                     }
                 }
             }

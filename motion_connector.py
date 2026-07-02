@@ -2343,11 +2343,18 @@ class MotionConnector(QObject):
         return sorted(ids, key=ts_key, reverse=True)
 
     @pyqtSlot(str, result=QVariant)
-    def get_scan_details(self, scan_id: str):
+    def get_scan_details(self, scan_id: str, session_id: int = -1):
         """
         scan_id is either:
           New / mid format: 'YYYYMMDD_HHMMSS_userLabel'
           Legacy format:    'userLabel_YYYYMMDD_HHMMSS'
+
+        session_id, when >= 0, is the unique DB session id: the DB-side
+        fields (notes, row-count) are resolved by it instead of by
+        label — a by-label lookup returns the newest session with that
+        label, so duplicate labels silently read a different session's
+        notes (issue #254). File resolution always keys off scan_id;
+        the CSVs are named by label on disk.
 
         For each format we try to resolve the canonical CSV across
         all naming generations (#44):
@@ -2402,9 +2409,9 @@ class MotionConnector(QObject):
             if m:
                 right_mask = m.group(1)
 
-        # Notes live in the scan DB (sessions.session_notes, keyed by
-        # session_label == scan_id). Scans from before the DB migration
-        # only have a *_notes.txt on disk — fall back to that.
+        # Notes live in the scan DB (sessions.session_notes). Scans from
+        # before the DB migration only have a *_notes.txt on disk — fall
+        # back to that.
         notes = ""
         has_db_rows = False
         db_path = getattr(self._interface, "scan_db_path", None)
@@ -2413,7 +2420,10 @@ class MotionConnector(QObject):
                 from omotion.ScanDatabase import ScanDatabase
                 db = ScanDatabase(db_path)
                 try:
-                    session = db.get_session_by_label(scan_id)
+                    if session_id >= 0:
+                        session = db.get_session(int(session_id))
+                    else:
+                        session = db.get_session_by_label(scan_id)
                     if session and session.get("session_notes"):
                         notes = session["session_notes"]
                     if session:
@@ -2990,12 +3000,18 @@ class MotionConnector(QObject):
         self._set_current_scan_source(self._live_scan_source)
         logger.info("[Plot] viewer switched back to live source")
 
-    @pyqtSlot(str)
-    def loadPastScan(self, session_label: str) -> None:
-        """Open the saved scan with the given session_label (the
-        YYYYMMDD_HHMMSS_userLabel string used elsewhere in the UI) and
+    @pyqtSlot(int, str)
+    def loadPastScan(self, session_id: int, session_label: str) -> None:
+        """Open the saved scan with the given unique DB session id and
         display it in the PlotViewer. The held live source is left
         intact so a subsequent showLiveSource() can return to it.
+
+        session_label (the YYYYMMDD_HHMMSS_userLabel string used
+        elsewhere in the UI) still names the scan's CSVs on disk and the
+        log/signal payloads, but the DB session is resolved by id — a
+        by-label lookup returns the newest session with that label, so
+        duplicate labels silently loaded a different scan than the one
+        selected in History (issue #254, same fix as the exports).
 
         Asynchronous load (issue #152): the bulk SQLite walk / CSV parse
         is multi-second for long scans (a ~70-min scan measured ~8.3M
@@ -3005,9 +3021,12 @@ class MotionConnector(QObject):
         where the PastScanSource QObject is constructed and bound to the
         viewer. pastScanLoadFinished(label, ok) fires on completion
         either way so the History modal can clear its busy state."""
-        if not session_label:
-            logger.warning("loadPastScan: empty session_label")
-            self.pastScanLoadFinished.emit("", False)
+        if session_id < 0 or not session_label:
+            logger.warning(
+                "loadPastScan: invalid session_id %r / label %r",
+                session_id, session_label,
+            )
+            self.pastScanLoadFinished.emit(session_label or "", False)
             return
         db_path = getattr(self._interface, "scan_db_path", None)
         if not db_path:
@@ -3016,7 +3035,8 @@ class MotionConnector(QObject):
             )
             self.pastScanLoadFinished.emit(session_label, False)
             return
-        self._audit.log("scan_viewed", {"label": session_label})
+        self._audit.log("scan_viewed", {"label": session_label,
+                                        "session_id": int(session_id)})
         # Per-cam corrected CSV ({scan_id}.csv, 82-col wide format)
         # is the only source of per-cam BFI/BVI/mean/contrast for
         # past replay — the DB's session_data only holds side-
@@ -3025,13 +3045,15 @@ class MotionConnector(QObject):
         # available. Resolving the path is a cheap directory glob —
         # fine on the GUI thread (the modal already does it per
         # selection); the heavy parse happens on the worker.
-        details = self.get_scan_details(session_label) or {}
+        details = self.get_scan_details(
+            session_label, session_id=int(session_id)) or {}
         corrected_csv = details.get("correctedPath") or None
         self._past_scan_load_seq += 1
         seq = self._past_scan_load_seq
         threading.Thread(
             target=self._load_past_scan_worker,
-            args=(seq, session_label, str(db_path), corrected_csv),
+            args=(seq, int(session_id), session_label, str(db_path),
+                  corrected_csv),
             name=f"past-scan-load-{seq}",
             daemon=True,
         ).start()
@@ -3039,6 +3061,7 @@ class MotionConnector(QObject):
     def _load_past_scan_worker(
         self,
         seq: int,
+        session_id: int,
         session_label: str,
         db_path: str,
         corrected_csv: Optional[str],
@@ -3052,17 +3075,17 @@ class MotionConnector(QObject):
             from data_sources import load_past_scan_buffers
             db = ScanDatabase(db_path)
             try:
-                session = db.get_session_by_label(session_label)
+                session = db.get_session(session_id)
                 if not session:
                     logger.warning(
-                        "loadPastScan: no session found for label %r",
-                        session_label,
+                        "loadPastScan: no session found for id %d "
+                        "(label %r)",
+                        session_id, session_label,
                     )
                     self._pastScanBuffersReady.emit(
                         seq, session_label, -1, None, "", None, None
                     )
                     return
-                session_id = int(session["id"])
                 # The camera config the scan was RUN with lives in
                 # session_meta.sdk_flags (written by ScanDBSink). Thread it to
                 # the GUI thread so PastScanSource lays its grid out from the
