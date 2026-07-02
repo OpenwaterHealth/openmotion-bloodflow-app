@@ -28,9 +28,9 @@ powershell -File scripts\build_update_test_bundles.ps1
 
 Produces (in `build\installer\`):
 
-- `Openwater-Setup-1.3.0_Research.exe` — **OLD**, the build under test (its update
+- `Open-Motion-Research-Setup-1.3.0.exe` — **OLD**, the build under test (its update
   check points at `http://127.0.0.1:8077/releases/latest`).
-- `Openwater-Setup-1.3.1_Research.exe` — **NEW**, the upgrade target.
+- `Open-Motion-Research-Setup-1.3.1.exe` — **NEW**, the upgrade target.
 
 The script prints the SDK path it built against — confirm it's a clean `next`.
 
@@ -38,7 +38,7 @@ The script prints the SDK path it built against — confirm it's a clean `next`.
 
 ```powershell
 conda run -n pylib python scripts\fake_release_server.py `
-    --bundle build\installer\Openwater-Setup-1.3.1_Research.exe --tag 1.3.1 --port 8077
+    --bundle build\installer\Open-Motion-Research-Setup-1.3.1.exe --tag 1.3.1 --port 8077
 ```
 
 It serves `releases/latest` (advertising 1.3.1) and the bundle file. Watch its
@@ -46,7 +46,7 @@ log — you'll see the app's requests, confirming nothing goes to the internet.
 
 ## 3. Install the OLD bundle + run the test
 
-1. Double-click `Openwater-Setup-1.3.0_Research.exe` → SmartScreen "More info → Run
+1. Double-click `Open-Motion-Research-Setup-1.3.0.exe` → SmartScreen "More info → Run
    anyway" + UAC. Installs to `C:\Program Files\Openwater\Open-Motion\`.
 2. Launch **Open-Motion Research** from the Start menu.
 3. Within ~3 s the banner appears: *"A new version is available: 1.3.1."*
