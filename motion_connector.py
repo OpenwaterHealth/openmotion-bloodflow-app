@@ -3927,6 +3927,19 @@ class MotionConnector(QObject):
         — BloodFlow's scan-start gate polls this instead of firing blind."""
         return self._ensure_idle() is None
 
+    @pyqtSlot(result=bool)
+    def isConfigInFlight(self) -> bool:
+        """QML probe: True while a camera-sensor configuration (FPGA
+        flash) is in flight or still draining after a cancel. Unlike the
+        other _ensure_idle busy states (a few seconds at most), a config
+        holds the pipeline for ~50 s — BloodFlow's start gate (issue #283)
+        stretches its wait deadline to flash timescale while this is True
+        instead of erroring out at the short deadline."""
+        if self._config_running:
+            return True
+        workflow = getattr(self, "_scan_workflow", None)
+        return bool(workflow is not None and getattr(workflow, "config_running", False))
+
     # ──────────────────────────────────────────────────────────────────
     @pyqtSlot(int, int)
     def runContactQualityCheck(self, left_camera_mask: int, right_camera_mask: int):
