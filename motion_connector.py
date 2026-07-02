@@ -72,6 +72,17 @@ _CQ_DEFAULT_DARK_THRESHOLD_DN = 3.0
 _CQ_DEFAULT_LIGHT_THRESHOLD_DN = 15.0
 _CQ_DEFAULT_ROLLING_WINDOW = 10
 
+# Console front-panel RGB LED states — wire values of the firmware's
+# OW_CTRL_SET_IND command (console-fw led_driver.c, via
+# omotion.MotionConsole.set_rgb_led): 0=off, 1=red, 2=blue, 3=green.
+# The firmware itself shows solid green when idle and solid blue while the
+# trigger/laser is active; its hard-fault Error_Handler blinks blue at
+# 500 ms. The app-side error blink below mirrors that error indication.
+_RGB_LED_OFF = 0
+_RGB_LED_BLUE = 2
+_RGB_LED_GREEN = 3
+_ERROR_LED_BLINK_MS = 500  # on/off half-period, matches firmware Error_Handler
+
 # ── Engineering-mode unlock ──────────────────────────────────────────────
 # Hardcoded engineering-mode password. Double-clicking the Openwater logo
 # opens a prompt; entering this value sets engineeringMode=true (persisted).
@@ -772,6 +783,10 @@ class MotionConnector(QObject):
     # dismissible modal with a stable error code (see error_codes.py).
     # Payload: (code, title, message, suggestedAction, detail).
     criticalErrorRaised = pyqtSignal(str, str, str, str, str)
+    # Private worker→main marshalling: _raise_critical may fire from USB I/O
+    # or scanner worker threads, but the console error-LED blink QTimer lives
+    # on the GUI thread that owns it (issue #257). Wired in connect_signals.
+    _errorLedBlinkRequested = pyqtSignal()
     notificationRequested = pyqtSignal('QVariant')  # toast notification payload dict
     notificationDismissByIdRequested = pyqtSignal(int)   # dismiss the toast with this id
     notificationDismissByTagRequested = pyqtSignal(str)  # dismiss the toast with this tag
@@ -934,6 +949,16 @@ class MotionConnector(QObject):
         self._dropout_timer = QTimer(self)
         self._dropout_timer.setInterval(1000)
         self._dropout_timer.timeout.connect(self._on_dropout_check)
+
+        # Console error-LED blink (issue #257): while the critical-error
+        # modal is up, blink the console front-panel LED blue instead of
+        # leaving it solid green. Started via _errorLedBlinkRequested
+        # (queued from worker threads); stopped and restored to idle green
+        # by criticalErrorsDismissed() when the modal queue empties.
+        self._error_led_timer = QTimer(self)
+        self._error_led_timer.setInterval(_ERROR_LED_BLINK_MS)
+        self._error_led_timer.timeout.connect(self._on_error_led_tick)
+        self._error_led_on = False  # True while the blue half-period is lit
         self._plot_t0: float = 0.0  # set at scan start; scan-start monotonic anchor
 
         # Trigger-ON clock (issue #201) — the single scan-time source of
@@ -4617,6 +4642,9 @@ class MotionConnector(QObject):
         Looks ``code`` up in :mod:`error_codes`, logs it, and emits
         ``criticalErrorRaised``. Safe to call from worker threads — the QML
         side connects with a queued connection. Never raises.
+
+        Also starts the console error-LED blink (issue #257) so the hardware
+        mirrors the on-screen error state until the modal is dismissed.
         """
         try:
             err = error_codes.lookup(code)
@@ -4624,8 +4652,59 @@ class MotionConnector(QObject):
                          f" ({detail})" if detail else "")
             self.criticalErrorRaised.emit(
                 code, err.title, err.message, err.suggested_action, detail)
+            self._errorLedBlinkRequested.emit()
         except Exception:
             logger.exception("Failed to raise critical error %s", code)
+
+    # --- Console error-LED blink (issue #257) -----------------------------
+    # While the critical-error modal is showing, the console front-panel LED
+    # blinks blue (mirroring the firmware Error_Handler's 500 ms blink)
+    # instead of staying solid green. There is no firmware "blink" command —
+    # OW_CTRL_SET_IND only sets solid states — so the app toggles blue/off on
+    # a GUI-thread QTimer and restores idle green on dismissal.
+
+    def _start_error_led_blink(self) -> None:
+        """Main-thread slot: begin blinking the console LED blue.
+
+        Idempotent — additional critical errors queued while the modal is
+        already up keep the one running timer.
+        """
+        if self._error_led_timer.isActive():
+            return
+        self._error_led_on = False
+        self._error_led_timer.start()
+        self._on_error_led_tick()  # first (blue) edge now, not after 500 ms
+
+    def _on_error_led_tick(self) -> None:
+        """Toggle the console LED between blue and off; stop on failure."""
+        self._error_led_on = not self._error_led_on
+        state = _RGB_LED_BLUE if self._error_led_on else _RGB_LED_OFF
+        if not self._set_console_led(state):
+            # Console unreachable (e.g. disconnected while the modal is up)
+            # — stop retrying rather than spamming failing UART writes.
+            self._error_led_timer.stop()
+            self._error_led_on = False
+
+    def _set_console_led(self, state: int) -> bool:
+        """Best-effort console RGB LED write. True on success; never raises."""
+        try:
+            return self._interface.console.set_rgb_led(state) == state
+        except Exception:
+            logger.debug("console LED write failed (state %d)", state,
+                         exc_info=True)
+            return False
+
+    @pyqtSlot()
+    def criticalErrorsDismissed(self):
+        """Called from CriticalErrorModal when the last queued error is
+        dismissed: stop the error blink and restore the idle green LED
+        (issue #257). No-op if the blink never started (e.g. the console
+        was never reachable)."""
+        if not self._error_led_timer.isActive() and not self._error_led_on:
+            return
+        self._error_led_timer.stop()
+        self._error_led_on = False
+        self._set_console_led(_RGB_LED_GREEN)
 
     def _device_info_str(self) -> str:
         """Best-effort one-line device identity for bug reports."""
@@ -4709,6 +4788,10 @@ class MotionConnector(QObject):
         self.scanWorkerFailedDuringCapture.connect(
             self._on_scan_worker_failed
         )
+        # Worker → Qt main thread: start the console error-LED blink for a
+        # critical error (issue #257). The QTimer must be driven from the
+        # GUI thread that owns it.
+        self._errorLedBlinkRequested.connect(self._start_error_led_blink)
         # Worker → Qt main thread for the calibration completion callback.
         self._calibrationCompleteSignal.connect(self._on_calibration_complete)
         self._testScanCompleteSignal.connect(self._on_test_scan_complete)
