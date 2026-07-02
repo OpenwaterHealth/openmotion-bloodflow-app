@@ -724,7 +724,7 @@ def app():
                     ensure_visible()
                     return True
             else:
-                if "openwater" in name:
+                if "openwater" in name or "open-motion" in name:
                     log.info("App already running.")
                     time.sleep(SLEEP)
                     ensure_visible()

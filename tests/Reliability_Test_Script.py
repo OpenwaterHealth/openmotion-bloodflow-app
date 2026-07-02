@@ -1,6 +1,11 @@
 """
-Reliability Test Script — overnight life test in Reduced Mode (FDA mode).
+Reliability Test Script — overnight life test in clinical (FDA) mode.
 
+The script runs the app exactly as configured on the host. Set the desired
+mode before launching, e.g. ``"clinicalMode": true`` in the writable
+overrides file ``%PROGRAMDATA%\\Openwater\\app_config.local.json`` (the
+packaged app's bundled config in Program Files is read-only). A module
+fixture logs the effective mode and warns when clinicalMode is off.
 """
 
 import atexit
@@ -43,13 +48,15 @@ QUALITY_CHECK_TIMEOUT = 180     # max wait for "Good signal quality" modal
 STOP_SETTLE_SEC      = 15       # wait after Stop for data to flush
 POWER_CYCLE_OFF_SEC  = 5.0
 RECONNECT_TIMEOUT    = 60
+RECONNECT_SETTLE_SEC = 30       # after CONNECTED: let sensors re-enumerate
 INTER_SCAN_PAUSE_SEC = 5
 
 SCAN_DURATION_SEC = SCAN_DURATION_MIN * 60
 SLEEP             = 2
 
-# App window identification + paths.
-APP_KEYWORDS = ("openmotion", "bloodflow", "openwater")
+# App window identification + paths. The packaged 1.4.x window is titled
+# "Open-Motion" (clinical) or "Open-Motion Research".
+APP_KEYWORDS = ("open-motion", "openmotion", "bloodflow", "openwater")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 APP_CONFIG_PATH = PROJECT_ROOT / "config" / "app_config.json"
 
@@ -65,7 +72,6 @@ SIDEBAR_START = (0.019, 0.115)
 
 
 # ─── Module state (populated by fixtures, consumed by the report) ───
-_INITIAL_REDUCED_MODE: bool | None = None
 _REPORT_SESSION_START: datetime | None = None
 _REPORT_APP_VERSION:   str | None = None
 _CYCLE_RESULTS: list[dict] = []
@@ -74,10 +80,44 @@ _CYCLE_RESULTS: list[dict] = []
 # ═══════════════════════════════════════════════════════════════════
 # Window / UIA helpers (inlined so this script has no conftest dep)
 # ═══════════════════════════════════════════════════════════════════
+# Title keywords false-positive on a File Explorer window sitting at the
+# repo folder or a browser tab with the repo open, so a matching window
+# is accepted only when its owning process is the app itself.
+_APP_PROCESS_PREFIXES = ("open-motion", "openwaterapp")
+
+
+def _is_app_window(w) -> bool:
+    """True if window ``w`` is the bloodflow app (title + owning process)."""
+    title = (w.title or "").strip().lower()
+    if not title or not any(k in title for k in APP_KEYWORDS):
+        return False
+    hwnd = getattr(w, "_hWnd", None)
+    if hwnd is None:
+        return True
+    try:
+        import ctypes
+        pid = ctypes.c_ulong()
+        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value == 0:
+            return True
+        proc = psutil.Process(pid.value)
+        name = proc.name().lower()
+    except Exception:
+        return True          # PID lookup failed — fall back to title match
+    if name.startswith(_APP_PROCESS_PREFIXES):
+        return True
+    if name in ("python.exe", "pythonw.exe"):   # from-source launch
+        try:
+            return "main.py" in " ".join(proc.cmdline()).lower()
+        except Exception:
+            return False
+    return False
+
+
 def get_app_window():
     """Return a pygetwindow Window object for the bloodflow app."""
     for w in gw.getAllWindows():
-        if any(k in w.title.lower() for k in APP_KEYWORDS):
+        if _is_app_window(w):
             return w
     raise RuntimeError("App window not found")
 
@@ -85,7 +125,7 @@ def get_app_window():
 def is_app_alive() -> bool:
     """True if the app window still exists."""
     for w in gw.getAllWindows():
-        if any(k in w.title.lower() for k in APP_KEYWORDS):
+        if _is_app_window(w):
             return True
     return False
 
@@ -93,7 +133,7 @@ def is_app_alive() -> bool:
 def ensure_visible() -> bool:
     """Bring the app window to the foreground. True if found."""
     for w in gw.getAllWindows():
-        if any(k in w.title.lower() for k in APP_KEYWORDS):
+        if _is_app_window(w):
             try:
                 if w.isMinimized:
                     w.restore()
@@ -129,26 +169,32 @@ def move_window_on_screen() -> None:
         log.warning(f"  move_window_on_screen failed: {e}")
 
 
+# Exact window titles by build variant: clinical, research, legacy.
+_UIA_TITLES = ("Open-Motion", "Open-Motion Research", "OpenWater Bloodflow")
+
+
 def uia_window(retries: int = 3):
     """Return the bloodflow app's UIA window spec."""
     for attempt in range(retries):
         ensure_visible()
         desktop = UiaDesktop(backend="uia")
-        try:
-            spec = desktop.window(title="OpenWater Bloodflow")
-            if spec.exists(timeout=5):
-                return spec
-        except Exception:
-            for kw in APP_KEYWORDS:
-                try:
-                    for win in desktop.windows(title_re=f"(?i).*{kw}.*"):
-                        title = win.window_text()
-                        if "File Explorer" in title or "Chrome" in title:
-                            continue
-                        if any(k in title.lower() for k in APP_KEYWORDS):
-                            return desktop.window(title=title)
-                except Exception:
-                    continue
+        for exact in _UIA_TITLES:
+            try:
+                spec = desktop.window(title=exact)
+                if spec.exists(timeout=2):
+                    return spec
+            except Exception:
+                pass
+        for kw in APP_KEYWORDS:
+            try:
+                for win in desktop.windows(title_re=f"(?i).*{kw}.*"):
+                    title = win.window_text()
+                    if "File Explorer" in title or "Chrome" in title:
+                        continue
+                    if any(k in title.lower() for k in APP_KEYWORDS):
+                        return desktop.window(title=title)
+            except Exception:
+                continue
         if attempt < retries - 1:
             time.sleep(2)
     raise RuntimeError("App window not found via UI Automation")
@@ -167,48 +213,60 @@ def click_sidebar(rx: float, ry: float, label: str = "") -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# App config helpers (read/write reducedMode)
+# App config helpers (read-only — the operator sets the mode)
 # ═══════════════════════════════════════════════════════════════════
-def read_app_config_value(key, default=None):
+# The packaged app layers %PROGRAMDATA%\Openwater\app_config.local.json
+# over its read-only bundled config (see utils/config_store.py). This
+# script never writes either file: put the desired mode in the overrides
+# file before starting the run.
+def _writable_root() -> Path:
+    """The app's writable data root (config overrides, logs, scan data)."""
+    env = os.environ.get("OPENWATER_DATA_ROOT")
+    if env:
+        return Path(env)
+    return Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "Openwater"
+
+
+def _merged_app_config() -> dict:
+    """Best-effort view of the config the app reads: the installed exe's
+    bundled config (repo config as fallback) + writable overrides."""
+    cfg: dict = {}
+    exe = _running_app_exe_path() or _find_installed_exe()
+    if exe:
+        bundled = Path(exe).parent / "_internal" / "config" / "app_config.json"
+        try:
+            cfg.update(json.loads(bundled.read_text(encoding="utf-8")))
+        except Exception:
+            pass
+    if not cfg:
+        try:
+            cfg.update(json.loads(APP_CONFIG_PATH.read_text(encoding="utf-8")))
+        except Exception:
+            pass
     try:
-        with APP_CONFIG_PATH.open(encoding="utf-8") as fh:
-            return json.load(fh).get(key, default)
+        overrides = _writable_root() / "app_config.local.json"
+        cfg.update(json.loads(overrides.read_text(encoding="utf-8")))
     except Exception:
-        return default
-
-
-def write_app_config_value(key, value) -> None:
-    try:
-        with APP_CONFIG_PATH.open(encoding="utf-8") as fh:
-            cfg = json.load(fh)
-        cfg[key] = value
-        with APP_CONFIG_PATH.open("w", encoding="utf-8") as fh:
-            json.dump(cfg, fh, indent=2)
-    except Exception as e:
-        log.warning(f"  Failed to persist {key}={value}: {e}")
-
-
-def force_app_config_value(key, value):
-    """Snapshot + force ``key=value``; return original so caller can restore."""
-    initial = read_app_config_value(key)
-    if initial != value:
-        write_app_config_value(key, value)
-        log.warning(
-            f"  app_config.json {key} was {initial!r}; forced to {value!r} "
-            f"for this run — relaunch the app if it was already running."
-        )
-    return initial
+        pass
+    return cfg
 
 
 # ═══════════════════════════════════════════════════════════════════
 # App-log tailing (used to verify console reconnect after power cycle)
 # ═══════════════════════════════════════════════════════════════════
 def find_app_log() -> Path | None:
-    """Locate the most recently modified bloodflow app log."""
+    """Locate the most recently modified bloodflow app log.
+
+    The installed 1.4.x app writes ``<writable-root>/logs/open-motion-*.log``
+    where the writable root is %PROGRAMDATA%\\Openwater (or
+    $OPENWATER_DATA_ROOT). Older layouts are kept as fallbacks.
+    """
     home = Path.home()
     roots = [
+        _writable_root(),
         Path.cwd(),
         PROJECT_ROOT,
+        home / "Documents" / "Open-Motion",
         home / "Documents" / "OpenWater Bloodflow",
         home / "Documents" / "OpenMotion",
     ]
@@ -216,6 +274,7 @@ def find_app_log() -> Path | None:
     for root in roots:
         if not root.exists():
             continue
+        candidates.extend(root.glob("logs/open-motion-*.log"))
         candidates.extend(root.glob("**/app-logs/ow-bloodflowapp-*.log"))
     if not candidates:
         return None
@@ -255,7 +314,10 @@ def _running_app_exe_path() -> str:
     for proc in psutil.process_iter(["name", "exe"]):
         try:
             name = (proc.info.get("name") or "").lower()
-            if name in ("openwaterapp.exe", "openwaterapp_console.exe"):
+            if name in (
+                "open-motion.exe", "open-motion_console.exe",
+                "openwaterapp.exe", "openwaterapp_console.exe",
+            ):
                 exe = proc.info.get("exe") or ""
                 if exe and os.path.exists(exe):
                     return exe
@@ -265,11 +327,16 @@ def _running_app_exe_path() -> str:
 
 
 def _find_installed_exe() -> str:
-    """Find an installed OpenWaterApp.exe (newest by mtime)."""
+    """Find an installed Open-Motion.exe / legacy OpenWaterApp.exe
+    (newest by mtime)."""
     env = os.environ.get("OPENWATER_EXE", "")
     if env and os.path.exists(env):
         return env
     patterns = (
+        r"C:\Program Files (x86)\Openwater\**\Open-Motion.exe",
+        r"C:\Program Files\Openwater\**\Open-Motion.exe",
+        r"C:\Users\*\Documents\OpenMotion\**\Open-Motion.exe",
+        r"C:\Users\*\Desktop\**\Open-Motion.exe",
         r"C:\Users\*\Documents\OpenMotion\**\OpenWaterApp.exe",
         r"C:\Users\*\Desktop\**\OpenWaterApp.exe",
         r"C:\Program Files\**\OpenWaterApp.exe",
@@ -281,9 +348,45 @@ def _find_installed_exe() -> str:
     return max(matches, key=os.path.getmtime) if matches else ""
 
 
+def _registry_display_version() -> str:
+    """DisplayVersion of the installed Open-Motion app from the Windows
+    uninstall registry ('' when not found / not on Windows)."""
+    try:
+        import winreg
+    except ImportError:
+        return ""
+    for root_key in (
+        r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+        r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+    ):
+        try:
+            hive = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, root_key)
+        except OSError:
+            continue
+        with hive:
+            for i in range(winreg.QueryInfoKey(hive)[0]):
+                try:
+                    with winreg.OpenKey(hive, winreg.EnumKey(hive, i)) as k:
+                        name = str(winreg.QueryValueEx(k, "DisplayName")[0])
+                        if "open-motion" not in name.lower():
+                            continue
+                        ver = str(winreg.QueryValueEx(k, "DisplayVersion")[0]).strip()
+                        if ver:
+                            return ver
+                except OSError:
+                    continue
+    return ""
+
+
 def resolve_app_version() -> str:
     """Resolve the version of the running/installed bloodflow app.
     """
+    # 0. The installer's registry entry — the packaged exe itself ships
+    #    without VersionInfo metadata, so this is the most reliable source.
+    reg_version = _registry_display_version()
+    if reg_version:
+        return reg_version
+
     exe_path = _running_app_exe_path() or _find_installed_exe()
     if not exe_path:
         return os.environ.get("OPENWATER_VERSION", "unknown")
@@ -437,6 +540,8 @@ def _power_cycle_and_wait_reconnect(outlet, cycle_idx: int) -> None:
         f"cycle {cycle_idx} power cycle."
     )
     log.info(f"  ✓ reconnected: {line.strip()}")
+    log.info(f"  settling {RECONNECT_SETTLE_SEC}s for sensors to re-enumerate")
+    time.sleep(RECONNECT_SETTLE_SEC)
     move_window_on_screen()
 
 
@@ -455,12 +560,15 @@ def _write_report() -> None:
     log_dir.mkdir(exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+    cfg = _merged_app_config()
     env = {
         "tester":         os.environ.get("TESTER_NAME", getpass.getuser()),
         "hostname":       socket.gethostname(),
         "os":             f"{platform.system()} {platform.release()} ({platform.version()})",
         "python_version": sys.version.split()[0],
         "app_version":    app_version,
+        "clinical_mode":  cfg.get("clinicalMode"),
+        "engineering_mode": cfg.get("engineeringMode"),
     }
     start = _REPORT_SESSION_START
     end   = datetime.now()
@@ -519,6 +627,7 @@ def _write_report() -> None:
 - **OS:** {env['os']}
 - **Python:** {env['python_version']}
 - **App version:** {env['app_version']}
+- **Clinical mode:** {env['clinical_mode']} (engineeringMode={env['engineering_mode']})
 
 ## Configuration
 
@@ -563,21 +672,28 @@ _Report generated automatically by `{Path(__file__).name}` on \
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Module-level setup — force Reduced Mode before app launches
-# ═══════════════════════════════════════════════════════════════════
-# Pytest's ``app`` fixture (from conftest, when present) launches the
-# app AFTER module import, so writing reducedMode=True here is enough
-# for a fresh launch to boot into FDA mode. Restored on teardown.
-_INITIAL_REDUCED_MODE = force_app_config_value("reducedMode", True)
-
-
-# ═══════════════════════════════════════════════════════════════════
 # Fixtures
 # ═══════════════════════════════════════════════════════════════════
 @pytest.fixture(scope="module", autouse=True)
-def _restore_reduced_mode_on_module_teardown():
+def _log_app_mode():
+    """Log the effective app mode; warn when clinicalMode is off.
+
+    The script must not write any config file (the bundled config is
+    read-only under Program Files, and import-time writes to the repo
+    config abort collection — see conftest). The operator sets the mode
+    in app_config.local.json before the run instead.
+    """
+    cfg = _merged_app_config()
+    clinical = cfg.get("clinicalMode")
+    engineering = cfg.get("engineeringMode")
+    log.info(f"App mode: clinicalMode={clinical} engineeringMode={engineering}")
+    if clinical is not True:
+        log.warning(
+            "clinicalMode is not enabled — this reliability run is meant to "
+            "exercise clinical (FDA) mode. Set \"clinicalMode\": true in "
+            f"{_writable_root() / 'app_config.local.json'} and restart."
+        )
     yield
-    write_app_config_value("reducedMode", _INITIAL_REDUCED_MODE)
 
 
 @pytest.fixture(scope="module", autouse=True)
