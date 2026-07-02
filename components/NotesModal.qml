@@ -9,7 +9,6 @@ Item {
     visible: false
     z: 9998
 
-    AppTheme { id: theme }
 
     // Modal interface — see HistoryModal.qml for rationale.
     readonly property string label: "Session Notes"
@@ -63,8 +62,8 @@ Item {
         width: Math.min(parent.width - root.iconBarInset - 40, 600)
         height: 450
         radius: 12
-        color: theme.bgContainer
-        border.color: theme.borderSubtle
+        color: AppTheme.bgContainer
+        border.color: AppTheme.borderSubtle
         border.width: 2
         // Center within [iconBarInset, parent.width] so the card clears the
         // icon bar instead of bleeding under it. horizontalCenterOffset
@@ -80,13 +79,13 @@ Item {
         // X close button
         Rectangle {
             width: 28; height: 28; radius: 14
-            color: xArea.containsMouse ? "#C0392B" : theme.borderStrong
-            border.color: theme.borderHover; border.width: 1
+            color: xArea.containsMouse ? "#C0392B" : AppTheme.borderStrong
+            border.color: AppTheme.borderHover; border.width: 1
             anchors.top: parent.top; anchors.right: parent.right
             anchors.topMargin: 10; anchors.rightMargin: 10
             z: 10
             Behavior on color { ColorAnimation { duration: 120 } }
-            Text { anchors.centerIn: parent; text: "✕"; color: theme.textPrimary; font.pixelSize: 13 }
+            Text { anchors.centerIn: parent; text: "✕"; color: AppTheme.textPrimary; font.pixelSize: 13 }
             MouseArea {
                 id: xArea; anchors.fill: parent; hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor; onClicked: root.close()
@@ -100,16 +99,16 @@ Item {
 
             Text {
                 text: root.label
-                color: theme.textPrimary
+                color: AppTheme.textPrimary
                 font.pixelSize: 20
                 font.weight: Font.Bold
                 Layout.alignment: Qt.AlignHCenter
             }
 
             Rectangle {
-                color: theme.bgInput
+                color: AppTheme.bgInput
                 radius: 6
-                border.color: theme.borderSubtle
+                border.color: AppTheme.borderSubtle
                 border.width: 1
                 Layout.fillWidth: true
                 Layout.fillHeight: true
@@ -121,10 +120,10 @@ Item {
                     TextArea {
                         id: notesArea
                         font.pixelSize: 14
-                        color: theme.textPrimary
+                        color: AppTheme.textPrimary
                         wrapMode: Text.Wrap
                         placeholderText: "Enter notes for this session..."
-                        placeholderTextColor: theme.textTertiary
+                        placeholderTextColor: AppTheme.textTertiary
                         background: null
                     }
                 }

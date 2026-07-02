@@ -21,7 +21,6 @@ Item {
     visible: false
     z: 100000
 
-    AppTheme { id: theme }
 
     // Current error fields (bound into the panel).
     property string code: ""
@@ -98,8 +97,8 @@ Item {
         width: 520
         height: contentCol.implicitHeight + headerBar.height + 16 + 20
         radius: 14
-        color: theme.bgContainer
-        border.color: theme.accentRed
+        color: AppTheme.bgContainer
+        border.color: AppTheme.accentRed
         border.width: 1
         anchors.centerIn: parent
 
@@ -114,14 +113,14 @@ Item {
             anchors.right: parent.right
             height: 44
             radius: 14
-            color: theme.accentRed
+            color: AppTheme.accentRed
             // square off the bottom corners so only the top is rounded
             Rectangle {
                 anchors.bottom: parent.bottom
                 anchors.left: parent.left
                 anchors.right: parent.right
                 height: parent.radius
-                color: theme.accentRed
+                color: AppTheme.accentRed
             }
 
             RowLayout {
@@ -139,7 +138,7 @@ Item {
                         id: codeText
                         anchors.centerIn: parent
                         text: root.code
-                        color: theme.accentRed
+                        color: AppTheme.accentRed
                         font.pixelSize: 13
                         font.weight: Font.Bold
                         font.family: "Consolas, monospace"
@@ -175,7 +174,7 @@ Item {
 
             Text {
                 text: root.title
-                color: theme.textPrimary
+                color: AppTheme.textPrimary
                 font.pixelSize: 17
                 font.weight: Font.DemiBold
                 wrapMode: Text.WordWrap
@@ -184,7 +183,7 @@ Item {
 
             Text {
                 text: root.message
-                color: theme.textSecondary
+                color: AppTheme.textSecondary
                 font.pixelSize: 13
                 wrapMode: Text.WordWrap
                 Layout.fillWidth: true
@@ -195,7 +194,7 @@ Item {
                 visible: root.suggestedAction !== ""
                 Layout.fillWidth: true
                 radius: 6
-                color: theme.bgInput
+                color: AppTheme.bgInput
                 Layout.preferredHeight: actionRow.implicitHeight + 16
                 RowLayout {
                     id: actionRow
@@ -204,13 +203,13 @@ Item {
                     spacing: 8
                     Text {
                         text: "→"
-                        color: theme.accentBlue
+                        color: AppTheme.accentBlue
                         font.pixelSize: 14
                         font.weight: Font.Bold
                     }
                     Text {
                         text: root.suggestedAction
-                        color: theme.textPrimary
+                        color: AppTheme.textPrimary
                         font.pixelSize: 13
                         wrapMode: Text.WordWrap
                         Layout.fillWidth: true
@@ -222,7 +221,7 @@ Item {
             Text {
                 visible: root.detail !== ""
                 text: (root._detailExpanded ? "▼ " : "▶ ") + "Details"
-                color: theme.textTertiary
+                color: AppTheme.textTertiary
                 font.pixelSize: 12
                 MouseArea {
                     anchors.fill: parent
@@ -233,7 +232,7 @@ Item {
             Text {
                 visible: root.detail !== "" && root._detailExpanded
                 text: root.detail
-                color: theme.textTertiary
+                color: AppTheme.textTertiary
                 font.pixelSize: 12
                 font.family: "Consolas, monospace"
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
@@ -252,14 +251,14 @@ Item {
                     onClicked: MotionInterface.copyToClipboard(root._reportText())
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 13
-                        color: theme.textSecondary
+                        color: AppTheme.textSecondary
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? theme.bgHover : theme.bgInput
+                        color: parent.hovered ? AppTheme.bgHover : AppTheme.bgInput
                         radius: 4
-                        border.color: theme.borderSoft; border.width: 1
+                        border.color: AppTheme.borderSoft; border.width: 1
                     }
                 }
 
@@ -269,14 +268,14 @@ Item {
                     onClicked: MotionInterface.sendBugReport(root.code)
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 13
-                        color: theme.textPrimary
+                        color: AppTheme.textPrimary
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? theme.bgHover : theme.bgInput
+                        color: parent.hovered ? AppTheme.bgHover : AppTheme.bgInput
                         radius: 4
-                        border.color: theme.borderSubtle; border.width: 1
+                        border.color: AppTheme.borderSubtle; border.width: 1
                     }
                 }
 
@@ -293,7 +292,7 @@ Item {
                         verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? Qt.lighter(theme.accentRed, 1.1) : theme.accentRed
+                        color: parent.hovered ? Qt.lighter(AppTheme.accentRed, 1.1) : AppTheme.accentRed
                         radius: 4
                     }
                 }

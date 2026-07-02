@@ -1,4 +1,5 @@
 import QtQuick 6.0
+import OpenMotion 1.0
 
 // Bottom timeline showing the full scan extent (0 → liveEdge) with the
 // visible window highlighted as a draggable inset. Click outside the
@@ -11,7 +12,6 @@ import QtQuick 6.0
 Item {
     id: scrubber
 
-    AppTheme { id: theme }
 
     // ── Inputs ─────────────────────────────────────────────────────────
     property real fullScanDuration: 0      // = liveEdgeSnapshot
@@ -39,8 +39,8 @@ Item {
     // ── Background ─────────────────────────────────────────────────────
     Rectangle {
         anchors.fill: parent
-        color: theme.plotCellBg
-        border.color: theme.borderSubtle
+        color: AppTheme.plotCellBg
+        border.color: AppTheme.borderSubtle
         border.width: 1
         radius: 4
     }
@@ -56,7 +56,7 @@ Item {
         anchors.bottom: parent.bottom
         anchors.topMargin: 2
         anchors.bottomMargin: 2
-        color: scrubber.followLive ? theme.statusBlue : theme.accentOrange
+        color: scrubber.followLive ? AppTheme.statusBlue : AppTheme.accentOrange
         opacity: 0.35
         radius: 3
     }
@@ -70,7 +70,7 @@ Item {
         width: 2
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        color: theme.statusGreen
+        color: AppTheme.statusGreen
         visible: scrubber.fullScanDuration > 0
     }
 

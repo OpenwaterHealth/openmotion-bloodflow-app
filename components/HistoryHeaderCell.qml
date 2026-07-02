@@ -1,5 +1,6 @@
 import QtQuick 6.0
 import QtQuick.Layouts 6.0
+import OpenMotion 1.0
 
 // One clickable, sort-aware column header in the History table.
 Item {
@@ -12,20 +13,19 @@ Item {
 
     Layout.preferredHeight: 30
 
-    AppTheme { id: theme }
 
     Row {
         anchors.verticalCenter: parent.verticalCenter
         spacing: 4
         Text {
             text: cell.text
-            color: theme.textSecondary
+            color: AppTheme.textSecondary
             font.pixelSize: 12; font.weight: Font.DemiBold
         }
         Text {
             visible: cell.activeSort === cell.sortName
             text: cell.ascending ? "▲" : "▼"
-            color: theme.textSecondary; font.pixelSize: 9
+            color: AppTheme.textSecondary; font.pixelSize: 9
             anchors.verticalCenter: parent.verticalCenter
         }
     }

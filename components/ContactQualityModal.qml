@@ -34,7 +34,6 @@ Item {
     visible: false
     z: 9999
 
-    AppTheme { id: theme }
 
     // ── state ────────────────────────────────────────────────────────────
     // One of: "checking" | "ok" | "warnings" | "error"
@@ -250,12 +249,12 @@ Item {
         width: 520
         height: 480
         radius: 10
-        color: theme.bgContainer
+        color: AppTheme.bgContainer
         border.width: 2
-        border.color: root.state_ === "ok" ? theme.accentGreen
+        border.color: root.state_ === "ok" ? AppTheme.accentGreen
                     : (root.state_ === "warnings"
-                       ? ((root.liveScan && root.liveScanDismissable) ? theme.accentGreen : theme.accentOrange)
-                       : (root.state_ === "error" ? theme.accentRed : theme.borderSubtle))
+                       ? ((root.liveScan && root.liveScanDismissable) ? AppTheme.accentGreen : AppTheme.accentOrange)
+                       : (root.state_ === "error" ? AppTheme.accentRed : AppTheme.borderSubtle))
         anchors.centerIn: parent
         focus: true
 
@@ -275,7 +274,7 @@ Item {
                 horizontalAlignment: Text.AlignHCenter
                 font.pixelSize: 20
                 font.bold: true
-                color: theme.textPrimary
+                color: AppTheme.textPrimary
                 wrapMode: Text.WordWrap
                 text: root.label
             }
@@ -296,7 +295,7 @@ Item {
                 Layout.fillWidth: true
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
-                color: theme.textSecondary
+                color: AppTheme.textSecondary
                 font.pixelSize: 14
                 text: "All cameras are reporting acceptable ambient light and contact levels."
             }
@@ -307,7 +306,7 @@ Item {
                 Layout.fillWidth: true
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
-                color: theme.textSecondary
+                color: AppTheme.textSecondary
                 font.pixelSize: 14
                 text: (root.entries.length > 0)
                       ? "Hover over orange cameras for details."
@@ -320,7 +319,7 @@ Item {
                 Layout.fillWidth: true
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
-                color: theme.accentRed
+                color: AppTheme.accentRed
                 font.pixelSize: 14
                 text: root.errorText
             }
@@ -336,15 +335,15 @@ Item {
                 Rectangle {
                     visible: MotionInterface.leftSensorConnected
                     width: 180; height: 210; radius: 22
-                    color: theme.bgCard
-                    border.color: theme.borderSubtle; border.width: 2
+                    color: AppTheme.bgCard
+                    border.color: AppTheme.borderSubtle; border.width: 2
 
                     ColumnLayout {
                         anchors.fill: parent; anchors.margins: 8; spacing: 6
 
                         Text {
                             text: "Left Sensor"
-                            font.pixelSize: 14; color: theme.textSecondary
+                            font.pixelSize: 14; color: AppTheme.textSecondary
                             horizontalAlignment: Text.AlignHCenter
                             Layout.alignment: Qt.AlignHCenter
                         }
@@ -382,15 +381,15 @@ Item {
                 Rectangle {
                     visible: MotionInterface.rightSensorConnected
                     width: 180; height: 210; radius: 22
-                    color: theme.bgCard
-                    border.color: theme.borderSubtle; border.width: 2
+                    color: AppTheme.bgCard
+                    border.color: AppTheme.borderSubtle; border.width: 2
 
                     ColumnLayout {
                         anchors.fill: parent; anchors.margins: 8; spacing: 6
 
                         Text {
                             text: "Right Sensor"
-                            font.pixelSize: 14; color: theme.textSecondary
+                            font.pixelSize: 14; color: AppTheme.textSecondary
                             horizontalAlignment: Text.AlignHCenter
                             Layout.alignment: Qt.AlignHCenter
                         }
@@ -436,16 +435,16 @@ Item {
                 RowLayout {
                     spacing: 6
                     Rectangle { width: 10; height: 10; radius: 5
-                        color: theme.accentOrangeAmbient
+                        color: AppTheme.accentOrangeAmbient
                         border.color: "black"; border.width: 1 }
-                    Text { text: "ambient"; color: theme.textSecondary; font.pixelSize: 11 }
+                    Text { text: "ambient"; color: AppTheme.textSecondary; font.pixelSize: 11 }
                 }
                 RowLayout {
                     spacing: 6
                     Rectangle { width: 10; height: 10; radius: 5
-                        color: theme.accentOrangeContact
+                        color: AppTheme.accentOrangeContact
                         border.color: "black"; border.width: 1 }
-                    Text { text: "contact"; color: theme.textSecondary; font.pixelSize: 11 }
+                    Text { text: "contact"; color: AppTheme.textSecondary; font.pixelSize: 11 }
                 }
                 RowLayout {
                     spacing: 6
@@ -454,13 +453,13 @@ Item {
                         border.color: "black"; border.width: 1
                         gradient: Gradient {
                             orientation: Gradient.Horizontal
-                            GradientStop { position: 0.0;    color: theme.accentOrangeAmbient }
-                            GradientStop { position: 0.4999; color: theme.accentOrangeAmbient }
-                            GradientStop { position: 0.5001; color: theme.accentOrangeContact }
-                            GradientStop { position: 1.0;    color: theme.accentOrangeContact }
+                            GradientStop { position: 0.0;    color: AppTheme.accentOrangeAmbient }
+                            GradientStop { position: 0.4999; color: AppTheme.accentOrangeAmbient }
+                            GradientStop { position: 0.5001; color: AppTheme.accentOrangeContact }
+                            GradientStop { position: 1.0;    color: AppTheme.accentOrangeContact }
                         }
                     }
-                    Text { text: "both"; color: theme.textSecondary; font.pixelSize: 11 }
+                    Text { text: "both"; color: AppTheme.textSecondary; font.pixelSize: 11 }
                 }
             }
 
@@ -484,12 +483,12 @@ Item {
                     Layout.preferredHeight: 45
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 12
-                        color: parent.hovered ? "#FFFFFF" : theme.textSecondary
+                        color: parent.hovered ? "#FFFFFF" : AppTheme.textSecondary
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? theme.accentBlue : theme.bgInput
-                        radius: 4; border.color: parent.hovered ? theme.accentBlue : theme.borderSoft; border.width: 1
+                        color: parent.hovered ? AppTheme.accentBlue : AppTheme.bgInput
+                        radius: 4; border.color: parent.hovered ? AppTheme.accentBlue : AppTheme.borderSoft; border.width: 1
                     }
                     onClicked: { root.close(); root.dismissed() }
                 }
@@ -500,12 +499,12 @@ Item {
                     Layout.preferredHeight: 45
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 12
-                        color: parent.hovered ? "#FFFFFF" : theme.textSecondary
+                        color: parent.hovered ? "#FFFFFF" : AppTheme.textSecondary
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? theme.accentBlue : theme.bgInput
-                        radius: 4; border.color: parent.hovered ? theme.accentBlue : theme.borderSoft; border.width: 1
+                        color: parent.hovered ? AppTheme.accentBlue : AppTheme.bgInput
+                        radius: 4; border.color: parent.hovered ? AppTheme.accentBlue : AppTheme.borderSoft; border.width: 1
                     }
                     onClicked: { root.close(); root.retestRequested() }
                 }
@@ -516,12 +515,12 @@ Item {
                     Layout.preferredHeight: 45
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 12
-                        color: parent.hovered ? "#FFFFFF" : theme.textSecondary
+                        color: parent.hovered ? "#FFFFFF" : AppTheme.textSecondary
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? theme.accentGreen : theme.bgInput
-                        radius: 4; border.color: parent.hovered ? theme.accentGreen : theme.borderSoft; border.width: 1
+                        color: parent.hovered ? AppTheme.accentGreen : AppTheme.bgInput
+                        radius: 4; border.color: parent.hovered ? AppTheme.accentGreen : AppTheme.borderSoft; border.width: 1
                     }
                     onClicked: { root.continueRequested(); root.close(); root.dismissed() }
                 }
@@ -534,12 +533,12 @@ Item {
                     Layout.preferredHeight: 45
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 12
-                        color: parent.hovered ? "#FFFFFF" : theme.textSecondary
+                        color: parent.hovered ? "#FFFFFF" : AppTheme.textSecondary
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? theme.accentRed : theme.bgInput
-                        radius: 4; border.color: parent.hovered ? theme.accentRed : theme.borderSoft; border.width: 1
+                        color: parent.hovered ? AppTheme.accentRed : AppTheme.bgInput
+                        radius: 4; border.color: parent.hovered ? AppTheme.accentRed : AppTheme.borderSoft; border.width: 1
                     }
                     onClicked: { root.stopScanRequested(); root.close(); root.dismissed() }
                 }
@@ -551,16 +550,16 @@ Item {
                     Layout.preferredHeight: 45
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 12
-                        color: !parent.enabled ? theme.textDisabled
-                              : (parent.hovered ? "#FFFFFF" : theme.textSecondary)
+                        color: !parent.enabled ? AppTheme.textDisabled
+                              : (parent.hovered ? "#FFFFFF" : AppTheme.textSecondary)
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: !parent.enabled ? theme.bgCard
-                              : (parent.hovered ? theme.accentBlue : theme.bgInput)
+                        color: !parent.enabled ? AppTheme.bgCard
+                              : (parent.hovered ? AppTheme.accentBlue : AppTheme.bgInput)
                         radius: 4
-                        border.color: !parent.enabled ? theme.borderSubtle
-                                    : (parent.hovered ? theme.accentBlue : theme.borderSoft)
+                        border.color: !parent.enabled ? AppTheme.borderSubtle
+                                    : (parent.hovered ? AppTheme.accentBlue : AppTheme.borderSoft)
                         border.width: 1
                     }
                     onClicked: { root.continueRequested(); root.close(); root.dismissed() }
@@ -574,12 +573,12 @@ Item {
                     Layout.preferredHeight: 45
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 12
-                        color: parent.hovered ? "#FFFFFF" : theme.textSecondary
+                        color: parent.hovered ? "#FFFFFF" : AppTheme.textSecondary
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? theme.accentBlue : theme.bgInput
-                        radius: 4; border.color: parent.hovered ? theme.accentBlue : theme.borderSoft; border.width: 1
+                        color: parent.hovered ? AppTheme.accentBlue : AppTheme.bgInput
+                        radius: 4; border.color: parent.hovered ? AppTheme.accentBlue : AppTheme.borderSoft; border.width: 1
                     }
                     onClicked: { root.close(); root.dismissed() }
                 }
@@ -590,12 +589,12 @@ Item {
                     Layout.preferredHeight: 45
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 12
-                        color: parent.hovered ? "#FFFFFF" : theme.textSecondary
+                        color: parent.hovered ? "#FFFFFF" : AppTheme.textSecondary
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? theme.accentBlue : theme.bgInput
-                        radius: 4; border.color: parent.hovered ? theme.accentBlue : theme.borderSoft; border.width: 1
+                        color: parent.hovered ? AppTheme.accentBlue : AppTheme.bgInput
+                        radius: 4; border.color: parent.hovered ? AppTheme.accentBlue : AppTheme.borderSoft; border.width: 1
                     }
                     onClicked: { root.close(); root.retestRequested() }
                 }
@@ -612,7 +611,7 @@ Item {
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? "#B8740F" : theme.bgInput
+                        color: parent.hovered ? "#B8740F" : AppTheme.bgInput
                         radius: 4
                         border.color: parent.hovered ? "#E8A020" : "#E8A020"
                         border.width: 1

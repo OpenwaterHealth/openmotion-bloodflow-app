@@ -19,7 +19,6 @@ Item {
     // Visible only via its toasts; root itself is transparent and doesn't
     // capture mouse events on empty space.
 
-    AppTheme { id: theme }
 
     FontLoader {
         id: iconFont
@@ -35,11 +34,11 @@ Item {
 
     function _accentColor(type) {
         switch (type) {
-            case "success": return theme.accentGreen
-            case "warning": return theme.accentYellow
-            case "error":   return theme.accentRed
+            case "success": return AppTheme.accentGreen
+            case "warning": return AppTheme.accentYellow
+            case "error":   return AppTheme.accentRed
             case "info":
-            default:        return theme.accentBlue
+            default:        return AppTheme.accentBlue
         }
     }
 
@@ -249,8 +248,8 @@ Item {
                     implicitHeight: contentRow.implicitHeight + 24
                     height: implicitHeight
                     radius: 10
-                    color: theme.bgElevated
-                    border.color: theme.borderSubtle
+                    color: AppTheme.bgElevated
+                    border.color: AppTheme.borderSubtle
                     border.width: 1
 
                     // Hovering anywhere on the toast pauses the auto-dismiss timer.
@@ -295,7 +294,7 @@ Item {
 
                         Text {
                             text: model.text
-                            color: theme.textPrimary
+                            color: AppTheme.textPrimary
                             font.pixelSize: 13
                             wrapMode: Text.Wrap
                             Layout.fillWidth: true
@@ -312,7 +311,7 @@ Item {
                                 text: "\ue9b4"
                                 font.family: iconFont.name
                                 font.pixelSize: 14
-                                color: closeArea.containsMouse ? theme.textPrimary : theme.textTertiary
+                                color: closeArea.containsMouse ? AppTheme.textPrimary : AppTheme.textTertiary
                             }
                             MouseArea {
                                 id: closeArea

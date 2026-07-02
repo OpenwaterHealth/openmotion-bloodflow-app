@@ -1,6 +1,7 @@
 import QtQuick 6.0
 import QtQuick.Controls 6.0
 import QtQuick.Layouts 6.0
+import OpenMotion 1.0
 
 Item {
     id: iconSmallButton
@@ -11,15 +12,14 @@ Item {
     property string iconGlyph: "\ue900"       // Unicode glyph for the icon
     property string buttonText: "Action"      // Tooltip text
 
-    AppTheme { id: theme }
 
     // Colors
-    property color iconColor: theme.textSecondary
-    property color hoverColor: theme.textPrimary
-    property color backgroundColor: theme.bgInput
-    property color hoverBackgroundColor: theme.borderSubtle
+    property color iconColor: AppTheme.textSecondary
+    property color hoverColor: AppTheme.textPrimary
+    property color backgroundColor: AppTheme.bgInput
+    property color hoverBackgroundColor: AppTheme.borderSubtle
     property color borderColor: "transparent"
-    property color hoverBorderColor: theme.textSecondary
+    property color hoverBorderColor: AppTheme.textSecondary
 
     // Signals
     signal clicked()
@@ -56,7 +56,7 @@ Item {
         width: Math.max(80, buttonText.length * 8)
         height: 28
         radius: 4
-        color: theme.bgBase
+        color: AppTheme.bgBase
         border.color: "transparent"
         z: 10
 
@@ -70,7 +70,7 @@ Item {
             text: buttonText
             anchors.centerIn: parent
             font.pixelSize: 12
-            color: theme.textPrimary
+            color: AppTheme.textPrimary
         }
     }
 

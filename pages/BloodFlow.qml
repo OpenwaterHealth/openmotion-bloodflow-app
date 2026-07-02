@@ -10,10 +10,9 @@ Rectangle {
     id: bloodFlow
     width: parent.width
     height: parent.height
-    color: theme.bgBase
+    color: AppTheme.bgBase
     radius: 0
 
-    AppTheme { id: theme }
 
     property bool scanning: false
     property bool camerasReady: true  // gates Start/Check; false only while no sensor is connected

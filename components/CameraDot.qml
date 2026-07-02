@@ -1,5 +1,6 @@
 import QtQuick 6.0
 import QtQuick.Controls as Controls
+import OpenMotion 1.0
 
 /*  CameraDot — single per-camera contact-quality indicator.
  *
@@ -27,7 +28,6 @@ Item {
     width: size
     height: size
 
-    AppTheme { id: theme }
 
     readonly property string status: modal.cameraStatus(side, camIndex1)
     readonly property var    types: status === "bad" && modal.engineeringMode
@@ -43,12 +43,12 @@ Item {
         if (status === "inactive") return "#666666"
         // status === "bad" past this point
         if (!modal.engineeringMode)  return "#E67E22"
-        if (isSplit)                return theme.accentOrangeAmbient  // unused at render time (splitFrame handles it); kept so singleColor is never undefined
-        if (hasAmbient)             return theme.accentOrangeAmbient
-        if (hasContact)             return theme.accentOrangeContact
+        if (isSplit)                return AppTheme.accentOrangeAmbient  // unused at render time (splitFrame handles it); kept so singleColor is never undefined
+        if (hasAmbient)             return AppTheme.accentOrangeAmbient
+        if (hasContact)             return AppTheme.accentOrangeContact
         // Unknown / future typeKey — fall back to dark orange and warn.
         console.warn("CameraDot: unknown typeKey(s)", types, "for", side, camIndex1)
-        return theme.accentOrangeAmbient
+        return AppTheme.accentOrangeAmbient
     }
 
     // Solid case (no split) — single coloured circle.
@@ -75,10 +75,10 @@ Item {
         border.width: 1
         gradient: Gradient {
             orientation: Gradient.Horizontal
-            GradientStop { position: 0.0;    color: theme.accentOrangeAmbient }
-            GradientStop { position: 0.4999; color: theme.accentOrangeAmbient }
-            GradientStop { position: 0.5001; color: theme.accentOrangeContact }
-            GradientStop { position: 1.0;    color: theme.accentOrangeContact }
+            GradientStop { position: 0.0;    color: AppTheme.accentOrangeAmbient }
+            GradientStop { position: 0.4999; color: AppTheme.accentOrangeAmbient }
+            GradientStop { position: 0.5001; color: AppTheme.accentOrangeContact }
+            GradientStop { position: 1.0;    color: AppTheme.accentOrangeContact }
         }
     }
 

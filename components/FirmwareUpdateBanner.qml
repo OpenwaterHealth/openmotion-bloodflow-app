@@ -13,7 +13,6 @@ Rectangle {
     height: visible ? 36 : 0
     clip: true
 
-    AppTheme { id: theme }
 
     signal viewRequested()
 
@@ -21,7 +20,7 @@ Rectangle {
     property bool _dismissed: false
     visible: _devMode && MotionInterface.anyFirmwareUpdateAvailable && !_dismissed
 
-    color: theme.accentBlue
+    color: AppTheme.accentBlue
     radius: 0
     Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutQuad } }
 
@@ -46,7 +45,7 @@ Rectangle {
                 id: viewBtn
                 anchors.centerIn: parent
                 text: "View"
-                color: theme.accentBlue
+                color: AppTheme.accentBlue
                 font.pixelSize: 12
                 font.weight: Font.DemiBold
             }
