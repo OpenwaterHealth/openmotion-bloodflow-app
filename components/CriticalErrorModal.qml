@@ -44,6 +44,11 @@ Item {
 
     function _showNext() {
         if (root._queue.length === 0) {
+            if (root.visible) {
+                // Last queued error dismissed — let the connector stop the
+                // console error-LED blink and restore idle green (#257).
+                MotionInterface.criticalErrorsDismissed()
+            }
             root.visible = false
             return
         }
