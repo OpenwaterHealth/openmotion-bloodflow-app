@@ -13,9 +13,9 @@ import OpenMotion 1.0
 // inlined it overrode the caller's anchors and slid under the ButtonPanel.
 Rectangle {
     id: viewer
-    color: theme.bgPlot
+    color: AppTheme.bgPlot
     radius: 8
-    border.color: theme.borderSoft
+    border.color: AppTheme.borderSoft
     border.width: 1
 
     // Keyboard focus — viewer starts focused so spec keys (← → +/- 0
@@ -62,7 +62,6 @@ Rectangle {
         }
     }
 
-    AppTheme { id: theme }
 
     // ── Inputs ─────────────────────────────────────────────────────────
     property bool clinicalMode: false   // honored in Phase 2b-ii
@@ -359,14 +358,14 @@ Rectangle {
     // on dark) doesn't render invisible in the other.
     property color bfiColor: "#E74C3C"
     property color bviColor: "#3498DB"
-    readonly property color bfiInk: theme.readableInk(viewer.bfiColor)
-    readonly property color bviInk: theme.readableInk(viewer.bviColor)
+    readonly property color bfiInk: AppTheme.readableInk(viewer.bfiColor)
+    readonly property color bviInk: AppTheme.readableInk(viewer.bviColor)
 
     function _traceColorForMetric(m) {
         if (m === "bfi")      return viewer.bfiInk
         if (m === "bvi")      return viewer.bviInk
-        if (m === "mean")     return theme.readableInk("#2ECC71")  // green
-        if (m === "contrast") return theme.readableInk("#9B59B6")  // purple
+        if (m === "mean")     return AppTheme.readableInk("#2ECC71")  // green
+        if (m === "contrast") return AppTheme.readableInk("#9B59B6")  // purple
         return viewer.bviInk
     }
 
@@ -612,7 +611,7 @@ Rectangle {
 
             Text {
                 text: panel.panelSide.toUpperCase()
-                color: theme.textSecondary
+                color: AppTheme.textSecondary
                 font.pixelSize: 20
                 font.weight: Font.DemiBold
             }
@@ -627,7 +626,7 @@ Rectangle {
             }
             Text {
                 text: panel._displayText("bfi")
-                color: theme.textPrimary
+                color: AppTheme.textPrimary
                 font.pixelSize: 60
                 font.weight: Font.Bold
                 font.family: "Roboto Mono"
@@ -643,7 +642,7 @@ Rectangle {
             }
             Text {
                 text: panel._displayText("bvi")
-                color: theme.textPrimary
+                color: AppTheme.textPrimary
                 font.pixelSize: 60
                 font.weight: Font.Bold
                 font.family: "Roboto Mono"
@@ -754,7 +753,7 @@ Rectangle {
                 Text {
                     anchors.centerIn: parent
                     text: "No active cameras selected"
-                    color: theme.textTertiary
+                    color: AppTheme.textTertiary
                     font.pixelSize: 14
                     font.family: "Roboto Mono"
                 }
@@ -805,8 +804,8 @@ Rectangle {
                               ? backToLiveOverlay.height + viewer._overlayMarginPx
                               : 0)
         anchors.rightMargin: viewer._overlayEdgeMarginPx
-        color: theme.overlayBgSolid
-        border.color: theme.borderSubtle
+        color: AppTheme.overlayBgSolid
+        border.color: AppTheme.borderSubtle
         border.width: 1
         radius: 4
         width: tooltipColumn.implicitWidth + 16
@@ -860,7 +859,7 @@ Rectangle {
                     var secs = (t - mins * 60).toFixed(3)
                     return "t = " + mins + ":" + (secs < 10 ? "0" + secs : secs) + " s"
                 }
-                color: theme.textSecondary
+                color: AppTheme.textSecondary
                 font.pixelSize: 11
                 font.family: "Roboto Mono"
                 font.bold: true
@@ -872,7 +871,7 @@ Rectangle {
                     Text {
                         text: modelData.label
                         width: 30
-                        color: theme.textSecondary
+                        color: AppTheme.textSecondary
                         font.pixelSize: 10
                         font.family: "Roboto Mono"
                     }
@@ -942,8 +941,8 @@ Rectangle {
         anchors.topMargin: viewer._overlayEdgeMarginPx
         anchors.rightMargin: viewer._overlayEdgeMarginPx
         z: 6
-        color: theme.overlayBg
-        border.color: theme.accentRed
+        color: AppTheme.overlayBg
+        border.color: AppTheme.accentRed
         border.width: 1
 
         Text {
@@ -954,7 +953,7 @@ Rectangle {
                    && MotionInterface.liveSourceAvailable)
                   ? "← Back to live scan"
                   : "● Back to live"
-            color: theme.accentRed
+            color: AppTheme.accentRed
             font.pixelSize: 13
             font.family: "Roboto Mono"
         }
@@ -1001,8 +1000,8 @@ Rectangle {
         width: scanBadgeRow.implicitWidth + 28
         height: 36
         radius: 18
-        color: theme.overlayBg
-        border.color: theme.borderSubtle
+        color: AppTheme.overlayBg
+        border.color: AppTheme.borderSubtle
         border.width: 1
 
         Row {
@@ -1012,14 +1011,14 @@ Rectangle {
             Text {
                 anchors.verticalCenter: parent.verticalCenter
                 text: "Viewing"
-                color: theme.textTertiary
+                color: AppTheme.textTertiary
                 font.pixelSize: 12
                 font.family: "Roboto Mono"
             }
             Text {
                 anchors.verticalCenter: parent.verticalCenter
                 text: viewer._scanBadgeText
-                color: theme.textPrimary
+                color: AppTheme.textPrimary
                 font.pixelSize: 13
                 font.weight: Font.DemiBold
                 font.family: "Roboto Mono"
@@ -1047,8 +1046,8 @@ Rectangle {
             width: windowSecondsText.implicitWidth + 38
             height: 36
             radius: 18
-            color: theme.overlayBg
-            border.color: theme.borderSubtle
+            color: AppTheme.overlayBg
+            border.color: AppTheme.borderSubtle
             border.width: 1
 
             Text {
@@ -1057,7 +1056,7 @@ Rectangle {
                 anchors.leftMargin: 14
                 anchors.verticalCenter: parent.verticalCenter
                 text: viewer._labelForWindowSeconds(viewer.windowSeconds)
-                color: theme.textPrimary
+                color: AppTheme.textPrimary
                 font.pixelSize: 13
                 font.family: "Roboto Mono"
             }
@@ -1066,7 +1065,7 @@ Rectangle {
                 anchors.rightMargin: 12
                 anchors.verticalCenter: parent.verticalCenter
                 text: "▾"
-                color: theme.textTertiary
+                color: AppTheme.textTertiary
                 font.pixelSize: 12
             }
 
@@ -1089,8 +1088,8 @@ Rectangle {
                 padding: 6
                 implicitWidth: 120
                 background: Rectangle {
-                    color: theme.overlayBgSolid
-                    border.color: theme.borderSubtle
+                    color: AppTheme.overlayBgSolid
+                    border.color: AppTheme.borderSubtle
                     border.width: 1
                     radius: 8
                 }
@@ -1119,14 +1118,14 @@ Rectangle {
             radius: 18
             color: settingsPopup.opened
                    ? Qt.rgba(0.29, 0.56, 0.89, 0.85)
-                   : theme.overlayBg
-            border.color: settingsPopup.opened ? "#4A90E2" : theme.borderSubtle
+                   : AppTheme.overlayBg
+            border.color: settingsPopup.opened ? "#4A90E2" : AppTheme.borderSubtle
             border.width: 1
 
             Text {
                 anchors.centerIn: parent
                 text: "⋯"
-                color: settingsPopup.opened ? "white" : theme.textPrimary
+                color: settingsPopup.opened ? "white" : AppTheme.textPrimary
                 font.pixelSize: 20
                 font.bold: true
             }
@@ -1152,8 +1151,8 @@ Rectangle {
                 closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
 
                 background: Rectangle {
-                    color: theme.overlayBgSolid
-                    border.color: theme.borderSubtle
+                    color: AppTheme.overlayBgSolid
+                    border.color: AppTheme.borderSubtle
                     border.width: 1
                     radius: 8
                 }
@@ -1168,8 +1167,8 @@ Rectangle {
                         x:      psCtrl.leftPadding
                         y:      (psCtrl.height - height) / 2
                         width:  44; height: 24; radius: 12
-                        color:  psCtrl.checked ? theme.accentBlue : theme.bgInput
-                        border.color: psCtrl.checked ? theme.accentBlue : theme.borderSoft
+                        color:  psCtrl.checked ? AppTheme.accentBlue : AppTheme.bgInput
+                        border.color: psCtrl.checked ? AppTheme.accentBlue : AppTheme.borderSoft
                         border.width: 1
                         Behavior on color { ColorAnimation { duration: 120 } }
 
@@ -1201,7 +1200,7 @@ Rectangle {
                         Text {
                             anchors.verticalCenter: bfiBviSwitch.verticalCenter
                             text: bfiBviSwitch.checked ? "BFI / BVI" : "Mean / Contrast"
-                            color: theme.textPrimary
+                            color: AppTheme.textPrimary
                             font.pixelSize: 12
                             font.family: "Roboto Mono"
                         }
@@ -1220,7 +1219,7 @@ Rectangle {
                         Text {
                             anchors.verticalCenter: autoScaleSwitch.verticalCenter
                             text: "Autoscale"
-                            color: theme.textPrimary
+                            color: AppTheme.textPrimary
                             font.pixelSize: 12
                             font.family: "Roboto Mono"
                         }
@@ -1236,7 +1235,7 @@ Rectangle {
                         Text {
                             anchors.verticalCenter: axisLabelsSwitch.verticalCenter
                             text: "Axis labels"
-                            color: theme.textPrimary
+                            color: AppTheme.textPrimary
                             font.pixelSize: 12
                             font.family: "Roboto Mono"
                         }
@@ -1300,25 +1299,25 @@ Rectangle {
             }
             Text {
                 text: "rate    " + viewer.profSampleRateHz.toFixed(1) + " Hz"
-                color: theme.textSecondary
+                color: AppTheme.textSecondary
                 font.pixelSize: 10
                 font.family: "Roboto Mono"
             }
             Text {
                 text: "tick    " + viewer.profPaintTickMsAvg.toFixed(2) + " ms"
-                color: theme.textSecondary
+                color: AppTheme.textSecondary
                 font.pixelSize: 10
                 font.family: "Roboto Mono"
             }
             Text {
                 text: "canvas  " + viewer.profCanvasMsAvg.toFixed(2) + " ms avg"
-                color: theme.textSecondary
+                color: AppTheme.textSecondary
                 font.pixelSize: 10
                 font.family: "Roboto Mono"
             }
             Text {
                 text: "points  " + viewer.profPointsLastTick
-                color: theme.textSecondary
+                color: AppTheme.textSecondary
                 font.pixelSize: 10
                 font.family: "Roboto Mono"
             }

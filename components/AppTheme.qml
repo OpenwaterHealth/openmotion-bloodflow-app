@@ -1,11 +1,15 @@
+pragma Singleton
 import QtQuick 6.0
 import OpenMotion 1.0
 
-/*  AppTheme — lightweight colour-token provider.
+/*  AppTheme — colour-token provider, registered as a QML SINGLETON
+ *  (main.py: qmlRegisterSingletonType into the OpenMotion module).
  *
- *  Instantiate once per file that needs themed colours:
- *      AppTheme { id: theme }
- *  Then reference: theme.bgBase, theme.textPrimary, etc.
+ *  Do NOT instantiate — `import OpenMotion 1.0` and reference the
+ *  tokens directly: AppTheme.bgBase, AppTheme.textPrimary, etc.
+ *  One instance serves the whole UI; the old per-file
+ *  `AppTheme { id: theme }` pattern re-evaluated every token binding
+ *  once per instantiating file on each darkMode flip.
  *
  *  All tokens react to MotionInterface.appConfig.darkMode so the
  *  entire UI flips live when the toggle is changed.

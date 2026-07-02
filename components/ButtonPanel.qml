@@ -6,12 +6,11 @@ import OpenMotion 1.0
 Rectangle {
     id: panel
 
-    AppTheme { id: theme }
 
     width: 80
-    color: theme.bgPanel
+    color: AppTheme.bgPanel
     radius: 12
-    border.color: theme.borderStrong
+    border.color: AppTheme.borderStrong
     border.width: 1
 
     property bool scanning: false
@@ -58,7 +57,7 @@ Rectangle {
                     id: startStopCircle
                     Layout.alignment: Qt.AlignHCenter
                     width: 36; height: 36; radius: 18
-                    color: !panel.allConnected ? theme.textDisabled
+                    color: !panel.allConnected ? AppTheme.textDisabled
                          : panel.waiting  ? "#F1C40F"
                          : panel.scanning ? "#E74C3C"
                          :                  "#2ECC71"
@@ -101,7 +100,7 @@ Rectangle {
                 Text {
                     text: !panel.allConnected ? "Disconnected" : panel.scanning ? "Stop" : "Start"
                     font.pixelSize: 10
-                    color: (panel.camerasReady && panel.allConnected) ? theme.textSecondary : theme.textDisabled
+                    color: (panel.camerasReady && panel.allConnected) ? AppTheme.textSecondary : AppTheme.textDisabled
                     horizontalAlignment: Text.AlignHCenter
                     Layout.alignment: Qt.AlignHCenter
                 }
@@ -111,8 +110,8 @@ Rectangle {
             Rectangle {
                 anchors.fill: parent
                 radius: 10
-                color: ssArea.containsMouse ? theme.bgHover : "transparent"
-                border.color: ssArea.containsMouse ? theme.borderHover : "transparent"
+                color: ssArea.containsMouse ? AppTheme.bgHover : "transparent"
+                border.color: ssArea.containsMouse ? AppTheme.borderHover : "transparent"
                 border.width: 1
                 z: -1
                 Behavior on color { ColorAnimation { duration: 150 } }
@@ -133,7 +132,7 @@ Rectangle {
         Rectangle {
             Layout.preferredWidth: 52; Layout.preferredHeight: 1
             Layout.topMargin: 4; Layout.bottomMargin: 4
-            Layout.alignment: Qt.AlignHCenter; color: theme.borderSubtle
+            Layout.alignment: Qt.AlignHCenter; color: AppTheme.borderSubtle
         }
 
         // Scan Settings (camera + duration)
@@ -151,7 +150,7 @@ Rectangle {
             visible: !panel.clinicalMode
             Layout.preferredWidth: 52; Layout.preferredHeight: 1
             Layout.topMargin: 4; Layout.bottomMargin: 4
-            Layout.alignment: Qt.AlignHCenter; color: theme.borderSubtle
+            Layout.alignment: Qt.AlignHCenter; color: AppTheme.borderSubtle
         }
 
         // Notes
@@ -165,7 +164,7 @@ Rectangle {
             visible: !panel.clinicalMode
             Layout.preferredWidth: 52; Layout.preferredHeight: 1
             Layout.topMargin: 4; Layout.bottomMargin: 4
-            Layout.alignment: Qt.AlignHCenter; color: theme.borderSubtle
+            Layout.alignment: Qt.AlignHCenter; color: AppTheme.borderSubtle
         }
 
         // Check (contact quality quick-check)
@@ -188,7 +187,7 @@ Rectangle {
             onClicked: panel.historyClicked()
         }
 
-        Rectangle { Layout.preferredWidth: 52; Layout.preferredHeight: 1; Layout.topMargin: 4; Layout.bottomMargin: 4; Layout.alignment: Qt.AlignHCenter; color: theme.borderSubtle }
+        Rectangle { Layout.preferredWidth: 52; Layout.preferredHeight: 1; Layout.topMargin: 4; Layout.bottomMargin: 4; Layout.alignment: Qt.AlignHCenter; color: AppTheme.borderSubtle }
 
         // Settings
         PanelButton {
@@ -216,9 +215,9 @@ Rectangle {
             anchors.fill: parent
             radius: 10
             color: btnMouseArea.containsMouse
-                ? (btnItem.highlighted ? Qt.lighter(btnItem.highlightColor, 1.2) : theme.bgHover)
+                ? (btnItem.highlighted ? Qt.lighter(btnItem.highlightColor, 1.2) : AppTheme.bgHover)
                 : (btnItem.highlighted ? btnItem.highlightColor : "transparent")
-            border.color: btnMouseArea.containsMouse ? theme.borderHover : "transparent"
+            border.color: btnMouseArea.containsMouse ? AppTheme.borderHover : "transparent"
             border.width: 1
 
             Behavior on color { ColorAnimation { duration: 150 } }
@@ -232,7 +231,7 @@ Rectangle {
                 text: btnItem.iconText
                 font.family: iconFont.name
                 font.pixelSize: 26
-                color: btnItem.enabled ? (btnItem.highlighted ? "white" : theme.textSecondary) : theme.textDisabled
+                color: btnItem.enabled ? (btnItem.highlighted ? "white" : AppTheme.textSecondary) : AppTheme.textDisabled
                 horizontalAlignment: Text.AlignHCenter
                 Layout.alignment: Qt.AlignHCenter
             }
@@ -240,7 +239,7 @@ Rectangle {
             Text {
                 text: btnItem.label
                 font.pixelSize: 10
-                color: btnItem.enabled ? (btnItem.highlighted ? "white" : theme.textTertiary) : theme.textDisabled
+                color: btnItem.enabled ? (btnItem.highlighted ? "white" : AppTheme.textTertiary) : AppTheme.textDisabled
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
                 Layout.preferredWidth: 64

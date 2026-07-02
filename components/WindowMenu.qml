@@ -1,13 +1,13 @@
 import QtQuick 6.0
 import QtQuick.Controls 6.0
 import QtQuick.Layouts 6.0
+import OpenMotion 1.0
 
 Rectangle {
     id: windowMenu
-    AppTheme { id: theme }
     width: parent.width
     height: 60
-    color: theme.bgContainer // Header background color
+    color: AppTheme.bgContainer // Header background color
     radius: 20
 
     // Emitted when the user clicks the exit (X) icon in the title
@@ -70,19 +70,19 @@ Rectangle {
                 anchors.fill: parent
                 fillMode: Image.PreserveAspectFit
                 smooth: true
-                visible: theme.dark && windowMenu.logoSource !== ""
+                visible: AppTheme.dark && windowMenu.logoSource !== ""
             }
             // Light-mode: paint a dark logo using the white image as an
             // opacity mask over a solid-colour Canvas.  No shaders needed.
             Item {
                 anchors.fill: parent
-                visible: !theme.dark && windowMenu.logoSource !== ""
+                visible: !AppTheme.dark && windowMenu.logoSource !== ""
 
                 Canvas {
                     id: logoDarkCanvas
                     anchors.fill: parent
                     // Re-render whenever the theme changes or the image loads
-                    property color tint: theme.textPrimary
+                    property color tint: AppTheme.textPrimary
                     onTintChanged: requestPaint()
 
                     Image {
@@ -130,9 +130,9 @@ Rectangle {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 34
-            color: theme.bgElevated
+            color: AppTheme.bgElevated
             radius: 8
-            border.color: theme.borderSubtle
+            border.color: AppTheme.borderSubtle
             border.width: 1
 
             RowLayout {
@@ -141,10 +141,10 @@ Rectangle {
                 anchors.rightMargin: 14
                 spacing: 10
 
-                Text { text: "Session:"; color: theme.textTertiary; font.pixelSize: 13 }
+                Text { text: "Session:"; color: AppTheme.textTertiary; font.pixelSize: 13 }
                 Text {
                     text: windowMenu.sessionId || "—"
-                    color: theme.textLink
+                    color: AppTheme.textLink
                     font.pixelSize: 13
                     font.weight: Font.DemiBold
                 }
@@ -153,7 +153,7 @@ Rectangle {
 
                 Text {
                     text: "Open-Motion"
-                    color: theme.textPrimary
+                    color: AppTheme.textPrimary
                     font.pixelSize: 14
                     font.weight: Font.Bold
                 }
@@ -192,7 +192,7 @@ Rectangle {
                             ? windowMenu.formatSec(windowMenu.elapsedSec) + " / " + windowMenu.formatSec(windowMenu.durationSec)
                             : windowMenu.formatSec(windowMenu.durationSec)
                     }
-                    color: windowMenu.scanning ? theme.statusGreen : theme.textTertiary
+                    color: windowMenu.scanning ? AppTheme.statusGreen : AppTheme.textTertiary
                     font.pixelSize: 13
                     font.family: "Courier New"
                 }

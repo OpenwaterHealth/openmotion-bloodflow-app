@@ -14,7 +14,6 @@ ApplicationWindow {
     flags: Qt.FramelessWindowHint | Qt.Window | Qt.CustomizeWindowHint | Qt.WindowTitleHint
     color: "transparent"
 
-    AppTheme { id: theme }
 
     // Issue #75: aggregate 'something is happening' state used by the
     // close-while-busy warning. Anything that the user would not want
@@ -61,7 +60,7 @@ ApplicationWindow {
 
     Rectangle {
         anchors.fill: parent
-        color: theme.bgBase
+        color: AppTheme.bgBase
         radius: 20
         border.color: "transparent"
 
@@ -176,7 +175,7 @@ ApplicationWindow {
             anchors.margins: 3
             onPaint: {
                 var ctx = getContext("2d")
-                ctx.strokeStyle = theme.borderHover
+                ctx.strokeStyle = AppTheme.borderHover
                 ctx.lineWidth = 1
                 var s = width
                 for (var i = 0; i < 3; i++) {

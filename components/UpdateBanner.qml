@@ -19,7 +19,6 @@ Rectangle {
     visible: shown && !_clinicalMode
     clip: true
 
-    AppTheme { id: theme }
 
     property string latestVersion: ""
     property string downloadUrl: ""
@@ -28,7 +27,7 @@ Rectangle {
     property bool updating: false
     property string statusText: "Update"
 
-    color: theme.accentBlue
+    color: AppTheme.accentBlue
     radius: 0
 
     Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutQuad } }
@@ -63,7 +62,7 @@ Rectangle {
                 id: downloadBtn
                 anchors.centerIn: parent
                 text: banner.updating ? banner.statusText : "Update"
-                color: theme.accentBlue
+                color: AppTheme.accentBlue
                 font.pixelSize: 12
                 font.weight: Font.DemiBold
             }

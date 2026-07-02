@@ -14,9 +14,8 @@ Window {
     flags: Qt.Window
     modality: Qt.NonModal
 
-    AppTheme { id: theme }
 
-    color: theme.bgBase
+    color: AppTheme.bgBase
 
     readonly property var rows: MotionInterface.testScanRows
     readonly property string status: MotionInterface.testScanStatus
@@ -86,7 +85,7 @@ Window {
                     case "failed":  return "#F44336"
                     case "aborted": return "#FF9800"
                     case "running": return "#2196F3"
-                    default:        return theme.textPrimary
+                    default:        return AppTheme.textPrimary
                     }
                 }
                 font.bold: true
@@ -109,26 +108,26 @@ Window {
         Rectangle {
             Layout.fillWidth: true
             implicitHeight: 28
-            color: theme.bgCard
-            border.color: theme.borderSoft
+            color: AppTheme.bgCard
+            border.color: AppTheme.borderSoft
             border.width: 1
             RowLayout {
                 anchors.fill: parent
                 anchors.leftMargin: 8
                 anchors.rightMargin: 8
                 spacing: 0
-                Text { Layout.preferredWidth: 50;  text: "Side"; color: theme.textSecondary; font.bold: true; font.pixelSize: 12 }
-                Text { Layout.preferredWidth: 40;  text: "Cam";  color: theme.textSecondary; font.bold: true; font.pixelSize: 12 }
-                Text { Layout.preferredWidth: 90;  text: "Light Mean";    color: theme.textSecondary; font.bold: true; font.pixelSize: 12 }
-                Text { Layout.preferredWidth: 70;  text: "Min Mean";      color: theme.textSecondary; font.bold: true; font.pixelSize: 12 }
-                Text { Layout.preferredWidth: 60;  text: "Mean PF";       color: theme.textSecondary; font.bold: true; font.pixelSize: 12 }
-                Text { Layout.preferredWidth: 90;  text: "Dark Mean";     color: theme.textSecondary; font.bold: true; font.pixelSize: 12 }
-                Text { Layout.preferredWidth: 70;  text: "Max Dark";      color: theme.textSecondary; font.bold: true; font.pixelSize: 12 }
-                Text { Layout.preferredWidth: 60;  text: "Dark PF";       color: theme.textSecondary; font.bold: true; font.pixelSize: 12 }
-                Text { Layout.preferredWidth: 90;  text: "Contrast";      color: theme.textSecondary; font.bold: true; font.pixelSize: 12 }
-                Text { Layout.preferredWidth: 90;  text: "Min Contrast";  color: theme.textSecondary; font.bold: true; font.pixelSize: 12 }
-                Text { Layout.preferredWidth: 80;  text: "Contrast PF";   color: theme.textSecondary; font.bold: true; font.pixelSize: 12 }
-                Text { Layout.fillWidth: true;     text: "Overall";       color: theme.textSecondary; font.bold: true; font.pixelSize: 12 }
+                Text { Layout.preferredWidth: 50;  text: "Side"; color: AppTheme.textSecondary; font.bold: true; font.pixelSize: 12 }
+                Text { Layout.preferredWidth: 40;  text: "Cam";  color: AppTheme.textSecondary; font.bold: true; font.pixelSize: 12 }
+                Text { Layout.preferredWidth: 90;  text: "Light Mean";    color: AppTheme.textSecondary; font.bold: true; font.pixelSize: 12 }
+                Text { Layout.preferredWidth: 70;  text: "Min Mean";      color: AppTheme.textSecondary; font.bold: true; font.pixelSize: 12 }
+                Text { Layout.preferredWidth: 60;  text: "Mean PF";       color: AppTheme.textSecondary; font.bold: true; font.pixelSize: 12 }
+                Text { Layout.preferredWidth: 90;  text: "Dark Mean";     color: AppTheme.textSecondary; font.bold: true; font.pixelSize: 12 }
+                Text { Layout.preferredWidth: 70;  text: "Max Dark";      color: AppTheme.textSecondary; font.bold: true; font.pixelSize: 12 }
+                Text { Layout.preferredWidth: 60;  text: "Dark PF";       color: AppTheme.textSecondary; font.bold: true; font.pixelSize: 12 }
+                Text { Layout.preferredWidth: 90;  text: "Contrast";      color: AppTheme.textSecondary; font.bold: true; font.pixelSize: 12 }
+                Text { Layout.preferredWidth: 90;  text: "Min Contrast";  color: AppTheme.textSecondary; font.bold: true; font.pixelSize: 12 }
+                Text { Layout.preferredWidth: 80;  text: "Contrast PF";   color: AppTheme.textSecondary; font.bold: true; font.pixelSize: 12 }
+                Text { Layout.fillWidth: true;     text: "Overall";       color: AppTheme.textSecondary; font.bold: true; font.pixelSize: 12 }
             }
         }
 
@@ -151,13 +150,13 @@ Window {
                     delegate: Rectangle {
                         width: parent.width
                         implicitHeight: 24
-                        color: (index % 2 === 0) ? "transparent" : Qt.darker(theme.bgBase, 1.05)
-                        border.color: theme.borderSoft
+                        color: (index % 2 === 0) ? "transparent" : Qt.darker(AppTheme.bgBase, 1.05)
+                        border.color: AppTheme.borderSoft
                         border.width: 0
 
                         property color _passColor: "#4CAF50"
                         property color _failColor: "#F44336"
-                        property color _naColor:   theme.textSecondary
+                        property color _naColor:   AppTheme.textSecondary
                         function _pfColor(s) {
                             if (s === "PASS") return _passColor
                             if (s === "FAIL") return _failColor
@@ -170,16 +169,16 @@ Window {
                             anchors.rightMargin: 8
                             spacing: 0
 
-                            Text { Layout.preferredWidth: 50;  text: modelData.side; color: theme.textPrimary;  font.family: "Consolas"; font.pixelSize: 12 }
-                            Text { Layout.preferredWidth: 40;  text: modelData.cam;  color: theme.textPrimary;  font.family: "Consolas"; font.pixelSize: 12 }
-                            Text { Layout.preferredWidth: 90;  text: testWin._fmtNum(modelData.light_mean, 2); color: theme.textPrimary;  font.family: "Consolas"; font.pixelSize: 12 }
-                            Text { Layout.preferredWidth: 70;  text: testWin._fmtNum(modelData.min_mean, 2);   color: theme.textSecondary; font.family: "Consolas"; font.pixelSize: 12 }
+                            Text { Layout.preferredWidth: 50;  text: modelData.side; color: AppTheme.textPrimary;  font.family: "Consolas"; font.pixelSize: 12 }
+                            Text { Layout.preferredWidth: 40;  text: modelData.cam;  color: AppTheme.textPrimary;  font.family: "Consolas"; font.pixelSize: 12 }
+                            Text { Layout.preferredWidth: 90;  text: testWin._fmtNum(modelData.light_mean, 2); color: AppTheme.textPrimary;  font.family: "Consolas"; font.pixelSize: 12 }
+                            Text { Layout.preferredWidth: 70;  text: testWin._fmtNum(modelData.min_mean, 2);   color: AppTheme.textSecondary; font.family: "Consolas"; font.pixelSize: 12 }
                             Text { Layout.preferredWidth: 60;  text: modelData.mean_pf;     color: parent.parent._pfColor(modelData.mean_pf); font.family: "Consolas"; font.bold: true; font.pixelSize: 12 }
-                            Text { Layout.preferredWidth: 90;  text: testWin._fmtNum(modelData.dark_mean, 2); color: theme.textPrimary;  font.family: "Consolas"; font.pixelSize: 12 }
-                            Text { Layout.preferredWidth: 70;  text: testWin._fmtNum(modelData.max_dark, 2);  color: theme.textSecondary; font.family: "Consolas"; font.pixelSize: 12 }
+                            Text { Layout.preferredWidth: 90;  text: testWin._fmtNum(modelData.dark_mean, 2); color: AppTheme.textPrimary;  font.family: "Consolas"; font.pixelSize: 12 }
+                            Text { Layout.preferredWidth: 70;  text: testWin._fmtNum(modelData.max_dark, 2);  color: AppTheme.textSecondary; font.family: "Consolas"; font.pixelSize: 12 }
                             Text { Layout.preferredWidth: 60;  text: modelData.dark_pf;     color: parent.parent._pfColor(modelData.dark_pf); font.family: "Consolas"; font.bold: true; font.pixelSize: 12 }
-                            Text { Layout.preferredWidth: 90;  text: testWin._fmtNum(modelData.contrast, 5); color: theme.textPrimary;  font.family: "Consolas"; font.pixelSize: 12 }
-                            Text { Layout.preferredWidth: 90;  text: testWin._fmtNum(modelData.min_contrast, 4); color: theme.textSecondary; font.family: "Consolas"; font.pixelSize: 12 }
+                            Text { Layout.preferredWidth: 90;  text: testWin._fmtNum(modelData.contrast, 5); color: AppTheme.textPrimary;  font.family: "Consolas"; font.pixelSize: 12 }
+                            Text { Layout.preferredWidth: 90;  text: testWin._fmtNum(modelData.min_contrast, 4); color: AppTheme.textSecondary; font.family: "Consolas"; font.pixelSize: 12 }
                             Text { Layout.preferredWidth: 80;  text: modelData.contrast_pf; color: parent.parent._pfColor(modelData.contrast_pf); font.family: "Consolas"; font.bold: true; font.pixelSize: 12 }
                             Text { Layout.fillWidth: true;     text: modelData.overall;    color: parent.parent._pfColor(modelData.overall);    font.family: "Consolas"; font.bold: true; font.pixelSize: 12 }
                         }

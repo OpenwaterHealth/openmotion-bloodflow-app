@@ -23,8 +23,12 @@ if sys.stderr is None:
 
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication, QMessageBox
-from PyQt6.QtQml import QQmlApplicationEngine, qmlRegisterSingletonInstance
-from PyQt6.QtCore import qInstallMessageHandler, QtMsgType
+from PyQt6.QtQml import (
+    QQmlApplicationEngine,
+    qmlRegisterSingletonInstance,
+    qmlRegisterSingletonType,
+)
+from PyQt6.QtCore import qInstallMessageHandler, QtMsgType, QUrl
 
 from motion_connector import MotionConnector
 from omotion import MotionInterface
@@ -313,6 +317,15 @@ def main():
         app_version=APP_VERSION, log_path=logfile_path,
     )
     qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MotionInterface", connector)
+    # AppTheme as a true QML singleton: one QObject with ~40 color
+    # bindings instead of one instance per file (~24 of them, each
+    # re-evaluating every binding on a darkMode flip). Registered into
+    # the same OpenMotion module QML already imports for MotionInterface;
+    # instantiated lazily on first use, after both registrations.
+    qmlRegisterSingletonType(
+        QUrl.fromLocalFile(str(resource_path("components", "AppTheme.qml"))),
+        "OpenMotion", 1, 0, "AppTheme",
+    )
     engine.rootContext().setContextProperty("appVersion", APP_VERSION)
 
     # Load the QML file

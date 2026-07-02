@@ -10,7 +10,6 @@ Item {
     visible: false
     z: 9998
 
-    AppTheme { id: theme }
 
     // Modal interface — see HistoryModal.qml for rationale.
     readonly property string label: "Settings"
@@ -58,15 +57,15 @@ Item {
     property string appUpdateProgressText: "Update"
 
     // ── Theme tokens (aliased from AppTheme) ──────────────────────────────
-    readonly property color colBgPanel:    theme.bgContainer
-    readonly property color colBgCard:     theme.bgCard
-    readonly property color colBgInput:    theme.bgInput
-    readonly property color colBorder:     theme.borderStrong
-    readonly property color colBorderSoft: theme.borderSoft
-    readonly property color colAccent:     theme.accentBlue
-    readonly property color colTextPri:    theme.textPrimary
-    readonly property color colTextSec:    theme.textSecondary
-    readonly property color colTextMuted:  theme.textTertiary
+    readonly property color colBgPanel:    AppTheme.bgContainer
+    readonly property color colBgCard:     AppTheme.bgCard
+    readonly property color colBgInput:    AppTheme.bgInput
+    readonly property color colBorder:     AppTheme.borderStrong
+    readonly property color colBorderSoft: AppTheme.borderSoft
+    readonly property color colAccent:     AppTheme.accentBlue
+    readonly property color colTextPri:    AppTheme.textPrimary
+    readonly property color colTextSec:    AppTheme.textSecondary
+    readonly property color colTextMuted:  AppTheme.textTertiary
 
     signal settingsChanged()
 
@@ -688,7 +687,7 @@ Item {
                         Text { text: "Max"; color: root.colTextMuted; font.pixelSize: 12; font.weight: Font.DemiBold; Layout.alignment: Qt.AlignHCenter; Layout.preferredWidth: 90 }
                         Item { Layout.fillWidth: true }
 
-                        Text { text: "BFI"; color: theme.readableInk(root.bfiColor); font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
+                        Text { text: "BFI"; color: AppTheme.readableInk(root.bfiColor); font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
                             Layout.preferredWidth: 90
                             decimals: 1
@@ -703,7 +702,7 @@ Item {
                         }
                         Item { Layout.fillWidth: true }
 
-                        Text { text: "BVI"; color: theme.readableInk(root.bviColor); font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
+                        Text { text: "BVI"; color: AppTheme.readableInk(root.bviColor); font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
                             Layout.preferredWidth: 90
                             decimals: 1
@@ -1128,7 +1127,7 @@ Item {
                         property string label: "Update"
                         property bool chipEnabled: true
                         width: chipText.implicitWidth + 18; height: 24; radius: 4
-                        color: chipArea.containsMouse ? Qt.lighter(theme.accentBlue, 1.1) : theme.accentBlue
+                        color: chipArea.containsMouse ? Qt.lighter(AppTheme.accentBlue, 1.1) : AppTheme.accentBlue
                         opacity: chipEnabled ? 1.0 : 0.6
                         Text {
                             id: chipText
@@ -1159,13 +1158,13 @@ Item {
                         Text {
                             visible: !root.clinicalMode && root.appUpdateStatus === "uptodate"
                             text: "Up to date"
-                            color: theme.statusGreen
+                            color: AppTheme.statusGreen
                             font.pixelSize: 12
                         }
                         Text {
                             visible: !root.clinicalMode && root.appUpdateStatus === "failed"
                             text: "Check failed"
-                            color: theme.accentRed
+                            color: AppTheme.accentRed
                             font.pixelSize: 12
                         }
                         UpdateChip {
@@ -1235,7 +1234,7 @@ Item {
                         Text {
                             visible: connected && !updateAvailable
                             text: "Up to date"
-                            color: theme.statusGreen
+                            color: AppTheme.statusGreen
                             font.pixelSize: 12
                         }
                         UpdateChip {
@@ -1366,7 +1365,7 @@ Item {
         }
         function onFirmwareUpdateFinished(deviceKey, ok, msg) {
             fwStatus.text = deviceKey + " — " + msg
-            fwStatus.color = ok ? theme.accentGreen : theme.accentRed
+            fwStatus.color = ok ? AppTheme.accentGreen : AppTheme.accentRed
             fwBar.visible = false
         }
     }
