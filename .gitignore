@@ -87,6 +87,7 @@ local_notes.md
 /scan_data/
 Open-Motion*.zip
 /run-logs/
+app-logs/
 
 .claude/
 .superpowers/
