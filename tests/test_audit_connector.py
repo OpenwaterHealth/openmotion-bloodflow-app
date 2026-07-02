@@ -193,11 +193,13 @@ def test_delete_scans_logs_scan_deleted(tmp_path):
 def test_load_past_scan_logs_scan_viewed(tmp_path):
     db_path = str(tmp_path / "scans.db")
     c = _connector(tmp_path, scan_db_path=db_path)
-    c.loadPastScan("20260101_000000_owABC")
+    c.loadPastScan(1, "20260101_000000_owABC")
     ev = [e for e in c.auditLogEntries()
           if e["event_type"] == "scan_viewed"]
     assert ev
-    assert json.loads(ev[0]["details"])["label"] == "20260101_000000_owABC"
+    details = json.loads(ev[0]["details"])
+    assert details["label"] == "20260101_000000_owABC"
+    assert details["session_id"] == 1
 
 
 def test_prepare_debug_bundle_creates_zip_and_logs(tmp_path):
