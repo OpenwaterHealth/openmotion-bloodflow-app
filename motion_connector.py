@@ -291,43 +291,32 @@ def _safety_unknown_streak_decision(snap, prev_streak, threshold=SAFETY_UNKNOWN_
     return 0, False
 
 
-def _check_dropped_camera_emit(
+def _rearm_dropped_camera(
     side: str,
     cam_id: int,
     dropped: set,
-    already_logged: set,
-) -> tuple[bool, str | None]:
-    """Decide whether to emit a per-camera sample to the UI given the
-    dropout watchdog's view of which cameras are 'Connection Lost'
-    (issue #85).
+) -> str | None:
+    """Un-mark a camera the dropout watchdog flagged 'Connection Lost',
+    now that a fresh frame has arrived (issue #85 follow-up).
 
-    Returns ``(should_emit, recovery_warning)``:
-      - ``should_emit`` is True when the camera is alive (not in
-        ``dropped``); the caller proceeds with the normal emit.
-      - ``should_emit`` is False when the camera is in ``dropped``;
-        the caller suppresses the sample.
-      - ``recovery_warning`` is a non-None string the FIRST time a
-        given dropped camera key sends fresh data — the caller should
-        log it at WARNING. Subsequent calls return None so a flapping
-        camera doesn't spam 40 Hz worth of identical warnings.
+    Dropout marking used to be permanent for the scan and later samples
+    were suppressed, so any transient stall killed the camera's display
+    for the rest of the scan. Frames resuming is proof the camera is back
+    — re-arm the watchdog and resume display. The watchdog will re-fire
+    (with a fresh toast) if the camera goes silent again.
 
-    Mutates ``already_logged`` by inserting the key on the first
-    suppression, which is what gates the one-per-dropout behavior.
+    Returns the recovery message to log when ``(side, cam_id)`` was
+    marked, else None. Mutates ``dropped``.
     """
     key = (side, int(cam_id))
     if key not in dropped:
-        return True, None
-    if key in already_logged:
-        return False, None
-    already_logged.add(key)
-    msg = (
-        f"UNEXPECTED: Camera {side.upper()} {int(cam_id) + 1} sent "
-        f"fresh data after being marked Connection Lost. Suppressing "
-        f"the sample. Investigate the dropout cause — camera flapping, "
-        f"firmware glitch, or a too-tight dropout threshold can all "
-        f"produce this."
+        return None
+    dropped.discard(key)
+    return (
+        f"Camera {side.upper()} {int(cam_id) + 1} resumed sending frames "
+        f"after being marked Connection Lost — re-arming the dropout "
+        f"watchdog and resuming display."
     )
-    return False, msg
 
 
 _SIDE_NAMES = ("left", "right")
@@ -339,7 +328,14 @@ class _LivePlotSink:
 
     The 'live' channel carries a FrameBatch after BfiBvi. Each batch may
     contain multiple frames and both sides; we iterate frame × side × cam_id,
-    gate on the camera-dropout watchdog, and append to the source.
+    feed the camera-liveness bookkeeping, and append to the source.
+
+    Camera liveness is keyed to FRAME ARRIVAL, not to whether a frame
+    yielded a plottable sample. A covered / off-target camera streams
+    light-typed frames whose BFI/BVI are NaN (the SDK dark stage suppresses
+    realtime emission for unlit frames); that camera is connected and
+    healthy. Keying the heartbeat on finite BFI — the old behavior —
+    misdiagnosed covered sensors as camera dropouts.
 
     The 'live_side' channel carries one SideAverageSample per capture per side
     (from the SDK's LiveSideAverageStage, clinical mode) — the realtime per-side
@@ -348,6 +344,11 @@ class _LivePlotSink:
 
     channels = {"live", "live_side"}
 
+    # A camera must present this many consecutive frames of the opposite
+    # low-light state before we log the transition — one operator-facing
+    # line per genuine cover/uncover, not 40 Hz of boundary flapping.
+    _LOW_LIGHT_DEBOUNCE_FRAMES = 80  # ~2 s at 40 fps
+
     def __init__(self, connector: "MotionConnector", plot_t0: float,
                  live_source: "LiveScanSource",
                  nan_gap_tracker: "NanGapTracker | None" = None):
@@ -355,10 +356,16 @@ class _LivePlotSink:
         self._plot_t0 = plot_t0
         self._live_source = live_source
         self._temp_alerted: dict[tuple[str, int], bool] = {}
-        # Records every finite BFI/BVI sample so the scan-complete handler
-        # can report sustained data gaps in the notes footer. Optional so
+        # Records every arriving frame so the scan-complete handler can
+        # report sustained DELIVERY gaps in the notes footer. Optional so
         # the sink works standalone (tests, future callers).
         self._nan_gap_tracker = nan_gap_tracker
+        # Per-camera low-light state (from the SDK's batch.low_light_rt):
+        # True = camera currently sees no meaningful light (covered / off
+        # target). Debounced transitions are logged so an empty plot has an
+        # explanation in the capture log.
+        self._low_light_state: dict[tuple[str, int], bool] = {}
+        self._low_light_streak: dict[tuple[str, int], int] = {}
 
     def on_scan_start(self, meta) -> None:
         self._temp_alerted.clear()
@@ -378,10 +385,13 @@ class _LivePlotSink:
         threshold = connector._camera_temp_alert_threshold_c
         now_mono = time.monotonic()
 
+        low_light_rt = getattr(batch, "low_light_rt", None)
+
         for i in range(n):
             ft = str(batch.frame_type[i]) if batch.frame_type is not None else "light"
-            # Skip frames that carry no useful display signal.
-            if ft in ("warmup", "stale"):
+            # Stale frames are leftover garbage (e.g. an unflushed histogram
+            # buffer) — not evidence of a live camera, never displayed.
+            if ft == "stale":
                 continue
             is_dark = (ft == "dark")
             ts = float(batch.timestamp_s[i])
@@ -390,7 +400,8 @@ class _LivePlotSink:
 
             side_ids = getattr(batch, "side_ids", None)
             cam_ids = getattr(batch, "cam_ids", None)
-            if side_ids is not None and cam_ids is not None:
+            row_addressed = side_ids is not None and cam_ids is not None
+            if row_addressed:
                 side_idx = int(side_ids[i])
                 cam_id = int(cam_ids[i])
                 if side_idx < 0 or side_idx >= len(_SIDE_NAMES) or cam_id < 0 or cam_id >= 8:
@@ -408,50 +419,63 @@ class _LivePlotSink:
                 bvi = float(batch.bvi_live[i, side_idx, cam_id])
                 temp_c = float(batch.temperature_c[i, side_idx, cam_id])
 
-                # Skip NaN samples — Qt plot would otherwise render them as
-                # a spike from baseline to wherever NaN happens to land in
-                # the y-mapping. Common cause: the first dark frame, which
-                # the dark stage emits with mean_dc_rt=NaN (no prior light
-                # to hold over). NaN now propagates cleanly through the
-                # pipeline; skip it here for the plot.
-                if not (math.isfinite(bfi) and math.isfinite(bvi)):
-                    continue
-
                 _key = (side, cam_id)
 
-                # Finite sample — feed the NaN-gap tracker before the
-                # dropout gate: a dropout-suppressed camera still sending
-                # finite data is not a NaN gap.
-                if self._nan_gap_tracker is not None:
-                    self._nan_gap_tracker.record(_key, plot_ts)
+                # ── Liveness: frame ARRIVAL, not plottability ─────────────
+                # An unlit (covered / off-target) camera streams frames whose
+                # BFI/BVI are NaN — it is connected and must keep feeding the
+                # heartbeat and the delivery-gap tracker. Only the
+                # row-addressed path can key on arrival: legacy batches
+                # without side_ids/cam_ids fan every row out to all 16
+                # cameras, where a finite BFI is the only evidence this
+                # camera actually produced the row.
+                row_alive = row_addressed or (
+                    math.isfinite(bfi) and math.isfinite(bvi))
+                if row_alive:
+                    connector._camera_last_seen[_key] = now_mono
+                    recovery_msg = _rearm_dropped_camera(
+                        side, cam_id, connector._camera_dropped)
+                    if recovery_msg is not None:
+                        logger.warning(recovery_msg)
+                        connector._on_camera_dropout_recovered(side, cam_id)
+                    # Delivery gaps: every arriving frame counts. "Data
+                    # gaps" in the notes footer means frames stopped
+                    # arriving — a covered sensor is not a data gap.
+                    if self._nan_gap_tracker is not None:
+                        self._nan_gap_tracker.record(_key, plot_ts)
 
-                # Dropout gate — same logic as the old _on_uncorrected closure.
-                should_emit, recovery_msg = _check_dropped_camera_emit(
-                    side, cam_id,
-                    connector._camera_dropped,
-                    connector._camera_dropped_recovery_logged,
-                )
-                if recovery_msg is not None:
-                    logger.warning(recovery_msg)
-                if not should_emit:
+                # Warmup frames prove liveness but carry no display signal.
+                if ft == "warmup":
                     continue
 
-                # Update dropout-watchdog heartbeat (non-dark frames only, since
-                # dark frames arrive at ~40x lower rate and would skew the timer).
-                if not is_dark:
-                    connector._camera_last_seen[_key] = now_mono
-                    connector._camera_last_temp[_key] = temp_c
+                # Low-light bookkeeping (SDK ≥ low_light_rt): debounced
+                # transition log so an empty plot has an explanation.
+                if low_light_rt is not None and not is_dark:
+                    self._note_low_light(
+                        _key, bool(low_light_rt[i, side_idx, cam_id]))
 
-                # Temperature alert (light frames only — dark frames have no
-                # meaningful camera temperature reading for display).
-                if not is_dark and temp_c >= threshold and _key not in self._temp_alerted:
-                    self._temp_alerted[_key] = True
-                    msg = (
-                        f"ALERT: Camera {cam_id + 1} ({side}) "
-                        f"temperature {temp_c:.1f}°C >= {threshold:.0f}°C threshold."
-                    )
-                    connector.captureLog.emit(msg)
-                    logger.warning(msg)
+                # Temperature cache + alert (light frames only — scheduled
+                # dark frames have no meaningful camera temperature reading).
+                # Deliberately before the NaN gate: a covered camera still
+                # reports a real chip temperature and can still overheat.
+                if not is_dark and math.isfinite(temp_c):
+                    connector._camera_last_temp[_key] = temp_c
+                    if temp_c >= threshold and _key not in self._temp_alerted:
+                        self._temp_alerted[_key] = True
+                        msg = (
+                            f"ALERT: Camera {cam_id + 1} ({side}) "
+                            f"temperature {temp_c:.1f}°C >= {threshold:.0f}°C threshold."
+                        )
+                        connector.captureLog.emit(msg)
+                        logger.warning(msg)
+
+                # Skip NaN samples for the plot — Qt would otherwise render
+                # them as a spike from baseline to wherever NaN lands in the
+                # y-mapping. Common causes: warmup before the first dark
+                # observation, and unlit frames (the dark stage suppresses
+                # realtime emission — see low_light_rt above).
+                if not (math.isfinite(bfi) and math.isfinite(bvi)):
+                    continue
 
                 mean_for_source: Optional[float] = None
                 contrast_for_source: Optional[float] = None
@@ -494,6 +518,34 @@ class _LivePlotSink:
                     temp=temp_for_source,
                 )
 
+    def _note_low_light(self, key: tuple[str, int], is_low: bool) -> None:
+        """Track a camera's low-light state (SDK batch.low_light_rt) and log
+        debounced transitions. A camera flipping state must hold the new
+        state for _LOW_LIGHT_DEBOUNCE_FRAMES consecutive frames before the
+        transition is accepted — one capture-log line per genuine
+        cover/uncover event, not 40 Hz of threshold flapping."""
+        current = self._low_light_state.get(key, False)
+        if is_low == current:
+            self._low_light_streak[key] = 0
+            return
+        streak = self._low_light_streak.get(key, 0) + 1
+        if streak < self._LOW_LIGHT_DEBOUNCE_FRAMES:
+            self._low_light_streak[key] = streak
+            return
+        self._low_light_state[key] = is_low
+        self._low_light_streak[key] = 0
+        side, cam_id = key
+        if is_low:
+            msg = (
+                f"Camera {side.upper()} {cam_id + 1} low light — frames "
+                f"arriving but no meaningful signal (sensor covered or "
+                f"off target?). Plot paused for this camera."
+            )
+        else:
+            msg = f"Camera {side.upper()} {cam_id + 1} signal restored."
+        logger.info(msg)
+        self._connector.captureLog.emit(msg)
+
     def _consume_side_avg(self, sample) -> None:
         """Append one clinical-mode per-side average (SideAverageSample from the
         SDK's LiveSideAverageStage) under cam_id=-1. The stage already emits one
@@ -505,11 +557,11 @@ class _LivePlotSink:
         bfi = float(getattr(sample, "bfi", float("nan")))
         bvi = float(getattr(sample, "bvi", float("nan")))
         t = float(getattr(sample, "t", 0.0))
-        # The side-average path stores NaN as-is (the renderer skips it),
-        # so the tracker must gate on finiteness here — only finite
-        # samples count as "data present".
-        if (self._nan_gap_tracker is not None
-                and math.isfinite(bfi) and math.isfinite(bvi)):
+        # Arrival-based, same as the per-camera path: the stage emitted a
+        # sample for this capture, so the pipeline is delivering — a NaN
+        # average (all cameras unlit, e.g. covered sensors) is not a
+        # delivery gap.
+        if self._nan_gap_tracker is not None:
             self._nan_gap_tracker.record((_SIDE_NAMES[side_idx], -1), t)
         self._live_source.append_uncorrected(
             side=_SIDE_NAMES[side_idx],
@@ -789,6 +841,9 @@ class MotionConnector(QObject):
     contactQualityIssueStateChanged = pyqtSignal(str, str, str, float, bool)
     contactQualityScanInProgress = pyqtSignal(bool)
     cameraDropoutDetected = pyqtSignal(str, int, str)  # side ("left"/"right"), cam_id (0-7), elapsed HH:MM:SS
+    # Frames resumed for a camera previously flagged Connection Lost — the
+    # watchdog was re-armed and display resumed. Mirror of cameraDropoutDetected.
+    cameraDropoutRecovered = pyqtSignal(str, int, str)  # side, cam_id (0-7), elapsed HH:MM:SS
 
     # post-processing signals
     postProgress = pyqtSignal(int)
@@ -867,13 +922,16 @@ class MotionConnector(QObject):
         self._camera_dropout_threshold_sec = float(cfg.get("cameraDropoutThresholdSec", 2.0))
 
         # Camera dropout watchdog state — reset at start of each scan.
+        # _camera_last_seen is refreshed on every FRAME ARRIVAL for the
+        # camera (see _LivePlotSink.consume), so membership in
+        # _camera_dropped means "frames stopped arriving" — a camera
+        # streaming unlit frames (covered sensor) is NOT a dropout.
+        # Dropped cameras re-arm automatically when frames resume
+        # (_rearm_dropped_camera), so the set holds currently-silent
+        # cameras, not a permanent per-scan record.
         self._camera_last_seen: dict[tuple[str, int], float] = {}
         self._camera_last_temp: dict[tuple[str, int], float] = {}
         self._camera_dropped: set[tuple[str, int]] = set()
-        # Tracks dropped-camera keys we've already surfaced a 'sent
-        # data after Connection Lost' warning for. One log per dropout
-        # — at 40 Hz a flapping camera would otherwise spam the logs.
-        self._camera_dropped_recovery_logged: set[tuple[str, int]] = set()
 
         # NaN-gap tracker — replaced with a fresh instance at each scan
         # start. Kept on the instance for debugging/introspection only;
@@ -3251,7 +3309,6 @@ class MotionConnector(QObject):
         self._camera_last_seen = {}
         self._camera_last_temp = {}
         self._camera_dropped = set()
-        self._camera_dropped_recovery_logged = set()
         self._dropout_timer.start()
 
         # NaN-gap tracker — fresh per scan (same lifecycle as the watchdog).
@@ -4262,7 +4319,7 @@ class MotionConnector(QObject):
                 elapsed_str = self._scan_elapsed_str()
                 msg = (
                     f"[{elapsed_str}] Camera {side.upper()} {cam_id + 1} dropout detected "
-                    f"(no data for >{threshold:.0f} s). Last temperature: {temp:.1f}°C"
+                    f"(no frames for >{threshold:.0f} s). Last temperature: {temp:.1f}°C"
                 )
                 logger.warning(msg)
                 self.notify(
@@ -4281,6 +4338,29 @@ class MotionConnector(QObject):
                 src = self._current_scan_source
                 if src is not None and getattr(src, "live", False):
                     src.mark_dropped(side=side, cam_id=cam_id, t=now - self._plot_t0)
+
+    def _on_camera_dropout_recovered(self, side: str, cam_id: int) -> None:
+        """Frames resumed for a camera the watchdog had flagged Connection
+        Lost — surface the recovery. Called from _LivePlotSink.consume on
+        the pipeline runner thread right after _rearm_dropped_camera
+        un-marked the key (signal emits and notify() are thread-safe: both
+        go through queued signal delivery).
+
+        Reuses the dropout toast's tag so the "connection lost" toast is
+        replaced in place rather than stacking a second one.
+        """
+        elapsed_str = self._scan_elapsed_str()
+        self.notify(
+            f"Camera {side.upper()} {cam_id + 1} reconnected at {elapsed_str}",
+            type_="success",
+            duration_ms=8000,
+            tag=f"dropout_{side}_{cam_id}",
+        )
+        self.captureLog.emit(
+            f"[{elapsed_str}] Camera {side.upper()} {cam_id + 1} frames "
+            f"resumed — dropout watchdog re-armed."
+        )
+        self.cameraDropoutRecovered.emit(side, cam_id, elapsed_str)
 
     # --- TRIGGER-ON CLOCK (issue #201) ---
     # Single scan-time clock backing the notes duration line, the header
