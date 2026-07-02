@@ -125,6 +125,15 @@ _SCAN = [
         "Wait a few seconds for the previous scan to finish, then try again. "
         "Reconnect if the system stays busy.",
     ),
+    _e(
+        "E-303", "scan",
+        "Camera data lost during scan",
+        "Every camera stopped delivering data and acquisition could not "
+        "continue, so the scan was stopped. Data captured before the loss "
+        "was saved.",
+        "Check the sensor cables and power, then reconnect and start a new "
+        "scan. If it happens repeatedly, send a bug report.",
+    ),
 ]
 
 

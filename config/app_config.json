@@ -57,6 +57,7 @@
   "forceLaserFail": false,
   "cameraFakeData": false,
   "cameraTempAlertThresholdC": 110,
+  "scanDataStallTimeoutSec": 15,
   "tecTripTempC": 40,
   "powerOffUnusedCameras": true,
   "sensorDebugLogging": false,
