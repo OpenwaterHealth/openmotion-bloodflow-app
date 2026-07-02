@@ -63,6 +63,10 @@ Item {
     // binds this from appConfig.engineeringMode (issue #165).
     property bool showTemperature: false
 
+    // Connection-lost badge (issue #174) — the viewer sets this true
+    // while the connector's dropout watchdog has this (side, camId)
+    // marked Connection Lost; clears when frames resume.
+    property bool connectionLost: false
 
     // ── Repaint plumbing ───────────────────────────────────────────────
     // Repaints are throttled by the parent PlotViewer: it owns a 33 ms
@@ -345,6 +349,31 @@ Item {
         color: AppTheme.readableInk(AppTheme.accentOrange)
         font.pixelSize: 10
         font.family: "Roboto Mono"
+    }
+
+    // Connection-lost badge — centered red pill shown while the dropout
+    // watchdog has this camera marked Connection Lost (issue #174). The
+    // trace freezes when frames stop, so the badge is the in-plot
+    // explanation; it disappears if frames resume (watchdog re-arm).
+    Rectangle {
+        visible: cell.connectionLost
+        anchors.centerIn: parent
+        width: lostLabel.implicitWidth + 16
+        height: lostLabel.implicitHeight + 8
+        radius: height / 2
+        color: AppTheme.plotCellBg
+        border.color: AppTheme.accentRed
+        border.width: 1
+        opacity: 0.92
+        Text {
+            id: lostLabel
+            anchors.centerIn: parent
+            text: "CONNECTION LOST"
+            color: AppTheme.accentRed
+            font.pixelSize: cell.width >= 160 ? 11 : 9
+            font.weight: Font.DemiBold
+            font.family: "Roboto Mono"
+        }
     }
 
     // ── Pan + wheel-zoom MouseArea ─────────────────────────────────────

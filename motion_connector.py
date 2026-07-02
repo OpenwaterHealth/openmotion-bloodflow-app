@@ -41,6 +41,7 @@ from omotion.config import (
     DEBUG_FLAG_COMM_VERBOSE,
     DEBUG_FLAG_CMD_VERBOSE,
     DEBUG_FLAG_SEND_DEFER,
+    DEBUG_FLAG_HISTO_STALL,
 )
 from omotion.MotionProcessing import process_bin_file
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
@@ -322,6 +323,34 @@ def _rearm_dropped_camera(
         f"after being marked Connection Lost — re-arming the dropout "
         f"watchdog and resuming display."
     )
+
+
+def _scan_data_stall_decision(
+    now_mono: float,
+    trigger_on_mono: float | None,
+    last_seen: dict,
+    timeout_sec: float,
+) -> float | None:
+    """Decide whether data acquisition has completely stopped (issue #248).
+
+    ``last_seen`` is the dropout watchdog's per-camera arrival map
+    (``_camera_last_seen``) — its newest value is the last time a frame
+    arrived from ANY camera. ``trigger_on_mono`` (the current trigger-ON
+    edge) is the floor for the silence measurement: it covers the case
+    where no camera ever delivered a frame, and restarts the clock if the
+    trigger re-opens after a pause.
+
+    Returns the stall duration in seconds when EVERY camera has been
+    silent for longer than ``timeout_sec``, else None. A non-positive
+    ``timeout_sec`` disables the check; a None ``trigger_on_mono`` means
+    the trigger clock isn't open (no ON edge yet), so there's no baseline
+    to measure silence against.
+    """
+    if timeout_sec <= 0 or trigger_on_mono is None:
+        return None
+    newest = max(last_seen.values(), default=trigger_on_mono)
+    stalled = now_mono - max(newest, trigger_on_mono)
+    return stalled if stalled > timeout_sec else None
 
 
 _SIDE_NAMES = ("left", "right")
@@ -935,6 +964,12 @@ class MotionConnector(QObject):
         self._force_laser_fail            = bool(cfg.get("forceLaserFail", False))
         self._camera_temp_alert_threshold_c = float(cfg.get("cameraTempAlertThresholdC", 105.0))
         self._camera_dropout_threshold_sec = float(cfg.get("cameraDropoutThresholdSec", 2.0))
+        # Whole-scan data-stall watchdog (issue #248): if NO selected camera
+        # delivers a frame for this long while the trigger is ON, the scan is
+        # aborted with E-303 instead of running to completion on air. Must be
+        # comfortably above cameraDropoutThresholdSec (per-camera toast) and
+        # the sensor warmup window. <= 0 disables the abort.
+        self._scan_data_stall_timeout_sec = float(cfg.get("scanDataStallTimeoutSec", 3.0))
 
         # Camera dropout watchdog state — reset at start of each scan.
         # _camera_last_seen is refreshed on every FRAME ARRIVAL for the
@@ -947,6 +982,9 @@ class MotionConnector(QObject):
         self._camera_last_seen: dict[tuple[str, int], float] = {}
         self._camera_last_temp: dict[tuple[str, int], float] = {}
         self._camera_dropped: set[tuple[str, int]] = set()
+        # One-shot guard for the all-camera stall abort (issue #248) —
+        # set when E-303 fires, cleared at the next startCapture.
+        self._scan_stall_abort_fired = False
 
         # NaN-gap tracker — replaced with a fresh instance at each scan
         # start. Kept on the instance for debugging/introspection only;
@@ -986,6 +1024,7 @@ class MotionConnector(QObject):
         self._camera_fake_data            = bool(cfg.get("cameraFakeData", False))
         self._histo_throttle              = bool(cfg.get("histoThrottle", False))
         self._histo_cmp                   = bool(cfg.get("histoCmp", False))
+        self._histo_stall_test           = bool(cfg.get("debugHistoStallTest", False))
         self._send_data_defer             = bool(cfg.get("deferHistoSend", False))
         self._comm_verbose                = bool(cfg.get("commVerbose", False))
         self._verbose_command_handling    = bool(cfg.get("verboseCommandHandling", False))
@@ -1219,6 +1258,8 @@ class MotionConnector(QObject):
             flags |= DEBUG_FLAG_HISTO_CMP
         if self._send_data_defer:
             flags |= DEBUG_FLAG_SEND_DEFER
+        if self._histo_stall_test:
+            flags |= DEBUG_FLAG_HISTO_STALL
         return flags
 
     def _apply_sensor_debug_flags(self) -> None:
@@ -3412,6 +3453,7 @@ class MotionConnector(QObject):
         self._camera_last_seen = {}
         self._camera_last_temp = {}
         self._camera_dropped = set()
+        self._scan_stall_abort_fired = False
         self._dropout_timer.start()
 
         # NaN-gap tracker — fresh per scan (same lifecycle as the watchdog).
@@ -4297,6 +4339,50 @@ class MotionConnector(QObject):
                     drop_t = src.last_sample_t(side, cam_id)
                     if math.isfinite(drop_t):
                         src.mark_dropped(side=side, cam_id=cam_id, t=drop_t)
+
+        # ── All-camera stall (issue #248) ─────────────────────────────
+        # Per-camera dropouts above are informational (fail-soft: the
+        # scan keeps running on the remaining cameras). Total data loss
+        # is NOT fail-soft: if no camera has delivered a frame for
+        # scanDataStallTimeoutSec the scan is dead air — abort it and
+        # tell the user instead of counting down to a hollow "complete".
+        if not self._scan_stall_abort_fired:
+            stalled_s = _scan_data_stall_decision(
+                now,
+                self._trigger_on_mono,
+                self._camera_last_seen,
+                self._scan_data_stall_timeout_sec,
+            )
+            if stalled_s is not None:
+                self._abort_scan_data_stall(stalled_s)
+
+    def _abort_scan_data_stall(self, stalled_s: float) -> None:
+        """Abort the running scan because data acquisition has completely
+        stopped (issue #248). Runs on the main thread from the 1 Hz
+        dropout watchdog. Mirrors the safety-trip path: capture-log line,
+        critical-error modal (E-303), then stopCapture() — which cancels
+        the SDK scan; the pipeline's completion sink then finalizes the
+        data files and emits captureFinished, returning the QML scan flow
+        (and the state machine) to idle exactly like a user Stop.
+        """
+        self._scan_stall_abort_fired = True
+        elapsed_str = self._scan_elapsed_str()
+        msg = (
+            f"[{elapsed_str}] No data from any camera for "
+            f">{self._scan_data_stall_timeout_sec:.0f} s — data acquisition "
+            f"has stopped. Stopping the scan; data captured before the loss "
+            f"is saved."
+        )
+        logger.error(msg)
+        self.captureLog.emit(msg)
+        self._raise_critical(
+            "E-303",
+            detail=(
+                f"no camera frames for {stalled_s:.0f} s "
+                f"(scan elapsed {elapsed_str})"
+            ),
+        )
+        self.stopCapture()
 
     def _on_camera_dropout_recovered(self, side: str, cam_id: int) -> None:
         """Frames resumed for a camera the watchdog had flagged Connection

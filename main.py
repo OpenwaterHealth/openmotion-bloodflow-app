@@ -76,12 +76,20 @@ def _load_app_config() -> dict:
     """Load application config from config/app_config.json. Returns defaults if missing or invalid."""
     defaults = {
         "forceLaserFail": False,
+        # QA/bench lever: sets DEBUG_FLAG_HISTO_STALL on both sensors so a
+        # scan deterministically loses all camera data ~45 s in while USB
+        # stays alive (sensor-fw#75) — the #248/#174 repro. Default off.
+        "debugHistoStallTest": False,
         # In-app updater source overrides (default None => production GitHub
         # repo). updateRepo swaps the owner/repo; updateApiUrl fully overrides
         # the releases-latest endpoint (used by the local update-test server).
         "updateRepo": None,
         "updateApiUrl": None,
         "cameraTempAlertThresholdC": 105,
+        # Whole-scan data-stall watchdog (issue #248): abort the scan with
+        # E-303 when no camera delivers a frame for this many seconds while
+        # the trigger is ON. <= 0 disables the abort.
+        "scanDataStallTimeoutSec": 3,
         # Console over-temp trip (°C) pushed to the console user config on
         # connect. 0/missing disables the firmware trip, so this is validated
         # (1-60 °C) before any write; see motion_config.ensure_tec_trip.

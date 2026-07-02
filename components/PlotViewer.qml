@@ -429,6 +429,35 @@ Rectangle {
         }
     }
 
+    // ── Per-camera "Connection Lost" badges (issue #174) ───────────────
+    // Map "side:camId" → true while the connector's dropout watchdog has
+    // that camera marked Connection Lost. Fed by cameraDropoutDetected /
+    // cameraDropoutRecovered (both delivered queued on the GUI thread);
+    // cleared when a fresh live source arrives (scan start). Reassigned
+    // wholesale — never mutated in place — so the cell delegate bindings
+    // re-evaluate. Badges only display on the live source (see the
+    // delegate's connectionLost binding), so panning to a past scan hides
+    // them without losing the state.
+    property var _lostCameras: ({})
+
+    function _setCameraLost(side, camId, lost) {
+        var m = {}
+        for (var k in viewer._lostCameras) m[k] = viewer._lostCameras[k]
+        if (lost) m[side + ":" + camId] = true
+        else delete m[side + ":" + camId]
+        viewer._lostCameras = m
+    }
+
+    Connections {
+        target: MotionInterface
+        function onCameraDropoutDetected(side, camId, elapsed) {
+            viewer._setCameraLost(side, camId, true)
+        }
+        function onCameraDropoutRecovered(side, camId, elapsed) {
+            viewer._setCameraLost(side, camId, false)
+        }
+    }
+
     // ── Profile HUD state ──────────────────────────────────────────────
     // Hidden behind engineeringMode && showProfiling — clinical users
     // never see this overlay. Counters accumulate per tick; the 1 Hz
@@ -530,6 +559,11 @@ Rectangle {
         viewer.liveEdgeSnapshot = viewer.scanSource ? viewer.scanSource.liveEdge : 0
         viewer.followLive = true
         viewer._dirty = true
+        // Fresh live source = new scan → clear stale Connection Lost
+        // badges. A past (non-live) source keeps the state; its badges
+        // are already hidden by the delegate's live-only binding.
+        if (viewer.scanSource && viewer.scanSource.live === true)
+            viewer._lostCameras = ({})
         // Re-fit y-axis to the new source's data immediately, otherwise
         // a past scan loaded with very different value ranges would draw
         // off-axis until the next autoscale tick.
@@ -746,6 +780,11 @@ Rectangle {
                         liveEdgeSnapshot: viewer.liveEdgeSnapshot
                         panZoomTarget: viewer
                         cursorT: viewer.cursorT
+                        // Live-source only: past scans have no "current"
+                        // connection state to report (issue #174).
+                        connectionLost: viewer.scanSource !== null
+                            && viewer.scanSource.live === true
+                            && viewer._lostCameras[modelData.side + ":" + modelData.camId] === true
                     }
                 }
             }
