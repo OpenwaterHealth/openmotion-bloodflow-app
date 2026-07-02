@@ -164,7 +164,9 @@ Item {
                 MotionInterface.notify("Interrupted scans can't be exported.", "warning")
                 return
             }
-            exportDialog.selectedScanId = rows[0].label
+            // Export by the unique DB session id — labels can collide, and a
+            // by-label lookup silently exports the newest match (issue #254).
+            exportDialog.exportSessionId = rows[0].sessionId
             exportDialog.selectedFile = "file:///" + MotionInterface.directory
                                         + "/" + rows[0].label + "_export.csv"
             exportDialog.open()
@@ -173,16 +175,16 @@ Item {
 
         // 2+ checked -> pick a destination folder. Interrupted scans can't be
         // exported, so drop them here and fold them into the skip count.
-        var labels = [], skipped = 0
+        var ids = [], skipped = 0
         for (var i = 0; i < rows.length; i++) {
             if (rows[i].interrupted) { skipped += 1; continue }
-            labels.push(rows[i].label)
+            ids.push(rows[i].sessionId)
         }
-        if (labels.length === 0) {
+        if (ids.length === 0) {
             MotionInterface.notify("Interrupted scans can't be exported.", "warning")
             return
         }
-        exportFolderDialog.pendingLabels = labels
+        exportFolderDialog.pendingSessionIds = ids
         exportFolderDialog.pendingSkipped = skipped
         exportFolderDialog.open()
     }
@@ -614,12 +616,13 @@ Item {
         title: "Export Scan CSV"
         fileMode: Dialogs.FileDialog.SaveFile
         nameFilters: ["CSV files (*.csv)", "All files (*)"]
-        property string selectedScanId: ""
+        property int exportSessionId: -1
         onAccepted: {
             var path = selectedFile.toString().replace("file:///", "")
             // Async: runs on a worker thread; the success toast fires
-            // from onScanCsvExportFinished below.
-            MotionInterface.exportScanCsv(selectedScanId, path)
+            // from onScanCsvExportFinished below. By unique session id
+            // (labels can collide — #254).
+            MotionInterface.exportScanCsv(exportSessionId, path)
         }
     }
 
@@ -627,14 +630,15 @@ Item {
         id: exportFolderDialog
         title: "Export Scans to Folder"
         currentFolder: "file:///" + (MotionInterface.directory || "")
-        property var pendingLabels: []
+        property var pendingSessionIds: []
         property int pendingSkipped: 0
         onAccepted: {
             var folder = selectedFolder.toString().replace("file:///", "")
             // Async: the batch runs on a worker thread; the summary
             // toast fires from onScansExportFinished below, which folds
             // in pendingSkipped (interrupted scans filtered pre-dialog).
-            MotionInterface.exportScansToFolder(pendingLabels, folder)
+            // By unique session id (labels can collide — #254).
+            MotionInterface.exportScansToFolder(pendingSessionIds, folder)
         }
     }
 
