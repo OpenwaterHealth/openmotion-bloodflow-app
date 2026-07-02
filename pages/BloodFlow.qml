@@ -21,7 +21,10 @@ Rectangle {
     // Aggregate live state of the contact-quality runners so main.qml
     // can detect 'check in progress' for the close-while-busy warning
     // (issue #75). Either runner being non-idle counts as busy.
-    readonly property bool checkRunning: qualityCheckRunner.running
+    // Includes a gate-pending check (armed but waiting for the pipeline
+    // to go idle) so main.qml's close-while-busy warning still covers it.
+    readonly property bool checkRunning: qualityCheckRunner.running ||
+                                         (startGate.running && startGate.action === "check")
 
     // Hand main.qml the same ModalManager BloodFlow's icon-bar uses,
     // so the close-while-busy handler can dismiss any open modal
@@ -127,36 +130,65 @@ Rectangle {
         scanRunner.start()
     }
 
-    // Scan-start gate: the pre-scan CQ check's SDK worker keeps unwinding
+    // Start gate: the pre-scan CQ check's SDK worker keeps unwinding
     // for ~2 s after its results are displayed, and a start issued in that
     // window is refused synchronously by the connector's _ensure_idle gate
     // (the failure used to be swallowed — modal closed, nothing happened).
-    // Poll isPipelineIdle() and begin the scan the moment the connector is
-    // actually free; give up loudly after 8 s.
-    property bool scanStartPending: scanStartGate.running
+    // Poll isPipelineIdle() and begin the moment the connector is actually
+    // free; give up loudly after 8 s — unless a camera configuration (FPGA
+    // flash, ~50 s) is what holds the pipeline (issue #283), in which case
+    // wait it out on the flash watchdog's timescale instead of erroring.
+    property bool scanStartPending: startGate.running && startGate.action === "scan"
     function beginScanWhenReady() {
-        if (bloodFlow.scanning || scanStartGate.running) return
-        scanStartGate.elapsedMs = 0
-        scanStartGate.start()
+        if (bloodFlow.scanning || startGate.running) return
+        startGate.arm("scan")
+    }
+    // Same gate for starting a contact-quality check (Check button and the
+    // clinical pre-scan check): firing qualityCheckRunner while a
+    // configuration was still draining used to surface a raw "Camera
+    // configuration already in progress" error in the modal (issue #283).
+    function beginCheckWhenReady() {
+        if (bloodFlow.scanning || startGate.running || qualityCheckRunner.running)
+            return
+        startGate.arm("check")
     }
     Timer {
-        id: scanStartGate
+        id: startGate
         interval: 200
         repeat: true
-        triggeredOnStart: true   // idle path starts the scan with no delay
+        triggeredOnStart: true   // idle path starts with no delay
+        property string action: "scan"   // "scan" | "check"
         property int elapsedMs: 0
+        function arm(what) {
+            action = what
+            elapsedMs = 0
+            start()
+        }
         onTriggered: {
             if (MotionInterface.isPipelineIdle()) {
                 stop()
-                beginScanNow()
+                if (action === "scan")
+                    beginScanNow()
+                else
+                    qualityCheckRunner.start()
                 return
             }
             elapsedMs += interval
-            if (elapsedMs >= 8000) {
+            // A config in flight legitimately blocks for ~50 s — match
+            // ScanRunner's flash watchdog bound. Anything else holding the
+            // pipeline past 8 s is stuck; give up loudly.
+            var deadline = MotionInterface.isConfigInFlight() ? 250000 : 8000
+            if (elapsedMs >= deadline) {
                 stop()
-                MotionInterface.notify(
-                    "Could not start scan — the previous check is still " +
-                    "finishing. Please press Start again.", "error")
+                if (action === "scan") {
+                    MotionInterface.notify(
+                        "Could not start scan — the previous step is still " +
+                        "finishing. Please press Start again.", "error")
+                } else {
+                    contactQualityModal.showError(
+                        "Could not start check — the previous step is still " +
+                        "finishing. Please try again.")
+                }
             }
         }
     }
@@ -197,7 +229,7 @@ Rectangle {
                     clinicalStartPending = true
                     contactQualityModal.preScanMode = true
                     contactQualityModal.reset(true)
-                    qualityCheckRunner.start()
+                    beginCheckWhenReady()
                 } else {
                     beginScanWhenReady()
                 }
@@ -206,7 +238,7 @@ Rectangle {
         onCheckClicked: {
             modalManager.closeCurrent()
             contactQualityModal.reset(false)
-            qualityCheckRunner.start()
+            beginCheckWhenReady()
         }
 
         // Toggle buttons — open the named modal, or close it if it's
@@ -400,7 +432,7 @@ Rectangle {
         onRetestRequested: {
             contactQualityModal.preScanMode = bloodFlow.clinicalStartPending
             contactQualityModal.reset(bloodFlow.clinicalStartPending)
-            qualityCheckRunner.start()
+            beginCheckWhenReady()
         }
         onDismissed: {
             if (!bloodFlow.scanning)
