@@ -1149,10 +1149,37 @@ class MotionConnector(QObject):
                 logger.warning("Failed to set debug flags on %s sensor", side)
 
     def _schedule_sensor_init(self, side: str):
-        """Delay initial sensor commands to allow USB settle."""
-        QTimer.singleShot(1000, lambda: self._run_sensor_init(side))
+        """Delay initial sensor commands to allow USB settle, then run
+        them on a daemon worker thread. The init sequence is a multi-
+        command USB conversation with a built-in 0.5 s camera-power
+        settle sleep — on the GUI thread it froze the app for >0.5 s on
+        every sensor (re)connect."""
+        QTimer.singleShot(
+            1000, lambda: self._start_sensor_init_worker(side)
+        )
+
+    def _start_sensor_init_worker(self, side: str) -> None:
+        """Spawn the init worker. Worker-safety: the SDK serializes
+        per-device command I/O (CommInterface._io_lock/_send_lock), every
+        signal emitted from the sequence queues to the main thread, and
+        _raise_critical is worker-safe by contract — same pattern as the
+        CQ-check and past-scan-load workers."""
+        threading.Thread(
+            target=self._run_sensor_init, args=(side,),
+            name=f"sensor-init-{side}", daemon=True,
+        ).start()
 
     def _run_sensor_init(self, side: str):
+        """Run the connect-time init sequence for one sensor. Called on
+        a sensor-init worker thread (see _start_sensor_init_worker);
+        unit tests call it synchronously. Never raises — an uncaught
+        exception on a plain worker thread would vanish to stderr."""
+        try:
+            self._run_sensor_init_impl(side)
+        except Exception:
+            logger.exception("sensor init failed for %s sensor", side)
+
+    def _run_sensor_init_impl(self, side: str):
         if side == "left" and not self._leftSensorConnected:
             return
         if side == "right" and not self._rightSensorConnected:
