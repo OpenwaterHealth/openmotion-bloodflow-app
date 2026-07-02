@@ -420,6 +420,13 @@ Rectangle {
         }
         onContinueRequested: {
             if (bloodFlow.clinicalStartPending) {
+                // Defense in depth for issue #268: never arm the scan while
+                // the pre-scan check is still in flight. The modal already
+                // disables Start Scan during "checking"; this catches any
+                // other path that fires continueRequested early. By the time
+                // results are on screen the runner is idle, so the normal
+                // click-through is unaffected.
+                if (bloodFlow.checkRunning) return
                 contactQualityModal.close()
                 // Gated, not direct: the CQ check's worker is often still
                 // unwinding when the user clicks Start Scan, and an

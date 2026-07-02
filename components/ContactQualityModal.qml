@@ -510,17 +510,28 @@ Item {
                 }
                 Button {
                     visible: root.preScanMode
+                    // Never startable mid-check (issue #268): engineering
+                    // mode makes this footer visible during "checking" (for
+                    // Force Dismiss), which used to let Start Scan arm the
+                    // scan before the check reported — the scan then began
+                    // regardless of the contact-quality outcome.
+                    enabled: root.state_ !== "checking"
                     text: "Start Scan"
-                    hoverEnabled: true
+                    hoverEnabled: enabled
                     Layout.preferredHeight: 45
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 12
-                        color: parent.hovered ? "#FFFFFF" : AppTheme.textSecondary
+                        color: !parent.enabled ? AppTheme.textDisabled
+                              : (parent.hovered ? "#FFFFFF" : AppTheme.textSecondary)
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? AppTheme.accentGreen : AppTheme.bgInput
-                        radius: 4; border.color: parent.hovered ? AppTheme.accentGreen : AppTheme.borderSoft; border.width: 1
+                        color: !parent.enabled ? AppTheme.bgCard
+                              : (parent.hovered ? AppTheme.accentGreen : AppTheme.bgInput)
+                        radius: 4
+                        border.color: !parent.enabled ? AppTheme.borderSubtle
+                                    : (parent.hovered ? AppTheme.accentGreen : AppTheme.borderSoft)
+                        border.width: 1
                     }
                     onClicked: { root.continueRequested(); root.close(); root.dismissed() }
                 }
