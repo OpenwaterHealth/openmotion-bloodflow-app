@@ -75,13 +75,14 @@ _CQ_DEFAULT_ROLLING_WINDOW = 10
 
 # Console front-panel RGB LED states — wire values of the firmware's
 # OW_CTRL_SET_IND command (console-fw led_driver.c, via
-# omotion.MotionConsole.set_rgb_led): 0=off, 1=red, 2=blue, 3=green.
+# omotion.MotionConsole.set_rgb_led): 0=off, 1=red, 2=green, 3=blue
+# (console-fw led_driver.h: LED_NONE=0, LED_RED=1, LED_GREEN=2, LED_BLUE=3).
 # The firmware itself shows solid green when idle and solid blue while the
 # trigger/laser is active; its hard-fault Error_Handler blinks blue at
 # 500 ms. The app-side error blink below mirrors that error indication.
 _RGB_LED_OFF = 0
-_RGB_LED_BLUE = 2
-_RGB_LED_GREEN = 3
+_RGB_LED_BLUE = 3
+_RGB_LED_GREEN = 2
 _ERROR_LED_BLINK_MS = 500  # on/off half-period, matches firmware Error_Handler
 
 # ── Engineering-mode unlock ──────────────────────────────────────────────
