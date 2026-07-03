@@ -135,17 +135,8 @@ exe_gui = EXE(
     upx=False   # safer for DLLs on Windows
 )
 
-exe_cli = EXE(
-    pyz, a.scripts, [],
-    exclude_binaries=True,
-    name=f"{APP_NAME}_console",
-    console=True,
-    icon=ICON_FILE,
-    upx=False
-)
-
 coll = COLLECT(
-    exe_gui, exe_cli,
+    exe_gui,
     a.binaries, a.zipfiles, a.datas,
     strip=False, upx=False, upx_exclude=[],
     name=APP_NAME
