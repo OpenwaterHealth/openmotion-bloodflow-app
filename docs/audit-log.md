@@ -105,15 +105,19 @@ LIMIT 50;
 
 ## Sending debug logs to Openwater
 
-The **Send Debug Logs** button (top of the audit-log viewer) packages the
-app's diagnostic logs for support. It writes a zip to
+Debug logs are **not part of the audit log** — the audit log is the
+clinical record, while the debug bundle is engineering diagnostics for
+support. The **Send Debug Logs** button lives in its own **Settings →
+Support** section. It packages the app's diagnostic logs for support,
+writing a zip to
 `<dataDirectory>/data/debug-bundles/debug-bundle-<timestamp>.zip`
 containing the app log files from the last 48 hours, `app_config.json`,
 and a `system_info.txt` (app/SDK version + host details). The file
 explorer opens with the zip selected, and a message shows the path —
 **email that zip to support@openwater.cc**. No data is sent
 automatically, and the bundle contains no scan data or patient
-information.
+information. The only trace in the audit log is the
+`debug_bundle_created` event recording that a bundle was made.
 
 ## Exporting to CSV
 
