@@ -47,7 +47,10 @@ SCAN_DURATION_MIN    = 10
 QUALITY_CHECK_TIMEOUT = 180     # max wait for "Good signal quality" modal
 START_RETRY_SEC      = 60       # re-click Start if no dialog after this long
 STOP_SETTLE_SEC      = 15       # extra settle after teardown completes
-SCAN_TEARDOWN_TIMEOUT = 90      # max wait for "Full scan ended" after Stop
+# Under USB stress the app can take ~2 min to register Stop and flush;
+# observed 122 s on a stressed scan. Wait comfortably past that so the
+# next Start lands after teardown instead of falling through to the retry.
+SCAN_TEARDOWN_TIMEOUT = 240     # max wait for "Full scan ended" after Stop
 POWER_CYCLE_OFF_SEC  = 5.0
 RECONNECT_TIMEOUT    = 60
 RECONNECT_SETTLE_SEC = 30       # after CONNECTED: let sensors re-enumerate
