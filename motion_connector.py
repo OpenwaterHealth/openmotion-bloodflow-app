@@ -50,7 +50,8 @@ from motion_config import (
     TEC_TRIP_MIN_C,
     TecTripOutcome,
     ensure_tec_trip,
-    load_tec_params,
+    load_tec_voltage_params,
+    select_tec_voltage,
 )
 import error_codes
 import bug_report
@@ -1118,7 +1119,7 @@ class MotionConnector(QObject):
         # doesn't match the latest request is stale and dropped.
         self._past_scan_load_seq = 0
 
-        self._tec_voltage_default = load_tec_params(config_dir)
+        self._tec_voltage_params = load_tec_voltage_params(config_dir)
         self._console_mutex = QRecursiveMutex()
 
         ft_mean     = cfg.get("ft_min_mean_per_camera")
@@ -1823,11 +1824,21 @@ class MotionConnector(QObject):
                 # exception and terminates the app process.
                 try:
                     self._interface.log_console_info()
-                    if self._interface.console.tec_voltage(self._tec_voltage_default):
-                        logger.info(f"Console TEC voltage set to {self._tec_voltage_default}V")
+                    # EVT2 consoles (board-ID strap 1) need +1.16 V on the
+                    # TEC DAC to hold the lasers at 25 C; DVT and beyond use
+                    # TEC_VOLTAGE_DEFAULT from tec_params.json (issue #269).
+                    tec_voltage, tec_reason = select_tec_voltage(
+                        self._interface.console, self._tec_voltage_params
+                    )
+                    if self._interface.console.tec_voltage(tec_voltage):
+                        logger.info(
+                            f"Console TEC voltage set to {tec_voltage}V "
+                            f"({tec_reason})"
+                        )
                     else:
                         logger.error(
-                            f"Failed to set console TEC voltage to {self._tec_voltage_default}V"
+                            f"Failed to set console TEC voltage to "
+                            f"{tec_voltage}V ({tec_reason})"
                         )
                     if self._interface.console.set_fan_speed(fan_speed=100):
                         logger.info("Console fan speed set to 100%")
