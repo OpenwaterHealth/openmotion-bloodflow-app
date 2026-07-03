@@ -47,6 +47,21 @@ Item {
         ListElement { name: "All";       maskHex: "0xFF" }
     }
 
+    // Content-fit width for the mask selectors (#315): widest pattern
+    // name at the ComboBox font, plus fixed chrome — 10px contentItem
+    // leftPadding + ~10px indicator glyph + its 10px right inset + 10px
+    // text/indicator gap. Measured so a longer pattern name added to
+    // sensorPatterns can never elide. ~98px with Segoe UI; capped at the
+    // pre-#315 150 so an exotic fallback font can't make it wider than
+    // it ever was.
+    FontMetrics { id: maskSelectorMetrics; font.pixelSize: 13 }
+    readonly property int maskSelectorWidth: {
+        var w = 0
+        for (var i = 0; i < sensorPatterns.count; i++)
+            w = Math.max(w, maskSelectorMetrics.advanceWidth(sensorPatterns.get(i).name))
+        return Math.min(150, Math.ceil(w) + 40)
+    }
+
     function maskFromArray(arr) {
         if (!arr || arr.length !== 8) return 0
         const bitMap = [7, 6, 5, 4, 3, 2, 1, 0]
@@ -282,7 +297,11 @@ Item {
 
                     ComboBox {
                         id: leftSelector
-                        Layout.preferredWidth: 150
+                        // Content-fit (#315) — and pin it: nested-layout
+                        // children can inherit fillWidth, which would
+                        // stretch the box back out to the column width.
+                        Layout.fillWidth: false
+                        Layout.preferredWidth: root.maskSelectorWidth
                         Layout.preferredHeight: 32
                         Layout.alignment: Qt.AlignHCenter
                         model: sensorPatterns
@@ -332,7 +351,9 @@ Item {
 
                     ComboBox {
                         id: rightSelector
-                        Layout.preferredWidth: 150
+                        // Content-fit (#315) — see leftSelector.
+                        Layout.fillWidth: false
+                        Layout.preferredWidth: root.maskSelectorWidth
                         Layout.preferredHeight: 32
                         Layout.alignment: Qt.AlignHCenter
                         model: sensorPatterns
