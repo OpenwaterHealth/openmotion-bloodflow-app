@@ -1,0 +1,7 @@
+{
+    "name": "Default Scan",
+    "leftMask": 255,
+    "rightMask": 255,
+    "freeRun": false,
+    "durationSec": 3600
+}
