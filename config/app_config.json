@@ -24,8 +24,6 @@
     "bviClampHigh": 10.0,
     "bfiColor": "#ffffff",
     "bviColor": "#3437db",
-    "bviLowPassEnabled": true,
-    "bviLowPassCutoffHz": 40.0,
     "plotWindowSec": 5,
     "autoScale": false,
     "autoScalePerPlot": false,

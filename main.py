@@ -162,8 +162,6 @@ def _load_app_config() -> dict:
         "plotWindowSec": 15,
         "bfiColor": "#E74C3C",
         "bviColor": "#3498DB",
-        "bviLowPassEnabled": False,
-        "bviLowPassCutoffHz": 40.0,
         "bfiClampLow": 0.0,
         "bfiClampHigh": 10.0,
         "bviClampLow": 0.0,
