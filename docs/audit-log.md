@@ -122,9 +122,9 @@ LIMIT 50;
 
 Debug logs are **not part of the audit log** — the audit log is the
 clinical record, while the debug bundle is engineering diagnostics for
-support. The **Send Debug Logs** button lives in its own **Settings →
-Support** section. It packages the app's diagnostic logs for support,
-writing a zip to
+support. The **Send Debug Logs** button sits in the top-right corner of
+the **Settings → About** section (with the firmware information). It
+packages the app's diagnostic logs for support, writing a zip to
 `<dataDirectory>/data/debug-bundles/debug-bundle-<timestamp>.zip`
 containing the app log files from the last 48 hours, `app_config.json`,
 and a `system_info.txt` (app/SDK version + host details). The file
