@@ -107,14 +107,17 @@ Item {
         bviColor           = cfg.bviColor           !== undefined ? cfg.bviColor           : "#3498DB"
         bviLowPassEnabled  = cfg.bviLowPassEnabled  !== undefined ? cfg.bviLowPassEnabled  : false
         bviLowPassCutoffHz = cfg.bviLowPassCutoffHz !== undefined ? cfg.bviLowPassCutoffHz : 40.0
-        bfiMin       = cfg.bfiMin       !== undefined ? cfg.bfiMin       : 0.0
-        bfiMax       = cfg.bfiMax       !== undefined ? cfg.bfiMax       : 10.0
-        bviMin       = cfg.bviMin       !== undefined ? cfg.bviMin       : 0.0
-        bviMax       = cfg.bviMax       !== undefined ? cfg.bviMax       : 10.0
-        meanMin      = cfg.meanMin      !== undefined ? cfg.meanMin      : 0.0
-        meanMax      = cfg.meanMax      !== undefined ? cfg.meanMax      : 500.0
-        contrastMin  = cfg.contrastMin  !== undefined ? cfg.contrastMin  : 0.0
-        contrastMax  = cfg.contrastMax  !== undefined ? cfg.contrastMax  : 1.0
+        // Persisted bounds are untrusted (#229) — sanitizeBoundPair
+        // supplies the per-metric defaults for missing/garbage values
+        // and re-clamps anything a hand-edited config smuggled in.
+        var b = sanitizeBoundPair("bfi", cfg.bfiMin, cfg.bfiMax)
+        bfiMin = b.min; bfiMax = b.max
+        b = sanitizeBoundPair("bvi", cfg.bviMin, cfg.bviMax)
+        bviMin = b.min; bviMax = b.max
+        b = sanitizeBoundPair("mean", cfg.meanMin, cfg.meanMax)
+        meanMin = b.min; meanMax = b.max
+        b = sanitizeBoundPair("contrast", cfg.contrastMin, cfg.contrastMax)
+        contrastMin = b.min; contrastMax = b.max
         writeRawCsv       = cfg.writeRawCsv       !== undefined ? cfg.writeRawCsv       : false
         rawCsvDurationSec = cfg.rawCsvDurationSec !== undefined ? cfg.rawCsvDurationSec : null
         if (darkModeSwitch) darkModeSwitch.checked = cfg.darkMode !== false
@@ -334,6 +337,63 @@ Item {
     function _roundTo(v, decimals) {
         var f = Math.pow(10, decimals)
         return Math.round(v * f) / f
+    }
+
+    // ── Manual plot-bound clamping (issue #229) ─────────────────────────
+    // Sane entry windows per metric. `decimals` matches the field's
+    // display precision; one display unit (10^-decimals) doubles as the
+    // enforced minimum min→max gap, so min < max always holds strictly
+    // (PlotCell._drawTrace divides by max - min).
+    //   bfi/bvi:  pipeline emits (1 - norm) * 10 — nominal 0–10 (the
+    //             bfiClampLow/High display-clamp precedent); ±100 gives
+    //             10x headroom for out-of-calibration excursions.
+    //   mean:     10-bit pixel data (1024 histogram bins); dark-corrected
+    //             mean can dip slightly below zero.
+    //   contrast: speckle contrast is nominally 0–1.
+    readonly property var _boundPolicy: ({
+        "bfi":      { lo: -100,  hi: 100,  decimals: 1, defMin: 0.0, defMax: 10.0 },
+        "bvi":      { lo: -100,  hi: 100,  decimals: 1, defMin: 0.0, defMax: 10.0 },
+        "mean":     { lo: -1024, hi: 1024, decimals: 0, defMin: 0.0, defMax: 500.0 },
+        "contrast": { lo: -10,   hi: 10,   decimals: 2, defMin: 0.0, defMax: 1.0 }
+    })
+
+    // Coerce one edited bound: clamp into the metric's window, then keep
+    // it one display-step clear of the opposing bound (`other`) so the
+    // pair can never invert or collapse. Returns the value rounded to the
+    // field's precision; callers re-display it so the correction is
+    // visible to the user.
+    function clampBound(metric, which, value, other) {
+        var p = _boundPolicy[metric]
+        var v = Number(value)
+        if (p === undefined) return v
+        if (!isFinite(v)) return which === "min" ? p.defMin : p.defMax
+        var step = Math.pow(10, -p.decimals)
+        if (which === "min") {
+            v = Math.min(Math.max(v, p.lo), p.hi - step)
+            if (isFinite(other) && v > other - step) v = other - step
+        } else {
+            v = Math.min(Math.max(v, p.lo + step), p.hi)
+            if (isFinite(other) && v < other + step) v = other + step
+        }
+        return _roundTo(v, p.decimals)
+    }
+
+    // Sanitize a persisted min/max pair — config values are untrusted
+    // (hand-edited or pre-#229 files can carry anything). Non-numeric or
+    // missing → metric defaults; out-of-window → clamped; a pair still
+    // inverted (or collapsed) after clamping → defaults.
+    function sanitizeBoundPair(metric, minValue, maxValue) {
+        var mn = Number(minValue)
+        var mx = Number(maxValue)
+        var p = _boundPolicy[metric]
+        if (p === undefined) return { min: mn, max: mx }
+        var step = Math.pow(10, -p.decimals)
+        if (!isFinite(mn)) mn = p.defMin
+        if (!isFinite(mx)) mx = p.defMax
+        mn = _roundTo(Math.min(Math.max(mn, p.lo), p.hi - step), p.decimals)
+        mx = _roundTo(Math.min(Math.max(mx, p.lo + step), p.hi), p.decimals)
+        if (mn >= mx) { mn = p.defMin; mx = p.defMax }
+        return { min: mn, max: mx }
     }
 
     component PillSwitch: Switch {
@@ -689,31 +749,35 @@ Item {
 
                         Text { text: "BFI"; color: AppTheme.readableInk(root.bfiColor); font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
+                            objectName: "bfiMinField"
                             Layout.preferredWidth: 90
                             decimals: 1
                             text: root.bfiMin.toFixed(1)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bfiMin = root._roundTo(v, 1); text = root.bfiMin.toFixed(1) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bfiMin = root.clampBound("bfi", "min", v, root.bfiMax); text = root.bfiMin.toFixed(1) }
                         }
                         StyledNumberField {
+                            objectName: "bfiMaxField"
                             Layout.preferredWidth: 90
                             decimals: 1
                             text: root.bfiMax.toFixed(1)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bfiMax = root._roundTo(v, 1); text = root.bfiMax.toFixed(1) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bfiMax = root.clampBound("bfi", "max", v, root.bfiMin); text = root.bfiMax.toFixed(1) }
                         }
                         Item { Layout.fillWidth: true }
 
                         Text { text: "BVI"; color: AppTheme.readableInk(root.bviColor); font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
+                            objectName: "bviMinField"
                             Layout.preferredWidth: 90
                             decimals: 1
                             text: root.bviMin.toFixed(1)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bviMin = root._roundTo(v, 1); text = root.bviMin.toFixed(1) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bviMin = root.clampBound("bvi", "min", v, root.bviMax); text = root.bviMin.toFixed(1) }
                         }
                         StyledNumberField {
+                            objectName: "bviMaxField"
                             Layout.preferredWidth: 90
                             decimals: 1
                             text: root.bviMax.toFixed(1)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bviMax = root._roundTo(v, 1); text = root.bviMax.toFixed(1) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bviMax = root.clampBound("bvi", "max", v, root.bviMin); text = root.bviMax.toFixed(1) }
                         }
                         Item { Layout.fillWidth: true }
 
@@ -723,35 +787,39 @@ Item {
                         // children, so the grid reflows to just BFI / BVI.
                         Text { visible: !root.clinicalMode; text: "Mean"; color: "#2ECC71"; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
+                            objectName: "meanMinField"
                             visible: !root.clinicalMode
                             Layout.preferredWidth: 90
                             decimals: 0
                             text: root.meanMin.toFixed(0)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.meanMin = Math.round(v); text = root.meanMin.toFixed(0) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.meanMin = root.clampBound("mean", "min", v, root.meanMax); text = root.meanMin.toFixed(0) }
                         }
                         StyledNumberField {
+                            objectName: "meanMaxField"
                             visible: !root.clinicalMode
                             Layout.preferredWidth: 90
                             decimals: 0
                             text: root.meanMax.toFixed(0)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.meanMax = Math.round(v); text = root.meanMax.toFixed(0) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.meanMax = root.clampBound("mean", "max", v, root.meanMin); text = root.meanMax.toFixed(0) }
                         }
                         Item { visible: !root.clinicalMode; Layout.fillWidth: true }
 
                         Text { visible: !root.clinicalMode; text: "Contrast"; color: "#9B59B6"; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
+                            objectName: "contrastMinField"
                             visible: !root.clinicalMode
                             Layout.preferredWidth: 90
                             decimals: 2
                             text: root.contrastMin.toFixed(2)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.contrastMin = root._roundTo(v, 2); text = root.contrastMin.toFixed(2) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.contrastMin = root.clampBound("contrast", "min", v, root.contrastMax); text = root.contrastMin.toFixed(2) }
                         }
                         StyledNumberField {
+                            objectName: "contrastMaxField"
                             visible: !root.clinicalMode
                             Layout.preferredWidth: 90
                             decimals: 2
                             text: root.contrastMax.toFixed(2)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.contrastMax = root._roundTo(v, 2); text = root.contrastMax.toFixed(2) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.contrastMax = root.clampBound("contrast", "max", v, root.contrastMin); text = root.contrastMax.toFixed(2) }
                         }
                         Item { visible: !root.clinicalMode; Layout.fillWidth: true }
                     }
