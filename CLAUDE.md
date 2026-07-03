@@ -93,7 +93,6 @@ Debug flags that are still useful when hardware **is** attached (`config/app_con
 | `test_scan_duration_sec` | `5` | "Test" scan runtime (feature #132). |
 | `cq_dark_threshold_per_camera` | `[3.0,…]` | Contact-quality dark threshold. |
 | `bfiClampLow` / `bfiClampHigh` | `0.0` / `10.0` | Display clamps (values outside show `--`). |
-| `bviLowPassEnabled` | `true` | 1-pole LPF on BVI (cutoff 40 Hz). |
 | `writeRawCsv` | `false` | Opt-in raw histogram CSVs (`{scan_id}_(left\|right)_mask*_raw.csv`). Settings → Engineering toggle; additionally gated on `engineeringMode` — flipping engineering mode off stops raw output even if the toggle was left on. `rawCsvDurationSec` caps seconds written (`null` = whole scan). |
 | `writeCorrectedCsv` | `false` | Opt-in corrected per-cam CSV (`{scan_id}.csv`) — redundant now that per-cam BFI/BVI lands in `scans.db`. Config-only, no Settings UI. |
 | `dataDirectory` | `null` | Single output root — `logs/` and `data/` (`scans.db`, calibrations) live under it. `null` = `app_paths.writable_root()`: cwd for dev runs, exe-adjacent or `%PROGRAMDATA%\Openwater` per `portableMode` when frozen. |
