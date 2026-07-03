@@ -45,7 +45,9 @@ CYCLE_COUNT          = 60       # number of (5-scan + power-cycle) cycles
 SCANS_PER_CYCLE      = 5
 SCAN_DURATION_MIN    = 10
 QUALITY_CHECK_TIMEOUT = 180     # max wait for "Good signal quality" modal
-STOP_SETTLE_SEC      = 15       # wait after Stop for data to flush
+START_RETRY_SEC      = 60       # re-click Start if no dialog after this long
+STOP_SETTLE_SEC      = 15       # extra settle after teardown completes
+SCAN_TEARDOWN_TIMEOUT = 90      # max wait for "Full scan ended" after Stop
 POWER_CYCLE_OFF_SEC  = 5.0
 RECONNECT_TIMEOUT    = 60
 RECONNECT_SETTLE_SEC = 30       # after CONNECTED: let sensors re-enumerate
@@ -66,6 +68,9 @@ _START_SCAN_BUTTON_REL = (0.58, 0.78)
 
 # SDK logs one transition line per state change.
 RE_CONNECTED = re.compile(r"state \S+ -> CONNECTED")
+
+# Connector logs this once scan teardown (flush + post-processing) is done.
+RE_SCAN_ENDED = re.compile(r"Full scan ended")
 
 # Sidebar Start/Stop position (relative to the app window).
 SIDEBAR_START = (0.019, 0.115)
@@ -472,10 +477,21 @@ def _quality_dialog_visible() -> bool:
     return False
 
 
-def _wait_quality_then_start(timeout: int = QUALITY_CHECK_TIMEOUT) -> None:
-    """Poll until the 'Good signal quality' dialog appears, then click Start Scan."""
+def _wait_quality_then_start(
+    label: str = "", timeout: int = QUALITY_CHECK_TIMEOUT
+) -> None:
+    """Poll until the 'Good signal quality' dialog appears, then click Start Scan.
+
+    If the dialog hasn't shown after START_RETRY_SEC, re-click the sidebar
+    Start button: the app silently swallows a Start click that lands while
+    the previous scan is still tearing down (or right after a power cycle),
+    and without a retry that swallowed click strands the whole run. The
+    dialog appears ~8 s after an accepted Start, so a 60 s retry interval
+    can't interrupt an in-flight quality check.
+    """
     log.info(f"  waiting up to {timeout}s for signal quality dialog…")
     deadline = time.time() + timeout
+    last_start_click = time.time()
     while time.time() < deadline:
         time.sleep(5)
         if not is_app_alive():
@@ -486,6 +502,14 @@ def _wait_quality_then_start(timeout: int = QUALITY_CHECK_TIMEOUT) -> None:
             _click_start_scan_button()
             time.sleep(SLEEP)
             return
+        if time.time() - last_start_click >= START_RETRY_SEC:
+            log.warning(
+                f"  no signal-quality dialog {START_RETRY_SEC}s after Start "
+                f"— the click may have been swallowed; re-clicking Start"
+            )
+            ensure_visible()
+            click_sidebar(*SIDEBAR_START, f"{label}: Start (retry)")
+            last_start_click = time.time()
     pytest.fail(f"Signal-quality dialog did not appear within {timeout}s.")
 
 
@@ -513,14 +537,31 @@ def _run_single_scan(cycle_idx: int, scan_idx: int) -> None:
     require_focus()
     click_sidebar(*SIDEBAR_START, f"{label}: Start")
 
-    _wait_quality_then_start()
+    _wait_quality_then_start(label)
     _sleep_with_alive_check(label, SCAN_DURATION_SEC)
 
     move_window_on_screen()
     ensure_visible()
     require_focus()
     log.info(f"  {label}: clicking Stop")
+    # Scan teardown (USB flush, pipeline post-processing, DB save) takes
+    # ~30 s after the Stop click; a Start clicked before the app logs
+    # "Full scan ended" is silently swallowed. Tail the app log so the
+    # next scan waits exactly as long as teardown actually takes.
+    log_path = find_app_log()
+    stop_offset = log_size(log_path) if log_path else 0
     click_sidebar(*SIDEBAR_START, f"{label}: Stop")
+    if log_path:
+        ended = wait_for_pattern(
+            RE_SCAN_ENDED, log_path, stop_offset, SCAN_TEARDOWN_TIMEOUT
+        )
+        if ended:
+            log.info(f"  {label}: teardown complete: {ended}")
+        else:
+            log.warning(
+                f"  {label}: no 'Full scan ended' in app log within "
+                f"{SCAN_TEARDOWN_TIMEOUT}s — continuing anyway"
+            )
     time.sleep(STOP_SETTLE_SEC)
     pyautogui.press("escape")              # dismiss any post-scan modal
     time.sleep(SLEEP)
