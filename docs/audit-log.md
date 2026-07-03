@@ -30,6 +30,21 @@ The viewer lists entries **newest first**, with three columns:
 Use **Refresh** to reload, and **Export CSV** to save the full log to a file
 (see [Exporting](#exporting-to-csv)).
 
+### Filtering the view
+
+A filter bar above the table narrows what is shown (the underlying log is
+never modified):
+
+| Filter | Behavior |
+|---|---|
+| **Event type** | Dropdown of the event types actually present in the log; pick one, or "All events". |
+| **Date range** | `From` / `To` fields, `YYYY-MM-DD` (local time). Both days are inclusive; either side may be left empty. A malformed date shows a red border and is ignored. |
+| **Search** | Case-insensitive substring match across the event type and the `details` JSON (e.g. a scan label). |
+
+Filters combine (AND) and apply to the on-screen view only — **Export CSV
+always writes the complete log**, so the exported file remains the full
+audit record regardless of active filters. **Clear** resets all filters.
+
 ---
 
 ## What gets recorded

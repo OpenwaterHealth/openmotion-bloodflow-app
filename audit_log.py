@@ -48,6 +48,34 @@ EV_DEBUG_BUNDLE_CREATED = "debug_bundle_created"
 _CSV_FIELDS = ["ts_iso", "ts_epoch", "event_type", "details"]
 
 
+def _escape_like(needle: str) -> str:
+    """Escape LIKE wildcards so ``needle`` matches literally (used with
+    ``ESCAPE '\\'``)."""
+    return (
+        needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    )
+
+
+def parse_date_bound(text: Any, end: bool = False) -> Optional[float]:
+    """Parse a ``YYYY-MM-DD`` date string into a local-time epoch bound
+    for filtering on ``ts_epoch``.
+
+    Returns midnight at the start of the day, or — when ``end`` is True —
+    midnight at the start of the *next* day (an exclusive upper bound
+    covering the whole named day). ``None`` for empty/invalid input, so
+    a malformed filter simply doesn't constrain the query.
+    """
+    if not text:
+        return None
+    try:
+        day = datetime.datetime.strptime(str(text).strip(), "%Y-%m-%d")
+    except ValueError:
+        return None
+    if end:
+        day += datetime.timedelta(days=1)
+    return day.timestamp()
+
+
 def gather_host_info() -> Dict[str, Any]:
     """Collect host/system facts for the ``system_info`` event. Best-effort
     — any probe that fails is simply omitted."""
@@ -163,21 +191,75 @@ class AuditLog:
                 "AuditLog: failed to write %s event", event_type, exc_info=True
             )
 
-    def query(self, limit: int = 500) -> List[Dict[str, Any]]:
-        """Return up to ``limit`` rows, newest first, as plain dicts."""
+    def query(
+        self,
+        limit: int = 500,
+        event_type: Optional[str] = None,
+        since_epoch: Optional[float] = None,
+        until_epoch: Optional[float] = None,
+        contains: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return up to ``limit`` rows, newest first, as plain dicts.
+
+        Optional filters (ANDed together; #226):
+          - ``event_type``: exact match on the event type.
+          - ``since_epoch``: inclusive lower bound on ``ts_epoch``.
+          - ``until_epoch``: exclusive upper bound on ``ts_epoch`` (pair
+            with ``parse_date_bound(..., end=True)`` for whole days).
+          - ``contains``: case-insensitive substring across event_type
+            and details; LIKE wildcards in the needle match literally.
+
+        ``limit`` applies to the filtered rows.
+        """
+        sql = "SELECT id, ts_epoch, ts_iso, event_type, details FROM logs"
+        where: List[str] = []
+        params: List[Any] = []
+        if event_type:
+            where.append("event_type = ?")
+            params.append(str(event_type))
+        if since_epoch is not None:
+            where.append("ts_epoch >= ?")
+            params.append(float(since_epoch))
+        if until_epoch is not None:
+            where.append("ts_epoch < ?")
+            params.append(float(until_epoch))
+        if contains:
+            pat = f"%{_escape_like(str(contains))}%"
+            where.append(
+                "(event_type LIKE ? ESCAPE '\\'"
+                " OR IFNULL(details, '') LIKE ? ESCAPE '\\')"
+            )
+            params += [pat, pat]
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(int(limit))
+        try:
+            with self._lock:
+                if self._conn is None:
+                    return []
+                cur = self._conn.execute(sql, params)
+                cols = [c[0] for c in cur.description]
+                return [dict(zip(cols, row)) for row in cur.fetchall()]
+        except Exception:
+            logger.warning("AuditLog: query failed", exc_info=True)
+            return []
+
+    def distinct_event_types(self) -> List[str]:
+        """Sorted list of the distinct event types present in the log
+        (for filter dropdowns). Empty when disabled / on error."""
         try:
             with self._lock:
                 if self._conn is None:
                     return []
                 cur = self._conn.execute(
-                    "SELECT id, ts_epoch, ts_iso, event_type, details"
-                    " FROM logs ORDER BY id DESC LIMIT ?",
-                    (int(limit),),
+                    "SELECT DISTINCT event_type FROM logs"
+                    " ORDER BY event_type ASC"
                 )
-                cols = [c[0] for c in cur.description]
-                return [dict(zip(cols, row)) for row in cur.fetchall()]
+                return [row[0] for row in cur.fetchall()]
         except Exception:
-            logger.warning("AuditLog: query failed", exc_info=True)
+            logger.warning("AuditLog: distinct_event_types failed",
+                           exc_info=True)
             return []
 
     def count(self) -> int:
