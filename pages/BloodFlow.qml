@@ -261,6 +261,12 @@ Rectangle {
                     maskToArray(leftMask),
                     maskToArray(rightMask)
                 )
+                // Seed the modal's duration state from the page too —
+                // close() always commits the modal's freeRun/duration back
+                // to the page, so without this an open+close would clobber
+                // a boot-preset duration (issue #314) with the modal's
+                // hardcoded 1:00:00 default.
+                scanSettingsModal.setInitialDuration(freeRun, durationSec)
             }
             modalManager.toggle(scanSettingsModal)
         }
@@ -648,6 +654,27 @@ Rectangle {
     }
 
     Component.onCompleted: {
+        // Boot into the single default scan preset when no device has been
+        // detected (issue #314, config/default_scan.json). At QML load the
+        // connector is always DISCONNECTED (state 0) — the connection
+        // monitor starts after the engine loads — so this defines the
+        // page's no-device ready state. Nothing is replayed and Start
+        // stays gated on device readiness. Deliberately does NOT set the
+        // _*MaskInitialApplied flags: when a device does connect, the
+        // config-default masks are adopted exactly as before (issue #127).
+        // The clinicalMode branch below still runs afterwards and wins, so
+        // clinical builds keep their forced FDA configuration — the preset
+        // shapes the research-mode boot state only.
+        if (!clinicalMode && MotionInterface.state === 0) {
+            var preset = MotionInterface.defaultScanPreset
+            if (preset && preset.leftMask !== undefined) {
+                leftMask  = preset.leftMask
+                rightMask = preset.rightMask
+                freeRun   = preset.freeRun === true
+                durationSec = freeRun ? 43200
+                            : (preset.durationSec > 0 ? preset.durationSec : 3600)
+            }
+        }
         if (clinicalMode) {
             freeRun = true
             durationSec = 43200

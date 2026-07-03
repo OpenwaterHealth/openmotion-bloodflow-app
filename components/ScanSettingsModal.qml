@@ -127,6 +127,26 @@ Item {
         secondsField.text = String(s).padStart(2, '0')
     }
 
+    // Seed the modal's duration state from the page's current values
+    // (BloodFlow calls this on open, alongside setInitialSelection). Field
+    // texts and the switch are set imperatively because user edits break
+    // their declarative bindings — same reason commitDurationFields writes
+    // the text back. In free-run the page holds the 43200 sentinel, so the
+    // H:M:S fields are left alone (they're hidden and don't apply).
+    function setInitialDuration(fr, durSec) {
+        root.freeRun = (fr === true)
+        modeSwitch.checked = root.freeRun
+        if (!root.freeRun && durSec > 0) {
+            var d = Math.min(durSec, 99 * 3600 + 59 * 60 + 59)
+            root.hours   = Math.floor(d / 3600)
+            root.minutes = Math.floor((d % 3600) / 60)
+            root.seconds = d % 60
+            hoursField.text   = String(root.hours)
+            minutesField.text = String(root.minutes).padStart(2, '0')
+            secondsField.text = String(root.seconds).padStart(2, '0')
+        }
+    }
+
     function setInitialSelection(leftArr, rightArr) {
         leftSensorActive = leftArr
         rightSensorActive = rightArr
