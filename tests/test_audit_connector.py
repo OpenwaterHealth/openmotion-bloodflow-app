@@ -224,6 +224,80 @@ def test_prepare_debug_bundle_creates_zip_and_logs(tmp_path):
     assert "debug_bundle_created" in _types(c)
 
 
+# ── Filtered entries + event types (#226) ───────────────────────────────
+
+def test_filtered_entries_by_event_type(tmp_path):
+    c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
+    c._audit.log("scan_started", {"n": 1})
+    c._audit.log("scan_ended", {"n": 2})
+    out = c.filteredAuditLogEntries({"eventType": "scan_ended"})
+    assert out
+    assert all(e["event_type"] == "scan_ended" for e in out)
+
+
+def test_filtered_entries_text_search(tmp_path):
+    c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
+    c._audit.log("scan_started", {"label": "owXYZ"})
+    out = c.filteredAuditLogEntries({"text": "owxyz"})
+    assert len(out) == 1
+    assert json.loads(out[0]["details"])["label"] == "owXYZ"
+
+
+def test_filtered_entries_date_range(tmp_path):
+    import datetime
+    c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
+    today = datetime.date.today()
+    # From today (inclusive): startup events logged "now" must match.
+    out = c.filteredAuditLogEntries({"dateFrom": today.isoformat(),
+                                     "dateTo": today.isoformat()})
+    assert "system_startup" in [e["event_type"] for e in out]
+    # To yesterday: everything logged today is excluded.
+    yesterday = (today - datetime.timedelta(days=1)).isoformat()
+    assert c.filteredAuditLogEntries({"dateTo": yesterday}) == []
+
+
+def test_filtered_entries_empty_filters_match_unfiltered(tmp_path):
+    c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
+    c._audit.log("scan_started", {"n": 1})
+    unfiltered = c.auditLogEntries()
+    for f in ({}, {"eventType": "", "dateFrom": "", "dateTo": "",
+                   "text": ""}):
+        out = c.filteredAuditLogEntries(f)
+        assert [e["id"] for e in out] == [e["id"] for e in unfiltered]
+
+
+def test_filtered_entries_invalid_dates_are_ignored(tmp_path):
+    # Garbage date strings must not raise and must not filter anything.
+    c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
+    out = c.filteredAuditLogEntries({"dateFrom": "not-a-date",
+                                     "dateTo": "2026-99-99"})
+    assert "system_startup" in [e["event_type"] for e in out]
+
+
+def test_filtered_entries_fail_soft_on_bad_limit(tmp_path):
+    c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
+    assert c.filteredAuditLogEntries({"limit": "garbage"}) == []
+
+
+def test_filtered_entries_no_db_noop(tmp_path):
+    c = _connector(tmp_path, scan_db_path=None)
+    assert c.filteredAuditLogEntries({"eventType": "scan_started"}) == []
+
+
+def test_audit_event_types_slot(tmp_path):
+    c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
+    types = c.auditEventTypes()
+    # Construction always logs these two.
+    assert "system_startup" in types
+    assert "system_info" in types
+    assert types == sorted(types)
+
+
+def test_audit_event_types_no_db_noop(tmp_path):
+    c = _connector(tmp_path, scan_db_path=None)
+    assert c.auditEventTypes() == []
+
+
 def test_prepare_debug_bundle_failure_returns_empty(tmp_path, monkeypatch):
     # If the bundle build raises, the slot must return "" and NOT log a
     # debug_bundle_created event (fail-soft, mirrors the other slots).

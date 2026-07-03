@@ -2641,6 +2641,39 @@ class MotionConnector(QObject):
             logger.warning("auditLogEntries failed", exc_info=True)
             return []
 
+    @pyqtSlot("QVariantMap", result="QVariantList")
+    def filteredAuditLogEntries(self, filters):
+        """Audit-log rows (newest first) matching the Logs modal's filter
+        bar (#226). ``filters`` keys, all optional: ``eventType`` (exact
+        event type), ``dateFrom`` / ``dateTo`` (``YYYY-MM-DD``, local,
+        inclusive whole days), ``text`` (case-insensitive substring
+        across event type + details), ``limit`` (int, default 500).
+        Empty/invalid values are ignored. Pure read — does not itself
+        log, so refreshing never double-logs."""
+        try:
+            from audit_log import parse_date_bound
+            f = dict(filters or {})
+            return self._audit.query(
+                limit=int(f.get("limit") or 500),
+                event_type=str(f.get("eventType") or "") or None,
+                since_epoch=parse_date_bound(f.get("dateFrom")),
+                until_epoch=parse_date_bound(f.get("dateTo"), end=True),
+                contains=str(f.get("text") or "") or None,
+            )
+        except Exception:
+            logger.warning("filteredAuditLogEntries failed", exc_info=True)
+            return []
+
+    @pyqtSlot(result="QVariantList")
+    def auditEventTypes(self):
+        """Distinct event types present in the audit log (sorted), for
+        the Logs modal's filter dropdown (#226)."""
+        try:
+            return self._audit.distinct_event_types()
+        except Exception:
+            logger.warning("auditEventTypes failed", exc_info=True)
+            return []
+
     @pyqtSlot()
     def recordAuditLogViewed(self):
         """Record that the audit log was opened. Called once from
