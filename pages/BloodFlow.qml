@@ -267,6 +267,9 @@ Rectangle {
         onNotesClicked:    modalManager.toggle(notesModal)
         onHistoryClicked:  modalManager.toggle(historyModal)
         onSettingsClicked: modalManager.toggle(settingsModal)
+        // App-log viewer is a separate Window, not a ModalManager modal —
+        // clicking Logs just shows/raises it (close via its title bar).
+        onLogsClicked:     logViewerWindow.open()
     }
 
     // Allow external callers (firmware banner) to open the Settings overlay.
@@ -405,6 +408,12 @@ Rectangle {
 
     LogsModal {
         id: logsModal
+    }
+
+    // Engineering live app-log viewer (icon-bar Logs button) — a separate
+    // non-modal Window, distinct from the audit-log LogsModal above.
+    LogViewerWindow {
+        id: logViewerWindow
     }
 
     ContactQualityModal {
