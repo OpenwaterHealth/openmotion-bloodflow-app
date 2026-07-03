@@ -777,6 +777,8 @@ Item {
                 }
 
                 // ── Audit Log ────────────────────────────────────────────────
+                // Clinical record only — debug/diagnostic tooling lives in
+                // the Support section below (#227).
                 SectionCard {
                     title: "Audit Log"
 
@@ -787,6 +789,31 @@ Item {
                             Layout.preferredWidth: 130
                             onClicked: logsPasswordModal.open()
                         }
+                        Item { Layout.fillWidth: true }
+                    }
+                    Text {
+                        text: "Password-protected, machine-readable record of system "
+                              + "events for auditors. Open the viewer to browse entries "
+                              + "or export them as CSV."
+                        color: root.colTextMuted
+                        font.pixelSize: 11
+                        wrapMode: Text.WordWrap
+                        Layout.fillWidth: true
+                    }
+                }
+
+                // ── Support ──────────────────────────────────────────────────
+                // Debug-log bundle for support. Deliberately separate from
+                // the Audit Log section: the audit log is the clinical
+                // record, the debug bundle is engineering diagnostics
+                // (#227). Visible in all modes — it is the designated
+                // support path for clinical sites and the bundle contains
+                // no scan or patient data.
+                SectionCard {
+                    title: "Support"
+
+                    FieldRow {
+                        label: "Debug logs"
                         ActionButton {
                             text: "Send Debug Logs"
                             Layout.preferredWidth: 150
@@ -797,10 +824,10 @@ Item {
                         Item { Layout.fillWidth: true }
                     }
                     Text {
-                        text: "Password-protected, machine-readable record of system "
-                              + "events for auditors. Open the viewer to browse entries "
-                              + "or export them as CSV. Send Debug Logs zips the last "
-                              + "48 hours of app logs to email to support@openwater.cc."
+                        text: "Packages the last 48 hours of app logs plus system "
+                              + "info into a zip for troubleshooting — email it to "
+                              + "support@openwater.cc. Contains no scan data or "
+                              + "patient information."
                         color: root.colTextMuted
                         font.pixelSize: 11
                         wrapMode: Text.WordWrap
