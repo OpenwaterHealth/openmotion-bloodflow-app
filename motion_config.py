@@ -1,6 +1,7 @@
 """TEC-parameter helper.
 
-Loads `config/tec_params.json` (the TEC voltage default). Extracted from
+Loads `config/tec_params.json` (the TEC DAC setpoints) and picks the one
+matching the connected console's hardware revision. Extracted from
 `motion_connector.py` to keep that file focused on the Qt connector.
 
 The laser-power application and FPGA register map that used to live here now
@@ -12,6 +13,7 @@ that config. The thermistor R-T lookup likewise lives in
 
 from __future__ import annotations
 
+import dataclasses
 import enum
 import json
 import logging
@@ -23,52 +25,122 @@ from utils.resource_path import resource_path
 logger = logging.getLogger("openmotion.bloodflow-app.motion_config")
 
 
-def load_tec_params(config_dir: str) -> float:
-    """Load `tec_params.json` and return the TEC_VOLTAGE_DEFAULT value.
+# --- TEC DAC setpoint (issue #269) --------------------------------------------
+# EVT2 units need +1.16 V on the TEC DAC to hold the lasers at 25 C; DVT1a
+# changed the voltage divider around the DAC input, so DVT-and-beyond use the
+# TEC_VOLTAGE_DEFAULT from tec_params.json (-0.07 V).
+#
+# The unit revision comes from the console's 3-bit BRD_V0..V2 hardware strap
+# (SDK `console.read_board_id()`, OW_CTRL_BOARDID): EVT2 straps 1; the DVT1a
+# Unified Console Board (700-00010 Rev 0.4 / Rev 1) straps 2. The SDK returns
+# 0 on a transport error, so 0 must never be listed as an EVT2 id.
+TEC_VOLTAGE_DEFAULT = -0.07       # volts — DVT1a and beyond
+TEC_VOLTAGE_EVT2_DEFAULT = 1.16   # volts — EVT2 units
+EVT2_BOARD_IDS_DEFAULT = (1,)     # board-ID strap values that mean "EVT2"
 
-    Returns the float voltage from the file, or the hard-coded default on any
-    error.
+
+@dataclasses.dataclass(frozen=True)
+class TecVoltageParams:
+    """TEC DAC setpoints from tec_params.json, by console hardware revision."""
+
+    default_v: float = TEC_VOLTAGE_DEFAULT
+    evt2_v: float = TEC_VOLTAGE_EVT2_DEFAULT
+    evt2_board_ids: tuple = EVT2_BOARD_IDS_DEFAULT
+
+
+def load_tec_voltage_params(config_dir: str) -> TecVoltageParams:
+    """Load `tec_params.json` and return the TEC DAC setpoint parameters.
+
+    Every field falls back to its hard-coded default independently, so a
+    pre-#269 file (TEC_VOLTAGE_DEFAULT only) keeps working and a malformed
+    EVT2 entry can never break the DVT path.
     """
-    _TEC_VOLTAGE_DEFAULT = -0.07  # volts
     config_path = (
         resource_path("config", "tec_params.json")
         if config_dir == "config"
         else Path(config_dir) / "tec_params.json"
     )
 
-    if not config_path.exists():
-        logger.warning(
-            "TEC parameter file not found: %s, using default value %sV",
-            config_path, _TEC_VOLTAGE_DEFAULT,
-        )
-        return _TEC_VOLTAGE_DEFAULT
-
     try:
         with open(config_path, "r") as f:
-            params = json.load(f)
-        voltage = params.get("TEC_VOLTAGE_DEFAULT", _TEC_VOLTAGE_DEFAULT)
-        logger.info(
-            "Loaded TEC voltage from %s: %sV", config_path, voltage
-        )
-        return voltage
+            raw = json.load(f)
     except FileNotFoundError:
         logger.warning(
-            "TEC parameter file not found: %s, using default value %sV",
-            config_path, _TEC_VOLTAGE_DEFAULT,
+            "TEC parameter file not found: %s, using defaults %r",
+            config_path, TecVoltageParams(),
         )
-        return _TEC_VOLTAGE_DEFAULT
+        return TecVoltageParams()
     except json.JSONDecodeError as e:
         logger.error(
-            "Invalid JSON in %s: %s, using default value %sV",
-            config_path, e, _TEC_VOLTAGE_DEFAULT,
+            "Invalid JSON in %s: %s, using defaults %r",
+            config_path, e, TecVoltageParams(),
         )
-        return _TEC_VOLTAGE_DEFAULT
+        return TecVoltageParams()
     except Exception as e:
         logger.error(
-            "Error loading TEC parameters: %s, using default value %sV",
-            e, _TEC_VOLTAGE_DEFAULT,
+            "Error loading TEC parameters: %s, using defaults %r",
+            e, TecVoltageParams(),
         )
-        return _TEC_VOLTAGE_DEFAULT
+        return TecVoltageParams()
+
+    def _volts(key, fallback):
+        value = raw.get(key, fallback)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            logger.error(
+                "Invalid %s=%r in %s, using default %sV",
+                key, value, config_path, fallback,
+            )
+            return fallback
+
+    default_v = _volts("TEC_VOLTAGE_DEFAULT", TEC_VOLTAGE_DEFAULT)
+    evt2_v = _volts("TEC_VOLTAGE_EVT2", TEC_VOLTAGE_EVT2_DEFAULT)
+
+    ids_raw = raw.get("EVT2_BOARD_IDS", list(EVT2_BOARD_IDS_DEFAULT))
+    if isinstance(ids_raw, list):
+        # ints only — bools (True == 1) and strings must never widen
+        # EVT2 detection via a config typo.
+        evt2_board_ids = tuple(x for x in ids_raw if type(x) is int)
+        if len(evt2_board_ids) != len(ids_raw):
+            logger.error(
+                "Dropped non-integer entries from EVT2_BOARD_IDS=%r in %s",
+                ids_raw, config_path,
+            )
+    else:
+        logger.error(
+            "Invalid EVT2_BOARD_IDS=%r in %s (expected a list), using "
+            "default %r", ids_raw, config_path, EVT2_BOARD_IDS_DEFAULT,
+        )
+        evt2_board_ids = EVT2_BOARD_IDS_DEFAULT
+
+    params = TecVoltageParams(
+        default_v=default_v, evt2_v=evt2_v, evt2_board_ids=evt2_board_ids,
+    )
+    logger.info("Loaded TEC voltage params from %s: %r", config_path, params)
+    return params
+
+
+def select_tec_voltage(console, params: TecVoltageParams):
+    """Pick the TEC DAC setpoint for the connected console.
+
+    Reads the console's board-ID strap and returns ``(voltage, reason)``;
+    ``reason`` is a short human-readable string for the caller's log line.
+    Never raises and never logs (the caller owns logging).
+
+    Fail-safe direction: any read failure or unknown/error board id falls
+    back to ``params.default_v`` — exactly the pre-#269 behavior for every
+    unit. EVT2 is the only special case.
+    """
+    try:
+        board_id = console.read_board_id()
+    except Exception as e:
+        return params.default_v, f"board id read failed: {e}"
+    # `type is int` (not isinstance) — SDK demo mode returns True, and a
+    # bool must never satisfy EVT2 detection.
+    if type(board_id) is int and board_id in params.evt2_board_ids:
+        return params.evt2_v, f"EVT2 console (board id {board_id})"
+    return params.default_v, f"board id {board_id!r}"
 
 
 # --- TEC over-temp trip (TEC_TRIP) -------------------------------------------
