@@ -78,6 +78,14 @@ Rectangle {
     // it from settingsModal.showBfiBvi). "bfi_bvi" overlays BFI+BVI on
     // each cell; "mean_contrast" overlays Mean+Contrast.
     property string displayMode: "bfi_bvi"
+    // Pair mode (issue #289) — collapse each grid row's two cameras
+    // (1-based pairs 4/5, 3/6, 2/7, 1/8 per side) into ONE cell that
+    // renders their averaged trace, halving the grid to ≤4 panels per
+    // side. Config is the source of truth (same pattern as
+    // showAxisLabels): the ⋯ popup toggle writes plotPairMode through
+    // MotionInterface.setConfig, which notifies appConfigChanged.
+    // Per-camera view only — clinical mode already shows side averages.
+    property bool pairMode: MotionInterface.appConfig.plotPairMode === true
     // autoScale — driven externally from Settings; when true, the 3 s
     // _recomputeAutoscale timer below repins primary/secondary YMin/YMax
     // to per-metric percentile bounds across the buffer.
@@ -243,6 +251,43 @@ Rectangle {
         return entries
     }
 
+    // Pair mode (issue #289) — collapse each U row's two cameras into
+    // ONE cell rendering their averaged trace. Same row order and
+    // shared-row compaction as _devCellModel (row r pairs 1-based cams
+    // 4-r | 5+r — top row 4/5 … bottom row 1/8, issue #164), so
+    // toggling pair mode keeps rows vertically in place. camIdB names
+    // the pair's second camera; when one member is masked out the cell
+    // falls back to the remaining camera alone (camIdB -1 → PlotCell's
+    // plain single-camera path). Left module owns column 0, right
+    // column 2 — column 1 is the side-break spacer when both sides are
+    // active (a side with nothing selected gives up its column).
+    readonly property var _pairCellModel: {
+        var masks = [viewer._effLeftMask & 0xFF, viewer._effRightMask & 0xFF]
+        var sides = ["left", "right"]
+        var colBase = [0, masks[0] !== 0 ? 2 : 0]
+        var entries = []
+        var displayRow = 0
+        for (var r = 0; r < 4; r++) {
+            var armA = 3 - r   // zero-based camId, 1-based cam 4-r
+            var armB = 4 + r   // zero-based camId, 1-based cam 5+r
+            var rowBits = (1 << armA) | (1 << armB)
+            if (!((masks[0] | masks[1]) & rowBits)) continue
+            for (var s = 0; s < 2; s++) {
+                var hasA = (masks[s] & (1 << armA)) !== 0
+                var hasB = (masks[s] & (1 << armB)) !== 0
+                if (!hasA && !hasB) continue
+                entries.push({
+                    side: sides[s],
+                    camId: hasA ? armA : armB,
+                    camIdB: (hasA && hasB) ? armB : -1,
+                    row: displayRow, col: colBase[s]
+                })
+            }
+            displayRow++
+        }
+        return entries
+    }
+
     // Clinical mode — one cell per ACTIVE side, each rendering the
     // side-averaged stream (cam_id=-1, fed by SDK's SideAveragingStage
     // via _LivePlotSink.consume). Stacked vertically in a single column.
@@ -261,7 +306,7 @@ Rectangle {
 
     readonly property var _activeCellModel: viewer.effectiveClinical
         ? _clinicalCellModel
-        : _devCellModel
+        : (viewer.pairMode ? _pairCellModel : _devCellModel)
 
     // ── Autoscale recompute (shared by Timer + displayMode change) ────
     // Writes to _auto* — the derived primaryYMin/Max bindings above
@@ -761,19 +806,23 @@ Rectangle {
                 Layout.fillHeight: true
                 // Clinical mode: single column, 2 stacked cells. Engineering mode:
                 // 4 columns; +1 spacer column (col 2) when both sides are
-                // active, for a visual break between the modules.
-                columns: viewer.effectiveClinical ? 1 : (viewer._sideGapActive ? 5 : 4)
+                // active, for a visual break between the modules. Pair mode
+                // halves that: 1 column per side, spacer at col 1.
+                columns: viewer.effectiveClinical ? 1
+                    : viewer.pairMode ? (viewer._sideGapActive ? 3 : 2)
+                    : (viewer._sideGapActive ? 5 : 4)
                 rowSpacing: 6
                 columnSpacing: 6
 
                 // Side-break spacer — fixed-width empty column 2 between the
-                // left (cols 0-1) and right (cols 3-4) modules. fillWidth is
-                // false so it stays a fixed gap; the plot cells (fillWidth)
-                // absorb the rest of the row width around it.
+                // left (cols 0-1) and right (cols 3-4) modules; in pair mode
+                // the modules are single columns (0 and 2), spacer at col 1.
+                // fillWidth is false so it stays a fixed gap; the plot cells
+                // (fillWidth) absorb the rest of the row width around it.
                 Item {
                     visible: viewer._sideGapActive
                     Layout.row: 0
-                    Layout.column: 2
+                    Layout.column: viewer.pairMode ? 1 : 2
                     Layout.fillWidth: false
                     Layout.fillHeight: false
                     Layout.preferredWidth: viewer._sideGapPx
@@ -789,6 +838,10 @@ Rectangle {
                         source: viewer.scanSource
                         side: modelData.side
                         camId: modelData.camId
+                        // Pair mode (issue #289): second camera of the row
+                        // pair; -1 (also for dev/clinical entries, which
+                        // don't carry the key) keeps the single-cam path.
+                        camIdB: modelData.camIdB !== undefined ? modelData.camIdB : -1
                         windowSeconds: viewer.windowSeconds
                         followLive: viewer.followLive
                         windowStartT: viewer.windowStartT
@@ -808,10 +861,14 @@ Rectangle {
                         panZoomTarget: viewer
                         cursorT: viewer.cursorT
                         // Live-source only: past scans have no "current"
-                        // connection state to report (issue #174).
+                        // connection state to report (issue #174). A pair
+                        // cell only reads lost when EVERY member is lost —
+                        // with one survivor the averaged trace continues.
                         connectionLost: viewer.scanSource !== null
                             && viewer.scanSource.live === true
                             && viewer._lostCameras[modelData.side + ":" + modelData.camId] === true
+                            && (modelData.camIdB === undefined || modelData.camIdB < 0
+                                || viewer._lostCameras[modelData.side + ":" + modelData.camIdB] === true)
                     }
                 }
             }
@@ -898,16 +955,23 @@ Rectangle {
             var rows = []
             for (var i = 0; i < viewer._activeCellModel.length; i++) {
                 var c = viewer._activeCellModel[i]
-                var pv = viewer.clampForDisplay(primMetric,
-                    viewer.scanSource.value_at(c.side, c.camId, primMetric, t))
-                var sv = viewer.clampForDisplay(secMetric,
-                    viewer.scanSource.value_at(c.side, c.camId, secMetric, t))
+                // Pair cells (issue #289) read the staleness-gated pair
+                // average; single-cam / clinical entries keep value_at.
+                var b = (c.camIdB !== undefined && c.camIdB >= 0) ? c.camIdB : -1
+                var pv = viewer.clampForDisplay(primMetric, b >= 0
+                    ? viewer.scanSource.pair_value_at(c.side, c.camId, b, primMetric, t)
+                    : viewer.scanSource.value_at(c.side, c.camId, primMetric, t))
+                var sv = viewer.clampForDisplay(secMetric, b >= 0
+                    ? viewer.scanSource.pair_value_at(c.side, c.camId, b, secMetric, t)
+                    : viewer.scanSource.value_at(c.side, c.camId, secMetric, t))
                 // Clinical mode uses camId=-1 for the side-averaged stream;
                 // (c.camId + 1) would render "L0"/"R0" instead of the
-                // cell's own "LEFT AVG" / "RIGHT AVG" label.
+                // cell's own "LEFT AVG" / "RIGHT AVG" label. Pair cells
+                // name both members ("L4/5") like the panel label.
                 var label = c.camId === -1
                     ? c.side.charAt(0).toUpperCase() + " AVG"
                     : c.side.charAt(0).toUpperCase() + (c.camId + 1)
+                          + (b >= 0 ? "/" + (b + 1) : "")
                 rows.push({
                     label: label,
                     pVal: pv, pColor: primColor,
@@ -1308,6 +1372,27 @@ Rectangle {
                         Text {
                             anchors.verticalCenter: axisLabelsSwitch.verticalCenter
                             text: "Axis labels"
+                            color: AppTheme.textPrimary
+                            font.pixelSize: 12
+                            font.family: "Roboto Mono"
+                        }
+                    }
+                    Row {
+                        // Pair mode (issue #289): collapse each grid row's
+                        // camera pair (4/5, 3/6, 2/7, 1/8) into one averaged
+                        // panel — 4 per side. Hidden in clinical mode, which
+                        // already averages whole sides. Persisted via config
+                        // like Axis labels above.
+                        visible: !viewer.effectiveClinical
+                        spacing: 8
+                        PopupPillSwitch {
+                            id: pairModeSwitch
+                            checked: viewer.pairMode
+                            onToggled: MotionInterface.setConfig("plotPairMode", checked)
+                        }
+                        Text {
+                            anchors.verticalCenter: pairModeSwitch.verticalCenter
+                            text: "Pair mode"
                             color: AppTheme.textPrimary
                             font.pixelSize: 12
                             font.family: "Roboto Mono"

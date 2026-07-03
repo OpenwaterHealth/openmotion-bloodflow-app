@@ -150,6 +150,10 @@ def _load_app_config() -> dict:
         "autoScalePerPlot": False,
         # Y-axis tick labels on plot cells; runtime toggle in the ⋯ popup.
         "showAxisLabels": True,
+        # Pair mode (issue #289): collapse each plot row's camera pair
+        # (1/8, 2/7, 3/6, 4/5 per side) into one averaged panel; runtime
+        # toggle in the ⋯ popup. Default off — full per-camera grid.
+        "plotPairMode": False,
         # Build-time flag: true keeps ALL writable state (config overrides,
         # logs, scan data/db) next to the exe, like the old un-installed
         # layout; false scatters it to %PROGRAMDATA%\Openwater (the

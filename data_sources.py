@@ -268,24 +268,126 @@ class _CameraBuffer:
         Lock-protected: the GUI hover tooltip reads while the pipeline
         thread appends/ring-trims. A torn read of `n` previously caused
         IndexErrors when a searchsorted idx passed a stale-n clamp."""
+        _, v = self.sample_near(t)
+        return v if math.isfinite(v) else float("nan")
+
+    def sample_near(self, t: float) -> tuple[float, float]:
+        """(timestamp, value) of the sample nearest to time `t`, or
+        (NaN, NaN) when the buffer is empty. The value is returned as
+        stored — including NaN — so callers can tell "no sample near t"
+        (NaN timestamp) apart from "the nearest sample is non-finite".
+        Backs pair_value_at's staleness gate (issue #289).
+
+        Lock-protected like value_near: the pipeline thread appends /
+        ring-trims concurrently with GUI-thread reads."""
         with self._lock:
             n = self.n
             if n == 0:
-                return float("nan")
+                return float("nan"), float("nan")
             t_slice = self.t[:n]
             idx = int(np.searchsorted(t_slice, t, side="left"))
             if idx >= n:
                 idx = n - 1
             elif idx > 0 and abs(t_slice[idx - 1] - t) < abs(t_slice[idx] - t):
                 idx -= 1
-            v = float(self.v[idx])
-            return v if np.isfinite(v) else float("nan")
+            return float(t_slice[idx]), float(self.v[idx])
 
     def mark_dropped(self, t: float) -> None:
         """Record the first dropout timestamp for this stream. Idempotent —
         later calls don't overwrite the earlier dropout."""
         if self.dropped_at is None:
             self.dropped_at = float(t)
+
+
+# ── Pair mode (issue #289) ────────────────────────────────────────────────
+# The plot viewer's pair mode collapses each grid row's two cameras
+# (1-based pairs 1+8, 2+7, 3+6, 4+5 per side) into one panel rendering
+# their averaged trace. The averaging lives here, at read time — no
+# extra per-pair buffers, and both live DB-tail stitching and past-scan
+# replay inherit it because pair_points_for_window rides the polymorphic
+# points_for_window.
+
+_PAIR_NOMINAL_HZ = 40.0  # SDK histogram cadence (matches window_decimated)
+# A camera contributes to the pair average at a grid point only if one
+# of its own finite samples lies within this many output-sample
+# spacings — a dropped/covered camera stops contributing where its data
+# ends instead of being flat-line extrapolated across the gap by
+# np.interp, so the pair panel falls back to the surviving camera.
+_PAIR_GAP_SPACINGS = 1.5
+# ...and the gate is never tighter than this (seconds): raw 40 Hz
+# samples are 25 ms apart, so a 100 ms floor tolerates a few missed
+# frames without the trace flickering between "pair" and "single".
+_PAIR_GAP_MIN_S = 0.1
+# pair_value_at: a camera's nearest sample must be at most this stale
+# to count toward the pair readout — a stalled camera drops out of the
+# label/tooltip average instead of pinning its last value forever.
+# Matches nan_gap_tracker.MIN_GAP_S ("delivery genuinely stopped").
+_PAIR_VALUE_STALENESS_S = 1.0
+
+
+def merge_pair_points(pts_a, pts_b, t_lo: float, t_hi: float,
+                      max_points: int) -> list:
+    """Merge two per-camera decimated [t, v] series into one averaged
+    series for a pair-mode panel (issue #289).
+
+    Both inputs are points_for_window outputs for the SAME window and
+    point budget. Either side empty → the other is returned VERBATIM,
+    so a pair whose second camera never delivered renders exactly like
+    the survivor's own single-camera cell.
+
+    Otherwise both series are linearly resampled onto a common grid of
+    absolute-time multiples of the window's output spacing (the same
+    stride math as _CameraBuffer.window_decimated, so grid positions
+    are invariant under pan/data growth and the merged trace doesn't
+    morph between paints). Each camera contributes at a grid point only
+    when one of its own finite samples is nearby (_PAIR_GAP_SPACINGS);
+    the output value is the mean of the contributing cameras. Grid
+    points where neither camera contributes are omitted (the renderer
+    draws nothing there, same as a single camera's own gap)."""
+    if not pts_a:
+        return pts_b
+    if not pts_b:
+        return pts_a
+
+    t_lo = float(t_lo)
+    t_hi = float(t_hi)
+    expected = max(1.0, (t_hi - t_lo) * _PAIR_NOMINAL_HZ)
+    stride = max(1, int(-(-expected // max(1, int(max_points)))))
+    spacing = stride / _PAIR_NOMINAL_HZ
+    k_lo = math.ceil(t_lo / spacing)
+    k_hi = math.floor(t_hi / spacing)
+    if k_hi < k_lo:
+        return []
+    grid = np.arange(k_lo, k_hi + 1, dtype=np.float64) * spacing
+    gap_max = max(_PAIR_GAP_SPACINGS * spacing, _PAIR_GAP_MIN_S)
+
+    acc = np.zeros(grid.size, dtype=np.float64)
+    cnt = np.zeros(grid.size, dtype=np.int64)
+    for pts in (pts_a, pts_b):
+        arr = np.asarray(pts, dtype=np.float64)
+        finite = np.isfinite(arr[:, 1])
+        if not finite.any():
+            continue
+        t_f = arr[finite, 0]
+        v_f = arr[finite, 1]
+        v_i = np.interp(grid, t_f, v_f)
+        # Distance from each grid point to this camera's nearest finite
+        # sample — the contribution gate.
+        idx = np.searchsorted(t_f, grid)
+        left = np.clip(idx - 1, 0, t_f.size - 1)
+        right = np.clip(idx, 0, t_f.size - 1)
+        dist = np.minimum(np.abs(grid - t_f[left]),
+                          np.abs(t_f[right] - grid))
+        ok = dist <= gap_max
+        acc[ok] += v_i[ok]
+        cnt[ok] += 1
+
+    have = cnt > 0
+    if not have.any():
+        return []
+    t_out = grid[have]
+    v_out = acc[have] / cnt[have]
+    return [[float(t), float(v)] for t, v in zip(t_out, v_out)]
 
 
 _FLUSH_INTERVAL_MS = 100  # spec §"Throttled UI notify"
@@ -484,6 +586,66 @@ class ScanDataSource(QObject):
         if buf is None:
             return float("nan")
         return buf.value_near(t)
+
+    @pyqtSlot(str, int, int, str, float, float, int, result="QVariantList")
+    def pair_points_for_window(
+        self,
+        side: str,
+        cam_a: int,
+        cam_b: int,
+        metric: str,
+        t_lo: float,
+        t_hi: float,
+        max_points: int,
+    ) -> list:
+        """QML-facing pair-mode variant of points_for_window (issue
+        #289): the row pair (cam_a, cam_b) averaged into one series.
+        Rides the polymorphic points_for_window per camera, so
+        LiveScanSource's DB-tail stitching and PastScanSource replay
+        behave identically to the single-camera cells. Fallbacks live in
+        merge_pair_points: one dead/masked camera → the survivor's own
+        series verbatim, never a NaN/blank panel."""
+        pts_a = self.points_for_window(
+            side, cam_a, metric, t_lo, t_hi, max_points)
+        pts_b = self.points_for_window(
+            side, cam_b, metric, t_lo, t_hi, max_points)
+        return merge_pair_points(
+            pts_a, pts_b, float(t_lo), float(t_hi), int(max_points))
+
+    def _sample_near(
+        self, side: str, cam_id: int, metric: str, t: float
+    ) -> tuple[float, float]:
+        """(timestamp, value) of the sample nearest to `t` for one
+        stream, or (NaN, NaN) when the buffer doesn't exist / is empty.
+        Hook for pair_value_at's staleness gate; LiveScanSource
+        overrides it with the DB-tail branch."""
+        buf = self.buffers.get((side, int(cam_id), metric))
+        if buf is None:
+            return float("nan"), float("nan")
+        return buf.sample_near(t)
+
+    @pyqtSlot(str, int, int, str, float, result=float)
+    def pair_value_at(
+        self, side: str, cam_a: int, cam_b: int, metric: str, t: float
+    ) -> float:
+        """Pair-mode value readout (issue #289): the mean over the
+        pair's cameras at time `t`, counting only cameras whose nearest
+        sample is FRESH (within _PAIR_VALUE_STALENESS_S of `t`). A
+        camera that stopped delivering drops out of the average instead
+        of pinning its stale last value into the cell label / hover
+        tooltip; NaN when neither camera qualifies (renders "--")."""
+        t = float(t)
+        total = 0.0
+        count = 0
+        for cam_id in (cam_a, cam_b):
+            t_n, v = self._sample_near(side, int(cam_id), metric, t)
+            if not (math.isfinite(t_n) and math.isfinite(v)):
+                continue
+            if abs(t_n - t) > _PAIR_VALUE_STALENESS_S:
+                continue
+            total += v
+            count += 1
+        return (total / count) if count else float("nan")
 
     @pyqtSlot(str, int, result=float)
     def dropped_at_for(self, side: str, cam_id: int) -> float:
@@ -901,6 +1063,22 @@ class LiveScanSource(ScanDataSource):
         if buf is None:
             return float("nan")
         return buf.value_near(t)
+
+    def _sample_near(
+        self, side: str, cam_id: int, metric: str, t: float
+    ) -> tuple[float, float]:
+        """DB-tail-aware _sample_near (pair mode, issue #289) — mirrors
+        value_at: serve from memory unless `t` falls below the
+        ring-trimmed in-memory range, then read the transient DB
+        window."""
+        if (not self._needs_db_tail(side, int(cam_id), metric, t)
+                or not self._db_ready()):
+            return super()._sample_near(side, cam_id, metric, t)
+        self._ensure_db_window(t, t)
+        buf = self._db_window_buffers.get((side, int(cam_id), metric))
+        if buf is None:
+            return float("nan"), float("nan")
+        return buf.sample_near(t)
 
     def append_uncorrected(
         self,

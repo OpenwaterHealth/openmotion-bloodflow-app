@@ -13,6 +13,11 @@ Item {
     property var source: null            // ScanDataSource (Python QObject) or null
     property string side: "left"
     property int    camId: 0
+    // Pair mode (issue #289): when >= 0 this cell renders the AVERAGED
+    // row pair (camId, camIdB) via the source's pair_* slots — one
+    // trace per metric, labeled "L 4/5". -1 (the default) keeps the
+    // original single-camera behavior byte-for-byte.
+    property int    camIdB: -1
     property real   windowSeconds: 15
 
     // Time-axis state — when followLive=true, the cell tracks the
@@ -101,6 +106,16 @@ Item {
         return v
     }
 
+    // Value readout for the top-left labels / temperature — pair cells
+    // read the staleness-gated pair average (a stalled member drops out
+    // instead of pinning its last value); single-cam cells keep value_at.
+    function _valueAt(metricName, t) {
+        if (cell.camIdB >= 0)
+            return cell.source.pair_value_at(
+                cell.side, cell.camId, cell.camIdB, metricName, t)
+        return cell.source.value_at(cell.side, cell.camId, metricName, t)
+    }
+
     // Y-axis tick decimals chosen per axis from its span so all three
     // ticks format consistently — whole numbers for wide ranges (mean's
     // 0–500), one decimal for BFI/BVI's 0–10, two for contrast's 0–1
@@ -144,9 +159,14 @@ Item {
     function _drawTrace(ctx, metricName, color, yMinVal, yMaxVal,
                        tLo, tHi, dt, maxPts, w, h) {
         if (!metricName || metricName.length === 0) return 0
-        var pts = cell.source.points_for_window(
-            cell.side, cell.camId, metricName, tLo, tHi, maxPts
-        )
+        // Pair cells fetch the row pair's averaged series (falls back to
+        // the surviving camera when one member is dead/masked — see
+        // data_sources.merge_pair_points).
+        var pts = cell.camIdB >= 0
+            ? cell.source.pair_points_for_window(
+                  cell.side, cell.camId, cell.camIdB, metricName, tLo, tHi, maxPts)
+            : cell.source.points_for_window(
+                  cell.side, cell.camId, metricName, tLo, tHi, maxPts)
         if (pts.length < 2) return 0
         var dy = yMaxVal - yMinVal
         if (dy <= 0) return 0
@@ -236,16 +256,22 @@ Item {
                             tLo, tHi, dt, maxPts, width, height)
 
             // Dropout marker — vertical red bar at the recorded
-            // dropout time for this (side, cam).
-            var dropT = cell.source.dropped_at_for(cell.side, cell.camId)
-            if (isFinite(dropT) && dropT >= tLo && dropT <= tHi) {
-                var dropX = ((dropT - tLo) / dt) * width
-                ctx.strokeStyle = AppTheme.accentRed
-                ctx.lineWidth = 2
-                ctx.beginPath()
-                ctx.moveTo(Math.floor(dropX) + 0.5, 0)
-                ctx.lineTo(Math.floor(dropX) + 0.5, height)
-                ctx.stroke()
+            // dropout time for this (side, cam). Pair cells draw one
+            // per member so a single-camera dropout stays visible even
+            // while the averaged trace continues from the survivor.
+            var dropCams = cell.camIdB >= 0
+                ? [cell.camId, cell.camIdB] : [cell.camId]
+            for (var dc = 0; dc < dropCams.length; dc++) {
+                var dropT = cell.source.dropped_at_for(cell.side, dropCams[dc])
+                if (isFinite(dropT) && dropT >= tLo && dropT <= tHi) {
+                    var dropX = ((dropT - tLo) / dt) * width
+                    ctx.strokeStyle = AppTheme.accentRed
+                    ctx.lineWidth = 2
+                    ctx.beginPath()
+                    ctx.moveTo(Math.floor(dropX) + 0.5, 0)
+                    ctx.lineTo(Math.floor(dropX) + 0.5, height)
+                    ctx.stroke()
+                }
             }
 
             // Crosshair — vertical line at cursorT (broadcast by the
@@ -283,8 +309,10 @@ Item {
             // cam_id = -1 is the side-averaged stream fed by the SDK's
             // SideAveragingStage in clinical mode — hide the label there;
             // the large side panel next to the plot already names the side.
+            // Pair cells name both members ("LEFT 4/5", issue #289).
             visible: cell.camId !== -1
             text: cell.side.toUpperCase() + " " + (cell.camId + 1)
+                  + (cell.camIdB >= 0 ? "/" + (cell.camIdB + 1) : "")
             color: AppTheme.textSecondary
             font.pixelSize: 11
             font.family: "Roboto Mono"
@@ -302,7 +330,7 @@ Item {
                 void cell.paintTick  // dependency
                 if (!cell.source) return cell.metric.toUpperCase() + "  --"
                 var v = cell._displayValue(cell.metric,
-                    cell.source.value_at(cell.side, cell.camId, cell.metric, cell.liveEdgeSnapshot))
+                    cell._valueAt(cell.metric, cell.liveEdgeSnapshot))
                 return cell.metric.toUpperCase() + "  "
                        + (isFinite(v) ? v.toFixed(2) : "--")
             }
@@ -317,7 +345,7 @@ Item {
                 void cell.paintTick
                 if (!cell.source) return cell.secondaryMetric.toUpperCase() + "  --"
                 var v = cell._displayValue(cell.secondaryMetric,
-                    cell.source.value_at(cell.side, cell.camId, cell.secondaryMetric, cell.liveEdgeSnapshot))
+                    cell._valueAt(cell.secondaryMetric, cell.liveEdgeSnapshot))
                 return cell.secondaryMetric.toUpperCase() + "  "
                        + (isFinite(v) ? v.toFixed(2) : "--")
             }
@@ -335,8 +363,8 @@ Item {
         property real tempC: {
             void cell.paintTick  // dependency
             if (!cell.source || !cell.showTemperature) return NaN
-            return cell.source.value_at(cell.side, cell.camId, "temp",
-                                        cell.liveEdgeSnapshot)
+            // Pair cells show the pair-mean chip temperature.
+            return cell._valueAt("temp", cell.liveEdgeSnapshot)
         }
         visible: cell.showTemperature && cell.width >= 80 && isFinite(tempC)
         anchors.top: parent.top

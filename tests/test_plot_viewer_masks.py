@@ -129,6 +129,15 @@ class _StubPastScanSource(QObject):
     def value_at(self, side, cam_id, metric, t):
         return float("nan")
 
+    @pyqtSlot(str, int, int, str, float, float, int, result="QVariantList")
+    def pair_points_for_window(self, side, cam_a, cam_b, metric,
+                               t_lo, t_hi, max_points):
+        return []
+
+    @pyqtSlot(str, int, int, str, float, result=float)
+    def pair_value_at(self, side, cam_a, cam_b, metric, t):
+        return float("nan")
+
     @pyqtSlot(str, int, result=float)
     def dropped_at_for(self, side, cam_id):
         return float("nan")
@@ -614,6 +623,175 @@ def test_past_scan_ignores_connection_gate(viewer_factory):
     finally:
         viewer_factory.stub.setScanSource(None)
         viewer_factory.stub.setSensorsConnected(left=True, right=True)
+
+
+# ── Issue #289 — pair mode grid model ───────────────────────────────────
+# Pair mode collapses each U row's two cameras (1-based 4-r | 5+r → pairs
+# 4/5, 3/6, 2/7, 1/8 top-to-bottom, same order as the dev grid) into ONE
+# cell per side rendering their averaged trace — ≤4 panels per side. A
+# pair member missing from the mask falls the cell back to the single
+# remaining camera (camIdB == -1 → plain single-cam PlotCell path); a
+# row with neither camera selected is dropped. Left module owns column
+# 0, right column 2 (column 1 is the side-break spacer). The averaging
+# itself is Python-side — tests/test_plot_pair_mode.py.
+
+
+def _pair_cells(viewer):
+    val = viewer.property("_pairCellModel")
+    if hasattr(val, "toVariant"):
+        val = val.toVariant()
+    assert isinstance(val, list)
+    return val
+
+
+def _active_cells(viewer):
+    val = viewer.property("_activeCellModel")
+    if hasattr(val, "toVariant"):
+        val = val.toVariant()
+    assert isinstance(val, list)
+    return val
+
+
+def _pair_pos(cells, side, cam_id, cam_id_b):
+    matches = [(c["row"], c["col"]) for c in cells
+               if c["side"] == side and c["camId"] == cam_id
+               and c["camIdB"] == cam_id_b]
+    assert len(matches) == 1, \
+        f"expected exactly one cell for {side} pair {cam_id}/{cam_id_b}"
+    return matches[0]
+
+
+def test_pair_mode_all_masks_collapse_to_four_rows_per_side(viewer_factory):
+    viewer = viewer_factory()
+    viewer.setProperty("leftMask", ALL_MASK)
+    viewer.setProperty("rightMask", ALL_MASK)
+    viewer.setProperty("pairMode", True)
+    cells = _pair_cells(viewer)
+    assert len(cells) == 8  # 4 rows × 2 sides
+    # Row r pairs zero-based camIds (3-r, 4+r) — same U order as the
+    # dev grid (row 0 = 4/5 … row 3 = 1/8). Left col 0, right col 2.
+    for r in range(4):
+        assert _pair_pos(cells, "left", 3 - r, 4 + r) == (r, 0)
+        assert _pair_pos(cells, "right", 3 - r, 4 + r) == (r, 2)
+
+
+def test_pair_mode_rows_compact_like_dev_grid(viewer_factory):
+    viewer = viewer_factory()
+    viewer.setProperty("leftMask", MIDDLE_MASK)
+    viewer.setProperty("rightMask", MIDDLE_MASK)
+    viewer.setProperty("pairMode", True)
+    cells = _pair_cells(viewer)
+    assert len(cells) == 4
+    # Middle = U rows 1 (cams 3|6) and 2 (cams 2|7), compacted to 0,1.
+    assert _pair_pos(cells, "left", 2, 5) == (0, 0)
+    assert _pair_pos(cells, "right", 2, 5) == (0, 2)
+    assert _pair_pos(cells, "left", 1, 6) == (1, 0)
+    assert _pair_pos(cells, "right", 1, 6) == (1, 2)
+
+
+def test_pair_mode_masked_partner_falls_back_to_single_camera(viewer_factory):
+    """One camera of a pair masked out → the cell carries only the
+    remaining camera (camIdB -1), i.e. the plain single-camera render
+    path, labeled with just that camera."""
+    viewer = viewer_factory()
+    # Left: cam 4 only (camId 3, U row 0) — partner cam 5 masked out.
+    viewer.setProperty("leftMask", 0x08)
+    viewer.setProperty("rightMask", 0x00)
+    viewer.setProperty("pairMode", True)
+    cells = _pair_cells(viewer)
+    assert len(cells) == 1
+    assert cells[0]["side"] == "left"
+    assert cells[0]["camId"] == 3
+    assert cells[0]["camIdB"] == -1
+    assert (cells[0]["row"], cells[0]["col"]) == (0, 0)
+
+
+def test_pair_mode_single_side_takes_first_column(viewer_factory):
+    viewer = viewer_factory()
+    viewer.setProperty("leftMask", 0x00)
+    viewer.setProperty("rightMask", ALL_MASK)
+    viewer.setProperty("pairMode", True)
+    cells = _pair_cells(viewer)
+    assert len(cells) == 4
+    assert all(c["side"] == "right" and c["col"] == 0 for c in cells)
+
+
+def test_active_model_follows_pair_mode_toggle(viewer_factory):
+    """Toggling pair mode mid-session swaps the active grid model between
+    the 16-cell dev grid and the 8-cell pair grid (and back)."""
+    viewer = viewer_factory()
+    viewer.setProperty("leftMask", ALL_MASK)
+    viewer.setProperty("rightMask", ALL_MASK)
+    viewer.setProperty("pairMode", False)
+    assert len(_active_cells(viewer)) == 16
+    viewer.setProperty("pairMode", True)
+    cells = _active_cells(viewer)
+    assert len(cells) == 8
+    assert all(c["camIdB"] >= 0 for c in cells)
+    viewer.setProperty("pairMode", False)
+    assert len(_active_cells(viewer)) == 16
+
+
+def test_pair_mode_defaults_off(viewer_factory):
+    viewer = viewer_factory()
+    assert viewer.property("pairMode") is False
+
+
+def test_clinical_mode_wins_over_pair_mode(viewer_factory):
+    """Clinical mode already averages (whole side, cam_id -1) — pair mode
+    must not replace its 2-cell layout."""
+    viewer = viewer_factory()
+    try:
+        viewer.setProperty("clinicalMode", True)
+        viewer.setProperty("leftMask", ALL_MASK)
+        viewer.setProperty("rightMask", ALL_MASK)
+        viewer.setProperty("pairMode", True)
+        cells = _active_cells(viewer)
+        assert [c["camId"] for c in cells] == [-1, -1]
+    finally:
+        viewer.setProperty("clinicalMode", False)
+        viewer.setProperty("pairMode", False)
+
+
+def test_pair_mode_respects_connection_gate(viewer_factory):
+    """The issue-#298 per-side connection gate applies unchanged: a lone
+    right sensor must not draw phantom left pair panels."""
+    viewer = viewer_factory()
+    try:
+        viewer_factory.stub.setSensorsConnected(left=False, right=True)
+        viewer.setProperty("leftMask", 0x99)
+        viewer.setProperty("rightMask", 0x99)
+        viewer.setProperty("pairMode", True)
+        cells = _pair_cells(viewer)
+        assert all(c["side"] == "right" for c in cells)
+        # 0x99 = cams 1,4,5,8 → U rows 0 (4/5) and 3 (1/8), compacted.
+        assert _pair_pos(cells, "right", 3, 4) == (0, 0)
+        assert _pair_pos(cells, "right", 0, 7) == (1, 0)
+    finally:
+        viewer_factory.stub.setSensorsConnected(left=True, right=True)
+        viewer.setProperty("pairMode", False)
+
+
+def test_pair_mode_replay_uses_recorded_masks(viewer_factory):
+    """Pair mode on a replayed past scan lays out from the scan's own
+    recorded masks (issue #175 semantics carry over)."""
+    viewer = viewer_factory()
+    try:
+        viewer.setProperty("leftMask", ALL_MASK)
+        viewer.setProperty("rightMask", ALL_MASK)
+        viewer.setProperty("pairMode", True)
+        past = _StubPastScanSource(FAR_MASK, FAR_MASK)
+        viewer_factory.stub.setScanSource(past)
+        cells = _pair_cells(viewer)
+        # Far = cams 1,2,7,8 → U rows 2 (2/7) and 3 (1/8), both sides.
+        assert len(cells) == 4
+        assert _pair_pos(cells, "left", 1, 6) == (0, 0)
+        assert _pair_pos(cells, "right", 1, 6) == (0, 2)
+        assert _pair_pos(cells, "left", 0, 7) == (1, 0)
+        assert _pair_pos(cells, "right", 0, 7) == (1, 2)
+    finally:
+        viewer_factory.stub.setScanSource(None)
+        viewer.setProperty("pairMode", False)
 
 
 def test_clinical_model_drops_disconnected_side(viewer_factory):
