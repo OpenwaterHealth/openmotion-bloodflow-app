@@ -20,6 +20,10 @@ Rectangle {
     border.color: AppTheme.borderSoft
     border.width: 1
 
+    // Size to the natural content height (+ the 14px top/bottom margins) so the
+    // host lays the panel out exactly as tall as it needs — no cramped footnote.
+    implicitHeight: statsCol.implicitHeight + 28
+
     readonly property var _lf: (leftSnap && leftSnap.features) ? leftSnap.features : null
     readonly property var _rf: (rightSnap && rightSnap.features) ? rightSnap.features : null
     readonly property bool _lReliable: _lf && _lf.reliable === true
@@ -77,6 +81,7 @@ Rectangle {
         ? _pearson(leftSnap.template, rightSnap.template) : NaN
 
     ColumnLayout {
+        id: statsCol
         anchors.fill: parent
         anchors.margins: 14
         spacing: 4
@@ -151,8 +156,8 @@ Rectangle {
             }
         }
 
-        Item { Layout.fillHeight: true }
-        Rectangle { Layout.fillWidth: true; height: 1; color: AppTheme.borderSubtle; opacity: 0.5 }
+        Rectangle { Layout.fillWidth: true; height: 1; color: AppTheme.borderSubtle
+                    opacity: 0.5; Layout.topMargin: 6 }
 
         RowLayout {
             Layout.fillWidth: true

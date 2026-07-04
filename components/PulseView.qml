@@ -139,9 +139,10 @@ Item {
         }
 
         // ── comparison stats ─────────────────────────────────────────────
+        // No fixed height — the panel reports its own implicitHeight and the
+        // canvases above take the remaining space (Layout.fillHeight).
         PulseStatsPanel {
             Layout.fillWidth: true
-            Layout.preferredHeight: 330
             leftSnap: root.leftSnap
             rightSnap: root.rightSnap
         }

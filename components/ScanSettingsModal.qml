@@ -157,8 +157,11 @@ Item {
     }
 
     Rectangle {
+        id: card
         width: Math.min(parent.width - root.iconBarInset - 40, 520)
-        height: Math.min(parent.height - 60, 640)
+        // Grow to fit the content (Viewer Mode + Camera + Duration), capped to
+        // the window so it never overflows; the body scrolls past the cap.
+        height: Math.min(parent.height - 60, contentCol.implicitHeight + 40)
         radius: 14
         color: AppTheme.bgContainer
         border.color: AppTheme.borderSubtle
@@ -193,10 +196,23 @@ Item {
             }
         }
 
-        ColumnLayout {
+        // Scrollable body: the card auto-sizes to fit this content, but on a
+        // short window the content exceeds the cap and this Flickable scrolls
+        // instead of clipping the bottom (Scan Duration) off the card.
+        Flickable {
+            id: contentFlick
             anchors.fill: parent
             anchors.margins: 20
-            spacing: 10
+            contentWidth: width
+            contentHeight: contentCol.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+            ColumnLayout {
+            id: contentCol
+            width: contentFlick.width
+            spacing: 8
 
             // Title
             Text {
@@ -533,8 +549,7 @@ Item {
                 font.pixelSize: 13
                 Layout.alignment: Qt.AlignHCenter
             }
-
-            Item { Layout.fillHeight: true }
+            }
         }
 
         Keys.onReleased: function(event) {
