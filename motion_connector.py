@@ -2235,6 +2235,11 @@ class MotionConnector(QObject):
     @pyqtSlot()
     def stopCapture(self):
         """Stop capture (Cancel button or app close). Ceases scan, disables cameras, waits for worker."""
+        logger.info(
+            "=== STOP requested (capture_running=%s, demo=%s) ===",
+            self._capture_running,
+            bool(self._app_config.get("demoMode", False)),
+        )
         if self._capture_running:
             self.captureLog.emit("Stop requested.")
 
@@ -3764,9 +3769,10 @@ class MotionConnector(QObject):
         if started:
             logger.info(
                 "=== Full scan started: subject=%s duration=%ss "
-                "left=0x%02X right=0x%02X laser=%s ===",
+                "left=0x%02X right=0x%02X laser=%s demo=%s ===",
                 subject_id, duration_sec, left_camera_mask, right_camera_mask,
                 "off" if disable_laser else "on",
+                "REPLAY" if demo_csv else "off",
             )
             # Bind the live source's DB tail to THIS scan's session row by its
             # exact label (set synchronously inside start_scan), so a later
