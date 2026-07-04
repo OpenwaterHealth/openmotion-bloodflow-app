@@ -29,7 +29,10 @@ Item {
     property bool   showBfiBvi:        true
     property bool   autoScale:         false
     property bool   autoScalePerPlot:  false
-    property bool   clinicalMode:       false
+    // Live binding to the clinicalMode config flag. Read-only on purpose:
+    // clinical selection is build-time/env-only (#233), so the modal never
+    // edits or persists it.
+    readonly property bool clinicalMode: MotionInterface.appConfig.clinicalMode === true
     property int    plotWindowSec:     15
     property color  bfiColor:          "#E74C3C"
     property color  bviColor:          "#3498DB"
@@ -96,7 +99,6 @@ Item {
         var cfg = MotionInterface.appConfig
         defaultLeftMaskIndex  = maskToIndex(cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99)
         defaultRightMaskIndex = maskToIndex(cfg.rightMask !== undefined ? cfg.rightMask : 0x99)
-        clinicalMode        = cfg.clinicalMode        !== undefined ? cfg.clinicalMode        : false
         showBfiBvi         = clinicalMode ? true : (cfg.showBfiBvi !== undefined ? cfg.showBfiBvi : true)
         autoScale          = cfg.autoScale          !== undefined ? cfg.autoScale          : false
         autoScalePerPlot   = autoScale
@@ -147,7 +149,9 @@ Item {
             "showBfiBvi":         showBfiBvi,
             "autoScale":          autoScale,
             "autoScalePerPlot":   autoScalePerPlot,
-            "clinicalMode":        clinicalMode,
+            // clinicalMode is deliberately NOT saved here (#233): the
+            // Clinical/Research split is build-time/env-only and the
+            // config store refuses to persist it as a runtime override.
             "plotWindowSec":      plotWindowSec,
             "bfiColor":           "" + bfiColor,
             "bviColor":           "" + bviColor,
