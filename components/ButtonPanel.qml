@@ -16,7 +16,7 @@ Rectangle {
     property bool scanning: false
     property bool waiting: false       // true while a scan start is armed (pipeline-idle gate)
     property bool camerasReady: false  // gates Start/Check enablement
-    property bool clinicalMode: false       // FDA mode hides scan-settings button
+    property bool clinicalMode: false       // Clinical mode hides scan-settings button
 
     // Engineering-gated extras (Logs button). Live binding: appConfig is
     // a notify property, so the button appears the moment the runtime

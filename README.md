@@ -98,10 +98,10 @@ Edit `config/app_config.json` to customize behavior:
 | Key | Default | Description |
 |-----|---------|-------------|
 | `dataDirectory` | `null` | Root directory for `logs/` and `data/` (null = auto-detect) |
-| `engineeringMode` | `false` | Enable engineering UI features |
-| `clinicalMode` | `false` | Simplified clinical UI: forces far camera config + free run, hides scan settings, shows large left/right BFI/BVI panels |
+| `engineeringMode` | `false` | Enable engineering UI features (runtime-unlockable) |
+| `clinicalMode` | `false` | Simplified clinical UI: forces far camera config + free run, hides scan settings, shows large left/right BFI/BVI panels. Build-time only — never persisted as a runtime override |
 | `leftMask` / `rightMask` | `0x66` | Camera bitmask for left/right sensor modules |
-| `writeRawCsv` | `true` | Write raw histogram CSV during capture |
+| `writeRawCsv` | `true` | Write raw histogram CSV during capture (requires `clinicalMode` off, or `engineeringMode` on) |
 | `rawCsvDurationSec` | `null` | Limit raw CSV capture duration (null = unlimited) |
 | `showBfiBvi` | `true` | Plot BFI/BVI instead of raw mean/contrast |
 | `plotWindowSec` | `15` | Realtime plot time window (3 / 5 / 15 / 30) |

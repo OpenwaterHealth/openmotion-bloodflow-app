@@ -1043,7 +1043,7 @@ def _bucketize_session_rows(
 
     Rows are bucketed by their stored cam_id verbatim:
       - cam_id 0..7 — per-camera BFI/BVI/mean/contrast (normal-mode scans).
-      - cam_id == -1 — the reduced-mode dark-corrected per-side average
+      - cam_id == -1 — the clinical-mode dark-corrected per-side average
         (bfi/bvi/mean/contrast), persisted by ScanDBSink from the cam_id=-1
         frames the SDK's SideAverageStage routes onto the "final" channel.
     has_bfi reflects whether ANY finite BFI/BVI landed (either layout) — the
@@ -1181,7 +1181,7 @@ def _derive_masks_from_buffers(buffers: dict) -> tuple[int, int]:
     """Reconstruct (left_mask, right_mask) from which per-camera streams a
     loaded scan carries — bit c set ⇒ camera c (cam_id 0..7) recorded data.
 
-    Returns (-1, -1) when no per-camera streams exist (e.g. a reduced-mode
+    Returns (-1, -1) when no per-camera streams exist (e.g. a clinical-mode
     scan whose only buffers are the cam_id=-1 side average) so the viewer
     falls back to its live/preview masks rather than rendering an empty
     normal-mode grid. A side that recorded nothing yields mask 0 as long as
@@ -1270,10 +1270,10 @@ def load_past_scan_buffers(
 
     session_data carries, by cam_id:
       - cam_id 0..7  — per-camera BFI/BVI/mean/contrast (normal-mode scans).
-      - cam_id == -1 — the reduced-mode dark-corrected per-side average
+      - cam_id == -1 — the clinical-mode dark-corrected per-side average
         (cam_id=-1 frames on the "final" channel, persisted by ScanDBSink).
-        Reduced cells query cam_id=-1, so replay reads it straight from the
-        DB — no derivation.
+        Clinical cells query cam_id=-1, so replay reads it straight from
+        the DB — no derivation.
     Pre-pipeline scans carry no BFI/BVI in the DB; the corrected-CSV
     fallback covers those (CsvSink writes it for every scan)."""
     buffers, has_bfi = _bucketize_session_rows(scan_db, int(session_id))
