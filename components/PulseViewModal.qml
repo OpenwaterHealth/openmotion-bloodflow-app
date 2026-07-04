@@ -145,7 +145,8 @@ Item {
                     Text {
                         id: demoLbl
                         anchors.centerIn: parent
-                        text: "SYNTHETIC DEMO"
+                        text: MotionInterface.pulseDemoMode === "replay"
+                              ? "SAMPLE DATA" : "SYNTHETIC DEMO"
                         color: AppTheme.accentBlue
                         font.pixelSize: 11; font.bold: true
                     }
@@ -153,7 +154,16 @@ Item {
 
                 Item { Layout.fillWidth: true }
 
-                // Demo shape presets (only meaningful while the demo drives it).
+                // Replay the bundled recorded sample scan (real pulse morphology).
+                Button {
+                    visible: MotionInterface.pulseDemoActive
+                    text: "Sample scan"
+                    flat: true
+                    highlighted: MotionInterface.pulseDemoMode === "replay"
+                    onClicked: MotionInterface.startPulseSample()
+                }
+
+                // Synthetic shape presets (only meaningful while the demo drives it).
                 Repeater {
                     model: [["Normal", "normal"], ["High PI", "high_pi"],
                             ["Low PI", "low_pi"], ["Damped", "damped"],
@@ -163,7 +173,8 @@ Item {
                         visible: MotionInterface.pulseDemoActive
                         text: modelData[0]
                         flat: true
-                        highlighted: root.demoPreset === modelData[1]
+                        highlighted: MotionInterface.pulseDemoMode !== "replay"
+                                     && root.demoPreset === modelData[1]
                         onClicked: {
                             root.demoPreset = modelData[1]
                             MotionInterface.startPulseDemo(modelData[1], root.demoBpm)

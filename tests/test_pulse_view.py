@@ -9,7 +9,8 @@ import numpy as np
 import pytest
 
 from omotion.pulse.types import PulseAnalysis, PulseFeatures
-from pulse_view import PulseSink, PulseDemoController
+from omotion.pulse.synth import synth_bfi
+from pulse_view import PulseSink, PulseDemoController, load_bfi_results_csv
 
 pytestmark = pytest.mark.unit
 
@@ -85,6 +86,36 @@ def test_demo_running_flag_tracks_start_stop():
     assert ctrl.running is True
     ctrl.stop()
     assert ctrl.running is False
+
+
+def test_load_bfi_results_csv(tmp_path):
+    p = tmp_path / "s.csv"
+    p.write_text(
+        "camera,side,time_s,BFI,BVI\n"
+        "0,left,0.0,4.5,7.0\n"
+        "1,left,0.0,5.5,7.5\n"
+        "0,right,0.0,4.0,8.0\n"
+        "0,left,0.025,4.6,7.1\n")
+    left, right = load_bfi_results_csv(str(p))
+    assert left.shape[0] == 2                 # two distinct timepoints, left
+    assert right.shape[0] == 1
+    assert abs(float(left[0]) - 5.0) < 1e-9   # per-side mean of cams: (4.5+5.5)/2
+
+
+def test_demo_replay_streams_provided_data():
+    seen = []
+    ctrl = PulseDemoController(emit_fn=seen.append, step=4)
+    _, lv = synth_bfi(duration_s=16.0, fs=40.0, bpm=72.0, seed=1)
+    _, rv = synth_bfi(duration_s=16.0, fs=40.0, bpm=100.0, seed=2)
+    ctrl.start_replay(lv, rv)
+    assert ctrl.running is True
+    for _ in range(240):
+        ctrl._tick()
+    ctrl.stop()
+    assert {s.side for s in seen} == {"left", "right"}
+    left = [s for s in seen if s.side == "left"][-1]
+    assert 66.0 <= left.features.hr_bpm <= 78.0   # recovered the 72 bpm replay
+    assert left.features.reliable is True          # replayed a real pulse
 
 
 def test_demo_stop_halts_emission():

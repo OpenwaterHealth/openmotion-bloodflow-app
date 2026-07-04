@@ -28,6 +28,8 @@ Item {
 
     readonly property var _f: (snap && snap.features) ? snap.features : null
     readonly property bool _hasData: snap && snap.beatCount > 0
+    // A genuine, regular cardiac pulse (not phantom / lead-off noise).
+    readonly property bool _reliable: _f && _f.reliable === true
 
     onSnapChanged: canvas.requestPaint()
     onYMinChanged: canvas.requestPaint()
@@ -46,6 +48,8 @@ Item {
         anchors.fill: parent
         anchors.margins: 1
         renderStrategy: Canvas.Cooperative
+        // De-emphasise the trace when the "pulse" is really just noise.
+        opacity: (root._hasData && !root._reliable) ? 0.35 : 1.0
 
         readonly property real padL: 46
         readonly property real padR: 14
@@ -180,17 +184,45 @@ Item {
             font.pixelSize: 15; font.bold: true
         }
         Item { Layout.fillWidth: true }
+        // Heart-rate readout is shown only when a real pulse is detected;
+        // otherwise it would report a fake rate off band-limited noise.
         Text {
+            visible: root._reliable
             text: (root._f && isFinite(root._f.hr_bpm))
                   ? Math.round(root._f.hr_bpm) + " bpm" : "-- bpm"
             color: AppTheme.textPrimary
             font.pixelSize: 15; font.family: "Roboto Mono"
         }
         Text {
+            visible: root._reliable
             text: (root._f && isFinite(root._f.pi))
                   ? "PI " + root._f.pi.toFixed(2) : "PI --"
             color: AppTheme.textTertiary
             font.pixelSize: 13; font.family: "Roboto Mono"
+        }
+        Text {
+            visible: root._hasData && !root._reliable
+            text: "No pulse detected"
+            color: AppTheme.accentYellow
+            font.pixelSize: 14; font.bold: true
+        }
+    }
+
+    // Centered "No pulse detected" banner when there is a signal but no
+    // genuine cardiac pulse (static phantom, poor contact, lead-off).
+    Rectangle {
+        visible: root._hasData && !root._reliable
+        anchors.centerIn: parent
+        width: noPulseLabel.width + 28; height: noPulseLabel.height + 16
+        radius: 8
+        color: Qt.rgba(0.95, 0.77, 0.06, 0.14)
+        border.color: AppTheme.accentYellow; border.width: 1
+        Text {
+            id: noPulseLabel
+            anchors.centerIn: parent
+            text: "No pulse detected"
+            color: AppTheme.accentYellow
+            font.pixelSize: 15; font.bold: true
         }
     }
 }

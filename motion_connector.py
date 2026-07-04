@@ -60,7 +60,7 @@ from utils import app_paths, config_store
 from data_sources import (
     LiveScanSource, PastScanSource, ScanDataSource, buffers_are_empty,
 )
-from pulse_view import PulseSink, PulseDemoController
+from pulse_view import PulseSink, PulseDemoController, load_bfi_results_csv
 
 # constants for calculations
 SCALE_V = 0.0909
@@ -2817,6 +2817,13 @@ class MotionConnector(QObject):
     def pulseDemoActive(self) -> bool:
         return self._pulse_demo is not None and self._pulse_demo.running
 
+    @pyqtProperty(str, notify=pulseDemoActiveChanged)
+    def pulseDemoMode(self) -> str:
+        """'synth', 'replay', or '' — for the pulse view's data-source badge."""
+        if self._pulse_demo is not None and self._pulse_demo.running:
+            return self._pulse_demo.mode
+        return ""
+
     @pyqtSlot(str)
     @pyqtSlot(str, float)
     def startPulseDemo(self, preset: str = "normal", bpm: float = 72.0) -> None:
@@ -2833,6 +2840,30 @@ class MotionConnector(QObject):
         if self._pulse_demo is not None:
             self._pulse_demo.stop()
         self.pulseDemoActiveChanged.emit()
+
+    @pyqtSlot(str)
+    def startPulseReplay(self, csv_path: str) -> None:
+        """Replay a recorded ``*_bfi_results.csv`` (columns camera,side,time_s,
+        BFI,BVI) through the pulse view as sample data."""
+        try:
+            left, right = load_bfi_results_csv(csv_path)
+        except Exception:
+            logger.exception("failed to load pulse replay CSV: %s", csv_path)
+            return
+        if self._pulse_demo is None:
+            self._pulse_demo = PulseDemoController(
+                self._emit_pulse_snapshot, parent=self)
+        try:
+            self._pulse_demo.start_replay(left, right)
+        except Exception:
+            logger.exception("failed to start pulse replay")
+            return
+        self.pulseDemoActiveChanged.emit()
+
+    @pyqtSlot()
+    def startPulseSample(self) -> None:
+        """Replay the bundled realistic sample scan (assets/sample_pulse_scan.csv)."""
+        self.startPulseReplay(resource_path("assets/sample_pulse_scan.csv"))
 
     def _save_app_config(self):
         """Persist runtime config changes as a diff vs the shipped baseline.

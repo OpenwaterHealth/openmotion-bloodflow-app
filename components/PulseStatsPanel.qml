@@ -22,28 +22,37 @@ Rectangle {
 
     readonly property var _lf: (leftSnap && leftSnap.features) ? leftSnap.features : null
     readonly property var _rf: (rightSnap && rightSnap.features) ? rightSnap.features : null
+    readonly property bool _lReliable: _lf && _lf.reliable === true
+    readonly property bool _rReliable: _rf && _rf.reliable === true
 
-    function _fmt(v, d) { return (v !== undefined && isFinite(v)) ? v.toFixed(d) : "—" }
     function _get(f, k) { return (f && f[k] !== undefined) ? f[k] : NaN }
-
-    function _delta(k, d) {
+    // Format one cell, blanking gated pulse-shape metrics when that side has
+    // no reliable pulse — a phantom / lead-off must not show a fake number.
+    function _cell(f, reliable, k, d, gated) {
+        if (gated && !reliable) return "—"
+        var v = _get(f, k)
+        return (v !== undefined && isFinite(v)) ? v.toFixed(d) : "—"
+    }
+    function _delta(k, d, gated) {
+        if (gated && !(_lReliable && _rReliable)) return "—"
         var l = _get(_lf, k), r = _get(_rf, k)
         if (!isFinite(l) || !isFinite(r)) return "—"
         var dv = l - r
         return (dv >= 0 ? "+" : "") + dv.toFixed(d)
     }
 
-    // [label, key, digits]
+    // [label, key, digits, unit, gated-on-reliability]
     readonly property var _metrics: [
-        ["Heart rate",         "hr_bpm",       0, "bpm"],
-        ["Pulse amplitude",    "amp",          2, "BFI"],
-        ["Pulsatility index",  "pi",           2, ""],
-        ["Resistivity index",  "ri",           2, ""],
-        ["Area under curve",   "auc",          2, ""],
-        ["Rise time",          "rise_time_ms", 0, "ms"],
-        ["Augmentation index", "aix",          2, ""],
-        ["Beats analysed",     "beat_count",   0, ""],
-        ["Template consistency","consistency", 2, ""]
+        ["Heart rate",          "hr_bpm",       0, "bpm", true],
+        ["Pulse amplitude",     "amp",          2, "BFI", true],
+        ["Pulsatility index",   "pi",           2, "",    true],
+        ["Resistivity index",   "ri",           2, "",    true],
+        ["Area under curve",    "auc",          2, "",    true],
+        ["Rise time",           "rise_time_ms", 0, "ms",  true],
+        ["Augmentation index",  "aix",          2, "",    true],
+        ["Beats analysed",      "beat_count",   0, "",    false],
+        ["Signal periodicity",  "periodicity",  2, "",    false],
+        ["Template consistency","consistency",  2, "",    false]
     ]
 
     function _pearson(a, b) {
@@ -89,6 +98,29 @@ Rectangle {
 
         Rectangle { Layout.fillWidth: true; height: 1; color: AppTheme.borderSubtle; opacity: 0.5 }
 
+        // Pulse-detected indicator (drives whether the shape metrics below are
+        // shown or blanked). A component so left/right render identically.
+        component DetectBadge: Text {
+            property bool ok: false
+            property bool has: false
+            horizontalAlignment: Text.AlignRight
+            Layout.preferredWidth: 90
+            font.pixelSize: 14; font.bold: true
+            text: !has ? "—" : (ok ? "Yes" : "No")
+            color: !has ? AppTheme.textTertiary
+                        : (ok ? AppTheme.accentGreen : AppTheme.accentYellow)
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 8
+            Text { text: "Pulse detected"; color: AppTheme.textSecondary
+                   font.pixelSize: 13; font.bold: true; Layout.preferredWidth: 200 }
+            Item { Layout.fillWidth: true }
+            DetectBadge { has: root._lf !== null; ok: root._lReliable }
+            DetectBadge { has: root._rf !== null; ok: root._rReliable }
+            Item { Layout.preferredWidth: 80 }
+        }
+
         Repeater {
             model: root._metrics
             delegate: RowLayout {
@@ -102,17 +134,17 @@ Rectangle {
                 }
                 Item { Layout.fillWidth: true }
                 Text {
-                    text: root._fmt(root._get(root._lf, modelData[1]), modelData[2])
+                    text: root._cell(root._lf, root._lReliable, modelData[1], modelData[2], modelData[4])
                     color: AppTheme.textPrimary; font.pixelSize: 14; font.family: "Roboto Mono"
                     horizontalAlignment: Text.AlignRight; Layout.preferredWidth: 90
                 }
                 Text {
-                    text: root._fmt(root._get(root._rf, modelData[1]), modelData[2])
+                    text: root._cell(root._rf, root._rReliable, modelData[1], modelData[2], modelData[4])
                     color: AppTheme.textPrimary; font.pixelSize: 14; font.family: "Roboto Mono"
                     horizontalAlignment: Text.AlignRight; Layout.preferredWidth: 90
                 }
                 Text {
-                    text: root._delta(modelData[1], modelData[2])
+                    text: root._delta(modelData[1], modelData[2], modelData[4])
                     color: AppTheme.textSecondary; font.pixelSize: 14; font.family: "Roboto Mono"
                     horizontalAlignment: Text.AlignRight; Layout.preferredWidth: 80
                 }
