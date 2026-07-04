@@ -34,6 +34,14 @@ Rectangle {
     // FDA mode (read from app config). Forces Far camera pattern + free run,
     // hides scan-settings button, and swaps in the FDA plot view.
     property bool clinicalMode: MotionInterface.appConfig.clinicalMode === true
+
+    // Research-only "Pulse" viewer mode (Scan Settings → Viewer Mode). When on,
+    // the main content shows the cardiac pulse waveforms instead of the default
+    // BFI/BVI plots. Never active in clinical mode.
+    readonly property bool pulseViewerActive:
+        !clinicalMode
+        && MotionInterface.appConfig.pulseView !== false
+        && MotionInterface.appConfig.viewerMode === "pulse"
     // In clinical mode, Start first runs a contact-quality preflight check.
     property bool clinicalStartPending: false
     // Prevent late CQ callbacks from re-opening the modal while a stop/cancel
@@ -271,7 +279,6 @@ Rectangle {
         onNotesClicked:    modalManager.toggle(notesModal)
         onHistoryClicked:  modalManager.toggle(historyModal)
         onSettingsClicked: modalManager.toggle(settingsModal)
-        onPulseViewClicked: modalManager.toggle(pulseViewModal)
     }
 
     // Allow external callers (firmware banner) to open the Settings overlay.
@@ -285,8 +292,21 @@ Rectangle {
     ModalManager {
         id: modalManager
         modals: [scanSettingsModal, notesModal, historyModal,
-                 settingsModal, contactQualityModal, logsModal,
-                 pulseViewModal]
+                 settingsModal, contactQualityModal, logsModal]
+    }
+
+    // Pulse viewer (Research "Pulse" viewer mode) — fills the same area as
+    // the plot viewer, shown instead of it when Viewer Mode is "Pulse".
+    PulseView {
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.left: buttonPanel.right
+        anchors.right: parent.right
+        anchors.margins: 8
+        anchors.leftMargin: 16
+        visible: bloodFlow.pulseViewerActive
+        active: bloodFlow.pulseViewerActive
+        scanning: bloodFlow.scanning
     }
 
     // Data viewer — fills remaining space to the right of ButtonPanel.
@@ -297,6 +317,7 @@ Rectangle {
         anchors.right: parent.right
         anchors.margins: 8
         anchors.leftMargin: 16
+        visible: !bloodFlow.pulseViewerActive
         clinicalMode: bloodFlow.clinicalMode
         // Clinical mode never autoscales: the toggle is hidden in both the
         // Settings modal and the viewer's three-dot popup, so a stale
@@ -334,6 +355,7 @@ Rectangle {
     // ===== MODALS =====
     ScanSettingsModal {
         id: scanSettingsModal
+        clinicalMode: bloodFlow.clinicalMode
         onSelectionChanged: function(newLeftMask, newRightMask) {
             bloodFlow.freeRun = scanSettingsModal.freeRun
             var dur = scanSettingsModal.freeRun ? 43200 : scanSettingsModal.durationSec
@@ -411,15 +433,6 @@ Rectangle {
 
     LogsModal {
         id: logsModal
-    }
-
-    // Real-time pulse-waveform view (live pulse over an average/min-max
-    // envelope, with L-vs-R shape statistics). Auto-runs the synthetic demo
-    // when opened idle so it is useful without hardware; a live clinical scan
-    // feeds it through the SDK "pulse" channel instead.
-    PulseViewModal {
-        id: pulseViewModal
-        scanning: bloodFlow.scanning
     }
 
     ContactQualityModal {

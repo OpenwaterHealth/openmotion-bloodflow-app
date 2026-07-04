@@ -3767,7 +3767,11 @@ class MotionConnector(QObject):
             left_camera_mask=left_camera_mask,
             right_camera_mask=right_camera_mask,
             disable_laser=disable_laser,
-            reduced_mode=self._app_config.get("clinicalMode", False),
+            # Side-averaged (reduced) mode in clinical mode, OR when the
+            # research "Pulse" viewer is active — the pulse stage needs the
+            # per-side average, so a pulse-viewer scan produces live pulse data.
+            reduced_mode=(self._app_config.get("clinicalMode", False)
+                          or self._app_config.get("viewerMode") == "pulse"),
             # Corrected CSV is opt-in now that per-cam BFI/BVI lands in
             # the scan DB (the new viewer + past replay read from there).
             # Default False to skip the redundant {scan_id}.csv; flip

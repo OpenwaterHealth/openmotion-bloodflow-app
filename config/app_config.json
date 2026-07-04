@@ -32,6 +32,7 @@
     "showAxisLabels": true,
     "darkMode": true,
     "pulseView": true,
+    "viewerMode": "default",
     "max_calibration_time_sec": 600,
     "calibration_scan_duration_sec": 15,
     "test_scan_duration_sec": 5,
