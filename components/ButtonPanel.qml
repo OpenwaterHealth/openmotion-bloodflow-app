@@ -17,6 +17,7 @@ Rectangle {
     property bool waiting: false       // true while a scan start is armed (pipeline-idle gate)
     property bool camerasReady: false  // gates Start/Check enablement
     property bool clinicalMode: false       // FDA mode hides scan-settings button
+    property bool demoMode: false      // demo mode replays a file — Start works with no hardware
 
     // Connection state — drives start button icon and enablement.
     // A laser-safety trip is surfaced via a persistent NotificationCenter
@@ -24,6 +25,9 @@ Rectangle {
     // a disconnect here.
     property bool allConnected: MotionInterface.consoleConnected &&
         (MotionInterface.leftSensorConnected || MotionInterface.rightSensorConnected)
+    // In demo mode a scan replays a file, so Start is available without hardware.
+    readonly property bool startConnected: demoMode || allConnected
+    readonly property bool startReady: demoMode || (camerasReady && allConnected)
     signal startStopClicked()
     signal scanSettingsClicked()
     signal notesClicked()
@@ -58,7 +62,7 @@ Rectangle {
                     id: startStopCircle
                     Layout.alignment: Qt.AlignHCenter
                     width: 36; height: 36; radius: 18
-                    color: !panel.allConnected ? AppTheme.textDisabled
+                    color: !panel.startConnected ? AppTheme.textDisabled
                          : panel.waiting  ? "#F1C40F"
                          : panel.scanning ? "#E74C3C"
                          :                  "#2ECC71"
@@ -71,14 +75,14 @@ Rectangle {
                         font.family: iconFont.name
                         font.pixelSize: 20
                         color: "#FFFFFF"
-                        visible: !panel.allConnected && !panel.scanning
+                        visible: !panel.startConnected && !panel.scanning
                     }
 
                     // Play triangle (shown when connected and not scanning)
                     Canvas {
                         anchors.centerIn: parent
                         width: 16; height: 16
-                        visible: panel.allConnected && !panel.scanning
+                        visible: panel.startConnected && !panel.scanning
                         onPaint: {
                             var ctx = getContext("2d")
                             ctx.clearRect(0, 0, width, height)
@@ -99,9 +103,9 @@ Rectangle {
                 }
 
                 Text {
-                    text: !panel.allConnected ? "Disconnected" : panel.scanning ? "Stop" : "Start"
+                    text: !panel.startConnected ? "Disconnected" : panel.scanning ? "Stop" : "Start"
                     font.pixelSize: 10
-                    color: (panel.camerasReady && panel.allConnected) ? AppTheme.textSecondary : AppTheme.textDisabled
+                    color: panel.startReady ? AppTheme.textSecondary : AppTheme.textDisabled
                     horizontalAlignment: Text.AlignHCenter
                     Layout.alignment: Qt.AlignHCenter
                 }
@@ -121,8 +125,8 @@ Rectangle {
             MouseArea {
                 id: ssArea
                 anchors.fill: parent
-                hoverEnabled: panel.camerasReady && panel.allConnected
-                enabled: panel.camerasReady && panel.allConnected
+                hoverEnabled: panel.startReady
+                enabled: panel.startReady
                 cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
                 onClicked: panel.startStopClicked()
             }

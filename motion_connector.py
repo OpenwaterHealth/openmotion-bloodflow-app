@@ -3500,6 +3500,15 @@ class MotionConnector(QObject):
         except Exception as e:
             logger.error(f"Error querying device info: {e}")
 
+    def _resolve_demo_data_file(self) -> "str | None":
+        """The demo-mode replay file: the configured demoDataFile if it exists,
+        else the bundled sample scan. None if neither is present."""
+        p = self._app_config.get("demoDataFile", "") or ""
+        if p and os.path.isfile(p):
+            return p
+        bundled = resource_path("assets/sample_pulse_scan.csv")
+        return bundled if os.path.isfile(bundled) else None
+
     @pyqtSlot(str, int, int, int, bool, result=bool)
     def startCapture(
         self,
@@ -3541,6 +3550,26 @@ class MotionConnector(QObject):
         except Exception as e:
             self.captureLog.emit(f"Failed to create data dir: {e}")
             return False
+
+        # Demo mode (engineering): replay a recorded bfi_results CSV at the
+        # pipeline top instead of streaming from sensors. Override the masks
+        # with the demo masks, force the laser off, and pass demo_csv so the
+        # SDK builds a DemoScanSource (no camera enable / trigger / laser). The
+        # scan auto-stops when the recording is exhausted.
+        demo_csv = None
+        if self._app_config.get("demoMode", False):
+            demo_csv = self._resolve_demo_data_file()
+            if not demo_csv:
+                self.captureLog.emit(
+                    "Demo mode is on but no demo data file was found.")
+                return False
+            left_camera_mask = int(self._app_config.get("demoModeLeftMask", 0xFF))
+            right_camera_mask = int(self._app_config.get("demoModeRightMask", 0xFF))
+            disable_laser = True
+            logger.info("Demo mode: replaying %s (left=0x%02X right=0x%02X)",
+                        demo_csv, left_camera_mask, right_camera_mask)
+            self.captureLog.emit(
+                f"Demo mode: replaying {os.path.basename(demo_csv)}")
 
         self._capture_stop = threading.Event()
         # Each new scan starts with a fresh notes buffer
@@ -3764,6 +3793,9 @@ class MotionConnector(QObject):
             # the pulseView flag is on; the SDK only inserts PulseWaveformStage
             # in reduced (clinical) mode, so the sink is otherwise idle.
             pulse_analysis=self._app_config.get("pulseView", True),
+            # Demo mode: replay this recorded file at the pipeline top instead
+            # of the sensors (None in normal scans). See _resolve_demo_data_file.
+            demo_csv=demo_csv,
             sinks=[
                 _LivePlotSink(connector=self, plot_t0=plot_t0, live_source=live_source,
                               nan_gap_tracker=nan_gap_tracker),

@@ -218,6 +218,7 @@ Rectangle {
         // on every sensor (re)connect, so a mid-session replug re-gates too.
         camerasReady: bloodFlow.camerasReady && !MotionInterface.sensorInitBusy
         clinicalMode: bloodFlow.clinicalMode
+        demoMode: MotionInterface.appConfig.demoMode === true
 
         // Action buttons — close any open modal first (which by
         // convention saves), then perform the action. If the open
@@ -236,7 +237,10 @@ Rectangle {
                 // has been appended to scanNotes. Opening it here would
                 // race the append and pop an empty modal.
             } else {
-                if (bloodFlow.clinicalMode) {
+                // Demo mode replays a file — no hardware, so skip the clinical
+                // contact-quality preflight and start the (demo) scan directly.
+                if (bloodFlow.clinicalMode
+                        && MotionInterface.appConfig.demoMode !== true) {
                     clinicalStartPending = true
                     contactQualityModal.preScanMode = true
                     contactQualityModal.reset(true)

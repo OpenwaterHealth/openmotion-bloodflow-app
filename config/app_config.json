@@ -129,6 +129,10 @@
         15.0
     ],
     "engineeringMode": false,
+    "demoMode": false,
+    "demoModeLeftMask": 255,
+    "demoModeRightMask": 255,
+    "demoDataFile": "",
     "downloadBetaFirmware": false,
     "forceLaserFail": false,
     "cameraFakeData": false,

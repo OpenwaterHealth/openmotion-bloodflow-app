@@ -118,6 +118,15 @@ def _load_app_config() -> dict:
         "rightMask": 0x66,
         "uncorrectedOnly": False,
         "engineeringMode": False,
+        # Pulse-waveform view toggle (icon-bar button visibility).
+        "pulseView": True,
+        # Demo mode (engineering): replay a recorded bfi_results CSV at the top
+        # of the pipeline instead of streaming from sensors. Masks select the
+        # replayed cameras; demoDataFile "" falls back to the bundled sample.
+        "demoMode": False,
+        "demoModeLeftMask": 255,
+        "demoModeRightMask": 255,
+        "demoDataFile": "",
         "showBfiBvi": True,
         "bfiMin": 0.0,
         "bfiMax": 10.0,
