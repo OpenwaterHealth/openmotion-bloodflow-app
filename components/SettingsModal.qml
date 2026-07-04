@@ -1183,7 +1183,7 @@ Item {
                             hoverColor: "#C0392B"
                             onClicked: {
                                 MotionInterface.setConfig("engineeringMode", false)
-                                MotionInterface.notify("Engineering mode disabled.", "info", 3000, false, "dev-mode")
+                                MotionInterface.notify("Engineering mode disabled.", "info", 3000, false, "engineering-mode")
                             }
                         }
                         Item { Layout.fillWidth: true }
