@@ -615,6 +615,72 @@ Item {
                             onAccepted: dataPathField.text = selectedFolder.toString().replace("file:///", "")
                         }
                     }
+
+                    // ── Raw histogram CSVs (research + engineering, #234) ────
+                    // Research data — moved out of the Engineering card so
+                    // Research (non-clinical) users get them without the
+                    // engineering unlock; the engineering unlock also shows
+                    // them on a clinical build. The connector re-checks the
+                    // flags at scan start, so a plain Clinical build never
+                    // writes raw CSVs even if a stale config left the
+                    // toggle on (#43).
+                    FieldRow {
+                        visible: !root.clinicalMode
+                                 || MotionInterface.appConfig.engineeringMode === true
+                        label: "Save raw CSV"
+                        PillSwitch {
+                            // objectName for the unit suite; Accessible.name
+                            // for the Windows a11y (UIA) tree — plain QML
+                            // Text labels don't surface there, and the HIL
+                            // suite (test_raw_csv_save.py) locates the
+                            // toggle by this name.
+                            objectName: "saveRawCsvSwitch"
+                            Accessible.name: "Save raw CSV"
+                            checked: root.writeRawCsv
+                            onCheckedChanged: root.writeRawCsv = checked
+                        }
+                        Text {
+                            text: root.writeRawCsv ? "On" : "Off"
+                            color: root.writeRawCsv ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    FieldRow {
+                        visible: !root.clinicalMode
+                                 || MotionInterface.appConfig.engineeringMode === true
+                        label: "Raw CSV duration"
+                        opacity: root.writeRawCsv ? 1.0 : 0.4
+                        TextField {
+                            id: rawCsvDurationField
+                            objectName: "rawCsvDurationField"
+                            Accessible.name: "Raw CSV duration"
+                            Layout.preferredWidth: 80
+                            Layout.preferredHeight: 32
+                            enabled: root.writeRawCsv
+                            text: root.rawCsvDurationSec !== null && root.rawCsvDurationSec !== undefined
+                                  ? root.rawCsvDurationSec.toString() : ""
+                            placeholderText: ""
+                            inputMethodHints: Qt.ImhDigitsOnly
+                            color: root.colTextPri
+                            background: Rectangle {
+                                color: root.colBgInput
+                                border.color: rawCsvDurationField.activeFocus ? root.colAccent : root.colBorderSoft
+                                radius: 4
+                            }
+                            onEditingFinished: {
+                                var v = parseInt(text, 10)
+                                root.rawCsvDurationSec = (text === "" || isNaN(v) || v <= 0) ? null : v
+                            }
+                        }
+                        Text {
+                            text: "seconds  (blank = full scan)"
+                            color: root.colTextMuted
+                            font.pixelSize: 11
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
                 }
 
                 // ── Realtime Plot Display ────────────────────────────────────
@@ -940,51 +1006,6 @@ Item {
                             text: MotionInterface.appConfig.consoleDebugLogging === true ? "On" : "Off"
                             color: MotionInterface.appConfig.consoleDebugLogging === true ? root.colAccent : root.colTextMuted
                             font.pixelSize: 12
-                        }
-                        Item { Layout.fillWidth: true }
-                    }
-
-                    FieldRow {
-                        label: "Save raw CSV"
-                        PillSwitch {
-                            checked: root.writeRawCsv
-                            onCheckedChanged: root.writeRawCsv = checked
-                        }
-                        Text {
-                            text: root.writeRawCsv ? "On" : "Off"
-                            color: root.writeRawCsv ? root.colAccent : root.colTextMuted
-                            font.pixelSize: 12
-                        }
-                        Item { Layout.fillWidth: true }
-                    }
-
-                    FieldRow {
-                        label: "Raw CSV duration"
-                        opacity: root.writeRawCsv ? 1.0 : 0.4
-                        TextField {
-                            id: rawCsvDurationField
-                            Layout.preferredWidth: 80
-                            Layout.preferredHeight: 32
-                            enabled: root.writeRawCsv
-                            text: root.rawCsvDurationSec !== null && root.rawCsvDurationSec !== undefined
-                                  ? root.rawCsvDurationSec.toString() : ""
-                            placeholderText: ""
-                            inputMethodHints: Qt.ImhDigitsOnly
-                            color: root.colTextPri
-                            background: Rectangle {
-                                color: root.colBgInput
-                                border.color: rawCsvDurationField.activeFocus ? root.colAccent : root.colBorderSoft
-                                radius: 4
-                            }
-                            onEditingFinished: {
-                                var v = parseInt(text, 10)
-                                root.rawCsvDurationSec = (text === "" || isNaN(v) || v <= 0) ? null : v
-                            }
-                        }
-                        Text {
-                            text: "seconds  (blank = full scan)"
-                            color: root.colTextMuted
-                            font.pixelSize: 11
                         }
                         Item { Layout.fillWidth: true }
                     }

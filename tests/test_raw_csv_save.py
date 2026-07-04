@@ -1,11 +1,13 @@
 """
-test_raw_csv_save.py — verify the engineering-mode raw-CSV truncation.
+test_raw_csv_save.py — verify the research-mode raw-CSV truncation.
 
-Issue: OpenwaterHealth/openmotion-bloodflow-app#105
+Issues: OpenwaterHealth/openmotion-bloodflow-app#105 (truncation),
+#234 (raw CSVs are a research-mode feature, no engineering unlock
+needed).
 
 What this exercises
 -------------------
-When the user enables ``writeRawCsv`` in the Settings → Engineering
+When the user enables ``writeRawCsv`` in the Settings → Data Output
 section and sets ``Raw CSV duration`` to N seconds, the SDK's
 ScanWorkflow writes per-side raw histogram CSVs (``*_left_mask*_raw.csv`` /
 ``*_right_mask*_raw.csv``) for the first N seconds of the scan, then
@@ -17,11 +19,12 @@ Lifecycle
   1. Snapshot the on-disk values of every config key the test
      mutates.
   2. Kill the bloodflow app.
-  3. Force on disk: ``engineeringMode=true`` (so the Save raw CSV
-     toggle and duration field are visible), ``clinicalMode=false``
-     (so the Scan Settings panel button is visible).
+  3. Force on disk: ``engineeringMode=false`` + ``clinicalMode=false``
+     — research mode, where the Save raw CSV toggle and duration
+     field must be visible without the engineering unlock (#234),
+     and the Scan Settings panel button is visible.
   4. Launch the app, calibrate panel buttons, wait for CONNECTED.
-  5. Open Settings, scroll to the Engineering section, toggle
+  5. Open Settings, scroll to the Data Output section, toggle
      ``Save raw CSV`` ON via the UI, type ``30`` into
      ``Raw CSV duration``, escape out.
   6. Open Scan Settings, set duration to 1 minute, escape out.
@@ -87,7 +90,7 @@ SESSION_NOTES_TIMEOUT = 200  # camera config (~75s) + 1-min scan + buffer
 
 # Test parameters (also baked into the assertions below)
 SCAN_DURATION_SEC      = 60    # 1 min, set in Scan Settings
-RAW_CSV_DURATION_SEC   = 30    # 30 s, typed into Settings → Engineering
+RAW_CSV_DURATION_SEC   = 30    # 30 s, typed into Settings → Data Output
 DURATION_TOLERANCE_SEC = 8     # how far off the timestamps can drift
 
 # Column name in both raw and canonical CSVs.
@@ -366,87 +369,73 @@ def _find_control_aligned_with_label(
     return best
 
 
-def _focus_soft_reset_button() -> None:
-    """Set keyboard focus to the Engineering section's 'Soft Reset' button
-    *without invoking it*.
+def _find_named_control(name: str, control_types: tuple[str, ...]):
+    """Return the first UIA descendant whose title matches ``name``.
 
-    Why this anchor: Qt's a11y bridge doesn't surface FieldRow's plain
-    QML Text labels (verified by UIA-text dump — the Engineering section
-    has 'Soft Reset', 'Run Calibration', 'Check for Updates' visible
-    but no 'Save raw CSV' / 'Raw CSV duration' / 'Console' labels).
-    The 'Soft Reset' Button IS surfaced and is the FIRST focusable
-    element in the Engineering SectionCard. Tab order from there hits
-    the Save raw CSV PillSwitch next, then the Raw CSV duration
-    TextField. That gives us a deterministic path to both controls.
-
-    Why set_focus over clicking: clicking 'Soft Reset' would fire
-    ``softResetSensor("console")`` and tear down the USB connection
-    mid-test. UIA's SetFocus pattern just moves keyboard focus
-    without invoking the button.
+    The Save raw CSV PillSwitch and Raw CSV duration TextField carry
+    explicit ``Accessible.name`` values (issue #234 moved them into the
+    Data Output SectionCard), so — unlike plain FieldRow Text labels,
+    which Qt's a11y bridge drops — they surface in the UIA tree and can
+    be targeted directly. Tries a title+control_type query per candidate
+    type first, then falls back to a plain title walk in case the Qt
+    bridge maps the control to an unexpected UIA control type.
     """
     win = uia_window()
-    matches = win.descendants(title="Soft Reset", control_type="Button")
-    if not matches:
-        # Last-resort: walk Buttons by title text in case a build
-        # renamed the button.
-        matches = [
-            b for b in win.descendants(control_type="Button")
-            if (b.window_text() or "").strip().lower() == "soft reset"
-        ]
-    if not matches:
-        pytest.fail(
-            "Could not locate the 'Soft Reset' button to anchor "
-            "focus on. The Engineering section may be hidden "
-            "(engineeringMode flag not applied?) or the button was "
-            "renamed."
-        )
-    btn = matches[0]
-    try:
-        btn.set_focus()
-        log.info("  focused Soft Reset (without invoking)")
-    except Exception as e:
-        # Shouldn't happen on a Button, but log and surface clearly.
-        pytest.fail(
-            f"Could not set keyboard focus on the Soft Reset button: "
-            f"{e}. Without focus we can't Tab-walk to the Save raw "
-            f"CSV switch."
-        )
-    time.sleep(0.3)
+    for ct in control_types:
+        try:
+            matches = win.descendants(title=name, control_type=ct)
+        except Exception:
+            continue
+        if matches:
+            return matches[0]
+    for elem in win.descendants():
+        try:
+            if (elem.window_text() or "").strip() == name:
+                return elem
+        except Exception:
+            continue
+    return None
 
 
 def _toggle_raw_csv_save_on() -> None:
-    """Toggle the Save raw CSV PillSwitch via Tab+Space from Soft Reset.
+    """Flip the Save raw CSV PillSwitch by clicking it directly.
 
-    Plain Text labels in the Engineering section don't surface in UIA,
-    so we can't click by label-rect. Instead we anchor on the
-    'Soft Reset' Button (the section's first focusable child),
-    set_focus on it without invoking, then Tab once to land on the
-    Save raw CSV PillSwitch and Space to flip it.
+    The switch is found by its ``Accessible.name`` ("Save raw CSV") —
+    QML Switch surfaces as a CheckBox through Qt's a11y bridge, with
+    Button/Custom fallbacks for bridge quirks.
     """
-    _focus_soft_reset_button()
-    pyautogui.press("tab")
-    time.sleep(0.3)
-    pyautogui.press("space")
-    log.info("  Tab+Space from Soft Reset — Save raw CSV toggled")
+    elem = _find_named_control(
+        "Save raw CSV", ("CheckBox", "Button", "Custom"))
+    if elem is None:
+        pytest.fail(
+            "Could not locate the 'Save raw CSV' switch in the UIA "
+            "tree. The Data Output section may be hidden (is the app "
+            "in clinical mode? it should be research/engineering here) "
+            "or the Accessible.name was removed. UIA texts seen: "
+            f"{_dump_uia_texts()}"
+        )
+    click_element_center(elem, "Save raw CSV switch")
+    log.info("  clicked Save raw CSV switch")
     time.sleep(SLEEP)
 
 
 def _set_raw_csv_duration_sec(seconds: int) -> None:
-    """Type ``seconds`` into the Raw CSV duration TextField via
-    Tab-from-Soft-Reset navigation.
+    """Type ``seconds`` into the Raw CSV duration TextField.
 
-    Tab order in the Engineering SectionCard:
-        Soft Reset -> Save raw CSV PillSwitch -> Raw CSV duration TextField
-
-    So two Tab presses from Soft Reset focus lands on the duration
-    field. Re-anchoring (vs. continuing from where ``_toggle_raw_csv_save_on``
-    left us) is deliberate — keeps each helper independent and makes
-    transient focus loss recoverable.
+    The field is found by its ``Accessible.name`` ("Raw CSV duration")
+    and clicked to focus; typing replaces any existing content
+    (Ctrl+A first) and a final Tab commits via focus-loss →
+    ``onEditingFinished``.
     """
-    _focus_soft_reset_button()
-    pyautogui.press("tab")  # → Save raw CSV PillSwitch
-    time.sleep(0.2)
-    pyautogui.press("tab")  # → Raw CSV duration TextField
+    elem = _find_named_control("Raw CSV duration", ("Edit",))
+    if elem is None:
+        pytest.fail(
+            "Could not locate the 'Raw CSV duration' TextField in the "
+            "UIA tree. The Data Output section may be hidden or the "
+            "Accessible.name was removed. UIA texts seen: "
+            f"{_dump_uia_texts()}"
+        )
+    click_element_center(elem, "Raw CSV duration field")
     time.sleep(0.3)
     pyautogui.hotkey("ctrl", "a")
     time.sleep(0.1)
@@ -664,7 +653,7 @@ def _new_csvs_in(dir_path: Path, before: set[str]) -> dict[str, Path]:
 # Test
 # ─────────────────────────────────────────────
 class TestRawCsvSave:
-    """End-to-end verification of the engineering-mode raw-CSV truncation."""
+    """End-to-end verification of the research-mode raw-CSV truncation."""
 
     def test_raw_csv_truncates_at_configured_duration(self, app):
         """Walk through the lifecycle in the module docstring and
@@ -692,15 +681,20 @@ class TestRawCsvSave:
             # ─── Step 1+2+3: kill app, write pre-launch flags ───
             log.info("=" * 60)
             log.info(
-                "Step 1+2+3: killing app, writing engineeringMode=true, "
-                "clinicalMode=false, writeRawCsv=false (will toggle ON "
-                "via UI), pinning dataDirectory"
+                "Step 1+2+3: killing app, writing engineeringMode=false "
+                "+ clinicalMode=false (research mode — #234 makes raw "
+                "CSVs a research feature), writeRawCsv=false (will "
+                "toggle ON via UI), pinning dataDirectory"
             )
             log.info("=" * 60)
             _kill_bloodflow_processes()
             time.sleep(2)
             test_data_dir.mkdir(parents=True, exist_ok=True)
-            write_app_config_value("engineeringMode",     True)
+            # Research mode, NOT engineering: since #234 the raw-CSV
+            # toggle lives in the research-visible Data Output card, so
+            # this doubles as the hand-off check that research users
+            # really can enable raw CSVs without the engineering unlock.
+            write_app_config_value("engineeringMode",     False)
             write_app_config_value("clinicalMode",       False)
             # Start with writeRawCsv off so we can prove the UI toggle
             # actually changed it (rather than walking past a no-op).
@@ -728,17 +722,16 @@ class TestRawCsvSave:
             log.info("=" * 60)
             click_panel("Settings")
             time.sleep(SLEEP)
-            # Engineering section is at the bottom of a long modal.
-            # Anchor scroll on 'Soft Reset' (the first focusable
-            # control in the Engineering SectionCard) rather than the
-            # 'Save raw CSV' label — the latter is a plain QML Text
-            # which Qt's a11y bridge doesn't surface in UIA, but the
-            # Soft Reset Button is reliably exposed.
-            assert _scroll_until_label_visible("Soft Reset"), (
-                "Could not bring the Engineering section into view "
+            # The Data Output section is far down a long modal. The
+            # Save raw CSV switch carries an Accessible.name (#234),
+            # so it surfaces in the UIA tree directly and doubles as
+            # the scroll anchor.
+            assert _scroll_until_label_visible("Save raw CSV"), (
+                "Could not bring the Data Output section into view "
                 "after scrolling the Settings modal. Either the modal "
-                "didn't open or the Engineering section is hidden "
-                "(engineeringMode flag not applied?)."
+                "didn't open or the section is hidden (clinicalMode "
+                "flag not applied? the card shows for research and "
+                "engineering modes)."
             )
             _toggle_raw_csv_save_on()
             _set_raw_csv_duration_sec(RAW_CSV_DURATION_SEC)
