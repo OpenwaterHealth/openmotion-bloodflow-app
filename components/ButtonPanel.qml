@@ -28,6 +28,7 @@ Rectangle {
     signal scanSettingsClicked()
     signal notesClicked()
     signal checkClicked()
+    signal pulseViewClicked()
     signal historyClicked()
     signal settingsClicked()
 
@@ -174,6 +175,23 @@ Rectangle {
             iconText: "\uea31"  // graph-3 icon
             label: "Check"
             onClicked: panel.checkClicked()
+        }
+
+        // Divider before the Pulse view (visible in both modes).
+        Rectangle {
+            visible: pulseBtn.visible
+            Layout.preferredWidth: 52; Layout.preferredHeight: 1
+            Layout.topMargin: 4; Layout.bottomMargin: 4
+            Layout.alignment: Qt.AlignHCenter; color: AppTheme.borderSubtle
+        }
+
+        // Pulse-waveform view (live pulse over an average/min-max envelope).
+        PanelButton {
+            id: pulseBtn
+            visible: MotionInterface.appConfig.pulseView !== false
+            iconText: ""  // pulse icon
+            label: "Pulse"
+            onClicked: panel.pulseViewClicked()
         }
 
         // ── spacer pushes bottom controls down ──

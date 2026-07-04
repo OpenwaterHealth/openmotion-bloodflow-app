@@ -267,6 +267,7 @@ Rectangle {
         onNotesClicked:    modalManager.toggle(notesModal)
         onHistoryClicked:  modalManager.toggle(historyModal)
         onSettingsClicked: modalManager.toggle(settingsModal)
+        onPulseViewClicked: modalManager.toggle(pulseViewModal)
     }
 
     // Allow external callers (firmware banner) to open the Settings overlay.
@@ -280,7 +281,8 @@ Rectangle {
     ModalManager {
         id: modalManager
         modals: [scanSettingsModal, notesModal, historyModal,
-                 settingsModal, contactQualityModal, logsModal]
+                 settingsModal, contactQualityModal, logsModal,
+                 pulseViewModal]
     }
 
     // Data viewer — fills remaining space to the right of ButtonPanel.
@@ -405,6 +407,15 @@ Rectangle {
 
     LogsModal {
         id: logsModal
+    }
+
+    // Real-time pulse-waveform view (live pulse over an average/min-max
+    // envelope, with L-vs-R shape statistics). Auto-runs the synthetic demo
+    // when opened idle so it is useful without hardware; a live clinical scan
+    // feeds it through the SDK "pulse" channel instead.
+    PulseViewModal {
+        id: pulseViewModal
+        scanning: bloodFlow.scanning
     }
 
     ContactQualityModal {
