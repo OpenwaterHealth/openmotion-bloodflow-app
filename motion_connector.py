@@ -60,7 +60,7 @@ from utils import app_paths, config_store
 from data_sources import (
     LiveScanSource, PastScanSource, ScanDataSource, buffers_are_empty,
 )
-from pulse_view import PulseSink, PulseDemoController, load_bfi_results_csv
+from pulse_view import PulseSink
 
 # constants for calculations
 SCALE_V = 0.0909
@@ -923,11 +923,10 @@ class MotionConnector(QObject):
     updateCheckFailed = pyqtSignal(str)      # error message
     updateProgress = pyqtSignal(str)         # human-readable progress status
 
-    # Pulse-view signals. pulseSnapshot carries one side's PulseAnalysis as a
+    # Pulse-view signal. pulseSnapshot carries one side's PulseAnalysis as a
     # plain QVariantMap (see PulseAnalysis.to_qvariant) — fired by the pipeline
-    # PulseSink (worker thread → queued) or the PulseDemoController (GUI thread).
+    # PulseSink from the scan worker thread (delivered queued to the GUI).
     pulseSnapshot = pyqtSignal(str, "QVariant")   # (side, snapshot map)
-    pulseDemoActiveChanged = pyqtSignal()
 
     def __init__(
         self,
@@ -1124,8 +1123,6 @@ class MotionConnector(QObject):
         # Monotonic token for async past-scan loads — a result whose seq
         # doesn't match the latest request is stale and dropped.
         self._past_scan_load_seq = 0
-        # No-hardware synthetic pulse demo (pulse view); constructed lazily.
-        self._pulse_demo: PulseDemoController | None = None
 
         self._tec_voltage_default = load_tec_params(config_dir)
         self._console_mutex = QRecursiveMutex()
@@ -2803,67 +2800,14 @@ class MotionConnector(QObject):
 
     def _emit_pulse_snapshot(self, analysis) -> None:
         """Forward one PulseAnalysis to QML as a QVariantMap. Called from the
-        pipeline PulseSink (scan worker thread — delivered queued) and from the
-        PulseDemoController (GUI thread). Fail-soft: a serialization bug must
-        never crash a scan."""
+        pipeline PulseSink on the scan worker thread (delivered queued to the
+        GUI). Fail-soft: a serialization bug must never crash a scan."""
         try:
             payload = analysis.to_qvariant()
         except Exception:
             logger.exception("failed to serialize pulse snapshot")
             return
         self.pulseSnapshot.emit(str(payload.get("side", "")), payload)
-
-    @pyqtProperty(bool, notify=pulseDemoActiveChanged)
-    def pulseDemoActive(self) -> bool:
-        return self._pulse_demo is not None and self._pulse_demo.running
-
-    @pyqtProperty(str, notify=pulseDemoActiveChanged)
-    def pulseDemoMode(self) -> str:
-        """'synth', 'replay', or '' — for the pulse view's data-source badge."""
-        if self._pulse_demo is not None and self._pulse_demo.running:
-            return self._pulse_demo.mode
-        return ""
-
-    @pyqtSlot(str)
-    @pyqtSlot(str, float)
-    def startPulseDemo(self, preset: str = "normal", bpm: float = 72.0) -> None:
-        """Start the no-hardware synthetic pulse demo for the pulse view."""
-        if self._pulse_demo is None:
-            self._pulse_demo = PulseDemoController(
-                self._emit_pulse_snapshot, parent=self)
-        self._pulse_demo.start(preset=preset or "normal",
-                               bpm=float(bpm) if bpm else 72.0)
-        self.pulseDemoActiveChanged.emit()
-
-    @pyqtSlot()
-    def stopPulseDemo(self) -> None:
-        if self._pulse_demo is not None:
-            self._pulse_demo.stop()
-        self.pulseDemoActiveChanged.emit()
-
-    @pyqtSlot(str)
-    def startPulseReplay(self, csv_path: str) -> None:
-        """Replay a recorded ``*_bfi_results.csv`` (columns camera,side,time_s,
-        BFI,BVI) through the pulse view as sample data."""
-        try:
-            left, right = load_bfi_results_csv(csv_path)
-        except Exception:
-            logger.exception("failed to load pulse replay CSV: %s", csv_path)
-            return
-        if self._pulse_demo is None:
-            self._pulse_demo = PulseDemoController(
-                self._emit_pulse_snapshot, parent=self)
-        try:
-            self._pulse_demo.start_replay(left, right)
-        except Exception:
-            logger.exception("failed to start pulse replay")
-            return
-        self.pulseDemoActiveChanged.emit()
-
-    @pyqtSlot()
-    def startPulseSample(self) -> None:
-        """Replay the bundled realistic sample scan (assets/sample_pulse_scan.csv)."""
-        self.startPulseReplay(resource_path("assets/sample_pulse_scan.csv"))
 
     def _save_app_config(self):
         """Persist runtime config changes as a diff vs the shipped baseline.
