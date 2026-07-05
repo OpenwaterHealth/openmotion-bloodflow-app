@@ -133,6 +133,14 @@ ApplicationWindow {
             onViewRequested: bloodFlowPage.openSettings()
         }
 
+        // Thermal cooldown lockout banner (issue #102)
+        CooldownBanner {
+            id: cooldownBanner
+            anchors.top: firmwareUpdateBanner.bottom
+            anchors.left: parent.left
+            anchors.right: parent.right
+        }
+
         // Toast notification overlay — fills the window, positions toasts in its own bottom-right corner
         NotificationCenter {
             id: notificationCenter
@@ -144,6 +152,7 @@ ApplicationWindow {
             anchors.fill: parent
             anchors.topMargin: 65 + (updateBanner.visible ? updateBanner.height : 0)
                                + (firmwareUpdateBanner.visible ? firmwareUpdateBanner.height : 0)
+                               + (cooldownBanner.visible ? cooldownBanner.height : 0)
             anchors.rightMargin: 8
             anchors.bottomMargin: 8
             anchors.leftMargin: 8

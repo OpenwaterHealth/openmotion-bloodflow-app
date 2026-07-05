@@ -217,6 +217,8 @@ Rectangle {
         // can wedge a camera until DUT power-cycle. sensorInitBusy re-arms
         // on every sensor (re)connect, so a mid-session replug re-gates too.
         camerasReady: bloodFlow.camerasReady && !MotionInterface.sensorInitBusy
+        // Thermal cooldown lockout (issue #102) — gates Start only.
+        coolingDown: MotionInterface.cooldownLockout
         clinicalMode: bloodFlow.clinicalMode
 
         // Action buttons — close any open modal first (which by
@@ -228,6 +230,15 @@ Rectangle {
             // A start is already armed and waiting on the connector to go
             // idle — ignore further clicks until it fires or times out.
             if (bloodFlow.scanStartPending) return
+            // Thermal cooldown lockout (issue #102) — belt-and-braces with
+            // the disabled Start button; catches a click racing the unlock.
+            if (!bloodFlow.scanning && MotionInterface.cooldownLockout) {
+                MotionInterface.notify(
+                    "Cameras are cooling down — scan start unlocks at ≤"
+                    + MotionInterface.cooldownThresholdC.toFixed(0) + "°C.",
+                    "warning")
+                return
+            }
             modalManager.closeCurrent()
             if (bloodFlow.scanning) {
                 scanRunner.cancel()
