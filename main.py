@@ -33,7 +33,18 @@ from PyQt6.QtCore import qInstallMessageHandler, QtMsgType, QUrl
 import data_sources
 from motion_connector import MotionConnector
 from omotion import MotionInterface
-from omotion.config import trigger_overrides_for_rate
+try:
+    from omotion.config import (
+        SUPPORTED_CAPTURE_RATES_HZ,
+        trigger_overrides_for_rate,
+    )
+except ImportError:  # omotion < sdk#129 — degrade to 40 Hz-only instead
+    # of bricking launch; the captureRateHz validation below then clamps
+    # any configured 60 back to 40 with a warning.
+    SUPPORTED_CAPTURE_RATES_HZ = (40,)
+
+    def trigger_overrides_for_rate(rate_hz):
+        return {"TriggerFrequencyHz": rate_hz}
 from utils.single_instance import check_single_instance, cleanup_single_instance
 from version import get_version
 from utils.resource_path import resource_path
@@ -331,12 +342,14 @@ def main():
     os.makedirs(_scan_data_dir, exist_ok=True)
     _scan_db_path = os.path.join(_scan_data_dir, "scans.db")
     _capture_rate = app_config.get("captureRateHz", 40)
-    if _capture_rate not in (40, 60):
+    if _capture_rate not in SUPPORTED_CAPTURE_RATES_HZ:
         logger.warning(
-            "captureRateHz=%r unsupported (allowed: 40, 60) — using 40",
-            _capture_rate,
+            "captureRateHz=%r unsupported (allowed: %s) — using 40",
+            _capture_rate, SUPPORTED_CAPTURE_RATES_HZ,
         )
         _capture_rate = 40
+        # Clamp in the dict too: the connector and QML appConfig read
+        # this same object (live-cache sizing, Settings toggle).
         app_config["captureRateHz"] = 40
     if _capture_rate != 40:
         logger.info("Capture rate: %d Hz (experimental, issue #327)", _capture_rate)
