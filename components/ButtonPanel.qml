@@ -16,6 +16,7 @@ Rectangle {
     property bool scanning: false
     property bool waiting: false       // true while a scan start is armed (pipeline-idle gate)
     property bool camerasReady: false  // gates Start/Check enablement
+    property bool coolingDown: false   // thermal cooldown lockout (issue #102) — gates Start only
     property bool clinicalMode: false       // FDA mode hides scan-settings button
 
     // Connection state — drives start button icon and enablement.
@@ -60,6 +61,7 @@ Rectangle {
                     color: !panel.allConnected ? AppTheme.textDisabled
                          : panel.waiting  ? "#F1C40F"
                          : panel.scanning ? "#E74C3C"
+                         : panel.coolingDown ? "#3498DB"
                          :                  "#2ECC71"
                     Behavior on color { ColorAnimation { duration: 150 } }
 
@@ -98,7 +100,10 @@ Rectangle {
                 }
 
                 Text {
-                    text: !panel.allConnected ? "Disconnected" : panel.scanning ? "Stop" : "Start"
+                    text: !panel.allConnected ? "Disconnected"
+                        : panel.scanning ? "Stop"
+                        : panel.coolingDown ? "Cooling"
+                        : "Start"
                     font.pixelSize: 10
                     color: (panel.camerasReady && panel.allConnected) ? AppTheme.textSecondary : AppTheme.textDisabled
                     horizontalAlignment: Text.AlignHCenter
@@ -120,8 +125,12 @@ Rectangle {
             MouseArea {
                 id: ssArea
                 anchors.fill: parent
-                hoverEnabled: panel.camerasReady && panel.allConnected
-                enabled: panel.camerasReady && panel.allConnected
+                // coolingDown gates Start only — Stop must stay clickable
+                // mid-scan (the lockout can never be true while scanning,
+                // but the explicit scanning escape keeps that invariant
+                // local instead of relying on the poller's idle gating).
+                hoverEnabled: panel.camerasReady && panel.allConnected && (panel.scanning || !panel.coolingDown)
+                enabled: panel.camerasReady && panel.allConnected && (panel.scanning || !panel.coolingDown)
                 cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
                 onClicked: panel.startStopClicked()
             }
