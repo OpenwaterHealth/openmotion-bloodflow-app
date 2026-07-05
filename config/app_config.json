@@ -8,6 +8,7 @@
     "clinicalMode": true,
     "clinicalModeLeftMask": 195,
     "clinicalModeRightMask": 195,
+    "captureRateHz": 40,
     "uncorrectedOnly": true,
     "showBfiBvi": true,
     "bfiMin": 0.0,

@@ -3496,10 +3496,11 @@ class MotionConnector(QObject):
         # ring-trim window (>30 min into a long scan). None-safe: if the
         # interface has no scan_db_path the source stays in-memory-only.
         # In-memory cache size before ring-trim → DB tail. Default 30 min
-        # (1800 s × 40 Hz). Shrink liveCacheMaxSeconds in app_config to
-        # exercise the DB lazy-load quickly (e.g. 60 → eviction after 1 min).
+        # (1800 s × captureRateHz). Shrink liveCacheMaxSeconds in app_config
+        # to exercise the DB lazy-load quickly (e.g. 60 → eviction after 1 min).
         _live_cache_sec = self._app_config.get("liveCacheMaxSeconds", 1800)
-        _live_cache_samples = max(2, int(float(_live_cache_sec) * 40))
+        _capture_hz = float(self._app_config.get("captureRateHz", 40))
+        _live_cache_samples = max(2, int(float(_live_cache_sec) * _capture_hz))
         live_source = LiveScanSource(
             plot_t0=plot_t0,
             parent=self,

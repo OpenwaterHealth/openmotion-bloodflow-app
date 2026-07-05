@@ -839,6 +839,29 @@ Item {
                         Item { Layout.fillWidth: true }
                     }
 
+                    // Capture rate (issue #327). Persisted only — the rate is
+                    // baked into the MotionInterface trigger default and the
+                    // laser-safety RATE_LL floor at startup, so unlike the
+                    // debug flags below it cannot be pushed live.
+                    FieldRow {
+                        label: "60 Hz capture"
+                        PillSwitch {
+                            checked: MotionInterface.appConfig.captureRateHz === 60
+                            onToggled: MotionInterface.saveConfigs({
+                                "captureRateHz": checked ? 60 : 40
+                            })
+                        }
+                        Text {
+                            text: (MotionInterface.appConfig.captureRateHz === 60
+                                   ? "60 Hz (experimental)" : "40 Hz")
+                                  + " — takes effect after restart"
+                            color: MotionInterface.appConfig.captureRateHz === 60
+                                   ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
                     // Sensor firmware debug flags — persisted to config AND
                     // pushed live to connected sensors via setSensorDebugFlag.
                     // onToggled (not onCheckedChanged) so the appConfig rebind
