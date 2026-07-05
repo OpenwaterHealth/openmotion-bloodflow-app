@@ -33,6 +33,7 @@ from PyQt6.QtCore import qInstallMessageHandler, QtMsgType, QUrl
 import data_sources
 from motion_connector import MotionConnector
 from omotion import MotionInterface
+from omotion.config import trigger_overrides_for_rate
 from utils.single_instance import check_single_instance, cleanup_single_instance
 from version import get_version
 from utils.resource_path import resource_path
@@ -340,11 +341,14 @@ def main():
     if _capture_rate != 40:
         logger.info("Capture rate: %d Hz (experimental, issue #327)", _capture_rate)
     data_sources.set_nominal_rate_hz(_capture_rate)
+    # trigger_overrides_for_rate also scales the dark-frame pulse
+    # displacement so the laser-safety rate floor keeps its margin at
+    # 60 Hz (sdk#129) — requires omotion >= sdk#129.
     motion_interface = MotionInterface(
         data_dir=_scan_data_dir,
         scan_db_path=_scan_db_path,
         operator_id="bloodflow-app",
-        default_trigger_config={"TriggerFrequencyHz": _capture_rate},
+        default_trigger_config=trigger_overrides_for_rate(_capture_rate),
     )
     motion_interface.log_system_info()
 
