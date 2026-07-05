@@ -59,3 +59,61 @@ def test_read_camera_temps_disconnected_sensor_skipped():
 
 def test_read_camera_temps_none_interface():
     assert read_camera_temps(None) == {}
+
+
+# ---------------------------------------------------------------------------
+# CooldownPolicy — temperature gating
+# ---------------------------------------------------------------------------
+
+from thermal_cooldown import CooldownPolicy  # noqa: E402
+
+_CFG = {
+    "cooldownEnabled": True,
+    "cooldownStartTempC": 45.0,
+    "cooldownHysteresisC": 2.0,
+    "cooldownTimerFallbackSec": 600,
+    "cooldownTauSec": 0,
+    "cooldownAmbientC": 25.0,
+}
+
+
+def _temps(*vals):
+    return {("left", i): float(v) for i, v in enumerate(vals)}
+
+
+def test_policy_locks_above_threshold_and_releases_below_hysteresis():
+    p = CooldownPolicy(_CFG)
+    assert p.apply(_temps(30.0, 80.0), now=0.0) is True
+    assert p.locked and p.reason == "temp"
+    assert p.hottest_c == pytest.approx(80.0)
+    # Between release level (43) and threshold (45): still locked.
+    p.apply(_temps(30.0, 44.0), now=5.0)
+    assert p.locked
+    # At/below threshold - hysteresis: released.
+    changed = p.apply(_temps(30.0, 43.0), now=10.0)
+    assert changed and not p.locked and p.reason == ""
+
+
+def test_policy_no_lock_when_never_above_threshold():
+    p = CooldownPolicy(_CFG)
+    p.apply(_temps(44.9), now=0.0)
+    assert not p.locked
+
+
+def test_policy_judges_on_finite_temps_only():
+    p = CooldownPolicy(_CFG)
+    p.apply({("left", 0): float("nan"), ("left", 1): 90.0}, now=0.0)
+    assert p.locked and p.hottest_c == pytest.approx(90.0)
+
+
+def test_policy_disabled_never_locks():
+    p = CooldownPolicy({**_CFG, "cooldownEnabled": False})
+    p.apply(_temps(120.0), now=0.0)
+    assert not p.locked
+
+
+def test_policy_change_detection_is_stable():
+    p = CooldownPolicy(_CFG)
+    assert p.apply(_temps(80.0), now=0.0) is True
+    assert p.apply(_temps(80.0), now=5.0) is False       # nothing changed
+    assert p.apply(_temps(79.0), now=10.0) is True       # hottest moved
