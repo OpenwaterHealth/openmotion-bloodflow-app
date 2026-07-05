@@ -117,3 +117,55 @@ def test_policy_change_detection_is_stable():
     assert p.apply(_temps(80.0), now=0.0) is True
     assert p.apply(_temps(80.0), now=5.0) is False       # nothing changed
     assert p.apply(_temps(79.0), now=10.0) is True       # hottest moved
+
+
+# ---------------------------------------------------------------------------
+# CooldownPolicy — timer fallback, override, ETA
+# ---------------------------------------------------------------------------
+
+def test_policy_timer_fallback_when_no_temps():
+    p = CooldownPolicy(_CFG)
+    p.on_scan_ended(now=100.0)
+    p.apply({}, now=101.0)                       # nothing readable
+    assert p.locked and p.reason == "timer"
+    assert p.eta_sec(now=101.0) == 599
+    p.apply({}, now=100.0 + 600.0)               # expiry -> fail open
+    assert not p.locked
+
+
+def test_policy_no_timer_no_temps_fails_open():
+    p = CooldownPolicy(_CFG)
+    p.apply({}, now=0.0)                          # fresh launch, all NaN
+    assert not p.locked
+
+
+def test_policy_temps_take_authority_over_timer():
+    p = CooldownPolicy(_CFG)
+    p.on_scan_ended(now=0.0)
+    p.apply(_temps(30.0), now=1.0)                # readable AND cool
+    assert not p.locked                           # timer ignored
+
+
+def test_policy_override_unlocks_until_next_scan_end():
+    p = CooldownPolicy(_CFG)
+    p.apply(_temps(90.0), now=0.0)
+    assert p.locked
+    p.override()
+    p.apply(_temps(90.0), now=1.0)
+    assert not p.locked
+    p.on_scan_ended(now=2.0)                      # override consumed
+    p.apply(_temps(90.0), now=3.0)
+    assert p.locked
+
+
+def test_policy_eta_from_tau():
+    p = CooldownPolicy({**_CFG, "cooldownTauSec": 300})
+    p.apply(_temps(90.0), now=0.0)
+    # tau * ln((90-25)/(43-25)) = 300 * ln(65/18) ~= 385 s
+    assert p.eta_sec(now=0.0) == pytest.approx(385, abs=2)
+
+
+def test_policy_eta_unknown_without_tau():
+    p = CooldownPolicy(_CFG)
+    p.apply(_temps(90.0), now=0.0)
+    assert p.eta_sec(now=0.0) == -1
