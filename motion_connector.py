@@ -59,6 +59,7 @@ from utils.resource_path import resource_path
 from utils import app_paths, config_store
 from data_sources import (
     LiveScanSource, PastScanSource, ScanDataSource, buffers_are_empty,
+    set_nominal_rate_hz,
 )
 
 # constants for calculations
@@ -2849,6 +2850,45 @@ class MotionConnector(QObject):
         "histoCmp": "_histo_cmp",
         "sensorDebugLogging": "_sensor_debug_logging",
     }
+
+    @pyqtSlot(int)
+    def setCaptureRate(self, rate_hz: int) -> None:
+        """Live-switch the capture rate (issue #327) — no restart needed.
+
+        Re-resolves the SDK's default trigger config (frequency,
+        dark-displacement, pulse-delay) and re-applies the laser-safety
+        RATE_LL floor while holding the console mutex, then persists
+        ``captureRateHz`` and retunes the plot decimation. The per-camera
+        VTS retime rides on the next scan start. On failure (floor
+        re-apply refused) the previous rate is kept and the QML switch is
+        snapped back via appConfigChanged.
+        """
+        rate = int(rate_hz)
+        ok = False
+        try:
+            self._console_mutex.lock()
+            try:
+                ok = self._interface.set_capture_rate(rate)
+            finally:
+                self._console_mutex.unlock()
+        except ValueError as e:
+            logger.warning("setCaptureRate(%s) rejected: %s", rate_hz, e)
+        except AttributeError:
+            # omotion < sdk#129 — no live switch; persist for next launch.
+            logger.warning(
+                "SDK has no set_capture_rate; %s Hz applies after restart", rate
+            )
+            ok = True
+        if ok:
+            set_nominal_rate_hz(float(rate))
+            self.saveConfigs({"captureRateHz": rate})
+            logger.info("Capture rate switched to %d Hz (live)", rate)
+        else:
+            logger.error(
+                "Capture-rate switch to %s Hz failed — keeping previous rate",
+                rate,
+            )
+            self.appConfigChanged.emit()
 
     @pyqtSlot(str, bool)
     def setSensorDebugFlag(self, key: str, enabled: bool) -> None:
