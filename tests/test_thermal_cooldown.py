@@ -220,3 +220,12 @@ def test_gate_disabled_never_starts_thread():
     gate, _ = _make_gate(_FakeInterface(), cfg={**_CFG, "cooldownEnabled": False})
     gate.start()
     assert gate._thread is None
+
+
+def test_connector_exposes_cooldown_surface():
+    import motion_connector
+    cls = motion_connector.MotionConnector
+    for name in ("cooldownLockout", "cooldownHottestTempC",
+                 "cooldownThresholdC", "cooldownEtaSec", "cooldownReason",
+                 "cooldownOverride", "cooldownStateChanged"):
+        assert hasattr(cls, name), name

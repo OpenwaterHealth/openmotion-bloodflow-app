@@ -55,6 +55,7 @@ from motion_config import (
 import error_codes
 import bug_report
 from nan_gap_tracker import NanGapTracker, gap_note_line
+from thermal_cooldown import CooldownGate
 from utils.resource_path import resource_path
 from utils import app_paths, config_store
 from data_sources import (
@@ -802,6 +803,8 @@ class MotionConnector(QObject):
     # running. The drain-side emit fires on the init worker thread; Qt
     # auto-queues the cross-thread delivery to QML/main-thread consumers.
     sensorInitBusyChanged = pyqtSignal()
+    # Notify for the thermal cooldown gate surface (issue #102).
+    cooldownStateChanged = pyqtSignal()
     stateChanged = pyqtSignal()  # Signal to notify QML of state changes
     laserStateChanged = pyqtSignal()  # Signal to notify QML of laser state changes
     safetyFailureStateChanged = pyqtSignal()  # Signal to notify QML of safety
@@ -1003,6 +1006,23 @@ class MotionConnector(QObject):
         self._dropout_timer = QTimer(self)
         self._dropout_timer.setInterval(1000)
         self._dropout_timer.timeout.connect(self._on_dropout_check)
+
+        # Thermal cooldown gate (issue #102): while idle, polls per-camera
+        # die temps and locks out scan starts until every camera is at or
+        # below cooldownStartTempC. captureFinished (success OR abort) arms
+        # its timer fallback for the no-telemetry case. The poll thread
+        # self-gates on pipeline idleness so it never touches the camera
+        # I2C bus mid-scan (firmware polls temps on that bus per frame).
+        self._cooldown_gate = CooldownGate(
+            cfg,
+            interface_getter=lambda: self._interface,
+            is_idle_fn=lambda: self.isPipelineIdle() and not self.sensorInitBusy,
+            parent=self,
+        )
+        self._cooldown_gate.stateChanged.connect(self.cooldownStateChanged)
+        self.captureFinished.connect(
+            lambda *_a: self._cooldown_gate.on_scan_ended())
+        self._cooldown_gate.start()
 
         # Console error-LED blink (issue #257): while the critical-error
         # modal is up, blink the console front-panel LED blue instead of
@@ -1324,6 +1344,43 @@ class MotionConnector(QObject):
         (re)connect because _schedule_sensor_init re-runs then."""
         with self._sensor_init_lock:
             return any(v > 0 for v in self._sensor_init_pending.values())
+
+    @pyqtProperty(bool, notify=cooldownStateChanged)
+    def cooldownLockout(self) -> bool:
+        return self._cooldown_gate.policy.locked
+
+    @pyqtProperty(float, notify=cooldownStateChanged)
+    def cooldownHottestTempC(self) -> float:
+        """Hottest camera die temp (°C), -1.0 when unknown."""
+        hottest = self._cooldown_gate.policy.hottest_c
+        return round(hottest, 1) if math.isfinite(hottest) else -1.0
+
+    @pyqtProperty(float, notify=cooldownStateChanged)
+    def cooldownThresholdC(self) -> float:
+        return self._cooldown_gate.policy.start_temp_c
+
+    @pyqtProperty(int, notify=cooldownStateChanged)
+    def cooldownEtaSec(self) -> int:
+        """Estimated seconds to unlock; -1 when no model is configured."""
+        return self._cooldown_gate.policy.eta_sec(time.monotonic())
+
+    @pyqtProperty(str, notify=cooldownStateChanged)
+    def cooldownReason(self) -> str:
+        return self._cooldown_gate.policy.reason
+
+    @pyqtSlot()
+    def cooldownOverride(self) -> None:
+        """Engineering-only escape hatch for the cooldown lockout — the
+        clinical build must not be able to start a scan on hot cameras."""
+        if not self._app_config.get("engineeringMode", False):
+            logger.warning("cooldownOverride refused: engineeringMode off")
+            return
+        logger.warning(
+            "cooldown lockout OVERRIDDEN (hottest %.1f °C)",
+            self._cooldown_gate.policy.hottest_c)
+        self._audit.log("cooldown_override", {
+            "hottest_c": self.cooldownHottestTempC})
+        self._cooldown_gate.request_override()
 
     def _schedule_sensor_init(self, side: str):
         """Delay initial sensor commands to allow USB settle, then run
