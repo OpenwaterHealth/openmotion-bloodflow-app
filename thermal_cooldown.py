@@ -168,3 +168,65 @@ class CooldownPolicy:
         """Rounded display value (None when unknown) so change detection
         doesn't fire on sub-0.1 deg noise or NaN != NaN."""
         return round(self.hottest_c, 1) if math.isfinite(self.hottest_c) else None
+
+
+class CooldownGate(QObject):
+    """Qt shell around CooldownPolicy: a daemon thread polls die temps
+    while the pipeline is idle; snapshots cross to the GUI thread via a
+    queued signal so all policy mutation is single-threaded there."""
+
+    stateChanged = pyqtSignal()
+    _snapshotReady = pyqtSignal(object)   # worker thread -> GUI thread
+
+    def __init__(self, cfg: dict, interface_getter, is_idle_fn,
+                 parent=None, clock=time.monotonic):
+        super().__init__(parent)
+        self.policy = CooldownPolicy(cfg)
+        self._interface_getter = interface_getter
+        self._is_idle_fn = is_idle_fn
+        self._clock = clock
+        self._poll_interval = max(
+            1.0, float(cfg.get("cooldownPollIntervalSec", 5.0)))
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._snapshotReady.connect(self._on_snapshot)
+
+    def start(self) -> None:
+        if not self.policy.enabled or self._thread is not None:
+            return
+        self._thread = threading.Thread(
+            target=self._poll_loop, name="cooldown-poll", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    # -- worker thread (never raises out — mirrors _run_sensor_init) ----
+
+    def _poll_loop(self) -> None:
+        while not self._stop.wait(self._poll_interval):
+            try:
+                self._tick_once()
+            except Exception:
+                logger.exception("cooldown poll tick failed")
+
+    def _tick_once(self) -> None:
+        if not self._is_idle_fn():
+            return                       # scan/config/init owns the bus
+        temps = read_camera_temps(self._interface_getter())
+        self._snapshotReady.emit(temps)
+
+    # -- GUI thread ------------------------------------------------------
+
+    def _on_snapshot(self, temps) -> None:
+        if self.policy.apply(temps, self._clock()):
+            self.stateChanged.emit()
+
+    def on_scan_ended(self) -> None:
+        self.policy.on_scan_ended(self._clock())
+
+    def request_override(self) -> None:
+        self.policy.override()
+        # Reflect immediately instead of waiting out a poll interval.
+        if self.policy.apply({}, self._clock()):
+            self.stateChanged.emit()

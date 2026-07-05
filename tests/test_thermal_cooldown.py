@@ -169,3 +169,54 @@ def test_policy_eta_unknown_without_tau():
     p = CooldownPolicy(_CFG)
     p.apply(_temps(90.0), now=0.0)
     assert p.eta_sec(now=0.0) == -1
+
+
+# ---------------------------------------------------------------------------
+# CooldownGate — Qt shell (constructed without a QApplication; ticks are
+# driven synchronously so no thread or event loop is involved)
+# ---------------------------------------------------------------------------
+
+from thermal_cooldown import CooldownGate  # noqa: E402
+
+
+def _make_gate(iface, idle=True, cfg=None):
+    state = {"idle": idle, "clock": 0.0}
+    gate = CooldownGate(
+        cfg or _CFG,
+        interface_getter=lambda: iface,
+        is_idle_fn=lambda: state["idle"],
+        clock=lambda: state["clock"],
+    )
+    return gate, state
+
+
+def test_gate_tick_applies_snapshot_and_signals():
+    left = _FakeSensor({i: 30.0 for i in range(8)})
+    left._temps[3] = 90.0
+    gate, _ = _make_gate(_FakeInterface(left=left))
+    fired = []
+    gate.stateChanged.connect(lambda: fired.append(1))
+    gate._tick_once()          # same-thread emit -> synchronous delivery
+    assert gate.policy.locked and fired == [1]
+
+
+def test_gate_tick_skips_bus_when_not_idle():
+    left = _FakeSensor({i: 30.0 for i in range(8)})
+    gate, state = _make_gate(_FakeInterface(left=left), idle=False)
+    gate._tick_once()
+    assert left.read_calls == 0
+
+
+def test_gate_override_reflects_immediately():
+    left = _FakeSensor({i: 90.0 for i in range(8)})
+    gate, _ = _make_gate(_FakeInterface(left=left))
+    gate._tick_once()
+    assert gate.policy.locked
+    gate.request_override()
+    assert not gate.policy.locked
+
+
+def test_gate_disabled_never_starts_thread():
+    gate, _ = _make_gate(_FakeInterface(), cfg={**_CFG, "cooldownEnabled": False})
+    gate.start()
+    assert gate._thread is None
