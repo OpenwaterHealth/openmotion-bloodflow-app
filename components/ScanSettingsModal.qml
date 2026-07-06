@@ -47,19 +47,19 @@ Item {
         ListElement { name: "All";       maskHex: "0xFF" }
     }
 
-    // Content-fit width for the mask selectors (#315): widest pattern
-    // name at the ComboBox font, plus fixed chrome — 10px contentItem
-    // leftPadding + ~10px indicator glyph + its 10px right inset + 10px
-    // text/indicator gap. Measured so a longer pattern name added to
-    // sensorPatterns can never elide. ~98px with Segoe UI; capped at the
-    // pre-#315 150 so an exotic fallback font can't make it wider than
-    // it ever was.
+    // Mask-selector width (#315): midpoint between the content-fit width
+    // (widest pattern name at the ComboBox font plus fixed chrome — 10px
+    // contentItem leftPadding + ~10px indicator glyph + its 10px right
+    // inset + 10px text/indicator gap; ~98px with Segoe UI) and the
+    // pre-#315 150px, per hand-test feedback that pure content-fit read
+    // too cramped (~124px result). Capped at 150 so an exotic fallback
+    // font can't make it wider than it ever was.
     FontMetrics { id: maskSelectorMetrics; font.pixelSize: 13 }
     readonly property int maskSelectorWidth: {
         var w = 0
         for (var i = 0; i < sensorPatterns.count; i++)
             w = Math.max(w, maskSelectorMetrics.advanceWidth(sensorPatterns.get(i).name))
-        return Math.min(150, Math.ceil(w) + 40)
+        return Math.min(150, Math.round((Math.ceil(w) + 40 + 150) / 2))
     }
 
     function maskFromArray(arr) {
