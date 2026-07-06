@@ -29,6 +29,46 @@ logger = logging.getLogger("openmotion.bloodflow-app.data_sources")
 
 _MAX_CAPACITY = 72000       # ≈ 30 min @ 40 Hz; ring-trim above this.
 _INITIAL_CAPACITY = _MAX_CAPACITY
+
+# ── BVI display low-pass (issue #228) ───────────────────────────────────
+# The live display applies a 1-pole IIR low-pass to the BVI stream at
+# LiveScanSource ingest, governed ONLY by the bviLowPassCutoffHz config
+# key (the Settings switch and the bviLowPassEnabled bool are gone).
+# Display-side only: the scan DB record (SDK ScanDBSink), CSVs, the
+# DB-tail history windows, and replay all stay raw.
+BVI_LPF_DEFAULT_CUTOFF_HZ = 20.0
+_BVI_LPF_SAMPLE_HZ = 40.0   # nominal live sample rate (dt = 1/40 s)
+
+
+def resolve_bvi_lpf_cutoff(value) -> float:
+    """Resolve the ``bviLowPassCutoffHz`` config value to an effective
+    cutoff in Hz. Contract (#228): the number is the only control —
+    missing or invalid → the 20 Hz default; ``<= 0`` → 0.0, the
+    documented escape hatch that turns the filter off. Bools are
+    rejected as invalid (a leftover ``true`` must not become 1 Hz)."""
+    if isinstance(value, bool):
+        return BVI_LPF_DEFAULT_CUTOFF_HZ
+    try:
+        cutoff = float(value)
+    except (TypeError, ValueError):
+        return BVI_LPF_DEFAULT_CUTOFF_HZ
+    if math.isnan(cutoff):
+        return BVI_LPF_DEFAULT_CUTOFF_HZ
+    return cutoff if cutoff > 0.0 else 0.0
+
+
+def bvi_lpf_alpha(cutoff_hz: float) -> float:
+    """Smoothing factor for the 1-pole IIR at the nominal 40 Hz live
+    sample rate: ``alpha = dt / (RC + dt)``, ``RC = 1/(2*pi*fc)``,
+    ``dt = 1/40 s`` — the same discretization the legacy QML filter
+    used (37f7dc9). ``cutoff_hz <= 0`` → 1.0 (pass-through). At the
+    20 Hz default this is mild smoothing (alpha ≈ 0.759), since 20 Hz
+    sits at Nyquist for the ~40 fps BVI stream."""
+    if cutoff_hz <= 0.0:
+        return 1.0
+    dt = 1.0 / _BVI_LPF_SAMPLE_HZ
+    rc = 1.0 / (2.0 * math.pi * float(cutoff_hz))
+    return dt / (rc + dt)
 # Pre-allocate at the cap. Mid-scan grow events (np.resize → alloc +
 # copy) at the 7-min and 14-min doublings stressed Python's allocator
 # hard enough to stall the SDK parser thread — the data_queue would
@@ -614,10 +654,20 @@ class LiveScanSource(ScanDataSource):
 
     def __init__(self, plot_t0: float, parent: Optional[QObject] = None,
                  scan_db_path: Optional[str] = None,
-                 cache_max_samples: int = _MAX_CAPACITY) -> None:
+                 cache_max_samples: int = _MAX_CAPACITY,
+                 bvi_lpf_cutoff_hz: float = 0.0) -> None:
         super().__init__(plot_t0=plot_t0, parent=parent,
                          buffer_max_capacity=cache_max_samples)
         self._live = True
+        # BVI display low-pass (issue #228): 1-pole IIR applied at ingest,
+        # per (side, cam_id) stream (cam_id -1 = clinical side average).
+        # The constructor default 0.0 = OFF, preserving raw-storage
+        # semantics for direct constructions (tests); the connector — the
+        # sole production construction site — passes the config-resolved
+        # cutoff (resolve_bvi_lpf_cutoff: missing/invalid → 20 Hz). State
+        # is per-scan by construction: a fresh source per scan.
+        self._bvi_lpf_alpha = bvi_lpf_alpha(float(bvi_lpf_cutoff_hz))
+        self._bvi_lpf_prev: dict[tuple[str, int], float] = {}
         # DB tail state — all lazily initialized on first pan-into-past.
         self._scan_db_path = scan_db_path
         self._db = None                       # omotion.ScanDatabase read handle
@@ -917,12 +967,15 @@ class LiveScanSource(ScanDataSource):
         """Append one frame's worth of uncorrected metrics.
 
         bfi and bvi are always appended (NaN included — the source stores
-        what arrives). mean/contrast/temp are appended only when non-None;
+        what arrives). bvi alone passes through the display low-pass
+        first when a cutoff was configured (see _bvi_lpf; issue #228).
+        mean/contrast/temp are appended only when non-None;
         the existing _LivePlotSink passes None for samples where the
         SDK reported a non-finite mean_dc_rt / contrast_sn_rt, and None
         temp for dark frames (whose camera-temp reading is meaningless)."""
         self._append_one(side, cam_id, "bfi", frame_id, t, bfi)
-        self._append_one(side, cam_id, "bvi", frame_id, t, bvi)
+        self._append_one(side, cam_id, "bvi", frame_id, t,
+                         self._bvi_lpf(side, cam_id, bvi))
         if mean is not None:
             self._append_one(side, cam_id, "mean", frame_id, t, mean)
         if contrast is not None:
@@ -939,6 +992,24 @@ class LiveScanSource(ScanDataSource):
                 buf.mark_dropped(t)
 
     # ── internal ──────────────────────────────────────────────────────────
+
+    def _bvi_lpf(self, side: str, cam_id: int, bvi: float) -> float:
+        """1-pole IIR low-pass on the DISPLAY BVI stream (issue #228).
+
+        ``y[n] = y[n-1] + alpha * (x[n] - y[n-1])``; the first finite
+        sample seeds the state (no ramp-in from zero). Non-finite input
+        (NaN side averages while sensors are covered) is returned as-is —
+        the renderer skips NaN — and leaves the state untouched, so the
+        filter resumes from the last finite output. alpha >= 1 (filter
+        off) short-circuits to raw."""
+        alpha = self._bvi_lpf_alpha
+        if alpha >= 1.0 or not math.isfinite(bvi):
+            return bvi
+        key = (side, int(cam_id))
+        prev = self._bvi_lpf_prev.get(key)
+        out = bvi if prev is None else prev + alpha * (bvi - prev)
+        self._bvi_lpf_prev[key] = out
+        return out
 
     def _append_one(
         self,
