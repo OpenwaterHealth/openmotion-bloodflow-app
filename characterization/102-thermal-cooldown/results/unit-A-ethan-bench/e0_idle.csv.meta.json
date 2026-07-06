@@ -1,0 +1,19 @@
+{
+  "args": {
+    "out_csv": "e0_idle.csv",
+    "interval": 5.0,
+    "duration": 180.0,
+    "mode": "powered",
+    "power_on": false,
+    "capture_before_read": false,
+    "settle": 1.0,
+    "sides": "left,right",
+    "exit_below": null,
+    "exit_above": null,
+    "note": "E0 idle validity - rails on, no streaming, cold bench"
+  },
+  "started_utc": 1783361102.6201558,
+  "owcam_tools": "C:\\Users\\ethan\\Projects\\camera-drift-campaign\\tools",
+  "finished_utc": 1783361284.3413959,
+  "exit_reason": "user/duration"
+}

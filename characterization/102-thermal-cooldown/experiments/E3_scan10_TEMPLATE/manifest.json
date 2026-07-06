@@ -1,0 +1,7 @@
+{
+  "name": "E3_scan10_TEMPLATE",
+  "duration_sec": 600,
+  "left_camera_mask": 255,
+  "right_camera_mask": 255,
+  "notes": "#102 characterization E3: 10-min all-camera 40Hz laser-on scan from a CONTROLLED start temperature. COPY this directory per trial (E3_scan10_start35, E3_scan10_start60, ...), set name to match, and gate the start with thermal_logger --exit-below <T> (cooling) or --exit-above <T> (preheating via a short scan). Outputs land next to the manifest, so each trial needs its own copy. PASS = all 16 cameras deliver frames for the full 600 s (deaths.py reports zero died/never_started rows)."
+}

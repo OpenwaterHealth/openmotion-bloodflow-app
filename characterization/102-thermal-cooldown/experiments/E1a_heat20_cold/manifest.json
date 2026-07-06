@@ -1,0 +1,7 @@
+{
+  "name": "E1a_heat20_cold",
+  "duration_sec": 1200,
+  "left_camera_mask": 255,
+  "right_camera_mask": 255,
+  "notes": "#102 characterization E1a: COLD-start 20-min all-camera 40Hz laser-on heat run on the NEW hardware rev. Cold = every camera <= 35C confirmed by thermal_logger immediately before start. Record fw/SDK versions + serials in the bench log before running. Deliverables: per-slot steady-state temp, heating time constant, latch temps if any (deaths.py)."
+}

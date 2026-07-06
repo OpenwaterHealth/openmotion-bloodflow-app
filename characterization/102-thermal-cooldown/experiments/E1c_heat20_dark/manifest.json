@@ -1,0 +1,9 @@
+{
+  "name": "E1c_heat20_dark",
+  "duration_sec": 1200,
+  "left_camera_mask": 255,
+  "right_camera_mask": 255,
+  "disable_laser": false,
+  "trigger_config": { "TriggerStatus": 1 },
+  "notes": "#102 characterization E1c: laser-OFF 20-min all-camera heat run (fsync runs, laser disarmed via TriggerStatus=1 - same recipe as drift campaign 003_dark; disable_laser=true would skip FSIN and yield zero frames). Separates streaming self-heat from laser heating. Compare steady-state temps vs E1a."
+}

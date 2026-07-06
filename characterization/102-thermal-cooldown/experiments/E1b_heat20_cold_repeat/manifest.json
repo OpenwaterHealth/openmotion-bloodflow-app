@@ -1,0 +1,7 @@
+{
+  "name": "E1b_heat20_cold_repeat",
+  "duration_sec": 1200,
+  "left_camera_mask": 255,
+  "right_camera_mask": 255,
+  "notes": "#102 characterization E1b: repeat of E1a after full cooldown + sensor power cycle (clears any latch AND the fw#73 stale temp-poll deadline so streamed temps stay live). Confirms repeatability of steady-state temps."
+}

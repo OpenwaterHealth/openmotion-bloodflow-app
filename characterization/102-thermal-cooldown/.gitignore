@@ -1,0 +1,6 @@
+# Heat-run raw collector output is 50-100 MB per scan — reduce with
+# tools/temp_trace.py and commit the 1 Hz trace into results/<unit>/ instead.
+experiments/**/means.csv
+experiments/**/means.partial.csv
+experiments/**/regdump_*.txt
+experiments/**/result.json
