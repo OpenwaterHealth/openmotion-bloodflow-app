@@ -186,6 +186,24 @@ Rectangle {
         // ── spacer pushes bottom controls down ──
         Item { Layout.fillHeight: true }
 
+        // Logs \u2014 live app-log viewer window (LogViewerWindow), the
+        // replacement for the removed console=True second exe (#57).
+        PanelButton {
+            visible: panel.engineeringMode
+            iconText: "\ue9a8"  // code icon
+            label: "Logs"
+            onClicked: panel.logsClicked()
+        }
+
+        // Divider between Logs and History \u2014 engineering mode only, so
+        // the bar looks unchanged when the Logs button is hidden.
+        Rectangle {
+            visible: panel.engineeringMode
+            Layout.preferredWidth: 52; Layout.preferredHeight: 1
+            Layout.topMargin: 4; Layout.bottomMargin: 4
+            Layout.alignment: Qt.AlignHCenter; color: AppTheme.borderSubtle
+        }
+
         // History
         PanelButton {
             enabled: !panel.scanning
@@ -202,24 +220,6 @@ Rectangle {
             iconText: "\ueabe"  // setting-2 icon
             label: "Settings"
             onClicked: panel.settingsClicked()
-        }
-
-        // Divider between Settings and Logs \u2014 engineering mode only, so
-        // the bar never ends on a dangling divider.
-        Rectangle {
-            visible: panel.engineeringMode
-            Layout.preferredWidth: 52; Layout.preferredHeight: 1
-            Layout.topMargin: 4; Layout.bottomMargin: 4
-            Layout.alignment: Qt.AlignHCenter; color: AppTheme.borderSubtle
-        }
-
-        // Logs \u2014 live app-log viewer window (LogViewerWindow), the
-        // replacement for the removed console=True second exe (#57).
-        PanelButton {
-            visible: panel.engineeringMode
-            iconText: "\ue9a8"  // code icon
-            label: "Logs"
-            onClicked: panel.logsClicked()
         }
     }
 
