@@ -301,12 +301,12 @@ def test_absurd_config_magnitudes_clamp_to_metric_windows(modal_factory):
         "meanMin": -99999, "meanMax": 99999,
         "contrastMin": -50, "contrastMax": 50,
     })
-    assert modal.property("bviMin") == -100.0
-    assert modal.property("bviMax") == 100.0
-    assert modal.property("meanMin") == -1024.0
+    assert modal.property("bviMin") == 0.0
+    assert modal.property("bviMax") == 10.0
+    assert modal.property("meanMin") == 0.0
     assert modal.property("meanMax") == 1024.0
-    assert modal.property("contrastMin") == -10.0
-    assert modal.property("contrastMax") == 10.0
+    assert modal.property("contrastMin") == 0.0
+    assert modal.property("contrastMax") == 1.0
 
 
 def test_non_numeric_config_bounds_fall_back_to_defaults(modal_factory):
@@ -339,9 +339,9 @@ def test_close_persists_sanitized_bounds(modal_factory):
 def test_huge_max_coerces_to_window_edge(modal_factory):
     modal = modal_factory()
     field = _commit(modal, "bfiMaxField", "999999999")
-    assert modal.property("bfiMax") == 100.0
+    assert modal.property("bfiMax") == 10.0
     # The correction is visible — the field re-displays the coerced value.
-    assert field.property("text") == "100.0"
+    assert field.property("text") == "10.0"
 
 
 def test_min_at_or_above_max_coerces_one_step_below(modal_factory):
@@ -392,7 +392,7 @@ def test_contrast_min_coerces_below_its_max(modal_factory):
 
 def test_in_window_values_commit_unchanged(modal_factory):
     modal = modal_factory({"bfiMin": 0.0, "bfiMax": 10.0})
-    _commit(modal, "bfiMinField", "-2.5")
-    assert modal.property("bfiMin") == -2.5
-    _commit(modal, "bfiMaxField", "42.5")
-    assert modal.property("bfiMax") == 42.5
+    _commit(modal, "bfiMinField", "2.5")
+    assert modal.property("bfiMin") == 2.5
+    _commit(modal, "bfiMaxField", "8.5")
+    assert modal.property("bfiMax") == 8.5

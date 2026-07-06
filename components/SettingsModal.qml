@@ -344,17 +344,15 @@ Item {
     // display precision; one display unit (10^-decimals) doubles as the
     // enforced minimum min→max gap, so min < max always holds strictly
     // (PlotCell._drawTrace divides by max - min).
-    //   bfi/bvi:  pipeline emits (1 - norm) * 10 — nominal 0–10 (the
-    //             bfiClampLow/High display-clamp precedent); ±100 gives
-    //             10x headroom for out-of-calibration excursions.
-    //   mean:     10-bit pixel data (1024 histogram bins); dark-corrected
-    //             mean can dip slightly below zero.
-    //   contrast: speckle contrast is nominally 0–1.
+    //   bfi/bvi:  pipeline emits (1 - norm) * 10 — display range 0–10
+    //             (matches the bfiClampLow/High display clamps).
+    //   mean:     10-bit pixel data (1024 histogram bins) — 0–1024.
+    //   contrast: speckle contrast — 0.00–1.00.
     readonly property var _boundPolicy: ({
-        "bfi":      { lo: -100,  hi: 100,  decimals: 1, defMin: 0.0, defMax: 10.0 },
-        "bvi":      { lo: -100,  hi: 100,  decimals: 1, defMin: 0.0, defMax: 10.0 },
-        "mean":     { lo: -1024, hi: 1024, decimals: 0, defMin: 0.0, defMax: 500.0 },
-        "contrast": { lo: -10,   hi: 10,   decimals: 2, defMin: 0.0, defMax: 1.0 }
+        "bfi":      { lo: 0, hi: 10,   decimals: 1, defMin: 0.0, defMax: 10.0 },
+        "bvi":      { lo: 0, hi: 10,   decimals: 1, defMin: 0.0, defMax: 10.0 },
+        "mean":     { lo: 0, hi: 1024, decimals: 0, defMin: 0.0, defMax: 500.0 },
+        "contrast": { lo: 0, hi: 1,    decimals: 2, defMin: 0.0, defMax: 1.0 }
     })
 
     // Coerce one edited bound: clamp into the metric's window, then keep
