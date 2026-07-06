@@ -18,6 +18,12 @@ Rectangle {
     property bool camerasReady: false  // gates Start/Check enablement
     property bool clinicalMode: false       // FDA mode hides scan-settings button
 
+    // Engineering-gated extras (Logs button). Live binding: appConfig is
+    // a notify property, so the button appears the moment the runtime
+    // EngineeringUnlockModal persists engineeringMode via setConfig.
+    readonly property bool engineeringMode:
+        MotionInterface.appConfig.engineeringMode === true
+
     // Connection state — drives start button icon and enablement.
     // A laser-safety trip is surfaced via a persistent NotificationCenter
     // toast (see motion_connector.safetyFailure setter), not by faking
@@ -30,6 +36,7 @@ Rectangle {
     signal checkClicked()
     signal historyClicked()
     signal settingsClicked()
+    signal logsClicked()
 
     FontLoader {
         id: iconFont
@@ -178,6 +185,24 @@ Rectangle {
 
         // ── spacer pushes bottom controls down ──
         Item { Layout.fillHeight: true }
+
+        // Logs \u2014 live app-log viewer window (LogViewerWindow), the
+        // replacement for the removed console=True second exe (#57).
+        PanelButton {
+            visible: panel.engineeringMode
+            iconText: "\ue9a8"  // code icon
+            label: "Logs"
+            onClicked: panel.logsClicked()
+        }
+
+        // Divider between Logs and History \u2014 engineering mode only, so
+        // the bar looks unchanged when the Logs button is hidden.
+        Rectangle {
+            visible: panel.engineeringMode
+            Layout.preferredWidth: 52; Layout.preferredHeight: 1
+            Layout.topMargin: 4; Layout.bottomMargin: 4
+            Layout.alignment: Qt.AlignHCenter; color: AppTheme.borderSubtle
+        }
 
         // History
         PanelButton {

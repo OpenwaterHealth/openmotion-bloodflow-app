@@ -923,7 +923,7 @@ def _report_get_app_version() -> str:
     ``$OPENWATER_VERSION`` if no app process is detected.
     """
     try:
-        for proc_name in ("Open-Motion.exe", "Open-Motion_console.exe"):
+        for proc_name in ("Open-Motion.exe",):
             try:
                 result = subprocess.run(
                     ["wmic", "process", "where", f"name='{proc_name}'",

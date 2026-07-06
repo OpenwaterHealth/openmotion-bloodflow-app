@@ -57,7 +57,7 @@ import error_codes
 import bug_report
 from nan_gap_tracker import NanGapTracker, gap_note_line
 from utils.resource_path import resource_path
-from utils import app_paths, config_store
+from utils import app_paths, config_store, log_tail
 from data_sources import (
     LiveScanSource, PastScanSource, ScanDataSource, buffers_are_empty,
 )
@@ -950,6 +950,10 @@ class MotionConnector(QObject):
         self._log_path = log_path
         self._support_email = cfg.get("support_email", "support@openwater.health")
         self._bug_report_smtp = cfg.get("bug_report_smtp")
+
+        # Incremental app-log reader behind readAppLog() (engineering
+        # Logs window). Created lazily on the first poll.
+        self._app_log_tail: log_tail.LogTail | None = None
 
         # Connection watchdog (E-104/E-106): one-shot check armed at startup
         # that flags expected devices that never enumerated. 0 disables it.
@@ -2771,6 +2775,37 @@ class MotionConnector(QObject):
                 "could not reveal %s in file explorer", path, exc_info=True
             )
 
+    # ── Engineering log viewer (LogViewerWindow.qml) ─────────────────────
+    @pyqtSlot(result=str)
+    def appLogPath(self) -> str:
+        """Absolute path of this launch's app log file, or ''.
+
+        Prefers the exact path main.py handed in (log_path); falls back
+        to the newest logs/open-motion-*.log under the data root for
+        callers that construct the connector without one (tests).
+        """
+        if self._log_path and os.path.isfile(self._log_path):
+            return self._log_path
+        return log_tail.latest_log_path(
+            os.path.join(self._directory, app_paths.LOGS_DIRNAME))
+
+    @pyqtSlot(result=str)
+    def readAppLog(self) -> str:
+        """New app-log text since the last call (see utils/log_tail.py).
+
+        Bounded, shared-read, opens the file per call — safe for the
+        Logs window's GUI-thread QTimer poll. The first call returns
+        the tail of the file; '' means nothing new (or no log file
+        yet). Re-resolves the path each call so the viewer recovers if
+        the log only appears after the connector was constructed.
+        """
+        path = self.appLogPath()
+        if not path:
+            return ""
+        if self._app_log_tail is None or self._app_log_tail.path != path:
+            self._app_log_tail = log_tail.LogTail(path)
+        return self._app_log_tail.read_new()
+
     @pyqtProperty(str, notify=directoryChanged)
     def directory(self):
         return self._directory
@@ -2791,8 +2826,8 @@ class MotionConnector(QObject):
     def _data_root(self) -> str:
         """Where scan files, calibrations, debug-bundles, and
         the scan DB live: self._directory/data. A sibling of the app-wide
-        logs/ folder (main.py's concern only — the connector never touches
-        it)."""
+        logs/ folder (written by main.py only; the connector reads it for
+        the engineering log viewer — see appLogPath)."""
         return os.path.join(self._directory, app_paths.DATA_DIRNAME)
 
     # ── App config — generic read/write API ──────────────────────────────────
