@@ -453,18 +453,26 @@ def _set_raw_csv_duration_sec(seconds: int) -> None:
 # Scan Settings modal manipulation
 # ─────────────────────────────────────────────
 def _scan_settings_modal_open() -> bool:
-    """True when the Scan Settings modal's "Scan Duration" heading is in
-    the UIA tree — a cheap did-it-actually-open check before driving the
-    modal's fields (a panel click that lands stale coordinates no-ops
-    silently otherwise)."""
+    """True when the Scan Settings modal is open, detected via its
+    exposed control signature.
+
+    Plain QML ``Text`` items never surface through Qt's a11y bridge, so
+    text anchors can't work here — the main page exposes NO elements at
+    all, and controls only appear in the UIA tree while a modal hosting
+    real QC2 controls is open. Scan Settings exposes >=3 Edit fields
+    (user label + H/M/S duration) with at most one CheckBox-role
+    control; the main Settings modal exposes 4+ CheckBoxes, so the
+    CheckBox bound keeps a stuck-open Settings modal (whose numeric
+    plot-bound fields look just like duration fields to the
+    small-numeric walk in ``_set_scan_duration``) from false-positiving.
+    """
     try:
         win = uia_window()
-        for t in win.descendants(control_type="Text"):
-            if (t.window_text() or "").strip() == "Scan Duration":
-                return True
+        edits = win.descendants(control_type="Edit")
+        checks = win.descendants(control_type="CheckBox")
     except Exception:
-        pass
-    return False
+        return False
+    return len(edits) >= 3 and len(checks) <= 2
 
 
 def _set_scan_duration(hours: int, minutes: int, seconds: int) -> None:
