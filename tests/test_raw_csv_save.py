@@ -452,6 +452,21 @@ def _set_raw_csv_duration_sec(seconds: int) -> None:
 # ─────────────────────────────────────────────
 # Scan Settings modal manipulation
 # ─────────────────────────────────────────────
+def _scan_settings_modal_open() -> bool:
+    """True when the Scan Settings modal's "Scan Duration" heading is in
+    the UIA tree — a cheap did-it-actually-open check before driving the
+    modal's fields (a panel click that lands stale coordinates no-ops
+    silently otherwise)."""
+    try:
+        win = uia_window()
+        for t in win.descendants(control_type="Text"):
+            if (t.window_text() or "").strip() == "Scan Duration":
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def _set_scan_duration(hours: int, minutes: int, seconds: int) -> None:
     """Walk UIA descendants for small numeric Edit fields and write
     H/M/S into the first three. Mirrors test_history's
@@ -492,7 +507,7 @@ def _set_scan_duration(hours: int, minutes: int, seconds: int) -> None:
             return
     pytest.fail(
         "Could not locate three duration spinboxes in Scan Settings — "
-        "UIA tree may have changed."
+        f"UIA tree may have changed. UIA texts seen: {_dump_uia_texts()}"
     )
 
 
@@ -796,6 +811,19 @@ class TestRawCsvSave:
             log.info("=" * 60)
             click_panel("Scan\nSettings")
             time.sleep(SLEEP)
+            if not _scan_settings_modal_open():
+                log.warning(
+                    "  Scan Settings modal not detected after click — "
+                    "recalibrating panel buttons and retrying"
+                )
+                recalibrate_panel_buttons()
+                click_panel("Scan\nSettings")
+                time.sleep(SLEEP)
+            assert _scan_settings_modal_open(), (
+                "Scan Settings modal did not open even after a "
+                "recalibrated retry — the panel click is landing "
+                f"somewhere else. UIA texts seen: {_dump_uia_texts()}"
+            )
             _set_scan_duration(0, SCAN_DURATION_SEC // 60, SCAN_DURATION_SEC % 60)
             require_focus_via_ensure_visible()
             pyautogui.press("escape")  # close Scan Settings → commits
