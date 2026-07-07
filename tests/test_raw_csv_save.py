@@ -69,11 +69,14 @@ from conftest import (
 )
 from hil_helpers import (
     RE_CONNECTED,
+    _resolve_app_config_path,
     click_element_center,
     click_panel,
     find_app_log,
     read_app_config_value,
+    read_local_config_value,
     recalibrate_panel_buttons,
+    resolve_local_config_path,
     validate_raw_csv_payload,
     wait_for_pattern,
     write_app_config_value,
@@ -662,6 +665,17 @@ class TestRawCsvSave:
         ``rawCsvDurationSec`` mark.
         """
         # ─── Step 0: snapshot config we will mutate ──────────────
+        # Byte-snapshots, not per-key: write_app_config_value re-dumps
+        # the shipped config with different formatting, so a value-level
+        # restore leaves the tracked file dirty in git. The local
+        # overrides file is where the Settings UI persists (#233); a
+        # stale one from a previous run or hand-test would override the
+        # dataDirectory seeding below AND make the toggle assert pass
+        # before the click, so it is parked for the duration of the run.
+        cfg_path    = _resolve_app_config_path()
+        cfg_bytes   = cfg_path.read_bytes()
+        local_path  = resolve_local_config_path()
+        local_bytes = local_path.read_bytes() if local_path.exists() else None
         original = {
             "engineeringMode":     bool(read_app_config_value("engineeringMode", False)),
             "clinicalMode":       bool(read_app_config_value("clinicalMode", False)),
@@ -670,6 +684,10 @@ class TestRawCsvSave:
             "dataDirectory":     read_app_config_value("dataDirectory", None),
         }
         log.info(f"original config snapshot: {original}")
+        log.info(
+            f"local overrides at {local_path}: "
+            f"{'present (parked for the run)' if local_bytes is not None else 'absent'}"
+        )
 
         # Pin a known data directory so the diff-after-scan step
         # doesn't have to chase a default that depends on cwd. The app
@@ -689,6 +707,10 @@ class TestRawCsvSave:
             log.info("=" * 60)
             _kill_bloodflow_processes()
             time.sleep(2)
+            # Park any pre-existing local overrides (restored in step 9)
+            # so the shipped-config seeding below is what the app boots
+            # with — see the step-0 comment.
+            local_path.unlink(missing_ok=True)
             test_data_dir.mkdir(parents=True, exist_ok=True)
             # Research mode, NOT engineering: since #234 the raw-CSV
             # toggle lives in the research-visible Data Output card, so
@@ -741,20 +763,24 @@ class TestRawCsvSave:
 
             # Sanity-check what the connector actually persisted. The
             # PillSwitch and TextField call setWriteRawCsv /
-            # setRawCsvDurationSec which write through to disk.
-            wrote = read_app_config_value("writeRawCsv", False)
-            dur   = read_app_config_value("rawCsvDurationSec", None)
+            # setRawCsvDurationSec, and since #233 config_store writes
+            # changed keys ONLY to the local overrides file — the
+            # shipped app_config.json is never touched at runtime, so
+            # these reads MUST hit app_config.local.json.
+            wrote = read_local_config_value("writeRawCsv", False)
+            dur   = read_local_config_value("rawCsvDurationSec", None)
             assert wrote is True, (
-                f"Settings UI didn't flip writeRawCsv to True "
-                f"(got {wrote!r}). Toggle click likely missed the "
-                f"PillSwitch — check coordinate offsets in "
-                f"_toggle_raw_csv_save_on."
+                f"Settings UI didn't persist writeRawCsv=True to "
+                f"{resolve_local_config_path()} (got {wrote!r}). Either "
+                f"the toggle click missed the PillSwitch (check "
+                f"_toggle_raw_csv_save_on) or config_store's write "
+                f"path changed."
             )
             assert dur is not None and abs(float(dur) - RAW_CSV_DURATION_SEC) < 1, (
-                f"Settings UI didn't write rawCsvDurationSec="
-                f"{RAW_CSV_DURATION_SEC} (got {dur!r}). The TextField "
-                f"likely didn't accept the typed input — check "
-                f"_set_raw_csv_duration_sec."
+                f"Settings UI didn't persist rawCsvDurationSec="
+                f"{RAW_CSV_DURATION_SEC} to the local overrides file "
+                f"(got {dur!r}). The TextField likely didn't accept the "
+                f"typed input — check _set_raw_csv_duration_sec."
             )
             log.info(
                 f"  config sanity: writeRawCsv={wrote}, "
@@ -915,10 +941,13 @@ class TestRawCsvSave:
             # honoured at startup.
             log.info("=" * 60)
             log.info(
-                f"Step 9 (cleanup): restoring original config to disk: "
-                f"{original}"
+                "Step 9 (cleanup): byte-restoring shipped config and "
+                f"local overrides (snapshotted values were: {original})"
             )
             log.info("=" * 60)
-            for key, value in original.items():
-                write_app_config_value(key, value)
-            log.info("  cleanup complete; original config restored")
+            cfg_path.write_bytes(cfg_bytes)
+            if local_bytes is None:
+                local_path.unlink(missing_ok=True)
+            else:
+                local_path.write_bytes(local_bytes)
+            log.info("  cleanup complete; original config restored byte-exact")
