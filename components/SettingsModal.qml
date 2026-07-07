@@ -192,8 +192,12 @@ Item {
 
     // ── Reusable building blocks ────────────────────────────────────────────
     component SectionCard: Rectangle {
+        id: sectionCard
         property string title: ""
         default property alias contentItem: cardContent.data
+        // Optional item(s) right-aligned on the title row — e.g. the
+        // About card's Send Debug Logs button (#227).
+        property alias headerItem: headerSlot.data
         Layout.fillWidth: true
         Layout.leftMargin: 20
         Layout.rightMargin: 20
@@ -209,12 +213,19 @@ Item {
             anchors.margins: 18
             spacing: 14
 
-            Text {
-                text:           parent.parent.title
-                color:          root.colTextPri
-                font.pixelSize: 15
-                font.weight:    Font.DemiBold
-                font.letterSpacing: 0.3
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                Text {
+                    text:           sectionCard.title
+                    color:          root.colTextPri
+                    font.pixelSize: 15
+                    font.weight:    Font.DemiBold
+                    font.letterSpacing: 0.3
+                }
+                Item { Layout.fillWidth: true }
+                RowLayout { id: headerSlot; spacing: 8 }
             }
 
             Rectangle { Layout.fillWidth: true; height: 1; color: root.colBorderSoft }
@@ -822,6 +833,8 @@ Item {
                 }
 
                 // ── Audit Log ────────────────────────────────────────────────
+                // Clinical record only — debug/diagnostic tooling lives in
+                // the Support section below (#227).
                 SectionCard {
                     title: "Audit Log"
 
@@ -832,20 +845,12 @@ Item {
                             Layout.preferredWidth: 130
                             onClicked: logsPasswordModal.open()
                         }
-                        ActionButton {
-                            text: "Send Debug Logs"
-                            Layout.preferredWidth: 150
-                            // Direct action — zips the last 48h of app logs,
-                            // reveals the file, and toasts the support address.
-                            onClicked: MotionInterface.prepareDebugLogBundle()
-                        }
                         Item { Layout.fillWidth: true }
                     }
                     Text {
                         text: "Password-protected, machine-readable record of system "
                               + "events for auditors. Open the viewer to browse entries "
-                              + "or export them as CSV. Send Debug Logs zips the last "
-                              + "48 hours of app logs to email to support@openwater.cc."
+                              + "or export them as CSV."
                         color: root.colTextMuted
                         font.pixelSize: 11
                         wrapMode: Text.WordWrap
@@ -1163,6 +1168,21 @@ Item {
                 // ── About ─────────────────────────────────────────────────────
                 SectionCard {
                     title: "About"
+
+                    // Debug-log bundle for support, top-right of the About
+                    // (firmware info) card per #227 — deliberately away from
+                    // the Audit Log section: the audit log is the clinical
+                    // record, the debug bundle is engineering diagnostics.
+                    // Visible in ALL modes — it is the designated support
+                    // path for clinical sites and the bundle contains no
+                    // scan or patient data.
+                    headerItem: ActionButton {
+                        text: "Send Debug Logs"
+                        Layout.preferredWidth: 150
+                        // Direct action — zips the last 48h of app logs,
+                        // reveals the file, and toasts the support address.
+                        onClicked: MotionInterface.prepareDebugLogBundle()
+                    }
 
                     // Small pill button reused for the Application row and
                     // each device firmware row.
