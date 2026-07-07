@@ -1,0 +1,80 @@
+left: enable_camera_power(0xFF) -> True
+right: enable_camera_power(0xFF) -> True
+== console ==
+  fw: 1.8.0
+  hw_id: 2f004300155133343633353000000000
+== left sensor ==
+  fw: 1.8.1-rc.3
+  hw_id: 43004e00065133333735383300000000
+== right sensor ==
+  fw: 1.8.1-rc.3
+  hw_id: 2a005200065133333735383300000000
+== left cameras ==
+  cam0: chip_id=0x5802  die_temp=22.2 C
+  cam1: chip_id=0x5802  die_temp=24.6 C
+  cam2: chip_id=0x5802  die_temp=25.2 C
+  cam3: chip_id=0x5802  die_temp=25.4 C
+  cam4: chip_id=0x5802  die_temp=26.5 C
+  cam5: chip_id=0x5802  die_temp=-51.6 C
+  cam6: chip_id=0x5802  die_temp=55.7 C
+  cam7: chip_id=0x5802  die_temp=25.0 C
+== right cameras ==
+  cam0: chip_id=0x5802  die_temp=23.7 C
+  cam1: chip_id=0x5802  die_temp=23.0 C
+  cam2: chip_id=0x5802  die_temp=58.0 C
+  cam3: chip_id=0x5802  die_temp=13.3 C
+  cam4: chip_id=0x5802  die_temp=26.2 C
+  cam5: chip_id=0x5802  die_temp=26.6 C
+  cam6: chip_id=0x5802  die_temp=51.6 C
+  cam7: chip_id=0x5802  die_temp=25.2 C
+
+--- Attribution notes (appended by hand) ---
+Unit label: unit-B-hwid-3450 (console serial unprogrammed; label uses last 4 chars of hw_id 2f004300155133343633353000000000)
+Hardware rev: DVT-1B
+Room temp: 70 F (~21 C)
+Fixture: static phantoms on both sensors
+Firmware: console 1.8.0, sensors 1.8.1-rc.3 (no "-dirty" suffix, unlike unit A's 1.8.1-rc.3-dirty)
+Camera survey: all 16 cameras chip_id=0x5802 as expected; idle die-temp readings garbage (TPM doesn't convert in standby, matches unit A / doc expectation)
+
+--- E1a cold-gate note (appended by hand) ---
+Cold gate (--mode rail-off --exit-below 35) did NOT converge after ~42 min:
+left cams plateaued 36-46C, right cams 38-44C, flat with no decay trend.
+Room temp 70F/~21C, so a persistent 15-25C offset above ambient even with
+rails cycled off between reads. Loop period ran ~200s/cycle vs configured
+120s interval -- enable/disable_camera_power calls appear slow on this unit.
+Also hit one hard hang (44+ min, zero output) on the first cold-gate attempt,
+resolved by a full bench power-cycle via Shelly (192.168.1.14) -- not yet
+root-caused, may recur.
+Decision: proceeded to E1a heat run without a clean cold-gate exit since
+this is the unit's first heat cycle (nothing run hot yet). Treating the
+36-46C/38-44C plateau as this unit's baseline, not a real elevated-temp state.
+
+--- Cold-start confirmed (appended by hand) ---
+Disabled camera power fully (disable_camera_power(0xFF), both sides), waited
+5 min with zero polling/re-power, then re-enabled and read once: all 16 cams
+20.7-27.6C, well under 35C. Confirms the earlier rail-off cold-gate plateau
+(36-46C) was an artifact of that tool's own periodic re-power-to-read cycle,
+not a true thermal floor -- true passive cooldown works fine.
+Proceeding to E1a heat run from this confirmed cold start.
+
+--- E1b/E2b repeat + powered-vs-rails-off cooldown comparison (appended by hand) ---
+E1b heat run: clean, no errors, no camera latches (deaths.py: 16/16 rows, no deaths,
+32 total cumulative across E1a+E1b).
+E2b (rails-off, cycled off/on every ~120s to sample, capture-before-read) cooldown_fit:
+T_floor_c 35.9-46.1C per camera, tau up to 8.8 min, several cams' fits NaN (too
+plateaued/noisy near their floor for a clean exponential fit).
+Compare to E2a (rails stayed powered continuously, sampled every 5s, no cycling):
+T_floor_c 24.6-31.8C per camera, tau 4.7-8.5 min.
+And to the one-off true rails-off test before E1a (fully off 5 min, zero polling,
+single read after): all 16 cams 20.7-27.6C.
+
+Conclusion: cycling rails off/on to sample (E2a's cold-gate mode and E2b) plateaus
+10-15C HIGHER than leaving rails continuously powered, which itself sits a few C
+above a true uninterrupted rails-off cooldown. The periodic re-power (plus the
+forced capture-before-read frame) reintroduces a power-on thermal transient each
+cycle and the tool samples inside that transient rather than a settled rails-off
+temperature. This is a measurement-method artifact of thermal_logger's rail-off
+mode, not a real property of the hardware -- the camera's true rails-off floor is
+close to ambient (~21C room temp) per the manual test. Recommend future rails-off
+gating/characterization use a single off-period-then-read (as done manually here)
+rather than periodic re-power-to-sample, if a true rails-off floor is needed.

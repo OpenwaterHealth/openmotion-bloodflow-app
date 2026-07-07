@@ -1,0 +1,19 @@
+{
+  "args": {
+    "out_csv": "results/unit-B-hwid-3450/e2b_cooldown_railoff.csv",
+    "interval": 120.0,
+    "duration": 3600.0,
+    "mode": "rail-off",
+    "power_on": false,
+    "capture_before_read": true,
+    "settle": 1.0,
+    "sides": "left,right",
+    "exit_below": null,
+    "exit_above": null,
+    "note": ""
+  },
+  "started_utc": 1783381592.0143263,
+  "owcam_tools": "C:\\Users\\openwater\\Projects\\openmotion-bloodflow-app\\.claude\\worktrees\\hopeful-booth-6a41e5\\characterization\\102-thermal-cooldown\\tools",
+  "finished_utc": 1783385297.692735,
+  "exit_reason": "user/duration"
+}
