@@ -1,0 +1,30 @@
+== unit-A (Ethan's bench) — survey 2026-07-06 ==
+console:  fw 1.8.0            hw_id 23004c00065133333735383300000000  serial QWW04Q10003
+LEFT:     fw 1.8.1-rc.3-dirty hw_id 28004f00065133333735383300000000  serial QWW24Q10011
+RIGHT:    fw 1.8.1-rc.3-dirty hw_id 24004600035133333639353500000000  serial EVT2SN82
+cameras:  16/16 chip_id 0x5802
+
+--- Attribution notes ---
+Mixed-rev bench: LEFT is a production-serial (QWW) module, RIGHT is an EVT2
+module. Sensors run a LOCAL firmware build (1.8.1-rc.3-dirty) - branch/diff
+to be confirmed with Ethan. Room ambient ~27-33 C per IMU (warmer than
+unit-B's 21 C room).
+
+--- Run history (2026-07-06 -> 07) ---
+- E0 idle validity + capture-first probe (results/unit-A-ethan-bench/e0_*.csv):
+  plain idle reads garbage on never-streamed cameras; capture-first live but
+  activates the sensor (~16 C/min self-heat, ~80 s per 16-cam sweep).
+- E2b rail-cycle attempt (3 h): sampling-duty artifact, retained as duty-cycle
+  equilibrium data + errno-32 USB collapse note. Superseded.
+- E1a_unitA_heat20_cold (post Shelly cycle, streamed temps live, deaths.py
+  temp_frozen all False): LEFT cams 3+4 thermally latched at 501/600 s
+  (113.4/115.6 C peaks); LEFT hottest survivor steady 114.3 C. RIGHT clean,
+  hottest 105.4 C.
+- e2a_unitA_cooldown_powered.csv: 45-min post-scan cooldown, all 16 cams
+  readable from log start (incl. both latched cams - rail re-power during
+  teardown restores I2C). Fast ~25-30 C die-dissipation collapse in the
+  first minute, then slow assembly cooling (tau 9.1-12.8 min).
+
+Metrics: see MODULE_METRICS.md / results/module_metrics.csv.
+ACTION: LEFT QWW24Q10011 is TSI > 1 (Regime B) - flag for clamp/pad service
+and re-run E1 after service to confirm TSI drops below 1.

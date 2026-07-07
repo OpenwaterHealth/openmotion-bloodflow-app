@@ -1,0 +1,19 @@
+{
+  "args": {
+    "out_csv": "e2a_unitA_cooldown_powered.csv",
+    "interval": 5.0,
+    "duration": 2700.0,
+    "mode": "powered",
+    "power_on": false,
+    "capture_before_read": false,
+    "settle": 1.0,
+    "sides": "left,right",
+    "exit_below": null,
+    "exit_above": null,
+    "note": "unit-A E2a: post-E1a powered-idle cooldown, plain 5s reads, started immediately at scan end"
+  },
+  "started_utc": 1783406343.8732054,
+  "owcam_tools": "C:\\Users\\ethan\\Projects\\camera-drift-campaign\\tools",
+  "finished_utc": 1783409048.5073924,
+  "exit_reason": "user/duration"
+}

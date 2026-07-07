@@ -1,0 +1,5 @@
+unit,side,serial,fw,experiment,T_amb_C,T_ss_hot_C,LM_C,TSI,HR5_C_min,SSS_C,n_latch,t_latch_s,tau_cool_min,r2_min,T_floor_C,TTR60_min,TTR45_min
+unit-B-hwid-3450,left,unprog-hwid-43004e,1.8.1-rc.3,E1a_heat20_cold,32.7,96.8,16.0,0.801,10.05,44.7,0,,7.87,0.898,31.8,0.3,1.6
+unit-B-hwid-3450,right,unprog-hwid-2a0052,1.8.1-rc.3,E1a_heat20_cold,33.2,90.0,22.7,0.714,9.25,37.1,0,,8.47,0.832,30.3,0.2,1.0
+unit-A-ethan-bench,left,QWW24Q10011,1.8.1-rc.3-dirty,E1a_unitA_heat20_cold,40.6,114.3,-1.6,1.022,10.62,30.0,2,500.9,12.78,0.982,38.7,2.7,15.6
+unit-A-ethan-bench,right,EVT2SN82,1.8.1-rc.3-dirty,E1a_unitA_heat20_cold,33.5,105.4,7.3,0.908,11.25,49.6,0,,9.09,0.935,31.6,0.6,2.9
