@@ -75,23 +75,31 @@ class CooldownPolicy:
     """Pure gate state machine. Callers pass ``now`` (monotonic seconds);
     no Qt, no threads, no clock reads — fully unit-testable.
 
-    Lock rule: locked while any finite camera temp exceeds
-    ``cooldownStartTempC``; released once every finite temp is at or below
-    ``cooldownStartTempC - cooldownHysteresisC``. With no finite temps at
-    all, falls back to a timer armed by scan end; with no armed timer,
-    fails OPEN (a cool freshly-launched system must not lock, and a
-    telemetry fault must not wedge a clinical operator — the firmware
+    Lock rule: ARMED by a scan ending; while armed, locked while any finite
+    camera temp exceeds ``cooldownStartTempC``; released (and disarmed) once
+    every finite temp is at or below ``cooldownStartTempC -
+    cooldownHysteresisC``. While armed with no finite temps at all, falls
+    back to a timer from scan end; on timer expiry, fails OPEN and disarms
+    (a telemetry fault must not wedge a clinical operator — the firmware
     latch remains the hardware backstop).
+
+    Why armed-only (#330 characterization, 2026-07-06): the die-temp
+    conversion does not run on a powered-but-never-streamed camera — such
+    reads are ±50 °C garbage that would randomly lock/unlock the gate.
+    Post-scan reads (configured + recently streaming) were verified live
+    for ≥45 min. So temperatures are only meaningful — and only consulted —
+    between a scan ending and the gate releasing.
     """
 
     def __init__(self, cfg: dict):
         self.enabled = bool(cfg.get("cooldownEnabled", True))
-        self.start_temp_c = float(cfg.get("cooldownStartTempC", 45.0))
+        self.start_temp_c = float(cfg.get("cooldownStartTempC", 60.0))
         self.hysteresis_c = float(cfg.get("cooldownHysteresisC", 2.0))
         self.timer_fallback_sec = float(cfg.get("cooldownTimerFallbackSec", 600))
-        self.tau_sec = float(cfg.get("cooldownTauSec", 0))
-        self.ambient_c = float(cfg.get("cooldownAmbientC", 25.0))
+        self.tau_sec = float(cfg.get("cooldownTauSec", 510))
+        self.ambient_c = float(cfg.get("cooldownAmbientC", 29.0))
 
+        self.armed = False                     # scan ended; temps trustworthy
         self.locked = False
         self.reason = ""                       # "temp" | "timer" | ""
         self.hottest_c = float("nan")
@@ -102,7 +110,9 @@ class CooldownPolicy:
     # -- inputs --------------------------------------------------------
 
     def on_scan_ended(self, now: float) -> None:
-        """Arm the timer fallback and cancel any engineering override."""
+        """Arm the gate (temps are trustworthy from here until release)
+        and cancel any engineering override."""
+        self.armed = True
         self._scan_end = now
         self._override = False
         self._timer_expiry_logged = False
@@ -113,18 +123,30 @@ class CooldownPolicy:
 
     def apply(self, temps: dict, now: float) -> bool:
         """Fold a temp snapshot into the gate. True if visible state changed."""
-        finite = [t for t in temps.values() if math.isfinite(t)]
         before = (self.locked, self.reason, self._display_hottest())
+
+        if not self.armed:
+            # Pre-first-scan reads are garbage (see class docstring) and
+            # there is nothing to cool down from — stay open, store nothing.
+            self.hottest_c = float("nan")
+            self.locked, self.reason = False, ""
+            return (self.locked, self.reason,
+                    self._display_hottest()) != before
+
+        finite = [t for t in temps.values() if math.isfinite(t)]
         self.hottest_c = max(finite) if finite else float("nan")
 
         if not self.enabled or self._override:
             self.locked, self.reason = False, ""
         elif finite:
-            if self.locked:
-                if self.hottest_c <= self.start_temp_c - self.hysteresis_c:
-                    self.locked, self.reason = False, ""
-                else:
-                    self.reason = "temp"
+            if self.hottest_c <= self.start_temp_c - self.hysteresis_c:
+                # Cool enough to start: release AND disarm — polling stops
+                # until the next scan re-arms, so late garbage can never
+                # re-lock an idle system.
+                self.locked, self.reason = False, ""
+                self.armed = False
+            elif self.locked:
+                self.reason = "temp"
             elif self.hottest_c > self.start_temp_c:
                 self.locked, self.reason = True, "temp"
         elif self._timer_active(now):
@@ -137,6 +159,7 @@ class CooldownPolicy:
                     "expired — unlocking (temperature unverified)")
                 self._timer_expiry_logged = True
             self.locked, self.reason = False, ""
+            self.armed = False
         return (self.locked, self.reason, self._display_hottest()) != before
 
     # -- outputs -------------------------------------------------------
@@ -211,6 +234,9 @@ class CooldownGate(QObject):
                 logger.exception("cooldown poll tick failed")
 
     def _tick_once(self) -> None:
+        if not self.policy.armed:
+            return                       # nothing to gate; pre-scan reads
+                                         # are garbage anyway (#330 E0)
         if not self._is_idle_fn():
             return                       # scan/config/init owns the bus
         temps = read_camera_temps(self._interface_getter())
