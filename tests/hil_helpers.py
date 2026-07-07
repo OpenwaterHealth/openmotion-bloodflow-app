@@ -215,6 +215,50 @@ def read_app_config_value(key: str, default: Any = None) -> Any:
         return default
 
 
+def resolve_local_config_path() -> Path:
+    """Return the writable ``app_config.local.json`` for the app under
+    test.
+
+    Since #233 the Settings UI persists changed keys ONLY here (via
+    config_store) and never into the shipped app_config.json — asserts
+    on UI-driven config changes must read this file, not
+    ``read_app_config_value``. Mirrors ``utils/app_paths.writable_root``:
+      1. ``OPENWATER_DATA_ROOT`` env override, used as-is.
+      2. From-source mode → repo root (the app's cwd).
+      3. Packaged exe → exe dir when its bundled config ships
+         ``portableMode: true`` (portable zips), else
+         ``%PROGRAMDATA%\\Openwater`` (installers).
+    """
+    env = os.environ.get("OPENWATER_DATA_ROOT", "")
+    if env:
+        return Path(env) / "app_config.local.json"
+    if _from_source_mode():
+        return _REPO_APP_CONFIG_PATH.parent.parent / "app_config.local.json"
+    bundled = _resolve_app_config_path()
+    portable = False
+    try:
+        with bundled.open(encoding="utf-8") as fh:
+            portable = bool(json.load(fh).get("portableMode", False))
+    except Exception:
+        pass
+    if portable and bundled.name == "app_config.json" and bundled.parent.name == "config":
+        # <exe-dir>/_internal/config/app_config.json → <exe-dir>
+        return bundled.parent.parent.parent / "app_config.local.json"
+    base = os.environ.get("PROGRAMDATA", r"C:\ProgramData")
+    return Path(base) / "Openwater" / "app_config.local.json"
+
+
+def read_local_config_value(key: str, default: Any = None) -> Any:
+    """Return ``key`` from the writable overrides file (see
+    ``resolve_local_config_path``), or ``default`` if the key is absent
+    or the file is missing/unreadable."""
+    try:
+        with resolve_local_config_path().open(encoding="utf-8") as fh:
+            return json.load(fh).get(key, default)
+    except Exception:
+        return default
+
+
 def write_app_config_value(key: str, value: Any) -> None:
     """Persist ``key=value`` to app_config.json. Logs a warning on
     failure rather than raising — config IO shouldn't take a test

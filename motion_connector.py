@@ -3744,9 +3744,16 @@ class MotionConnector(QObject):
             self.captureFinished.emit(True, "", "", "")
             self.scanNotesReady.emit()
 
-        # Issue #43: telemetry and raw CSVs are engineering diagnostics —
-        # clinical users must not get them. Default False (fail closed).
+        # Issue #43: telemetry CSVs are engineering diagnostics — clinical
+        # users must not get them. Default False (fail closed). Raw
+        # histogram CSVs are research data (#234): allowed whenever the
+        # build is not clinical (clinicalMode false) or engineeringMode is
+        # unlocked — never on a plain clinical build.
         engineering_mode = self._app_config.get("engineeringMode", False)
+        raw_csv_allowed = (
+            not self._app_config.get("clinicalMode", False)
+            or engineering_mode
+        )
 
         req = ScanRequest(
             subject_id=subject_id,
@@ -3768,13 +3775,14 @@ class MotionConnector(QObject):
             write_telemetry_csv=engineering_mode,
             # Raw CSV duration forwarded to the pipeline's Tee("raw") gate
             # via raw_save_max_duration_s. None means unbounded (write entire
-            # scan); 0 omits raw tee entirely. The writeRawCsv toggle lives
-            # in the engineering-only Settings card, so its persisted value is
-            # additionally gated on engineeringMode (#43) — flipping engineering
-            # mode off must stop raw output even if the toggle was left on.
+            # scan); 0 omits raw tee entirely. The persisted writeRawCsv
+            # toggle is additionally gated on the mode flags (#234: research
+            # users get raw CSVs) so a Clinical build never writes raw CSVs
+            # even if a prior research/engineering session left the toggle
+            # on (#43 invariant).
             raw_save_max_duration_s=(
                 self._raw_csv_duration_sec
-                if (engineering_mode and self._write_raw_csv) else 0
+                if (raw_csv_allowed and self._write_raw_csv) else 0
             ),
             sinks=[
                 _LivePlotSink(connector=self, plot_t0=plot_t0, live_source=live_source,

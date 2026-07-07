@@ -31,8 +31,9 @@ Rectangle {
     // app tears down.
     readonly property alias modalManager: modalManager
 
-    // FDA mode (read from app config). Forces Far camera pattern + free run,
-    // hides scan-settings button, and swaps in the FDA plot view.
+    // Clinical mode (read from app config). Forces Far camera pattern +
+    // free run, hides scan-settings button, and swaps in the clinical
+    // plot view.
     property bool clinicalMode: MotionInterface.appConfig.clinicalMode === true
     // In clinical mode, Start first runs a contact-quality preflight check.
     property bool clinicalStartPending: false
@@ -56,7 +57,7 @@ Rectangle {
 
     // Duration from scan time modal
     property bool freeRun: clinicalMode
-    property int durationSec: clinicalMode ? 43200 : 3600  // 12h in FDA mode, 1h default
+    property int durationSec: clinicalMode ? 43200 : 3600  // 12h in clinical mode, 1h default
 
     onClinicalModeChanged: {
         if (clinicalMode) {

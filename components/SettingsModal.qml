@@ -29,7 +29,10 @@ Item {
     property bool   showBfiBvi:        true
     property bool   autoScale:         false
     property bool   autoScalePerPlot:  false
-    property bool   clinicalMode:       false
+    // Live binding to the clinicalMode config flag. Read-only on purpose:
+    // clinical selection is build-time/env-only (#233), so the modal never
+    // edits or persists it.
+    readonly property bool clinicalMode: MotionInterface.appConfig.clinicalMode === true
     property int    plotWindowSec:     15
     property color  bfiColor:          "#E74C3C"
     property color  bviColor:          "#3498DB"
@@ -96,7 +99,6 @@ Item {
         var cfg = MotionInterface.appConfig
         defaultLeftMaskIndex  = maskToIndex(cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99)
         defaultRightMaskIndex = maskToIndex(cfg.rightMask !== undefined ? cfg.rightMask : 0x99)
-        clinicalMode        = cfg.clinicalMode        !== undefined ? cfg.clinicalMode        : false
         showBfiBvi         = clinicalMode ? true : (cfg.showBfiBvi !== undefined ? cfg.showBfiBvi : true)
         autoScale          = cfg.autoScale          !== undefined ? cfg.autoScale          : false
         autoScalePerPlot   = autoScale
@@ -147,7 +149,9 @@ Item {
             "showBfiBvi":         showBfiBvi,
             "autoScale":          autoScale,
             "autoScalePerPlot":   autoScalePerPlot,
-            "clinicalMode":        clinicalMode,
+            // clinicalMode is deliberately NOT saved here (#233): the
+            // Clinical/Research split is build-time/env-only and the
+            // config store refuses to persist it as a runtime override.
             "plotWindowSec":      plotWindowSec,
             "bfiColor":           "" + bfiColor,
             "bviColor":           "" + bviColor,
@@ -611,6 +615,72 @@ Item {
                             onAccepted: dataPathField.text = selectedFolder.toString().replace("file:///", "")
                         }
                     }
+
+                    // ── Raw histogram CSVs (research + engineering, #234) ────
+                    // Research data — moved out of the Engineering card so
+                    // Research (non-clinical) users get them without the
+                    // engineering unlock; the engineering unlock also shows
+                    // them on a clinical build. The connector re-checks the
+                    // flags at scan start, so a plain Clinical build never
+                    // writes raw CSVs even if a stale config left the
+                    // toggle on (#43).
+                    FieldRow {
+                        visible: !root.clinicalMode
+                                 || MotionInterface.appConfig.engineeringMode === true
+                        label: "Save raw CSV"
+                        PillSwitch {
+                            // objectName for the unit suite; Accessible.name
+                            // for the Windows a11y (UIA) tree — plain QML
+                            // Text labels don't surface there, and the HIL
+                            // suite (test_raw_csv_save.py) locates the
+                            // toggle by this name.
+                            objectName: "saveRawCsvSwitch"
+                            Accessible.name: "Save raw CSV"
+                            checked: root.writeRawCsv
+                            onCheckedChanged: root.writeRawCsv = checked
+                        }
+                        Text {
+                            text: root.writeRawCsv ? "On" : "Off"
+                            color: root.writeRawCsv ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    FieldRow {
+                        visible: !root.clinicalMode
+                                 || MotionInterface.appConfig.engineeringMode === true
+                        label: "Raw CSV duration"
+                        opacity: root.writeRawCsv ? 1.0 : 0.4
+                        TextField {
+                            id: rawCsvDurationField
+                            objectName: "rawCsvDurationField"
+                            Accessible.name: "Raw CSV duration"
+                            Layout.preferredWidth: 80
+                            Layout.preferredHeight: 32
+                            enabled: root.writeRawCsv
+                            text: root.rawCsvDurationSec !== null && root.rawCsvDurationSec !== undefined
+                                  ? root.rawCsvDurationSec.toString() : ""
+                            placeholderText: ""
+                            inputMethodHints: Qt.ImhDigitsOnly
+                            color: root.colTextPri
+                            background: Rectangle {
+                                color: root.colBgInput
+                                border.color: rawCsvDurationField.activeFocus ? root.colAccent : root.colBorderSoft
+                                radius: 4
+                            }
+                            onEditingFinished: {
+                                var v = parseInt(text, 10)
+                                root.rawCsvDurationSec = (text === "" || isNaN(v) || v <= 0) ? null : v
+                            }
+                        }
+                        Text {
+                            text: "seconds  (blank = full scan)"
+                            color: root.colTextMuted
+                            font.pixelSize: 11
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
                 }
 
                 // ── Realtime Plot Display ────────────────────────────────────
@@ -940,51 +1010,6 @@ Item {
                         Item { Layout.fillWidth: true }
                     }
 
-                    FieldRow {
-                        label: "Save raw CSV"
-                        PillSwitch {
-                            checked: root.writeRawCsv
-                            onCheckedChanged: root.writeRawCsv = checked
-                        }
-                        Text {
-                            text: root.writeRawCsv ? "On" : "Off"
-                            color: root.writeRawCsv ? root.colAccent : root.colTextMuted
-                            font.pixelSize: 12
-                        }
-                        Item { Layout.fillWidth: true }
-                    }
-
-                    FieldRow {
-                        label: "Raw CSV duration"
-                        opacity: root.writeRawCsv ? 1.0 : 0.4
-                        TextField {
-                            id: rawCsvDurationField
-                            Layout.preferredWidth: 80
-                            Layout.preferredHeight: 32
-                            enabled: root.writeRawCsv
-                            text: root.rawCsvDurationSec !== null && root.rawCsvDurationSec !== undefined
-                                  ? root.rawCsvDurationSec.toString() : ""
-                            placeholderText: ""
-                            inputMethodHints: Qt.ImhDigitsOnly
-                            color: root.colTextPri
-                            background: Rectangle {
-                                color: root.colBgInput
-                                border.color: rawCsvDurationField.activeFocus ? root.colAccent : root.colBorderSoft
-                                radius: 4
-                            }
-                            onEditingFinished: {
-                                var v = parseInt(text, 10)
-                                root.rawCsvDurationSec = (text === "" || isNaN(v) || v <= 0) ? null : v
-                            }
-                        }
-                        Text {
-                            text: "seconds  (blank = full scan)"
-                            color: root.colTextMuted
-                            font.pixelSize: 11
-                        }
-                        Item { Layout.fillWidth: true }
-                    }
-
                     // ── Calibration / Test (moved here from the former
                     //    standalone Calibration card; now engineering-only) ──
                     Rectangle { Layout.fillWidth: true; height: 1; color: root.colBorderSoft }
@@ -1158,7 +1183,7 @@ Item {
                             hoverColor: "#C0392B"
                             onClicked: {
                                 MotionInterface.setConfig("engineeringMode", false)
-                                MotionInterface.notify("Engineering mode disabled.", "info", 3000, false, "dev-mode")
+                                MotionInterface.notify("Engineering mode disabled.", "info", 3000, false, "engineering-mode")
                             }
                         }
                         Item { Layout.fillWidth: true }
