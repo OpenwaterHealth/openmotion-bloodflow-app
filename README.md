@@ -109,8 +109,7 @@ Edit `config/app_config.json` to customize behavior:
 | `bfiColor` / `bviColor` | `#ff0000` / `#3437db` | Trace colors for BFI / BVI |
 | `bfiClampLow` / `bfiClampHigh` | `0.0` / `10.0` | BFI display clamps — values outside show `--` |
 | `bviClampLow` / `bviClampHigh` | `0.0` / `10.0` | BVI display clamps — values outside show `--` |
-| `bviLowPassEnabled` | `false` | Enable 1-pole low-pass filter on BVI samples |
-| `bviLowPassCutoffHz` | `40.0` | Cutoff frequency for the BVI LPF |
+| `bviLowPassCutoffHz` | `20.0` | Cutoff (Hz) for the 1-pole low-pass on the *displayed* BVI stream; `<= 0` disables, missing/invalid → 20. Display-only — stored scan data stays raw. No Settings UI |
 | `bfiMin` / `bfiMax` | `4.0` / `9.0` | Manual BFI plot bounds (when autoscale is off) |
 | `bviMin` / `bviMax` | `4.0` / `8.0` | Manual BVI plot bounds (when autoscale is off) |
 | `meanMin` / `meanMax` | `0` / `200` | Manual mean plot bounds |

@@ -60,6 +60,7 @@ from utils.resource_path import resource_path
 from utils import app_paths, config_store, log_tail
 from data_sources import (
     LiveScanSource, PastScanSource, ScanDataSource, buffers_are_empty,
+    resolve_bvi_lpf_cutoff,
 )
 
 # constants for calculations
@@ -3546,11 +3547,22 @@ class MotionConnector(QObject):
         # exercise the DB lazy-load quickly (e.g. 60 → eviction after 1 min).
         _live_cache_sec = self._app_config.get("liveCacheMaxSeconds", 1800)
         _live_cache_samples = max(2, int(float(_live_cache_sec) * 40))
+        # BVI display low-pass (issue #228): config-only — the number is
+        # the whole contract (missing/invalid → 20 Hz, <= 0 → off).
+        # Applied at live ingest only; scans.db / CSVs / replay stay raw.
+        _bvi_lpf_cutoff = resolve_bvi_lpf_cutoff(
+            self._app_config.get("bviLowPassCutoffHz"))
+        logger.info(
+            "BVI display low-pass: %s",
+            f"{_bvi_lpf_cutoff:g} Hz cutoff" if _bvi_lpf_cutoff > 0.0
+            else "disabled (bviLowPassCutoffHz <= 0)",
+        )
         live_source = LiveScanSource(
             plot_t0=plot_t0,
             parent=self,
             scan_db_path=getattr(self._interface, "scan_db_path", None),
             cache_max_samples=_live_cache_samples,
+            bvi_lpf_cutoff_hz=_bvi_lpf_cutoff,
         )
         # Track the live source separately so the user can navigate
         # to a past scan and return; emit so QML rebinds the

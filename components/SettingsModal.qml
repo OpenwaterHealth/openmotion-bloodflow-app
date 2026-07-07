@@ -33,8 +33,6 @@ Item {
     property int    plotWindowSec:     15
     property color  bfiColor:          "#E74C3C"
     property color  bviColor:          "#3498DB"
-    property bool   bviLowPassEnabled:  false
-    property real   bviLowPassCutoffHz: 40.0
     property real   bfiMin:      0.0
     property real   bfiMax:      10.0
     property real   bviMin:      0.0
@@ -105,8 +103,6 @@ Item {
         plotWindowSec      = cfg.plotWindowSec      !== undefined ? cfg.plotWindowSec      : 15
         bfiColor           = cfg.bfiColor           !== undefined ? cfg.bfiColor           : "#E74C3C"
         bviColor           = cfg.bviColor           !== undefined ? cfg.bviColor           : "#3498DB"
-        bviLowPassEnabled  = cfg.bviLowPassEnabled  !== undefined ? cfg.bviLowPassEnabled  : false
-        bviLowPassCutoffHz = cfg.bviLowPassCutoffHz !== undefined ? cfg.bviLowPassCutoffHz : 40.0
         // Persisted bounds are untrusted (#229) — sanitizeBoundPair
         // supplies the per-metric defaults for missing/garbage values
         // and re-clamps anything a hand-edited config smuggled in.
@@ -155,8 +151,6 @@ Item {
             "plotWindowSec":      plotWindowSec,
             "bfiColor":           "" + bfiColor,
             "bviColor":           "" + bviColor,
-            "bviLowPassEnabled":  bviLowPassEnabled,
-            "bviLowPassCutoffHz": bviLowPassCutoffHz,
             "bfiMin":      bfiMin,
             "bfiMax":      bfiMax,
             "bviMin":      bviMin,
@@ -663,21 +657,6 @@ Item {
                         Text {
                             text: root.autoScale ? "On" : "Off"
                             color: root.autoScale ? root.colAccent : root.colTextMuted
-                            font.pixelSize: 12
-                        }
-                        Item { Layout.fillWidth: true }
-                    }
-
-                    FieldRow {
-                        visible: !root.clinicalMode
-                        label: "BVI low-pass filter"
-                        PillSwitch {
-                            checked: root.bviLowPassEnabled
-                            onCheckedChanged: root.bviLowPassEnabled = checked
-                        }
-                        Text {
-                            text: root.bviLowPassCutoffHz.toFixed(0) + " Hz cutoff"
-                            color: root.colTextMuted
                             font.pixelSize: 12
                         }
                         Item { Layout.fillWidth: true }
