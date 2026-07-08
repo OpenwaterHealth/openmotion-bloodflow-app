@@ -1520,9 +1520,11 @@ class MotionConnector(QObject):
                     "(E-106: %d of %d)", n_sensors, self._min_sensors)
                 msg = ("Sensor not detected. Check the sensor USB cable and "
                        "power, then reconnect.")
-            # Sticky, single (tagged) yellow toast — the user must act, but it
-            # never blocks the UI like the critical modal.
-            self.notify(msg, "warning", duration_ms=0, dismissible=True,
+            # Single (tagged) yellow toast — never blocks the UI like the
+            # critical modal. Auto-dismisses after 10 s so it doesn't nag while
+            # the user explores the no-device sample scan (#314); the user can
+            # still dismiss it early via the ✕.
+            self.notify(msg, "warning", duration_ms=10000, dismissible=True,
                         tag="connection-watchdog")
         except Exception:
             logger.exception("connection watchdog check failed")
