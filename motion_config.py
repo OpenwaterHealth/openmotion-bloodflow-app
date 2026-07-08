@@ -143,6 +143,92 @@ def select_tec_voltage(console, params: TecVoltageParams):
     return params.default_v, f"board id {board_id!r}"
 
 
+# --- Default scan preset (issue #314) ----------------------------------------
+# The single scan configuration the app boots into when no device has been
+# detected — camera masks + duration only; nothing is replayed and Start stays
+# gated on device readiness. The shipped values live in
+# config/default_scan.json (bundled by openwater.spec) — edit THAT file to
+# change the preset. This dict is only the fallback for a missing/corrupt
+# file or invalid values, and must be kept in sync with the shipped file
+# (pinned by tests/test_default_scan_preset.py).
+DEFAULT_SCAN_PRESET = {
+    "name": "Default Scan",
+    "leftMask": 0xFF,   # all 8 cameras ("All" pattern) — placeholder
+    "rightMask": 0xFF,
+    "freeRun": False,
+    "durationSec": 3600,  # timed 1 h — matches the research-mode boot default
+}
+
+
+def load_default_scan_preset(config_dir: str = "config") -> dict:
+    """Load `default_scan.json` — the boot-time default scan preset (#314).
+
+    Returns a dict with exactly the DEFAULT_SCAN_PRESET keys. File values
+    override the fallbacks; a key that is absent or invalid (mask outside
+    0-255, non-bool freeRun, non-positive durationSec, non-string name)
+    falls back individually, and a missing/corrupt file falls back wholesale.
+    Never raises.
+    """
+    preset = dict(DEFAULT_SCAN_PRESET)
+    config_path = (
+        resource_path("config", "default_scan.json")
+        if config_dir == "config"
+        else Path(config_dir) / "default_scan.json"
+    )
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+    except FileNotFoundError:
+        logger.warning(
+            "Default scan preset file not found: %s; using built-in preset",
+            config_path,
+        )
+        return preset
+    except (json.JSONDecodeError, OSError) as e:
+        logger.error(
+            "Could not read default scan preset %s: %s; using built-in preset",
+            config_path, e,
+        )
+        return preset
+
+    if not isinstance(loaded, dict):
+        logger.error(
+            "Default scan preset %s is not a JSON object; using built-in "
+            "preset", config_path,
+        )
+        return preset
+
+    def _valid(key, value):
+        if key in ("leftMask", "rightMask"):
+            return (
+                isinstance(value, int) and not isinstance(value, bool)
+                and 0 <= value <= 0xFF
+            )
+        if key == "freeRun":
+            return isinstance(value, bool)
+        if key == "durationSec":
+            return (
+                isinstance(value, int) and not isinstance(value, bool)
+                and value > 0
+            )
+        return isinstance(value, str) and bool(value)  # name
+
+    for key in preset:
+        if key not in loaded:
+            continue
+        if _valid(key, loaded[key]):
+            preset[key] = loaded[key]
+        else:
+            logger.warning(
+                "Default scan preset %s: invalid %r (%r); using fallback %r",
+                config_path, key, loaded[key], preset[key],
+            )
+
+    logger.info("Loaded default scan preset from %s: %s", config_path, preset)
+    return preset
+
+
 # --- TEC over-temp trip (TEC_TRIP) -------------------------------------------
 # Hardcoded guard rails (°C) for the configured TEC_TRIP. A value outside this
 # range is rejected so a config typo can't disable the firmware over-temp trip
