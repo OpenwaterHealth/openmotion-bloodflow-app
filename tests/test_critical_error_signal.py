@@ -173,6 +173,20 @@ def test_watchdog_sensor_only_missing_warns(tmp_path):
     assert "Sensor" in notifs[0]["text"]
 
 
+def test_watchdog_toast_auto_dismisses_after_10s(tmp_path):
+    """The connection warning auto-dismisses after 10 s (#314) rather than
+    staying sticky, so it doesn't nag while the user explores the no-device
+    sample scan. Still user-dismissible via the close button."""
+    conn = _connector(tmp_path, connected=(False, False, False))
+    notifs = _notifs(conn)
+
+    conn._check_connection_watchdog()
+
+    assert len(notifs) == 1
+    assert notifs[0]["durationMs"] == 10000
+    assert notifs[0]["dismissible"] is True
+
+
 def test_watchdog_respects_min_sensors_config(tmp_path):
     conn = _connector(tmp_path, app_config={"minSensors": 2},
                       connected=(True, True, False))  # only one sensor
