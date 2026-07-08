@@ -1282,6 +1282,25 @@ def load_past_scan_buffers(
     return buffers, has_bfi
 
 
+def load_csv_scan_buffers(csv_path: str) -> dict:
+    """Bulk-load a scan-export CSV into a fresh
+    {(side, cam_id, metric): _CameraBuffer} dict, DB-free.
+
+    The History → Export CSV / SDK ``materialize_corrected_csv`` output is
+    the same per-cam wide format ``_load_corrected_csv_into`` already parses
+    (frame_id, timestamp_s, bfi/bvi/mean/contrast per camera; trailing temp/
+    quality columns are ignored). Used to feed a ``PastScanSource`` straight
+    from a CSV — no ``scans.db`` involvement — e.g. the bundled sample scan
+    shown in the replay viewer when no device is connected at boot (#314).
+
+    Fail-soft: a missing or unreadable file yields an empty dict (the
+    OSError guard lives in ``_load_corrected_csv_into``); callers check
+    ``buffers_are_empty`` before displaying."""
+    buffers: dict = {}
+    _load_corrected_csv_into(buffers, csv_path)
+    return buffers
+
+
 class PastScanSource(ScanDataSource):
     """ScanDataSource constructed from an SDK ScanDatabase session_id.
     Bucketizes session_data rows into per-(side, cam, metric) buffers

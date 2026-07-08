@@ -60,7 +60,7 @@ from utils.resource_path import resource_path
 from utils import app_paths, config_store, log_tail
 from data_sources import (
     LiveScanSource, PastScanSource, ScanDataSource, buffers_are_empty,
-    resolve_bvi_lpf_cutoff,
+    load_csv_scan_buffers, resolve_bvi_lpf_cutoff,
 )
 
 # constants for calculations
@@ -3079,6 +3079,77 @@ class MotionConnector(QObject):
             return
         self._set_current_scan_source(self._live_scan_source)
         logger.info("[Plot] viewer switched back to live source")
+
+    def _any_device_connected(self) -> bool:
+        """True when the console OR either sensor is currently connected.
+
+        A lone sensor (no console) still counts as a device, so this gates
+        on the raw connection flags rather than the DISCONNECTED FSM state
+        (which reads DISCONNECTED for a single sensor with no console)."""
+        return bool(self._consoleConnected
+                    or self._leftSensorConnected
+                    or self._rightSensorConnected)
+
+    @pyqtSlot()
+    def loadSampleScanIfNoDevice(self) -> None:
+        """Boot helper (#314): when NO device is present, load a bundled
+        real sample scan into the replay viewer so a hardware-free launch
+        lands on explorable BFI/BVI traces the user can pan/zoom/scrub,
+        instead of an empty scan page.
+
+        No-op when any device is connected — a real session proceeds
+        unchanged, and once the user runs a scan startCapture's fresh
+        LiveScanSource retires the sample source (the sample is never
+        written anywhere, so real scan data is never polluted). Called from
+        BloodFlow.qml Component.onCompleted; safe to call more than once —
+        it only binds the sample while nothing else is showing."""
+        if self._any_device_connected():
+            logger.info(
+                "[Plot] sample scan skipped — device present at boot")
+            return
+        if self._current_scan_source is not None:
+            # Something is already bound (e.g. a scan already ran, or a
+            # previous call). Don't clobber it.
+            return
+        self._load_sample_scan(
+            str(resource_path("resources", "sample_scan.csv")))
+
+    def _load_sample_scan(self, csv_path: str) -> None:
+        """Parse a scan-export CSV and bind it to the viewer as a DB-free
+        PastScanSource. Fail-soft: a missing/unreadable/empty CSV logs a
+        warning and leaves the viewer untouched (never raises — a bad
+        sample file must not break boot). Split from the slot so unit tests
+        can drive it with an arbitrary path."""
+        try:
+            buffers = load_csv_scan_buffers(csv_path)
+        except Exception:
+            logger.warning(
+                "[Plot] sample scan load failed: %s", csv_path, exc_info=True)
+            return
+        if buffers_are_empty(buffers):
+            logger.warning(
+                "[Plot] sample scan unavailable or empty: %s", csv_path)
+            return
+        try:
+            sample = PastScanSource(
+                scan_db=None,
+                session_id=-1,
+                parent=self,
+                preloaded_buffers=buffers,
+                user_label="Sample scan",
+                date_time="",
+            )
+        except Exception:
+            logger.warning(
+                "[Plot] sample scan source construction failed",
+                exc_info=True)
+            return
+        self._set_current_scan_source(sample)
+        n_samples = sum(b.n for b in sample.buffers.values())
+        logger.info(
+            "[Plot] loaded sample scan (no device at boot): "
+            "buffers=%d samples=%d from %s",
+            len(sample.buffers), n_samples, csv_path)
 
     @pyqtSlot(int, str)
     def loadPastScan(self, session_id: int, session_label: str) -> None:

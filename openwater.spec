@@ -23,6 +23,13 @@ for folder in ("pages", "components", "assets", "models", "config", "models", "p
     if os.path.isdir(folder):
         datas.append((folder, folder))
 
+# Bundle the replay sample scan (#314) — loaded into the viewer when no
+# device is connected at boot. Located at runtime via
+# utils.resource_path.resource_path("resources", "sample_scan.csv").
+_SAMPLE_SCAN = os.path.join("resources", "sample_scan.csv")
+if os.path.exists(_SAMPLE_SCAN):
+    datas.append((_SAMPLE_SCAN, "resources"))
+
 # Ensure the icon is explicitly included
 if os.path.exists(ICON_FILE):
     datas.append((ICON_FILE, "assets/images"))
