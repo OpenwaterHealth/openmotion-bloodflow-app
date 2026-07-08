@@ -666,6 +666,11 @@ Rectangle {
             rightMask = _cfg.clinicalModeRightMask !== undefined ? _cfg.clinicalModeRightMask : 0xC3
         }
         applyDefaultCameras()
+        // No device at boot → load a real sample scan into the replay
+        // viewer so the user can pan/zoom/scrub actual BFI/BVI traces
+        // instead of landing on an empty page (#314). No-op when a device
+        // is connected; the connector owns the gating + fail-soft parsing.
+        MotionInterface.loadSampleScanIfNoDevice()
     }
 
     Component.onDestruction: {
