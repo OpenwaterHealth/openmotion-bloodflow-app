@@ -239,26 +239,30 @@ def _config_name(mask) -> str:
     return _CONFIG_NAMES.get(m, f"0x{m:02X}")
 
 
-def _sdk_flags_from_session(session) -> Optional[dict]:
-    """Pull the ``sdk_flags`` block out of a ScanDatabase session dict's
-    ``session_meta`` (the camera config / clinical-mode the scan was RUN with,
-    written by the SDK's ScanDBSink). Returns None when absent or unparseable.
-
-    ScanDatabase already json-decodes session_meta into a dict, but tolerate a
-    raw JSON string too — the same defensive parse the History list uses
-    (_session_to_row). Used to lay a replayed scan's plot grid out from its
-    recorded config rather than only the cameras that logged data (#175)."""
+def _sdk_meta_dict(session) -> dict:
+    """Decode a ScanDatabase session dict's ``session_meta`` into a dict.
+    ScanDatabase already json-decodes it, but tolerate a raw JSON string too —
+    the same defensive parse the History list uses. Returns an empty dict when
+    absent or unparseable so callers can merge into it safely."""
     if not isinstance(session, dict):
-        return None
+        return {}
     meta = session.get("session_meta")
     if isinstance(meta, str):
         try:
             meta = json.loads(meta)
         except Exception:
-            return None
-    if not isinstance(meta, dict):
-        return None
-    flags = meta.get("sdk_flags")
+            return {}
+    return meta if isinstance(meta, dict) else {}
+
+
+def _sdk_flags_from_session(session) -> Optional[dict]:
+    """Pull the ``sdk_flags`` block out of a ScanDatabase session dict's
+    ``session_meta`` (the camera config / clinical-mode the scan was RUN with,
+    written by the SDK's ScanDBSink). Returns None when absent or unparseable.
+
+    Used to lay a replayed scan's plot grid out from its recorded config rather
+    than only the cameras that logged data (#175)."""
+    flags = _sdk_meta_dict(session).get("sdk_flags")
     return flags if isinstance(flags, dict) else None
 
 
@@ -2503,10 +2507,23 @@ class MotionConnector(QObject):
 
         start = s.get("session_start")
         end = s.get("session_end")
-        if start is not None and end is not None:
-            duration = float(end) - float(start)
-        else:
-            duration = -1.0
+        # Prefer the actual trigger-ON duration stamped by the completion
+        # handler (issue #335). session_end - session_start brackets the whole
+        # pipeline lifetime — pre-trigger setup + post-trigger USB drain — which
+        # runs ~3 s longer than the laser-on window, so the raw delta reads e.g.
+        # "2:03" for a 2:00 scan. Old rows lack the key; fall back to wall-clock.
+        actual = meta.get("actual_duration_sec")
+        duration = None
+        if actual is not None:
+            try:
+                duration = float(actual)
+            except (TypeError, ValueError):
+                duration = None
+        if duration is None:
+            if start is not None and end is not None:
+                duration = float(end) - float(start)
+            else:
+                duration = -1.0
 
         return {
             "sessionId": int(s.get("id")),
@@ -2917,11 +2934,20 @@ class MotionConnector(QObject):
         if self._scan_notes_session_label:
             self._persist_scan_notes(self._scan_notes_session_label)
 
-    def _persist_scan_notes(self, session_label: str) -> bool:
+    def _persist_scan_notes(
+        self, session_label: str, actual_duration_sec: float | None = None
+    ) -> bool:
         """Write the in-memory notes buffer to sessions.session_notes of the
         scan DB session whose session_label matches. Returns True on success.
         ScanDBSink (critical) creates the session at scan start, so every scan
-        that ran has a row to update."""
+        that ran has a row to update.
+
+        When ``actual_duration_sec`` is given, merge it into session_meta as
+        ``actual_duration_sec`` so History reports the actual trigger-ON scan
+        time rather than the pipeline wall-clock (issue #335). This runs from
+        the app's _CompletionSink, which fires *after* the SDK's ScanDBSink has
+        finalised session_end + any diagnostics meta, so a read-modify-write
+        here is race-free and preserves the existing meta."""
         db_path = getattr(self._interface, "scan_db_path", None)
         if not db_path or not session_label:
             return False
@@ -2935,8 +2961,14 @@ class MotionConnector(QObject):
                         "Scan notes: no DB session with label %r", session_label
                     )
                     return False
-                db.update_session(session["id"],
-                                  session_notes=self._scan_notes.strip())
+                update_kwargs: dict = {
+                    "session_notes": self._scan_notes.strip()
+                }
+                if actual_duration_sec is not None:
+                    meta = _sdk_meta_dict(session)
+                    meta["actual_duration_sec"] = float(actual_duration_sec)
+                    update_kwargs["session_meta"] = meta
+                db.update_session(session["id"], **update_kwargs)
                 logger.info("Scan notes saved to DB session %r",
                             session_label)
                 return True
@@ -3604,7 +3636,10 @@ class MotionConnector(QObject):
             scan_id = getattr(meta, "scan_id", "") if meta else ""
             session_label = f"{scan_id}_{subject_id}" if scan_id else ""
             self._scan_notes_session_label = session_label
-            self._persist_scan_notes(session_label)
+            # Stamp the actual trigger-ON duration (same value as the notes
+            # line above) so History shows the real scan time, not the pipeline
+            # wall-clock session_end - session_start (issue #335).
+            self._persist_scan_notes(session_label, actual_duration_sec=elapsed)
 
             # Interrupted-scan outcome. An interrupted scan loses its open
             # interval; one that ends before any interval closes saves
