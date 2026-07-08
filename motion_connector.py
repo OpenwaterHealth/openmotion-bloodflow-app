@@ -50,7 +50,6 @@ from motion_config import (
     TEC_TRIP_MIN_C,
     TecTripOutcome,
     ensure_tec_trip,
-    load_default_scan_preset,
     load_tec_voltage_params,
     select_tec_voltage,
 )
@@ -1130,11 +1129,6 @@ class MotionConnector(QObject):
         self._past_scan_load_seq = 0
 
         self._tec_voltage_params = load_tec_voltage_params(config_dir)
-        # Boot-time default scan preset (issue #314): the single scan
-        # configuration BloodFlow.qml loads when no device has been
-        # detected. Read once — config/default_scan.json never changes at
-        # runtime (defaultScanPreset property below is constant).
-        self._default_scan_preset = load_default_scan_preset(config_dir)
         self._console_mutex = QRecursiveMutex()
 
         ft_mean     = cfg.get("ft_min_mean_per_camera")
@@ -2895,16 +2889,6 @@ class MotionConnector(QObject):
     @pyqtProperty('QVariantMap', notify=appConfigChanged)
     def appConfig(self):
         return self._app_config
-
-    @pyqtProperty('QVariantMap', constant=True)
-    def defaultScanPreset(self):
-        """Boot-time default scan preset (issue #314).
-
-        Loaded once at startup from config/default_scan.json — edit that
-        file to change the preset. BloodFlow.qml applies it at page load
-        while no device has been detected; see its Component.onCompleted.
-        """
-        return self._default_scan_preset
 
     def _save_app_config(self):
         """Persist runtime config changes as a diff vs the shipped baseline.
