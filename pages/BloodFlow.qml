@@ -203,7 +203,7 @@ Rectangle {
             cnapPopup.open()
         }
     }
-    
+
     // ===== MANUAL EVENT MARK POPUP =====
     Popup {
         id: eventMarkPopup
@@ -435,7 +435,7 @@ Rectangle {
             border.width: 1
         }
 
-        
+
 
         Column {
             anchors.fill: parent
@@ -729,7 +729,7 @@ Rectangle {
             }
         }
     }
-         
+
 
 
     // Single source of truth for which modal is on screen. See

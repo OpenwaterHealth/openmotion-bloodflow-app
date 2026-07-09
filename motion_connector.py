@@ -408,7 +408,7 @@ class MOTIONConnector(QObject):
         self._capture_right_path = ""
         self._scan_notes = ""
         self._scan_notes_path = ""  # path to current scan's notes file on disk
-        
+
         # --- manual event marker support ---
         self._event_counter = 0
         self._pending_event_mark = None
@@ -1645,7 +1645,7 @@ class MOTIONConnector(QObject):
             self.directory,
             f"{event_stamp}_{safe_subject_id}_events.csv",
         )
-        
+
         def _extra_cols():
             now_dt = datetime.datetime.now()
             now_unix = time.time()
@@ -1698,7 +1698,7 @@ class MOTIONConnector(QObject):
         def _on_uncorrected(sample):
             """Fires for every non-dark frame (~40 Hz). Feeds the realtime plot."""
             self._record_scos_first_bfi_time_if_needed(subject_id)
-            
+
             current_side = sample.side
             _key = (sample.side, int(sample.cam_id))
 
@@ -2352,7 +2352,7 @@ class MOTIONConnector(QObject):
         self.triggerStateChanged.emit()
 
         return trigger_setting or {}
-    
+
     def _write_scos_timing_file(self, subject_id):
         """Write SCOS timing metadata. Updated once first BFI frame arrives."""
         try:
@@ -4210,7 +4210,7 @@ class MOTIONConnector(QObject):
         except Exception as e:
             logger.error(f"ABP simulation tick failed: {e}", exc_info=True)
             print("ABP simulation tick failed:", e)
-    
+
     @pyqtSlot(result="QVariantList")
     def listAbpDaqChannels(self):
         """Return available NI-DAQ analog input physical channels."""

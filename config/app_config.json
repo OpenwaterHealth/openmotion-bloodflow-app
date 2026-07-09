@@ -15,7 +15,7 @@
   "abpVoltageMin": -5.0,
   "abpVoltageMax": 5.0,
   "abpMmHgPerVolt": 100.0,
-  "abpMmHgOffset": 0.0
+  "abpMmHgOffset": 0.0,
 
   "ft_min_mean_per_camera": [
     50,
@@ -135,5 +135,4 @@
     15.0
   ],
   "triggerConfig": null
-  
 }
