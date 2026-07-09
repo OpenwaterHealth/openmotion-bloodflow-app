@@ -25,6 +25,8 @@ import time
 import random
 import re
 import string
+import math
+
 
 from omotion import MotionInterface
 from omotion.firmware_update import (
@@ -434,6 +436,13 @@ class _LivePlotSink:
             if ft == "stale":
                 continue
             is_dark = (ft == "dark")
+            if not is_dark:
+                # SCOS timing reference: record CPU time of the first live
+                # (non-dark) frame of the scan. One-shot — the connector
+                # method returns immediately once the reference is set.
+                # Replaces the 1.1.0-era _on_uncorrected hook.
+                connector._record_scos_first_bfi_time_if_needed(
+                    connector._scos_subject_id)
             ts = float(batch.timestamp_s[i])
             abs_frame_id = int(batch.abs_frame_ids[i]) if batch.abs_frame_ids is not None else i
             plot_ts = ts
@@ -885,6 +894,8 @@ class MotionConnector(QObject):
     # is guaranteed to reflect the just-completed scan. Not emitted on
     # hard errors — those keep the scan dialog visible with the error.
     scanNotesReady = pyqtSignal()
+    abpSampled = pyqtSignal(str, int, float, float)
+    abpStatusChanged = pyqtSignal(bool)
 
     # Contact-quality quick-check signals.
     contactQualityCheckStarted = pyqtSignal(int)  # expected duration in seconds
@@ -1176,6 +1187,25 @@ class MotionConnector(QObject):
         # session_label of the just-completed scan's DB session — notes edits
         # persist there (sessions.session_notes); empty until a scan completes.
         self._scan_notes_session_label = ""
+
+        # --- manual event marker support ---
+        self._event_counter = 0
+        self._pending_event_mark = None
+        self._events_csv_path = None
+        self._capture_start_monotonic = None
+
+        # --- SCOS timing reference ---
+        self._scos_capture_request_dt = None
+        self._scos_capture_request_unix = None
+        self._scos_capture_request_monotonic = None
+
+        self._scos_first_bfi_dt = None
+        self._scos_first_bfi_unix = None
+        self._scos_first_bfi_monotonic = None
+        self._scos_timing_csv_path = None
+        self._scos_subject_id = ""
+
+
         self.connect_signals()
 
         self._tec_voltage = 0.0
@@ -1194,6 +1224,31 @@ class MotionConnector(QObject):
         self._calibration_t0 = None
         self._test_scan_t0 = None
         self._cq_t0 = None
+
+        # --- CNAP / ABP monitor support ---
+        self._abp_timer = QTimer(self)
+        self._abp_timer.setInterval(25)  # 40 Hz simulated ABP
+        self._abp_timer.timeout.connect(self._on_abp_sim_tick)
+
+        self._abp_running = False
+        self._abp_start_monotonic = None
+        self._abp_start_unix = None
+        self._abp_csv_path = None
+        self._abp_csv_file = None
+        self._abp_csv_writer = None
+        self._abp_sample_idx = 0
+        # --- CNAP / ABP DAQ support ---
+        self._abp_thread = None
+        self._abp_stop_event = threading.Event()
+
+        self._abp_daq_channel = str(cfg.get("abpDaqChannel", ""))
+        self._abp_source_mode = str(cfg.get("abpSource", "daq"))
+        print("ABP source mode =", self._abp_source_mode)
+        self._abp_sample_rate_hz = float(cfg.get("abpSampleRateHz", 100.0))
+        self._abp_voltage_min = float(cfg.get("abpVoltageMin", -5.0))
+        self._abp_voltage_max = float(cfg.get("abpVoltageMax", 5.0))
+        self._abp_mmhg_per_volt = float(cfg.get("abpMmHgPerVolt", 100.0))
+        self._abp_mmhg_offset = float(cfg.get("abpMmHgOffset", 0.0))
 
         os.makedirs(resolved_dir, exist_ok=True)
         self._directory = resolved_dir
@@ -3505,12 +3560,24 @@ class MotionConnector(QObject):
         self._scan_notes_session_label = ""
         self.scanNotesChanged.emit()
         self._capture_running = True
+
         self._capture_start_time = time.time()
         self._audit.log("scan_started", {
             "label": subject_id,
             "left_mask": int(left_camera_mask),
             "right_mask": int(right_camera_mask),
         })
+
+        # --- SCOS timing reference ---
+        self._scos_capture_request_dt = datetime.datetime.now().astimezone()
+        self._scos_capture_request_unix = time.time()
+        self._scos_capture_request_monotonic = time.monotonic()
+
+        self._scos_first_bfi_dt = None
+        self._scos_first_bfi_unix = None
+        self._scos_first_bfi_monotonic = None
+        self._scos_timing_csv_path = None
+
         # Per-scan monotonic zero for plot timestamps. sample.timestamp_s comes
         # from each sensor's firmware clock, which resets on sensor reboot — so
         # after a mid-scan unplug/replug, the two sides' clocks diverge and the
@@ -3552,6 +3619,23 @@ class MotionConnector(QObject):
         self._retire_scan_source(prev_live)
         self._capture_left_path = ""
         self._capture_right_path = ""
+
+        # Write initial metadata with capture-request time.
+        # It will be updated when the first BFI frame arrives.
+        self._write_scos_timing_file(subject_id)
+
+        self._capture_start_monotonic = time.monotonic()
+        self._event_counter = 0
+        self._pending_event_mark = None
+        self._scos_subject_id = subject_id
+
+        event_stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_subject_id = str(subject_id).strip().replace(" ", "_") or "subject"
+
+        self._events_csv_path = os.path.join(
+            self._data_root,
+            f"{event_stamp}_{safe_subject_id}_events.csv",
+        )
 
         # Camera dropout watchdog state — fresh per scan.
         self._camera_last_seen = {}
@@ -4035,6 +4119,107 @@ class MotionConnector(QObject):
         self.triggerStateChanged.emit()
 
         return trigger_setting or {}
+
+    def _write_scos_timing_file(self, subject_id):
+        """Write SCOS timing metadata. Updated once first BFI frame arrives."""
+        try:
+            stamp_dt = self._scos_capture_request_dt or datetime.datetime.now().astimezone()
+            stamp = stamp_dt.strftime("%Y%m%d_%H%M%S")
+            safe_subject_id = str(subject_id).strip().replace(" ", "_") or "subject"
+
+            if not self._scos_timing_csv_path:
+                self._scos_timing_csv_path = os.path.join(
+                    self._data_root,
+                    f"scos_timing_{stamp}_{safe_subject_id}.csv",
+                )
+
+            delay_ms = ""
+            if self._scos_capture_request_unix is not None and self._scos_first_bfi_unix is not None:
+                delay_ms = int(
+                    (self._scos_first_bfi_unix - self._scos_capture_request_unix) * 1000
+                )
+
+            with open(self._scos_timing_csv_path, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["field", "value"])
+
+                writer.writerow([
+                    "capture_request_datetime",
+                    "" if self._scos_capture_request_dt is None
+                    else self._scos_capture_request_dt.isoformat(timespec="milliseconds"),
+                ])
+                writer.writerow([
+                    "capture_request_unix_ms",
+                    "" if self._scos_capture_request_unix is None
+                    else int(self._scos_capture_request_unix * 1000),
+                ])
+                writer.writerow([
+                    "capture_request_monotonic_ms",
+                    "" if self._scos_capture_request_monotonic is None
+                    else int(self._scos_capture_request_monotonic * 1000),
+                ])
+
+                writer.writerow([
+                    "scos_first_bfi_datetime",
+                    "" if self._scos_first_bfi_dt is None
+                    else self._scos_first_bfi_dt.isoformat(timespec="milliseconds"),
+                ])
+                writer.writerow([
+                    "scos_first_bfi_unix_ms",
+                    "" if self._scos_first_bfi_unix is None
+                    else int(self._scos_first_bfi_unix * 1000),
+                ])
+                writer.writerow([
+                    "scos_first_bfi_monotonic_ms",
+                    "" if self._scos_first_bfi_monotonic is None
+                    else int(self._scos_first_bfi_monotonic * 1000),
+                ])
+
+                writer.writerow(["delay_request_to_first_bfi_ms", delay_ms])
+                writer.writerow(["subject_id", safe_subject_id])
+                writer.writerow(["data_directory", self._data_root])
+                writer.writerow([
+                    "note",
+                    "Use scos_first_bfi_unix_ms + SCOS CSV time_stamp_s*1000 to reconstruct each frame wall-clock time.",
+                ])
+
+            print("SCOS timing metadata saved:", self._scos_timing_csv_path)
+
+        except Exception as e:
+            logger.error(f"Failed to write SCOS timing file: {e}", exc_info=True)
+            print("Failed to write SCOS timing file:", e)
+
+    def _record_scos_first_bfi_time_if_needed(self, subject_id):
+        """Record CPU time of the first SCOS BFI reference.
+
+        The first live callback arrives about 0.25 s before the first
+        row in the SCOS CSV, where time_stamp_s = 0 and frame_id = 10.
+        Therefore we shift the reference forward by 0.25 s.
+        """
+        if self._scos_first_bfi_unix is not None:
+            return
+
+        SCOS_FIRST_BFI_OFFSET_S = 0.25
+
+        now_dt = datetime.datetime.now().astimezone()
+        now_unix = time.time()
+        now_mono = time.monotonic()
+
+        adjusted_dt = now_dt + datetime.timedelta(seconds=SCOS_FIRST_BFI_OFFSET_S)
+        adjusted_unix = now_unix + SCOS_FIRST_BFI_OFFSET_S
+        adjusted_mono = now_mono + SCOS_FIRST_BFI_OFFSET_S
+
+        self._scos_first_bfi_dt = adjusted_dt
+        self._scos_first_bfi_unix = adjusted_unix
+        self._scos_first_bfi_monotonic = adjusted_mono
+
+        print(
+            "SCOS first BFI reference time:",
+            adjusted_dt.isoformat(timespec="milliseconds"),
+            f"(first callback + {SCOS_FIRST_BFI_OFFSET_S:.3f}s)",
+        )
+
+        self._write_scos_timing_file(subject_id)
 
     @pyqtSlot(str, result=bool)
     def setTrigger(self, triggerjson):  # Lock auto-released at function exit
@@ -5555,6 +5740,457 @@ class MotionConnector(QObject):
         """Open the download URL in the system browser."""
         import webbrowser
         webbrowser.open(url)
+
+    def _ensure_events_csv(self):
+        try:
+            if not self._events_csv_path:
+                event_stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                self._events_csv_path = os.path.join(
+                    self._data_root,
+                    f"{event_stamp}_events.csv",
+                )
+
+            file_exists = os.path.exists(self._events_csv_path)
+
+            if not file_exists:
+                with open(self._events_csv_path, "w", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(
+                    [
+                        "event_id",
+                        "cpu_datetime_local",
+                        "cpu_unix_ms",
+                        "cpu_monotonic_ms",
+                        "elapsed_s_from_capture_request",
+                        "scos_elapsed_s_est",
+                        "event_text",
+                    ]
+                    )
+
+        except Exception as e:
+            logger.error(f"Failed to create events CSV: {e}", exc_info=True)
+            print("Failed to create events CSV:", e)
+
+
+    @pyqtSlot(result=int)
+    def markEvent(self):
+        now_dt = datetime.datetime.now().astimezone()
+        now_unix = time.time()
+        now_mono = time.monotonic()
+
+        self._event_counter += 1
+
+        if self._capture_start_monotonic is not None:
+            elapsed_s = now_mono - self._capture_start_monotonic
+        else:
+            elapsed_s = 0.0
+
+        if self._scos_first_bfi_unix is not None:
+            scos_elapsed_s_est = now_unix - self._scos_first_bfi_unix
+        else:
+            scos_elapsed_s_est = ""
+
+        self._pending_event_mark = {
+            "event_id": self._event_counter,
+            "cpu_datetime_local": now_dt.isoformat(timespec="milliseconds"),
+            "cpu_unix_ms": int(now_unix * 1000),
+            "cpu_monotonic_ms": int(now_mono * 1000),
+            "elapsed_s": f"{elapsed_s:.3f}",
+            "scos_elapsed_s_est": "" if scos_elapsed_s_est == "" else f"{scos_elapsed_s_est:.3f}",
+        }
+
+        print("Event marked:", self._pending_event_mark)
+        return self._event_counter
+
+    @pyqtSlot(str)
+    def saveMarkedEventNote(self, event_text):
+        if self._pending_event_mark is None:
+            print("No pending event mark to save.")
+            return
+
+        self._ensure_events_csv()
+
+        row = self._pending_event_mark.copy()
+        row["event_text"] = event_text.strip()
+
+        with open(self._events_csv_path, "a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(
+                [
+                    row["event_id"],
+                    row["cpu_datetime_local"],
+                    row["cpu_unix_ms"],
+                    row["cpu_monotonic_ms"],
+                    row["elapsed_s"],
+                    row.get("scos_elapsed_s_est", ""),
+                    row["event_text"],
+                ]
+            )
+
+        print("Event note saved:", row)
+        self._pending_event_mark = None
+
+    def _get_abp_elapsed_relative_to_scos(self, now_unix, now_mono):
+        """
+        Return ABP elapsed time relative to first SCOS BFI frame.
+
+        If SCOS first BFI has not arrived yet, return:
+            scos_elapsed_s = ""
+            reference = "waiting_for_scos_first_bfi"
+
+        GUI can still use fallback_elapsed_s for plotting before SCOS starts.
+        """
+        if self._scos_first_bfi_monotonic is not None:
+            return (
+                now_mono - self._scos_first_bfi_monotonic,
+                "scos_first_bfi_monotonic",
+            )
+
+        if self._scos_first_bfi_unix is not None:
+            return (
+                now_unix - self._scos_first_bfi_unix,
+                "scos_first_bfi_unix",
+            )
+
+        return "", "waiting_for_scos_first_bfi"
+
+    def _write_and_emit_abp_sample(
+        self,
+        abp_mmHg,
+        source,
+        raw_voltage=None,
+        sample_elapsed_s=None,
+    ):
+        try:
+            now_dt = datetime.datetime.now().astimezone()
+            now_unix = time.time()
+            now_mono = time.monotonic()
+
+            # ------------------------------------------------------------
+            # IMPORTANT:
+            # For DAQ data, one task.read() returns a batch of samples.
+            # We should timestamp each sample by DAQ sample index / fs,
+            # not by the Python write time, otherwise 25 samples in one
+            # batch get almost the same x-axis time and the plot becomes
+            # vertical/sawtooth.
+            # ------------------------------------------------------------
+            if (
+                sample_elapsed_s is not None
+                and self._abp_start_monotonic is not None
+            ):
+                elapsed_from_abp_start_s = float(sample_elapsed_s)
+                sample_mono = self._abp_start_monotonic + elapsed_from_abp_start_s
+
+                if getattr(self, "_abp_start_unix", None) is not None:
+                    sample_unix = self._abp_start_unix + elapsed_from_abp_start_s
+                    sample_dt = datetime.datetime.fromtimestamp(sample_unix).astimezone()
+                else:
+                    sample_unix = now_unix
+                    sample_dt = now_dt
+
+            else:
+                sample_mono = now_mono
+                sample_unix = now_unix
+                sample_dt = now_dt
+
+                if self._abp_start_monotonic is not None:
+                    elapsed_from_abp_start_s = sample_mono - self._abp_start_monotonic
+                else:
+                    elapsed_from_abp_start_s = 0.0
+
+            # SCOS-aligned elapsed time, if first BFI reference exists.
+            if self._scos_first_bfi_monotonic is not None:
+                scos_elapsed_s = sample_mono - self._scos_first_bfi_monotonic
+                scos_elapsed_csv_value = f"{scos_elapsed_s:.3f}"
+                elapsed_reference = "daq_sample_clock_scos_first_bfi"
+                elapsed_for_gui_s = scos_elapsed_s
+            else:
+                scos_elapsed_csv_value = ""
+                elapsed_reference = "waiting_for_scos_first_bfi"
+                elapsed_for_gui_s = elapsed_from_abp_start_s
+
+            cpu_datetime_local = sample_dt.isoformat(timespec="milliseconds")
+            cpu_unix_ms = int(sample_unix * 1000)
+            cpu_monotonic_ms = int(sample_mono * 1000)
+
+            if self._abp_csv_writer is not None:
+                self._abp_csv_writer.writerow(
+                    [
+                        cpu_datetime_local,
+                        cpu_unix_ms,
+                        cpu_monotonic_ms,
+                        f"{elapsed_from_abp_start_s:.3f}",
+                        scos_elapsed_csv_value,
+                        elapsed_reference,
+                        f"{abp_mmHg:.2f}",
+                        source,
+                        self._abp_daq_channel,
+                        "" if raw_voltage is None else f"{raw_voltage:.6f}",
+                    ]
+                )
+
+                if self._abp_sample_idx % 125 == 0 and self._abp_csv_file is not None:
+                    self._abp_csv_file.flush()
+
+            self.abpSampled.emit(
+                cpu_datetime_local,
+                int(cpu_unix_ms),
+                float(elapsed_for_gui_s),
+                float(abp_mmHg),
+            )
+
+            self._abp_sample_idx += 1
+
+        except Exception as e:
+            logger.error(f"Failed to write/emit ABP sample: {e}", exc_info=True)
+            print("Failed to write/emit ABP sample:", e)
+
+    @pyqtSlot()
+    def stopAbpSimulation(self):
+        try:
+            if not self._abp_running:
+                return
+
+            self._abp_timer.stop()
+            self._abp_running = False
+            self.abpStatusChanged.emit(False)
+
+            if self._abp_csv_file is not None:
+                self._abp_csv_file.flush()
+                self._abp_csv_file.close()
+
+            self._abp_csv_file = None
+            self._abp_csv_writer = None
+
+            print("ABP simulation stopped.")
+
+        except Exception as e:
+            logger.error(f"Failed to stop ABP simulation: {e}", exc_info=True)
+            print("Failed to stop ABP simulation:", e)
+
+    @pyqtSlot()
+    def startAbpRecording(self):
+        try:
+            if self._abp_source_mode == "daq":
+                self.startAbpDaq()
+            else:
+                self.startAbpSimulation()
+        except Exception as e:
+            logger.error(f"Failed to start ABP recording: {e}", exc_info=True)
+            print("Failed to start ABP recording:", e)
+
+    @pyqtSlot()
+    def stopAbpRecording(self):
+        try:
+            if self._abp_source_mode == "daq":
+                self.stopAbpDaq()
+            else:
+                self.stopAbpSimulation()
+        except Exception as e:
+            logger.error(f"Failed to stop ABP recording: {e}", exc_info=True)
+            print("Failed to stop ABP recording:", e)
+
+    @pyqtSlot()
+    def startAbpDaq(self):
+        try:
+            if not self._abp_daq_channel:
+                print("No ABP DAQ channel selected.")
+                return
+
+            # If already running, rotate to a new CSV but keep DAQ running.
+            if self._abp_running:
+                if self._abp_csv_file is not None:
+                    self._abp_csv_file.flush()
+                    self._abp_csv_file.close()
+
+                self._abp_csv_file = None
+                self._abp_csv_writer = None
+                self._open_abp_csv("cnap_daq_100hz")
+                print("ABP DAQ CSV rotated:", self._abp_csv_path)
+                return
+
+            self._open_abp_csv("cnap_daq_100hz")
+
+            self._abp_start_monotonic = time.monotonic()
+            self._abp_start_unix = time.time()
+            self._abp_sample_idx = 0
+            self._abp_running = True
+            self._abp_stop_event.clear()
+
+            self._abp_thread = threading.Thread(
+                target=self._abp_daq_loop,
+                daemon=True,
+            )
+            self._abp_thread.start()
+
+            self.abpStatusChanged.emit(True)
+            print("ABP DAQ started on channel:", self._abp_daq_channel)
+
+        except Exception as e:
+            logger.error(f"Failed to start ABP DAQ: {e}", exc_info=True)
+            print("Failed to start ABP DAQ:", e)
+
+    @pyqtSlot()
+    def stopAbpDaq(self):
+        try:
+            if not self._abp_running:
+                return
+
+            self._abp_stop_event.set()
+            self._abp_running = False
+            self.abpStatusChanged.emit(False)
+
+            if self._abp_thread is not None:
+                self._abp_thread.join(timeout=2.0)
+
+            self._abp_thread = None
+
+            if self._abp_csv_file is not None:
+                self._abp_csv_file.flush()
+                self._abp_csv_file.close()
+
+            self._abp_csv_file = None
+            self._abp_csv_writer = None
+
+            print("ABP DAQ stopped.")
+
+        except Exception as e:
+            logger.error(f"Failed to stop ABP DAQ: {e}", exc_info=True)
+            print("Failed to stop ABP DAQ:", e)
+
+    def _open_abp_csv(self, source_name):
+        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        self._abp_csv_path = os.path.join(
+            self._data_root,
+            f"{stamp}_{source_name}.csv",
+        )
+
+        self._abp_csv_file = open(self._abp_csv_path, "w", newline="")
+        self._abp_csv_writer = csv.writer(self._abp_csv_file)
+        self._abp_csv_writer.writerow(
+            [
+                "cpu_datetime_local",
+                "cpu_unix_ms",
+                "cpu_monotonic_ms",
+                "elapsed_s_from_abp_start",
+                "scos_elapsed_s_est",
+                "elapsed_reference",
+                "abp_mmHg",
+                "source",
+                "daq_channel",
+                "raw_voltage",
+            ]
+        )
+
+        print("ABP CSV opened:", self._abp_csv_path)
+
+    def _convert_abp_voltage_to_mmhg(self, voltage):
+        return self._abp_mmhg_offset + voltage * self._abp_mmhg_per_volt
+
+    def _abp_daq_loop(self):
+        try:
+            import nidaqmx
+            from nidaqmx.constants import AcquisitionType
+
+            fs = float(self._abp_sample_rate_hz)
+            samples_per_read = 25
+
+            with nidaqmx.Task() as task:
+                task.ai_channels.add_ai_voltage_chan(
+                    self._abp_daq_channel,
+                    min_val=self._abp_voltage_min,
+                    max_val=self._abp_voltage_max,
+                )
+
+                task.timing.cfg_samp_clk_timing(
+                    rate=fs,
+                    sample_mode=AcquisitionType.CONTINUOUS,
+                    samps_per_chan=samples_per_read,
+                )
+
+                while not self._abp_stop_event.is_set():
+                    voltages = task.read(
+                        number_of_samples_per_channel=samples_per_read,
+                        timeout=2.0,
+                    )
+
+                    for voltage in voltages:
+                        sample_elapsed_s = self._abp_sample_idx / fs
+
+                        abp_mmHg = self._convert_abp_voltage_to_mmhg(float(voltage))
+
+                        self._write_and_emit_abp_sample(
+                            abp_mmHg=abp_mmHg,
+                            source=f"daq_cnap_{int(fs)}hz",
+                            raw_voltage=float(voltage),
+                            sample_elapsed_s=sample_elapsed_s,
+                        )
+
+        except Exception as e:
+            logger.error(f"ABP DAQ loop failed: {e}", exc_info=True)
+            print("ABP DAQ loop failed:", e)
+            self._abp_running = False
+            self.abpStatusChanged.emit(False)
+
+    def _on_abp_sim_tick(self):
+        try:
+            if not self._abp_running:
+                return
+
+            if self._abp_start_monotonic is None:
+                self._abp_start_monotonic = time.monotonic()
+
+            elapsed_s = time.monotonic() - self._abp_start_monotonic
+
+            # Simulated arterial pressure waveform.
+            heart_rate_hz = 1.2
+            resp_hz = 0.25
+
+            pulse = max(0.0, math.sin(2 * math.pi * heart_rate_hz * elapsed_s)) ** 2.5
+            resp = math.sin(2 * math.pi * resp_hz * elapsed_s)
+
+            abp_mmHg = 80.0 + 40.0 * pulse + 4.0 * resp
+
+            self._write_and_emit_abp_sample(
+                abp_mmHg=abp_mmHg,
+                source="simulation_125hz",
+                raw_voltage=None,
+            )
+
+        except Exception as e:
+            logger.error(f"ABP simulation tick failed: {e}", exc_info=True)
+            print("ABP simulation tick failed:", e)
+
+    @pyqtSlot(result="QVariantList")
+    def listAbpDaqChannels(self):
+        """Return available NI-DAQ analog input physical channels."""
+        try:
+            import nidaqmx
+            from nidaqmx.system import System
+
+            channels = []
+            system = System.local()
+
+            for dev in system.devices:
+                for ch in dev.ai_physical_chans:
+                    channels.append(str(ch.name))
+
+            print("Available DAQ channels:", channels)
+            return channels
+
+        except Exception as e:
+            logger.warning(f"DAQ channel scan failed: {e}")
+            print("DAQ channel scan failed:", e)
+            return []
+
+    @pyqtSlot(str)
+    def setAbpDaqChannel(self, channel):
+        self._abp_daq_channel = channel
+        print("Selected ABP DAQ channel:", self._abp_daq_channel)
+
+    @pyqtSlot(result=str)
+    def getAbpDaqChannel(self):
+        return getattr(self, "_abp_daq_channel", "")
 
     @pyqtSlot(str)
     def applyUpdate(self, download_url: str):

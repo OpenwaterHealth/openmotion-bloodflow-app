@@ -103,6 +103,15 @@ def _load_app_config() -> dict:
         "powerOffUnusedCameras": False,
         "commVerbose": False,  # Enable cmd id and "." prints from MCU
         "verboseCommandHandling": False,  # Enable printf in MCU command handlers
+        # CNAP / ABP monitor (research): "daq" reads an NI-DAQ analog input
+        # (nidaqmx), anything else falls back to the simulated waveform.
+        "abpSource": "daq",
+        "abpSampleRateHz": 125,
+        "abpDaqChannel": "",
+        "abpVoltageMin": -5.0,
+        "abpVoltageMax": 5.0,
+        "abpMmHgPerVolt": 100.0,
+        "abpMmHgOffset": 0.0,
         "ft_min_mean_per_camera": [0] * 8,
         "ft_min_contrast_per_camera": [0] * 8,
         "ft_min_bfi_per_camera": [0.0] * 8,

@@ -30,6 +30,8 @@ Rectangle {
     signal checkClicked()
     signal historyClicked()
     signal settingsClicked()
+    signal markClicked()
+    signal cnapClicked()
 
     FontLoader {
         id: iconFont
@@ -158,6 +160,20 @@ Rectangle {
             iconText: "\uea7f"  // notes/document icon
             label: "Notes"
             onClicked: panel.notesClicked()
+        }
+
+        // Mark
+        PanelButton {
+            iconText: "\uea5f"  // temporary icon; can change later
+            label: "Mark"
+            onClicked: panel.markClicked()
+        }
+
+        // CNAP / ABP Monitor
+        PanelButton {
+            iconText: "\uea31"
+            label: "CNAP"
+            onClicked: panel.cnapClicked()
         }
 
         Rectangle {

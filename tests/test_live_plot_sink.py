@@ -41,10 +41,17 @@ def _connector():
         _camera_last_temp={},
         captureLog=_Signal(),
         recovered=[],
+        _scos_subject_id="",
+        scos_first_bfi_calls=[],
     )
     # Called by the sink when a dropped camera's frames resume.
     conn._on_camera_dropout_recovered = (
         lambda side, cam_id: conn.recovered.append((side, cam_id)))
+    # Called by the sink on the first non-dark row of the scan (SCOS timing
+    # reference); recorded here rather than no-op'd so a future test could
+    # assert on it.
+    conn._record_scos_first_bfi_time_if_needed = (
+        lambda subject_id: conn.scos_first_bfi_calls.append(subject_id))
     return conn
 
 

@@ -267,7 +267,539 @@ Rectangle {
         onNotesClicked:    modalManager.toggle(notesModal)
         onHistoryClicked:  modalManager.toggle(historyModal)
         onSettingsClicked: modalManager.toggle(settingsModal)
+        onMarkClicked:     eventMarkPopup.open()
+        onCnapClicked: {
+            cnapPopup.open()
+        }
     }
+
+    // ===== MANUAL EVENT MARK POPUP =====
+    Popup {
+        id: eventMarkPopup
+        modal: false
+        focus: true
+        closePolicy: Popup.NoAutoClose
+        z: 2000
+
+        width: 520
+        height: 310
+
+        x: Math.max(10, Math.min((bloodFlow.width - width) / 2, bloodFlow.width - width - 10))
+        y: Math.max(10, Math.min((bloodFlow.height - height) / 2, bloodFlow.height - height - 10))
+
+        property int pendingEventId: -1
+        property bool hasPendingMark: false
+
+        // For dragging
+        property real dragOffsetX: 0
+        property real dragOffsetY: 0
+
+        background: Rectangle {
+            color: "#202020"
+            radius: 12
+            border.color: "#666666"
+            border.width: 1
+        }
+
+        onOpened: {
+            var channels = MotionInterface.listAbpDaqChannels()
+
+            if (channels.length === 0) {
+                cnapDaqChannelCombo.model = ["No DAQ channels found"]
+                cnapDaqChannelCombo.currentIndex = 0
+            } else {
+                cnapDaqChannelCombo.model = channels
+
+                var savedChannel = MotionInterface.getAbpDaqChannel()
+                var foundIndex = -1
+
+                for (var i = 0; i < channels.length; i++) {
+                    if (channels[i] === savedChannel) {
+                        foundIndex = i
+                        break
+                    }
+                }
+
+                cnapDaqChannelCombo.currentIndex = foundIndex >= 0 ? foundIndex : 0
+                MotionInterface.setAbpDaqChannel(cnapDaqChannelCombo.currentText)
+            }
+        }
+
+        Column {
+            anchors.fill: parent
+            spacing: 0
+
+            // ===== Draggable title bar =====
+            Rectangle {
+                id: dragHeader
+                width: parent.width
+                height: 42
+                color: "#2b2b2b"
+                radius: 12
+
+                Text {
+                    text: "Manual Event Marker"
+                    color: "white"
+                    font.pixelSize: 16
+                    font.bold: true
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.left: parent.left
+                    anchors.leftMargin: 14
+                }
+
+                Button {
+                    id: closeMarkPopupButton
+                    text: "×"
+                    width: 30
+                    height: 28
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.right: parent.right
+                    anchors.rightMargin: 8
+
+                    onClicked: {
+                        eventMarkPopup.close()
+                    }
+                }
+
+                MouseArea {
+                    anchors.left: parent.left
+                    anchors.right: closeMarkPopupButton.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    cursorShape: Qt.SizeAllCursor
+
+                    onPressed: function(mouse) {
+                        var p = mapToItem(bloodFlow, mouse.x, mouse.y)
+                        eventMarkPopup.dragOffsetX = p.x - eventMarkPopup.x
+                        eventMarkPopup.dragOffsetY = p.y - eventMarkPopup.y
+                    }
+
+                    onPositionChanged: function(mouse) {
+                        if (!pressed)
+                            return
+
+                        var p = mapToItem(bloodFlow, mouse.x, mouse.y)
+
+                        var newX = p.x - eventMarkPopup.dragOffsetX
+                        var newY = p.y - eventMarkPopup.dragOffsetY
+
+                        eventMarkPopup.x = Math.max(
+                            0,
+                            Math.min(bloodFlow.width - eventMarkPopup.width, newX)
+                        )
+
+                        eventMarkPopup.y = Math.max(
+                            0,
+                            Math.min(bloodFlow.height - eventMarkPopup.height, newY)
+                        )
+                    }
+                }
+            }
+
+            // ===== Content area =====
+            Column {
+                width: parent.width
+                height: parent.height - dragHeader.height
+                padding: 16
+                spacing: 12
+
+                Text {
+                    text: eventMarkPopup.hasPendingMark
+                          ? "Timestamp recorded for mark #" + eventMarkPopup.pendingEventId
+                          : "Click Mark when the event happens. Then type a note and Save."
+                    color: "#aaaaaa"
+                    font.pixelSize: 12
+                    wrapMode: Text.WordWrap
+                    width: parent.width - 32
+                }
+
+                Row {
+                    spacing: 10
+
+                    Button {
+                        text: "Mark"
+                        width: 100
+
+                        onClicked: {
+                            eventMarkPopup.pendingEventId = MotionInterface.markEvent()
+                            eventMarkPopup.hasPendingMark = true
+                            eventNoteInput.text = ""
+                            eventNoteInput.forceActiveFocus()
+                        }
+                    }
+
+                    Button {
+                        text: "Clear"
+                        width: 100
+
+                        onClicked: {
+                            eventMarkPopup.pendingEventId = -1
+                            eventMarkPopup.hasPendingMark = false
+                            eventNoteInput.text = ""
+                        }
+                    }
+                }
+
+                TextField {
+                    id: eventNoteInput
+                    width: parent.width - 32
+                    placeholderText: "e.g., patient moved head, CNAP adjusted"
+                    enabled: eventMarkPopup.hasPendingMark
+                }
+
+                Row {
+                    spacing: 10
+
+                    Button {
+                        text: "Save"
+                        enabled: eventMarkPopup.hasPendingMark
+
+                        onClicked: {
+                            MotionInterface.saveMarkedEventNote(eventNoteInput.text)
+                            eventMarkPopup.hasPendingMark = false
+                            eventMarkPopup.pendingEventId = -1
+                            eventNoteInput.text = ""
+                        }
+                    }
+
+                    Button {
+                        text: "Close"
+
+                        onClicked: {
+                            eventMarkPopup.close()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ===== CNAP / ABP MONITOR POPUP =====
+    Popup {
+        id: cnapPopup
+        modal: false
+        focus: true
+        closePolicy: Popup.NoAutoClose
+        z: 20001
+
+        width: Math.min(720, bloodFlow.width - 140)
+        height: Math.min(390, bloodFlow.height - 80)
+
+        x: Math.max(10, Math.min((bloodFlow.width - width) / 2, bloodFlow.width - width - 10))
+        y: Math.max(10, Math.min((bloodFlow.height - height) / 2, bloodFlow.height - height - 10))
+
+        property bool running: false
+        property var abpTimes: []
+        property var abpValues: []
+        property real latestElapsed: 0
+        property real latestAbp: 0
+
+        property real dragOffsetX: 0
+        property real dragOffsetY: 0
+
+        background: Rectangle {
+            color: "#202020"
+            radius: 12
+            border.color: "#666666"
+            border.width: 1
+        }
+
+
+
+        Column {
+            anchors.fill: parent
+            spacing: 0
+
+            Rectangle {
+                id: cnapHeader
+                width: parent.width
+                height: 42
+                color: "#2b2b2b"
+                radius: 12
+
+                Text {
+                    text: cnapPopup.running ? "CNAP / ABP Monitor — Recording" : "CNAP / ABP Monitor"
+                    color: "white"
+                    font.pixelSize: 16
+                    font.bold: true
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.left: parent.left
+                    anchors.leftMargin: 14
+                }
+
+                Button {
+                    id: closeCnapPopupButton
+                    text: "×"
+                    width: 30
+                    height: 28
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.right: parent.right
+                    anchors.rightMargin: 8
+
+                    onClicked: {
+                        // Close only hides the monitor window.
+                        // It does NOT stop recording.
+                        cnapPopup.close()
+                    }
+                }
+
+                MouseArea {
+                    anchors.left: parent.left
+                    anchors.right: closeCnapPopupButton.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    cursorShape: Qt.SizeAllCursor
+
+                    onPressed: function(mouse) {
+                        var p = mapToItem(bloodFlow, mouse.x, mouse.y)
+                        cnapPopup.dragOffsetX = p.x - cnapPopup.x
+                        cnapPopup.dragOffsetY = p.y - cnapPopup.y
+                    }
+
+                    onPositionChanged: function(mouse) {
+                        if (!pressed)
+                            return
+
+                        var p = mapToItem(bloodFlow, mouse.x, mouse.y)
+
+                        var newX = p.x - cnapPopup.dragOffsetX
+                        var newY = p.y - cnapPopup.dragOffsetY
+
+                        cnapPopup.x = Math.max(
+                            0,
+                            Math.min(bloodFlow.width - cnapPopup.width, newX)
+                        )
+
+                        cnapPopup.y = Math.max(
+                            0,
+                            Math.min(bloodFlow.height - cnapPopup.height, newY)
+                        )
+                    }
+                }
+            }
+
+
+            Column {
+                width: parent.width
+                height: parent.height - cnapHeader.height
+                padding: 16
+                spacing: 10
+
+                Row {
+                    spacing: 10
+                    width: parent.width - 32
+
+                    Text {
+                        text: "DAQ channel:"
+                        color: "#aaaaaa"
+                        font.pixelSize: 12
+                        height: 36
+                        verticalAlignment: Text.AlignVCenter
+                    }
+
+                    ComboBox {
+                        id: cnapDaqChannelCombo
+                        width: 260
+                        height: 36
+                        model: []
+
+                        onActivated: {
+                            if (currentText.length > 0 && currentText !== "No DAQ channels found") {
+                                MotionInterface.setAbpDaqChannel(currentText)
+                            }
+                        }
+                    }
+
+                    Button {
+                        text: "Refresh"
+                        width: 100
+                        height: 36
+
+                        onClicked: {
+                            var channels = MotionInterface.listAbpDaqChannels()
+
+                            if (channels.length === 0) {
+                                cnapDaqChannelCombo.model = ["No DAQ channels found"]
+                                cnapDaqChannelCombo.currentIndex = 0
+                            } else {
+                                cnapDaqChannelCombo.model = channels
+
+                                var savedChannel = MotionInterface.getAbpDaqChannel()
+                                var foundIndex = -1
+
+                                for (var i = 0; i < channels.length; i++) {
+                                    if (channels[i] === savedChannel) {
+                                        foundIndex = i
+                                        break
+                                    }
+                                }
+
+                                cnapDaqChannelCombo.currentIndex = foundIndex >= 0 ? foundIndex : 0
+                                MotionInterface.setAbpDaqChannel(cnapDaqChannelCombo.currentText)
+                            }
+                        }
+                    }
+                }
+
+                Row {
+                    spacing: 10
+
+                    Button {
+                        text: cnapPopup.running ? "New" : "Start"
+                        width: 130
+
+                        onClicked: {
+                            if (!cnapPopup.running) {
+                                cnapPopup.abpTimes = []
+                                cnapPopup.abpValues = []
+                            }
+
+                            // If not running: start recording and create CSV.
+                            // If already running: rotate to a new CSV and keep recording.
+                            MotionInterface.startAbpRecording()
+                        }
+                    }
+
+                    Button {
+                        text: "Stop"
+                        width: 130
+                        enabled: cnapPopup.running
+
+                        onClicked: {
+                            MotionInterface.stopAbpRecording()
+                        }
+                    }
+
+                    Button {
+                        text: "Close"
+                        width: 130
+
+                        onClicked: {
+                            // Close only hides the window.
+                            // Recording continues in the background.
+                            cnapPopup.close()
+                        }
+                    }
+
+                    Text {
+                        text: "ABP: " + cnapPopup.latestAbp.toFixed(1) + " mmHg"
+                        color: "white"
+                        font.pixelSize: 14
+                        verticalAlignment: Text.AlignVCenter
+                    }
+
+                    Text {
+                        text: "t = " + cnapPopup.latestElapsed.toFixed(2) + " s"
+                        color: "#aaaaaa"
+                        font.pixelSize: 12
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+
+                Rectangle {
+                    id: abpPlotFrame
+                    width: parent.width - 32
+                    height: Math.max(140, parent.height - 170)
+                    color: "#111111"
+                    radius: 8
+                    border.color: "#444444"
+                    border.width: 1
+
+                    Canvas {
+                        id: abpCanvas
+                        anchors.fill: parent
+                        anchors.margins: 8
+
+                        onPaint: {
+                            var ctx = getContext("2d")
+                            ctx.clearRect(0, 0, width, height)
+
+                            ctx.strokeStyle = "#555555"
+                            ctx.lineWidth = 1
+                            ctx.beginPath()
+                            ctx.moveTo(0, height * 0.25)
+                            ctx.lineTo(width, height * 0.25)
+                            ctx.moveTo(0, height * 0.50)
+                            ctx.lineTo(width, height * 0.50)
+                            ctx.moveTo(0, height * 0.75)
+                            ctx.lineTo(width, height * 0.75)
+                            ctx.stroke()
+
+                            var n = cnapPopup.abpValues.length
+                            if (n < 2)
+                                return
+
+                            var tLatest = cnapPopup.abpTimes[n - 1]
+                            var windowSec = 10.0
+                            var tStart = tLatest - windowSec
+
+                            var yMin = 40.0
+                            var yMax = 160.0
+
+                            ctx.strokeStyle = "#ffffff"
+                            ctx.lineWidth = 2
+                            ctx.beginPath()
+
+                            var started = false
+                            for (var i = 0; i < n; i++) {
+                                var t = cnapPopup.abpTimes[i]
+                                var v = cnapPopup.abpValues[i]
+
+                                if (t < tStart)
+                                    continue
+
+                                var x = ((t - tStart) / windowSec) * width
+                                var y = height - ((v - yMin) / (yMax - yMin)) * height
+
+                                if (!started) {
+                                    ctx.moveTo(x, y)
+                                    started = true
+                                } else {
+                                    ctx.lineTo(x, y)
+                                }
+                            }
+
+                            ctx.stroke()
+                        }
+                    }
+                }
+
+                Text {
+                    text: cnapPopup.running
+                          ? "Recording continues even if this window is closed. Press Stop to end recording."
+                          : "Press Start to create a new CNAP CSV in scan_data."
+                    color: "#aaaaaa"
+                    font.pixelSize: 11
+                }
+            }
+        }
+
+
+        Connections {
+            target: MotionInterface
+
+            function onAbpSampled(cpuDatetimeLocal, cpuUnixMs, elapsedS, abpMmHg) {
+                cnapPopup.latestElapsed = elapsedS
+                cnapPopup.latestAbp = abpMmHg
+
+                cnapPopup.abpTimes.push(elapsedS)
+                cnapPopup.abpValues.push(abpMmHg)
+
+                while (cnapPopup.abpTimes.length > 1500) {
+                    cnapPopup.abpTimes.shift()
+                    cnapPopup.abpValues.shift()
+                }
+
+                abpCanvas.requestPaint()
+            }
+
+            function onAbpStatusChanged(running) {
+                cnapPopup.running = running
+            }
+        }
+    }
+
+
 
     // Allow external callers (firmware banner) to open the Settings overlay.
     function openSettings() { modalManager.toggle(settingsModal) }
