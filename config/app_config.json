@@ -9,6 +9,14 @@
   "powerOffUnusedCameras": false,
   "commVerbose": false,
   "verboseCommandHandling": false,
+  "abpSource": "daq",
+  "abpSampleRateHz": 125,
+  "abpDaqChannel": "",
+  "abpVoltageMin": -5.0,
+  "abpVoltageMax": 5.0,
+  "abpMmHgPerVolt": 100.0,
+  "abpMmHgOffset": 0.0
+
   "ft_min_mean_per_camera": [
     50,
     70,
@@ -86,12 +94,12 @@
   "meanMax": 200.0,
   "contrastMin": 0.0,
   "contrastMax": 0.7,
-  "dataDirectory": null,
+  "dataDirectory": "/Users/yueh-chiwu/Desktop/openmotion-bloodflow-app/scan_data",
   "writeRawCsv": false,
   "rawCsvDurationSec": 60.0,
   "autoScale": false,
   "autoScalePerPlot": false,
-  "reducedMode": true,
+  "reducedMode": false,
   "reducedModeLeftMask": 195,
   "reducedModeRightMask": 195,
   "plotWindowSec": 5,
@@ -125,5 +133,7 @@
     15.0,
     15.0,
     15.0
-  ]
+  ],
+  "triggerConfig": null
+  
 }
