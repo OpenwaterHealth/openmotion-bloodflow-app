@@ -935,6 +935,35 @@ Item {
                         Item { Layout.fillWidth: true }
                     }
 
+                    // Dark-correction bypass (#345) — persisted config only
+                    // (no firmware flag); read engineering-gated at scan
+                    // start. onToggled (not onCheckedChanged) so the
+                    // appConfig rebind can't feed back into the slot.
+                    FieldRow {
+                        label: "Bypass dark correction"
+                        PillSwitch {
+                            checked: MotionInterface.appConfig.darkCorrectionBypass === true
+                            onToggled: MotionInterface.setConfig("darkCorrectionBypass", checked)
+                        }
+                        Text {
+                            text: MotionInterface.appConfig.darkCorrectionBypass === true ? "On" : "Off"
+                            color: MotionInterface.appConfig.darkCorrectionBypass === true ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+                    Text {
+                        text: "For bench illumination sources that never turn off: scans "
+                              + "skip realtime + interval dark subtraction and all dark-frame "
+                              + "warnings. Recorded values become raw − pedestal and the "
+                              + "session is marked as bypassed. Only applies while "
+                              + "engineering mode is on."
+                        color: root.colTextMuted
+                        font.pixelSize: 11
+                        wrapMode: Text.WordWrap
+                        Layout.fillWidth: true
+                    }
+
                     // ── Calibration / Test (moved here from the former
                     //    standalone Calibration card; now engineering-only) ──
                     Rectangle { Layout.fillWidth: true; height: 1; color: root.colBorderSoft }

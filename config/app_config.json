@@ -3,6 +3,7 @@
     "dataDirectory": null,
     "writeRawCsv": false,
     "rawCsvDurationSec": null,
+    "darkCorrectionBypass": false,
     "leftMask": 102,
     "rightMask": 102,
     "clinicalMode": true,

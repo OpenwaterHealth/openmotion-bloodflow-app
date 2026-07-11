@@ -95,6 +95,7 @@ Debug flags that are still useful when hardware **is** attached (`config/app_con
 | `bfiClampLow` / `bfiClampHigh` | `0.0` / `10.0` | Display clamps (values outside show `--`). |
 | `bviLowPassEnabled` | `true` | 1-pole LPF on BVI (cutoff 40 Hz). |
 | `writeRawCsv` | `false` | Opt-in raw histogram CSVs (`{scan_id}_(left\|right)_mask*_raw.csv`). Settings → Engineering toggle; additionally gated on `engineeringMode` — flipping engineering mode off stops raw output even if the toggle was left on. `rawCsvDurationSec` caps seconds written (`null` = whole scan). |
+| `darkCorrectionBypass` | `false` | Engineering bench toggle (Settings → Engineering, #345): scans bypass the whole dark subsystem — realtime + batch use raw − pedestal (SDK `ScanRequest.dark_correction_bypass`), dark-frame warnings off, terminal interval always closes, `session_meta` marks the session `dark_correction: bypassed`. Gated on `engineeringMode` at scan start (fail closed, #43 pattern); an amber badge on the scan page shows while armed. For continuous illumination sources that never turn off. |
 | `writeCorrectedCsv` | `false` | Opt-in corrected per-cam CSV (`{scan_id}.csv`) — redundant now that per-cam BFI/BVI lands in `scans.db`. Config-only, no Settings UI. |
 | `dataDirectory` | `null` | Single output root — `logs/` and `data/` (`scans.db`, calibrations) live under it. `null` = `app_paths.writable_root()`: cwd for dev runs, exe-adjacent or `%PROGRAMDATA%\Openwater` per `portableMode` when frozen. |
 

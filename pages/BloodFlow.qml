@@ -325,6 +325,35 @@ Rectangle {
         }
     }
 
+    // Engineering bench indicator (#345) — dark-correction bypass is armed
+    // (Settings → Engineering → "Bypass dark correction"). Shown whenever
+    // the next scan will run bypassed (engineering mode AND the toggle),
+    // not just mid-scan, so a forgotten toggle is visible before Start.
+    // z above the plot, below modals (9998) and ButtonPanel (10000).
+    Rectangle {
+        visible: MotionInterface.appConfig.engineeringMode === true
+                 && MotionInterface.appConfig.darkCorrectionBypass === true
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.topMargin: 14
+        anchors.rightMargin: 20
+        z: 5000
+        radius: height / 2
+        height: 24
+        width: bypassBadgeText.implicitWidth + 24
+        color: "#B45309"
+        border.color: "#F59E0B"
+        border.width: 1
+        Text {
+            id: bypassBadgeText
+            anchors.centerIn: parent
+            text: "DARK CORRECTION BYPASSED"
+            color: "#FFFFFF"
+            font.pixelSize: 11
+            font.weight: Font.DemiBold
+        }
+    }
+
     // ===== MODALS =====
     ScanSettingsModal {
         id: scanSettingsModal
