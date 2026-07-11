@@ -3506,10 +3506,20 @@ class MotionConnector(QObject):
         self.scanNotesChanged.emit()
         self._capture_running = True
         self._capture_start_time = time.time()
+        # Dark-correction bypass (engineering bench sources that never turn
+        # off, issue #345): engineering-gated the same way as raw CSV /
+        # telemetry (#43 — fail closed for clinical use even if the
+        # persisted toggle was left on). Computed before the audit entry so
+        # the compliance trail records whether this scan ran bypassed.
+        dark_correction_bypass = bool(
+            self._app_config.get("engineeringMode", False)
+            and self._app_config.get("darkCorrectionBypass", False)
+        )
         self._audit.log("scan_started", {
             "label": subject_id,
             "left_mask": int(left_camera_mask),
             "right_mask": int(right_camera_mask),
+            "dark_correction_bypass": dark_correction_bypass,
         })
         # Per-scan monotonic zero for plot timestamps. sample.timestamp_s comes
         # from each sensor's firmware clock, which resets on sensor reboot — so
@@ -3710,6 +3720,9 @@ class MotionConnector(QObject):
             # must be explicitly gated on engineeringMode here. The original
             # gate was dropped in the sink-refactor follow-up (93c2feb).
             write_telemetry_csv=engineering_mode,
+            # Engineering bench toggle (#345), gated at the top of this
+            # slot next to the audit entry.
+            dark_correction_bypass=dark_correction_bypass,
             # Raw CSV duration forwarded to the pipeline's Tee("raw") gate
             # via raw_save_max_duration_s. None means unbounded (write entire
             # scan); 0 omits raw tee entirely. The writeRawCsv toggle lives
@@ -3739,9 +3752,9 @@ class MotionConnector(QObject):
         if started:
             logger.info(
                 "=== Full scan started: subject=%s duration=%ss "
-                "left=0x%02X right=0x%02X laser=%s ===",
+                "left=0x%02X right=0x%02X laser=%s dark_bypass=%s ===",
                 subject_id, duration_sec, left_camera_mask, right_camera_mask,
-                "off" if disable_laser else "on",
+                "off" if disable_laser else "on", dark_correction_bypass,
             )
             # Bind the live source's DB tail to THIS scan's session row by its
             # exact label (set synchronously inside start_scan), so a later
