@@ -163,3 +163,18 @@ def test_tec_trip_temp_present_in_shipped_config():
     with open(shipped, "r", encoding="utf-8") as f:
         data = json.load(f)
     assert data["tecTripTempC"] == 40
+
+
+def test_dark_correction_bypass_key_survives_whitelist(tmp_path, monkeypatch):
+    """#345: darkCorrectionBypass must be registered in the in-code
+    defaults — config_store filters both the shipped config and the
+    writable overrides to those keys, so a missing registration makes
+    the Settings toggle silently non-persistent (and the badge/scan gate
+    never see the flag)."""
+    config_path = tmp_path / "app_config.json"
+    config_path.write_text(
+        json.dumps({"darkCorrectionBypass": True}), encoding="utf-8",
+    )
+    _patch_config_path(monkeypatch, config_path)
+    cfg = app_main._load_app_config()
+    assert cfg["darkCorrectionBypass"] is True

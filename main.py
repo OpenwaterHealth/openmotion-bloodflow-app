@@ -130,6 +130,12 @@ def _load_app_config() -> dict:
         "dataDirectory": None,
         "writeRawCsv": True,
         "rawCsvDurationSec": None,
+        # Engineering bench toggle (#345): bypass the scan pipeline's dark
+        # subsystem for continuous illumination sources that never turn
+        # off. Gated on engineeringMode at scan start (fail closed). Must
+        # be listed here — config_store filters both the shipped config
+        # and the writable overrides to keys present in these defaults.
+        "darkCorrectionBypass": False,
         # Corrected per-cam CSV ({scan_id}.csv) is redundant now that
         # per-cam BFI/BVI lands in scans.db (the new viewer + past replay
         # read from there). Default off; set true to keep exporting it
