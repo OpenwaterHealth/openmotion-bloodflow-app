@@ -209,23 +209,6 @@ def _load_app_config() -> dict:
     return merged
 
 
-def _start_device_monitoring(motion_interface) -> None:
-    """Start the SDK's connection monitor without blocking the GUI thread.
-
-    This runs after the QML window is already visible (main.qml's
-    ApplicationWindow is `visible: true`) and before app.exec() starts
-    pumping messages. A blocking wait here — even a bounded one — leaves a
-    freshly-shown top-level window unresponsive to Explorer's taskbar
-    icon/thumbnail negotiation, which can fall back to the generic Windows
-    icon (issue #223). Real console handshakes routinely take ~5s, well
-    past the old 2s cap, so this reliably blocked on any hardware-attached
-    launch. Already-attached devices are still discovered by the SDK
-    monitor's own thread and reach the UI via the same
-    _on_handle_state_changed signal path used for any later hotplug event.
-    """
-    motion_interface.start(wait=False)
-
-
 def _app_icon() -> QIcon:
     """Application icon with a PNG fallback.
 
@@ -386,8 +369,16 @@ def main():
         logger.error("Error: Failed to load QML file")
         sys.exit(-1)
 
+    # wait=False: the QML window is already visible at this point (main.qml's
+    # ApplicationWindow is `visible: true`) and Qt's event loop hasn't started
+    # yet (app.exec() is below) — a blocking wait here starves Explorer's
+    # taskbar icon/thumbnail negotiation for the freshly-shown window and can
+    # leave it showing the generic icon (issue #223). Real console handshakes
+    # take ~5s normally, well past the old 2s cap, so this reliably blocked on
+    # any hardware-attached launch. Already-attached devices still reach the
+    # UI via the same _on_handle_state_changed signal path as any hotplug.
     logger.info("Starting Motion monitoring...")
-    _start_device_monitoring(motion_interface)
+    motion_interface.start(wait=False)
 
     def handle_exit():
         logger.info("Application closing...")
