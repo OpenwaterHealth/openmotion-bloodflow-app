@@ -1238,8 +1238,11 @@ class MotionConnector(QObject):
         self._interface.console.telemetry.add_listener(self._on_telemetry_update)
 
         # Arm the startup connection watchdog (E-104/E-106). The timer starts
-        # once the Qt event loop runs — by which point motion_interface.start()
-        # has had its window to enumerate already-attached devices.
+        # once the Qt event loop runs. main.py starts device monitoring with
+        # wait=False (issue #223 — no blocking wait before app.exec()), so
+        # already-attached devices enumerate concurrently with this timer;
+        # the default 30s timeout comfortably covers normal enumeration time
+        # (console handshake is ~5s normally).
         self._arm_connection_watchdog()
 
     def set_ft_thresholds(
