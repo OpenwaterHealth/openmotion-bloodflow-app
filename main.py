@@ -369,10 +369,16 @@ def main():
         logger.error("Error: Failed to load QML file")
         sys.exit(-1)
 
-    # Start the SDK's connection monitor synchronously — it owns its own
-    # daemon thread, so the app's Qt event loop runs unblocked.
+    # wait=False: the QML window is already visible at this point (main.qml's
+    # ApplicationWindow is `visible: true`) and Qt's event loop hasn't started
+    # yet (app.exec() is below) — a blocking wait here starves Explorer's
+    # taskbar icon/thumbnail negotiation for the freshly-shown window and can
+    # leave it showing the generic icon (issue #223). Real console handshakes
+    # take ~5s normally, well past the old 2s cap, so this reliably blocked on
+    # any hardware-attached launch. Already-attached devices still reach the
+    # UI via the same _on_handle_state_changed signal path as any hotplug.
     logger.info("Starting Motion monitoring...")
-    motion_interface.start(wait=True, wait_timeout=2.0)
+    motion_interface.start(wait=False)
 
     def handle_exit():
         logger.info("Application closing...")
