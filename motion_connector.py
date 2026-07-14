@@ -3476,6 +3476,22 @@ class MotionConnector(QObject):
             f"disable_laser={disable_laser})"
         )
 
+        # Issue #352: a disconnected side's mask must be recorded as 0x00
+        # ("None"), not the UI's pending selection — the SDK persists the
+        # ScanRequest masks verbatim into session_meta.sdk_flags, which
+        # History and the replay grid trust (#175), so an ungated mask shows
+        # a phantom config and empty panes for hardware that was never
+        # there. The UI keeps the pending selection (it applies if the
+        # sensor is plugged in before scanning; zeroing it would regress the
+        # #127 preserve-across-power-cycle behavior), so the gate lives
+        # here — mirroring runContactQualityCheck and calibration/test.
+        left_camera_mask = (
+            int(left_camera_mask) if self._leftSensorConnected else 0x00
+        )
+        right_camera_mask = (
+            int(right_camera_mask) if self._rightSensorConnected else 0x00
+        )
+
         if duration_sec <= 0:
             logger.warning("duration_sec was %s, clamping to 3600", duration_sec)
             duration_sec = 3600
