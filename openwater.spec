@@ -51,15 +51,20 @@ hidden += [
     "usb.backend.libusb1",
 ]
 
-# --- force include omotion's 'requests' dependency (used by firmware_update) ---
+# --- force include omotion's + our own third-party deps ---
 # collect_all("omotion") above only walks omotion's own submodules/data, not its
-# third-party deps, and PyInstaller's static analysis doesn't trace into it either.
+# third-party deps, and PyInstaller's static analysis doesn't trace into them
+# either — same class of gap as the serial/usb block above. requests backs
+# omotion.firmware_update; crcmod backs omotion's i2c packet framing; base58
+# is imported directly by motion_connector.py.
 hidden += [
     "requests",
     "urllib3",
     "certifi",
     "charset_normalizer",
     "idna",
+    "crcmod",
+    "base58",
 ]
 
 # Optional: if you also have a separate 'libusb' wheel installed, this won't hurt
