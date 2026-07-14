@@ -1,21 +1,21 @@
 """
-Reduced Mode — end-to-end test.
+Clinical Mode — end-to-end test.
 
-Covers the full Reduced Mode workflow. Sensor dropdowns are a Scan
+Covers the full Clinical Mode workflow. Sensor dropdowns are a Scan
 Settings feature and are NOT tested here — Scan Settings is hidden
-while Reduced Mode is active.
+while Clinical Mode is active.
 
-Reduced Mode is forced on via ``app_config.json`` at module-import
+Clinical Mode is forced on via ``app_config.json`` at module-import
 time (before the session-scoped ``app`` fixture launches the app),
-not by clicking the Reduced Mode Enable toggle in the Settings modal
+not by clicking the Clinical Mode Enable toggle in the Settings modal
 at test run time. The original config value is restored on module
 teardown. This mirrors the pattern used by ``test_history`` and
 ``test_scan_settings`` for forcing the *opposite* state.
 
 Three classes:
-  TestReducedMode         (05–21) — keyboard-driven Notes / scan / history flow
-  TestReducedModeMouse    (22–32) — mouse-driven repeat of the same flow
-  TestReducedModeSettings (33)    — Settings modal: Time Window dropdown
+  TestClinicalMode         (05–21) — keyboard-driven Notes / scan / history flow
+  TestClinicalModeMouse    (22–32) — mouse-driven repeat of the same flow
+  TestClinicalModeSettings (33)    — Settings modal: Time Window dropdown
                                     parametrized over 3/5/15/30s.
 """
 
@@ -38,30 +38,24 @@ from conftest import (
 )
 from hil_helpers import (
     click_panel,
-    force_app_config_value,
     move_window_on_screen,
     selected_scan_text,
     visible_modals,
-    write_app_config_value,
 )
 
 pytestmark = pytest.mark.release
 
-# Force ``reducedMode = true`` on disk at module-import time so any
-# fresh launch in this session boots directly into Reduced Mode.
-# Restored on module teardown via the autouse fixture below.
+# Force ``clinicalMode = true`` on disk so any fresh launch in this
+# session boots directly into Clinical Mode. Applied by conftest's
+# pytest_collection_finish only when this module has selected tests
+# (never a module-level write — that fires during collection of every
+# run, including `-m unit`); restored byte-exact at session end.
 #
-# Caveat (see utils.force_app_config_value): the app caches its
+# Caveat (see hil_helpers.force_app_config_value): the app caches its
 # config at startup, so if the app was already running with
-# reducedMode=false when this module is imported, the running
-# instance will stay in non-reduced mode until it is relaunched.
-_INITIAL_REDUCED_MODE = force_app_config_value("reducedMode", True)
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _restore_reduced_mode_on_module_teardown():
-    yield
-    write_app_config_value("reducedMode", _INITIAL_REDUCED_MODE)
+# clinicalMode=false, the running instance will stay in non-clinical
+# mode until it is relaunched.
+FORCE_APP_CONFIG = {"clinicalMode": True}
 
 
 SCAN_WAIT       = 200   # seconds to run the long scan (3 min 20 s)
@@ -69,7 +63,7 @@ SHORT_SCAN_WAIT = 120   # seconds to run each Settings-feature scan (2 min)
 STOP_BUFFER     = 15    # seconds to wait after stopping for data to save
 
 # Time window dropdown values shown in the Settings modal (seconds).
-# TestReducedModeSettings.test_33 parametrizes over each of these.
+# TestClinicalModeSettings.test_33 parametrizes over each of these.
 TIME_WINDOW_OPTIONS = [3, 5, 15, 30]
 
 
@@ -87,7 +81,7 @@ _CONTACT_QUALITY_STATE_TITLES = {
 
 # Footer buttons shown by ContactQualityModal in preScanMode after
 # the check leaves "checking" (line ~505 of the QML: the footer
-# RowLayout is ``visible: root.state_ !== "checking" || developerMode``).
+# RowLayout is ``visible: root.state_ !== "checking" || engineeringMode``).
 # Used as a UIA-friendly fallback when the title Text isn't visible
 # to the accessibility tree but the QML Buttons still are.
 _CONTACT_QUALITY_PRESCAN_BUTTONS = ("Start Scan", "Dismiss", "Retest")
@@ -141,7 +135,7 @@ def _find_modal_state(win) -> str | None:
 
 def _wait_for_signal_quality_and_start_scan(timeout: int = 180) -> bool:
     """Wait for ContactQualityModal to reach the ``ok`` state after
-    clicking Start in Reduced Mode, then click ``Start Scan``.
+    clicking Start in Clinical Mode, then click ``Start Scan``.
 
     Modal lifecycle: opens in ``checking`` state, runs a brief
     contact-quality check (laser pulse + camera read), then
@@ -354,11 +348,11 @@ def _select_time_window(seconds: int):
 
 
 def _run_scan(label: str, duration_sec: int):
-    """Click Start, dismiss the signal-quality dialog (Reduced Mode
+    """Click Start, dismiss the signal-quality dialog (Clinical Mode
     auto-runs it), wait for ``duration_sec``, click Start again to
     stop, dismiss the post-scan modal.
 
-    Used by ``TestReducedModeSettings`` to run a scan per Time Window
+    Used by ``TestClinicalModeSettings`` to run a scan per Time Window
     value. Calibrated panel clicks per style-guide §6.
     """
     log.info(f"  [{label}] Starting scan for {duration_sec}s")
@@ -374,7 +368,7 @@ def _run_scan(label: str, duration_sec: int):
 
 
 def _scroll_modal_to_bottom():
-    """Scroll the Settings modal content down to reveal the Reduced Mode section.
+    """Scroll the Settings modal content down to reveal the Clinical Mode section.
 
     Scrolls in three passes with a short pause between each to handle
     modals that animate or load content progressively.
@@ -408,20 +402,20 @@ def _click_coord(rx: float, ry: float, label: str = ""):
 # Test class — keyboard
 # ─────────────────────────────────────────────
 @pytest.mark.incremental
-class TestReducedMode:
-    """Run a manual scan in Reduced Mode via the keyboard, verify
+class TestClinicalMode:
+    """Run a manual scan in Clinical Mode via the keyboard, verify
     History.
 
-    Reduced Mode is forced on in ``app_config.json`` at module-import
+    Clinical Mode is forced on in ``app_config.json`` at module-import
     time (see the module docstring); this class does not toggle it
     via the Settings modal. Scan Settings is NOT tested here — it is
-    hidden while Reduced Mode is active.
+    hidden while Clinical Mode is active.
     """
 
-    # ── Notes: full feature test in Reduced Mode ─────────────────────────
+    # ── Notes: full feature test in Clinical Mode ─────────────────────────
 
     def test_05_open_notes(self, app):
-        """Notes is now at the former Scan Settings position in the reduced sidebar."""
+        """Notes is now at the former Scan Settings position in the clinical sidebar."""
         move_window_on_screen()
         ensure_visible()
         click_panel("Notes")
@@ -429,9 +423,9 @@ class TestReducedMode:
     def test_06_type_note(self, app):
         """Type a unique note and save it."""
         require_focus()
-        TestReducedMode.session_note = f"ReducedScan_{datetime.now():%Y%m%d_%H%M%S}"
-        log.info(f"  Typing note: '{TestReducedMode.session_note}'")
-        pyautogui.typewrite(TestReducedMode.session_note, interval=0.04)
+        TestClinicalMode.session_note = f"ClinicalScan_{datetime.now():%Y%m%d_%H%M%S}"
+        log.info(f"  Typing note: '{TestClinicalMode.session_note}'")
+        pyautogui.typewrite(TestClinicalMode.session_note, interval=0.04)
         time.sleep(SLEEP)
 
     def test_07_close_notes(self, app):
@@ -448,8 +442,8 @@ class TestReducedMode:
         pyautogui.hotkey("ctrl", "c")
         time.sleep(0.3)
         clip = get_clipboard()
-        assert TestReducedMode.session_note in clip, (
-            f"Note not persisted: expected '{TestReducedMode.session_note}' "
+        assert TestClinicalMode.session_note in clip, (
+            f"Note not persisted: expected '{TestClinicalMode.session_note}' "
             f"in clipboard, got: '{clip[:60]}'"
         )
         log.info(f"  Note persisted: '{clip[:60]}'")
@@ -512,8 +506,8 @@ class TestReducedMode:
         pyautogui.press("delete")
         time.sleep(0.2)
         # Re-type the session note for the scan
-        TestReducedMode.session_note = f"ReducedScan_{datetime.now():%Y%m%d_%H%M%S}"
-        pyautogui.typewrite(TestReducedMode.session_note, interval=0.04)
+        TestClinicalMode.session_note = f"ClinicalScan_{datetime.now():%Y%m%d_%H%M%S}"
+        pyautogui.typewrite(TestClinicalMode.session_note, interval=0.04)
         time.sleep(SLEEP)
         require_focus()
         pyautogui.press("escape")
@@ -524,7 +518,7 @@ class TestReducedMode:
     def test_14_start_scan(self, app):
         """Click Start — the app auto-runs signal quality check, then click 'Start Scan'."""
         click_panel("Start")
-        # In Reduced Mode, the 'Good signal quality' dialog auto-appears.
+        # In Clinical Mode, the 'Good signal quality' dialog auto-appears.
         # _assert_scan_started fails the test (and short-circuits the
         # rest of the @incremental class) if the check never reaches
         # 'ok' — preventing test_15/16 from running on a non-existent
@@ -567,32 +561,32 @@ class TestReducedMode:
 
 
 # ─────────────────────────────────────────────
-# Mouse-based test class — Reduced Mode is forced on via
+# Mouse-based test class — Clinical Mode is forced on via
 # app_config.json at module-import time (see module docstring)
 # ─────────────────────────────────────────────
 @pytest.mark.incremental
-class TestReducedModeMouse:
-    """Reduced Mode mouse workflow. Reduced Mode is forced on in
+class TestClinicalModeMouse:
+    """Clinical Mode mouse workflow. Clinical Mode is forced on in
     ``app_config.json`` at module-import time.
 
-    Scan Settings is NOT tested here — it is hidden while Reduced
+    Scan Settings is NOT tested here — it is hidden while Clinical
     Mode is active.
     """
 
     # ── Notes: type session note ───────────────────────────────────────────
 
     def test_22_open_notes(self, app):
-        """Notes is now at the former Scan Settings position in the reduced sidebar."""
+        """Notes is now at the former Scan Settings position in the clinical sidebar."""
         move_window_on_screen()
         click_panel("Notes")
 
     def test_23_type_note(self, app):
         require_focus()
-        TestReducedModeMouse.session_note = (
-            f"ReducedScanMouse_{datetime.now():%Y%m%d_%H%M%S}"
+        TestClinicalModeMouse.session_note = (
+            f"ClinicalScanMouse_{datetime.now():%Y%m%d_%H%M%S}"
         )
-        log.info(f"  Typing note: '{TestReducedModeMouse.session_note}'")
-        pyautogui.typewrite(TestReducedModeMouse.session_note, interval=0.04)
+        log.info(f"  Typing note: '{TestClinicalModeMouse.session_note}'")
+        pyautogui.typewrite(TestClinicalModeMouse.session_note, interval=0.04)
         time.sleep(SLEEP)
 
     def test_24_close_notes(self, app):
@@ -605,7 +599,7 @@ class TestReducedModeMouse:
     def test_25_start_scan(self, app):
         """Click Start — the app auto-runs signal quality check, then click 'Start Scan'."""
         click_panel("Start")
-        # In Reduced Mode, the 'Good signal quality' dialog auto-appears.
+        # In Clinical Mode, the 'Good signal quality' dialog auto-appears.
         # _assert_scan_started fails the test (and short-circuits the
         # rest of the @incremental class) if the check never reaches
         # 'ok' — preventing test_26/27 from running on a non-existent
@@ -650,20 +644,20 @@ class TestReducedModeMouse:
 # Settings feature class — Time Window dropdown
 # ─────────────────────────────────────────────
 @pytest.mark.incremental
-class TestReducedModeSettings:
-    """Reduced Mode Settings — Time Window dropdown.
+class TestClinicalModeSettings:
+    """Clinical Mode Settings — Time Window dropdown.
 
     For each Time Window value (3, 5, 15, 30 s): open Settings, select
     the value, close Settings, run a 2-min scan.
 
-    Auto-scale is intentionally NOT covered here: reduced mode removes
+    Auto-scale is intentionally NOT covered here: clinical mode removes
     the option entirely (the Settings row and the plot viewer's
     three-dot popup entry are hidden, and BloodFlow.qml forces
     autoScale off), so there is nothing to toggle.
 
-    Reduced Mode is forced on in ``app_config.json`` at module-import
+    Clinical Mode is forced on in ``app_config.json`` at module-import
     time (see the module docstring); all three classes in this module
-    run with Reduced Mode already active.
+    run with Clinical Mode already active.
     """
 
     @pytest.mark.parametrize(
@@ -774,7 +768,7 @@ class TestModalExclusivity:
         """Open Settings, click Start, expect only one modal visible
         at any point during the contact-quality pre-scan check.
 
-        In reduced mode ``onStartStopClicked`` opens
+        In clinical mode ``onStartStopClicked`` opens
         ContactQualityModal without first dismissing whatever modal
         is already on screen — so Settings stays at z=9998 underneath
         ContactQualityModal at z=9999. This test polls
@@ -817,7 +811,7 @@ class TestModalExclusivity:
         )
         log.info(f"  Settings opened cleanly: visible_modals()={sorted(with_settings)}")
 
-        # Click Start without dismissing Settings first. In reduced
+        # Click Start without dismissing Settings first. In clinical
         # mode this fires the contact-quality pre-scan check, which
         # opens ContactQualityModal at z=9999 over Settings at z=9998.
         click_panel("Start")

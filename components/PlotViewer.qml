@@ -5,7 +5,7 @@ import OpenMotion 1.0
 
 // Phase 2b-i — multi-cell viewer. Always renders 16 cells (2 sides × 8 cams).
 // Inactive cameras just render an empty Canvas + label; no per-mask branching.
-// Reduced-mode 2-cell layout is Phase 2b-ii. Toolbar + autoscale arrive in
+// Clinical-mode 2-cell layout is Phase 2b-ii. Toolbar + autoscale arrive in
 // Task 5; the current header text is the Phase 2a placeholder.
 // Geometry is owned by the instantiation site (BloodFlow.qml anchors the
 // viewer beside the icon bar) — no anchors here. A root-level
@@ -13,9 +13,9 @@ import OpenMotion 1.0
 // inlined it overrode the caller's anchors and slid under the ButtonPanel.
 Rectangle {
     id: viewer
-    color: theme.bgPlot
+    color: AppTheme.bgPlot
     radius: 8
-    border.color: theme.borderSoft
+    border.color: AppTheme.borderSoft
     border.width: 1
 
     // Keyboard focus — viewer starts focused so spec keys (← → +/- 0
@@ -62,16 +62,15 @@ Rectangle {
         }
     }
 
-    AppTheme { id: theme }
 
     // ── Inputs ─────────────────────────────────────────────────────────
-    property bool reducedMode: false   // honored in Phase 2b-ii
-    // Per-cell top-left value labels. Default off in reduced mode — the
+    property bool clinicalMode: false   // honored in Phase 2b-ii
+    // Per-cell top-left value labels. Default off in clinical mode — the
     // large side panels show the same numbers there — and toggleable at
     // runtime from the bottom-right ⋯ popup.
-    property bool showCellValues: !viewer.effectiveReduced
+    property bool showCellValues: !viewer.effectiveClinical
     // Y-axis tick labels (max/mid/min per metric). Config is the single
-    // source of truth: the ⋯ popup toggle (hidden in reduced mode) writes
+    // source of truth: the ⋯ popup toggle (hidden in clinical mode) writes
     // through MotionInterface.setConfig, which persists to app_config.json
     // and notifies appConfigChanged — this binding then updates.
     property bool showAxisLabels: MotionInterface.appConfig.showAxisLabels === true
@@ -164,33 +163,44 @@ Rectangle {
     // the operator's current Scan Settings selection (issue #175). A live
     // source — or no source, before the first scan — reports -1 (unknown),
     // so the grid keeps following the live leftMask/rightMask selection.
+    //
+    // For the live fallback, additionally gate each side on its sensor
+    // actually being connected (issue #298): the live leftMask/rightMask
+    // carry the config default (e.g. 0x99 = 4 cams) regardless of which
+    // ports are populated, so a single sensor on the right port would
+    // otherwise draw 4 phantom left plots. A disconnected side contributes
+    // no cells; the binding re-flows on connect/disconnect because
+    // leftSensorConnected/rightSensorConnected notify connectionStatusChanged.
+    // Past scans are unaffected — their recorded masks win before this gate.
     readonly property int _effLeftMask:
         (viewer.scanSource && viewer.scanSource.leftMask !== undefined
          && viewer.scanSource.leftMask >= 0)
-            ? viewer.scanSource.leftMask : viewer.leftMask
+            ? viewer.scanSource.leftMask
+            : (MotionInterface.leftSensorConnected ? viewer.leftMask : 0x00)
     readonly property int _effRightMask:
         (viewer.scanSource && viewer.scanSource.rightMask !== undefined
          && viewer.scanSource.rightMask >= 0)
-            ? viewer.scanSource.rightMask : viewer.rightMask
+            ? viewer.scanSource.rightMask
+            : (MotionInterface.rightSensorConnected ? viewer.rightMask : 0x00)
 
     // Replay adopts the loaded scan's recorded mode: when the source reports a
-    // known mode (reducedMode >= 0) use it, else fall back to the live-config
-    // `reducedMode` input. Mirrors _effLeftMask/_effRightMask (#175). Note:
-    // scanSource.reducedMode is an int tri-state (-1/0/1) from Python;
-    // viewer.reducedMode is the bool live-config input.
-    readonly property bool effectiveReduced:
-        (viewer.scanSource && viewer.scanSource.reducedMode !== undefined
-         && viewer.scanSource.reducedMode >= 0)
-            ? (viewer.scanSource.reducedMode === 1)
-            : viewer.reducedMode
+    // known mode (clinicalMode >= 0) use it, else fall back to the live-config
+    // `clinicalMode` input. Mirrors _effLeftMask/_effRightMask (#175). Note:
+    // scanSource.clinicalMode is an int tri-state (-1/0/1) from Python;
+    // viewer.clinicalMode is the bool live-config input.
+    readonly property bool effectiveClinical:
+        (viewer.scanSource && viewer.scanSource.clinicalMode !== undefined
+         && viewer.scanSource.clinicalMode >= 0)
+            ? (viewer.scanSource.clinicalMode === 1)
+            : viewer.clinicalMode
 
     // ── Side break ─────────────────────────────────────────────────────
     // A bit of extra margin between the left and right sensor modules in
-    // dev (non-reduced) mode. The grid reserves an empty spacer column
+    // dev (non-clinical) mode. The grid reserves an empty spacer column
     // (col 2) between them, but only when BOTH sides have active cameras —
     // a single-sided scan keeps filling the width with no dangling gap.
     readonly property bool _sideGapActive:
-        !viewer.effectiveReduced
+        !viewer.effectiveClinical
         && (viewer._effLeftMask & 0xFF) !== 0
         && (viewer._effRightMask & 0xFF) !== 0
     readonly property real _sideGapPx: 3
@@ -233,16 +243,24 @@ Rectangle {
         return entries
     }
 
-    // Reduced mode — 2 cells, one per side, each rendering the
+    // Clinical mode — one cell per ACTIVE side, each rendering the
     // side-averaged stream (cam_id=-1, fed by SDK's SideAveragingStage
     // via _LivePlotSink.consume). Stacked vertically in a single column.
-    readonly property var _reducedCellModel: [
-        { side: "left",  camId: -1, row: 0, col: 0 },
-        { side: "right", camId: -1, row: 1, col: 0 }
-    ]
+    // A side with no active cameras (disconnected sensor / recorded mask 0)
+    // is dropped and the survivor compacts to row 0 so a single-sided
+    // clinical scan doesn't reserve a blank row (issue #298).
+    readonly property var _clinicalCellModel: {
+        var entries = []
+        var displayRow = 0
+        if ((viewer._effLeftMask & 0xFF) !== 0)
+            entries.push({ side: "left", camId: -1, row: displayRow++, col: 0 })
+        if ((viewer._effRightMask & 0xFF) !== 0)
+            entries.push({ side: "right", camId: -1, row: displayRow++, col: 0 })
+        return entries
+    }
 
-    readonly property var _activeCellModel: viewer.effectiveReduced
-        ? _reducedCellModel
+    readonly property var _activeCellModel: viewer.effectiveClinical
+        ? _clinicalCellModel
         : _devCellModel
 
     // ── Autoscale recompute (shared by Timer + displayMode change) ────
@@ -359,14 +377,14 @@ Rectangle {
     // on dark) doesn't render invisible in the other.
     property color bfiColor: "#E74C3C"
     property color bviColor: "#3498DB"
-    readonly property color bfiInk: theme.readableInk(viewer.bfiColor)
-    readonly property color bviInk: theme.readableInk(viewer.bviColor)
+    readonly property color bfiInk: AppTheme.readableInk(viewer.bfiColor)
+    readonly property color bviInk: AppTheme.readableInk(viewer.bviColor)
 
     function _traceColorForMetric(m) {
         if (m === "bfi")      return viewer.bfiInk
         if (m === "bvi")      return viewer.bviInk
-        if (m === "mean")     return theme.readableInk("#2ECC71")  // green
-        if (m === "contrast") return theme.readableInk("#9B59B6")  // purple
+        if (m === "mean")     return AppTheme.readableInk("#2ECC71")  // green
+        if (m === "contrast") return AppTheme.readableInk("#9B59B6")  // purple
         return viewer.bviInk
     }
 
@@ -421,10 +439,46 @@ Rectangle {
             viewer._dirty = true
             viewer._profSamplesAccum += n
         }
+        // Live source only (ignoreUnknownSignals covers PastScanSource):
+        // an async DB-tail window finished loading off-thread — repaint so
+        // the history appears even when no live samples are ticking the
+        // throttle (e.g. panned back after the scan ended).
+        function onHistoryWindowLoaded() {
+            viewer._dirty = true
+        }
+    }
+
+    // ── Per-camera "Connection Lost" badges (issue #174) ───────────────
+    // Map "side:camId" → true while the connector's dropout watchdog has
+    // that camera marked Connection Lost. Fed by cameraDropoutDetected /
+    // cameraDropoutRecovered (both delivered queued on the GUI thread);
+    // cleared when a fresh live source arrives (scan start). Reassigned
+    // wholesale — never mutated in place — so the cell delegate bindings
+    // re-evaluate. Badges only display on the live source (see the
+    // delegate's connectionLost binding), so panning to a past scan hides
+    // them without losing the state.
+    property var _lostCameras: ({})
+
+    function _setCameraLost(side, camId, lost) {
+        var m = {}
+        for (var k in viewer._lostCameras) m[k] = viewer._lostCameras[k]
+        if (lost) m[side + ":" + camId] = true
+        else delete m[side + ":" + camId]
+        viewer._lostCameras = m
+    }
+
+    Connections {
+        target: MotionInterface
+        function onCameraDropoutDetected(side, camId, elapsed) {
+            viewer._setCameraLost(side, camId, true)
+        }
+        function onCameraDropoutRecovered(side, camId, elapsed) {
+            viewer._setCameraLost(side, camId, false)
+        }
     }
 
     // ── Profile HUD state ──────────────────────────────────────────────
-    // Hidden behind developerMode && showProfiling — clinical users
+    // Hidden behind engineeringMode && showProfiling — clinical users
     // never see this overlay. Counters accumulate per tick; the 1 Hz
     // _profHudTimer below converts them to display values.
     property int _profSamplesAccum: 0        // samples since last 1Hz roll-up
@@ -486,11 +540,11 @@ Rectangle {
 
     // Runtime toggle — initialized from app_config.showProfiling but
     // flippable from the PlotToolbar's Profiler checkbox at runtime.
-    // The toolbar checkbox itself is hidden outside developer mode,
-    // and _hudVisible further gates on developerMode so the HUD can't
+    // The toolbar checkbox itself is hidden outside engineering mode,
+    // and _hudVisible further gates on engineeringMode so the HUD can't
     // appear in clinical builds even if showProfiling is flipped.
     property bool showProfiling: MotionInterface.appConfig.showProfiling === true
-    readonly property bool _hudVisible: MotionInterface.appConfig.developerMode === true
+    readonly property bool _hudVisible: MotionInterface.appConfig.engineeringMode === true
                                         && viewer.showProfiling
 
     Timer {
@@ -524,6 +578,11 @@ Rectangle {
         viewer.liveEdgeSnapshot = viewer.scanSource ? viewer.scanSource.liveEdge : 0
         viewer.followLive = true
         viewer._dirty = true
+        // Fresh live source = new scan → clear stale Connection Lost
+        // badges. A past (non-live) source keeps the state; its badges
+        // are already hidden by the delegate's live-only binding.
+        if (viewer.scanSource && viewer.scanSource.live === true)
+            viewer._lostCameras = ({})
         // Re-fit y-axis to the new source's data immediately, otherwise
         // a past scan loaded with very different value ranges would draw
         // off-axis until the next autoscale tick.
@@ -587,7 +646,7 @@ Rectangle {
         console.info("[Plot] windowSeconds → " + s + " s")
     }
 
-    // Large per-side BFI/BVI readout panel — reduced (clinical) mode
+    // Large per-side BFI/BVI readout panel — clinical mode
     // only, one per plot row, sitting to the left of the plot. Mirrors
     // the legacy ReducedPlotView side column: side label up top, big
     // mono values beneath. Values are the side-averaged stream
@@ -612,7 +671,7 @@ Rectangle {
 
             Text {
                 text: panel.panelSide.toUpperCase()
-                color: theme.textSecondary
+                color: AppTheme.textSecondary
                 font.pixelSize: 20
                 font.weight: Font.DemiBold
             }
@@ -627,7 +686,7 @@ Rectangle {
             }
             Text {
                 text: panel._displayText("bfi")
-                color: theme.textPrimary
+                color: AppTheme.textPrimary
                 font.pixelSize: 60
                 font.weight: Font.Bold
                 font.family: "Roboto Mono"
@@ -643,7 +702,7 @@ Rectangle {
             }
             Text {
                 text: panel._displayText("bvi")
-                color: theme.textPrimary
+                color: AppTheme.textPrimary
                 font.pixelSize: 60
                 font.weight: Font.Bold
                 font.family: "Roboto Mono"
@@ -663,27 +722,35 @@ Rectangle {
             Layout.fillHeight: true
             spacing: 8
 
-            // Reduced mode: large readouts beside the plots, one panel
+            // Clinical mode: large readouts beside the plots, one panel
             // per stacked plot row. Equal fillHeight keeps each panel
             // aligned with its row. fillWidth must be EXPLICITLY false:
             // nested layouts default it to true, which would make this
             // column compete with the grid for the whole row width.
             ColumnLayout {
-                visible: viewer.effectiveReduced
+                visible: viewer.effectiveClinical
                 Layout.fillWidth: false
                 Layout.fillHeight: true
                 Layout.preferredWidth: 250
                 spacing: 6
 
+                // Each side's readout panel is shown only when that side
+                // has active cameras, mirroring _clinicalCellModel — a
+                // disconnected sensor (or a single-sided recorded scan)
+                // leaves no dead "--" panel behind (issue #298).
                 SideMetricPanel {
                     panelSide: "left"
+                    visible: (viewer._effLeftMask & 0xFF) !== 0
                     Layout.fillWidth: true
-                    Layout.fillHeight: true
+                    Layout.fillHeight: visible
+                    Layout.preferredHeight: visible ? -1 : 0
                 }
                 SideMetricPanel {
                     panelSide: "right"
+                    visible: (viewer._effRightMask & 0xFF) !== 0
                     Layout.fillWidth: true
-                    Layout.fillHeight: true
+                    Layout.fillHeight: visible
+                    Layout.preferredHeight: visible ? -1 : 0
                 }
             }
 
@@ -692,10 +759,10 @@ Rectangle {
                 visible: viewer._activeCellModel.length > 0
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                // Reduced mode: single column, 2 stacked cells. Dev mode:
+                // Clinical mode: single column, 2 stacked cells. Engineering mode:
                 // 4 columns; +1 spacer column (col 2) when both sides are
                 // active, for a visual break between the modules.
-                columns: viewer.effectiveReduced ? 1 : (viewer._sideGapActive ? 5 : 4)
+                columns: viewer.effectiveClinical ? 1 : (viewer._sideGapActive ? 5 : 4)
                 rowSpacing: 6
                 columnSpacing: 6
 
@@ -735,11 +802,16 @@ Rectangle {
                         secondaryColor: viewer._traceColorForMetric(viewer._displayPair.secondary)
                         showValueLabels: viewer.showCellValues
                         showAxisLabels: viewer.showAxisLabels
-                        showTemperature: MotionInterface.appConfig.developerMode === true
+                        showTemperature: MotionInterface.appConfig.engineeringMode === true
                         paintTick: viewer.paintTick
                         liveEdgeSnapshot: viewer.liveEdgeSnapshot
                         panZoomTarget: viewer
                         cursorT: viewer.cursorT
+                        // Live-source only: past scans have no "current"
+                        // connection state to report (issue #174).
+                        connectionLost: viewer.scanSource !== null
+                            && viewer.scanSource.live === true
+                            && viewer._lostCameras[modelData.side + ":" + modelData.camId] === true
                     }
                 }
             }
@@ -754,7 +826,7 @@ Rectangle {
                 Text {
                     anchors.centerIn: parent
                     text: "No active cameras selected"
-                    color: theme.textTertiary
+                    color: AppTheme.textTertiary
                     font.pixelSize: 14
                     font.family: "Roboto Mono"
                 }
@@ -805,8 +877,8 @@ Rectangle {
                               ? backToLiveOverlay.height + viewer._overlayMarginPx
                               : 0)
         anchors.rightMargin: viewer._overlayEdgeMarginPx
-        color: theme.overlayBgSolid
-        border.color: theme.borderSubtle
+        color: AppTheme.overlayBgSolid
+        border.color: AppTheme.borderSubtle
         border.width: 1
         radius: 4
         width: tooltipColumn.implicitWidth + 16
@@ -830,7 +902,7 @@ Rectangle {
                     viewer.scanSource.value_at(c.side, c.camId, primMetric, t))
                 var sv = viewer.clampForDisplay(secMetric,
                     viewer.scanSource.value_at(c.side, c.camId, secMetric, t))
-                // Reduced mode uses camId=-1 for the side-averaged stream;
+                // Clinical mode uses camId=-1 for the side-averaged stream;
                 // (c.camId + 1) would render "L0"/"R0" instead of the
                 // cell's own "LEFT AVG" / "RIGHT AVG" label.
                 var label = c.camId === -1
@@ -860,7 +932,7 @@ Rectangle {
                     var secs = (t - mins * 60).toFixed(3)
                     return "t = " + mins + ":" + (secs < 10 ? "0" + secs : secs) + " s"
                 }
-                color: theme.textSecondary
+                color: AppTheme.textSecondary
                 font.pixelSize: 11
                 font.family: "Roboto Mono"
                 font.bold: true
@@ -872,7 +944,7 @@ Rectangle {
                     Text {
                         text: modelData.label
                         width: 30
-                        color: theme.textSecondary
+                        color: AppTheme.textSecondary
                         font.pixelSize: 10
                         font.family: "Roboto Mono"
                     }
@@ -942,8 +1014,8 @@ Rectangle {
         anchors.topMargin: viewer._overlayEdgeMarginPx
         anchors.rightMargin: viewer._overlayEdgeMarginPx
         z: 6
-        color: theme.overlayBg
-        border.color: theme.accentRed
+        color: AppTheme.overlayBg
+        border.color: AppTheme.accentRed
         border.width: 1
 
         Text {
@@ -954,7 +1026,7 @@ Rectangle {
                    && MotionInterface.liveSourceAvailable)
                   ? "← Back to live scan"
                   : "● Back to live"
-            color: theme.accentRed
+            color: AppTheme.accentRed
             font.pixelSize: 13
             font.family: "Roboto Mono"
         }
@@ -1001,8 +1073,8 @@ Rectangle {
         width: scanBadgeRow.implicitWidth + 28
         height: 36
         radius: 18
-        color: theme.overlayBg
-        border.color: theme.borderSubtle
+        color: AppTheme.overlayBg
+        border.color: AppTheme.borderSubtle
         border.width: 1
 
         Row {
@@ -1012,14 +1084,14 @@ Rectangle {
             Text {
                 anchors.verticalCenter: parent.verticalCenter
                 text: "Viewing"
-                color: theme.textTertiary
+                color: AppTheme.textTertiary
                 font.pixelSize: 12
                 font.family: "Roboto Mono"
             }
             Text {
                 anchors.verticalCenter: parent.verticalCenter
                 text: viewer._scanBadgeText
-                color: theme.textPrimary
+                color: AppTheme.textPrimary
                 font.pixelSize: 13
                 font.weight: Font.DemiBold
                 font.family: "Roboto Mono"
@@ -1047,8 +1119,8 @@ Rectangle {
             width: windowSecondsText.implicitWidth + 38
             height: 36
             radius: 18
-            color: theme.overlayBg
-            border.color: theme.borderSubtle
+            color: AppTheme.overlayBg
+            border.color: AppTheme.borderSubtle
             border.width: 1
 
             Text {
@@ -1057,7 +1129,7 @@ Rectangle {
                 anchors.leftMargin: 14
                 anchors.verticalCenter: parent.verticalCenter
                 text: viewer._labelForWindowSeconds(viewer.windowSeconds)
-                color: theme.textPrimary
+                color: AppTheme.textPrimary
                 font.pixelSize: 13
                 font.family: "Roboto Mono"
             }
@@ -1066,7 +1138,7 @@ Rectangle {
                 anchors.rightMargin: 12
                 anchors.verticalCenter: parent.verticalCenter
                 text: "▾"
-                color: theme.textTertiary
+                color: AppTheme.textTertiary
                 font.pixelSize: 12
             }
 
@@ -1089,8 +1161,8 @@ Rectangle {
                 padding: 6
                 implicitWidth: 120
                 background: Rectangle {
-                    color: theme.overlayBgSolid
-                    border.color: theme.borderSubtle
+                    color: AppTheme.overlayBgSolid
+                    border.color: AppTheme.borderSubtle
                     border.width: 1
                     radius: 8
                 }
@@ -1108,25 +1180,25 @@ Rectangle {
 
         Rectangle {
             id: settingsMenuButton
-            // In reduced mode the popup's only rows (display mode +
+            // In clinical mode the popup's only rows (display mode +
             // autoscale) are hidden and Cell values is gone, leaving the
             // dev-only Profiler as the sole possible entry. Hide the
             // button entirely when it would open an empty card.
-            visible: !viewer.effectiveReduced
-                     || MotionInterface.appConfig.developerMode === true
+            visible: !viewer.effectiveClinical
+                     || MotionInterface.appConfig.engineeringMode === true
             width: 36
             height: 36
             radius: 18
             color: settingsPopup.opened
                    ? Qt.rgba(0.29, 0.56, 0.89, 0.85)
-                   : theme.overlayBg
-            border.color: settingsPopup.opened ? "#4A90E2" : theme.borderSubtle
+                   : AppTheme.overlayBg
+            border.color: settingsPopup.opened ? "#4A90E2" : AppTheme.borderSubtle
             border.width: 1
 
             Text {
                 anchors.centerIn: parent
                 text: "⋯"
-                color: settingsPopup.opened ? "white" : theme.textPrimary
+                color: settingsPopup.opened ? "white" : AppTheme.textPrimary
                 font.pixelSize: 20
                 font.bold: true
             }
@@ -1152,8 +1224,8 @@ Rectangle {
                 closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
 
                 background: Rectangle {
-                    color: theme.overlayBgSolid
-                    border.color: theme.borderSubtle
+                    color: AppTheme.overlayBgSolid
+                    border.color: AppTheme.borderSubtle
                     border.width: 1
                     radius: 8
                 }
@@ -1168,8 +1240,8 @@ Rectangle {
                         x:      psCtrl.leftPadding
                         y:      (psCtrl.height - height) / 2
                         width:  44; height: 24; radius: 12
-                        color:  psCtrl.checked ? theme.accentBlue : theme.bgInput
-                        border.color: psCtrl.checked ? theme.accentBlue : theme.borderSoft
+                        color:  psCtrl.checked ? AppTheme.accentBlue : AppTheme.bgInput
+                        border.color: psCtrl.checked ? AppTheme.accentBlue : AppTheme.borderSoft
                         border.width: 1
                         Behavior on color { ColorAnimation { duration: 120 } }
 
@@ -1188,10 +1260,10 @@ Rectangle {
                     padding: 12
 
                     Row {
-                        // Hidden in reduced (clinical) mode — that view only
+                        // Hidden in clinical mode — that view only
                         // ever shows the BFI/BVI side averages, so the
                         // Mean/Contrast alternative isn't offered there.
-                        visible: !viewer.effectiveReduced
+                        visible: !viewer.effectiveClinical
                         spacing: 8
                         PopupPillSwitch {
                             id: bfiBviSwitch
@@ -1201,16 +1273,16 @@ Rectangle {
                         Text {
                             anchors.verticalCenter: bfiBviSwitch.verticalCenter
                             text: bfiBviSwitch.checked ? "BFI / BVI" : "Mean / Contrast"
-                            color: theme.textPrimary
+                            color: AppTheme.textPrimary
                             font.pixelSize: 12
                             font.family: "Roboto Mono"
                         }
                     }
                     Row {
-                        // Hidden in reduced (clinical) mode — autoscale is
+                        // Hidden in clinical mode — autoscale is
                         // not offered there; the view always uses the
                         // configured manual bounds.
-                        visible: !viewer.effectiveReduced
+                        visible: !viewer.effectiveClinical
                         spacing: 8
                         PopupPillSwitch {
                             id: autoScaleSwitch
@@ -1220,13 +1292,13 @@ Rectangle {
                         Text {
                             anchors.verticalCenter: autoScaleSwitch.verticalCenter
                             text: "Autoscale"
-                            color: theme.textPrimary
+                            color: AppTheme.textPrimary
                             font.pixelSize: 12
                             font.family: "Roboto Mono"
                         }
                     }
                     Row {
-                        visible: !viewer.effectiveReduced
+                        visible: !viewer.effectiveClinical
                         spacing: 8
                         PopupPillSwitch {
                             id: axisLabelsSwitch
@@ -1236,13 +1308,13 @@ Rectangle {
                         Text {
                             anchors.verticalCenter: axisLabelsSwitch.verticalCenter
                             text: "Axis labels"
-                            color: theme.textPrimary
+                            color: AppTheme.textPrimary
                             font.pixelSize: 12
                             font.family: "Roboto Mono"
                         }
                     }
                     Row {
-                        visible: MotionInterface.appConfig.developerMode === true
+                        visible: MotionInterface.appConfig.engineeringMode === true
                         spacing: 8
                         PopupPillSwitch {
                             id: profilerSwitch
@@ -1263,13 +1335,13 @@ Rectangle {
     }
 
     // ── Bottom-left overlay: profiler HUD ─────────────────────────────
-    // Developer-only HUD; toggled from the bottom-right settings menu's
+    // Engineering-only HUD; toggled from the bottom-right settings menu's
     // Profiler switch. Renders as a static overlay anchored at the
     // bottom-left corner of the plot grid, with the same rim margin as
     // the other overlays.
     Rectangle {
         id: profileHud
-        visible: MotionInterface.appConfig.developerMode === true
+        visible: MotionInterface.appConfig.engineeringMode === true
                  && viewer.showProfiling
                  && viewer.scanSource !== null
         anchors.left: parent.left
@@ -1300,25 +1372,25 @@ Rectangle {
             }
             Text {
                 text: "rate    " + viewer.profSampleRateHz.toFixed(1) + " Hz"
-                color: theme.textSecondary
+                color: AppTheme.textSecondary
                 font.pixelSize: 10
                 font.family: "Roboto Mono"
             }
             Text {
                 text: "tick    " + viewer.profPaintTickMsAvg.toFixed(2) + " ms"
-                color: theme.textSecondary
+                color: AppTheme.textSecondary
                 font.pixelSize: 10
                 font.family: "Roboto Mono"
             }
             Text {
                 text: "canvas  " + viewer.profCanvasMsAvg.toFixed(2) + " ms avg"
-                color: theme.textSecondary
+                color: AppTheme.textSecondary
                 font.pixelSize: 10
                 font.family: "Roboto Mono"
             }
             Text {
                 text: "points  " + viewer.profPointsLastTick
-                color: theme.textSecondary
+                color: AppTheme.textSecondary
                 font.pixelSize: 10
                 font.family: "Roboto Mono"
             }

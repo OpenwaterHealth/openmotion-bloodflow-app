@@ -122,13 +122,13 @@ jobs:
       - name: Extract build .zip and resolve OPENWATER_EXE
         if: steps.resolve.outputs.skip == 'false'
         run: |
-          $zip = Get-ChildItem build-artifact -Recurse -Filter "OpenMotion-Bloodflow-*.zip" |
+          $zip = Get-ChildItem build-artifact -Recurse -Filter "Open-Motion-*.zip" |
                  Select-Object -First 1
-          if (-not $zip) { throw "no OpenMotion-Bloodflow-*.zip found in build artifact" }
+          if (-not $zip) { throw "no Open-Motion-*.zip found in build artifact" }
           Expand-Archive $zip.FullName -DestinationPath build-extracted -Force
-          $exe = Get-ChildItem build-extracted -Recurse -Filter "OpenWaterApp.exe" |
+          $exe = Get-ChildItem build-extracted -Recurse -Filter "Open-Motion.exe" |
                  Select-Object -First 1
-          if (-not $exe) { throw "OpenWaterApp.exe not found after extracting build" }
+          if (-not $exe) { throw "Open-Motion.exe not found after extracting build" }
           "OPENWATER_EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "OPENWATER_EXE = $($exe.FullName)"
 
@@ -153,7 +153,7 @@ jobs:
           name: hil-test-logs-${{ steps.resolve.outputs.set }}-${{ github.run_id }}
           path: |
             tests/test_logs/**
-            tests/app-logs/**
-            app-logs/**
+            tests/logs/**
+            logs/**
           if-no-files-found: warn
           retention-days: 14

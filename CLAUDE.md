@@ -13,11 +13,20 @@ pip install -e ../openmotion-sdk
 
 python main.py                          # run the app
 
-python -m PyInstaller -y openwater.spec # package .exe → dist/OpenWaterApp/
-.\build_and_zip.ps1                     # CI packaging wrapper
+python -m PyInstaller -y openwater.spec # package .exe → dist/Open-Motion/
+.\build_and_zip.ps1                     # build + package all 4 artifacts
+
+# 4 artifacts: Clinical/Research × Portable/Installer
+#   Open-Motion-<ver>.zip                (Clinical portable)
+#   Open-Motion-Research-<ver>.zip       (Research portable)
+#   build/installer/Open-Motion-Setup-<ver>.exe          (Clinical installer)
+#   build/installer/Open-Motion-Research-Setup-<ver>.exe (Research installer)
+# build_and_zip.ps1 runs PyInstaller once, then scripts/package_artifacts.ps1
+# loops the variants. Installers are skipped with a warning if WiX isn't found;
+# scripts/package_artifacts.ps1 -SkipInstaller forces portable-only.
 ```
 
-- Tested on **Python 3.13.5**; `requirements.txt` pins PyQt6 6.8.0, qasync 0.27.1, pandas, numpy, matplotlib, pyusb, libusb1, PyInstaller 6.11.1, flake8 7.1.1.
+- Tested on **Python 3.13.5**; `requirements.txt` pins PyQt6 6.8.0, pandas, numpy, matplotlib, pyusb, libusb1, PyInstaller 6.11.1, flake8 7.1.1.
 - No `pyproject.toml`; pure `requirements.txt`.
 - QML does **not** hot-reload — restart the app to pick up `.qml` changes.
 
@@ -26,13 +35,13 @@ python -m PyInstaller -y openwater.spec # package .exe → dist/OpenWaterApp/
 | Path | What lives here |
 |---|---|
 | `main.py` | Entry point. PyQt app, QML engine, logging. Registers `MotionInterface` as a QML singleton. |
-| `motion_connector.py` | **4031 lines.** Single `MotionConnector` QObject — all UI⇄hardware glue, 135 signals/slots. State machine constants at lines 72–76; transitions at 1076–1084. |
+| `motion_connector.py` | **~4,700 lines.** Single `MotionConnector` QObject — all UI⇄hardware glue, ~64 signals / ~80 slots. State machine constants around line 252; transitions in `update_state` (~line 1947). |
 | `motion_config.py` | FPGA model + laser-parameter helpers (extracted in May 2025 for reuse). |
-| `pages/BloodFlow.qml` | Main scan page: patient info, sensor config, trigger. |
-| `pages/DataAnalysis.qml` | Post-processing + BFI/BVI visualization. |
-| `pages/Settings.qml` | Settings overlay. |
+| `pages/BloodFlow.qml` | Main scan page: patient info, sensor config, trigger. The only page `main.qml` loads. |
+| `components/PlotViewer.qml` | Real-time + replay BFI/BVI plot viewer (pan/zoom DVR, autoscale). |
+| `components/SettingsModal.qml` | Settings overlay (opened from BloodFlow — there is no `pages/Settings.qml`). |
 | `pages/scan/` | `ScanRunner.qml` plus task QMLs: `CaptureDataTask`, `ContactQualityCheckTask`, `FlashSensorsTask`, `PostProcessTask`, `SetTriggerTask`. Newer orchestration suite. |
-| `components/` | 29 reusable QML components — `SettingsModal`, `ContactQualityModal`, `CameraDot`, `TestResultsWindow`, etc. |
+| `components/` | 25 reusable QML components — `SettingsModal`, `ContactQualityModal`, `CameraDot`, `TestResultsWindow`, etc. |
 | `processing/visualize_bloodflow.py` | BFI/BVI computation from CSV histograms. |
 | `config/app_config.json` | 56 feature flags / thresholds, grouped by topic: output paths, scan/camera masks, plot/UI, calibration + FT thresholds, contact quality, developer/debug. |
 | `config/laser_params.json` | 18 laser I2C register sets (TA / SEED / EE / OPT variants). **Not user-tunable calibration data** — init/baseline commands for the laser driver chips. |
@@ -41,13 +50,13 @@ python -m PyInstaller -y openwater.spec # package .exe → dist/OpenWaterApp/
 
 **Note:** the old `motion_singleton.py` no longer exists — connector logic was consolidated into `motion_connector.py` and registered as a QML singleton in `main.py`.
 
-## State machine (motion_connector.py:72)
+## State machine (motion_connector.py:252)
 
 ```
 DISCONNECTED (0) → SENSOR_CONNECTED (1) → CONSOLE_CONNECTED (2) → READY (3) → RUNNING (4)
 ```
 
-No FSM class — integer enum + conditional branches on `self._state`. Transitions in `motion_connector.py` around line 1076.
+No FSM class — integer enum + conditional branches on `self._state`. Transitions in `update_state` (`motion_connector.py`, ~line 1947).
 
 QML↔Python wiring: `main.py:256` registers the connector as a QML singleton (`qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MotionInterface", connector)`). QML calls `MotionInterface.slotName()`; Python emits signals QML connects to with `onSignalNameChanged`.
 
@@ -62,19 +71,22 @@ To exercise app logic without hardware, write unit tests that mock the hardware 
 
 Debug flags that are still useful when hardware **is** attached (`config/app_config.json`):
 
-- `developerMode: true` — show per-camera CQ dots, test buttons, debug telemetry.
+- `engineeringMode: true` — show per-camera CQ dots, test buttons, debug telemetry.
 - `commVerbose: true` + `verboseCommandHandling: true` — SDK logs all UART packets + MCU printf output.
 
 ## Notable config flags (`config/app_config.json`)
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `developerMode` | `true` | Show debug telemetry, per-camera CQ dots, test buttons. |
-| `reducedMode` | `true` | Clinical UI: hide settings, large BFI/BVI panels. |
+| `engineeringMode` | `false` | Engineering UI + diagnostics: debug telemetry, per-camera CQ dots, test buttons, Force Dismiss in the CQ modal footer, firmware-update banner, profiling HUD. Also gates the per-scan telemetry and raw CSVs (issue #43 — clinical users must not get them). Unlockable at runtime via `EngineeringUnlockModal`. |
+| `clinicalMode` | `true` (repo config) | Clinical UI: hide settings, large BFI/BVI panels. `main.py` baseline default is `false` (= Research distribution; window title "Open-Motion Research"). The build flips it per artifact variant (`scripts/build_common.ps1`); env override `OPENMOTION_CLINICAL=1/0` beats both. No Settings toggle. |
+| `portableMode` | `false` | Build-time flag: `true` keeps all writable state (config overrides, logs, scan data/db) next to the exe (old un-installed layout); `false` scatters it to `%PROGRAMDATA%\Openwater`. Portable zips ship `true`, installers force `false` — see `Set-PortableMode` (`scripts/build_common.ps1`) and `utils/app_paths.py:writable_root`. Env override `OPENMOTION_PORTABLE=1` for dev testing. |
 | `forceLaserFail` | `false` | Debug: simulate a laser safety trip. |
 | `cameraFakeData` | `false` | **Broken — do not use.** Was meant to request firmware fake histograms; see "Working without hardware". |
 | `histoThrottle` | `false` | Drop histograms to reduce log spam. |
-| `histoCmp` | `true` | Histogram compression (firmware `DEBUG_FLAG_HISTO_CMP`, bit `0x40` — firmware logs it as "histo compress"). Toggle live from Settings → Developer → "Histogram compression". |
+| `histoCmp` | `true` | Histogram compression (firmware `DEBUG_FLAG_HISTO_CMP`, bit `0x40` — firmware logs it as "histo compress"). Toggle live from Settings → Engineering → "Histogram compression". |
+| `deferHistoSend` | `true` | Defer the per-frame histogram send out of the FSIN ISR into the firmware main loop (firmware `DEBUG_FLAG_SEND_DEFER`, bit `0x80`; sensor-fw#68). Config-only (no Settings UI); pushed to connected sensors at connect via `_compute_sensor_debug_flags`. Requires the PR-branch sensor firmware — stock firmware ignores bit 7. |
+| `scanDataStallTimeoutSec` | `15` | Whole-scan data-stall watchdog (#248): abort the scan with the E-303 critical modal when NO camera delivers a frame for this long while the trigger is ON. `<= 0` disables. Per-camera dropouts (`cameraDropoutThresholdSec`, default 2 s, code-only key) stay fail-soft — only total loss aborts. |
 | `tecTripTempC` | `40` | Console over-temp trip (°C) pushed to the console user config on connect via `motion_config.ensure_tec_trip` (read-modify-write, preserves calibration + OPT/EE keys). Validated to 1–60 °C; absent/invalid values leave the device's existing trip untouched (never writes `0`, which would disable the firmware trip). |
 | `ft_min_mean_per_camera` | `[40,40,…]` | Calibration pass threshold — min pixel mean per camera (8-element array). |
 | `calibration_scan_duration_sec` | `15` | Calibration runtime. |
@@ -82,39 +94,42 @@ Debug flags that are still useful when hardware **is** attached (`config/app_con
 | `cq_dark_threshold_per_camera` | `[3.0,…]` | Contact-quality dark threshold. |
 | `bfiClampLow` / `bfiClampHigh` | `0.0` / `10.0` | Display clamps (values outside show `--`). |
 | `bviLowPassEnabled` | `true` | 1-pole LPF on BVI (cutoff 40 Hz). |
-| `dataDirectory` | `C:\Users\ethan\Projects\scan_data` | Single output root — scan CSVs/DB, `app-logs/`, `app-logs/ft-test-csvs/` all land under here. |
+| `writeRawCsv` | `false` | Opt-in raw histogram CSVs (`{scan_id}_(left\|right)_mask*_raw.csv`). Settings → Engineering toggle; additionally gated on `engineeringMode` — flipping engineering mode off stops raw output even if the toggle was left on. `rawCsvDurationSec` caps seconds written (`null` = whole scan). |
+| `writeCorrectedCsv` | `false` | Opt-in corrected per-cam CSV (`{scan_id}.csv`) — redundant now that per-cam BFI/BVI lands in `scans.db`. Config-only, no Settings UI. |
+| `dataDirectory` | `null` | Single output root — `logs/` and `data/` (`scans.db`, calibrations) live under it. `null` = `app_paths.writable_root()`: cwd for dev runs, exe-adjacent or `%PROGRAMDATA%\Openwater` per `portableMode` when frozen. |
 
 ## Reading the app log
 
-Every launch writes a timestamped log to `<dataDirectory>/app-logs/ow-bloodflowapp-<YYYYMMDD_HHMMSS>.log`. Use it as the first stop when diagnosing scan / calibration / connect failures — it captures every SDK + connector log line, including pipeline-stage exceptions that are caught and silently swallowed by `ScanRunner._safe_consume`.
+Every launch writes a timestamped log to `<dataDirectory>/logs/open-motion-<YYYYMMDD_HHMMSS>.log`. Use it as the first stop when diagnosing scan / calibration / connect failures — it captures every SDK + connector log line, including pipeline-stage exceptions that are caught and silently swallowed by `ScanRunner._safe_consume`.
 
 ```powershell
+# Dev runs (dataDirectory null) log to <repo>/logs/. If dataDirectory is set
+# in config/app_config.json, substitute <dataDirectory>\logs\ below.
+
 # Latest log, full contents:
-Get-ChildItem C:\Users\ethan\Projects\scan_data\app-logs\ow-bloodflowapp-*.log |
+Get-ChildItem C:\Users\ethan\Projects\openmotion-bloodflow-app\logs\open-motion-*.log |
   Sort-Object LastWriteTime -Descending | Select-Object -First 1 | Get-Content
 
 # Filter the latest log for failure-shaped lines (most common starting point):
-Get-ChildItem C:\Users\ethan\Projects\scan_data\app-logs\ow-bloodflowapp-*.log |
+Get-ChildItem C:\Users\ethan\Projects\openmotion-bloodflow-app\logs\open-motion-*.log |
   Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
   Get-Content | Select-String -Pattern "WARNING|ERROR|raised|exception|Traceback|FAIL|aborted" -Context 0,3
 
 # Just the calibration outcome:
-Get-ChildItem C:\Users\ethan\Projects\scan_data\app-logs\ow-bloodflowapp-*.log |
+Get-ChildItem C:\Users\ethan\Projects\openmotion-bloodflow-app\logs\open-motion-*.log |
   Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
   Get-Content | Select-String -Pattern "Calibration phase|procedure complete|samples captured"
 ```
 
-The `dataDirectory` config key controls the root (defaults to cwd if unset — falls back to `~/Documents/OpenWater Bloodflow` on macOS). Sibling output directories under the same root:
-- `app-logs/` — app log files (one per launch)
-- `app-logs/ft-test-csvs/` — factory-test CSVs
-- `calibrations/` — saved calibration JSONs (also written here)
-- The scan output files (raw / corrected / telemetry CSV + `scans.db`) land directly in the root. Scan notes live in `scans.db` (`sessions.session_notes`), not as files; `*_notes.txt` files are legacy read-only fallbacks.
+The `dataDirectory` config key controls the root (defaults to cwd if unset — falls back to `~/Documents/Open-Motion` on macOS). When unset on a frozen build, the default instead follows `portableMode`: next to the exe (portable zip) or `%PROGRAMDATA%\Openwater` (installer). Two fixed children live under that root:
+- `logs/` — app log files (one per launch)
+- `data/` — everything else. **Scan output is DB-only by default**: everything lands in `scans.db` (per-cam BFI/BVI, sessions, notes in `sessions.session_notes`); no per-scan CSVs are written unless opted in. User-facing CSVs are export-time artifacts: History → Export CSV (`exportScanCsv`). The opt-in engineering per-scan CSVs land directly in `data/`: telemetry CSV (`{scan_id}_{subject}_telemetry.csv`, gated on `engineeringMode` — issue #43), raw histogram CSVs (`engineeringMode && writeRawCsv`), corrected per-cam CSV (`writeCorrectedCsv`). `data/calibrations/` holds saved calibration JSONs plus the SDK's per-camera PASS/FAIL CSVs (`calibration-<ts>.csv` / `test-<ts>.csv`); `data/debug-bundles/` holds "Send Debug Logs" zips; `data/updates/` holds in-app-updater downloads. `*_notes.txt` files are legacy read-only fallbacks. (`data/ft-test-csvs/` was a legacy per-scan factory-test export — dead since May 2026 and retired; the Test/Calibrate flows' CSVs are its superset.)
 
 **Important:** the runner is fail-soft. `ScanRunner._safe_consume` catches sink exceptions and logs them as `sink %r raised on channel ...` at ERROR; `pipeline.process` exceptions log as `pipeline.process raised — resetting and continuing` at ERROR. **Neither aborts the scan**, so the app may report "complete" while every interval was actually broken. Always grep for `raised|exception` even on apparent successes when something downstream looks wrong.
 
 ## Gotchas
 
-- **`motion_connector.py` is 4031 lines** — the file is doing too much. Don't add to it without considering extraction; recent precedent is `motion_config.py` (May 2025).
+- **`motion_connector.py` is ~4,700 lines** — the file is doing too much. Don't add to it without considering extraction; recent precedent is `motion_config.py` (May 2025).
 - **Cross-thread signals:** 135+ signals; several (e.g. `_calibrationCompleteSignal`, `safetyTripDuringCaptureRequested`) fire from USB I/O / scanner worker threads. Use `Qt.QueuedConnection` or you'll race QML.
 - **PyInstaller libusb mirror** (`openwater.spec` lines 61–95): if bundled app fails USB enumeration, the runtime hook can't find vendored libusb DLLs. Check the spec's mirror step.
 - **`laser_params.json` is not "tunable":** editing values risks laser-off, wrong pulse widths, safety failures. Treat as locked baseline.
@@ -126,6 +141,36 @@ The `dataDirectory` config key controls the root (defaults to cwd if unset — f
 - Default branch: `main`; daily work on `next`. PR feature → `next`, `next` → `main` for release.
 - Releases triggered by semver tags (e.g. `1.1.2`, `1.1.2-dev.0`, `1.1.2-rc.1`) — see [../CLAUDE.md](../CLAUDE.md) for tag format.
 - CI workflows: `.github/workflows/release-build.yml` (Windows runner, builds .exe + zip on tags / manual dispatch) and `hil-tests.yml` (self-hosted Windows runner with Shelly IoT outlet power control, runs after the release build completes).
+
+### Curating release notes (issue #348)
+
+`release-build.yml`'s auto-generated GitHub Release body is just a raw commit
+list since the *previous tag* — dev/rc noise included, and it resets on every
+pre-release so it never shows the full diff since the last production
+version. Treat it as a traceability appendix, not release notes. Before
+announcing an rc/dev build to the test team, curate the release
+(`gh release edit <tag> --notes-file <file>`) by adding two sections above
+that commit list:
+
+1. **Changelog** — plain-English feature summary since the last *production*
+   release (not the last pre-release tag — diff against the last `X.Y.Z`
+   with no suffix), grouped by theme. Include `openmotion-sdk` changes too:
+   prod/rc tags install the SDK's latest PyPI release at build time (see
+   `release-build.yml`'s SDK-selection step), so diff the SDK version bundled
+   at the last production release (check that build's CI log for
+   `Successfully installed ... openmotion-sdk-X.Y.Z`) against whatever's
+   currently on PyPI, and fold in anything user-visible.
+2. **Known Issues** — currently-open bugs a tester could hit in this build.
+   Never list unimplemented/future features here. Cross-check each candidate
+   against the merge log first — a ticket can still show "open" on the board
+   after its fix merged, since tickets stay in **In review** through
+   pre-release validation (see the board process in [../CLAUDE.md](../CLAUDE.md)).
+   **Always confirm the candidate list with Ethan before publishing** — the
+   backlog accumulates duplicates, stale hardware-specific reports, and
+   test-infra-only bugs that don't belong in a test-team-facing note.
+
+Keep the raw commit list / compare-diff link below the curated sections —
+it's the audit trail, not something to delete.
 
 ## "Start here" by task
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────
-#  build_macos.sh — Build OpenWater Bloodflow as a macOS .app + DMG
+#  build_macos.sh — Build Open-Motion as a macOS .app + DMG
 # ──────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # ── Configuration ─────────────────────────────────────────────────────
-APP_NAME="OpenWater Bloodflow"
+APP_NAME="Open-Motion"
 BUNDLE_ID="com.openwaterhealth.bloodflow"
 ICON_SRC="assets/images/favicon.png"
 SPEC_FILE="openwater_macos.spec"
@@ -17,7 +17,7 @@ BUILD_DIR="build"
 
 # Resolve version from git
 VERSION="$(python version.py 2>/dev/null || echo "0.0.0")"
-DMG_NAME="OpenWaterBloodflow-${VERSION}-macOS.dmg"
+DMG_NAME="Open-Motion-${VERSION}-macOS.dmg"
 
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║  Building ${APP_NAME} v${VERSION} for macOS                 "
@@ -65,7 +65,7 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 from PyInstaller.building.build_main import Analysis, PYZ, EXE, COLLECT, BUNDLE
 
-APP_NAME = "OpenWater Bloodflow"
+APP_NAME = "Open-Motion"
 ENTRY = "main.py"
 ICNS_FILE = "build/AppIcon.icns"
 
@@ -91,7 +91,6 @@ datas   += qt_datas
 binaries += qt_bins
 hidden  += qt_hidden
 hidden  += collect_submodules("PyQt6")
-hidden  += ["qasync"]
 
 # ── omotion SDK ──
 om_datas, om_bins, om_hidden = collect_all("omotion")
@@ -240,7 +239,7 @@ try:
         shade = int(40 + y * 0.5)
         draw.line([(0, y), (width, y)], fill=(shade, shade, shade + 20))
     # Title
-    draw.text((width // 2, 30), "OpenWater Bloodflow", fill="white", anchor="mt")
+    draw.text((width // 2, 30), "Open-Motion", fill="white", anchor="mt")
     # Arrow hint
     draw.text((width // 2, height // 2 + 40), "Drag app to Applications →", fill="#aaaacc", anchor="mm")
     img.save(sys.argv[1])

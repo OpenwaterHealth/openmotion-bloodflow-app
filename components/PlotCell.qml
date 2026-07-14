@@ -1,4 +1,5 @@
 import QtQuick 6.0
+import OpenMotion 1.0
 
 // Phase 2a — single-trace Canvas bound to one (side, cam_id, metric) key
 // on a ScanDataSource. The cell tracks the live edge of the source
@@ -26,7 +27,7 @@ Item {
     property string metric: "bfi"
     property real yMin: 0.0
     property real yMax: 10.0
-    property color traceColor: theme.statusBlue
+    property color traceColor: AppTheme.statusBlue
 
     // Secondary trace (optional) — set secondaryMetric to a non-empty
     // string to render a second overlaid trace with its own y-mapping.
@@ -34,11 +35,11 @@ Item {
     property string secondaryMetric: ""
     property real secondaryYMin: 0.0
     property real secondaryYMax: 10.0
-    property color secondaryColor: theme.statusBlue
+    property color secondaryColor: AppTheme.statusBlue
 
     // Visual — defaults pulled from AppTheme; can be overridden per-cell.
-    property color frameColor: theme.borderSubtle
-    property color bgColor: theme.plotCellBg
+    property color frameColor: AppTheme.borderSubtle
+    property color bgColor: AppTheme.plotCellBg
 
     // DVR target — set to PlotViewer; cell calls .setWindow(startT, sec)
     // on pan/zoom interactions. Cell itself owns no time-axis state;
@@ -50,7 +51,7 @@ Item {
     // to every cell so the vertical line stays synced across the grid.
     property real cursorT: NaN
 
-    // Top-left live value labels — toggleable so reduced mode (which
+    // Top-left live value labels — toggleable so clinical mode (which
     // shows the same numbers on the large side panels) can hide them.
     property bool showValueLabels: true
 
@@ -58,11 +59,14 @@ Item {
     // default comes from appConfig.showAxisLabels (false = labels off).
     property bool showAxisLabels: true
 
-    // Top-right temperature readout — developer mode only; the viewer
-    // binds this from appConfig.developerMode (issue #165).
+    // Top-right temperature readout — engineering mode only; the viewer
+    // binds this from appConfig.engineeringMode (issue #165).
     property bool showTemperature: false
 
-    AppTheme { id: theme }
+    // Connection-lost badge (issue #174) — the viewer sets this true
+    // while the connector's dropout watchdog has this (side, camId)
+    // marked Connection Lost; clears when frames resume.
+    property bool connectionLost: false
 
     // ── Repaint plumbing ───────────────────────────────────────────────
     // Repaints are throttled by the parent PlotViewer: it owns a 33 ms
@@ -236,7 +240,7 @@ Item {
             var dropT = cell.source.dropped_at_for(cell.side, cell.camId)
             if (isFinite(dropT) && dropT >= tLo && dropT <= tHi) {
                 var dropX = ((dropT - tLo) / dt) * width
-                ctx.strokeStyle = theme.accentRed
+                ctx.strokeStyle = AppTheme.accentRed
                 ctx.lineWidth = 2
                 ctx.beginPath()
                 ctx.moveTo(Math.floor(dropX) + 0.5, 0)
@@ -248,7 +252,7 @@ Item {
             // viewer so every cell stays in sync on hover).
             if (isFinite(cell.cursorT) && cell.cursorT >= tLo && cell.cursorT <= tHi) {
                 var crossX = ((cell.cursorT - tLo) / dt) * width
-                ctx.strokeStyle = theme.textTertiary
+                ctx.strokeStyle = AppTheme.textTertiary
                 ctx.lineWidth = 1
                 ctx.beginPath()
                 ctx.moveTo(Math.floor(crossX) + 0.5, 0)
@@ -277,11 +281,11 @@ Item {
 
         Text {
             // cam_id = -1 is the side-averaged stream fed by the SDK's
-            // SideAveragingStage in reduced mode — hide the label there;
+            // SideAveragingStage in clinical mode — hide the label there;
             // the large side panel next to the plot already names the side.
             visible: cell.camId !== -1
             text: cell.side.toUpperCase() + " " + (cell.camId + 1)
-            color: theme.textSecondary
+            color: AppTheme.textSecondary
             font.pixelSize: 11
             font.family: "Roboto Mono"
         }
@@ -324,7 +328,7 @@ Item {
     }
 
     // Camera temperature — top-right, orange, dev mode only. Reads the
-    // "temp" metric stream (light frames only; absent for the reduced-
+    // "temp" metric stream (light frames only; absent for the clinical-
     // mode cam_id=-1 average and for past scans) and hides itself when
     // no finite reading exists.
     Text {
@@ -342,9 +346,34 @@ Item {
         // but only when it's drawn; reclaim the space when axis labels are off.
         anchors.topMargin: cell.showAxisLabels ? 18 : 8
         text: isFinite(tempC) ? tempC.toFixed(1) + "°C" : ""
-        color: theme.readableInk(theme.accentOrange)
+        color: AppTheme.readableInk(AppTheme.accentOrange)
         font.pixelSize: 10
         font.family: "Roboto Mono"
+    }
+
+    // Connection-lost badge — centered red pill shown while the dropout
+    // watchdog has this camera marked Connection Lost (issue #174). The
+    // trace freezes when frames stop, so the badge is the in-plot
+    // explanation; it disappears if frames resume (watchdog re-arm).
+    Rectangle {
+        visible: cell.connectionLost
+        anchors.centerIn: parent
+        width: lostLabel.implicitWidth + 16
+        height: lostLabel.implicitHeight + 8
+        radius: height / 2
+        color: AppTheme.plotCellBg
+        border.color: AppTheme.accentRed
+        border.width: 1
+        opacity: 0.92
+        Text {
+            id: lostLabel
+            anchors.centerIn: parent
+            text: "CONNECTION LOST"
+            color: AppTheme.accentRed
+            font.pixelSize: cell.width >= 160 ? 11 : 9
+            font.weight: Font.DemiBold
+            font.family: "Roboto Mono"
+        }
     }
 
     // ── Pan + wheel-zoom MouseArea ─────────────────────────────────────

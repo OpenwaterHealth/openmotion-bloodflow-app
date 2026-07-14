@@ -18,7 +18,7 @@ def _connector(tmp_path, scan_db_path=None):
     # explicit: MagicMock default would be truthy
     iface.scan_db_path = scan_db_path
     return MotionConnector(
-        interface=iface, app_config={"developerMode": False},
+        interface=iface, app_config={"engineeringMode": False},
         data_dir=str(tmp_path), config_dir="config",
     )
 
@@ -79,7 +79,7 @@ class TestScanNotesSetter:
         c.scanNotes = "edited after scan"
 
         assert _db_notes(db_path, LABEL) == "edited after scan"
-        assert list(tmp_path.glob("*_notes.txt")) == []
+        assert list((tmp_path / "data").glob("*_notes.txt")) == []
 
     def test_setter_clears_notes_in_db(self, tmp_path):
         db_path = str(tmp_path / "scans.db")
@@ -96,7 +96,7 @@ class TestScanNotesSetter:
         c = _connector(tmp_path, scan_db_path=None)
         c.scanNotes = "pre-scan notes"
         assert c.scanNotes == "pre-scan notes"
-        assert list(tmp_path.glob("*_notes.txt")) == []
+        assert list((tmp_path / "data").glob("*_notes.txt")) == []
 
 
 class TestGetScanDetailsNotes:
@@ -111,8 +111,10 @@ class TestGetScanDetailsNotes:
     def test_details_fall_back_to_legacy_notes_txt(self, tmp_path):
         """Scans from before the DB migration only have a notes.txt —
         History must still show their notes."""
-        (tmp_path / f"{LABEL}_notes.txt").write_text("legacy file notes\n",
-                                                     encoding="utf-8")
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        (data_dir / f"{LABEL}_notes.txt").write_text("legacy file notes\n",
+                                                      encoding="utf-8")
         c = _connector(tmp_path, scan_db_path=None)
 
         details = c.get_scan_details(LABEL)
@@ -121,8 +123,10 @@ class TestGetScanDetailsNotes:
     def test_db_notes_win_over_legacy_file(self, tmp_path):
         db_path = str(tmp_path / "scans.db")
         _session(db_path, LABEL, notes="db notes")
-        (tmp_path / f"{LABEL}_notes.txt").write_text("stale file notes\n",
-                                                     encoding="utf-8")
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        (data_dir / f"{LABEL}_notes.txt").write_text("stale file notes\n",
+                                                      encoding="utf-8")
         c = _connector(tmp_path, scan_db_path=db_path)
 
         details = c.get_scan_details(LABEL)

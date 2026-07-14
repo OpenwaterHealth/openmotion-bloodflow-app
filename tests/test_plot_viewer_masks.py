@@ -139,11 +139,17 @@ class _StubMotionInterface(QObject):
     PlotViewer.qml (and its child components) actually reference."""
 
     currentScanSourceChanged = pyqtSignal()
+    connectionStatusChanged = pyqtSignal()
     _neverEmitted = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._scan_source = None
+        # Both sensors present by default so the legacy grid tests (which
+        # predate the issue-#298 connection gate) still render both sides
+        # on the live-fallback path. The #298 tests flip these.
+        self._left_connected = True
+        self._right_connected = True
 
     @pyqtProperty("QVariantMap", notify=_neverEmitted)
     def appConfig(self):
@@ -154,7 +160,7 @@ class _StubMotionInterface(QObject):
         return {
             "leftMask": MIDDLE_MASK,
             "rightMask": MIDDLE_MASK,
-            "developerMode": False,
+            "engineeringMode": False,
             "showProfiling": False,
         }
 
@@ -169,6 +175,19 @@ class _StubMotionInterface(QObject):
     @pyqtProperty(bool, notify=_neverEmitted)
     def liveSourceAvailable(self):
         return False
+
+    @pyqtProperty(bool, notify=connectionStatusChanged)
+    def leftSensorConnected(self):
+        return self._left_connected
+
+    @pyqtProperty(bool, notify=connectionStatusChanged)
+    def rightSensorConnected(self):
+        return self._right_connected
+
+    def setSensorsConnected(self, left, right):
+        self._left_connected = bool(left)
+        self._right_connected = bool(right)
+        self.connectionStatusChanged.emit()
 
     @pyqtSlot()
     def showLiveSource(self):
@@ -490,3 +509,132 @@ def test_row_compaction_is_shared_across_modules(viewer_factory):
     # U row 3 (cams 1|8) → display row 2: left side only.
     assert _pos(cells, "left", 0) == (2, 0)
     assert _pos(cells, "left", 7) == (2, 1)
+
+
+# ── Issue #298 — single sensor draws only its own side ─────────────────
+# The live leftMask/rightMask carry the config default (e.g. 0x99 = 4
+# cams) regardless of which sensor ports are populated. On the live
+# fallback (no past-scan source, so masks read -1) PlotViewer must gate
+# each side on its sensor actually being connected, or a lone right-port
+# sensor draws 4 phantom left plots. The gate re-flows on connect/
+# disconnect because leftSensorConnected/rightSensorConnected notify.
+
+
+def _clinical_cells(viewer):
+    """Read the clinical (side-averaged) grid model."""
+    val = viewer.property("_clinicalCellModel")
+    if hasattr(val, "toVariant"):
+        val = val.toVariant()
+    assert isinstance(val, list)
+    return val
+
+
+def test_right_only_sensor_hides_left_plots(viewer_factory):
+    """The reported bug: only the right sensor is connected, but the live
+    leftMask default (0x99, 4 cams) would draw 4 left plots. The connection
+    gate must drop them, leaving only the right side."""
+    viewer = viewer_factory()
+    try:
+        viewer_factory.stub.setSensorsConnected(left=False, right=True)
+        # BloodFlow.qml never clears leftMask when the left sensor is
+        # absent — it keeps the config default. Reproduce that here.
+        viewer.setProperty("leftMask", 0x99)
+        viewer.setProperty("rightMask", 0x99)
+        cells = _cells(viewer)
+        assert _cam_ids(cells, "left") == []
+        assert _cam_ids(cells, "right") == [0, 3, 4, 7]
+        # Single side active ⇒ no side-break spacer, right module at col 0-1.
+        assert viewer.property("_sideGapActive") is False
+    finally:
+        viewer_factory.stub.setSensorsConnected(left=True, right=True)
+
+
+def test_left_only_sensor_hides_right_plots(viewer_factory):
+    viewer = viewer_factory()
+    try:
+        viewer_factory.stub.setSensorsConnected(left=True, right=False)
+        viewer.setProperty("leftMask", 0x99)
+        viewer.setProperty("rightMask", 0x99)
+        cells = _cells(viewer)
+        assert _cam_ids(cells, "right") == []
+        assert _cam_ids(cells, "left") == [0, 3, 4, 7]
+        assert viewer.property("_sideGapActive") is False
+    finally:
+        viewer_factory.stub.setSensorsConnected(left=True, right=True)
+
+
+def test_both_sensors_connected_render_both_sides(viewer_factory):
+    viewer = viewer_factory()
+    try:
+        viewer_factory.stub.setSensorsConnected(left=True, right=True)
+        viewer.setProperty("leftMask", 0x99)
+        viewer.setProperty("rightMask", 0x99)
+        cells = _cells(viewer)
+        assert _cam_ids(cells, "left") == [0, 3, 4, 7]
+        assert _cam_ids(cells, "right") == [0, 3, 4, 7]
+        assert viewer.property("_sideGapActive") is True
+    finally:
+        viewer_factory.stub.setSensorsConnected(left=True, right=True)
+
+
+def test_grid_reflows_on_left_sensor_connect_midsession(viewer_factory):
+    """Re-flow on connect/disconnect: start right-only (left hidden), then
+    the left sensor enumerates → left plots appear without re-touching the
+    masks. Proves the binding tracks connectionStatusChanged."""
+    viewer = viewer_factory()
+    try:
+        viewer.setProperty("leftMask", 0x99)
+        viewer.setProperty("rightMask", 0x99)
+        viewer_factory.stub.setSensorsConnected(left=False, right=True)
+        assert _cam_ids(_cells(viewer), "left") == []
+
+        # Left sensor plugs in mid-session.
+        viewer_factory.stub.setSensorsConnected(left=True, right=True)
+        assert _cam_ids(_cells(viewer), "left") == [0, 3, 4, 7]
+
+        # And unplugs again — plots must disappear.
+        viewer_factory.stub.setSensorsConnected(left=False, right=True)
+        assert _cam_ids(_cells(viewer), "left") == []
+    finally:
+        viewer_factory.stub.setSensorsConnected(left=True, right=True)
+
+
+def test_past_scan_ignores_connection_gate(viewer_factory):
+    """A replayed past scan lays out from its recorded masks even with the
+    matching sensor disconnected — you can review a two-sided scan with no
+    hardware attached (issue #175 must survive the #298 gate)."""
+    viewer = viewer_factory()
+    try:
+        viewer_factory.stub.setSensorsConnected(left=False, right=False)
+        past = _StubPastScanSource(FAR_MASK, FAR_MASK)
+        viewer_factory.stub.setScanSource(past)
+        cells = _cells(viewer)
+        assert _cam_ids(cells, "left") == [0, 1, 6, 7]
+        assert _cam_ids(cells, "right") == [0, 1, 6, 7]
+    finally:
+        viewer_factory.stub.setScanSource(None)
+        viewer_factory.stub.setSensorsConnected(left=True, right=True)
+
+
+def test_clinical_model_drops_disconnected_side(viewer_factory):
+    """Clinical mode: a right-only sensor shows only the RIGHT side-average
+    cell, compacted to row 0 — no blank LEFT panel/row."""
+    viewer = viewer_factory()
+    try:
+        viewer.setProperty("clinicalMode", True)
+        viewer.setProperty("leftMask", 0xC3)
+        viewer.setProperty("rightMask", 0xC3)
+        viewer_factory.stub.setSensorsConnected(left=False, right=True)
+        cells = _clinical_cells(viewer)
+        assert len(cells) == 1
+        assert cells[0]["side"] == "right"
+        assert cells[0]["row"] == 0
+
+        # Both connected → both cells, stacked.
+        viewer_factory.stub.setSensorsConnected(left=True, right=True)
+        cells = _clinical_cells(viewer)
+        assert [c["side"] for c in cells] == ["left", "right"]
+        assert [c["row"] for c in cells] == [0, 1]
+    finally:
+        viewer_factory.stub.setSensorsConnected(left=True, right=True)
+        viewer.setProperty("clinicalMode", False)

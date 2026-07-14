@@ -343,7 +343,9 @@ def session_data_db(tmp_path):
     """Returns a (db, session_id) pair pre-populated with synthetic rows
     spanning two sides × two cameras × 5 timestamps each."""
     db_path = tmp_path / "scan.db"
-    conn = sqlite3.connect(str(db_path))
+    # check_same_thread=False matches the real ScanDatabase read handle —
+    # the async DB-window loader queries it from a worker thread.
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.executescript(_SESSION_DATA_DDL)
     session_id = 7
 
@@ -386,7 +388,7 @@ def test_past_scan_source_bucketizes_rows_into_per_metric_buffers(session_data_d
 
     # This fixture is a normal-mode scan: 4 (side, cam) combos × 4 metrics =
     # 16 per-cam buffers, each holding its 5 rows. No cam_id=-1 (that's the
-    # reduced-mode side average, read straight from the DB when present).
+    # clinical-mode side average, read straight from the DB when present).
     expected_keys = {
         (side, cam, metric)
         for side in ("left", "right")
@@ -433,10 +435,10 @@ def test_past_scan_source_empty_session_yields_empty_source(tmp_path):
 
 
 def test_past_scan_source_reads_cam_id_minus_1_from_db(tmp_path):
-    """A reduced-mode scan stores the corrected per-side average at cam_id=-1
+    """A clinical-mode scan stores the corrected per-side average at cam_id=-1
     (cam_id=-1 frames on the 'final' channel, persisted by ScanDBSink).
     PastScanSource exposes those directly —
-    no derivation — so reduced-mode replay reads the corrected trace verbatim."""
+    no derivation — so clinical-mode replay reads the corrected trace verbatim."""
     db_path = tmp_path / "scan.db"
     conn = sqlite3.connect(str(db_path))
     conn.executescript(_SESSION_DATA_DDL)
@@ -457,7 +459,7 @@ def test_past_scan_source_reads_cam_id_minus_1_from_db(tmp_path):
     db = _FakeScanDatabase(conn)
 
     src = PastScanSource(scan_db=db, session_id=9)
-    # Only cam_id=-1 buffers (reduced-mode scan persists average only).
+    # Only cam_id=-1 buffers (clinical-mode scan persists average only).
     assert all(cam == -1 for (_s, cam, _m) in src.buffers.keys())
     left_bfi = src.buffers[("left", -1, "bfi")]
     assert left_bfi.n == 3
@@ -476,7 +478,7 @@ def test_past_scan_source_buffers_are_unbounded(session_data_db):
 
 
 def test_past_scan_source_csv_fallback_when_db_has_no_bfi(tmp_path):
-    """A pre-pipeline scan with no BFI/BVI in the DB falls back to the reduced
+    """A pre-pipeline scan with no BFI/BVI in the DB falls back to the clinical
     corrected CSV, which populates the cam_id=-1 side buffers."""
     db_path = tmp_path / "scan.db"
     conn = sqlite3.connect(str(db_path))
@@ -484,7 +486,7 @@ def test_past_scan_source_csv_fallback_when_db_has_no_bfi(tmp_path):
     conn.commit()
     db = _FakeScanDatabase(conn)  # empty DB → no BFI → CSV fallback
 
-    csv_path = tmp_path / "reduced.csv"
+    csv_path = tmp_path / "clinical.csv"
     csv_path.write_text(
         "frame_id,timestamp_s,bfi_left,bfi_right,bvi_left,bvi_right\n"
         "0,0.0,2.5,3.5,12.0,13.0\n"
@@ -549,14 +551,14 @@ def test_load_past_scan_buffers_matches_sync_constructor(session_data_db):
 
 def test_load_past_scan_buffers_csv_fallback(tmp_path):
     """No BFI/BVI in the DB → the corrected-CSV fallback populates the
-    reduced-mode cam_id=-1 side buffers, same as the sync path."""
+    clinical-mode cam_id=-1 side buffers, same as the sync path."""
     db_path = tmp_path / "scan.db"
     conn = sqlite3.connect(str(db_path))
     conn.executescript(_SESSION_DATA_DDL)
     conn.commit()
     db = _FakeScanDatabase(conn)  # empty DB → no BFI → CSV fallback
 
-    csv_path = tmp_path / "reduced.csv"
+    csv_path = tmp_path / "clinical.csv"
     csv_path.write_text(
         "frame_id,timestamp_s,bfi_left,bfi_right,bvi_left,bvi_right\n"
         "0,0.0,2.5,3.5,12.0,13.0\n"
@@ -655,7 +657,7 @@ def test_live_scan_source_masks_unknown():
 
 
 def test_past_scan_source_masks_unknown_when_no_per_cam_streams():
-    """Reduced-mode scans only carry the cam_id=-1 side average; with no
+    """Clinical-mode scans only carry the cam_id=-1 side average; with no
     per-camera streams there is no normal-mode mask to derive, so the
     masks read -1 (unknown) and the viewer falls back to its live masks."""
     buffers = {}
@@ -668,12 +670,12 @@ def test_past_scan_source_masks_unknown_when_no_per_cam_streams():
     assert src.rightMask == -1
 
 
-# ── Replay mode awareness — source reports its recorded reduced/dev mode ──
-# The viewer renders in the mode the scan was recorded in. reducedMode is a
-# tri-state: -1 unknown, 0 per-camera, 1 reduced — derived from the loaded
-# buffer cam_ids (reduced scans store only cam_id=-1; per-camera store 0..7).
+# ── Replay mode awareness — source reports its recorded clinical/engineering mode ──
+# The viewer renders in the mode the scan was recorded in. clinicalMode is a
+# tri-state: -1 unknown, 0 per-camera, 1 clinical — derived from the loaded
+# buffer cam_ids (clinical scans store only cam_id=-1; per-camera store 0..7).
 
-from data_sources import _derive_reduced_from_buffers
+from data_sources import _derive_clinical_from_buffers
 
 
 def _one_sample_buffer():
@@ -685,20 +687,20 @@ def _one_sample_buffer():
 def test_derive_reduced_per_camera():
     buffers = {("left", 0, "bfi"): _one_sample_buffer(),
                ("right", 7, "bfi"): _one_sample_buffer()}
-    assert _derive_reduced_from_buffers(buffers) == 0
+    assert _derive_clinical_from_buffers(buffers) == 0
 
 
 def test_derive_reduced_side_average():
     buffers = {("left", -1, "bfi"): _one_sample_buffer(),
                ("right", -1, "bfi"): _one_sample_buffer()}
-    assert _derive_reduced_from_buffers(buffers) == 1
+    assert _derive_clinical_from_buffers(buffers) == 1
 
 
 def test_derive_reduced_empty_is_unknown():
-    assert _derive_reduced_from_buffers({}) == -1
+    assert _derive_clinical_from_buffers({}) == -1
     # A buffer dict whose buffers hold no samples is also "unknown".
     empty_buf = {("left", -1, "bfi"): _CameraBuffer()}
-    assert _derive_reduced_from_buffers(empty_buf) == -1
+    assert _derive_clinical_from_buffers(empty_buf) == -1
 
 
 def test_past_scan_source_reduced_mode_for_side_average():
@@ -706,7 +708,7 @@ def test_past_scan_source_reduced_mode_for_side_average():
     for side in ("left", "right"):
         buffers[(side, -1, "bfi")] = _one_sample_buffer()
     src = PastScanSource(scan_db=None, session_id=1, preloaded_buffers=buffers)
-    assert src.reducedMode == 1
+    assert src.clinicalMode == 1
 
 
 def test_past_scan_source_reduced_mode_for_per_camera():
@@ -714,12 +716,12 @@ def test_past_scan_source_reduced_mode_for_per_camera():
     for cam_id in (0, 1, 6, 7):
         buffers[("left", cam_id, "bfi")] = _one_sample_buffer()
     src = PastScanSource(scan_db=None, session_id=1, preloaded_buffers=buffers)
-    assert src.reducedMode == 0
+    assert src.clinicalMode == 0
 
 
 def test_live_scan_source_reduced_mode_unknown():
     src = LiveScanSource(plot_t0=0.0)
-    assert src.reducedMode == -1
+    assert src.clinicalMode == -1
 
 
 # ── Issue #175 reopen — stored config wins over the data-derived heuristic ──
@@ -781,7 +783,7 @@ def test_recorded_flags_honor_one_sided_config():
 
 
 def test_recorded_flags_reduced_mode_overrides_derived():
-    """Stored reduced_mode=True yields reducedMode==1 even though the
+    """Stored reduced_mode=True yields clinicalMode==1 even though the
     per-camera buffers would derive 0 (per-camera)."""
     src = PastScanSource(
         scan_db=None,
@@ -793,7 +795,7 @@ def test_recorded_flags_reduced_mode_overrides_derived():
             "reduced_mode": True,
         },
     )
-    assert src.reducedMode == 1
+    assert src.clinicalMode == 1
 
 
 def test_missing_recorded_flags_falls_back_to_derived():
@@ -807,7 +809,7 @@ def test_missing_recorded_flags_falls_back_to_derived():
     )
     assert src.leftMask == 0x66
     assert src.rightMask == 0x66
-    assert src.reducedMode == 0
+    assert src.clinicalMode == 0
 
 
 def test_partial_recorded_flags_derive_only_the_missing_field():
@@ -823,7 +825,7 @@ def test_partial_recorded_flags_derive_only_the_missing_field():
     assert src.leftMask == 0x66
     assert src.rightMask == 0x66
     # reduced_mode present → honored (0 = per-camera).
-    assert src.reducedMode == 0
+    assert src.clinicalMode == 0
 
 
 def test_recorded_flags_both_masks_zero_falls_back_to_derived():
@@ -1375,6 +1377,7 @@ def test_live_scan_source_pans_into_db_tail(session_data_db):
         buf.ring_trimmed = True
     src._db = db
     src._db_session_id = sid
+    src._db_load_async = False  # inline loads: assert on first call
 
     pts = src.points_for_window("left", 0, "bfi", 0.0, 0.1, max_points=100)
     assert len(pts) > 0
@@ -1427,6 +1430,7 @@ def test_live_scan_source_straddle_stitches_db_and_memory(session_data_db):
         buf.ring_trimmed = True
     src._db = db
     src._db_session_id = sid
+    src._db_load_async = False  # inline loads: assert on first call
 
     pts = src.points_for_window("left", 0, "bfi", 0.0, 10.1, max_points=200)
     vals = [p[1] for p in pts]
@@ -1447,6 +1451,7 @@ def test_live_scan_source_db_window_not_padded_into_future(session_data_db):
         buf.ring_trimmed = True
     src._db = db
     src._db_session_id = sid
+    src._db_load_async = False  # inline loads: assert on first call
 
     src.points_for_window("left", 0, "bfi", 0.0, 10.1, max_points=200)
     # The DB window's claimed upper bound never exceeds the newest sample.
@@ -1484,6 +1489,7 @@ def test_live_scan_source_negative_t_lo_paint_loop_hits_cache(session_data_db):
         buf.ring_trimmed = True
     src._db = counting
     src._db_session_id = sid
+    src._db_load_async = False  # inline loads: count real query calls
 
     # Simulate the followLive paint loop: windowSeconds=600 ≫ liveEdge,
     # so t_lo is negative and creeps up as the live edge advances.
@@ -1520,6 +1526,7 @@ def test_live_scan_source_value_at_negative_t_cache_valid(session_data_db):
         buf.ring_trimmed = True
     src._db = db
     src._db_session_id = sid
+    src._db_load_async = False  # inline loads: assert on first call
 
     v = src.value_at("left", 0, "bfi", -5.0)
     # Cache bounds remain a valid (lo <= hi), non-negative range.
@@ -1542,10 +1549,71 @@ def test_live_scan_source_value_at_uses_db_tail(session_data_db):
         buf.ring_trimmed = True
     src._db = db
     src._db_session_id = sid
+    src._db_load_async = False  # inline loads: assert on first call
 
     v = src.value_at("left", 0, "bfi", 0.0)
     assert isfinite_or_nan(v)
     assert v < 50  # DB value, not in-memory 99.0
+
+
+def test_live_scan_source_db_window_load_is_async_by_default(session_data_db):
+    """Issue #256: the DB-window load must NOT run on the calling (GUI)
+    thread. The first pan-into-past paint returns immediately with only
+    the in-memory portion; once the worker lands, a later paint serves
+    the DB rows. (The synchronous query + bucketize used to freeze the
+    app for seconds per zoom step on long All-camera scans.)"""
+    db, sid = session_data_db
+    src = LiveScanSource(plot_t0=0.0)
+    for i in range(5):
+        src.append_uncorrected(side="left", cam_id=0, frame_id=2000 + i,
+                               t=10.0 + i * 0.025, bfi=99.0, bvi=99.0)
+    for buf in src.buffers.values():
+        buf.ring_trimmed = True
+    src._db = db
+    src._db_session_id = sid
+    assert src._db_load_async  # production default
+
+    # First call: pure-past window, load only just scheduled -> no DB
+    # rows yet (in-memory has nothing below t=10 either).
+    pts = src.points_for_window("left", 0, "bfi", 0.0, 0.1, max_points=100)
+    assert pts == []
+
+    # The load ran on a worker thread; wait for it to land.
+    thread = src._db_load_thread
+    assert thread is not None
+    thread.join(timeout=10.0)
+    assert not thread.is_alive()
+
+    # Next paint serves the freshly-loaded history (~1.0..1.4, not 99.0).
+    pts = src.points_for_window("left", 0, "bfi", 0.0, 0.1, max_points=100)
+    assert len(pts) > 0
+    assert all(p[1] < 50 for p in pts)
+
+
+def test_live_scan_source_db_window_load_emits_history_window_loaded(
+        session_data_db):
+    """A landed DB-window load pings historyWindowLoaded so the viewer
+    repaints even when no live samples are ticking the throttle (e.g. the
+    user pans back after the scan ended). Inline mode keeps the emission
+    on the test thread -> synchronous direct-connection delivery."""
+    db, sid = session_data_db
+    src = LiveScanSource(plot_t0=0.0)
+    for i in range(5):
+        src.append_uncorrected(side="left", cam_id=0, frame_id=2000 + i,
+                               t=10.0 + i * 0.025, bfi=99.0, bvi=99.0)
+    for buf in src.buffers.values():
+        buf.ring_trimmed = True
+    src._db = db
+    src._db_session_id = sid
+    src._db_load_async = False
+    hits = []
+    src.historyWindowLoaded.connect(lambda: hits.append(1))
+
+    src.points_for_window("left", 0, "bfi", 0.0, 0.1, max_points=100)
+    assert hits == [1]
+    # Covered window -> cache hit -> no reload, no second ping.
+    src.points_for_window("left", 0, "bfi", 0.0, 0.1, max_points=100)
+    assert hits == [1]
 
 
 def test_live_scan_source_db_ready_resolve_path_no_nameerror(tmp_path):
@@ -1658,3 +1726,133 @@ def test_buffers_are_empty_false_when_any_sample_present():
     buf = _CameraBuffer(max_capacity=None)
     buf.append(t=0.0, v=1.0, frame_id=0)
     assert buffers_are_empty({("left", -1, "bfi"): buf}) is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# release() — retirement of superseded sources (leak fix)
+# ─────────────────────────────────────────────────────────────────────────────
+
+from data_sources import LiveScanSource, PastScanSource
+
+
+def test_release_stops_flush_timer_and_is_idempotent():
+    src = LiveScanSource(plot_t0=0.0)
+    assert src._flush_timer.isActive()
+    src.release()
+    assert not src._flush_timer.isActive()
+    src.release()  # idempotent — second call must not raise
+    assert not src._flush_timer.isActive()
+
+
+def test_release_drops_pending_notifications():
+    src = LiveScanSource(plot_t0=0.0)
+    src.append_uncorrected("left", 0, frame_id=1, t=0.025, bfi=1.0, bvi=2.0)
+    assert src._pending
+    src.release()
+    assert not src._pending
+
+
+def test_live_release_closes_db_handle():
+    src = LiveScanSource(plot_t0=0.0, scan_db_path="unused.db")
+
+    class FakeDb:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    db = FakeDb()
+    src._db = db
+    src._db_window_buffers = {("left", 0, "bfi"): _CameraBuffer()}
+    src.release()
+    assert db.closed
+    assert src._db is None
+    assert src._db_unavailable  # a released source must never reopen the DB
+    assert src._db_window_buffers == {}
+
+
+def test_past_release_stops_timer():
+    src = PastScanSource(scan_db=None, session_id=1, preloaded_buffers={})
+    assert src._flush_timer.isActive()
+    src.release()
+    assert not src._flush_timer.isActive()
+
+
+def test_released_source_buffers_stay_readable():
+    """A late paint during the deleteLater window must not crash: reads
+    still work after release, they just serve the frozen data."""
+    src = LiveScanSource(plot_t0=0.0)
+    src.append_uncorrected("left", 0, frame_id=1, t=0.025, bfi=1.0, bvi=2.0)
+    src.release()
+    pts = src.points_for_window("left", 0, "bfi", 0.0, 1.0, 100)
+    assert pts and pts[0][1] == 1.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# _CameraBuffer.value_near + cross-thread locking
+# ─────────────────────────────────────────────────────────────────────────────
+
+import threading
+import time
+
+
+def test_value_near_returns_nearest_sample():
+    buf = _CameraBuffer(initial_capacity=8)
+    buf.append(t=0.0, v=1.0, frame_id=0)
+    buf.append(t=1.0, v=2.0, frame_id=1)
+    assert buf.value_near(0.4) == 1.0
+    assert buf.value_near(0.6) == 2.0
+    assert buf.value_near(5.0) == 2.0   # clamped to newest
+    assert buf.value_near(-5.0) == 1.0  # clamped to oldest
+
+
+def test_value_near_empty_and_nonfinite_are_nan():
+    buf = _CameraBuffer(initial_capacity=8)
+    assert math.isnan(buf.value_near(0.0))
+    buf.append(t=0.0, v=float("nan"), frame_id=0)
+    assert math.isnan(buf.value_near(0.0))
+
+
+def test_source_value_at_matches_buffer_value_near():
+    src = LiveScanSource(plot_t0=0.0)
+    src.append_uncorrected("left", 0, frame_id=1, t=0.5, bfi=3.0, bvi=4.0)
+    assert src.value_at("left", 0, "bfi", 0.5) == 3.0
+    assert math.isnan(src.value_at("left", 0, "missing", 0.5))
+
+
+def test_concurrent_append_and_read_do_not_crash():
+    """Pipeline thread appends (with ring-trims) while the GUI thread
+    reads — the _CameraBuffer lock must keep every read in-bounds. A tiny
+    max_capacity forces a ring-trim every few appends, maximizing the
+    chance of catching an unguarded shift (issue: torn reads previously
+    caused IndexErrors in value_at; _ring_trim shifting under a reader
+    was the remaining unguarded case)."""
+    buf = _CameraBuffer(max_capacity=64)
+    stop = threading.Event()
+    errors = []
+
+    def writer():
+        i = 0
+        while not stop.is_set():
+            buf.append(t=float(i), v=float(i), frame_id=i)
+            i += 1
+
+    def reader():
+        while not stop.is_set():
+            try:
+                buf.window_decimated(0.0, 1e12, 50)
+                buf.window_decimated(0.0, 1e12, 100000)  # stride==1 path
+                buf.value_near(1e12)
+            except Exception as e:  # pragma: no cover - failure path
+                errors.append(e)
+                stop.set()
+
+    threads = [threading.Thread(target=writer),
+               threading.Thread(target=reader)]
+    for t in threads:
+        t.start()
+    time.sleep(0.3)
+    stop.set()
+    for t in threads:
+        t.join(timeout=5)
+    assert not errors

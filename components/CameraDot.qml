@@ -1,5 +1,6 @@
 import QtQuick 6.0
 import QtQuick.Controls as Controls
+import OpenMotion 1.0
 
 /*  CameraDot — single per-camera contact-quality indicator.
  *
@@ -13,7 +14,7 @@ import QtQuick.Controls as Controls
  *      camIndex1  : 1..8
  *      modal      : the ContactQualityModal root (required — used to
  *                   call cameraStatus / cameraWarningTypes / cameraTooltip
- *                   and to read developerMode)
+ *                   and to read engineeringMode)
  *      size       : pixel size of the dot (default 18).
  */
 Item {
@@ -27,10 +28,9 @@ Item {
     width: size
     height: size
 
-    AppTheme { id: theme }
 
     readonly property string status: modal.cameraStatus(side, camIndex1)
-    readonly property var    types: status === "bad" && modal.developerMode
+    readonly property var    types: status === "bad" && modal.engineeringMode
                                     ? modal.cameraWarningTypes(side, camIndex1)
                                     : []
     readonly property bool   hasAmbient: types.indexOf("ambient_light") >= 0
@@ -42,13 +42,13 @@ Item {
         if (status === "checking") return "#666666"
         if (status === "inactive") return "#666666"
         // status === "bad" past this point
-        if (!modal.developerMode)  return "#E67E22"
-        if (isSplit)                return theme.accentOrangeAmbient  // unused at render time (splitFrame handles it); kept so singleColor is never undefined
-        if (hasAmbient)             return theme.accentOrangeAmbient
-        if (hasContact)             return theme.accentOrangeContact
+        if (!modal.engineeringMode)  return "#E67E22"
+        if (isSplit)                return AppTheme.accentOrangeAmbient  // unused at render time (splitFrame handles it); kept so singleColor is never undefined
+        if (hasAmbient)             return AppTheme.accentOrangeAmbient
+        if (hasContact)             return AppTheme.accentOrangeContact
         // Unknown / future typeKey — fall back to dark orange and warn.
         console.warn("CameraDot: unknown typeKey(s)", types, "for", side, camIndex1)
-        return theme.accentOrangeAmbient
+        return AppTheme.accentOrangeAmbient
     }
 
     // Solid case (no split) — single coloured circle.
@@ -75,10 +75,10 @@ Item {
         border.width: 1
         gradient: Gradient {
             orientation: Gradient.Horizontal
-            GradientStop { position: 0.0;    color: theme.accentOrangeAmbient }
-            GradientStop { position: 0.4999; color: theme.accentOrangeAmbient }
-            GradientStop { position: 0.5001; color: theme.accentOrangeContact }
-            GradientStop { position: 1.0;    color: theme.accentOrangeContact }
+            GradientStop { position: 0.0;    color: AppTheme.accentOrangeAmbient }
+            GradientStop { position: 0.4999; color: AppTheme.accentOrangeAmbient }
+            GradientStop { position: 0.5001; color: AppTheme.accentOrangeContact }
+            GradientStop { position: 1.0;    color: AppTheme.accentOrangeContact }
         }
     }
 

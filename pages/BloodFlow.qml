@@ -10,10 +10,9 @@ Rectangle {
     id: bloodFlow
     width: parent.width
     height: parent.height
-    color: theme.bgBase
+    color: AppTheme.bgBase
     radius: 0
 
-    AppTheme { id: theme }
 
     property bool scanning: false
     property bool camerasReady: true  // gates Start/Check; false only while no sensor is connected
@@ -21,7 +20,10 @@ Rectangle {
     // Aggregate live state of the contact-quality runners so main.qml
     // can detect 'check in progress' for the close-while-busy warning
     // (issue #75). Either runner being non-idle counts as busy.
-    readonly property bool checkRunning: qualityCheckRunner.running
+    // Includes a gate-pending check (armed but waiting for the pipeline
+    // to go idle) so main.qml's close-while-busy warning still covers it.
+    readonly property bool checkRunning: qualityCheckRunner.running ||
+                                         (startGate.running && startGate.action === "check")
 
     // Hand main.qml the same ModalManager BloodFlow's icon-bar uses,
     // so the close-while-busy handler can dismiss any open modal
@@ -31,9 +33,9 @@ Rectangle {
 
     // FDA mode (read from app config). Forces Far camera pattern + free run,
     // hides scan-settings button, and swaps in the FDA plot view.
-    property bool reducedMode: MotionInterface.appConfig.reducedMode === true
-    // In reduced mode, Start first runs a contact-quality preflight check.
-    property bool reducedStartPending: false
+    property bool clinicalMode: MotionInterface.appConfig.clinicalMode === true
+    // In clinical mode, Start first runs a contact-quality preflight check.
+    property bool clinicalStartPending: false
     // Prevent late CQ callbacks from re-opening the modal while a stop/cancel
     // is in flight.
     property bool suppressLiveCqModal: false
@@ -53,16 +55,16 @@ Rectangle {
     property string sessionId: MotionInterface.userLabel || ""
 
     // Duration from scan time modal
-    property bool freeRun: reducedMode
-    property int durationSec: reducedMode ? 43200 : 3600  // 12h in FDA mode, 1h default
+    property bool freeRun: clinicalMode
+    property int durationSec: clinicalMode ? 43200 : 3600  // 12h in FDA mode, 1h default
 
-    onReducedModeChanged: {
-        if (reducedMode) {
+    onClinicalModeChanged: {
+        if (clinicalMode) {
             freeRun = true
             durationSec = 43200
             var _cfg = MotionInterface.appConfig;
-            leftMask  = _cfg.reducedModeLeftMask  !== undefined ? _cfg.reducedModeLeftMask  : 0xC3
-            rightMask = _cfg.reducedModeRightMask !== undefined ? _cfg.reducedModeRightMask : 0xC3
+            leftMask  = _cfg.clinicalModeLeftMask  !== undefined ? _cfg.clinicalModeLeftMask  : 0xC3
+            rightMask = _cfg.clinicalModeRightMask !== undefined ? _cfg.clinicalModeRightMask : 0xC3
         }
     }
     property int elapsedSec: 0
@@ -72,12 +74,17 @@ Rectangle {
     // instant triggerState flips to "OFF" (top of the SDK teardown, right
     // after stop_trigger) rather than when captureFinished arrives 2-4s later
     // after all the camera-disable / USB-drain / writer-join work is done.
+    //
+    // Each tick PULLS the connector's trigger-ON clock rather than counting
+    // ticks (issue #201): a QML Timer fires late under GUI load and never
+    // catches up, so a += 1 counter drifts behind real time and disagrees
+    // with the notes duration line written from the connector's clock.
     Timer {
         id: scanTimer
         interval: 1000
         repeat: true
         running: bloodFlow.scanning && MotionInterface.triggerState === "ON"
-        onTriggered: bloodFlow.elapsedSec += 1
+        onTriggered: bloodFlow.elapsedSec = MotionInterface.scanElapsedSec()
     }
 
     // Convert mask to active array for camera selection modal
@@ -93,8 +100,8 @@ Rectangle {
     // Apply default cameras from config
     function applyDefaultCameras() {
         var cfg      = MotionInterface.appConfig;
-        var defLeft  = reducedMode ? (cfg.reducedModeLeftMask  !== undefined ? cfg.reducedModeLeftMask  : 0xC3) : (cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99);
-        var defRight = reducedMode ? (cfg.reducedModeRightMask !== undefined ? cfg.reducedModeRightMask : 0xC3) : (cfg.rightMask !== undefined ? cfg.rightMask : 0x99);
+        var defLeft  = clinicalMode ? (cfg.clinicalModeLeftMask  !== undefined ? cfg.clinicalModeLeftMask  : 0xC3) : (cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99);
+        var defRight = clinicalMode ? (cfg.clinicalModeRightMask !== undefined ? cfg.clinicalModeRightMask : 0xC3) : (cfg.rightMask !== undefined ? cfg.rightMask : 0x99);
         if (MotionInterface.leftSensorConnected && !_leftMaskInitialApplied) {
             leftMask = defLeft;
             _leftMaskInitialApplied = true;
@@ -112,7 +119,7 @@ Rectangle {
     function beginScanNow() {
         bloodFlow.scanning = true
         bloodFlow.suppressLiveCqModal = false
-        reducedStartPending = false
+        clinicalStartPending = false
         // Drop any stale CQ warning entries from a previous scan/check.
         // The connector creates a fresh _ContactQualityState per scan, so
         // it never re-emits "cleared" for a camera that wasn't latched in
@@ -122,36 +129,71 @@ Rectangle {
         scanRunner.start()
     }
 
-    // Scan-start gate: the pre-scan CQ check's SDK worker keeps unwinding
+    // Start gate: the pre-scan CQ check's SDK worker keeps unwinding
     // for ~2 s after its results are displayed, and a start issued in that
     // window is refused synchronously by the connector's _ensure_idle gate
     // (the failure used to be swallowed — modal closed, nothing happened).
-    // Poll isPipelineIdle() and begin the scan the moment the connector is
-    // actually free; give up loudly after 8 s.
-    property bool scanStartPending: scanStartGate.running
+    // Poll isPipelineIdle() and begin the moment the connector is actually
+    // free; give up loudly after 8 s — unless a camera configuration (FPGA
+    // flash, ~50 s) is what holds the pipeline (issue #283), in which case
+    // wait it out on the flash watchdog's timescale instead of erroring.
+    property bool scanStartPending: startGate.running && startGate.action === "scan"
     function beginScanWhenReady() {
-        if (bloodFlow.scanning || scanStartGate.running) return
-        scanStartGate.elapsedMs = 0
-        scanStartGate.start()
+        if (bloodFlow.scanning || startGate.running) return
+        startGate.arm("scan")
+    }
+    // Same gate for starting a contact-quality check (Check button and the
+    // clinical pre-scan check): firing qualityCheckRunner while a
+    // configuration was still draining used to surface a raw "Camera
+    // configuration already in progress" error in the modal (issue #283).
+    function beginCheckWhenReady() {
+        if (bloodFlow.scanning || startGate.running || qualityCheckRunner.running)
+            return
+        startGate.arm("check")
     }
     Timer {
-        id: scanStartGate
+        id: startGate
         interval: 200
         repeat: true
-        triggeredOnStart: true   // idle path starts the scan with no delay
+        triggeredOnStart: true   // idle path starts with no delay
+        property string action: "scan"   // "scan" | "check"
         property int elapsedMs: 0
+        function arm(what) {
+            action = what
+            elapsedMs = 0
+            start()
+        }
         onTriggered: {
             if (MotionInterface.isPipelineIdle()) {
                 stop()
-                beginScanNow()
+                if (action === "scan")
+                    beginScanNow()
+                else
+                    qualityCheckRunner.start()
                 return
             }
             elapsedMs += interval
-            if (elapsedMs >= 8000) {
+            // A config in flight legitimately blocks for ~50 s — match
+            // ScanRunner's flash watchdog bound. The post-connect sensor
+            // init (issue #303) legitimately holds the pipeline for a few
+            // seconds after a (re)connect — wait that out on its own bound
+            // so a start armed just as a sensor replugs defers instead of
+            // erroring. Anything else holding the pipeline past 8 s is
+            // stuck; give up loudly.
+            var deadline = MotionInterface.isConfigInFlight() ? 250000
+                         : MotionInterface.sensorInitBusy ? 30000
+                         : 8000
+            if (elapsedMs >= deadline) {
                 stop()
-                MotionInterface.notify(
-                    "Could not start scan — the previous check is still " +
-                    "finishing. Please press Start again.", "error")
+                if (action === "scan") {
+                    MotionInterface.notify(
+                        "Could not start scan — the previous step is still " +
+                        "finishing. Please press Start again.", "error")
+                } else {
+                    contactQualityModal.showError(
+                        "Could not start check — the previous step is still " +
+                        "finishing. Please try again.")
+                }
             }
         }
     }
@@ -168,8 +210,14 @@ Rectangle {
 
         scanning: bloodFlow.scanning
         waiting: bloodFlow.scanStartPending
-        camerasReady: bloodFlow.camerasReady
-        reducedMode: bloodFlow.reducedMode
+        // Issue #303: hold Start/Check disabled while the connector's async
+        // post-connect sensor init (debug flags, camera power masks, info
+        // reads) is still in flight — a start in that window collides with
+        // the init sequence ("Failed to program FPGA" on both sensors) and
+        // can wedge a camera until DUT power-cycle. sensorInitBusy re-arms
+        // on every sensor (re)connect, so a mid-session replug re-gates too.
+        camerasReady: bloodFlow.camerasReady && !MotionInterface.sensorInitBusy
+        clinicalMode: bloodFlow.clinicalMode
 
         // Action buttons — close any open modal first (which by
         // convention saves), then perform the action. If the open
@@ -188,11 +236,11 @@ Rectangle {
                 // has been appended to scanNotes. Opening it here would
                 // race the append and pop an empty modal.
             } else {
-                if (bloodFlow.reducedMode) {
-                    reducedStartPending = true
+                if (bloodFlow.clinicalMode) {
+                    clinicalStartPending = true
                     contactQualityModal.preScanMode = true
                     contactQualityModal.reset(true)
-                    qualityCheckRunner.start()
+                    beginCheckWhenReady()
                 } else {
                     beginScanWhenReady()
                 }
@@ -201,7 +249,7 @@ Rectangle {
         onCheckClicked: {
             modalManager.closeCurrent()
             contactQualityModal.reset(false)
-            qualityCheckRunner.start()
+            beginCheckWhenReady()
         }
 
         // Toggle buttons — open the named modal, or close it if it's
@@ -220,6 +268,9 @@ Rectangle {
         onHistoryClicked:  modalManager.toggle(historyModal)
         onSettingsClicked: modalManager.toggle(settingsModal)
     }
+
+    // Allow external callers (firmware banner) to open the Settings overlay.
+    function openSettings() { modalManager.toggle(settingsModal) }
 
     // Single source of truth for which modal is on screen. See
     // ModalManager.qml for semantics. The list must include every
@@ -240,11 +291,11 @@ Rectangle {
         anchors.right: parent.right
         anchors.margins: 8
         anchors.leftMargin: 16
-        reducedMode: bloodFlow.reducedMode
-        // Reduced mode never autoscales: the toggle is hidden in both the
+        clinicalMode: bloodFlow.clinicalMode
+        // Clinical mode never autoscales: the toggle is hidden in both the
         // Settings modal and the viewer's three-dot popup, so a stale
         // autoScale=true in config must not leave it stuck on.
-        autoScale: bloodFlow.reducedMode ? false : settingsModal.autoScale
+        autoScale: bloodFlow.clinicalMode ? false : settingsModal.autoScale
         displayMode: settingsModal.showBfiBvi ? "bfi_bvi" : "mean_contrast"
         leftMask:  bloodFlow.leftMask
         rightMask: bloodFlow.rightMask
@@ -324,6 +375,16 @@ Rectangle {
     Connections {
         target: MotionInterface
         function onScanNotesReady() { notesModal.open() }
+        // Snap the header counter to the authoritative value on every
+        // trigger edge. The OFF edge matters most: it carries the SDK
+        // timestamp correction, so the final displayed value lands on
+        // exactly the duration the notes line will report — without this,
+        // the counter keeps the value of its last 1 s tick, which can sit
+        // a second high while the queued OFF event was in flight.
+        function onTriggerStateChanged() {
+            if (bloodFlow.scanning)
+                bloodFlow.elapsedSec = MotionInterface.scanElapsedSec()
+        }
     }
 
     HistoryModal {
@@ -351,10 +412,10 @@ Rectangle {
         anchors.fill: parent
         // Pre-scan check always evaluates all physically-present cameras,
         // regardless of the active scan mask.
-        leftMask: bloodFlow.reducedStartPending
+        leftMask: bloodFlow.clinicalStartPending
                   ? (MotionInterface.leftSensorConnected ? 0xFF : 0x00)
                   : bloodFlow.leftMask
-        rightMask: bloodFlow.reducedStartPending
+        rightMask: bloodFlow.clinicalStartPending
                    ? (MotionInterface.rightSensorConnected ? 0xFF : 0x00)
                    : bloodFlow.rightMask
         onStopScanRequested: {
@@ -367,10 +428,17 @@ Rectangle {
             } else {
                 MotionInterface.stopCapture()
             }
-            reducedStartPending = false
+            clinicalStartPending = false
         }
         onContinueRequested: {
-            if (bloodFlow.reducedStartPending) {
+            if (bloodFlow.clinicalStartPending) {
+                // Defense in depth for issue #268: never arm the scan while
+                // the pre-scan check is still in flight. The modal already
+                // disables Start Scan during "checking"; this catches any
+                // other path that fires continueRequested early. By the time
+                // results are on screen the runner is idle, so the normal
+                // click-through is unaffected.
+                if (bloodFlow.checkRunning) return
                 contactQualityModal.close()
                 // Gated, not direct: the CQ check's worker is often still
                 // unwinding when the user clicks Start Scan, and an
@@ -380,14 +448,14 @@ Rectangle {
             // Otherwise (live-scan warning modal), Continue just dismisses.
         }
         onRetestRequested: {
-            contactQualityModal.preScanMode = bloodFlow.reducedStartPending
-            contactQualityModal.reset(bloodFlow.reducedStartPending)
-            qualityCheckRunner.start()
+            contactQualityModal.preScanMode = bloodFlow.clinicalStartPending
+            contactQualityModal.reset(bloodFlow.clinicalStartPending)
+            beginCheckWhenReady()
         }
         onDismissed: {
             if (!bloodFlow.scanning)
-                reducedStartPending = false
-            if (!bloodFlow.reducedStartPending)
+                clinicalStartPending = false
+            if (!bloodFlow.clinicalStartPending)
                 contactQualityModal.preScanMode = false
         }
     }
@@ -401,7 +469,6 @@ Rectangle {
         rightMask: bloodFlow.rightMask
         durationSec: bloodFlow.durationSec
         subjectId: MotionInterface.userLabel
-        dataDir: MotionInterface.directory
         disableLaser: false
         laserOn: true
         laserPower: 50
@@ -440,14 +507,20 @@ Rectangle {
     // ===== SCAN RUNNER (check mode) =====
     // Shares flash + trigger/laser plumbing with scanRunner; final stage is
     // the contact-quality check instead of capture. Always flashes 0xFF so
-    // every physically-present camera participates — absent cameras are
-    // skipped by the configure workflow.
+    // every physically-present camera participates (lets the live CQ view
+    // show a dot for every camera) — absent cameras are skipped by the
+    // configure workflow. The pass/fail *evaluation* is narrower: only the
+    // user's currently configured scan mask (evalLeftMask/evalRightMask)
+    // is required to pass — a camera set to "None" in scan settings is
+    // flashed/shown but never blocks the check.
     ScanRunner {
         id: qualityCheckRunner
         mode: "check"
         connector: MotionInterface
         leftMask: MotionInterface.leftSensorConnected  ? 0xFF : 0x00
         rightMask: MotionInterface.rightSensorConnected ? 0xFF : 0x00
+        evalLeftMask: bloodFlow.leftMask
+        evalRightMask: bloodFlow.rightMask
         laserOn: true
         laserPower: 50
         // See note on the scanRunner triggerConfig above — same here.
@@ -481,8 +554,8 @@ Rectangle {
                 Qt.callLater(function() {
                     if (!bloodFlow.scanning) {
                         var cfg      = MotionInterface.appConfig;
-                        var defLeft  = bloodFlow.reducedMode ? (cfg.reducedModeLeftMask  !== undefined ? cfg.reducedModeLeftMask  : 0xC3) : (cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99);
-                        var defRight = bloodFlow.reducedMode ? (cfg.reducedModeRightMask !== undefined ? cfg.reducedModeRightMask : 0xC3) : (cfg.rightMask !== undefined ? cfg.rightMask : 0x99);
+                        var defLeft  = bloodFlow.clinicalMode ? (cfg.clinicalModeLeftMask  !== undefined ? cfg.clinicalModeLeftMask  : 0xC3) : (cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99);
+                        var defRight = bloodFlow.clinicalMode ? (cfg.clinicalModeRightMask !== undefined ? cfg.clinicalModeRightMask : 0xC3) : (cfg.rightMask !== undefined ? cfg.rightMask : 0x99);
                         // First connect this session per side: apply cfg
                         // default. Subsequent reconnects (e.g. console power
                         // cycle) preserve whatever's already in *Mask —
@@ -525,19 +598,16 @@ Rectangle {
             }
         }
 
-        function onLaserStateChanged() {}
-        function onSafetyFailureStateChanged() {}
-
         // Contact-quality quick-check lifecycle
         function onContactQualityCheckStarted(seconds) {
             // ``seconds`` is no longer shown as a countdown — the modal is
             // now just an indeterminate spinner during the check.
-            contactQualityModal.preScanMode = bloodFlow.reducedStartPending
-            contactQualityModal.reset(bloodFlow.reducedStartPending)
+            contactQualityModal.preScanMode = bloodFlow.clinicalStartPending
+            contactQualityModal.reset(bloodFlow.clinicalStartPending)
         }
         function onContactQualityCheckFinished(ok, error, warnings) {
-            if (bloodFlow.reducedStartPending) {
-                // Reduced-mode preflight: always land in live-style footer so
+            if (bloodFlow.clinicalStartPending) {
+                // Clinical-mode preflight: always land in live-style footer so
                 // user can explicitly Continue into the main scan.
                 contactQualityModal.liveScan = true
             }
@@ -554,7 +624,7 @@ Rectangle {
                 return
             }
             contactQualityModal.showOk()
-            if (bloodFlow.reducedStartPending)
+            if (bloodFlow.clinicalStartPending)
                 contactQualityModal.liveScanDismissable = true
         }
         // Live-scan warnings (ContactQualityMonitor via SciencePipeline)
@@ -578,12 +648,12 @@ Rectangle {
     }
 
     Component.onCompleted: {
-        if (reducedMode) {
+        if (clinicalMode) {
             freeRun = true
             durationSec = 43200
             var _cfg = MotionInterface.appConfig;
-            leftMask  = _cfg.reducedModeLeftMask  !== undefined ? _cfg.reducedModeLeftMask  : 0xC3
-            rightMask = _cfg.reducedModeRightMask !== undefined ? _cfg.reducedModeRightMask : 0xC3
+            leftMask  = _cfg.clinicalModeLeftMask  !== undefined ? _cfg.clinicalModeLeftMask  : 0xC3
+            rightMask = _cfg.clinicalModeRightMask !== undefined ? _cfg.clinicalModeRightMask : 0xC3
         }
         applyDefaultCameras()
     }

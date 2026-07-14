@@ -17,24 +17,24 @@
     "component": {
       "type": "application",
       "bom-ref": "pkg:generic/openwater/bloodflow-app@0.4.3",
-      "name": "OpenWater BloodFlow App",
+      "name": "Open-Motion",
       "version": "0.4.3",
-      "description": "Medical device software for measuring blood volume and blood flow index using diffuse correlation spectroscopy (DCS). Intended for use with OpenWater wearable optical sensors.",
+      "description": "Medical device software for measuring blood volume and blood flow index using diffuse correlation spectroscopy (DCS). Intended for use with Openwater wearable optical sensors.",
       "purl": "pkg:generic/openwater/bloodflow-app@0.4.3",
       "licenses": [
         {
           "license": {
             "id": "LicenseRef-Proprietary",
-            "name": "Proprietary – OpenWater Inc."
+            "name": "Proprietary – Openwater Inc."
           }
         }
       ],
       "supplier": {
-        "name": "OpenWater Inc.",
+        "name": "Openwater Inc.",
         "url": ["https://www.openwater.cc"]
       },
       "manufacturer": {
-        "name": "OpenWater Inc.",
+        "name": "Openwater Inc.",
         "url": ["https://www.openwater.cc"]
       },
       "properties": [
@@ -188,31 +188,6 @@
         {
           "type": "distribution",
           "url": "https://pypi.org/project/PyQt6-Charts/"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:pypi/qasync@0.27.1",
-      "name": "qasync",
-      "version": "0.27.1",
-      "description": "asyncio event loop integration with PyQt/PySide",
-      "purl": "pkg:pypi/qasync@0.27.1",
-      "licenses": [
-        {
-          "license": {
-            "id": "BSD-2-Clause"
-          }
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "distribution",
-          "url": "https://pypi.org/project/qasync/"
-        },
-        {
-          "type": "vcs",
-          "url": "https://github.com/CabbageDevelopment/qasync"
         }
       ]
     },
@@ -449,7 +424,7 @@
       "bom-ref": "pkg:github/OpenwaterHealth/OpenMOTION-Pylib@latest",
       "name": "omotion",
       "version": "latest",
-      "description": "OpenWater OpenMOTION Python SDK – closed-source proprietary library providing the hardware interface (MOTIONInterface) for OpenWater wearable optical sensors",
+      "description": "Openwater Open-Motion Python SDK – closed-source proprietary library providing the hardware interface (MOTIONInterface) for Openwater wearable optical sensors",
       "purl": "pkg:github/OpenwaterHealth/OpenMOTION-Pylib@latest",
       "licenses": [
         {
@@ -459,7 +434,7 @@
         }
       ],
       "supplier": {
-        "name": "OpenWater Inc.",
+        "name": "Openwater Inc.",
         "url": ["https://www.openwater.cc"]
       },
       "externalReferences": [
@@ -582,7 +557,6 @@
         "pkg:pypi/pyqt6-sip@13.9.1",
         "pkg:pypi/pyqt6-qt6@6.8.1",
         "pkg:pypi/pyqt6-charts@6.8.0",
-        "pkg:pypi/qasync@0.27.1",
         "pkg:pypi/base58@2.1.1",
         "pkg:pypi/pandas@2.3.1",
         "pkg:pypi/numpy@2.2.5",

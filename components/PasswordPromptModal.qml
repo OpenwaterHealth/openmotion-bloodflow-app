@@ -3,7 +3,7 @@ import QtQuick.Controls 6.0
 import QtQuick.Layouts 6.0
 import OpenMotion 1.0
 
-// Reusable password prompt modal. Checks against the developer password
+// Reusable password prompt modal. Checks against the engineering password
 // and emits accepted() on success. Caller sets title, description, and
 // confirmLabel to customise the appearance.
 Item {
@@ -12,7 +12,6 @@ Item {
     visible: false
     z: 10000
 
-    AppTheme { id: theme }
 
     property string title: "Password Required"
     property string description: "Enter the password to continue."
@@ -31,7 +30,7 @@ Item {
     }
 
     function _submit() {
-        if (MotionInterface.checkDeveloperPassword(pwField.text)) {
+        if (MotionInterface.checkEngineeringPassword(pwField.text)) {
             root.accepted()
             root.close()
         } else {
@@ -60,8 +59,8 @@ Item {
         width: 360
         height: contentCol.implicitHeight + 48
         radius: 14
-        color: theme.bgContainer
-        border.color: theme.borderStrong
+        color: AppTheme.bgContainer
+        border.color: AppTheme.borderStrong
         border.width: 1
         anchors.centerIn: parent
 
@@ -76,14 +75,14 @@ Item {
 
             Text {
                 text: root.title
-                color: theme.textPrimary
+                color: AppTheme.textPrimary
                 font.pixelSize: 18
                 font.weight: Font.DemiBold
             }
 
             Text {
                 text: root.description
-                color: theme.textSecondary
+                color: AppTheme.textSecondary
                 font.pixelSize: 13
                 wrapMode: Text.WordWrap
                 Layout.fillWidth: true
@@ -95,8 +94,8 @@ Item {
                 Layout.preferredHeight: 38
                 echoMode: TextInput.Password
                 placeholderText: ""
-                color: theme.textPrimary
-                placeholderTextColor: theme.textSecondary
+                color: AppTheme.textPrimary
+                placeholderTextColor: AppTheme.textSecondary
                 font.pixelSize: 14
                 verticalAlignment: TextInput.AlignVCenter
                 leftPadding: 10
@@ -104,9 +103,9 @@ Item {
                 topPadding: 0
                 bottomPadding: 0
                 background: Rectangle {
-                    color: theme.bgInput
+                    color: AppTheme.bgInput
                     radius: 4
-                    border.color: pwField.activeFocus ? theme.accentBlue : theme.borderSoft
+                    border.color: pwField.activeFocus ? AppTheme.accentBlue : AppTheme.borderSoft
                     border.width: 1
                 }
                 onAccepted: root._submit()
@@ -115,7 +114,7 @@ Item {
             Text {
                 id: errorLabel
                 text: "Incorrect password"
-                color: theme.accentRed
+                color: AppTheme.accentRed
                 font.pixelSize: 12
                 visible: false
             }
@@ -131,14 +130,14 @@ Item {
                     onClicked: root.close()
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 13
-                        color: theme.textSecondary
+                        color: AppTheme.textSecondary
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? theme.bgHover : theme.bgInput
+                        color: parent.hovered ? AppTheme.bgHover : AppTheme.bgInput
                         radius: 4
-                        border.color: theme.borderSoft; border.width: 1
+                        border.color: AppTheme.borderSoft; border.width: 1
                     }
                 }
 
@@ -153,7 +152,7 @@ Item {
                         verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? Qt.lighter(theme.accentBlue, 1.1) : theme.accentBlue
+                        color: parent.hovered ? Qt.lighter(AppTheme.accentBlue, 1.1) : AppTheme.accentBlue
                         radius: 4
                     }
                 }

@@ -18,7 +18,7 @@ def _connector(tmp_path, scan_db_path=None, app_config=None):
     iface.get_sdk_version.return_value = "9.9.9"
     return MotionConnector(
         interface=iface,
-        app_config=app_config or {"developerMode": False},
+        app_config=app_config or {"engineeringMode": False},
         data_dir=str(tmp_path),
         config_dir="config",
     )
@@ -193,29 +193,33 @@ def test_delete_scans_logs_scan_deleted(tmp_path):
 def test_load_past_scan_logs_scan_viewed(tmp_path):
     db_path = str(tmp_path / "scans.db")
     c = _connector(tmp_path, scan_db_path=db_path)
-    c.loadPastScan("20260101_000000_owABC")
+    c.loadPastScan(1, "20260101_000000_owABC")
     ev = [e for e in c.auditLogEntries()
           if e["event_type"] == "scan_viewed"]
     assert ev
-    assert json.loads(ev[0]["details"])["label"] == "20260101_000000_owABC"
+    details = json.loads(ev[0]["details"])
+    assert details["label"] == "20260101_000000_owABC"
+    assert details["session_id"] == 1
 
 
 def test_prepare_debug_bundle_creates_zip_and_logs(tmp_path):
     import os
     import zipfile
     db = str(tmp_path / "scans.db")
-    logs = tmp_path / "app-logs"
+    logs = tmp_path / "logs"
     logs.mkdir()
-    (logs / "ow-bloodflowapp-x.log").write_text("hello", encoding="utf-8")
+    (logs / "open-motion-x.log").write_text("hello", encoding="utf-8")
     c = _connector(tmp_path, scan_db_path=db)
     # Don't spawn a real file-explorer process during the test.
     c._reveal_in_explorer = lambda p: None
-    path = c.prepareDebugLogBundle()
+    # Call the worker body directly — the prepareDebugLogBundle slot is
+    # fire-and-forget (spawns a daemon thread) since the GUI-freeze fix.
+    path = c._prepare_debug_bundle_sync()
     assert path and os.path.exists(path)
     assert path.endswith(".zip")
     with zipfile.ZipFile(path) as zf:
         names = zf.namelist()
-    assert any(n.startswith("app-logs/") for n in names)
+    assert any(n.startswith("logs/") for n in names)
     assert "system_info.txt" in names
     assert "debug_bundle_created" in _types(c)
 
@@ -231,5 +235,5 @@ def test_prepare_debug_bundle_failure_returns_empty(tmp_path, monkeypatch):
         raise RuntimeError("disk full")
 
     monkeypatch.setattr(debug_bundle, "build_debug_bundle", boom)
-    assert c.prepareDebugLogBundle() == ""
+    assert c._prepare_debug_bundle_sync() == ""
     assert "debug_bundle_created" not in _types(c)

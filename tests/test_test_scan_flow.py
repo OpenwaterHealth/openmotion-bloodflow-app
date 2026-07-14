@@ -35,7 +35,7 @@ def connector(monkeypatch):
 
     c = MotionConnector(
         interface=fake_iface,
-        app_config={"developerMode": False},
+        app_config={"engineeringMode": False},
         data_dir=".",
         config_dir="config",
     )
@@ -115,7 +115,7 @@ def test_on_test_scan_complete_dev_mode_failure_reason(connector):
         TestScanResult,
     )
 
-    connector._app_config["developerMode"] = True
+    connector._app_config["engineeringMode"] = True
     rows = [
         CalibrationResultRow(
             camera_index=0, side="left", cam_id=0,

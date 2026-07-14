@@ -26,24 +26,16 @@ from hil_helpers import (
     SENSOR_OPTIONS,
     click_element_center,
     click_panel,
-    force_app_config_value,
-    write_app_config_value,
 )
 
 pytestmark = pytest.mark.dev
 
 # Same rationale as test_scan_settings: this module's seed scan opens
-# Scan Settings, which is hidden in reduced mode. Snapshot at module
-# import (before the session-scoped ``app`` fixture spins up the app)
-# so any fresh launch in this session boots in non-reduced mode;
-# restore on teardown via the autouse fixture below.
-_INITIAL_REDUCED_MODE = force_app_config_value("reducedMode", False)
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _restore_reduced_mode_on_module_teardown():
-    yield
-    write_app_config_value("reducedMode", _INITIAL_REDUCED_MODE)
+# Scan Settings, which is hidden in clinical mode. Applied by conftest's
+# pytest_collection_finish only when this module has selected tests
+# (before the session-scoped ``app`` fixture spins up the app);
+# restored byte-exact at session end.
+FORCE_APP_CONFIG = {"clinicalMode": False}
 
 # How long to seed the history with at the start. Short to keep
 # the dev-tier suite snappy, but long enough that the SDK actually

@@ -1,5 +1,5 @@
 """
-Shared fixtures and helpers for OpenWater BloodFlow UI tests.
+Shared fixtures and helpers for Open-Motion UI tests.
 
 Provides:
   - App launch/discovery as a session-scoped fixture
@@ -88,7 +88,7 @@ def pytest_addoption(parser):
         default=False,
         help=(
             "Launch the OpenWater app from source via 'python main.py' instead "
-            "of discovering an installed OpenWaterApp.exe. Equivalent to setting "
+            "of discovering an installed Open-Motion.exe. Equivalent to setting "
             "$OPENWATER_FROM_SOURCE=1; the env var is honoured either way."
         ),
     )
@@ -102,6 +102,13 @@ def pytest_configure(config):
     # _from_source_mode() helper picks it up without further plumbing.
     if config.getoption("--from-source"):
         os.environ["OPENWATER_FROM_SOURCE"] = "1"
+    # Snapshot the tracked repo config before collection imports any test
+    # module, so pytest_collection_finish can detect import-time writes.
+    global _repo_app_config_snapshot
+    try:
+        _repo_app_config_snapshot = _REPO_APP_CONFIG.read_bytes()
+    except OSError:
+        _repo_app_config_snapshot = None
 
 
 _class_failures = {}
@@ -128,6 +135,141 @@ def pytest_runtest_setup(item):
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
+# ─────────────────────────────────────────────
+# app_config.json hygiene + FORCE_APP_CONFIG
+# ─────────────────────────────────────────────
+# pytest imports EVERY test module during collection, even when `-m unit`
+# deselects all of a module's tests — so module-level code that writes
+# app_config.json fires on every run, and a module-scoped restore fixture
+# never runs for a fully-deselected module. That combination used to leave
+# the tracked config/app_config.json dirty (clinicalMode/engineeringMode
+# flipped, file re-serialized) after plain `pytest -m unit` runs.
+#
+# The sanctioned replacement: a module that needs an app-config value forced
+# on disk before the session `app` fixture launches declares
+#
+#     FORCE_APP_CONFIG = {"clinicalMode": False}
+#
+# at module level (a plain dict — no side effect at import). After
+# collection and `-m` deselection, pytest_collection_finish applies the
+# declarations of modules that actually have selected tests, targeting the
+# same file hil_helpers._resolve_app_config_path() resolves (repo config in
+# from-source mode, the exe's bundled copy otherwise). The file's original
+# bytes are restored at session end, so even the json.dump re-serialization
+# is undone.
+_REPO_APP_CONFIG = PROJECT_ROOT / "config" / "app_config.json"
+_repo_app_config_snapshot: bytes | None = None
+_forced_config_target: Path | None = None
+_forced_config_snapshot: bytes | None = None
+
+
+def _read_repo_app_config() -> bytes | None:
+    try:
+        return _REPO_APP_CONFIG.read_bytes()
+    except OSError:
+        return None
+
+
+def pytest_collection_finish(session):
+    """Guard the tracked repo config, then apply FORCE_APP_CONFIG.
+
+    Runs after collection + ``-m`` deselection but before any fixture, so
+    forced values are on disk before the session ``app`` fixture launches
+    the bloodflow app.
+    """
+    global _forced_config_target, _forced_config_snapshot
+
+    # 1. Fail loudly if merely importing the test modules dirtied the
+    #    tracked repo config — that's a module-level write sneaking back in.
+    if _repo_app_config_snapshot is not None:
+        current = _read_repo_app_config()
+        if current != _repo_app_config_snapshot:
+            _REPO_APP_CONFIG.write_bytes(_repo_app_config_snapshot)
+            raise pytest.UsageError(
+                "config/app_config.json was modified while importing test "
+                "modules. A test module writes the app config at import time "
+                "(e.g. a module-level force_app_config_value(...) call). That "
+                "fires during collection of every run — including `-m unit` "
+                "runs that never execute the module — and leaves the tracked "
+                "file dirty. Declare FORCE_APP_CONFIG = {...} at module level "
+                "instead; conftest applies it only when the module has "
+                "selected tests. (Original file contents were restored.)"
+            )
+
+    if session.config.option.collectonly:
+        return
+
+    # 2. Gather FORCE_APP_CONFIG from modules with selected tests.
+    forced: dict = {}
+    forced_by: dict = {}
+    for item in session.items:
+        module = getattr(item, "module", None)
+        declared = getattr(module, "FORCE_APP_CONFIG", None) or {}
+        for key, value in declared.items():
+            if key in forced and forced[key] != value:
+                log.warning(
+                    f"FORCE_APP_CONFIG conflict on {key!r}: "
+                    f"{forced_by[key]} wants {forced[key]!r}, "
+                    f"{module.__name__} wants {value!r}; using {value!r}"
+                )
+            forced[key] = value
+            forced_by[key] = module.__name__
+    if not forced:
+        return
+
+    # Deferred import — hil_helpers imports conftest, so importing it at
+    # module level here would be circular.
+    from hil_helpers import _resolve_app_config_path, force_app_config_value
+
+    target = _resolve_app_config_path()
+    try:
+        _forced_config_snapshot = target.read_bytes()
+    except OSError:
+        _forced_config_snapshot = None
+    _forced_config_target = target
+    for key, value in forced.items():
+        force_app_config_value(key, value)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Byte-exact restore of the app config we force-wrote at collection."""
+    if _forced_config_target is not None and _forced_config_snapshot is not None:
+        try:
+            _forced_config_target.write_bytes(_forced_config_snapshot)
+        except OSError as e:
+            log.warning(
+                f"could not restore {_forced_config_target} after forcing "
+                f"app-config values: {e}"
+            )
+
+
+@pytest.fixture(autouse=True)
+def _guard_tracked_app_config(request):
+    """Fail loudly if a unit test dirties the tracked config/app_config.json.
+
+    Unit tests must point config IO at tmp_path (monkeypatch
+    OPENWATER_DATA_ROOT / config_store.resource_path — see the pattern in
+    tests/test_app_config_defaults.py). HIL tests are exempt: several
+    legitimately write the on-disk config mid-session and restore it
+    themselves.
+    """
+    if request.node.get_closest_marker("unit") is None:
+        yield
+        return
+    before = _read_repo_app_config()
+    yield
+    after = _read_repo_app_config()
+    if before != after:
+        if before is not None:
+            _REPO_APP_CONFIG.write_bytes(before)
+        pytest.fail(
+            "this test modified the tracked config/app_config.json — unit "
+            "tests must redirect config reads/writes to tmp_path "
+            "(monkeypatch OPENWATER_DATA_ROOT / config_store.resource_path). "
+            "The original file contents were restored."
+        )
+
+
 def _from_source_mode() -> bool:
     """True when ``OPENWATER_FROM_SOURCE`` is set, i.e. launch via ``python main.py``."""
     return os.environ.get("OPENWATER_FROM_SOURCE", "").lower() in ("1", "true", "yes")
@@ -140,7 +282,7 @@ def _find_main_py() -> str:
 
 
 def _find_exe() -> str:
-    """Locate the latest OpenWaterApp.exe, including pre-release builds.
+    """Locate the latest Open-Motion.exe, including pre-release builds.
 
     Collects all matches across every search pattern and returns the most
     recently modified file, so a newer pre-release build is always preferred
@@ -150,19 +292,19 @@ def _find_exe() -> str:
     if env and os.path.exists(env):
         return env
     patterns = [
-        r"C:\Users\*\Documents\OpenMotion\**\OpenWaterApp.exe",
-        r"C:\Users\*\Desktop\**\OpenWaterApp.exe",
-        r"C:\Program Files\**\OpenWaterApp.exe",
-        r"C:\Program Files (x86)\**\OpenWaterApp.exe",
+        r"C:\Users\*\Documents\OpenMotion\**\Open-Motion.exe",
+        r"C:\Users\*\Desktop\**\Open-Motion.exe",
+        r"C:\Program Files\**\Open-Motion.exe",
+        r"C:\Program Files (x86)\**\Open-Motion.exe",
     ]
     all_matches = []
     for pattern in patterns:
         all_matches.extend(_glob.glob(pattern, recursive=True))
     if all_matches:
         latest = max(all_matches, key=os.path.getmtime)
-        log.info(f"  Found {len(all_matches)} OpenWaterApp.exe candidate(s) — using latest: {latest}")
+        log.info(f"  Found {len(all_matches)} Open-Motion.exe candidate(s) — using latest: {latest}")
         return latest
-    local = os.path.join(os.path.dirname(os.path.abspath(__file__)), "OpenWaterApp.exe")
+    local = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Open-Motion.exe")
     if os.path.exists(local):
         return local
     return ""
@@ -171,11 +313,11 @@ def _find_exe() -> str:
 # ─────────────────────────────────────────────
 # Window helpers
 # ─────────────────────────────────────────────
-# Process names accepted as the bloodflow app. ``OpenWaterApp.exe`` is
+# Process names accepted as the bloodflow app. ``Open-Motion.exe`` is
 # the packaged build; ``python.exe`` / ``pythonw.exe`` covers the
 # from-source mode (verified by also checking ``main.py`` in the
 # command line, since plenty of other things run under python.exe).
-_APP_PROCESS_NAMES = ("openwaterapp.exe", "python.exe", "pythonw.exe")
+_APP_PROCESS_NAMES = ("open-motion.exe", "python.exe", "pythonw.exe")
 
 
 def _window_process_name(w) -> str | None:
@@ -243,7 +385,7 @@ def _is_bloodflow_window(w) -> bool:
 def ensure_visible():
     """Bring the bloodflow app window to the foreground.
 
-    Identifies the right window by owning-process name (OpenWaterApp.exe
+    Identifies the right window by owning-process name (Open-Motion.exe
     or python main.py with the bloodflow project on the command line),
     so a sibling File Explorer window pointed at the project folder
     can't masquerade as the app. Otherwise every subsequent
@@ -270,7 +412,7 @@ def uia_window(retries: int = 3):
         ensure_visible()
         desktop = UiaDesktop(backend="uia")
         try:
-            spec = desktop.window(title="OpenWater Bloodflow")
+            spec = desktop.window(title="Open-Motion")
             if spec.exists(timeout=5):
                 return spec
         except Exception as e:
@@ -539,10 +681,10 @@ def get_clipboard() -> str:
 # ─────────────────────────────────────────────
 @pytest.fixture(scope="session")
 def app():
-    """Launch or connect to the OpenWater app. Session-scoped — runs once.
+    """Launch or connect to the Open-Motion app. Session-scoped — runs once.
 
     Set ``OPENWATER_FROM_SOURCE=1`` to run the in-tree dev branch via
-    ``python main.py`` instead of discovering an installed ``OpenWaterApp.exe``.
+    ``python main.py`` instead of discovering an installed ``Open-Motion.exe``.
     """
     from_source = _from_source_mode()
 
@@ -586,7 +728,7 @@ def app():
         return True
 
     pytest.skip(
-        "OpenWaterApp.exe not found -- set OPENWATER_EXE, or set "
+        "Open-Motion.exe not found -- set OPENWATER_EXE, or set "
         "OPENWATER_FROM_SOURCE=1 to launch via python main.py"
     )
 
@@ -709,19 +851,44 @@ def _check_app_alive(request):
     global _app_dead_after
     if _app_dead_after is not None:
         pytest.fail(
-            f"Bloodflow app died — first noticed by '{_app_dead_after}'. "
-            f"Subsequent tests cannot run. Inspect the bloodflow app log "
-            f"(app-logs/ow-bloodflowapp-*.log) around that test for an "
+            f"Open-Motion app died — first noticed by '{_app_dead_after}'. "
+            f"Subsequent tests cannot run. Inspect the app log "
+            f"(logs/open-motion-*.log) around that test for an "
             f"unhandled Python exception."
         )
 
     if not ensure_visible():
         _app_dead_after = request.node.nodeid
         pytest.fail(
-            f"Bloodflow app window is gone — likely crashed during the "
-            f"previous test. See app-logs/ow-bloodflowapp-*.log for "
+            f"Open-Motion app window is gone — likely crashed during the "
+            f"previous test. See logs/open-motion-*.log for "
             f"diagnostics. (First detected at '{_app_dead_after}'.)"
         )
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_writable_root(request, tmp_path, monkeypatch):
+    """Route utils.app_paths.writable_root() to a per-test tmp dir for
+    every unit test.
+
+    Without this, a non-frozen (dev-mode) writable_root() falls through to
+    cwd — the repo root when pytest runs from there. Any unit test that
+    triggers a config save (e.g. via setConfig/_save_app_config) without
+    its own OPENWATER_DATA_ROOT override then writes a real
+    app_config.local.json into the checked-out worktree, which persists
+    across test runs and corrupts later tests that load the shipped
+    config expecting no overrides present (seen: test_app_config_defaults
+    failures that changed shape between runs depending on prior state).
+
+    A test that needs its own root (e.g. to assert on the exact path)
+    still wins — monkeypatch.setenv/delenv in the test body simply
+    overrides this fixture's value, same monkeypatch instance either way.
+    """
+    if request.node.get_closest_marker("unit") is None:
+        yield
+        return
+    monkeypatch.setenv("OPENWATER_DATA_ROOT", str(tmp_path / "_app_paths_root"))
     yield
 
 
@@ -743,7 +910,7 @@ def _check_app_alive(request):
 #   - Generic across all test files — no per-file class filter.
 #
 # Originally adapted from a per-file version on origin/Varun-Test
-# (commits ba05bd0 + e3a017a in tests/test_reducedmode.py).
+# (commits ba05bd0 + e3a017a in tests/test_clinicalmode.py).
 
 _REPORT_SESSION_START: datetime | None = None
 
@@ -751,12 +918,12 @@ _REPORT_SESSION_START: datetime | None = None
 def _report_get_app_version() -> str:
     """Best-effort guess at the bundled bloodflow build version.
 
-    Reads it from the running OpenWaterApp.exe path (the build script
+    Reads it from the running Open-Motion.exe path (the build script
     lays the version into the parent-directory name). Falls back to
     ``$OPENWATER_VERSION`` if no app process is detected.
     """
     try:
-        for proc_name in ("OpenWaterApp.exe", "OpenWaterApp_console.exe"):
+        for proc_name in ("Open-Motion.exe", "Open-Motion_console.exe"):
             try:
                 result = subprocess.run(
                     ["wmic", "process", "where", f"name='{proc_name}'",
@@ -870,7 +1037,7 @@ def _write_hil_report() -> None:
 
     # ── JSON ──
     report_data = {
-        "report_title": "OpenWater BloodFlow — HIL Test Session Report",
+        "report_title": "Open-Motion — HIL Test Session Report",
         "purpose":      "Verification & validation evidence for the HIL "
                         "test suite.",
         "session_start": _REPORT_SESSION_START.isoformat(timespec="seconds")

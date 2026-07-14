@@ -14,7 +14,6 @@ ApplicationWindow {
     flags: Qt.FramelessWindowHint | Qt.Window | Qt.CustomizeWindowHint | Qt.WindowTitleHint
     color: "transparent"
 
-    AppTheme { id: theme }
 
     // Issue #75: aggregate 'something is happening' state used by the
     // close-while-busy warning. Anything that the user would not want
@@ -61,7 +60,7 @@ ApplicationWindow {
 
     Rectangle {
         anchors.fill: parent
-        color: theme.bgBase
+        color: AppTheme.bgBase
         radius: 20
         border.color: "transparent"
 
@@ -78,7 +77,7 @@ ApplicationWindow {
             sessionId:   bloodFlowPage.sessionId
             scanning:    bloodFlowPage.scanning
             freeRun:     bloodFlowPage.freeRun
-            reducedMode:     bloodFlowPage.reducedMode
+            clinicalMode:     bloodFlowPage.clinicalMode
             elapsedSec:  bloodFlowPage.elapsedSec
             durationSec: bloodFlowPage.durationSec
 
@@ -113,8 +112,8 @@ ApplicationWindow {
                 exitDisarmTimer.restart()
             }
 
-            // Hidden developer-mode entry point.
-            onLogoDoubleClicked: developerUnlockModal.open()
+            // Hidden engineering-mode entry point.
+            onLogoDoubleClicked: engineeringUnlockModal.open()
         }
 
         // Update available banner (slides in below header)
@@ -123,6 +122,15 @@ ApplicationWindow {
             anchors.top: headerMenu.bottom
             anchors.left: parent.left
             anchors.right: parent.right
+        }
+
+        // Firmware update banner (engineeringMode only)
+        FirmwareUpdateBanner {
+            id: firmwareUpdateBanner
+            anchors.top: updateBanner.bottom
+            anchors.left: parent.left
+            anchors.right: parent.right
+            onViewRequested: bloodFlowPage.openSettings()
         }
 
         // Toast notification overlay — fills the window, positions toasts in its own bottom-right corner
@@ -135,6 +143,7 @@ ApplicationWindow {
         Item {
             anchors.fill: parent
             anchors.topMargin: 65 + (updateBanner.visible ? updateBanner.height : 0)
+                               + (firmwareUpdateBanner.visible ? firmwareUpdateBanner.height : 0)
             anchors.rightMargin: 8
             anchors.bottomMargin: 8
             anchors.leftMargin: 8
@@ -145,9 +154,9 @@ ApplicationWindow {
             }
         }
 
-        // Developer-mode unlock prompt (opened by logo double-click).
-        DeveloperUnlockModal {
-            id: developerUnlockModal
+        // Engineering-mode unlock prompt (opened by logo double-click).
+        EngineeringUnlockModal {
+            id: engineeringUnlockModal
         }
     }
 
@@ -166,7 +175,7 @@ ApplicationWindow {
             anchors.margins: 3
             onPaint: {
                 var ctx = getContext("2d")
-                ctx.strokeStyle = theme.borderHover
+                ctx.strokeStyle = AppTheme.borderHover
                 ctx.lineWidth = 1
                 var s = width
                 for (var i = 0; i < 3; i++) {
@@ -195,10 +204,6 @@ ApplicationWindow {
                 window.height = newH
             }
         }
-    }
-
-    Connections {
-        target: MotionInterface
     }
 
     TestResultsWindow {

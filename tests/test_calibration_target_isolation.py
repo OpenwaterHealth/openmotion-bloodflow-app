@@ -68,25 +68,18 @@ from hil_helpers import (
     RE_CONNECTED,
     click_panel,
     find_app_log,
-    force_app_config_value,
     recalibrate_panel_buttons,
     wait_for_pattern,
-    write_app_config_value,
 )
 
 pytestmark = pytest.mark.release
 
-# Calibration controls live in the developerMode-gated "Developer" card
-# of the Settings modal. The app ships with developerMode=false, so force
-# it true on disk before the test's app relaunches read the config;
-# restore the original value when the module finishes.
-_INITIAL_DEVELOPER_MODE = force_app_config_value("developerMode", True)
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _restore_developer_mode():
-    yield
-    write_app_config_value("developerMode", _INITIAL_DEVELOPER_MODE)
+# Calibration controls live in the engineeringMode-gated "Engineering" card
+# of the Settings modal. The app ships with engineeringMode=false, so force
+# it true on disk before the test's app relaunches read the config.
+# Applied by conftest's pytest_collection_finish only when this module has
+# selected tests; restored byte-exact at session end.
+FORCE_APP_CONFIG = {"engineeringMode": True}
 
 # Calibration on real hardware: phase-0 flash (~5–15 s) + 2 sub-scans
 # of ~6 s each + compute + write + validation. Field runs settle
@@ -139,10 +132,10 @@ def _find_exe() -> str | None:
     if env and os.path.exists(env):
         return env
     patterns = [
-        r"C:\Users\*\Documents\OpenMotion\**\OpenWaterApp.exe",
-        r"C:\Users\*\Desktop\**\OpenWaterApp.exe",
-        r"C:\Program Files\**\OpenWaterApp.exe",
-        r"C:\Program Files (x86)\**\OpenWaterApp.exe",
+        r"C:\Users\*\Documents\OpenMotion\**\Open-Motion.exe",
+        r"C:\Users\*\Desktop\**\Open-Motion.exe",
+        r"C:\Program Files\**\Open-Motion.exe",
+        r"C:\Program Files (x86)\**\Open-Motion.exe",
     ]
     matches: list[str] = []
     for p in patterns:
@@ -189,7 +182,7 @@ def _launch_app() -> None:
     else:
         exe = _find_exe()
         if not exe:
-            pytest.fail("OpenWaterApp.exe not found and OPENWATER_EXE unset")
+            pytest.fail("Open-Motion.exe not found and OPENWATER_EXE unset")
         log.info(f"  launching: {exe}")
         subprocess.Popen([exe])
 

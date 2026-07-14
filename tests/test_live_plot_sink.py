@@ -34,14 +34,18 @@ class _RecorderLiveSource:
 
 
 def _connector():
-    return SimpleNamespace(
+    conn = SimpleNamespace(
         _camera_temp_alert_threshold_c=100.0,
         _camera_dropped=set(),
-        _camera_dropped_recovery_logged=set(),
         _camera_last_seen={},
         _camera_last_temp={},
         captureLog=_Signal(),
+        recovered=[],
     )
+    # Called by the sink when a dropped camera's frames resume.
+    conn._on_camera_dropout_recovered = (
+        lambda side, cam_id: conn.recovered.append((side, cam_id)))
+    return conn
 
 
 def _make_sink(conn, live_source=None):
@@ -167,7 +171,7 @@ def test_live_plot_sink_live_channel_appends_no_side_average():
 
 def test_live_plot_sink_live_channel_updates_dropout_heartbeat():
     """Per-camera BFI arrival on the 'live' channel still updates the
-    dropout-watchdog heartbeat — reduced mode shows only the average, but
+    dropout-watchdog heartbeat — clinical mode shows only the average, but
     liveness detection must keep seeing each camera."""
     conn = _connector()
     sink, _ = _make_sink(conn)
@@ -301,7 +305,10 @@ def test_live_plot_sink_no_temp_when_non_finite():
     assert src.appended[0]["temp"] is None
 
 
-def test_live_plot_sink_records_finite_samples_into_nan_gap_tracker():
+def test_live_plot_sink_records_every_arrival_into_gap_tracker():
+    """The gap tracker is fed on frame ARRIVAL — an unlit frame whose
+    BFI is NaN (covered sensor) is still delivery, not a data gap. Gaps
+    now mean "frames stopped arriving"."""
     from nan_gap_tracker import NanGapTracker
 
     conn = _connector()
@@ -321,10 +328,9 @@ def test_live_plot_sink_records_finite_samples_into_nan_gap_tracker():
         side_ids=np.array([0, 0, 0], dtype=np.int8),
         cam_ids=np.array([1, 1, 1], dtype=np.int8),
     )
-    # Middle sample is NaN-filled → skipped by the sink AND absent from
-    # the tracker, leaving a 0.1→3.0 gap for ("left", 1). The gap starts
-    # at the last finite sample before the silence (t=0.1, frame 0);
-    # t=0.125 (frame 1) is NaN and never recorded.
+    # Middle sample is NaN → skipped for the PLOT, but still recorded in
+    # the tracker (the frame arrived). The only gap is the genuine
+    # delivery silence between t=0.125 and t=3.0.
     batch.bfi_live[:] = 7.0
     batch.bvi_live[:] = 4.0
     batch.bfi_live[1, 0, 1] = np.nan
@@ -332,26 +338,54 @@ def test_live_plot_sink_records_finite_samples_into_nan_gap_tracker():
     sink.consume("live", batch)
 
     assert tracker.merged_gaps() == [
-        (pytest.approx(0.1), pytest.approx(3.0))
+        (pytest.approx(0.125), pytest.approx(3.0))
     ]
-    # Sink behavior unchanged: NaN sample not appended to the live source.
+    # Plot behavior unchanged: NaN sample not appended to the live source.
     assert [r["t"] for r in src.appended] == [
         pytest.approx(0.1), pytest.approx(3.0)
     ]
 
 
-def test_live_plot_sink_records_dropout_suppressed_samples_in_tracker():
-    """A camera in the dropped set is suppressed from the live source, but
-    its finite samples still reach the tracker — record() sits before the
-    dropout gate (arriving finite data is not a NaN gap)."""
+def test_live_plot_sink_covered_camera_stays_alive_and_unplotted():
+    """A covered / off-target camera streams light-typed frames whose
+    BFI/BVI are NaN. It must keep feeding the heartbeat and the gap
+    tracker (it is connected), while appending nothing to the plot."""
     from nan_gap_tracker import NanGapTracker
 
     conn = _connector()
-    conn._camera_dropped = {("left", 1)}
     tracker = NanGapTracker()
     src = _RecorderLiveSource()
     sink = _LivePlotSink(connector=conn, plot_t0=0.0, live_source=src,
                          nan_gap_tracker=tracker)
+    batch = SimpleNamespace(
+        bfi_live=np.full((2, 2, 8), np.nan, dtype=np.float32),
+        bvi_live=np.full((2, 2, 8), np.nan, dtype=np.float32),
+        mean_dc_rt=np.full((2, 2, 8), np.nan, dtype=np.float32),
+        contrast_sn_rt=np.full((2, 2, 8), np.nan, dtype=np.float32),
+        temperature_c=np.full((2, 2, 8), 55.0, dtype=np.float32),
+        frame_type=np.array(["light", "light"], dtype="<U8"),
+        timestamp_s=np.array([0.1, 0.125], dtype=np.float64),
+        abs_frame_ids=np.array([10, 11], dtype=np.int64),
+        side_ids=np.array([0, 0], dtype=np.int8),
+        cam_ids=np.array([2, 2], dtype=np.int8),
+    )
+
+    sink.consume("live", batch)
+
+    assert ("left", 2) in conn._camera_last_seen   # alive
+    assert tracker.t0 == pytest.approx(0.1)        # delivery recorded
+    assert src.appended == []                      # nothing plottable
+    # Chip temperature is real even when the camera sees no light.
+    assert conn._camera_last_temp[("left", 2)] == pytest.approx(55.0, abs=1e-4)
+
+
+def test_live_plot_sink_rearms_dropped_camera_on_frame_arrival():
+    """A camera in the dropped set that sends a fresh frame is re-armed:
+    removed from the set, recovery surfaced, and the sample plotted —
+    dropout marking is no longer permanent for the scan."""
+    conn = _connector()
+    conn._camera_dropped = {("left", 1)}
+    sink, src = _make_sink(conn)
     batch = SimpleNamespace(
         bfi_live=np.full((1, 2, 8), 7.0, dtype=np.float32),
         bvi_live=np.full((1, 2, 8), 4.0, dtype=np.float32),
@@ -367,11 +401,53 @@ def test_live_plot_sink_records_dropout_suppressed_samples_in_tracker():
 
     sink.consume("live", batch)
 
-    assert src.appended == []          # suppressed from the live source
-    assert tracker.t0 == pytest.approx(0.1)  # but recorded in the tracker
+    assert conn._camera_dropped == set()           # re-armed
+    assert conn.recovered == [("left", 1)]         # recovery surfaced
+    assert len(src.appended) == 1                  # display resumed
 
 
-def test_live_plot_sink_side_average_records_only_finite_into_tracker():
+def test_live_plot_sink_low_light_transition_logged_after_debounce():
+    """batch.low_light_rt drives a debounced per-camera state: after
+    _LOW_LIGHT_DEBOUNCE_FRAMES consecutive unlit frames, one capture-log
+    line explains the empty plot. No spam before the debounce."""
+    conn = _connector()
+    sink, _ = _make_sink(conn)
+    n = sink._LOW_LIGHT_DEBOUNCE_FRAMES
+
+    def _covered_batch(n_frames, t0):
+        b = SimpleNamespace(
+            bfi_live=np.full((n_frames, 2, 8), np.nan, dtype=np.float32),
+            bvi_live=np.full((n_frames, 2, 8), np.nan, dtype=np.float32),
+            mean_dc_rt=np.full((n_frames, 2, 8), np.nan, dtype=np.float32),
+            contrast_sn_rt=np.full((n_frames, 2, 8), np.nan, dtype=np.float32),
+            temperature_c=np.full((n_frames, 2, 8), 40.0, dtype=np.float32),
+            frame_type=np.array(["light"] * n_frames, dtype="<U8"),
+            timestamp_s=t0 + np.arange(n_frames, dtype=np.float64) * 0.025,
+            abs_frame_ids=np.arange(10, 10 + n_frames, dtype=np.int64),
+            side_ids=np.zeros(n_frames, dtype=np.int8),
+            cam_ids=np.full(n_frames, 3, dtype=np.int8),
+            low_light_rt=np.ones((n_frames, 2, 8), dtype=bool),
+        )
+        return b
+
+    # One frame short of the debounce: no message yet.
+    sink.consume("live", _covered_batch(n - 1, 0.0))
+    low_msgs = [c[0] for c in conn.captureLog.calls if "low light" in c[0]]
+    assert low_msgs == []
+
+    # One more unlit frame crosses the debounce: exactly one message.
+    sink.consume("live", _covered_batch(1, (n - 1) * 0.025))
+    low_msgs = [c[0] for c in conn.captureLog.calls if "low light" in c[0]]
+    assert len(low_msgs) == 1
+    assert "LEFT 4" in low_msgs[0]
+
+    # Staying covered produces no further messages.
+    sink.consume("live", _covered_batch(n, n * 0.025))
+    low_msgs = [c[0] for c in conn.captureLog.calls if "low light" in c[0]]
+    assert len(low_msgs) == 1
+
+
+def test_live_plot_sink_side_average_records_arrivals_into_tracker():
     from nan_gap_tracker import NanGapTracker
 
     conn = _connector()
@@ -389,9 +465,11 @@ def test_live_plot_sink_side_average_records_only_finite_into_tracker():
 
     # Side-average appends still store NaN (existing behavior)...
     assert len(src.appended) == 3
-    # ...but the tracker only saw the finite samples → 0.5→2.0 gap.
+    # ...and the tracker records every arriving sample — the NaN average
+    # at t=0.6 (e.g. all cameras covered) is delivery, so the only gap is
+    # the genuine 0.6→2.0 silence.
     assert tracker.merged_gaps() == [
-        (pytest.approx(0.5), pytest.approx(2.0))
+        (pytest.approx(0.6), pytest.approx(2.0))
     ]
 
 

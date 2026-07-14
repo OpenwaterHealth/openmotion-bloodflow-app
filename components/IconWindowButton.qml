@@ -1,18 +1,18 @@
 import QtQuick 6.0
 import QtQuick.Controls 6.0
 import QtQuick.Layouts 6.0
+import OpenMotion 1.0
 
 Item {
     id: iconWindowButton
     width: 40
     height: 40
 
-    AppTheme { id: theme }
 
     // IconWindowButton properties
     property string buttonIcon: "\ue900"         // Icon Unicode
-    property color iconColor: theme.textSecondary         // Default icon color
-    property color hoverBackground: theme.bgHover   // Background color on hover
+    property color iconColor: AppTheme.textSecondary         // Default icon color
+    property color hoverBackground: AppTheme.bgHover   // Background color on hover
     property color hoverIconColor: "white"      // Icon color on hover
     property color backgroundColor: "transparent" // Default background color
     property color activeBackground: "#374774"      // Background color when clicked

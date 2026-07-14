@@ -17,6 +17,8 @@ Nothing in QML consumes these yet — Phase 1 is purely additive.
 from __future__ import annotations
 
 import logging
+import math
+import threading
 from typing import Optional
 
 import numpy as np
@@ -48,7 +50,7 @@ class _CameraBuffer:
     """
 
     __slots__ = ("t", "v", "frame_id", "n", "dropped_at",
-                 "ring_trimmed", "_max_capacity")
+                 "ring_trimmed", "_max_capacity", "_lock")
 
     def __init__(
         self,
@@ -68,6 +70,13 @@ class _CameraBuffer:
         self.v = np.empty(initial_capacity, dtype=np.float32)
         self.frame_id = np.empty(initial_capacity, dtype=np.int64)
         self.n = 0
+        # Guards n + the arrays against a torn read: the SDK pipeline
+        # thread appends (and _ring_trim shifts data in place, rewriting
+        # n) while the GUI thread reads via window_decimated/value_near.
+        # RLock because window_decimated calls window_indices. Held only
+        # for short numpy ops, so contention at 40 Hz × ~32 buffers is
+        # negligible.
+        self._lock = threading.RLock()
         self.dropped_at: Optional[float] = None
         # True once _ring_trim has dropped older samples — i.e. data
         # below t[0] now lives only in the DB, not memory. LiveScanSource
@@ -90,7 +99,8 @@ class _CameraBuffer:
     def _ring_trim(self) -> None:
         """At-cap: drop the oldest half of the buffer in-place so new
         appends keep landing at index n without unbounded growth.
-        Called when capacity has already reached max_capacity."""
+        Called when capacity has already reached max_capacity.
+        Caller (append) holds _lock."""
         half = self._max_capacity // 2
         # Keep the most recent `half` samples (parity-safe — works for
         # odd max_capacity too, e.g. a test-configured small cache).
@@ -104,19 +114,21 @@ class _CameraBuffer:
     def append(self, t: float, v: float, frame_id: int) -> None:
         """Append one sample. Grows capacity (doubling) on overflow up
         to max_capacity; at the cap, ring-trims the oldest half."""
-        if self.n >= self.t.shape[0]:
-            # Unbounded (max_capacity=None): always grow, never trim — these
-            # buffers bulk-load a finite, already-known result set (a past scan
-            # or a DB-tail window) and must never drop their own loaded rows.
-            if self._max_capacity is not None and self.t.shape[0] >= self._max_capacity:
-                self._ring_trim()
-            else:
-                self._grow()
-        idx = self.n
-        self.t[idx] = t
-        self.v[idx] = v
-        self.frame_id[idx] = frame_id
-        self.n += 1
+        with self._lock:
+            if self.n >= self.t.shape[0]:
+                # Unbounded (max_capacity=None): always grow, never trim —
+                # these buffers bulk-load a finite, already-known result set
+                # (a past scan or a DB-tail window) and must never drop their
+                # own loaded rows.
+                if self._max_capacity is not None and self.t.shape[0] >= self._max_capacity:
+                    self._ring_trim()
+                else:
+                    self._grow()
+            idx = self.n
+            self.t[idx] = t
+            self.v[idx] = v
+            self.frame_id[idx] = frame_id
+            self.n += 1
 
     def window_indices(self, t_lo: float, t_hi: float) -> tuple[int, int]:
         """Return (i_lo, i_hi) such that t[i_lo:i_hi] covers [t_lo, t_hi].
@@ -126,12 +138,13 @@ class _CameraBuffer:
         appends in timestamp order at 40 Hz; PastScanSource reads rows ordered
         by timestamp_s ASC from the SDK query. Out-of-order append silently
         returns wrong indices — np.searchsorted does not validate."""
-        if self.n == 0:
-            return 0, 0
-        t_slice = self.t[: self.n]
-        i_lo = int(np.searchsorted(t_slice, t_lo, side="left"))
-        i_hi = int(np.searchsorted(t_slice, t_hi, side="right"))
-        return i_lo, i_hi
+        with self._lock:
+            if self.n == 0:
+                return 0, 0
+            t_slice = self.t[: self.n]
+            i_lo = int(np.searchsorted(t_slice, t_lo, side="left"))
+            i_hi = int(np.searchsorted(t_slice, t_hi, side="right"))
+            return i_lo, i_hi
 
     def window_decimated(
         self,
@@ -143,6 +156,10 @@ class _CameraBuffer:
         max_points samples. When decimation is required, samples are
         mean-binned (each output value = mean of `stride` consecutive
         input samples) rather than stride-subsampled.
+
+        Thread-safe: the whole read runs under _lock and the returned
+        arrays are fresh allocations, so a concurrent append/_ring_trim
+        on the pipeline thread can't shift data under the caller.
 
         Mean-binning matters: simple stride subsampling at e.g.
         stride=2 causes the rendered trace to alternate between odd-
@@ -157,6 +174,17 @@ class _CameraBuffer:
 
         Empty arrays returned when the window contains no samples or
         the buffer is empty."""
+        with self._lock:
+            return self._window_decimated_locked(t_lo, t_hi, max_points)
+
+    def _window_decimated_locked(
+        self,
+        t_lo: float,
+        t_hi: float,
+        max_points: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """window_decimated body. Caller holds _lock (RLock — the
+        window_indices call below re-enters it)."""
         i_lo, i_hi = self.window_indices(t_lo, t_hi)
         n_window = i_hi - i_lo
         if n_window <= 0:
@@ -192,8 +220,10 @@ class _CameraBuffer:
         # always forced a 2-sample average even when not needed, which
         # was the source of "looks filtered" at 5 s zoom.)
         if stride == 1:
-            t_out = self.t[i_lo:i_hi]
-            v_out = self.v[i_lo:i_hi]
+            # Copies, not views — a view would escape the lock and read
+            # memory a concurrent _ring_trim is shifting.
+            t_out = self.t[i_lo:i_hi].copy()
+            v_out = self.v[i_lo:i_hi].copy()
             return t_out, v_out
 
         window = stride
@@ -230,6 +260,26 @@ class _CameraBuffer:
             v_out = np.where(counts > 0, sums / np.maximum(counts, 1), np.nan)
         t_out = self.t[abs_idxs]
         return t_out, v_out.astype(np.float32)
+
+    def value_near(self, t: float) -> float:
+        """Value of the sample nearest to time `t`; NaN when the buffer
+        is empty or the nearest sample is itself non-finite.
+
+        Lock-protected: the GUI hover tooltip reads while the pipeline
+        thread appends/ring-trims. A torn read of `n` previously caused
+        IndexErrors when a searchsorted idx passed a stale-n clamp."""
+        with self._lock:
+            n = self.n
+            if n == 0:
+                return float("nan")
+            t_slice = self.t[:n]
+            idx = int(np.searchsorted(t_slice, t, side="left"))
+            if idx >= n:
+                idx = n - 1
+            elif idx > 0 and abs(t_slice[idx - 1] - t) < abs(t_slice[idx] - t):
+                idx -= 1
+            v = float(self.v[idx])
+            return v if np.isfinite(v) else float("nan")
 
     def mark_dropped(self, t: float) -> None:
         """Record the first dropout timestamp for this stream. Idempotent —
@@ -270,9 +320,9 @@ class ScanDataSource(QObject):
         self._left_mask: int = -1
         self._right_mask: int = -1
         # Recorded display mode, tri-state: -1 unknown / 0 per-camera / 1
-        # reduced. -1 for live sources (viewer follows the live config);
+        # clinical. -1 for live sources (viewer follows the live config);
         # PastScanSource derives the real value from its buffer layout.
-        self._reduced_mode: int = -1
+        self._clinical_mode: int = -1
         # Human-readable identity for the viewer's "Viewing" badge (issue
         # #245): the operator's user label and the scan's date/time. Empty
         # on live sources — the badge is past-scan only. PastScanSource sets
@@ -291,6 +341,10 @@ class ScanDataSource(QObject):
         # Pending dirty bookkeeping: (side, cam, metric) -> accumulated count.
         self._pending: dict[tuple[str, int, str], int] = {}
 
+        # Set by release() when the connector retires this source; guards
+        # against double-release and marks the flush timer as stopped.
+        self._released = False
+
         # Throttle timer — fires every 100 ms while the source is alive.
         # Tests can call _flush() directly and ignore the timer entirely.
         self._flush_timer = QTimer(self)
@@ -299,6 +353,20 @@ class ScanDataSource(QObject):
         self._flush_timer.start()
 
     # ── public ────────────────────────────────────────────────────────────
+
+    def release(self) -> None:
+        """Stop the flush timer and drop external resources. Idempotent.
+
+        Called by the connector right before deleteLater() when this source
+        is no longer reachable from QML (superseded by a newer scan or
+        another History view). Buffers stay readable — a late paint during
+        the deleteLater window must not crash — but no further
+        samplesAppended fires."""
+        if self._released:
+            return
+        self._released = True
+        self._flush_timer.stop()
+        self._pending.clear()
 
     @pyqtProperty(bool, constant=True)
     def live(self) -> bool:
@@ -327,12 +395,12 @@ class ScanDataSource(QObject):
         return self._right_mask
 
     @pyqtProperty(int, constant=True)
-    def reducedMode(self) -> int:
+    def clinicalMode(self) -> int:
         """Recorded display mode this source represents: -1 unknown, 0
-        per-camera, 1 reduced. Exposed for QML (PlotViewer.effectiveReduced)
+        per-camera, 1 clinical. Exposed for QML (PlotViewer.effectiveClinical)
         so a replayed scan renders in its own mode rather than the live config.
         See ``leftMask`` for why this must be a pyqtProperty."""
-        return self._reduced_mode
+        return self._clinical_mode
 
     @pyqtProperty(str, constant=True)
     def userLabel(self) -> str:
@@ -408,25 +476,14 @@ class ScanDataSource(QObject):
         NaN if the buffer doesn't exist, is empty, or the nearest sample
         is itself non-finite. Used by the viewer's hover tooltip.
 
-        Concurrency: snapshots buf.n locally because the SDK pipeline
-        thread may call _CameraBuffer.append (incrementing n) between
-        our reads. Without the snapshot, a torn read of n caused
-        IndexErrors when the searchsorted-returned idx happened to
-        equal the captured slice size but failed the (stale-n) clamp."""
+        Concurrency handled inside _CameraBuffer.value_near — the lookup
+        runs under the buffer lock so a pipeline-thread append/ring-trim
+        can't shift data mid-read (a torn read of n used to cause
+        IndexErrors here)."""
         buf = self.buffers.get((side, int(cam_id), metric))
         if buf is None:
             return float("nan")
-        n = buf.n
-        if n == 0:
-            return float("nan")
-        t_slice = buf.t[:n]
-        idx = int(np.searchsorted(t_slice, t, side="left"))
-        if idx >= n:
-            idx = n - 1
-        elif idx > 0 and abs(t_slice[idx - 1] - t) < abs(t_slice[idx] - t):
-            idx -= 1
-        v = float(buf.v[idx])
-        return v if np.isfinite(v) else float("nan")
+        return buf.value_near(t)
 
     @pyqtSlot(str, int, result=float)
     def dropped_at_for(self, side: str, cam_id: int) -> float:
@@ -440,6 +497,31 @@ class ScanDataSource(QObject):
             if buf is not None and buf.dropped_at is not None:
                 return float(buf.dropped_at)
         return float("nan")
+
+    def last_sample_t(self, side: str, cam_id: int) -> float:
+        """Newest sample timestamp across this (side, cam)'s metric
+        buffers, or NaN when the camera has no samples yet.
+
+        This is where the camera's trace visibly ends — the dropout
+        watchdog anchors the plot's dropout marker here so the marker
+        lives on the SAME time axis as the samples (SDK-normalized,
+        t=0 at the scan's first frame). See issue #284: a marker
+        computed on any other clock lands off the sample axis and
+        renders clipped or at the wrong x."""
+        latest = float("nan")
+        for metric in ("bfi", "bvi", "mean", "contrast"):
+            buf = self.buffers.get((side, int(cam_id), metric))
+            if buf is None:
+                continue
+            # Under the buffer lock: the pipeline thread appends (and
+            # ring-trims, shifting data + rewriting n) concurrently.
+            with buf._lock:
+                if buf.n == 0:
+                    continue
+                t = float(buf.t[buf.n - 1])
+            if math.isnan(latest) or t > latest:
+                latest = t
+        return latest
 
     @pyqtSlot(str, result="QVariantMap")
     @pyqtSlot(str, float, float, float, result="QVariantMap")
@@ -517,9 +599,18 @@ class LiveScanSource(ScanDataSource):
     BEFORE the in-memory window, points_for_window / value_at lazily
     load the requested range from the DB into a transient window so the
     full scan history stays navigable without unbounded memory growth.
+    The load runs on a worker thread (issue #256) — until it lands,
+    reads serve the in-memory portion plus whatever the previous cached
+    window covers, then historyWindowLoaded triggers a repaint.
 
     Pass scan_db_path to enable the DB tail; None (the default, e.g. in
     unit tests) keeps the legacy in-memory-only behavior."""
+
+    # Emitted (from the loader thread — PyQt queues it to the GUI thread)
+    # when an async DB-window load lands. PlotViewer marks itself dirty on
+    # this so the newly-available history paints even when no live samples
+    # are arriving to tick the paint throttle.
+    historyWindowLoaded = pyqtSignal()
 
     def __init__(self, plot_t0: float, parent: Optional[QObject] = None,
                  scan_db_path: Optional[str] = None,
@@ -540,6 +631,33 @@ class LiveScanSource(ScanDataSource):
         self._db_window_buffers: dict = {}     # transient (side,cam,metric)->buffer
         self._db_window_lo = float("inf")     # loaded range, exclusive sentinel
         self._db_window_hi = float("-inf")
+        # Async DB-window loader (issue #256): the query + bucketize run on
+        # a worker thread; the GUI thread only checks coverage and schedules.
+        # _db_load_lock guards the window bounds/buffers install and the
+        # thread handle. One load in flight at a time — a stale request is
+        # simply re-issued by a later paint if still uncovered.
+        self._db_load_lock = threading.Lock()
+        self._db_load_thread: Optional[threading.Thread] = None
+        # Test hook: False runs loads inline so assertions are deterministic.
+        self._db_load_async = True
+
+    def release(self) -> None:
+        """Base release plus DB-tail teardown: close the read handle and
+        drop the transient window buffers so a retired live source can't
+        hold the scan DB open for the app's lifetime."""
+        if self._released:
+            return
+        super().release()
+        db = self._db
+        self._db = None
+        self._db_unavailable = True  # never reopen after release
+        self._db_window_buffers = {}
+        if db is not None:
+            try:
+                db.close()
+            except Exception:
+                logger.warning("scan DB close failed on release",
+                               exc_info=True)
 
     def set_scan_label(self, label: Optional[str]) -> None:
         """Bind this live source to a specific scan-DB session by label
@@ -614,10 +732,18 @@ class LiveScanSource(ScanDataSource):
         return int(row[0]) if row is not None else None
 
     def _ensure_db_window(self, t_lo: float, t_hi: float) -> None:
-        """Materialize session_data rows for [t_lo, t_hi] (padded) into
-        the transient DB-window buffers, if not already covered. Padding
-        by one window each side means small pans reuse the cached load
-        instead of re-querying every paint.
+        """Make sure the transient DB-window buffers cover [t_lo, t_hi]
+        (padded), scheduling an ASYNC load when they don't. Never blocks
+        the GUI thread on the SQLite query + bucketize — loading the
+        window synchronously here froze the whole app for seconds per
+        zoom/pan step on long All-camera scans (issue #256: 16 cams ×
+        40 Hz ≈ 640 rows/s of history, so one padded 60 s window is
+        ~10⁵ rows re-bucketized per interaction). Until the load lands,
+        callers serve the in-memory portion plus whatever the previous
+        cached window still covers; historyWindowLoaded then triggers a
+        repaint with the fresh history. Padding by one window each side
+        means small pans reuse the cached load instead of re-querying
+        every paint.
 
         want_hi is capped at the newest available sample (liveEdge) so the
         cached window never claims to cover future/nonexistent rows — that
@@ -633,12 +759,19 @@ class LiveScanSource(ScanDataSource):
         "Back to live" mid-scan — requests t_lo = liveEdge - windowSeconds
         < 0 on EVERY paint; unclamped, that request can never be satisfied
         by the cache, so every points_for_window call (cells × metrics,
-        ~30 Hz) re-queried and re-bucketized the whole DB window on the GUI
-        thread, freezing the app until liveEdge outgrew the window or the
-        scan ended (issue #151)."""
+        ~30 Hz) re-queried and re-bucketized the whole DB window
+        (issue #151)."""
         t_lo = max(0.0, float(t_lo))
         t_hi = max(t_lo, float(t_hi))
-        if t_lo >= self._db_window_lo and t_hi <= self._db_window_hi:
+        with self._db_load_lock:
+            if t_lo >= self._db_window_lo and t_hi <= self._db_window_hi:
+                return
+            loader_busy = (self._db_load_thread is not None
+                           and self._db_load_thread.is_alive())
+        if loader_busy:
+            # One load in flight at a time. If this request is still
+            # uncovered when the in-flight load lands, the next paint
+            # re-issues it — the range converges without a queue.
             return
         span = max(1.0, t_hi - t_lo)
         want_lo = max(0.0, t_lo - span)
@@ -646,15 +779,46 @@ class LiveScanSource(ScanDataSource):
         want_hi = t_hi + span
         if edge > 0.0:
             want_hi = min(want_hi, edge)
+        if not self._db_load_async:
+            self._db_window_load(want_lo, want_hi)
+            return
+        thread = threading.Thread(
+            target=self._db_window_load, args=(want_lo, want_hi),
+            name="plot-db-window-load", daemon=True,
+        )
+        with self._db_load_lock:
+            self._db_load_thread = thread
+        thread.start()
+
+    def _db_window_load(self, want_lo: float, want_hi: float) -> None:
+        """Loader body — worker thread in the app, inline when
+        _db_load_async is False (tests). Queries + bucketizes the padded
+        range, installs the fresh window under the lock, and pings the
+        viewer. Sharing the sqlite handle with the GUI thread is safe:
+        it's opened check_same_thread=False, the GUI only touches it for
+        the one-shot session-id resolve in _db_ready (before any load can
+        be scheduled), and the single-inflight rule serializes loads."""
         try:
-            self._db_window_buffers, _ = _bucketize_session_rows(
+            buffers, _ = _bucketize_session_rows(
                 self._db, self._db_session_id, t_lo=want_lo, t_hi=want_hi
             )
+        except Exception:
+            if self._released:
+                # release() closed the DB under an in-flight load — the
+                # result would have been discarded anyway.
+                logger.debug("LiveScanSource: DB window load aborted by "
+                             "release", exc_info=True)
+            else:
+                logger.exception("LiveScanSource: DB window load failed")
+            # Leave the previous window in place; a later paint retries.
+            return
+        if self._released:
+            return
+        with self._db_load_lock:
+            self._db_window_buffers = buffers
             self._db_window_lo = want_lo
             self._db_window_hi = want_hi
-        except Exception:
-            logger.exception("LiveScanSource: DB window load failed")
-            # Leave the previous window in place; a later paint retries.
+        self.historyWindowLoaded.emit()
 
     def _needs_db_tail(self, side: str, cam_id: int, metric: str, t_lo: float) -> bool:
         """True iff the requested t_lo is below the oldest IN-MEMORY
@@ -672,7 +836,15 @@ class LiveScanSource(ScanDataSource):
         return t_lo < float(buf.t[0])
 
     @pyqtSlot(str, int, str, float, float, int, result="QVariantList")
-    def points_for_window(self, side, cam_id, metric, t_lo, t_hi, max_points):
+    def points_for_window(
+        self,
+        side: str,
+        cam_id: int,
+        metric: str,
+        t_lo: float,
+        t_hi: float,
+        max_points: int,
+    ) -> list:
         # Fast path: whole window in memory, or buffer not yet trimmed.
         # Only reach for the DB once data has actually been ring-trimmed.
         if not self._needs_db_tail(side, int(cam_id), metric, t_lo) or not self._db_ready():
@@ -703,6 +875,10 @@ class LiveScanSource(ScanDataSource):
 
         db_pts: list = []
         if db_span > 0.0:
+            # Non-blocking: schedules an async load when the cached window
+            # doesn't cover the range. Until it lands we render whatever
+            # overlap the previous cached window still has (possibly
+            # nothing) — historyWindowLoaded repaints with the fresh rows.
             self._ensure_db_window(float(t_lo), db_hi)
             dbuf = self._db_window_buffers.get((side, int(cam_id), metric))
             if dbuf is not None:
@@ -717,23 +893,14 @@ class LiveScanSource(ScanDataSource):
         return db_pts + mem_pts
 
     @pyqtSlot(str, int, str, float, result=float)
-    def value_at(self, side, cam_id, metric, t):
+    def value_at(self, side: str, cam_id: int, metric: str, t: float) -> float:
         if not self._needs_db_tail(side, int(cam_id), metric, t) or not self._db_ready():
             return super().value_at(side, cam_id, metric, t)
         self._ensure_db_window(t, t)
         buf = self._db_window_buffers.get((side, int(cam_id), metric))
-        if buf is None or buf.n == 0:
+        if buf is None:
             return float("nan")
-        n = buf.n
-        t_slice = buf.t[:n]
-        import numpy as _np
-        idx = int(_np.searchsorted(t_slice, t, side="left"))
-        if idx >= n:
-            idx = n - 1
-        elif idx > 0 and abs(t_slice[idx - 1] - t) < abs(t_slice[idx] - t):
-            idx -= 1
-        v = float(buf.v[idx])
-        return v if _np.isfinite(v) else float("nan")
+        return buf.value_near(t)
 
     def append_uncorrected(
         self,
@@ -921,7 +1088,10 @@ def _load_corrected_csv_into(buffers: dict, csv_path: str) -> None:
                             )
                             buf.append(t=t, v=v, frame_id=frame_id)
     except OSError:
-        pass
+        # Best-effort by contract (see docstring), but never silent — a
+        # missing/unreadable corrected CSV means the viewer shows less data.
+        logger.warning("corrected-CSV fallback load failed: %s",
+                       csv_path, exc_info=True)
 
 
 def buffers_are_empty(buffers: Optional[dict]) -> bool:
@@ -956,12 +1126,12 @@ def _derive_masks_from_buffers(buffers: dict) -> tuple[int, int]:
     return masks["left"], masks["right"]
 
 
-def _derive_reduced_from_buffers(buffers) -> int:
+def _derive_clinical_from_buffers(buffers) -> int:
     """Tri-state recorded display mode from a loaded scan's buffer cam_ids:
-    -1 unknown, 0 per-camera, 1 reduced. Reduced-mode scans store only the
-    cam_id=-1 side average; per-camera (dev) scans store cam_id 0..7. Mirrors
-    _derive_masks_from_buffers — the viewer prefers this over the live config
-    so replay renders in the mode the scan was captured in."""
+    -1 unknown, 0 per-camera, 1 clinical. Clinical-mode scans store only the
+    cam_id=-1 side average; per-camera (engineering) scans store cam_id 0..7.
+    Mirrors _derive_masks_from_buffers — the viewer prefers this over the live
+    config so replay renders in the mode the scan was captured in."""
     if buffers_are_empty(buffers):
         return -1
     if any(0 <= key[1] < 8 for key in buffers):
@@ -999,10 +1169,10 @@ def _masks_from_flags(flags) -> Optional[tuple[int, int]]:
     return lm, rm
 
 
-def _reduced_from_flags(flags) -> Optional[int]:
-    """Recorded display mode (0 per-camera / 1 reduced) from a scan's stored
+def _clinical_from_flags(flags) -> Optional[int]:
+    """Recorded display mode (0 per-camera / 1 clinical) from a scan's stored
     ``session_meta.sdk_flags.reduced_mode``, or None when absent. Preferred
-    over _derive_reduced_from_buffers for the same reason as _masks_from_flags
+    over _derive_clinical_from_buffers for the same reason as _masks_from_flags
     — it reflects how the scan was captured, not what its data happens to
     contain (issue #175 reopen)."""
     if not isinstance(flags, dict):
@@ -1095,10 +1265,10 @@ class PastScanSource(ScanDataSource):
         self._left_mask, self._right_mask = _derive_masks_from_buffers(
             self.buffers
         )
-        self._reduced_mode = _derive_reduced_from_buffers(self.buffers)
+        self._clinical_mode = _derive_clinical_from_buffers(self.buffers)
         recorded_masks = _masks_from_flags(recorded_flags)
         if recorded_masks is not None:
             self._left_mask, self._right_mask = recorded_masks
-        recorded_reduced = _reduced_from_flags(recorded_flags)
-        if recorded_reduced is not None:
-            self._reduced_mode = recorded_reduced
+        recorded_clinical = _clinical_from_flags(recorded_flags)
+        if recorded_clinical is not None:
+            self._clinical_mode = recorded_clinical

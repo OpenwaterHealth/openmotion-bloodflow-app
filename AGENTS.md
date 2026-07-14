@@ -102,7 +102,7 @@ git push origin main X.Y.Z
 - Stamps the tag (without leading `v`) into `version.py`'s
   `_FALLBACK_VERSION` so the frozen exe reports the right version.
 - Builds via PyInstaller (`openwater.spec`).
-- Zips `dist/` into `OpenMotion-Bloodflow-<TAG>.zip`.
+- Zips `dist/` into `Open-Motion-<TAG>.zip` (and `Open-Motion-Research-<TAG>.zip`).
 - Uploads the zip both as a workflow artifact and as a GitHub Release
   asset (the release is created automatically; pre-release flag is
   derived from the tag form).

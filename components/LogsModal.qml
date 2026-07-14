@@ -13,7 +13,6 @@ Item {
     visible: false
     z: 9998
 
-    AppTheme { id: theme }
 
     readonly property string label: "Audit Log"
     property var entries: []
@@ -55,8 +54,8 @@ Item {
         width: Math.min(parent.width - 60, 980)
         height: Math.min(parent.height - 60, 700)
         radius: 12
-        color: theme.bgContainer
-        border.color: theme.borderSubtle
+        color: AppTheme.bgContainer
+        border.color: AppTheme.borderSubtle
         border.width: 2
         anchors.centerIn: parent
 
@@ -75,7 +74,7 @@ Item {
                 Text {
                     text: root.label
                     font.pixelSize: 20; font.weight: Font.Bold
-                    color: theme.textPrimary
+                    color: AppTheme.textPrimary
                 }
                 Item { Layout.fillWidth: true }
 
@@ -84,12 +83,12 @@ Item {
                     Layout.preferredWidth: 110; Layout.preferredHeight: 32
                     hoverEnabled: true
                     contentItem: Text {
-                        text: parent.text; font.pixelSize: 13; color: theme.textSecondary
+                        text: parent.text; font.pixelSize: 13; color: AppTheme.textSecondary
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? theme.accentBlue : theme.bgInput
-                        border.color: parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
+                        color: parent.hovered ? AppTheme.accentBlue : AppTheme.bgInput
+                        border.color: parent.hovered ? AppTheme.textPrimary : AppTheme.textSecondary; radius: 4
                     }
                     onClicked: {
                         exportDialog.selectedFile = "file:///" + MotionInterface.directory
@@ -102,21 +101,21 @@ Item {
                     Layout.preferredWidth: 80; Layout.preferredHeight: 32
                     hoverEnabled: true
                     contentItem: Text {
-                        text: parent.text; font.pixelSize: 13; color: theme.textSecondary
+                        text: parent.text; font.pixelSize: 13; color: AppTheme.textSecondary
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? theme.accentBlue : theme.bgInput
-                        border.color: parent.hovered ? theme.textPrimary : theme.textSecondary; radius: 4
+                        color: parent.hovered ? AppTheme.accentBlue : AppTheme.bgInput
+                        border.color: parent.hovered ? AppTheme.textPrimary : AppTheme.textSecondary; radius: 4
                     }
                     onClicked: root.refresh()
                 }
                 Rectangle {
                     width: 28; height: 28; radius: 14
-                    color: xArea.containsMouse ? "#C0392B" : theme.borderStrong
-                    border.color: theme.borderHover; border.width: 1
+                    color: xArea.containsMouse ? "#C0392B" : AppTheme.borderStrong
+                    border.color: AppTheme.borderHover; border.width: 1
                     Behavior on color { ColorAnimation { duration: 120 } }
-                    Text { anchors.centerIn: parent; text: "✕"; color: theme.textPrimary; font.pixelSize: 13 }
+                    Text { anchors.centerIn: parent; text: "✕"; color: AppTheme.textPrimary; font.pixelSize: 13 }
                     MouseArea {
                         id: xArea; anchors.fill: parent; hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor; onClicked: root.close()
@@ -128,25 +127,25 @@ Item {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 30
-                color: theme.bgCardAlt; radius: 4
+                color: AppTheme.bgCardAlt; radius: 4
                 RowLayout {
                     anchors.fill: parent
                     anchors.leftMargin: 8; anchors.rightMargin: 8
                     spacing: 8
                     Text { text: "Time"; Layout.preferredWidth: col.time
-                           color: theme.textSecondary; font.pixelSize: 12; font.weight: Font.DemiBold }
+                           color: AppTheme.textSecondary; font.pixelSize: 12; font.weight: Font.DemiBold }
                     Text { text: "Event"; Layout.preferredWidth: col.event
-                           color: theme.textSecondary; font.pixelSize: 12; font.weight: Font.DemiBold }
+                           color: AppTheme.textSecondary; font.pixelSize: 12; font.weight: Font.DemiBold }
                     Text { text: "Details"; Layout.fillWidth: true
-                           color: theme.textSecondary; font.pixelSize: 12; font.weight: Font.DemiBold }
+                           color: AppTheme.textSecondary; font.pixelSize: 12; font.weight: Font.DemiBold }
                 }
             }
 
             // ── table body ─────────────────────────────────────────
             Rectangle {
                 Layout.fillWidth: true; Layout.fillHeight: true
-                radius: 6; color: theme.bgCardAlt
-                border.color: theme.borderSubtle; border.width: 1
+                radius: 6; color: AppTheme.bgCardAlt
+                border.color: AppTheme.borderSubtle; border.width: 1
                 clip: true
 
                 ListView {
@@ -168,19 +167,19 @@ Item {
                             Text {
                                 Layout.preferredWidth: col.time
                                 text: modelData.ts_iso || ""
-                                color: theme.textSecondary; font.pixelSize: 12
+                                color: AppTheme.textSecondary; font.pixelSize: 12
                                 font.family: "Consolas"; verticalAlignment: Text.AlignVCenter
                             }
                             Text {
                                 Layout.preferredWidth: col.event
                                 text: modelData.event_type || ""
-                                color: theme.textPrimary; font.pixelSize: 12
+                                color: AppTheme.textPrimary; font.pixelSize: 12
                                 verticalAlignment: Text.AlignVCenter
                             }
                             Text {
                                 Layout.fillWidth: true
                                 text: modelData.details || ""
-                                color: theme.textSecondary; font.pixelSize: 12
+                                color: AppTheme.textSecondary; font.pixelSize: 12
                                 font.family: "Consolas"
                                 elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter
                             }
@@ -191,7 +190,7 @@ Item {
                         anchors.centerIn: parent
                         visible: root.entries.length === 0
                         text: "No audit entries yet."
-                        color: theme.textSecondary; font.pixelSize: 14
+                        color: AppTheme.textSecondary; font.pixelSize: 14
                     }
                 }
             }

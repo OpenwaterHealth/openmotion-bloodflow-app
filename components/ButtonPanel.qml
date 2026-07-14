@@ -6,18 +6,17 @@ import OpenMotion 1.0
 Rectangle {
     id: panel
 
-    AppTheme { id: theme }
 
     width: 80
-    color: theme.bgPanel
+    color: AppTheme.bgPanel
     radius: 12
-    border.color: theme.borderStrong
+    border.color: AppTheme.borderStrong
     border.width: 1
 
     property bool scanning: false
     property bool waiting: false       // true while a scan start is armed (pipeline-idle gate)
     property bool camerasReady: false  // gates Start/Check enablement
-    property bool reducedMode: false       // FDA mode hides scan-settings button
+    property bool clinicalMode: false       // FDA mode hides scan-settings button
 
     // Connection state — drives start button icon and enablement.
     // A laser-safety trip is surfaced via a persistent NotificationCenter
@@ -58,7 +57,7 @@ Rectangle {
                     id: startStopCircle
                     Layout.alignment: Qt.AlignHCenter
                     width: 36; height: 36; radius: 18
-                    color: !panel.allConnected ? theme.textDisabled
+                    color: !panel.allConnected ? AppTheme.textDisabled
                          : panel.waiting  ? "#F1C40F"
                          : panel.scanning ? "#E74C3C"
                          :                  "#2ECC71"
@@ -101,7 +100,7 @@ Rectangle {
                 Text {
                     text: !panel.allConnected ? "Disconnected" : panel.scanning ? "Stop" : "Start"
                     font.pixelSize: 10
-                    color: (panel.camerasReady && panel.allConnected) ? theme.textSecondary : theme.textDisabled
+                    color: (panel.camerasReady && panel.allConnected) ? AppTheme.textSecondary : AppTheme.textDisabled
                     horizontalAlignment: Text.AlignHCenter
                     Layout.alignment: Qt.AlignHCenter
                 }
@@ -111,8 +110,8 @@ Rectangle {
             Rectangle {
                 anchors.fill: parent
                 radius: 10
-                color: ssArea.containsMouse ? theme.bgHover : "transparent"
-                border.color: ssArea.containsMouse ? theme.borderHover : "transparent"
+                color: ssArea.containsMouse ? AppTheme.bgHover : "transparent"
+                border.color: ssArea.containsMouse ? AppTheme.borderHover : "transparent"
                 border.width: 1
                 z: -1
                 Behavior on color { ColorAnimation { duration: 150 } }
@@ -129,16 +128,16 @@ Rectangle {
         }
 
         // Divider between Start and Scan Settings (or between Start and Notes
-        // in reduced mode where Scan Settings is hidden).
+        // in clinical mode where Scan Settings is hidden).
         Rectangle {
             Layout.preferredWidth: 52; Layout.preferredHeight: 1
             Layout.topMargin: 4; Layout.bottomMargin: 4
-            Layout.alignment: Qt.AlignHCenter; color: theme.borderSubtle
+            Layout.alignment: Qt.AlignHCenter; color: AppTheme.borderSubtle
         }
 
         // Scan Settings (camera + duration)
         PanelButton {
-            visible: !panel.reducedMode
+            visible: !panel.clinicalMode
             enabled: !panel.scanning
             iconText: "\ueabf"  // setting-3 icon
             label: "Scan\nSettings"
@@ -146,12 +145,12 @@ Rectangle {
         }
 
         // Divider between Scan Settings and Notes — only in normal mode so
-        // reduced mode doesn't get two consecutive dividers.
+        // clinical mode doesn't get two consecutive dividers.
         Rectangle {
-            visible: !panel.reducedMode
+            visible: !panel.clinicalMode
             Layout.preferredWidth: 52; Layout.preferredHeight: 1
             Layout.topMargin: 4; Layout.bottomMargin: 4
-            Layout.alignment: Qt.AlignHCenter; color: theme.borderSubtle
+            Layout.alignment: Qt.AlignHCenter; color: AppTheme.borderSubtle
         }
 
         // Notes
@@ -162,15 +161,15 @@ Rectangle {
         }
 
         Rectangle {
-            visible: !panel.reducedMode
+            visible: !panel.clinicalMode
             Layout.preferredWidth: 52; Layout.preferredHeight: 1
             Layout.topMargin: 4; Layout.bottomMargin: 4
-            Layout.alignment: Qt.AlignHCenter; color: theme.borderSubtle
+            Layout.alignment: Qt.AlignHCenter; color: AppTheme.borderSubtle
         }
 
         // Check (contact quality quick-check)
         PanelButton {
-            visible: !panel.reducedMode
+            visible: !panel.clinicalMode
             enabled: !panel.scanning && panel.camerasReady
             iconText: "\uea31"  // graph-3 icon
             label: "Check"
@@ -188,7 +187,7 @@ Rectangle {
             onClicked: panel.historyClicked()
         }
 
-        Rectangle { Layout.preferredWidth: 52; Layout.preferredHeight: 1; Layout.topMargin: 4; Layout.bottomMargin: 4; Layout.alignment: Qt.AlignHCenter; color: theme.borderSubtle }
+        Rectangle { Layout.preferredWidth: 52; Layout.preferredHeight: 1; Layout.topMargin: 4; Layout.bottomMargin: 4; Layout.alignment: Qt.AlignHCenter; color: AppTheme.borderSubtle }
 
         // Settings
         PanelButton {
@@ -216,9 +215,9 @@ Rectangle {
             anchors.fill: parent
             radius: 10
             color: btnMouseArea.containsMouse
-                ? (btnItem.highlighted ? Qt.lighter(btnItem.highlightColor, 1.2) : theme.bgHover)
+                ? (btnItem.highlighted ? Qt.lighter(btnItem.highlightColor, 1.2) : AppTheme.bgHover)
                 : (btnItem.highlighted ? btnItem.highlightColor : "transparent")
-            border.color: btnMouseArea.containsMouse ? theme.borderHover : "transparent"
+            border.color: btnMouseArea.containsMouse ? AppTheme.borderHover : "transparent"
             border.width: 1
 
             Behavior on color { ColorAnimation { duration: 150 } }
@@ -232,7 +231,7 @@ Rectangle {
                 text: btnItem.iconText
                 font.family: iconFont.name
                 font.pixelSize: 26
-                color: btnItem.enabled ? (btnItem.highlighted ? "white" : theme.textSecondary) : theme.textDisabled
+                color: btnItem.enabled ? (btnItem.highlighted ? "white" : AppTheme.textSecondary) : AppTheme.textDisabled
                 horizontalAlignment: Text.AlignHCenter
                 Layout.alignment: Qt.AlignHCenter
             }
@@ -240,7 +239,7 @@ Rectangle {
             Text {
                 text: btnItem.label
                 font.pixelSize: 10
-                color: btnItem.enabled ? (btnItem.highlighted ? "white" : theme.textTertiary) : theme.textDisabled
+                color: btnItem.enabled ? (btnItem.highlighted ? "white" : AppTheme.textTertiary) : AppTheme.textDisabled
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
                 Layout.preferredWidth: 64

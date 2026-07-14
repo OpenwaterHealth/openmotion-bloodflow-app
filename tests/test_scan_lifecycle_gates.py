@@ -22,7 +22,7 @@ def connector(tmp_path):
 
     c = MotionConnector(
         interface=iface,
-        app_config={"developerMode": False},
+        app_config={"engineeringMode": False},
         data_dir=str(tmp_path),
         config_dir="config",
     )
@@ -44,10 +44,10 @@ def test_start_configure_refuses_while_scan_workflow_running(connector):
     assert seen == [(False, "Scan already running")]
 
 
-def test_start_capture_refuses_while_scan_workflow_running(connector, tmp_path):
+def test_start_capture_refuses_while_scan_workflow_running(connector):
     connector._scan_workflow.running = True
 
-    ok = connector.startCapture("subject", 5, 0x66, 0x66, str(tmp_path), False)
+    ok = connector.startCapture("subject", 5, 0x66, 0x66, False)
 
     assert ok is False
     connector._interface.start_scan.assert_not_called()
@@ -72,4 +72,61 @@ def test_is_pipeline_idle_mirrors_ensure_idle(connector):
     assert connector.isPipelineIdle() is False
     connector._capture_running = False
 
+    connector._config_running = True
+    assert connector.isPipelineIdle() is False
+    connector._config_running = False
+
     assert connector.isPipelineIdle() is True
+
+
+def test_is_config_in_flight_tracks_both_config_flags(connector):
+    """Issue #283: a camera configuration (FPGA flash) can hold the
+    pipeline for ~50 s. QML's start gate stretches its wait deadline
+    while — and only while — a configuration is actually draining, so
+    the probe must reflect both the connector-local flag and the SDK
+    workflow's config_running."""
+    assert connector.isConfigInFlight() is False
+
+    connector._config_running = True
+    assert connector.isConfigInFlight() is True
+    connector._config_running = False
+
+    connector._scan_workflow.config_running = True
+    assert connector.isConfigInFlight() is True
+    connector._scan_workflow.config_running = False
+
+    # Other busy states are NOT a config in flight — the gate keeps its
+    # short deadline for those.
+    connector._capture_running = True
+    assert connector.isConfigInFlight() is False
+    connector._capture_running = False
+
+    connector._cq_quick_running = True
+    assert connector.isConfigInFlight() is False
+    connector._cq_quick_running = False
+
+
+def test_start_capture_refused_while_config_running(connector):
+    """Issue #283's failure mode at the Python seam: a scan started while
+    the FPGA flash is still in flight must be refused (the QML gate is
+    what waits it out — the connector itself never queues)."""
+    connector._config_running = True
+
+    ok = connector.startCapture("subject", 5, 0x66, 0x66, False)
+
+    assert ok is False
+    connector._interface.start_scan.assert_not_called()
+
+
+def test_start_configure_refused_while_config_running(connector):
+    """A second configure while one is draining is refused with the
+    canonical message QML used to surface raw to the user (issue #283)."""
+    connector._config_running = True
+    seen = []
+    connector.configFinished.connect(lambda ok, err: seen.append((ok, err)))
+
+    ok = connector.startConfigureCameraSensors(0x66, 0x66)
+
+    assert ok is False
+    connector._interface.start_configure_camera_sensors.assert_not_called()
+    assert seen == [(False, "Camera configuration already in progress")]

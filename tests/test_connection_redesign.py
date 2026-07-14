@@ -16,8 +16,8 @@ directory drives the outlet; see ``tests/shelly.py``.
 
 Verification
 ------------
-Connection events are detected by tailing the bloodflow app log
-(``app-logs/ow-bloodflowapp-*.log``). The SDK emits one info-level line
+Connection events are detected by tailing the app log
+(``logs/open-motion-*.log``). The SDK emits one info-level line
 per state transition in the form ``<name> state <OLD> -> <NEW> (<reason>)``.
 """
 
@@ -126,7 +126,7 @@ class TestConnectionRedesign:
         assert log_path, (
             "could not locate the bloodflow app log under any of the "
             "search roots in utils.find_app_log — verify the app is "
-            "actually launched and writing to app-logs/."
+            "actually launched and writing to logs/."
         )
         offset = log_size(log_path)
 
@@ -149,7 +149,7 @@ class TestConnectionRedesign:
         assert log_path, (
             "could not locate the bloodflow app log under any of the "
             "search roots in utils.find_app_log — verify the app is "
-            "actually launched and writing to app-logs/."
+            "actually launched and writing to logs/."
         )
         offset = log_size(log_path)
 
@@ -203,7 +203,7 @@ class TestConnectionRedesign:
         assert log_path, (
             "could not locate the bloodflow app log under any of the "
             "search roots in utils.find_app_log — verify the app is "
-            "actually launched and writing to app-logs/."
+            "actually launched and writing to logs/."
         )
         offset = log_size(log_path)
         outlet.power_cycle(off_time=5.0)

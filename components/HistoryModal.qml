@@ -10,7 +10,6 @@ Item {
     visible: false
     z: 9998
 
-    AppTheme { id: theme }
 
     // Modal interface label (single source of truth — see ModalManager).
     readonly property string label: "Scan History"
@@ -59,12 +58,13 @@ Item {
 
     function rebuildView() {
         var q = (searchText || "").toLowerCase()
-        // In reduced (clinical) mode, omit scans not shot in reduced mode —
-        // the reduced viewer can't render their per-camera data. Dev mode
-        // lists everything. A scan with no recorded mode counts as non-reduced.
-        var appReduced = MotionInterface.appConfig.reducedMode === true
+        // In clinical mode, omit scans not shot in clinical mode — the
+        // clinical viewer can't render their per-camera data. Engineering
+        // mode lists everything. A scan with no recorded mode counts as
+        // non-clinical.
+        var appClinical = MotionInterface.appConfig.clinicalMode === true
         var arr = scans.filter(function(r) {
-            if (appReduced && !r.reducedMode)
+            if (appClinical && !r.clinicalMode)
                 return false
             if (q.length > 0
                 && (r.userLabel || "").toLowerCase().indexOf(q) < 0
@@ -164,7 +164,9 @@ Item {
                 MotionInterface.notify("Interrupted scans can't be exported.", "warning")
                 return
             }
-            exportDialog.selectedScanId = rows[0].label
+            // Export by the unique DB session id — labels can collide, and a
+            // by-label lookup silently exports the newest match (issue #254).
+            exportDialog.exportSessionId = rows[0].sessionId
             exportDialog.selectedFile = "file:///" + MotionInterface.directory
                                         + "/" + rows[0].label + "_export.csv"
             exportDialog.open()
@@ -173,16 +175,16 @@ Item {
 
         // 2+ checked -> pick a destination folder. Interrupted scans can't be
         // exported, so drop them here and fold them into the skip count.
-        var labels = [], skipped = 0
+        var ids = [], skipped = 0
         for (var i = 0; i < rows.length; i++) {
             if (rows[i].interrupted) { skipped += 1; continue }
-            labels.push(rows[i].label)
+            ids.push(rows[i].sessionId)
         }
-        if (labels.length === 0) {
+        if (ids.length === 0) {
             MotionInterface.notify("Interrupted scans can't be exported.", "warning")
             return
         }
-        exportFolderDialog.pendingLabels = labels
+        exportFolderDialog.pendingSessionIds = ids
         exportFolderDialog.pendingSkipped = skipped
         exportFolderDialog.open()
     }
@@ -251,8 +253,8 @@ Item {
         width: Math.min(parent.width - root.iconBarInset - 40, 1040)
         height: Math.min(parent.height - 60, 680)
         radius: 12
-        color: theme.bgContainer
-        border.color: theme.borderSubtle
+        color: AppTheme.bgContainer
+        border.color: AppTheme.borderSubtle
         border.width: 2
         // Center within [iconBarInset, parent.width] so the card clears the
         // icon bar instead of bleeding under it. horizontalCenterOffset
@@ -277,7 +279,7 @@ Item {
                 Text {
                     text: root.label
                     font.pixelSize: 20; font.weight: Font.Bold
-                    color: theme.textPrimary
+                    color: AppTheme.textPrimary
                 }
                 Item { Layout.fillWidth: true }
 
@@ -286,14 +288,14 @@ Item {
                     Layout.preferredWidth: 240
                     Layout.preferredHeight: 34
                     placeholderText: "Search label…"
-                    color: theme.textPrimary
-                    placeholderTextColor: theme.textSecondary
+                    color: AppTheme.textPrimary
+                    placeholderTextColor: AppTheme.textSecondary
                     font.pixelSize: 13
                     leftPadding: 12; rightPadding: 12
                     verticalAlignment: TextInput.AlignVCenter
                     background: Rectangle {
-                        color: theme.bgInput; radius: 6
-                        border.color: searchField.activeFocus ? theme.accentBlue : theme.borderSubtle
+                        color: AppTheme.bgInput; radius: 6
+                        border.color: searchField.activeFocus ? AppTheme.accentBlue : AppTheme.borderSubtle
                         border.width: 1
                     }
                     onTextChanged: root.searchText = text
@@ -301,10 +303,10 @@ Item {
 
                 Rectangle {
                     width: 30; height: 30; radius: 15
-                    color: xArea.containsMouse ? "#C0392B" : theme.borderStrong
-                    border.color: theme.borderHover; border.width: 1
+                    color: xArea.containsMouse ? "#C0392B" : AppTheme.borderStrong
+                    border.color: AppTheme.borderHover; border.width: 1
                     Behavior on color { ColorAnimation { duration: 120 } }
-                    Text { anchors.centerIn: parent; text: "✕"; color: theme.textPrimary; font.pixelSize: 13 }
+                    Text { anchors.centerIn: parent; text: "✕"; color: AppTheme.textPrimary; font.pixelSize: 13 }
                     MouseArea {
                         id: xArea; anchors.fill: parent; hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor; onClicked: root.close()
@@ -316,7 +318,7 @@ Item {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 30
-                color: theme.bgCardAlt; radius: 4
+                color: AppTheme.bgCardAlt; radius: 4
                 RowLayout {
                     anchors.fill: parent
                     anchors.leftMargin: 8; anchors.rightMargin: 8
@@ -326,7 +328,7 @@ Item {
                     Text {
                         Layout.preferredWidth: col.chk
                         text: (root.checkedCount > 0 && root.checkedCount === root.view.length) ? "☑" : "☐"
-                        color: theme.textSecondary; font.pixelSize: 15
+                        color: AppTheme.textSecondary; font.pixelSize: 15
                         horizontalAlignment: Text.AlignHCenter
                         MouseArea {
                             anchors.fill: parent; cursorShape: Qt.PointingHandCursor
@@ -361,8 +363,8 @@ Item {
             // ── table body ─────────────────────────────────────────
             Rectangle {
                 Layout.fillWidth: true; Layout.fillHeight: true
-                radius: 6; color: theme.bgCardAlt
-                border.color: theme.borderSubtle; border.width: 1
+                radius: 6; color: AppTheme.bgCardAlt
+                border.color: AppTheme.borderSubtle; border.width: 1
                 clip: true
 
                 ListView {
@@ -395,7 +397,7 @@ Item {
                             Text {
                                 Layout.preferredWidth: col.chk
                                 text: root.checked[modelData.sessionId] ? "☑" : "☐"
-                                color: theme.textPrimary; font.pixelSize: 15
+                                color: AppTheme.textPrimary; font.pixelSize: 15
                                 horizontalAlignment: Text.AlignHCenter
                                 MouseArea {
                                     anchors.fill: parent; cursorShape: Qt.PointingHandCursor
@@ -407,25 +409,25 @@ Item {
                             Text {
                                 Layout.fillWidth: true
                                 text: modelData.userLabel || "(unlabeled)"
-                                color: theme.textPrimary; font.pixelSize: 13
+                                color: AppTheme.textPrimary; font.pixelSize: 13
                                 elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter
                             }
                             Text {
                                 Layout.preferredWidth: col.date
                                 text: modelData.dateTime || "-"
-                                color: theme.textSecondary; font.pixelSize: 13
+                                color: AppTheme.textSecondary; font.pixelSize: 13
                                 verticalAlignment: Text.AlignVCenter
                             }
                             Text {
                                 Layout.preferredWidth: col.config
                                 text: (modelData.configL || "—") + " / " + (modelData.configR || "—")
-                                color: theme.textSecondary; font.pixelSize: 13
+                                color: AppTheme.textSecondary; font.pixelSize: 13
                                 elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter
                             }
                             Text {
                                 Layout.preferredWidth: col.dur
                                 text: root.formatDuration(modelData.durationSec)
-                                color: theme.textSecondary; font.pixelSize: 13
+                                color: AppTheme.textSecondary; font.pixelSize: 13
                                 verticalAlignment: Text.AlignVCenter
                             }
                             Text {
@@ -445,7 +447,7 @@ Item {
                         visible: root.view.length === 0
                         text: root.scans.length === 0 ? "No scans yet."
                                                       : "No scans match the filter."
-                        color: theme.textSecondary; font.pixelSize: 14
+                        color: AppTheme.textSecondary; font.pixelSize: 14
                     }
                 }
             }
@@ -454,8 +456,8 @@ Item {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 230
-                radius: 6; color: theme.bgCardAlt
-                border.color: theme.borderSubtle; border.width: 1
+                radius: 6; color: AppTheme.bgCardAlt
+                border.color: AppTheme.borderSubtle; border.width: 1
                 visible: root.focusedRow !== null
 
                 // Stacked: a compact metadata strip on top, then the notes box
@@ -467,36 +469,36 @@ Item {
                     GridLayout {
                         Layout.fillWidth: true
                         columns: 6; columnSpacing: 12; rowSpacing: 6
-                        Text { text: "Full label:"; color: theme.textSecondary; font.pixelSize: 12 }
-                        Text { text: root.focusedRow ? root.focusedRow.label : ""; color: theme.textPrimary; font.pixelSize: 12; elide: Text.ElideRight; Layout.fillWidth: true }
-                        Text { text: "Operator:"; color: theme.textSecondary; font.pixelSize: 12 }
-                        Text { text: root.focusedRow ? (root.focusedRow.operator || "-") : ""; color: theme.textPrimary; font.pixelSize: 12 }
-                        Text { text: "Samples:"; color: theme.textSecondary; font.pixelSize: 12 }
-                        Text { text: root.focusedSampleCount < 0 ? "…" : root.focusedSampleCount.toLocaleString(); color: theme.textPrimary; font.pixelSize: 12; Layout.preferredWidth: 70 }
+                        Text { text: "Full label:"; color: AppTheme.textSecondary; font.pixelSize: 12 }
+                        Text { text: root.focusedRow ? root.focusedRow.label : ""; color: AppTheme.textPrimary; font.pixelSize: 12; elide: Text.ElideRight; Layout.fillWidth: true }
+                        Text { text: "Operator:"; color: AppTheme.textSecondary; font.pixelSize: 12 }
+                        Text { text: root.focusedRow ? (root.focusedRow.operator || "-") : ""; color: AppTheme.textPrimary; font.pixelSize: 12 }
+                        Text { text: "Samples:"; color: AppTheme.textSecondary; font.pixelSize: 12 }
+                        Text { text: root.focusedSampleCount < 0 ? "…" : root.focusedSampleCount.toLocaleString(); color: AppTheme.textPrimary; font.pixelSize: 12; Layout.preferredWidth: 70 }
 
-                        Text { text: "Mask (L / R):"; color: theme.textSecondary; font.pixelSize: 12 }
+                        Text { text: "Mask (L / R):"; color: AppTheme.textSecondary; font.pixelSize: 12 }
                         Text {
-                            color: theme.textPrimary; font.pixelSize: 12
+                            color: AppTheme.textPrimary; font.pixelSize: 12
                             text: root.focusedRow
                                   ? (root.maskLabel(root.focusedRow.leftMask)
                                      + " / " + root.maskLabel(root.focusedRow.rightMask))
                                   : ""
                         }
-                        Text { text: "Config (L / R):"; color: theme.textSecondary; font.pixelSize: 12 }
-                        Text { text: root.focusedRow ? (root.focusedRow.configL + " / " + root.focusedRow.configR) : ""; color: theme.textPrimary; font.pixelSize: 12 }
+                        Text { text: "Config (L / R):"; color: AppTheme.textSecondary; font.pixelSize: 12 }
+                        Text { text: root.focusedRow ? (root.focusedRow.configL + " / " + root.focusedRow.configR) : ""; color: AppTheme.textPrimary; font.pixelSize: 12 }
                     }
 
-                    Text { text: "Notes (read-only):"; color: theme.textSecondary; font.pixelSize: 12 }
+                    Text { text: "Notes (read-only):"; color: AppTheme.textSecondary; font.pixelSize: 12 }
                     Rectangle {
                         Layout.fillWidth: true; Layout.fillHeight: true
-                        radius: 4; color: theme.bgInput
-                        border.color: theme.borderSubtle; border.width: 1
+                        radius: 4; color: AppTheme.bgInput
+                        border.color: AppTheme.borderSubtle; border.width: 1
                         ScrollView {
                             anchors.fill: parent; anchors.margins: 2
                             TextArea {
                                 readOnly: true; wrapMode: Text.Wrap; background: null
                                 text: root.focusedRow ? (root.focusedRow.notes || "") : ""
-                                color: theme.textPrimary; font.pixelSize: 12
+                                color: AppTheme.textPrimary; font.pixelSize: 12
                             }
                         }
                     }
@@ -519,14 +521,14 @@ Item {
                     hoverEnabled: enabled
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 13
-                        color: deleteBtn.enabled ? theme.accentRed : theme.textTertiary
+                        color: deleteBtn.enabled ? AppTheme.accentRed : AppTheme.textTertiary
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
                         radius: 6
                         color: deleteBtn.hovered && deleteBtn.enabled
                                ? Qt.rgba(0.75, 0.22, 0.17, 0.16) : "transparent"
-                        border.color: deleteBtn.enabled ? theme.accentRed : theme.textTertiary
+                        border.color: deleteBtn.enabled ? AppTheme.accentRed : AppTheme.textTertiary
                         border.width: 1
                     }
                     onClicked: root.requestDelete()
@@ -542,13 +544,13 @@ Item {
                     hoverEnabled: enabled
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 13
-                        color: exportBtn.enabled ? theme.textSecondary : theme.textTertiary
+                        color: exportBtn.enabled ? AppTheme.textSecondary : AppTheme.textTertiary
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
                         radius: 6
-                        color: exportBtn.hovered && exportBtn.enabled ? theme.bgHover : "transparent"
-                        border.color: exportBtn.enabled ? theme.borderStrong : theme.textTertiary
+                        color: exportBtn.hovered && exportBtn.enabled ? AppTheme.bgHover : "transparent"
+                        border.color: exportBtn.enabled ? AppTheme.borderStrong : AppTheme.textTertiary
                         border.width: 1
                     }
                     onClicked: root.requestExport()
@@ -564,19 +566,24 @@ Item {
                     hoverEnabled: enabled
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 13; font.weight: Font.DemiBold
-                        color: loadBtn.enabled ? "#FFFFFF" : theme.textTertiary
+                        color: loadBtn.enabled ? "#FFFFFF" : AppTheme.textTertiary
                         elide: Text.ElideRight
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
                         radius: 6
-                        color: !loadBtn.enabled ? theme.bgInput
-                               : (loadBtn.hovered ? Qt.lighter(theme.accentBlue, 1.12)
-                                                  : theme.accentBlue)
+                        color: !loadBtn.enabled ? AppTheme.bgInput
+                               : (loadBtn.hovered ? Qt.lighter(AppTheme.accentBlue, 1.12)
+                                                  : AppTheme.accentBlue)
                     }
                     onClicked: {
                         root.loadingPlot = true
-                        MotionInterface.loadPastScan(root.focusedRow.label)
+                        // Load by the unique DB session id — labels can
+                        // collide, and a by-label lookup silently loads
+                        // the newest match (issue #254). The label still
+                        // names the scan's CSVs and log lines.
+                        MotionInterface.loadPastScan(root.focusedRow.sessionId,
+                                                     root.focusedRow.label)
                     }
                 }
             }
@@ -594,16 +601,16 @@ Item {
             Column {
                 anchors.centerIn: parent; spacing: 12
                 BusyIndicator { running: root.loadingPlot; width: 48; height: 48 }
-                Text { text: "Loading scan..."; color: theme.textPrimary; font.pixelSize: 14 }
+                Text { text: "Loading scan..."; color: AppTheme.textPrimary; font.pixelSize: 14 }
             }
         }
     }
 
-    // Reused developer-password prompt for delete confirmation.
+    // Reused engineering-password prompt for delete confirmation.
     PasswordPromptModal {
         id: deletePrompt
         title: "Confirm Delete"
-        description: "Enter the developer password to permanently delete the "
+        description: "Enter the engineering password to permanently delete the "
                      + "selected scan(s) from the database. This cannot be undone."
         confirmLabel: "Delete"
         onAccepted: root.doDelete()
@@ -614,11 +621,13 @@ Item {
         title: "Export Scan CSV"
         fileMode: Dialogs.FileDialog.SaveFile
         nameFilters: ["CSV files (*.csv)", "All files (*)"]
-        property string selectedScanId: ""
+        property int exportSessionId: -1
         onAccepted: {
             var path = selectedFile.toString().replace("file:///", "")
-            var ok = MotionInterface.exportScanCsv(selectedScanId, path)
-            if (ok) MotionInterface.notify("Exported to " + path, "success")
+            // Async: runs on a worker thread; the success toast fires
+            // from onScanCsvExportFinished below. By unique session id
+            // (labels can collide — #254).
+            MotionInterface.exportScanCsv(exportSessionId, path)
         }
     }
 
@@ -626,16 +635,15 @@ Item {
         id: exportFolderDialog
         title: "Export Scans to Folder"
         currentFolder: "file:///" + (MotionInterface.directory || "")
-        property var pendingLabels: []
+        property var pendingSessionIds: []
         property int pendingSkipped: 0
         onAccepted: {
             var folder = selectedFolder.toString().replace("file:///", "")
-            var res = MotionInterface.exportScansToFolder(pendingLabels, folder)
-            var ok = (res && res.exported) ? res.exported : 0
-            var sk = pendingSkipped + ((res && res.skipped) ? res.skipped : 0)
-            var msg = "Exported " + ok + " scan(s) to " + folder
-            if (sk > 0) msg += " (" + sk + " skipped)"
-            MotionInterface.notify(msg, ok > 0 ? "success" : "warning")
+            // Async: the batch runs on a worker thread; the summary
+            // toast fires from onScansExportFinished below, which folds
+            // in pendingSkipped (interrupted scans filtered pre-dialog).
+            // By unique session id (labels can collide — #254).
+            MotionInterface.exportScansToFolder(pendingSessionIds, folder)
         }
     }
 
@@ -648,7 +656,19 @@ Item {
             if (ok) root.close()
         }
         function onDirectoryChanged() { if (root.visible) root.refresh() }
-        // Re-apply the reduced-mode row filter if the app's mode changes
+        function onScanCsvExportFinished(ok, path) {
+            if (ok) MotionInterface.notify("Exported to " + path, "success")
+            // Failure toast comes from errorOccurred (handler below).
+        }
+        function onScansExportFinished(exported, skipped, folder) {
+            var sk = exportFolderDialog.pendingSkipped + skipped
+            exportFolderDialog.pendingSkipped = 0
+            var msg = "Exported " + exported + " scan(s) to " + folder
+            if (sk > 0) msg += " (" + sk + " skipped)"
+            MotionInterface.notify(msg, exported > 0 ? "success" : "warning",
+                                   4000, true, "scan-export")
+        }
+        // Re-apply the clinical-mode row filter if the app's mode changes
         // while History is open.
         function onAppConfigChanged() { if (root.visible) root.rebuildView() }
         function onErrorOccurred(msg) {

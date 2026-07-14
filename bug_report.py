@@ -33,8 +33,8 @@ def build_report_text(
 ) -> str:
     """Human-readable report body included in the email / clipboard."""
     return (
-        "OpenWater BloodFlow — Critical Error Report\n"
-        "-------------------------------------------\n"
+        "Open-Motion — Critical Error Report\n"
+        "------------------------------------\n"
         f"Code:       {code}\n"
         f"Title:      {title}\n"
         f"Message:    {message}\n"

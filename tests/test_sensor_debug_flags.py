@@ -1,9 +1,9 @@
-"""Settings → Developer switches for the sensor debug flags.
+"""Settings → Engineering switches for the sensor debug flags.
 
 ``setSensorDebugFlag`` toggles ``histoCmp`` / ``sensorDebugLogging`` in the
 runtime cache and persisted config, then re-pushes the recomputed firmware
 debug-flag bitmask to every connected sensor immediately (no restart) —
-mirroring the live ``setConsoleFan`` developer toggle.
+mirroring the live ``setConsoleFan`` engineering toggle.
 """
 
 from unittest.mock import MagicMock

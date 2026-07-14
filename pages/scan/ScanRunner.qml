@@ -8,8 +8,8 @@
 //   * "check"   — ContactQualityCheckTask  (contact-quality quick check)
 //
 // Properties irrelevant to a given mode are ignored (e.g. ``durationSec``
-// / ``dataDir`` for "check"; ``leftPath``/``rightPath`` in ``scanFinished``
-// are empty strings in "check" mode).
+// for "check"; ``leftPath``/``rightPath`` in ``scanFinished`` are empty
+// strings in "check" mode).
 import QtQuick 6.5
 import "."
 
@@ -23,9 +23,18 @@ QtObject {
     property int leftMask: 0x5A
     property int rightMask: 0x5A
 
+    // "check" mode only: the mask actually evaluated for contact-quality
+    // pass/fail. Defaults to leftMask/rightMask (the flash mask) so
+    // existing callers are unaffected; a caller that flashes every
+    // physically-present camera (leftMask/rightMask = 0xFF) but only
+    // wants to require contact on the user's *configured* scan cameras
+    // sets these explicitly — a camera the user set to "None" then never
+    // needs to pass contact quality.
+    property int evalLeftMask: leftMask
+    property int evalRightMask: rightMask
+
     property int durationSec: 60
     property string subjectId: ""
-    property string dataDir: ""
     property bool disableLaser: false
     property bool laserOn: true
     property int laserPower: 50
@@ -147,7 +156,6 @@ QtObject {
         rightCameraMask: runner.rightMask
         durationSec: runner.durationSec
         subjectId: runner.subjectId
-        dataDir: runner.dataDir
         disableLaser: runner.disableLaser
 
         onStarted: {
@@ -173,6 +181,8 @@ QtObject {
 
     property ContactQualityCheckTask checkTask: ContactQualityCheckTask {
         connector: runner.connector
+        leftCameraMask: runner.evalLeftMask
+        rightCameraMask: runner.evalRightMask
 
         onStarted: {
             runner._stage = "check"

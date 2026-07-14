@@ -1,22 +1,28 @@
-"""Sustained-gap detection over finite BFI/BVI sample timestamps.
+"""Sustained-gap detection over frame-arrival timestamps.
 
 During a scan, _LivePlotSink (motion_connector.py) calls record() for every
-sample whose BFI and BVI are both finite, keyed by (side, cam_id) — cam_id is
--1 for the reduced-mode per-side average. NaN is routine in this data (every
-dark frame, early warmup frames), but light frames flow at ~40 Hz, so during
-healthy capture each key's finite timestamp advances every ~25 ms. A stretch
-where a key produced no finite sample for longer than MIN_GAP_S therefore
-means data was genuinely lost (camera dropout, stall, sustained NaN-fill).
+frame that ARRIVES for a camera, keyed by (side, cam_id) — cam_id is -1 for
+the reduced-mode per-side average. Frames flow at ~40 Hz, so during healthy
+delivery each key's timestamp advances every ~25 ms. A stretch where a key
+received no frame for longer than MIN_GAP_S therefore means delivery
+genuinely stopped (camera dropout, USB stall, pipeline stall).
+
+Arrival, not plottability: a covered / off-target camera streams unlit
+frames whose BFI/BVI are NaN — that is expected operation, not a data gap,
+so it must not appear in the notes footer. (Before 2026-07 the tracker was
+fed only finite-BFI samples, which made covered sensors read as
+catastrophic whole-scan gaps.)
 
 At scan completion the connector unions the per-key gaps into aggregate
-ranges (a range = "at least one camera had no finite data here") and appends
-them to the session notes via gap_note_line().
+ranges (a range = "at least one camera received no frames here") and
+appends them to the session notes via gap_note_line().
 
 Pure Python, no Qt — unit-testable without hardware
 (tests/test_nan_gap_tracker.py). Extracted per the motion_config.py
 precedent rather than growing motion_connector.py further.
 
 Spec: docs/superpowers/specs/2026-06-11-nan-gap-notes-footer-design.md
+(gap semantics updated to arrival-based, 2026-07)
 """
 
 from __future__ import annotations
@@ -24,20 +30,22 @@ from __future__ import annotations
 import math
 from typing import Hashable, Optional
 
-# Minimum silence (seconds) between consecutive finite samples of one key
-# for the stretch to count as a gap. ~40 missed frames at 40 Hz. A single
-# dark-frame NaN produces a ~50 ms interval and never registers.
+# Minimum silence (seconds) between consecutive recorded samples of one key
+# for the stretch to count as a gap. ~40 missed frames at 40 Hz.
 MIN_GAP_S = 1.0
 
 
 class NanGapTracker:
-    """Tracks per-key finite-sample timestamps and the gaps between them.
+    """Tracks per-key recorded timestamps and the gaps between them.
 
-    Timestamps are the pipeline's plot timestamps (sensor firmware clock,
-    seconds). Leading gaps — before a key's first finite sample — are never
-    recorded: that is warmup, expected. Trailing gaps — a key falling silent
-    before the scan's last data — are closed at merged_gaps() time against
-    the global max timestamp seen (or an explicit end_t).
+    The tracker is agnostic about what a recorded sample *means* — the
+    caller decides what counts as "data present" (since 2026-07: frame
+    arrival). Timestamps are the pipeline's plot timestamps (sensor
+    firmware clock, seconds). Leading gaps — before a key's first recorded
+    sample — are never recorded: that is warmup, expected. Trailing gaps —
+    a key falling silent before the scan's last data — are closed at
+    merged_gaps() time against the global max timestamp seen (or an
+    explicit end_t).
     """
 
     def __init__(self, min_gap_s: float = MIN_GAP_S):

@@ -85,13 +85,12 @@ junit/
 
 local_notes.md
 /scan_data/
-OpenWaterApp*.zip
+Open-Motion*.zip
 /run-logs/
+app-logs/
 
 .claude/
 .superpowers/
-# Local process artifacts (brainstorming specs, plans, session notes) — not deliverables
-docs/superpowers/
 tests/scan_data/*
 tests/run-logs/*
 tests/test_logs/*
@@ -104,3 +103,10 @@ tests/New_UI_TestScripts/scan_data/
 tests/New_UI_TestScripts/app-logs/
 tests/New_UI_TestScripts/debug_uia.py
 test_logs/
+
+# Runtime-writable app state (ProgramData/exe-folder in prod, cwd in dev):
+# app_config.local.json (config overrides) and data/ (scans, calibrations,
+# debug-bundles, updates). logs/ isn't listed separately —
+# the *.log glob above already covers the files inside it.
+app_config.local.json
+data/

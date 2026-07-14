@@ -1,6 +1,6 @@
-# OpenWater BloodFlow — HIL Test Procedures
+# Open-Motion — HIL Test Procedures
 
-Hardware-in-the-loop UI test suite for the OpenWater BloodFlow desktop
+Hardware-in-the-loop UI test suite for the Open-Motion desktop
 application. Tests drive the real PyQt6/QML app via `pyautogui` mouse +
 keyboard input, inspect window state via `pywinauto` UI Automation
 (UIA), and exercise real console + camera hardware over USB. The
@@ -30,7 +30,7 @@ For style guidance on writing or editing tests, see
 | File | Tests | Coverage | Wall-clock |
 |---|---|---|---|
 | `test_scan_flow.py` | 15 | End-to-end happy path: configure → notes → check → 2-min scan → view in plot. | ~10 min |
-| `test_reducedmode.py` | 35 | Reduced Mode workflow in four classes (Reduced Mode forced on via `app_config.json`, not the Settings modal): keyboard-driven (05–20), mouse-driven (22–31), Settings feature (33–37: Time Window dropdown × 4, Auto-scale Y-axes ON), and modal-exclusivity detector (38: opens Settings then clicks Start, asserts only one modal is visible — verifies the `modalManager.closeCurrent()` call in `BloodFlow.qml`'s `onStartStopClicked` dismisses Settings before `ContactQualityModal` opens). | ~52 min |
+| `test_clinicalmode.py` | 35 | Clinical Mode workflow in four classes (Clinical Mode forced on via `app_config.json`, not the Settings modal): keyboard-driven (05–20), mouse-driven (22–31), Settings feature (33–37: Time Window dropdown × 4, Auto-scale Y-axes ON), and modal-exclusivity detector (38: opens Settings then clicks Start, asserts only one modal is visible — verifies the `modalManager.closeCurrent()` call in `BloodFlow.qml`'s `onStartStopClicked` dismisses Settings before `ContactQualityModal` opens). | ~52 min |
 | `test_connection_redesign.py` | 4 | Power-cycle resilience: app off + power on → auto-connect; idle power-cycle; mid-scan power-cycle; rapid 5× toggle survival. Requires Shelly outlet. | ~5 min |
 | `test_scan_auto_stop_bug.py` | 5 | GH issue #47 repro: 5×10-min All/All scans, power-cycle between loops 1–3, skip cycle on 4–5. Loop 5 expected to fail. Requires Shelly. | ~70 min |
 | `test_scan_auto_stop_bug_abbreviated.py` | 5 | Same repro logic with 2-min Far/Far scans for fast iteration. | ~25 min |
@@ -50,7 +50,7 @@ least one sensor. Tests that cycle power additionally require
 
 - Windows 11 with an interactive desktop session (UI tests need a real display).
 - Python 3.12.
-- OpenWater BloodFlow app — either the frozen build (`OPENWATER_EXE=…`) or the source (`OPENWATER_FROM_SOURCE=1`).
+- Open-Motion app — either the frozen build (`OPENWATER_EXE=…`) or the source (`OPENWATER_FROM_SOURCE=1`).
 - For `release`-tier tests: Shelly outlet on the LAN, `$SHELLY_IP_ADDRESS` exported.
 
 ### Install dependencies
@@ -102,7 +102,7 @@ tests/
 ├── test_notes.py               ← dev    — Session Notes textarea
 ├── test_scan_settings.py       ← dev    — Scan Settings modal
 ├── test_scan_flow.py           ← release — end-to-end happy path
-├── test_reducedmode.py         ← release — Reduced Mode workflow
+├── test_clinicalmode.py         ← release — Clinical Mode workflow
 ├── test_connection_redesign.py ← release — power-cycle resilience
 ├── test_scan_auto_stop_bug.py  ← release — issue #47 repro (10-min scans)
 ├── test_scan_auto_stop_bug_abbreviated.py  ← release — same, 2-min scans
@@ -167,7 +167,7 @@ The `app` fixture finds the bloodflow app in this order:
 1. `$OPENWATER_FROM_SOURCE=1` → launch via `python main.py`.
 2. `$OPENWATER_EXE` → use that absolute path.
 3. Glob across `Documents/OpenMotion/`, `Desktop/`, `Program Files/`.
-4. `OpenWaterApp.exe` next to `tests/`.
+4. `Open-Motion.exe` next to `tests/`.
 
 If none match, the fixture `pytest.skip`s.
 
@@ -181,8 +181,8 @@ If none match, the fixture `pytest.skip`s.
 | `tests/test_logs/pytest.log` | full pytest log for the run |
 | `tests/test_logs/HIL_Report_<ts>.json` | structured V&V report (per-test results, env, summary) |
 | `tests/test_logs/HIL_Report_<ts>.md` | human-readable V&V report with sign-off block |
-| `tests/app-logs/` | bloodflow app logs captured during tests |
-| `app-logs/` | bloodflow app logs captured outside the tests dir (varies by working dir) |
+| `tests/logs/` | bloodflow app logs captured during tests |
+| `logs/` | bloodflow app logs captured outside the tests dir (varies by working dir) |
 
 ---
 

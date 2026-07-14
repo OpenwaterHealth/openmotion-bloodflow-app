@@ -1,13 +1,13 @@
 import QtQuick 6.0
 import QtQuick.Controls 6.0
 import QtQuick.Layouts 6.0
+import OpenMotion 1.0
 
 Rectangle {
     id: windowMenu
-    AppTheme { id: theme }
     width: parent.width
     height: 60
-    color: theme.bgContainer // Header background color
+    color: AppTheme.bgContainer // Header background color
     radius: 20
 
     // Emitted when the user clicks the exit (X) icon in the title
@@ -16,7 +16,7 @@ Rectangle {
     signal closeRequested()
 
     // Emitted on double-click of the logo. main.qml owns the behavior
-    // (opens the developer-unlock prompt) — this component stays dumb.
+    // (opens the engineering-unlock prompt) — this component stays dumb.
     signal logoDoubleClicked()
 
     // Properties to configure the logo
@@ -26,7 +26,7 @@ Rectangle {
     property string sessionId: ""
     property bool   scanning: false
     property bool   freeRun: false
-    property bool   reducedMode: false
+    property bool   clinicalMode: false
     property int    elapsedSec: 0
     property int    durationSec: 3600
 
@@ -70,19 +70,19 @@ Rectangle {
                 anchors.fill: parent
                 fillMode: Image.PreserveAspectFit
                 smooth: true
-                visible: theme.dark && windowMenu.logoSource !== ""
+                visible: AppTheme.dark && windowMenu.logoSource !== ""
             }
             // Light-mode: paint a dark logo using the white image as an
             // opacity mask over a solid-colour Canvas.  No shaders needed.
             Item {
                 anchors.fill: parent
-                visible: !theme.dark && windowMenu.logoSource !== ""
+                visible: !AppTheme.dark && windowMenu.logoSource !== ""
 
                 Canvas {
                     id: logoDarkCanvas
                     anchors.fill: parent
                     // Re-render whenever the theme changes or the image loads
-                    property color tint: theme.textPrimary
+                    property color tint: AppTheme.textPrimary
                     onTintChanged: requestPaint()
 
                     Image {
@@ -116,7 +116,7 @@ Rectangle {
                 }
             }
 
-            // Double-click → developer-mode unlock prompt (dev gate).
+            // Double-click → engineering-mode unlock prompt (eng gate).
             // Sits above the header drag MouseArea so only the logo area
             // captures the double-click; the rest of the bar still drags.
             MouseArea {
@@ -130,9 +130,9 @@ Rectangle {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 34
-            color: theme.bgElevated
+            color: AppTheme.bgElevated
             radius: 8
-            border.color: theme.borderSubtle
+            border.color: AppTheme.borderSubtle
             border.width: 1
 
             RowLayout {
@@ -141,10 +141,10 @@ Rectangle {
                 anchors.rightMargin: 14
                 spacing: 10
 
-                Text { text: "Session:"; color: theme.textTertiary; font.pixelSize: 13 }
+                Text { text: "Session:"; color: AppTheme.textTertiary; font.pixelSize: 13 }
                 Text {
                     text: windowMenu.sessionId || "—"
-                    color: theme.textLink
+                    color: AppTheme.textLink
                     font.pixelSize: 13
                     font.weight: Font.DemiBold
                 }
@@ -152,14 +152,14 @@ Rectangle {
                 Item { Layout.fillWidth: true }
 
                 Text {
-                    text: "OpenMotion BloodFlow"
-                    color: theme.textPrimary
+                    text: "Open-Motion"
+                    color: AppTheme.textPrimary
                     font.pixelSize: 14
                     font.weight: Font.Bold
                 }
 
                 Rectangle {
-                    visible: !windowMenu.reducedMode
+                    visible: !windowMenu.clinicalMode
                     width: betaLabel.implicitWidth + 12
                     height: betaLabel.implicitHeight + 4
                     radius: 4
@@ -180,7 +180,7 @@ Rectangle {
                 Text {
                     text: {
                         if (windowMenu.freeRun) {
-                            if (windowMenu.reducedMode) {
+                            if (windowMenu.clinicalMode) {
                                 return windowMenu.scanning
                                     ? windowMenu.formatSec(windowMenu.elapsedSec) : ""
                             }
@@ -192,7 +192,7 @@ Rectangle {
                             ? windowMenu.formatSec(windowMenu.elapsedSec) + " / " + windowMenu.formatSec(windowMenu.durationSec)
                             : windowMenu.formatSec(windowMenu.durationSec)
                     }
-                    color: windowMenu.scanning ? theme.statusGreen : theme.textTertiary
+                    color: windowMenu.scanning ? AppTheme.statusGreen : AppTheme.textTertiary
                     font.pixelSize: 13
                     font.family: "Courier New"
                 }

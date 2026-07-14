@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from audit_log import gather_host_info
+from utils.app_paths import LOGS_DIRNAME
 
 logger = logging.getLogger("openmotion.bloodflow-app.debug-bundle")
 
@@ -39,7 +40,7 @@ def _system_info_text(
 
 
 def build_debug_bundle(
-    data_dir: str | Path,
+    root_dir: str | Path,
     dest_dir: str | Path,
     now_epoch: float,
     *,
@@ -49,8 +50,8 @@ def build_debug_bundle(
 ) -> Dict[str, Any]:
     """Zip recent app logs + config + system info into dest_dir.
 
-    Includes <data_dir>/app-logs/*.log with mtime within window_hours,
-    the app_config.json at config_path (default <data_dir>/app_config.json)
+    Includes <root_dir>/logs/*.log with mtime within window_hours,
+    the app_config.json at config_path (default <root_dir>/app_config.json)
     if present, and a generated system_info.txt. Returns
     {"path", "file_count", "log_count", "bytes"} where:
       - log_count  = log files that matched the time window.
@@ -59,12 +60,12 @@ def build_debug_bundle(
         fails to add (skipped fail-soft).
       - bytes      = size of the written zip on disk.
     """
-    data_dir = Path(data_dir)
+    root_dir = Path(root_dir)
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     cutoff = now_epoch - window_hours * 3600
-    log_dir = data_dir / "app-logs"
+    log_dir = root_dir / LOGS_DIRNAME
     recent_logs = []
     if log_dir.is_dir():
         for p in sorted(log_dir.glob("*.log")):
@@ -77,7 +78,7 @@ def build_debug_bundle(
                 )
 
     if config_path is None:
-        config_path = data_dir / "app_config.json"
+        config_path = root_dir / "app_config.json"
     config_path = Path(config_path)
 
     stamp = datetime.datetime.fromtimestamp(now_epoch).strftime(
@@ -89,7 +90,7 @@ def build_debug_bundle(
     with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
         for p in recent_logs:
             try:
-                zf.write(p, arcname=f"app-logs/{p.name}")
+                zf.write(p, arcname=f"{LOGS_DIRNAME}/{p.name}")
                 file_count += 1
             except OSError:
                 logger.warning(

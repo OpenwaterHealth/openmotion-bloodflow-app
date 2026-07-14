@@ -98,6 +98,17 @@ jobs:
           conda activate omotion
           python -m PyInstaller -y openwater.spec
 
+      - name: Install WiX v5
+        shell: pwsh
+        run: |
+          # Pin to 5.0.2 — the last MIT-licensed WiX. v6/v7 require accepting the
+          # paid Open Source Maintenance Fee EULA (WIX7015) and would fail CI.
+          dotnet tool install --global wix --version 5.0.2
+          # In WiX v5 the standard bootstrapper application ships in this package
+          # (not WixToolset.Bal.wixext); the bal: namespace in bundle.wxs is unchanged.
+          wix extension add -g WixToolset.BootstrapperApplications.wixext/5.0.2
+          echo "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Append
+
       # ── package ──────────────────────────────────────────────────
       - name: Determine version tag
         id: meta
@@ -109,10 +120,10 @@ jobs:
             TAG=$(git describe --tags --dirty --always 2>/dev/null || echo "dev-${GITHUB_SHA::8}")
           fi
           echo "TAG=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "ARTIFACT_NAME=OpenMotion-Bloodflow-${TAG}" >> "$GITHUB_OUTPUT"
-          echo "ARTIFACT_ZIP=OpenMotion-Bloodflow-${TAG}.zip" >> "$GITHUB_OUTPUT"
-          echo "ARTIFACT_NAME_RUO=OpenMotion-Bloodflow-${TAG}_RUO" >> "$GITHUB_OUTPUT"
-          echo "ARTIFACT_ZIP_RUO=OpenMotion-Bloodflow-${TAG}_RUO.zip" >> "$GITHUB_OUTPUT"
+          echo "ARTIFACT_NAME=Open-Motion-${TAG}" >> "$GITHUB_OUTPUT"
+          echo "ARTIFACT_ZIP=Open-Motion-${TAG}.zip" >> "$GITHUB_OUTPUT"
+          echo "ARTIFACT_NAME_RESEARCH=Open-Motion-Research-${TAG}" >> "$GITHUB_OUTPUT"
+          echo "ARTIFACT_ZIP_RESEARCH=Open-Motion-Research-${TAG}.zip" >> "$GITHUB_OUTPUT"
 
           # pre-release flag — X.Y.Z-dev.N (dev) and X.Y.Z-rc.N (release
           # candidate) tags both mark prerelease in the GitHub release UI.
@@ -124,30 +135,12 @@ jobs:
 
           echo "::notice ::Version tag resolved to: ${TAG}"
 
-      - name: Zip build output
+      - name: Package all artifacts (zips + installers, clinical + Research)
         shell: pwsh
+        env:
+          CODESIGN_THUMBPRINT: ${{ secrets.CODESIGN_THUMBPRINT }}
         run: |
-          Compress-Archive -Path dist\* -DestinationPath "${{ steps.meta.outputs.ARTIFACT_ZIP }}"
-
-      # ── RUO variant: same bits with reducedMode flipped to false ─
-      - name: Zip RUO build output
-        shell: pwsh
-        run: |
-          $configPath = "dist\OpenWaterApp\_internal\config\app_config.json"
-          if (-not (Test-Path $configPath)) {
-              throw "RUO build failed: bundled config not found at $configPath."
-          }
-          $orig = Get-Content -Raw $configPath
-          $ruo = $orig -replace '"reducedMode"\s*:\s*true', '"reducedMode": false'
-          if ($ruo -eq $orig) {
-              throw "RUO build failed: did not find 'reducedMode: true' in $configPath to flip."
-          }
-          Set-Content -Path $configPath -Value $ruo -Encoding UTF8 -NoNewline
-          try {
-              Compress-Archive -Path dist\* -DestinationPath "${{ steps.meta.outputs.ARTIFACT_ZIP_RUO }}"
-          } finally {
-              Set-Content -Path $configPath -Value $orig -Encoding UTF8 -NoNewline
-          }
+          powershell -NoProfile -File scripts\package_artifacts.ps1 -Version "${{ steps.meta.outputs.TAG }}"
 
       # ── always upload workflow artifact ──────────────────────────
       - name: Upload workflow artifact
@@ -156,11 +149,11 @@ jobs:
           name: ${{ steps.meta.outputs.ARTIFACT_NAME }}
           path: ${{ steps.meta.outputs.ARTIFACT_ZIP }}
 
-      - name: Upload RUO workflow artifact
+      - name: Upload Research workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.meta.outputs.ARTIFACT_NAME_RUO }}
-          path: ${{ steps.meta.outputs.ARTIFACT_ZIP_RUO }}
+          name: ${{ steps.meta.outputs.ARTIFACT_NAME_RESEARCH }}
+          path: ${{ steps.meta.outputs.ARTIFACT_ZIP_RESEARCH }}
 
       # ── build release notes ───────────────────────────────────────
       - name: Build release notes
@@ -201,7 +194,9 @@ jobs:
           prerelease: ${{ steps.meta.outputs.PRERELEASE == 'true' }}
           files: |
             ${{ steps.meta.outputs.ARTIFACT_ZIP }}
-            ${{ steps.meta.outputs.ARTIFACT_ZIP_RUO }}
+            ${{ steps.meta.outputs.ARTIFACT_ZIP_RESEARCH }}
+            build/installer/Open-Motion-Setup-*.exe
+            build/installer/Open-Motion-Research-Setup-*.exe
             resources/OpenMotionDriver-x64.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

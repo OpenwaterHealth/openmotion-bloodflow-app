@@ -1,0 +1,41 @@
+<!-- installer/bundle.wxs — one setup.exe: driver MSI then app MSI. -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+  <Bundle Name="$(var.ProductName)"
+          Manufacturer="Openwater"
+          Version="$(var.Version)"
+          UpgradeCode="$(var.BundleUpgradeCode)">
+
+    <BootstrapperApplication>
+      <!-- Custom theme = stock hyperlinkLicense + a "Create a desktop shortcut"
+           checkbox. Theme="hyperlinkLicense" is kept so the standard payload
+           group (logo.png etc.) is still provided; ThemeFile/LocalizationFile
+           override only the layout + strings. -->
+      <bal:WixStandardBootstrapperApplication Theme="hyperlinkLicense"
+                                              ThemeFile="bundle-theme.xml"
+                                              LocalizationFile="bundle-theme.wxl"
+                                              LicenseUrl="" />
+    </BootstrapperApplication>
+
+    <!-- Desktop-shortcut checkbox state. Default 1 = checked; the theme
+         checkbox two-way-binds to this by name, and it is handed to the app
+         MSI below. -->
+    <Variable Name="InstallDesktopShortcut" Type="numeric" Value="1" />
+
+    <Chain>
+      <!-- WinUSB driver. Vital but its absence on uninstall is fine (Permanent). -->
+      <MsiPackage Id="DriverMsi"
+                  SourceFile="$(var.DriverMsi)"
+                  Vital="yes"
+                  Permanent="yes"
+                  Visible="no" />
+      <!-- The app itself. Pass the checkbox state through as a public MSI
+           property so the desktop-shortcut component installs conditionally. -->
+      <MsiPackage Id="AppMsi"
+                  SourceFile="$(var.AppMsi)"
+                  Vital="yes">
+        <MsiProperty Name="INSTALLDESKTOPSHORTCUT" Value="[InstallDesktopShortcut]" />
+      </MsiPackage>
+    </Chain>
+  </Bundle>
+</Wix>

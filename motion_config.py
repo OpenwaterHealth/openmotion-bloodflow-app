@@ -20,7 +20,7 @@ from pathlib import Path
 from utils.resource_path import resource_path
 
 
-logger = logging.getLogger("ow-testapp")
+logger = logging.getLogger("openmotion.bloodflow-app.motion_config")
 
 
 def load_tec_params(config_dir: str) -> float:
@@ -38,8 +38,8 @@ def load_tec_params(config_dir: str) -> float:
 
     if not config_path.exists():
         logger.warning(
-            f"[Connector] TEC parameter file not found: {config_path}, "
-            f"using default value {_TEC_VOLTAGE_DEFAULT}V"
+            "TEC parameter file not found: %s, using default value %sV",
+            config_path, _TEC_VOLTAGE_DEFAULT,
         )
         return _TEC_VOLTAGE_DEFAULT
 
@@ -48,25 +48,25 @@ def load_tec_params(config_dir: str) -> float:
             params = json.load(f)
         voltage = params.get("TEC_VOLTAGE_DEFAULT", _TEC_VOLTAGE_DEFAULT)
         logger.info(
-            f"[Connector] Loaded TEC voltage from {config_path}: {voltage}V"
+            "Loaded TEC voltage from %s: %sV", config_path, voltage
         )
         return voltage
     except FileNotFoundError:
         logger.warning(
-            f"[Connector] TEC parameter file not found: {config_path}, "
-            f"using default value {_TEC_VOLTAGE_DEFAULT}V"
+            "TEC parameter file not found: %s, using default value %sV",
+            config_path, _TEC_VOLTAGE_DEFAULT,
         )
         return _TEC_VOLTAGE_DEFAULT
     except json.JSONDecodeError as e:
         logger.error(
-            f"[Connector] Invalid JSON in {config_path}: {e}, "
-            f"using default value {_TEC_VOLTAGE_DEFAULT}V"
+            "Invalid JSON in %s: %s, using default value %sV",
+            config_path, e, _TEC_VOLTAGE_DEFAULT,
         )
         return _TEC_VOLTAGE_DEFAULT
     except Exception as e:
         logger.error(
-            f"[Connector] Error loading TEC parameters: {e}, "
-            f"using default value {_TEC_VOLTAGE_DEFAULT}V"
+            "Error loading TEC parameters: %s, using default value %sV",
+            e, _TEC_VOLTAGE_DEFAULT,
         )
         return _TEC_VOLTAGE_DEFAULT
 

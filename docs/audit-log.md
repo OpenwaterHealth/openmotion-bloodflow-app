@@ -1,6 +1,6 @@
 # Audit Log — User & Auditor Guide
 
-The OpenWater Bloodflow app keeps an **audit log**: a machine-readable,
+The Open-Motion app keeps an **audit log**: a machine-readable,
 append-only record of significant system events. It exists primarily for
 **auditors** who need to reconstruct what the system and its operators did,
 and when. This guide explains how to open it, what it records, and how to
@@ -107,7 +107,7 @@ LIMIT 50;
 
 The **Send Debug Logs** button (top of the audit-log viewer) packages the
 app's diagnostic logs for support. It writes a zip to
-`<dataDirectory>/app-logs/debug-bundles/debug-bundle-<timestamp>.zip`
+`<dataDirectory>/data/debug-bundles/debug-bundle-<timestamp>.zip`
 containing the app log files from the last 48 hours, `app_config.json`,
 and a `system_info.txt` (app/SDK version + host details). The file
 explorer opens with the zip selected, and a message shows the path —

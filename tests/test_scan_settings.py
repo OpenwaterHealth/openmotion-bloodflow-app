@@ -31,8 +31,6 @@ from hil_helpers import (
     SENSOR_OPTIONS,
     click_panel,
     focus_combobox_by_label,
-    force_app_config_value,
-    write_app_config_value,
 )
 
 pytestmark = pytest.mark.dev
@@ -41,19 +39,14 @@ pytestmark = pytest.mark.dev
 # inside the modal, not the calibrated sidebar panel.
 SCAN_MODAL_CLOSE = (0.360, 0.119)
 
-# Every test in this module assumes reducedMode is off — in reduced
+# Every test in this module assumes clinicalMode is off — in clinical
 # mode the BloodFlow page forces freeRun + a 12-hour duration and the
-# Reduced Mode toggle in Settings hides itself, so the modal layout
-# the tab walks rely on isn't there. Snapshot at module import (before
-# the session-scoped ``app`` fixture spins up the app) and restore on
-# teardown via the autouse fixture below.
-_INITIAL_REDUCED_MODE = force_app_config_value("reducedMode", False)
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _restore_reduced_mode_on_module_teardown():
-    yield
-    write_app_config_value("reducedMode", _INITIAL_REDUCED_MODE)
+# Clinical Mode toggle in Settings hides itself, so the modal layout
+# the tab walks rely on isn't there. Applied by conftest's
+# pytest_collection_finish only when this module has selected tests
+# (before the session-scoped ``app`` fixture spins up the app);
+# restored byte-exact at session end.
+FORCE_APP_CONFIG = {"clinicalMode": False}
 
 
 # ─────────────────────────────────────────────
