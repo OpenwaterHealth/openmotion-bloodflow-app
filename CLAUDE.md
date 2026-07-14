@@ -142,6 +142,36 @@ The `dataDirectory` config key controls the root (defaults to cwd if unset — f
 - Releases triggered by semver tags (e.g. `1.1.2`, `1.1.2-dev.0`, `1.1.2-rc.1`) — see [../CLAUDE.md](../CLAUDE.md) for tag format.
 - CI workflows: `.github/workflows/release-build.yml` (Windows runner, builds .exe + zip on tags / manual dispatch) and `hil-tests.yml` (self-hosted Windows runner with Shelly IoT outlet power control, runs after the release build completes).
 
+### Curating release notes (issue #348)
+
+`release-build.yml`'s auto-generated GitHub Release body is just a raw commit
+list since the *previous tag* — dev/rc noise included, and it resets on every
+pre-release so it never shows the full diff since the last production
+version. Treat it as a traceability appendix, not release notes. Before
+announcing an rc/dev build to the test team, curate the release
+(`gh release edit <tag> --notes-file <file>`) by adding two sections above
+that commit list:
+
+1. **Changelog** — plain-English feature summary since the last *production*
+   release (not the last pre-release tag — diff against the last `X.Y.Z`
+   with no suffix), grouped by theme. Include `openmotion-sdk` changes too:
+   prod/rc tags install the SDK's latest PyPI release at build time (see
+   `release-build.yml`'s SDK-selection step), so diff the SDK version bundled
+   at the last production release (check that build's CI log for
+   `Successfully installed ... openmotion-sdk-X.Y.Z`) against whatever's
+   currently on PyPI, and fold in anything user-visible.
+2. **Known Issues** — currently-open bugs a tester could hit in this build.
+   Never list unimplemented/future features here. Cross-check each candidate
+   against the merge log first — a ticket can still show "open" on the board
+   after its fix merged, since tickets stay in **In review** through
+   pre-release validation (see the board process in [../CLAUDE.md](../CLAUDE.md)).
+   **Always confirm the candidate list with Ethan before publishing** — the
+   backlog accumulates duplicates, stale hardware-specific reports, and
+   test-infra-only bugs that don't belong in a test-team-facing note.
+
+Keep the raw commit list / compare-diff link below the curated sections —
+it's the audit trail, not something to delete.
+
 ## "Start here" by task
 
 | Task | First files |
