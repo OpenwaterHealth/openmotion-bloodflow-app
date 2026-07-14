@@ -51,6 +51,17 @@ hidden += [
     "usb.backend.libusb1",
 ]
 
+# --- force include omotion's 'requests' dependency (used by firmware_update) ---
+# collect_all("omotion") above only walks omotion's own submodules/data, not its
+# third-party deps, and PyInstaller's static analysis doesn't trace into it either.
+hidden += [
+    "requests",
+    "urllib3",
+    "certifi",
+    "charset_normalizer",
+    "idna",
+]
+
 # Optional: if you also have a separate 'libusb' wheel installed, this won't hurt
 try:
     binaries += collect_dynamic_libs("libusb")
