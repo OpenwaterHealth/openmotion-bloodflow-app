@@ -30,8 +30,21 @@ from PyQt6.QtQml import (
 )
 from PyQt6.QtCore import qInstallMessageHandler, QtMsgType, QUrl
 
+import data_sources
 from motion_connector import MotionConnector
 from omotion import MotionInterface
+try:
+    from omotion.config import (
+        SUPPORTED_CAPTURE_RATES_HZ,
+        trigger_overrides_for_rate,
+    )
+except ImportError:  # omotion < sdk#129 — degrade to 40 Hz-only instead
+    # of bricking launch; the captureRateHz validation below then clamps
+    # any configured 60 back to 40 with a warning.
+    SUPPORTED_CAPTURE_RATES_HZ = (40,)
+
+    def trigger_overrides_for_rate(rate_hz):
+        return {"TriggerFrequencyHz": rate_hz}
 from utils.single_instance import check_single_instance, cleanup_single_instance
 from version import get_version
 from utils.resource_path import resource_path
@@ -114,6 +127,13 @@ def _load_app_config() -> dict:
         "calibration_scan_duration_sec": 15,
         "test_scan_duration_sec": 5,
         "calibration_scan_delay_sec": 1,
+        # Histogram capture rate (Hz) — the console trigger frequency every
+        # scan/calibration/CQ run resolves to. 40 is the validated clinical
+        # rate; 60 is experimental (issue #327). Values other than 40/60
+        # are rejected at startup and fall back to 40. Requires app restart
+        # to change: the rate is baked into the MotionInterface default
+        # trigger config and the laser-safety RATE_LL floor at connect.
+        "captureRateHz": 40,
         "leftMask": 0x66,   # 0b01100110 — cameras 2,3,6,7 (Middle pattern)
         "rightMask": 0x66,
         "uncorrectedOnly": False,
@@ -321,10 +341,27 @@ def main():
     _scan_data_dir = os.path.join(_data_dir, app_paths.DATA_DIRNAME)
     os.makedirs(_scan_data_dir, exist_ok=True)
     _scan_db_path = os.path.join(_scan_data_dir, "scans.db")
+    _capture_rate = app_config.get("captureRateHz", 40)
+    if _capture_rate not in SUPPORTED_CAPTURE_RATES_HZ:
+        logger.warning(
+            "captureRateHz=%r unsupported (allowed: %s) — using 40",
+            _capture_rate, SUPPORTED_CAPTURE_RATES_HZ,
+        )
+        _capture_rate = 40
+        # Clamp in the dict too: the connector and QML appConfig read
+        # this same object (live-cache sizing, Settings toggle).
+        app_config["captureRateHz"] = 40
+    if _capture_rate != 40:
+        logger.info("Capture rate: %d Hz (experimental, issue #327)", _capture_rate)
+    data_sources.set_nominal_rate_hz(_capture_rate)
+    # trigger_overrides_for_rate also scales the dark-frame pulse
+    # displacement so the laser-safety rate floor keeps its margin at
+    # 60 Hz (sdk#129) — requires omotion >= sdk#129.
     motion_interface = MotionInterface(
         data_dir=_scan_data_dir,
         scan_db_path=_scan_db_path,
         operator_id="bloodflow-app",
+        default_trigger_config=trigger_overrides_for_rate(_capture_rate),
     )
     motion_interface.log_system_info()
 

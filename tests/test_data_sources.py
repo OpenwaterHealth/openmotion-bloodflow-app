@@ -1011,6 +1011,26 @@ def test_camera_buffer_window_decimated_returns_raw_when_window_fits():
     assert list(v_dec) == [np.float32(i) for i in range(20)]
 
 
+def test_camera_buffer_window_decimated_honors_nominal_rate():
+    """set_nominal_rate_hz (captureRateHz, issue #327) feeds the
+    time-keyed stride: the same 10 s window at 60 Hz expects 1.5x the
+    samples of 40 Hz, so stride grows from 4 to 6 at max_points=100."""
+    import data_sources
+
+    buf = _CameraBuffer(initial_capacity=1024)
+    for i in range(600):
+        buf.append(t=i / 60.0, v=float(i), frame_id=i)
+    data_sources.set_nominal_rate_hz(60.0)
+    try:
+        t_dec, v_dec = buf.window_decimated(t_lo=0.0, t_hi=10.0, max_points=100)
+    finally:
+        data_sources.set_nominal_rate_hz(40.0)
+    # 10 s × 60 Hz / max_points=100 = stride 6 → 600/6 = 100 outputs.
+    assert len(t_dec) == 100
+    # abs=6: causal window [1..6] → mean(1..6) = 3.5.
+    assert v_dec[1] == np.float32(3.5)
+
+
 def test_camera_buffer_window_decimated_strides_when_over_max():
     buf = _CameraBuffer(initial_capacity=1024)
     for i in range(400):

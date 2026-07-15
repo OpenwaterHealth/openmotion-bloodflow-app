@@ -29,6 +29,18 @@ logger = logging.getLogger("openmotion.bloodflow-app.data_sources")
 
 _MAX_CAPACITY = 72000       # ≈ 30 min @ 40 Hz; ring-trim above this.
 _INITIAL_CAPACITY = _MAX_CAPACITY
+
+# Histogram cadence used for time-window → sample-count math (decimation
+# stride). Process-wide because the capture rate is fixed for the app's
+# lifetime (captureRateHz config, issue #327); main.py sets it once at
+# startup before any buffer exists.
+_nominal_rate_hz = 40.0
+
+
+def set_nominal_rate_hz(rate_hz: float) -> None:
+    """Set the histogram capture rate the decimation math assumes."""
+    global _nominal_rate_hz
+    _nominal_rate_hz = float(rate_hz)
 # Pre-allocate at the cap. Mid-scan grow events (np.resize → alloc +
 # copy) at the 7-min and 14-min doublings stressed Python's allocator
 # hard enough to stall the SDK parser thread — the data_queue would
@@ -198,7 +210,7 @@ class _CameraBuffer:
         # sample is appended, the output at that absolute index has its
         # final value and never changes.
         #
-        # Stride is derived from the TIME WINDOW (× nominal 40 Hz), not
+        # Stride is derived from the TIME WINDOW (× nominal rate), not
         # from n_window. Keying on n_window meant stride crept up as
         # samples accumulated within a fixed zoom (e.g. 24 → 25 when
         # n_window crossed 4800 at the same zoom level), and every
@@ -211,8 +223,7 @@ class _CameraBuffer:
         # Nyquist-minimum — just enough to suppress aliasing across the
         # stride-subsampled output, without smearing real detail.
         # Earlier 3× kernel hid features even at the tightest 5 s zoom.
-        nominal_hz = 40.0  # SDK histogram cadence
-        expected_samples = max(1.0, (t_hi - t_lo) * nominal_hz)
+        expected_samples = max(1.0, (t_hi - t_lo) * _nominal_rate_hz)
         stride = max(1, int(-(-expected_samples // max_points)))
 
         # Zoomed-in tight enough that every sample fits — no decimation

@@ -839,6 +839,28 @@ Item {
                         Item { Layout.fillWidth: true }
                     }
 
+                    // Capture rate (issue #327). Applied LIVE: the connector
+                    // re-resolves the SDK trigger default and re-programs the
+                    // laser-safety RATE_LL floor before the next scan; camera
+                    // VTS retime rides on the next scan start. On failure the
+                    // switch snaps back via appConfigChanged.
+                    FieldRow {
+                        label: "60 Hz capture"
+                        PillSwitch {
+                            checked: MotionInterface.appConfig.captureRateHz === 60
+                            onToggled: MotionInterface.setCaptureRate(checked ? 60 : 40)
+                        }
+                        Text {
+                            text: MotionInterface.appConfig.captureRateHz === 60
+                                  ? "60 Hz (experimental) — applies to the next scan"
+                                  : "40 Hz — applies to the next scan"
+                            color: MotionInterface.appConfig.captureRateHz === 60
+                                   ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
                     // Sensor firmware debug flags — persisted to config AND
                     // pushed live to connected sensors via setSensorDebugFlag.
                     // onToggled (not onCheckedChanged) so the appConfig rebind
