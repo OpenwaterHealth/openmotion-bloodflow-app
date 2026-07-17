@@ -285,6 +285,11 @@ jobs:
 
       - name: Build .app + DMG
         shell: bash
+        env:
+          # The version-stamp sed above dirties the checkout, so letting
+          # build_macos.sh derive the version from `git describe --dirty`
+          # would name the DMG "<tag>+dirty". Pass the clean tag instead.
+          OPENMOTION_VERSION: ${{ steps.meta.outputs.TAG }}
         run: ./build_macos.sh   # CI env var is set by Actions → Finder styling and `open` are skipped
 
       - name: Locate DMG
