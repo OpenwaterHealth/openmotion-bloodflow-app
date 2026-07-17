@@ -168,6 +168,11 @@ app = BUNDLE(
 )
 SPEC_EOF
 
+# Clear previous output first: PyInstaller's -y overwrite can trip over
+# framework symlinks left by an earlier build (FileExistsError on
+# Versions/Current/* inside Qt .frameworks).
+rm -rf "${DIST_DIR}/${APP_NAME}" "${DIST_DIR}/${APP_NAME}.app"
+
 python -m PyInstaller --noconfirm --clean "$SPEC_FILE" 2>&1 | tail -5
 echo "  ✓ Built ${DIST_DIR}/${APP_NAME}.app"
 
@@ -266,7 +271,10 @@ MOUNT_POINT="/Volumes/${APP_NAME}"
 hdiutil detach "$MOUNT_POINT" >/dev/null 2>&1 || true
 hdiutil attach "$DMG_TEMP" -mountpoint "$MOUNT_POINT" >/dev/null 2>&1
 
-# Use AppleScript to set Finder window appearance
+# Use AppleScript to set Finder window appearance. Skipped in CI: headless
+# runners have no Finder session / automation permission, and the styling is
+# cosmetic — the DMG is fully functional without it.
+if [ -z "${CI:-}" ]; then
 osascript << APPLESCRIPT
 tell application "Finder"
     tell disk "$APP_NAME"
@@ -291,6 +299,9 @@ tell application "Finder"
     end tell
 end tell
 APPLESCRIPT
+else
+    echo "  (CI: skipping Finder window styling)"
+fi
 
 # Unmount
 sync
@@ -319,5 +330,7 @@ echo "║  DMG:  ${DMG_FINAL}                                         "
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 
-# Open the DMG so the user can see it
-open "$DMG_FINAL"
+# Open the DMG so the user can see it (interactive runs only)
+if [ -z "${CI:-}" ]; then
+    open "$DMG_FINAL"
+fi

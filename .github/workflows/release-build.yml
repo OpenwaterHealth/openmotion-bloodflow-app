@@ -200,3 +200,116 @@ jobs:
             resources/OpenMotionDriver-x64.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-macos:
+    runs-on: macos-15   # Apple Silicon runner
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install libusb
+        run: brew install libusb
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+
+          # SDK selection — mirrors the Windows job above (see the comment
+          # there for the full rationale).
+          if [[ "$GITHUB_REF" == refs/tags/*-dev.* ]] || [[ "$GITHUB_REF" == refs/heads/next ]]; then
+            echo "Dev/next-branch ($GITHUB_REF) — installing SDK from openmotion-sdk@next"
+            pip install "git+https://github.com/OpenwaterHealth/openmotion-sdk.git@next"
+          elif [[ "$GITHUB_REF" =~ ^refs/tags/[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+            echo "Production/RC tag detected ($GITHUB_REF) — installing latest openmotion-sdk from PyPI"
+            pip install --upgrade openmotion-sdk
+          else
+            WHL_URL=$(python -c "import json,urllib.request as ur,sys; d=json.load(ur.urlopen('https://api.github.com/repos/OpenwaterHealth/openmotion-sdk/releases/latest')); w=[a['browser_download_url'] for a in d.get('assets',[]) if a['name'].endswith('.whl')]; print(w[0] if w else '')" 2>/dev/null || true)
+
+            if [ -n "$WHL_URL" ]; then
+              echo "Installing pylib wheel: $WHL_URL"
+              pip install "$WHL_URL"
+            else
+              echo "No wheel found – falling back to source install"
+              pip install git+https://github.com/OpenwaterHealth/openmotion-sdk.git
+            fi
+          fi
+
+          pip install -r requirements.txt
+
+          # requirements.txt pins PyInstaller 6.11.1 for the Windows build.
+          # 6.11 has a macOS bug that creates Qt framework symlinks twice
+          # (FileExistsError on Versions/Current/* during assemble); fixed
+          # in later 6.x. Override the pin for this job only.
+          pip install --upgrade "pyinstaller>=6.13"
+
+      - name: Stamp version from git tag
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            VER="${TAG#v}"
+          else
+            VER=$(git describe --tags --dirty --always --long 2>/dev/null || echo "dev-${GITHUB_SHA::8}")
+          fi
+          echo "Stamping version: $VER"
+          # BSD sed needs an explicit (empty) backup suffix with -i
+          sed -i '' "s/^_FALLBACK_VERSION = .*/_FALLBACK_VERSION = \"${VER}\"/" version.py
+
+      - name: Determine version tag
+        id: meta
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG=$(git describe --tags --dirty --always 2>/dev/null || echo "dev-${GITHUB_SHA::8}")
+          fi
+          echo "TAG=${TAG}" >> "$GITHUB_OUTPUT"
+          if [[ "$TAG" == *-dev.* ]] || [[ "$TAG" == *-rc.* ]]; then
+            echo "PRERELEASE=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "PRERELEASE=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "::notice ::Version tag resolved to: ${TAG}"
+
+      - name: Build .app + DMG
+        shell: bash
+        run: ./build_macos.sh   # CI env var is set by Actions → Finder styling and `open` are skipped
+
+      - name: Locate DMG
+        id: dmg
+        shell: bash
+        run: |
+          DMG_PATH=$(ls dist/Open-Motion-*-macOS.dmg | head -1)
+          echo "DMG_PATH=${DMG_PATH}" >> "$GITHUB_OUTPUT"
+          echo "DMG_NAME=$(basename "$DMG_PATH" .dmg)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.dmg.outputs.DMG_NAME }}
+          path: ${{ steps.dmg.outputs.DMG_PATH }}
+
+      # Attach the DMG to the same release the Windows job creates. Both
+      # jobs target the same tag; action-gh-release appends assets to an
+      # existing release rather than clobbering it, so ordering is safe.
+      - name: Attach DMG to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.TAG }}
+          prerelease: ${{ steps.meta.outputs.PRERELEASE == 'true' }}
+          files: ${{ steps.dmg.outputs.DMG_PATH }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
