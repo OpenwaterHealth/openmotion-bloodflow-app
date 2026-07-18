@@ -229,7 +229,7 @@ Rectangle {
         property string iconText: ""
         property string label: ""
         property bool highlighted: false
-        property color highlightColor: "#4A90E2"
+        property color highlightColor: AppTheme.accentInteractive
         Layout.preferredWidth: 68
         Layout.preferredHeight: 68
         Layout.alignment: Qt.AlignHCenter
