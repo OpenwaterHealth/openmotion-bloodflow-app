@@ -90,7 +90,7 @@ Item {
             color: AppTheme.bgInput
             radius: 4
             border.color: !ff.validDate ? "#C0392B"
-                          : ff.activeFocus ? AppTheme.accentBlue
+                          : ff.activeFocus ? AppTheme.accentInteractive
                                            : AppTheme.borderSubtle
             border.width: 1
         }
@@ -153,7 +153,7 @@ Item {
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? AppTheme.accentBlue : AppTheme.bgInput
+                        color: parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput
                         border.color: parent.hovered ? AppTheme.textPrimary : AppTheme.textSecondary; radius: 4
                     }
                     onClicked: {
@@ -171,7 +171,7 @@ Item {
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? AppTheme.accentBlue : AppTheme.bgInput
+                        color: parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput
                         border.color: parent.hovered ? AppTheme.textPrimary : AppTheme.textSecondary; radius: 4
                     }
                     onClicked: root.refresh()
@@ -217,7 +217,7 @@ Item {
                     background: Rectangle {
                         color: AppTheme.bgInput; radius: 4
                         border.color: typeCombo.activeFocus
-                                      ? AppTheme.accentBlue : AppTheme.borderSubtle
+                                      ? AppTheme.accentInteractive : AppTheme.borderSubtle
                         border.width: 1
                     }
                     indicator: Text {
@@ -254,7 +254,7 @@ Item {
                             leftPadding: 8
                         }
                         background: Rectangle {
-                            color: highlighted ? AppTheme.accentBlue : "transparent"
+                            color: highlighted ? AppTheme.accentInteractive : "transparent"
                         }
                     }
                 }
@@ -297,7 +297,7 @@ Item {
                     }
                     background: Rectangle {
                         color: parent.enabled && parent.hovered
-                               ? AppTheme.accentBlue : AppTheme.bgInput
+                               ? AppTheme.accentInteractive : AppTheme.bgInput
                         border.color: parent.enabled && parent.hovered
                                       ? AppTheme.textPrimary : AppTheme.borderSubtle
                         radius: 4

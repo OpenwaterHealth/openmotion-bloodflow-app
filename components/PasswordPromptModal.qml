@@ -105,7 +105,7 @@ Item {
                 background: Rectangle {
                     color: AppTheme.bgInput
                     radius: 4
-                    border.color: pwField.activeFocus ? AppTheme.accentBlue : AppTheme.borderSoft
+                    border.color: pwField.activeFocus ? AppTheme.accentInteractive : AppTheme.borderSoft
                     border.width: 1
                 }
                 onAccepted: root._submit()
@@ -152,7 +152,7 @@ Item {
                         verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? Qt.lighter(AppTheme.accentBlue, 1.1) : AppTheme.accentBlue
+                        color: parent.hovered ? Qt.lighter(AppTheme.accentInteractive, 1.1) : AppTheme.accentInteractive
                         radius: 4
                     }
                 }

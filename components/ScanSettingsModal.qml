@@ -255,7 +255,7 @@ Item {
                     color: AppTheme.textPrimary
                     background: Rectangle {
                         color: AppTheme.bgInput; radius: 4
-                        border.color: userLabelField.activeFocus ? AppTheme.accentBlue : AppTheme.borderSubtle
+                        border.color: userLabelField.activeFocus ? AppTheme.accentInteractive : AppTheme.borderSubtle
                         border.width: 1
                     }
                     onEditingFinished: {
@@ -319,7 +319,7 @@ Item {
                         delegate: ItemDelegate {
                             width: leftSelector.width; height: 32
                             contentItem: Text { text: model.name; font.pixelSize: 13; color: AppTheme.textPrimary; verticalAlignment: Text.AlignVCenter; leftPadding: 8 }
-                            background: Rectangle { color: highlighted ? AppTheme.accentBlue : "transparent" }
+                            background: Rectangle { color: highlighted ? AppTheme.accentInteractive : "transparent" }
                             highlighted: leftSelector.highlightedIndex === index
                         }
                         popup: Popup {
@@ -371,7 +371,7 @@ Item {
                         delegate: ItemDelegate {
                             width: rightSelector.width; height: 32
                             contentItem: Text { text: model.name; font.pixelSize: 13; color: AppTheme.textPrimary; verticalAlignment: Text.AlignVCenter; leftPadding: 8 }
-                            background: Rectangle { color: highlighted ? AppTheme.accentBlue : "transparent" }
+                            background: Rectangle { color: highlighted ? AppTheme.accentInteractive : "transparent" }
                             highlighted: rightSelector.highlightedIndex === index
                         }
                         popup: Popup {
@@ -406,7 +406,7 @@ Item {
 
                 Text {
                     text: "Timed"
-                    color: !root.freeRun ? AppTheme.accentBlue : AppTheme.textSecondary
+                    color: !root.freeRun ? AppTheme.accentInteractive : AppTheme.textSecondary
                     font.pixelSize: 14
                     font.weight: !root.freeRun ? Font.Bold : Font.Normal
                 }
@@ -418,8 +418,8 @@ Item {
                     indicator: Rectangle {
                         x: modeSwitch.leftPadding; y: (modeSwitch.height - height) / 2
                         width: 44; height: 24; radius: 12
-                        color: modeSwitch.checked ? AppTheme.accentBlue : AppTheme.bgInput
-                        border.color: modeSwitch.checked ? AppTheme.accentBlue : AppTheme.borderSubtle; border.width: 1
+                        color: modeSwitch.checked ? AppTheme.accentInteractive : AppTheme.bgInput
+                        border.color: modeSwitch.checked ? AppTheme.accentInteractive : AppTheme.borderSubtle; border.width: 1
                         Behavior on color { ColorAnimation { duration: 120 } }
                         Rectangle {
                             x: modeSwitch.checked ? parent.width - width - 3 : 3
@@ -431,7 +431,7 @@ Item {
 
                 Text {
                     text: "Continuous"
-                    color: root.freeRun ? AppTheme.accentBlue : AppTheme.textSecondary
+                    color: root.freeRun ? AppTheme.accentInteractive : AppTheme.textSecondary
                     font.pixelSize: 14
                     font.weight: root.freeRun ? Font.Bold : Font.Normal
                 }

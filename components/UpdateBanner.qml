@@ -27,7 +27,7 @@ Rectangle {
     property bool updating: false
     property string statusText: "Update"
 
-    color: AppTheme.accentBlue
+    color: AppTheme.accentInteractive
     radius: 0
 
     Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutQuad } }
@@ -62,7 +62,7 @@ Rectangle {
                 id: downloadBtn
                 anchors.centerIn: parent
                 text: banner.updating ? banner.statusText : "Update"
-                color: AppTheme.accentBlue
+                color: AppTheme.accentInteractive
                 font.pixelSize: 12
                 font.weight: Font.DemiBold
             }

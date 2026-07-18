@@ -20,7 +20,7 @@ Rectangle {
     property bool _dismissed: false
     visible: _devMode && MotionInterface.anyFirmwareUpdateAvailable && !_dismissed
 
-    color: AppTheme.accentBlue
+    color: AppTheme.accentInteractive
     radius: 0
     Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutQuad } }
 
@@ -45,7 +45,7 @@ Rectangle {
                 id: viewBtn
                 anchors.centerIn: parent
                 text: "View"
-                color: AppTheme.accentBlue
+                color: AppTheme.accentInteractive
                 font.pixelSize: 12
                 font.weight: Font.DemiBold
             }

@@ -63,7 +63,7 @@ Item {
     readonly property color colBgInput:    AppTheme.bgInput
     readonly property color colBorder:     AppTheme.borderStrong
     readonly property color colBorderSoft: AppTheme.borderSoft
-    readonly property color colAccent:     AppTheme.accentBlue
+    readonly property color colAccent:     AppTheme.accentInteractive
     readonly property color colTextPri:    AppTheme.textPrimary
     readonly property color colTextSec:    AppTheme.textSecondary
     readonly property color colTextMuted:  AppTheme.textTertiary
@@ -1217,7 +1217,7 @@ Item {
                         property string label: "Update"
                         property bool chipEnabled: true
                         width: chipText.implicitWidth + 18; height: 24; radius: 4
-                        color: chipArea.containsMouse ? Qt.lighter(AppTheme.accentBlue, 1.1) : AppTheme.accentBlue
+                        color: chipArea.containsMouse ? Qt.lighter(AppTheme.accentInteractive, 1.1) : AppTheme.accentInteractive
                         opacity: chipEnabled ? 1.0 : 0.6
                         Text {
                             id: chipText
