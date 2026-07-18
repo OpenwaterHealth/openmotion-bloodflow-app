@@ -26,7 +26,7 @@ EDGE_CANDIDATES = [
 EDGE = next(p for p in EDGE_CANDIDATES if os.path.exists(p))
 
 FILES = {
-    "open-motion-user-manual-clinical.md": "Open-Motion-User-Manual-Clinical.pdf",
+    "open-motion-user-manual.md": "Open-Motion-User-Manual.pdf",
     "open-motion-user-manual-research.md": "Open-Motion-User-Manual-Research.pdf",
     "open-motion-user-manual-engineering.md": "Open-Motion-User-Manual-Engineering.pdf",
 }
@@ -112,7 +112,7 @@ def build(md_name, pdf_name):
         extensions=["extra", "toc", "sane_lists"],
         extension_configs={"toc": {"toc_depth": "2-2", "title": "Contents"}},
     )
-    title = re.sub(r"open-motion-user-manual-(\w+).md", r"Open-Motion User Manual \1", md_name)
+    title = pdf_name[:-4].replace("-", " ")
     html_path = os.path.join(DOCS, md_name.replace(".md", ".tmp.html"))
     open(html_path, "w", encoding="utf-8").write(TEMPLATE.format(title=title, css=CSS, body=html_body))
 

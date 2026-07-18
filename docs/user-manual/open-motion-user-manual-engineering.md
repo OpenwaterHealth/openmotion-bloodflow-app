@@ -2,9 +2,9 @@
 
 ![Openwater](img/openwater-logo.png){.cover-logo}
 
-# Open-Motion User Manual
+# Open-Motion
 
-## Engineering Mode
+## Engineering Mode Manual
 
 | | |
 |---|---|
@@ -16,7 +16,7 @@
 > **DRAFT — not a controlled document.** Engineering mode exposes diagnostics and
 > maintenance actions that can alter device configuration and data output. It is
 > intended for Openwater personnel only and must be disabled on systems handed to
-> clinical or study users.
+> operators.
 
 </div>
 
@@ -25,12 +25,12 @@
 ## 1. What engineering mode is
 
 Engineering mode is a hidden, password-protected feature level that overlays extra
-diagnostics on either distribution (Clinical or Research) of the Open-Motion app:
-hardware maintenance controls, calibration and factory-test workflows, raw-data
-outputs, firmware update tooling, and plot/contact-quality diagnostics.
+diagnostics on both applications (Open-Motion and Open-Motion Research): hardware
+maintenance controls, calibration and factory-test workflows, raw-data outputs,
+firmware update tooling, and plot/contact-quality diagnostics.
 
-Everything documented in the Clinical and Research manuals continues to work
-unchanged; this manual covers only what engineering mode **adds**.
+Everything documented in the Open-Motion and Open-Motion Research user manuals
+continues to work unchanged; this manual covers only what engineering mode **adds**.
 
 ### Feature map
 
@@ -156,13 +156,13 @@ Each run also writes a CSV report and a JSON manifest under
 ## 5. Contact-quality diagnostics
 
 Engineering mode upgrades the contact-quality dialog (both the standalone Check and
-the clinical pre-scan gate):
+Open-Motion's pre-scan gate):
 
 ![Engineering contact-quality result](img/en-cq-eng.png)
 
 - **Force Dismiss** (amber) — closes the dialog unconditionally, bypassing every
   contact-quality gate, **including while a check is still running** and during
-  the clinical pre-scan flow. Diagnostic escape hatch only.
+  Open-Motion's pre-scan flow. Diagnostic escape hatch only.
 - **Cause legend** — `ambient` / `contact` / `both` swatches. Failing dots are colored
   by cause: dark orange = too much ambient light, sandy orange = poor skin contact; a
   dot split vertically shows both causes at once.
@@ -176,7 +176,7 @@ the clinical pre-scan gate):
   always reachable):
 
 ![Force Dismiss available while checking](img/en-cq-checking-footer.png)
-*Clinical pre-scan check still running, with the engineering footer present — Start
+*Open-Motion pre-scan check still running, with the engineering footer present — Start
 Scan stays disabled until the check finishes, but Force Dismiss works immediately.*
 
 ---
@@ -286,7 +286,7 @@ database (all under the Output Folder's `data/` directory):
 | **Debug bundles** | Send Debug Logs button | `data/debug-bundles/〈timestamp〉.zip`. |
 
 Turning engineering mode off stops the telemetry and raw CSVs even if their switches
-are left on (clinical systems never produce them).
+are left on — systems without engineering mode never produce them.
 
 ---
 

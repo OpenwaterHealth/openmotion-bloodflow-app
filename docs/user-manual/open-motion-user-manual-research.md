@@ -2,20 +2,20 @@
 
 ![Openwater](img/openwater-logo.png){.cover-logo}
 
-# Open-Motion User Manual
+# Open-Motion Research
 
-## Research Mode
+## User Manual
 
 | | |
 |---|---|
-| **Product** | Open-Motion blood-flow monitor (Research distribution) |
+| **Product** | Open-Motion Research blood-flow monitor |
 | **Application version** | 1.4.0 |
 | **Document revision** | July 2026 — draft |
 | **Audience** | Research / study operators |
 
 > **DRAFT — not a controlled document.** This manual is a documentation preview generated
-> from Open-Motion 1.4.0 running on live hardware. The Research distribution is intended
-> for investigational use; it is not cleared for clinical decision-making.
+> from Open-Motion Research 1.4.0 running on live hardware. Open-Motion Research is
+> intended for investigational use only.
 
 </div>
 
@@ -30,24 +30,24 @@ laser-speckle images through the skin and compute, at 40 samples per second per 
 - **BFI — Blood Flow Index**: relative index of blood flow (white trace).
 - **BVI — Blood Volume Index**: relative index of blood volume (blue trace).
 
-The Research distribution (window title **"Open-Motion Research"**, orange **BETA**
-badge in the header) exposes the full acquisition controls: per-camera plots,
-selectable camera patterns, timed or continuous scans, a standalone contact-quality
-check, plot display options, and software-update notifications. Laser safety is
-enforced by a hardware interlock inside the console independently of this software.
+**Open-Motion Research** (window title "Open-Motion Research", orange **BETA** badge
+in the header) is the investigational variant of the Open-Motion application. It keeps
+the same core workflow and adds full acquisition control. Laser safety is enforced by
+a hardware interlock inside the console independently of this software.
 
-**Differences from Clinical mode at a glance**
+### What Open-Motion Research adds
 
-| Area | Research | Clinical |
+Everything in the *Open-Motion User Manual* applies here as well. On top of it,
+Open-Motion Research provides:
+
+| Addition | Summary | § |
 |---|---|---|
-| Window title | Open-Motion Research (+ BETA badge) | Open-Motion |
-| Plots | One cell per active camera | Two side-average plots + large numeric panels |
-| Camera pattern | Selectable (default *Middle*) | Fixed *Far* |
-| Scan length | Timed (default 1 h) or Continuous | Continuous until stopped |
-| Start button | Starts the scan directly | Runs a contact-quality preflight first |
-| Check button | Yes — on-demand contact-quality check | Hidden (built into Start) |
-| Scan Settings | Yes | Hidden |
-| Software updates | Update banner + About statuses | Disabled |
+| **Per-camera plot grid** | One live plot cell per active camera instead of two side-average plots. | 3, 9 |
+| **Scan Settings** | Session label, per-sensor camera patterns, timed/continuous duration. | 4 |
+| **Check button** | On-demand contact-quality check, decoupled from starting a scan. | 5 |
+| **Direct scan start** | Start launches the scan immediately; run Check yourself beforehand when needed. | 6 |
+| **Plot display options** | Mean/Contrast display mode, Y-axis autoscale, axis labels, BVI low-pass filter, extra plot bounds. | 9, 10 |
+| **Software updates** | Update banner at launch and version status in Settings → About. | 2, 10 |
 
 ---
 
@@ -63,6 +63,9 @@ If a newer application release is available, an update banner slides in under th
 header: *"A new version is available: vX.Y.Z"* with an **Update** button (downloads and
 installs in place) and an **✕** to dismiss.
 
+The connection badge states (grey `Disconnected` / green `Start` / yellow pending /
+red `Stop`) are the same as in the *Open-Motion User Manual*, §2.1.
+
 ---
 
 ## 3. The main screen
@@ -71,9 +74,9 @@ installs in place) and an **✕** to dismiss.
 
 | # | Element | What it does |
 |---|---|---|
-| 1 | **Openwater logo** | Branding. Double-click opens the password-protected Engineering Access prompt (covered in the Engineering manual). |
+| 1 | **Openwater logo** | Branding. |
 | 2 | **Session:** | Current session identifier — regenerated per launch, or derived from the User Label you set in Scan Settings. Stamped into every scan record. |
-| 3 | **BETA badge** | Marks the Research distribution. |
+| 3 | **BETA badge** | Marks Open-Motion Research. |
 | 4 | **Scan clock** | Idle: the configured scan duration (e.g. `01:00:00`), or "Continuous". Scanning: elapsed / total, in green. |
 | 5 | **Window controls** | Minimize `⌄`, maximize/restore `^`, close `✕`. |
 | 6 | **Start / Stop badge** | Starts or stops the scan. Grey = disconnected, green = ready, yellow = start pending, red = scanning. |
@@ -81,7 +84,7 @@ installs in place) and an **✕** to dismiss.
 | 8 | **Notes** | Session Notes editor (§7). |
 | 9 | **Check** | Runs an on-demand contact-quality check (§5). |
 | 10 | **History** | Scan History: review, replay, export, delete (§8). |
-| 11 | **Settings** | Application settings (§9). |
+| 11 | **Settings** | Application settings (§10). |
 | 12 | **Plot grid** | One live cell per active camera, labeled `LEFT n` / `RIGHT n`. |
 
 Window behaviors: drag the header to move; resize with the bottom-right grip
@@ -166,9 +169,9 @@ stayed clear for a couple of seconds).
 
 1. Configure Scan Settings (optional — defaults are sensible).
 2. Optionally run **Check** and re-seat sensors until green.
-3. Press **Start**. The badge turns yellow while the cameras are configured
-   (typically a few seconds; up to ~1 min after a cold connect), then red as data
-   starts flowing.
+3. Press **Start**. The scan launches directly — the badge turns yellow while the
+   cameras are configured (typically a few seconds; up to ~1 min after a cold
+   connect), then red as data starts flowing.
 4. Watch the live grid:
 
 ![Research scan running](img/rs-scanning-grid.png)
@@ -206,8 +209,8 @@ Press **Space** during a scan to open Notes with a timestamp line pre-inserted:
 
 ![Scan History](img/rs-history.png)
 
-Research mode lists **all** scans in the database (clinical and research). Times in
-the **Date / Time** column are shown in UTC.
+The list shows every scan in the database. Times in the **Date / Time** column are
+shown in UTC.
 
 | Control | What it does |
 |---|---|
@@ -219,8 +222,7 @@ the **Date / Time** column are shown in UTC.
 | **🗑 Delete (N)** | Permanently deletes the checked scans — password-protected: |
 
 ![Delete confirmation](img/rs-delete-prompt.png)
-*"Confirm Delete" — enter the engineering password to permanently delete. This cannot
-be undone.*
+*"Confirm Delete" — deletion requires a password and cannot be undone.*
 
 | Control | What it does |
 |---|---|
@@ -317,14 +319,13 @@ BVI, Mean and Contrast.
 *The light theme. (Shown here with only the right sensor connected — the grid always
 shows exactly the connected, active cameras.)*
 
-**Audit Log** — **View Logs** (password-protected audit-log viewer) and
-**Send Debug Logs** (zips the last 48 h of logs for emailing to
+**Audit Log** — **View Logs** (password-protected audit-log viewer for auditors and
+Openwater support) and **Send Debug Logs** (zips the last 48 h of logs for emailing to
 **support@openwater.cc**).
 
 **About** — Application / SDK / Console FW / Left & Right Sensor FW versions with
-up-to-date status. When a newer release exists, an **Update** chip appears next to the
-outdated component (application updates install in place; firmware updates are an
-engineering function).
+up-to-date status. When a newer application release exists, an **Update** chip appears
+next to the outdated component.
 
 Closing Settings saves any changes.
 
@@ -349,8 +350,8 @@ hover pauses auto-dismiss; safety-critical ones persist). Blocking failures rais
 | E-302 | Scan could not start | Wait for the previous scan to finish. |
 | E-303 | Camera data lost during scan | Check cables/power; data before the loss was saved. |
 
-(Full error wording is listed in the Clinical manual, §10.3; it is identical in both
-distributions.)
+(Full error wording is listed in the *Open-Motion User Manual*, §9.3; it is identical
+in both applications.)
 
 ---
 
@@ -360,11 +361,10 @@ distributions.)
 |---|---|
 | `logs/` | One application log per launch — first stop when troubleshooting. |
 | `data/scans.db` | Scan database: all sessions, per-camera data, notes. |
-| `data/calibrations/` | Calibration/test reports (engineering workflows). |
 | `data/debug-bundles/` | Send-Debug-Logs zips. |
 
 CSVs are export-time artifacts only (History → Export CSV).
 
 ---
 
-*Open-Motion User Manual — Research Mode · App 1.4.0 · July 2026 draft*
+*Open-Motion Research User Manual · App 1.4.0 · July 2026 draft*

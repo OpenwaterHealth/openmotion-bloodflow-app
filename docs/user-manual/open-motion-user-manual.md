@@ -2,20 +2,21 @@
 
 ![Openwater](img/openwater-logo.png){.cover-logo}
 
-# Open-Motion User Manual
+# Open-Motion
 
-## Clinical Mode
+## User Manual
 
 | | |
 |---|---|
-| **Product** | Open-Motion blood-flow monitor (Clinical distribution) |
+| **Product** | Open-Motion blood-flow monitor |
 | **Application version** | 1.4.0 |
 | **Document revision** | July 2026 — draft |
-| **Audience** | Clinical operators |
+| **Audience** | Operators |
 
 > **DRAFT — not a controlled document.** This manual is a documentation preview generated
-> from Open-Motion 1.4.0 running on live hardware. It is not a validated Instructions-For-Use
-> document; for clinical use, always defer to official Openwater labeling and training.
+> from Open-Motion 1.4.0 running on live hardware. It is not a validated
+> Instructions-For-Use document — always defer to official Openwater labeling and
+> training.
 
 </div>
 
@@ -30,22 +31,11 @@ laser-speckle images through the skin and compute, in real time:
 - **BFI — Blood Flow Index**: relative index of blood flow (white trace).
 - **BVI — Blood Volume Index**: relative index of blood volume (blue trace).
 
-The Clinical distribution of the desktop application (window title **"Open-Motion"**)
-presents a simplified, guided workflow: connect, check sensor contact, scan, review.
-Laser safety is enforced by a hardware interlock inside the console independently of
-this software.
-
-### What Clinical mode shows (and hides)
-
-Compared to the Research distribution, Clinical mode:
-
-- shows **large LEFT / RIGHT BFI + BVI numeric panels** with two side-average plots,
-- runs a **contact-quality preflight** every time you press Start,
-- uses fixed camera patterns (**Far** pattern on both sensors) and an unlimited scan
-  length (runs until you press Stop, up to 12 h),
-- hides the camera/duration pickers, the standalone Check button, the BETA badge,
-  and all software-update banners (no network checks are made),
-- hides plot display-mode options — the display is always **BFI / BVI**.
+The **Open-Motion** application presents a simple, guided workflow: connect, check
+sensor contact, scan, review. The display shows large LEFT / RIGHT BFI and BVI
+readouts backed by one live plot per side, and every scan is checked for sensor
+contact quality before it starts. Laser safety is enforced by a hardware interlock
+inside the console, independently of this software.
 
 ---
 
@@ -73,25 +63,25 @@ The round badge at the top of the left toolbar tells you the system state at a g
 | Yellow circle | `Start` | Start pressed; the system is finishing the previous operation before the scan begins (normally a few seconds). |
 | Red circle, stop icon | `Stop` | A scan is running. Press to stop. |
 
-![Clinical main screen while disconnected](img/cl-disconnected.png)
+![Main screen while disconnected](img/cl-disconnected.png)
 *Disconnected: the plot area reads "No active cameras selected" and the badge is grey.*
 
-![Clinical main screen when ready](img/cl-ready.png)
+![Main screen when ready](img/cl-ready.png)
 *Ready: green Start badge, LEFT/RIGHT panels showing `--` (no data yet).*
 
 ---
 
 ## 3. The main screen
 
-![Annotated clinical main screen](img/cl-anatomy.png)
+![Annotated main screen](img/cl-anatomy.png)
 
 | # | Element | What it does |
 |---|---|---|
-| 1 | **Openwater logo** | Branding. (Double-clicking it opens the password-protected Engineering Access prompt — for Openwater personnel only; see §9.) |
+| 1 | **Openwater logo** | Branding. |
 | 2 | **Session:** | The current session identifier. A new identifier is generated per app launch and stamped into every scan record. |
 | 3 | **Scan clock** | Blank while idle. During a scan it shows the elapsed time `HH:MM:SS` in green. |
 | 4 | **Window controls** | Minimize `⌄`, maximize/restore `^`, and close `✕`. |
-| 5 | **Start / Stop badge** | Starts the scan workflow (contact-quality preflight, then scan) or stops the running scan. Disabled until the system is ready. |
+| 5 | **Start / Stop badge** | Starts the scan workflow (contact-quality check, then scan) or stops the running scan. Disabled until the system is ready. |
 | 6 | **Notes** | Opens the Session Notes editor (§6). Always available. |
 | 7 | **History** | Opens Scan History — review, replay, export or delete past scans (§7). Disabled during a scan. |
 | 8 | **Settings** | Opens the Settings panel (§8). Disabled during a scan. |
@@ -112,7 +102,7 @@ Additional window behaviors:
 
 ### Step 1 — Press Start
 
-Press the green **Start** badge. Clinical mode always begins with an automatic
+Press the green **Start** badge. Every scan begins with an automatic
 **contact-quality check** of the sensors against the skin:
 
 ![Contact quality check in progress](img/cl-cq-checking.png)
@@ -155,7 +145,7 @@ appears whenever the mouse rests over a plot and shows the values under the curs
 
 During the scan:
 
-- The clinical scan is **open-ended**: it runs until you press **Stop** (with a 12-hour
+- The scan is **open-ended**: it runs until you press **Stop** (with a 12-hour
   ceiling).
 - The bottom **timeline bar** (scrubber) and the **`15 s ▾` pill** control how much
   history is visible; see §5.
@@ -172,8 +162,8 @@ window opens automatically with a record of the scan:
 
 ![Notes opened automatically after the scan](img/cl-notes-after.png)
 *The stop event and duration are pre-filled (e.g. "Scan stopped — duration: 00:01:13").
-Add any clinical observations above the line, then close with `✕` — notes are saved to
-the scan record ("Note saved." appears in the corner).*
+Add any observations above the line, then close with `✕` — notes are saved to the scan
+record ("Note saved." appears in the corner).*
 
 All scan data is stored automatically in the application's local database — nothing
 needs to be exported for the data to be retained.
@@ -229,8 +219,8 @@ Press **History** to review past scans.
 
 ![Scan History with a scan selected](img/cl-history.png)
 
-In Clinical mode the list shows clinical scans only. Times in the **Date / Time**
-column are shown in UTC.
+The list shows your recorded scans. Times in the **Date / Time** column are shown
+in UTC.
 
 | Control | What it does |
 |---|---|
@@ -239,7 +229,7 @@ column are shown in UTC.
 | **Row click** | Selects a scan and fills the detail pane below (full label, operator, sample count, camera masks, notes). |
 | **Checkbox** (per row / header) | Marks scans for Delete / Export. The header checkbox selects all. |
 | **Status dot** (right edge) | Green ● = complete scan. Amber ⚠ = interrupted scan (cannot be replayed or exported). |
-| **🗑 Delete (N)** | Permanently deletes the checked scans. Password-protected and irreversible — a *"Confirm Delete"* prompt asks for the engineering password. |
+| **🗑 Delete (N)** | Permanently deletes the checked scans. Password-protected and irreversible — a *"Confirm Delete"* prompt asks for a password before anything is removed. |
 | **Export CSV (N)** | Exports the checked scan(s) to CSV. One scan opens a save-file dialog; several scans ask for a folder. |
 | **Load "label" →** | Loads the selected scan into the plot viewer for replay. |
 | **✕** | Closes History. |
@@ -252,7 +242,7 @@ live view. All plot navigation (timeline, zoom, hover) works identically on repl
 
 ## 8. Settings
 
-Press **Settings**. Clinical mode shows the following cards (scroll for more):
+Press **Settings**. The panel contains the following cards (scroll for more):
 
 ![Settings, top](img/cl-settings-1.png)
 
@@ -279,32 +269,19 @@ direct skin contact with no obstructions.
 
 | Button | What it does |
 |---|---|
-| **View Logs** | Opens the audit-log viewer. Password-protected (for auditors/Openwater personnel). |
+| **View Logs** | Opens the audit-log viewer. Password-protected (for auditors and Openwater support). |
 | **Send Debug Logs** | Packages the last 48 hours of application logs into a zip under the data folder, opens its location in Explorer, and shows instructions to email it to **support@openwater.cc**. Use this when reporting a problem. |
 
 **About** — versions of the application, SDK, console firmware and both sensors'
-firmware. In Clinical mode no update checks are performed and no update controls are
-shown.
+firmware.
 
 Closing Settings (`✕` or `Esc`) saves any changes.
 
 ---
 
-## 9. Engineering Access prompt
+## 9. Alerts and errors
 
-Double-clicking the Openwater logo opens this password prompt:
-
-![Engineering Access prompt](img/cl-unlock.png)
-
-This unlocks Openwater's engineering/diagnostic features and is **not intended for
-clinical operators**. Press **Cancel** if it appears unintentionally. (The features it
-unlocks are documented in the separate *Engineering Mode* manual.)
-
----
-
-## 10. Alerts and errors
-
-### 10.1 Toast notifications
+### 9.1 Toast notifications
 
 Short status messages appear in the bottom-right corner, color-coded: green = success,
 yellow = warning, red = error, blue = information. They dismiss themselves after a few
@@ -321,7 +298,7 @@ Notable messages:
 | *"Laser safety system tripped. Scan will be cancelled in 5 seconds."* | A safety trip occurred mid-scan; the scan stops automatically. |
 | Console / sensor "not detected" warnings at startup | A device did not enumerate within the expected time — check cables/power. |
 
-### 10.2 Critical Error dialog
+### 9.2 Critical Error dialog
 
 Show-stopping conditions raise a blocking **Critical Error** dialog with an error code,
 explanation, and a suggested action. Buttons:
@@ -333,7 +310,7 @@ explanation, and a suggested action. Buttons:
 | **▶ Details** | Expands the technical detail block. |
 | **Dismiss** | Closes the dialog (shows the next queued error, if any). |
 
-### 10.3 Error code reference
+### 9.3 Error code reference
 
 | Code | Title | Meaning (summary) | Suggested action |
 |---|---|---|---|
@@ -349,7 +326,7 @@ explanation, and a suggested action. Buttons:
 
 ---
 
-## 11. Data storage
+## 10. Data storage
 
 All application data lives under the configured output folder (Settings → Data Output):
 
@@ -364,7 +341,7 @@ you explicitly export from Scan History.
 
 ---
 
-## 12. Getting help
+## 11. Getting help
 
 1. Use **Settings → Send Debug Logs** to package the recent logs.
 2. Email the zip to **support@openwater.cc** with a description of the issue, or use
@@ -372,4 +349,4 @@ you explicitly export from Scan History.
 
 ---
 
-*Open-Motion User Manual — Clinical Mode · App 1.4.0 · July 2026 draft*
+*Open-Motion User Manual · App 1.4.0 · July 2026 draft*

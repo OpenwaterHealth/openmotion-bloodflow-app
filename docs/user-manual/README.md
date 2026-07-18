@@ -1,11 +1,14 @@
 # Open-Motion user manuals
 
-Three illustrated user manuals for the bloodflow app, one per feature level:
+Three illustrated user manuals for the bloodflow app, one per feature level. Each
+manual documents its level in full and only the *next* level reveals what it adds —
+the Open-Motion manual doesn't reference Research features, and neither operator
+manual explains how engineering mode is entered.
 
 | Manual | Source | PDF |
 |---|---|---|
-| Clinical mode | `open-motion-user-manual-clinical.md` | `Open-Motion-User-Manual-Clinical.pdf` |
-| Research mode | `open-motion-user-manual-research.md` | `Open-Motion-User-Manual-Research.pdf` |
+| Open-Motion | `open-motion-user-manual.md` | `Open-Motion-User-Manual.pdf` |
+| Open-Motion Research | `open-motion-user-manual-research.md` | `Open-Motion-User-Manual-Research.pdf` |
 | Engineering mode | `open-motion-user-manual-engineering.md` | `Open-Motion-User-Manual-Engineering.pdf` |
 
 - Screenshots in `img/` were captured 2026-07-17 from the app (version 1.4.0) running
