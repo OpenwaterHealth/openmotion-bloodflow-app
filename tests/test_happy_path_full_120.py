@@ -131,6 +131,26 @@ SCAN_MAX_WAIT_SEC = SCAN_DURATION_SEC + 180   # scan + buffer (first-scan camera
 READY_TIMEOUT_SEC = 30                        # wait for CONNECTED at start
 SENSOR_OPTION     = "All"                     # both sensors → all 16 cameras
 
+
+def _sensor_picker_enabled(combobox_index: int, timeout: float = 15.0) -> bool:
+    """True iff the sensor ComboBox at ``combobox_index`` is enabled.
+
+    A side with no sensor attached renders its whole picker grayed out
+    (verified on 1.4.0: the disabled ComboBox ignores clicks and keyboard
+    selection, so trying to set it can never verify). Callers skip the
+    selection step for a disabled side.
+    """
+    elem = wait_for_combobox(combobox_index, timeout=timeout)
+    if elem is None:
+        return False
+    try:
+        return bool(elem.is_enabled())
+    except Exception as e:
+        # Assume enabled — _select_sensor's strict verify will surface
+        # the truth with a clear expected-vs-got message.
+        log.warning(f"  is_enabled() failed for ComboBox[{combobox_index}]: {e}")
+        return True
+
 # The connector logs these bracketed markers around every Check; tailing
 # them lets test_11 confirm the Check actually ran (and fail fast with a
 # clear message if the click didn't register / the app is unresponsive)
@@ -503,11 +523,19 @@ class TestHappyPathFull120:
         log.info(f"  user label set to '{STATE['subject_label']}' (field: '{got}').")
 
     def test_04_select_left_sensor(self, app):
-        """Left sensor mask set to 'All'."""
+        """Left sensor mask set to 'All' — skipped when the picker is
+        disabled (no left sensor attached to this bench)."""
+        if not _sensor_picker_enabled(0):
+            log.info("  Left sensor picker disabled — no left sensor attached.")
+            pytest.skip("Left sensor not attached (picker disabled).")
         _select_sensor(side="Left", combobox_index=0)
 
     def test_05_select_right_sensor(self, app):
-        """Right sensor mask set to 'All'."""
+        """Right sensor mask set to 'All' — skipped when the picker is
+        disabled (no right sensor attached to this bench)."""
+        if not _sensor_picker_enabled(1):
+            log.info("  Right sensor picker disabled — no right sensor attached.")
+            pytest.skip("Right sensor not attached (picker disabled).")
         _select_sensor(side="Right", combobox_index=1)
 
     def test_06_toggle_scan_mode_switch(self, app):
@@ -519,11 +547,19 @@ class TestHappyPathFull120:
         one step so the happy path leaves the switch on Timed.
         """
         require_focus()
-        focus_combobox_by_label("Left Sensor")
+        # Anchor on an ENABLED combobox — a disabled picker (side with no
+        # sensor attached) ignores clicks and never takes focus, so the
+        # Tab walk would start from the wrong place.
+        if _sensor_picker_enabled(0):
+            focus_combobox_by_label("Left Sensor")
+            tabs_to_switch = 2            # Left -> Right ComboBox -> Switch
+        else:
+            focus_combobox_by_label("Right Sensor")
+            tabs_to_switch = 1            # Right ComboBox -> Switch
         require_focus()
-        pyautogui.press("tab")            # Left ComboBox -> Right ComboBox
-        time.sleep(0.2)
-        pyautogui.press("tab")            # Right ComboBox -> Switch
+        for _ in range(tabs_to_switch):
+            pyautogui.press("tab")
+            time.sleep(0.2)
         time.sleep(0.3)
         pyautogui.press("space")          # Timed -> Free Run
         time.sleep(SLEEP)

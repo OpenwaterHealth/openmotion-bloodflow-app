@@ -74,7 +74,7 @@ if pyautogui is not None:
 # ─────────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────────
-APP_KEYWORDS = ["openmotion", "bloodflow", "openwater"]
+APP_KEYWORDS = ["openmotion", "open-motion", "bloodflow", "openwater"]
 SLEEP = 2  # seconds to wait after most UI actions
 
 LOG_DIR = Path(__file__).parent / "test_logs"
@@ -129,7 +129,14 @@ _class_failures = {}
 
 
 def pytest_runtest_makereport(item, call):
-    if call.when == "call" and call.excinfo is not None:
+    # A deliberate pytest.skip() inside a test (e.g. "this bench has no
+    # left sensor") is not a failure — it must not xfail the rest of an
+    # incremental class.
+    if (
+        call.when == "call"
+        and call.excinfo is not None
+        and not call.excinfo.errisinstance(pytest.skip.Exception)
+    ):
         cls = item.cls
         if cls is not None:
             _class_failures.setdefault(cls.__name__, item.name)
@@ -328,10 +335,12 @@ def _find_exe() -> str:
 # Window helpers
 # ─────────────────────────────────────────────
 # Process names accepted as the bloodflow app. ``Open-Motion.exe`` is
-# the packaged build; ``python.exe`` / ``pythonw.exe`` covers the
+# the packaged build and ``Open-Motion_console.exe`` the console build
+# shipped alongside it; ``python.exe`` / ``pythonw.exe`` covers the
 # from-source mode (verified by also checking ``main.py`` in the
 # command line, since plenty of other things run under python.exe).
-_APP_PROCESS_NAMES = ("open-motion.exe", "python.exe", "pythonw.exe")
+_APP_PROCESS_NAMES = ("open-motion.exe", "open-motion_console.exe",
+                      "python.exe", "pythonw.exe")
 
 
 def _window_process_name(w) -> str | None:
@@ -724,6 +733,9 @@ def app():
                     ensure_visible()
                     return True
             else:
+                # "openwater" covers the old ≤1.3.x OpenWaterApp.exe;
+                # "open-motion" covers the renamed builds, console
+                # variant included.
                 if "openwater" in name or "open-motion" in name:
                     log.info("App already running.")
                     time.sleep(SLEEP)
