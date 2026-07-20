@@ -1247,8 +1247,10 @@ class MotionConnector(QObject):
         # once the Qt event loop runs. main.py starts device monitoring with
         # wait=False (issue #223 — no blocking wait before app.exec()), so
         # already-attached devices enumerate concurrently with this timer;
-        # the default 30s timeout comfortably covers normal enumeration time
-        # (console handshake is ~5s normally).
+        # the default 8s is deliberately tight — it also gates the
+        # research-build sample-dataset offer, so it can't be generous — and
+        # leaves only ~3s of headroom over a normal ~5s console handshake, so
+        # slow enumeration can trip a false E-104/E-106.
         self._arm_connection_watchdog()
 
     def set_ft_thresholds(
