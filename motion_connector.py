@@ -962,7 +962,7 @@ class MotionConnector(QObject):
 
         # Connection watchdog (E-104/E-106): one-shot check armed at startup
         # that flags expected devices that never enumerated. 0 disables it.
-        self._connection_timeout_sec = float(cfg.get("connectionTimeoutSec", 30))
+        self._connection_timeout_sec = float(cfg.get("connectionTimeoutSec", 8))
         self._require_console = bool(cfg.get("requireConsole", True))
         self._min_sensors = int(cfg.get("minSensors", 1))
 
