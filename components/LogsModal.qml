@@ -120,7 +120,7 @@ Item {
         width: Math.min(parent.width - 60, 980)
         height: Math.min(parent.height - 60, 700)
         radius: 12
-        color: AppTheme.bgContainer
+        color: AppTheme.sheetBg
         border.color: AppTheme.borderSubtle
         border.width: 2
         anchors.centerIn: parent

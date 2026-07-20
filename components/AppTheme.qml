@@ -54,9 +54,11 @@ QtObject {
     // must stay legible over the busy ambient.
     readonly property color bgInput:      glass ? (dark ? Qt.rgba(0.16,0.16,0.19,0.86) : Qt.rgba(1,1,1,0.90))
                                                  : (dark ? "#2E2E33" : "#FDFCF8")
-    // Plot background: opaque in every mode. Real-time Canvas traces are
-    // the clinical payload — never let the ambient bleed through them.
-    readonly property color bgPlot:       dark ? "#141417" : "#F5F3EB"
+    // Plot region background (the gutters between cells). Opaque in the
+    // solid theme; transparent in glass so the ambient shows through the
+    // gaps and the grid reads as floating glass tiles.
+    readonly property color bgPlot:       glass ? "transparent"
+                                                 : (dark ? "#141417" : "#F5F3EB")
     readonly property color bgHover:      glass ? (dark ? Qt.rgba(1,1,1,0.16) : Qt.rgba(1,1,1,0.78))
                                                  : (dark ? "#2E2E33" : "#E3DFD1")
     readonly property color bgCard:       glass ? (dark ? Qt.rgba(1,1,1,0.08) : Qt.rgba(1,1,1,0.58))
@@ -111,9 +113,13 @@ QtObject {
     readonly property color plotGrid:     dark ? "#333333" : "#CFC9BA"
     readonly property color plotLabel:    dark ? "#999999" : "#6B675C"
     readonly property color plotText:     dark ? "#C9D1D9" : "#33312B"
-    // Plot cell / scrubber track surface. Opaque in every mode (see
-    // bgPlot) — clinical traces must never sit on a translucent fill.
-    readonly property color plotCellBg:   dark ? "#1A1A1C" : "#FFFFFF"
+    // Plot cell / scrubber track surface. In glass mode the cells become
+    // lightly translucent frosted tiles (kept dark/light-dominant so the
+    // white/ink traces and BFI/BVI numbers stay high-contrast — the soft
+    // ambient only whispers through behind the data). Solid theme opaque.
+    readonly property color plotCellBg:   glass ? (dark ? Qt.rgba(0.10,0.10,0.13,0.80)
+                                                         : Qt.rgba(1,1,1,0.82))
+                                                 : (dark ? "#1A1A1C" : "#FFFFFF")
 
     // ── floating overlays (pills, popups, tooltips over the plot) ──
     // Translucent in both modes; dark values match the previous
@@ -127,6 +133,18 @@ QtObject {
     readonly property color overlayBgSolid: glass ? (dark ? Qt.rgba(0.12,0.12,0.16,0.80) : Qt.rgba(1,1,1,0.82))
                                                    : (dark ? Qt.rgba(0.12, 0.12, 0.14, 0.96)
                                                            : Qt.rgba(0.99, 0.985, 0.96, 0.97))
+
+    // ── modal sheet surface ───────────────────────────────────────
+    // Modal panels (Settings, History, Contact Quality, …) need a much
+    // heavier frost than chrome like the header: a focused task sheet
+    // must abstract the busy plot grid behind it, not reveal it sharply.
+    // Nearly opaque in glass (the material reads from its bright glass
+    // border + the ambient around its edges, not from see-through).
+    // Matches bgContainer exactly in the solid theme so nothing changes
+    // when glass is off.
+    readonly property color sheetBg: glass ? (dark ? Qt.rgba(0.12,0.12,0.16,0.97)
+                                                    : Qt.rgba(1,1,1,0.96))
+                                            : (dark ? "#1E1E20" : "#F7F5EE")
 
     // ── liquid-glass helper tokens ────────────────────────────────
     // Used by GlassSurface / AmbientBackground and any panel that wants

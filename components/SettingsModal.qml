@@ -58,7 +58,7 @@ Item {
     property string appUpdateProgressText: "Update"
 
     // ── Theme tokens (aliased from AppTheme) ──────────────────────────────
-    readonly property color colBgPanel:    AppTheme.bgContainer
+    readonly property color colBgPanel:    AppTheme.sheetBg
     readonly property color colBgCard:     AppTheme.bgCard
     readonly property color colBgInput:    AppTheme.bgInput
     readonly property color colBorder:     AppTheme.borderStrong

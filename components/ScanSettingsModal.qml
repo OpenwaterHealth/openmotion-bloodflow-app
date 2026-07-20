@@ -171,7 +171,7 @@ Item {
         width: Math.min(parent.width - root.iconBarInset - 40, 520)
         height: Math.min(parent.height - 60, 640)
         radius: 14
-        color: AppTheme.bgContainer
+        color: AppTheme.sheetBg
         border.color: AppTheme.borderSubtle
         border.width: 2
         // Center within [iconBarInset, parent.width] so the card clears the

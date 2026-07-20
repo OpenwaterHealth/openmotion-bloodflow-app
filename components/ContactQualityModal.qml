@@ -249,7 +249,7 @@ Item {
         width: 520
         height: 480
         radius: 10
-        color: AppTheme.bgContainer
+        color: AppTheme.sheetBg
         border.width: 2
         border.color: root.state_ === "ok" ? AppTheme.accentGreen
                     : (root.state_ === "warnings"
