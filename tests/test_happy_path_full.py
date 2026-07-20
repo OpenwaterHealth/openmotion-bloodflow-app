@@ -1,7 +1,7 @@
 """
 test_happy_path_full.py — exhaustive end-to-end happy-path walkthrough.
 
-Marker: ``release`` (~8-10 min wall-clock — one real 2-min laser scan
+Marker: ``release`` (~16-18 min wall-clock — one real 10-min laser scan
 plus a full UI sweep). Only runs on release-pattern tag pushes.
 
 What it covers
@@ -18,7 +18,7 @@ a failure points at the specific feature that broke:
   4.  Left sensor mask is set to ``All``.
   5.  Right sensor mask is set to ``All``.
   6.  Scan-duration mode switch toggles (Timed -> Free Run -> Timed).
-  7.  Scan duration is set to 2 minutes.
+  7.  Scan duration is set to 10 minutes.
   8.  Scan Settings modal closes (and is verified closed).
   9.  Session Notes modal opens and a note is typed.
   10. Notes modal closes.
@@ -113,7 +113,7 @@ def _restore_reduced_mode_on_module_teardown():
 # ─────────────────────────────────────────────
 # Configuration
 # ─────────────────────────────────────────────
-SCAN_DURATION_MIN = 2
+SCAN_DURATION_MIN = 10
 SCAN_DURATION_SEC = SCAN_DURATION_MIN * 60
 CHECK_WAIT_SEC    = 120                       # Check completes within ~2 min
 CHECK_START_TIMEOUT_SEC = 20                  # a healthy Check logs "started" in ~1s
@@ -122,6 +122,26 @@ SCAN_POLL_SEC     = 10
 SCAN_MAX_WAIT_SEC = SCAN_DURATION_SEC + 180   # scan + 3-min buffer
 READY_TIMEOUT_SEC = 30                        # wait for CONNECTED at start
 SENSOR_OPTION     = "All"                     # both sensors → all 16 cameras
+
+
+def _sensor_picker_enabled(combobox_index: int, timeout: float = 15.0) -> bool:
+    """True iff the sensor ComboBox at ``combobox_index`` is enabled.
+
+    A side with no sensor attached renders its whole picker grayed out
+    (verified on 1.4.0: the disabled ComboBox ignores clicks and keyboard
+    selection, so trying to set it can never verify). Callers skip the
+    selection step for a disabled side.
+    """
+    elem = wait_for_combobox(combobox_index, timeout=timeout)
+    if elem is None:
+        return False
+    try:
+        return bool(elem.is_enabled())
+    except Exception as e:
+        # Assume enabled — _select_sensor's strict verify will surface
+        # the truth with a clear expected-vs-got message.
+        log.warning(f"  is_enabled() failed for ComboBox[{combobox_index}]: {e}")
+        return True
 
 # The connector logs these bracketed markers around every Check; tailing
 # them lets test_11 confirm the Check actually ran (and fail fast with a
@@ -164,16 +184,27 @@ STATE: dict = {
 # Helpers
 # ─────────────────────────────────────────────
 def _resolve_data_dir() -> Path:
-    """Return the directory the app writes scan CSVs + scans.db into.
+    """Return the directory the app writes scan output (CSVs + scans.db) into.
 
-    ``dataDirectory`` in app_config.json is the single output root
-    (see CLAUDE.md). Fall back to the current working directory, which
-    is what the app itself uses when the key is unset.
+    The output root is ``dataDirectory`` from app_config.json when set.
+    When unset (the packaged portable build ships it empty), the app
+    defaults the root to its own install folder — the same place its
+    ``logs/`` live — so derive the root from the app log location rather
+    than guessing cwd. Scan files land in the ``data/`` child when it
+    exists (1.4.0+ layout), else directly in the root (older builds).
     """
+    root = None
     configured = read_app_config_value("dataDirectory", None)
     if configured and Path(configured).is_dir():
-        return Path(configured)
-    return Path.cwd()
+        root = Path(configured)
+    else:
+        log_path = find_app_log()
+        if log_path:
+            root = Path(log_path).parent.parent
+    if root is None:
+        root = Path.cwd()
+    data = root / "data"
+    return data if data.is_dir() else root
 
 
 def _dir_listing(dir_path: Path) -> set:
@@ -355,8 +386,8 @@ def _set_duration_minutes(minutes: int):
     Edit fields directly — NOT by Tab-counting.
 
     Tab-navigation from the sensor row proved fragile: a one-off in the
-    tab count landed the value in the Hours field (a 2-hour scan instead
-    of 2 minutes). The three duration inputs are unambiguous UIA Edit
+    tab count landed the value in the Hours field (an N-hour scan instead
+    of N minutes). The three duration inputs are unambiguous UIA Edit
     controls, so we click each by its rectangle and type into it. Verified
     live on the 1.3.0_RUO build.
     """
@@ -492,11 +523,19 @@ class TestHappyPathFull:
         log.info(f"  user label set to '{STATE['subject_label']}' (field: '{got}').")
 
     def test_04_select_left_sensor(self, app):
-        """Left sensor mask set to 'All'."""
+        """Left sensor mask set to 'All' — skipped when the picker is
+        disabled (no left sensor attached to this bench)."""
+        if not _sensor_picker_enabled(0):
+            log.info("  Left sensor picker disabled — no left sensor attached.")
+            pytest.skip("Left sensor not attached (picker disabled).")
         _select_sensor(side="Left", combobox_index=0)
 
     def test_05_select_right_sensor(self, app):
-        """Right sensor mask set to 'All'."""
+        """Right sensor mask set to 'All' — skipped when the picker is
+        disabled (no right sensor attached to this bench)."""
+        if not _sensor_picker_enabled(1):
+            log.info("  Right sensor picker disabled — no right sensor attached.")
+            pytest.skip("Right sensor not attached (picker disabled).")
         _select_sensor(side="Right", combobox_index=1)
 
     def test_06_toggle_scan_mode_switch(self, app):
@@ -508,11 +547,19 @@ class TestHappyPathFull:
         one step so the happy path leaves the switch on Timed.
         """
         require_focus()
-        focus_combobox_by_label("Left Sensor")
+        # Anchor on an ENABLED combobox — a disabled picker (side with no
+        # sensor attached) ignores clicks and never takes focus, so the
+        # Tab walk would start from the wrong place.
+        if _sensor_picker_enabled(0):
+            focus_combobox_by_label("Left Sensor")
+            tabs_to_switch = 2            # Left -> Right ComboBox -> Switch
+        else:
+            focus_combobox_by_label("Right Sensor")
+            tabs_to_switch = 1            # Right ComboBox -> Switch
         require_focus()
-        pyautogui.press("tab")            # Left ComboBox -> Right ComboBox
-        time.sleep(0.2)
-        pyautogui.press("tab")            # Right ComboBox -> Switch
+        for _ in range(tabs_to_switch):
+            pyautogui.press("tab")
+            time.sleep(0.2)
         time.sleep(0.3)
         pyautogui.press("space")          # Timed -> Free Run
         time.sleep(SLEEP)
@@ -525,7 +572,7 @@ class TestHappyPathFull:
         )
 
     def test_07_set_duration(self, app):
-        """Scan duration set to 2 minutes, verified in the H:M:S fields."""
+        """Scan duration set to 10 minutes, verified in the H:M:S fields."""
         _set_duration_minutes(SCAN_DURATION_MIN)
         vals = [(e.window_text() or "").strip()
                 for e in _duration_fields(uia_window())[:3]]
@@ -536,7 +583,7 @@ class TestHappyPathFull:
         assert (h, m, s) == (0, SCAN_DURATION_MIN, 0), (
             f"Duration read H:M:S = {h}:{m:02d}:{s:02d}, expected "
             f"0:{SCAN_DURATION_MIN:02d}:00 — the value landed in the wrong "
-            f"field (this is the 2-hours-instead-of-2-minutes bug)."
+            f"field (the hours-instead-of-minutes bug)."
         )
 
     def test_08_close_scan_settings(self, app):
@@ -672,7 +719,7 @@ class TestHappyPathFull:
         log.info("  Scan started — monitoring for completion...")
 
     def test_13_scan_completes(self, app):
-        """Scan runs the full 2-min duration and reports completion."""
+        """Scan runs the full 10-min duration and reports completion."""
         elapsed = 0
         secs = None
         while elapsed < SCAN_MAX_WAIT_SEC:
@@ -701,17 +748,14 @@ class TestHappyPathFull:
         log.info(f"  Scan duration OK: {secs}s (>= {SCAN_DURATION_SEC}s).")
 
     def test_14_scan_output_files(self, app):
-        """Canonical scan CSV + scans.db are written, and the CSV carries
-        the user label from step 3."""
+        """Scan output is written: a raw CSV carrying the step-3 user label
+        when ``writeRawCsv`` is enabled, and the scans.db session always
+        (with ``writeRawCsv`` off — the packaged default — the DB session
+        id carries the label instead)."""
         data_dir = _resolve_data_dir()
         after = _dir_listing(data_dir)
         new = sorted(after - STATE["files_before"])
         log.info(f"  new files in {data_dir}: {new}")
-
-        new_csvs = [n for n in new if n.lower().endswith(".csv")]
-        assert new_csvs, (
-            f"No new .csv appeared in {data_dir} after the scan. New files: {new}"
-        )
 
         # The app normalizes User Label on save — prepends 'ow', uppercases,
         # and strips underscores/spaces/punctuation (e.g. 'HappyPath_144243'
@@ -722,13 +766,53 @@ class TestHappyPathFull:
             return "".join(c for c in s if c.isalnum()).upper()
 
         norm_label = _norm(STATE["subject_label"])
-        labelled = [n for n in new_csvs if norm_label and norm_label in _norm(n)]
-        assert labelled, (
-            f"None of the new CSVs {new_csvs} carry the user label "
-            f"'{STATE['subject_label']}' (normalized '{norm_label}') set in "
-            f"step 3 — the label did not propagate to the scan output filename."
-        )
-        log.info(f"  scan output CSV with label: {labelled}")
+
+        if read_app_config_value("writeRawCsv", False):
+            new_csvs = [n for n in new if n.lower().endswith(".csv")]
+            assert new_csvs, (
+                f"No new .csv appeared in {data_dir} after the scan. "
+                f"New files: {new}"
+            )
+            labelled = [
+                n for n in new_csvs if norm_label and norm_label in _norm(n)
+            ]
+            assert labelled, (
+                f"None of the new CSVs {new_csvs} carry the user label "
+                f"'{STATE['subject_label']}' (normalized '{norm_label}') set in "
+                f"step 3 — the label did not propagate to the scan output "
+                f"filename."
+            )
+            log.info(f"  scan output CSV with label: {labelled}")
+        else:
+            # CSV output is config-disabled — the scan is recorded to
+            # scans.db only. The connector logs the DB session id it saved
+            # under ("Scan notes saved to DB session '<id>'"), and the id
+            # embeds the normalized user label, so label propagation is
+            # still verified.
+            log.info("  writeRawCsv is off — verifying the DB session "
+                     "instead of a CSV.")
+            session_id = ""
+            log_path = find_app_log()
+            if log_path:
+                try:
+                    text = Path(log_path).read_text(
+                        encoding="utf-8", errors="replace"
+                    )
+                    ids = re.findall(r"DB session '([^']+)'", text)
+                    session_id = ids[-1] if ids else ""
+                except OSError:
+                    pass
+            assert session_id, (
+                "writeRawCsv is off and no 'saved to DB session' line was "
+                "found in the app log — the scan does not appear to have "
+                "been recorded."
+            )
+            assert norm_label and norm_label in _norm(session_id), (
+                f"DB session '{session_id}' does not carry the user label "
+                f"'{STATE['subject_label']}' (normalized '{norm_label}') set "
+                f"in step 3 — the label did not propagate to the scan record."
+            )
+            log.info(f"  scan recorded as DB session '{session_id}'.")
 
         # scans.db is created once and updated in place, so check it exists
         # and was touched recently rather than expecting it in the diff.
