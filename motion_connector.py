@@ -965,7 +965,7 @@ class MotionConnector(QObject):
 
         # Connection watchdog (E-104/E-106): one-shot check armed at startup
         # that flags expected devices that never enumerated. 0 disables it.
-        self._connection_timeout_sec = float(cfg.get("connectionTimeoutSec", 8))
+        self._connection_timeout_sec = float(cfg.get("connectionTimeoutSec", 12))
         self._require_console = bool(cfg.get("requireConsole", True))
         self._min_sensors = int(cfg.get("minSensors", 1))
 
@@ -1250,10 +1250,12 @@ class MotionConnector(QObject):
         # once the Qt event loop runs. main.py starts device monitoring with
         # wait=False (issue #223 — no blocking wait before app.exec()), so
         # already-attached devices enumerate concurrently with this timer;
-        # the default 8s is deliberately tight — it also gates the
-        # research-build sample-dataset offer, so it can't be generous — and
-        # leaves only ~3s of headroom over a normal ~5s console handshake, so
-        # slow enumeration can trip a false E-104/E-106.
+        # the default 12s is a deliberate compromise — it also gates the
+        # research-build sample-dataset offer, so it can't be generous, but
+        # it leaves ~7s of headroom over a normal ~5s console handshake:
+        # short enough that a hardware-free user isn't left staring at an
+        # empty scan page, long enough that a normally-enumerating console
+        # won't trip a false E-104/E-106 and a spurious sample-dataset offer.
         self._arm_connection_watchdog()
 
     def set_ft_thresholds(

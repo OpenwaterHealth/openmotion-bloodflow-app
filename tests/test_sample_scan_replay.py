@@ -300,7 +300,7 @@ def test_watchdog_no_offer_when_any_device_is_connected(
 
 def test_watchdog_no_offer_when_a_source_is_already_bound(tmp_path):
     """Something already showing (e.g. a past scan the user opened from
-    History during the 8 s window) is never clobbered by the offer."""
+    History during the 12 s window) is never clobbered by the offer."""
     c = _connector(tmp_path, console=False, left=False, right=False,
                    app_config={"clinicalMode": False})
     c.loadSampleScan()

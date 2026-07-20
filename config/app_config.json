@@ -142,7 +142,7 @@
     "commVerbose": false,
     "verboseCommandHandling": false,
     "support_email": "support@openwater.health",
-    "connectionTimeoutSec": 8,
+    "connectionTimeoutSec": 12,
     "requireConsole": true,
     "minSensors": 1
 }

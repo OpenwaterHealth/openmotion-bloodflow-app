@@ -387,7 +387,7 @@ Rectangle {
         target: MotionInterface
         function onScanNotesReady() { notesModal.open() }
         // Startup watchdog found no device (research builds only). Don't
-        // stomp a modal the user opened during the 8 s window. The
+        // stomp a modal the user opened during the 12 s window. The
         // watchdog is one-shot, so an offer dropped here is not retried
         // this launch (relaunch to be offered again).
         function onSampleScanOfferRequested() {

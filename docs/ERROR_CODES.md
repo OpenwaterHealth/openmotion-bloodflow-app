@@ -98,7 +98,7 @@ A one-shot check armed at app launch flags expected devices that never showed
 up. Unlike the codes above it is **non-blocking**: it shows a **yellow warning
 toast** in the bottom-right, not the critical modal, because the fix is usually
 just "plug it in and reconnect". If the expected devices haven't enumerated
-within `connectionTimeoutSec` (default 8 s) after launch:
+within `connectionTimeoutSec` (default 12 s) after launch:
 
 - **E-104 — Console not detected** → `"Console not detected. Check the console
   USB cable and power, then reconnect."`
@@ -111,7 +111,7 @@ The codes E-104/E-106 still appear in the app log for support traceability.
 
 Tunable in [`config/app_config.json`](../config/app_config.json):
 
-- `connectionTimeoutSec` (default `8`) — grace period before the check runs;
+- `connectionTimeoutSec` (default `12`) — grace period before the check runs;
   `0` disables the watchdog.
 - `requireConsole` (default `true`) — warn (E-104) if no console connected.
 - `minSensors` (default `1`) — warn (E-106) if fewer than this many sensors

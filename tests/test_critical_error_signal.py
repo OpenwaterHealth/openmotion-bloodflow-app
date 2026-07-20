@@ -117,9 +117,9 @@ def _notifs(conn):
     return out
 
 
-def test_connector_connection_timeout_defaults_to_eight_seconds(tmp_path):
+def test_connector_connection_timeout_defaults_to_twelve_seconds(tmp_path):
     """Guards the fallback at motion_connector.py's
-    `cfg.get("connectionTimeoutSec", 8)`: this applies whenever a caller
+    `cfg.get("connectionTimeoutSec", 12)`: this applies whenever a caller
     constructs MotionConnector with a partial config dict that omits the
     key — including `_connector()` here, whose default app_config doesn't
     set it. Every other watchdog test calls `_check_connection_watchdog()`
@@ -127,7 +127,7 @@ def test_connector_connection_timeout_defaults_to_eight_seconds(tmp_path):
     this fallback back to 30 would pass all of them silently."""
     conn = _connector(tmp_path)
 
-    assert conn._connection_timeout_sec == 8
+    assert conn._connection_timeout_sec == 12
 
 
 def test_watchdog_all_connected_no_notification(tmp_path):
