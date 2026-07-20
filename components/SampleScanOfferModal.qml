@@ -23,7 +23,10 @@ Item {
     // never slides under it on narrow windows. See HistoryModal.qml.
     readonly property int iconBarInset: 104
 
-    function open() { root.visible = true }
+    function open() {
+        root.visible = true
+        card.forceActiveFocus()
+    }
     function close() { root.visible = false }
 
     // Dimmed backdrop
@@ -41,6 +44,7 @@ Item {
     }
 
     Rectangle {
+        id: card
         width: Math.min(parent.width - root.iconBarInset - 40, 460)
         height: contentCol.implicitHeight + 48
         radius: 12
