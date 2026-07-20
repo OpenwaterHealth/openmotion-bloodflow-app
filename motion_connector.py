@@ -3130,25 +3130,20 @@ class MotionConnector(QObject):
                     or self._rightSensorConnected)
 
     @pyqtSlot()
-    def loadSampleScanIfNoDevice(self) -> None:
-        """Boot helper (#314): when NO device is present, load a bundled
-        real sample scan into the replay viewer so a hardware-free launch
-        lands on explorable BFI/BVI traces the user can pan/zoom/scrub,
-        instead of an empty scan page.
+    def loadSampleScan(self) -> None:
+        """Load the bundled sample scan into the replay viewer (#314).
 
-        No-op when any device is connected — a real session proceeds
-        unchanged, and once the user runs a scan startCapture's fresh
-        LiveScanSource retires the sample source (the sample is never
-        written anywhere, so real scan data is never polluted). Called from
-        BloodFlow.qml Component.onCompleted; safe to call more than once —
-        it only binds the sample while nothing else is showing."""
-        if self._any_device_connected():
-            logger.info(
-                "[Plot] sample scan skipped — device present at boot")
-            return
+        Called from SampleScanOfferModal when the user accepts the offer
+        the startup watchdog raised — never automatically, and never in a
+        clinical build (the connector doesn't emit the offer there). The
+        sample is never written anywhere, so real scan data is never
+        polluted; once the user runs a scan, startCapture's fresh
+        LiveScanSource retires it.
+
+        Guarded so it can't clobber a source that got bound between the
+        offer and the user's click.
+        """
         if self._current_scan_source is not None:
-            # Something is already bound (e.g. a scan already ran, or a
-            # previous call). Don't clobber it.
             return
         self._load_sample_scan(
             str(resource_path("resources", "sample_scan.csv")))

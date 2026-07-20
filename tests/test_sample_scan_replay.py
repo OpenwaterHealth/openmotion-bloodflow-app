@@ -9,7 +9,7 @@ Covers:
   - ``load_csv_scan_buffers`` column mapping / timestamps / per-cam series,
     against both a synthetic CSV and the shipped ``resources/sample_scan.csv``.
   - the replay-source interface those buffers feed (points_for_window, masks).
-  - the connector's no-device-only gating.
+  - the connector's watchdog-driven offer gating (research-only, no-device-only).
   - the fail-soft missing/empty-file path.
 """
 
@@ -167,25 +167,30 @@ def test_past_scan_source_from_csv_serves_replay_points(tmp_path):
 # ── connector gating + fail-soft ─────────────────────────────────────
 
 
-def _connector(tmp_path, *, console, left, right, scan_db_path=None):
+def _connector(tmp_path, *, console, left, right, scan_db_path=None,
+               app_config=None):
     iface = MagicMock()
     iface.is_device_connected.return_value = (console, left, right)
     iface.scan_workflow.running = False
     iface.scan_workflow.config_running = False
     iface.scan_db_path = scan_db_path
+    cfg = {"engineeringMode": False}
+    if app_config:
+        cfg.update(app_config)
     return MotionConnector(
-        interface=iface, app_config={"engineeringMode": False},
+        interface=iface, app_config=cfg,
         data_dir=str(tmp_path), config_dir="config",
     )
 
 
-def test_no_device_at_boot_loads_sample_into_replay(tmp_path):
-    """No console, no sensors → the shipped sample is bound to the viewer
-    as a non-live (replay) PastScanSource."""
+def test_load_sample_scan_binds_replay_source(tmp_path):
+    """The slot binds the shipped sample as a non-live (replay)
+    PastScanSource. No device check here — the caller (the watchdog offer,
+    via the dialog) has already decided."""
     c = _connector(tmp_path, console=False, left=False, right=False)
     assert c.currentScanSource is None
 
-    c.loadSampleScanIfNoDevice()
+    c.loadSampleScan()
 
     src = c.currentScanSource
     assert isinstance(src, PastScanSource)
@@ -195,26 +200,14 @@ def test_no_device_at_boot_loads_sample_into_replay(tmp_path):
     assert sum(b.n for b in src.buffers.values()) > 0
 
 
-@pytest.mark.parametrize(
-    "console,left,right",
-    [(True, False, False), (False, True, False),
-     (False, False, True), (True, True, True)],
-)
-def test_device_present_at_boot_loads_no_sample(tmp_path, console, left, right):
-    """Any device connected → no sample; a real session is unchanged."""
-    c = _connector(tmp_path, console=console, left=left, right=right)
-    c.loadSampleScanIfNoDevice()
-    assert c.currentScanSource is None
-
-
 def test_sample_not_reloaded_when_a_source_is_already_bound(tmp_path):
     """Idempotent: with a source already bound the call is a no-op, so it
     can't clobber a live scan the user has since started."""
     c = _connector(tmp_path, console=False, left=False, right=False)
-    c.loadSampleScanIfNoDevice()
+    c.loadSampleScan()
     first = c.currentScanSource
     assert first is not None
-    c.loadSampleScanIfNoDevice()
+    c.loadSampleScan()
     assert c.currentScanSource is first
 
 
@@ -223,7 +216,7 @@ def test_sample_source_replaced_by_a_real_scan_source(tmp_path):
     supersedes the sample (proving the sample never blocks/pollutes a
     real scan)."""
     c = _connector(tmp_path, console=False, left=False, right=False)
-    c.loadSampleScanIfNoDevice()
+    c.loadSampleScan()
     sample = c.currentScanSource
     assert isinstance(sample, PastScanSource)
 
