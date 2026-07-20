@@ -118,8 +118,8 @@ Item {
         contrastMin = b.min; contrastMax = b.max
         writeRawCsv       = cfg.writeRawCsv       !== undefined ? cfg.writeRawCsv       : false
         rawCsvDurationSec = cfg.rawCsvDurationSec !== undefined ? cfg.rawCsvDurationSec : null
-        if (darkModeSwitch) darkModeSwitch.checked = cfg.darkMode !== false
-        if (liquidGlassSwitch) liquidGlassSwitch.checked = cfg.liquidGlass === true
+        // Theme selector (themeCombo) binds its currentIndex directly to
+        // appConfig.darkMode/liquidGlass, so no manual sync is needed here.
     }
 
     Component.onCompleted: _loadFromConfig()
@@ -891,22 +891,27 @@ Item {
                         width: parent.width
                         spacing: 0
                         FieldRow {
-                            label: "Dark Mode"
-                            PillSwitch {
-                                id: darkModeSwitch
-                                checked: MotionInterface.appConfig.darkMode !== false
-                                onToggled: {
-                                    MotionInterface.setConfig("darkMode", checked)
-                                }
-                            }
-                        }
-                        FieldRow {
-                            label: "Liquid Glass"
-                            PillSwitch {
-                                id: liquidGlassSwitch
-                                checked: MotionInterface.appConfig.liquidGlass === true
-                                onToggled: {
-                                    MotionInterface.setConfig("liquidGlass", checked)
+                            label: "Theme"
+                            // Single selector over the two underlying booleans
+                            // (darkMode, liquidGlass). Liquid Glass is the
+                            // dark-based glass — the two solid themes are Dark
+                            // and Light (the warm-paper palette, #369). Written
+                            // atomically via saveConfigs so it's one persist +
+                            // one appConfigChanged + one audit entry.
+                            StyledCombo {
+                                id: themeCombo
+                                Layout.preferredWidth: 150
+                                model: ["Dark Mode", "Light Mode", "Liquid Glass"]
+                                currentIndex: MotionInterface.appConfig.liquidGlass === true
+                                              ? 2
+                                              : (MotionInterface.appConfig.darkMode !== false ? 0 : 1)
+                                onActivated: function(index) {
+                                    if (index === 0)
+                                        MotionInterface.saveConfigs({ "darkMode": true,  "liquidGlass": false })
+                                    else if (index === 1)
+                                        MotionInterface.saveConfigs({ "darkMode": false, "liquidGlass": false })
+                                    else
+                                        MotionInterface.saveConfigs({ "darkMode": true,  "liquidGlass": true })
                                 }
                             }
                         }

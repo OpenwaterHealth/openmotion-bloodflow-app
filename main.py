@@ -173,10 +173,12 @@ def _load_app_config() -> dict:
         "bviClampHigh": 10.0,
         "darkMode": True,
         # Liquid Glass theme — translucent frosted surfaces over an
-        # animated ambient backdrop (Settings → Appearance). Orthogonal
-        # to darkMode; both light and dark have a glass variant. Off by
-        # default so clinical builds keep the solid palette.
-        "liquidGlass": False,
+        # animated ambient backdrop (Settings → Appearance → Theme).
+        # Orthogonal to darkMode; both light and dark have a glass
+        # variant, and "Liquid Glass" in the Theme selector is the
+        # dark-based one. Default ON for macOS (its native Tahoe look),
+        # OFF elsewhere so Windows clinical builds keep the solid palette.
+        "liquidGlass": sys.platform == "darwin",
         "cq_check_duration_sec": 1.0,
         "cq_rolling_avg_window": 10,
         "cq_dark_threshold_per_camera": [3.0] * 8,
