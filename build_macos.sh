@@ -15,8 +15,11 @@ SPEC_FILE="openwater_macos.spec"
 DIST_DIR="dist"
 BUILD_DIR="build"
 
-# Resolve version from git
-VERSION="$(python version.py 2>/dev/null || echo "0.0.0")"
+# Resolve version: explicit override first (CI passes the release tag —
+# the version-stamp sed dirties the checkout, so git describe would
+# report "+dirty"), then git describe, then a placeholder.
+VERSION="${OPENMOTION_VERSION:-$(python version.py 2>/dev/null || echo "0.0.0")}"
+export OPENMOTION_VERSION="${VERSION}"   # let the spec's Info.plist use the same value
 DMG_NAME="Open-Motion-${VERSION}-macOS.dmg"
 
 echo "╔══════════════════════════════════════════════════════════════╗"
@@ -156,8 +159,10 @@ app = BUNDLE(
     bundle_identifier="com.openwaterhealth.bloodflow",
     info_plist={
         "CFBundleDisplayName": APP_NAME,
-        "CFBundleShortVersionString": os.popen("python version.py 2>/dev/null").read().strip() or "0.0.0",
-        "CFBundleVersion": os.popen("python version.py 2>/dev/null").read().strip() or "0.0.0",
+        "CFBundleShortVersionString": os.environ.get("OPENMOTION_VERSION")
+            or os.popen("python version.py 2>/dev/null").read().strip() or "0.0.0",
+        "CFBundleVersion": os.environ.get("OPENMOTION_VERSION")
+            or os.popen("python version.py 2>/dev/null").read().strip() or "0.0.0",
         "NSHighResolutionCapable": True,
         "LSMinimumSystemVersion": "12.0",
         "NSPrincipalClass": "NSApplication",
