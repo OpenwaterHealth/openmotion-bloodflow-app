@@ -243,3 +243,85 @@ def test_empty_sample_file_is_fail_soft(tmp_path):
     c = _connector(tmp_path, console=False, left=False, right=False)
     c._load_sample_scan(str(bad))
     assert c.currentScanSource is None
+
+
+# ── watchdog-driven offer gating ─────────────────────────────────────
+
+
+def _offers(conn):
+    """Capture sampleScanOfferRequested emissions."""
+    out = []
+    conn.sampleScanOfferRequested.connect(lambda: out.append(True))
+    return out
+
+
+def test_watchdog_offers_sample_in_research_with_no_device(tmp_path):
+    """Research build, nothing connected → offer the sample dataset."""
+    c = _connector(tmp_path, console=False, left=False, right=False,
+                   app_config={"clinicalMode": False})
+    offers = _offers(c)
+
+    c._check_connection_watchdog()
+
+    assert len(offers) == 1
+    # The offer is only an offer — nothing is loaded until the user accepts.
+    assert c.currentScanSource is None
+
+
+def test_watchdog_never_offers_in_clinical_mode(tmp_path):
+    """Clinical builds get no offer and no sample — ever. A clinical user
+    must never see fabricated traces they didn't ask for."""
+    c = _connector(tmp_path, console=False, left=False, right=False,
+                   app_config={"clinicalMode": True})
+    offers = _offers(c)
+
+    c._check_connection_watchdog()
+
+    assert offers == []
+    assert c.currentScanSource is None
+
+
+@pytest.mark.parametrize(
+    "console,left,right",
+    [(True, False, False), (False, True, False), (False, False, True)],
+)
+def test_watchdog_no_offer_when_any_device_is_connected(
+        tmp_path, console, left, right):
+    """Gated on the whole system, not just the console: a console-less rig
+    with a live sensor attached must never be offered a sample."""
+    c = _connector(tmp_path, console=console, left=left, right=right,
+                   app_config={"clinicalMode": False})
+    offers = _offers(c)
+
+    c._check_connection_watchdog()
+
+    assert offers == []
+
+
+def test_watchdog_no_offer_when_a_source_is_already_bound(tmp_path):
+    """Something already showing (e.g. a past scan the user opened from
+    History during the 8 s window) is never clobbered by the offer."""
+    c = _connector(tmp_path, console=False, left=False, right=False,
+                   app_config={"clinicalMode": False})
+    c.loadSampleScan()
+    assert c.currentScanSource is not None
+    offers = _offers(c)
+
+    c._check_connection_watchdog()
+
+    assert offers == []
+
+
+def test_watchdog_still_warns_while_offering(tmp_path):
+    """The offer is additive: the E-104/E-106 warning toast still fires."""
+    c = _connector(tmp_path, console=False, left=False, right=False,
+                   app_config={"clinicalMode": False})
+    notifs = []
+    c.notificationRequested.connect(lambda p: notifs.append(p))
+    offers = _offers(c)
+
+    c._check_connection_watchdog()
+
+    assert len(offers) == 1
+    assert len(notifs) == 1
+    assert notifs[0]["type"] == "warning"

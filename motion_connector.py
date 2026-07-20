@@ -838,6 +838,9 @@ class MotionConnector(QObject):
 
     # Real-time plot viewer source — see data_sources.py.
     currentScanSourceChanged = pyqtSignal()
+    # No device at the startup watchdog → offer the bundled sample scan.
+    # Research builds only; see _maybe_offer_sample_scan.
+    sampleScanOfferRequested = pyqtSignal()
     liveSourceAvailableChanged = pyqtSignal()
     # History → "View in plot": fires on the GUI thread when an async
     # loadPastScan completes. (session_label, ok). HistoryModal uses it
@@ -1528,8 +1531,34 @@ class MotionConnector(QObject):
             # still dismiss it early via the ✕.
             self.notify(msg, "warning", duration_ms=10000, dismissible=True,
                         tag="connection-watchdog")
+            self._maybe_offer_sample_scan()
         except Exception:
             logger.exception("connection watchdog check failed")
+
+    def _maybe_offer_sample_scan(self) -> None:
+        """Offer the bundled sample scan when the watchdog found nothing.
+
+        Three gates, all required:
+          * research build — a clinical user must never be shown fabricated
+            traces, not even behind a prompt;
+          * no device at all (`_any_device_connected`, not merely
+            `console_missing`) — a console-less rig with a live sensor is a
+            real session, not a demo;
+          * nothing already bound to the viewer.
+
+        Emits only. Nothing loads until the user accepts the dialog, which
+        calls `loadSampleScan`. One-shot, because the watchdog is: a user
+        who declines gets no second offer this launch.
+        """
+        if bool(self._app_config.get("clinicalMode", False)):
+            logger.info("[Plot] sample scan offer suppressed — clinical build")
+            return
+        if self._any_device_connected():
+            return
+        if self._current_scan_source is not None:
+            return
+        logger.info("[Plot] no device at watchdog — offering sample scan")
+        self.sampleScanOfferRequested.emit()
 
     @staticmethod
     def _i2c_missing_devices(health: dict) -> str:
@@ -3181,8 +3210,7 @@ class MotionConnector(QObject):
         self._set_current_scan_source(sample)
         n_samples = sum(b.n for b in sample.buffers.values())
         logger.info(
-            "[Plot] loaded sample scan (no device at boot): "
-            "buffers=%d samples=%d from %s",
+            "[Plot] loaded sample scan: buffers=%d samples=%d from %s",
             len(sample.buffers), n_samples, csv_path)
 
     @pyqtSlot(int, str)
