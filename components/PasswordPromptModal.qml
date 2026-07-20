@@ -59,7 +59,7 @@ Item {
         width: 360
         height: contentCol.implicitHeight + 48
         radius: 14
-        color: AppTheme.bgContainer
+        color: AppTheme.sheetBg
         border.color: AppTheme.borderStrong
         border.width: 1
         anchors.centerIn: parent
