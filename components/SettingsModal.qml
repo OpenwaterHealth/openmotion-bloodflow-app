@@ -119,6 +119,7 @@ Item {
         writeRawCsv       = cfg.writeRawCsv       !== undefined ? cfg.writeRawCsv       : false
         rawCsvDurationSec = cfg.rawCsvDurationSec !== undefined ? cfg.rawCsvDurationSec : null
         if (darkModeSwitch) darkModeSwitch.checked = cfg.darkMode !== false
+        if (liquidGlassSwitch) liquidGlassSwitch.checked = cfg.liquidGlass === true
     }
 
     Component.onCompleted: _loadFromConfig()
@@ -896,6 +897,16 @@ Item {
                                 checked: MotionInterface.appConfig.darkMode !== false
                                 onToggled: {
                                     MotionInterface.setConfig("darkMode", checked)
+                                }
+                            }
+                        }
+                        FieldRow {
+                            label: "Liquid Glass"
+                            PillSwitch {
+                                id: liquidGlassSwitch
+                                checked: MotionInterface.appConfig.liquidGlass === true
+                                onToggled: {
+                                    MotionInterface.setConfig("liquidGlass", checked)
                                 }
                             }
                         }

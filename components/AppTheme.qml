@@ -20,29 +20,65 @@ import OpenMotion 1.0
  *  e.g. light-mode borders run darkest→lightest hover < subtle <
  *  strong < soft ("subtle"/"strong" are named for their dark-mode
  *  roles).
+ *
+ *  ── Liquid Glass (MotionInterface.appConfig.liquidGlass) ───────────
+ *  A third, orthogonal axis on top of dark/light. When `glass` is on,
+ *  the *surface* tokens (panels, cards, containers, elevated, hover,
+ *  borders, overlays) become translucent frost so the AmbientBackground
+ *  shows through and every panel in the app reads as glass with no
+ *  per-component edits. Data-critical surfaces (plot cells, plot bg,
+ *  input fields) and text/semantic-accent tokens stay opaque so traces
+ *  and numbers never lose contrast. Each glassy token therefore carries
+ *  a 4-way value: glass×{dark,light} on top of the original
+ *  opaque×{dark,light}. Keep the opaque branch byte-identical to the
+ *  pre-glass values so turning the toggle off is a perfect revert.
  */
 QtObject {
-    // ── convenience alias ──────────────────────────────────────────
-    readonly property bool dark: MotionInterface.appConfig.darkMode !== false
+    // ── mode axes ──────────────────────────────────────────────────
+    readonly property bool dark:  MotionInterface.appConfig.darkMode !== false
+    readonly property bool glass: MotionInterface.appConfig.liquidGlass === true
 
     // ── backgrounds (lightest → darkest in dark mode) ─────────────
-    readonly property color bgBase:       dark ? "#1C1C1E" : "#F0EEE6"
-    readonly property color bgPanel:      dark ? "#1A1A1C" : "#E8E4D8"
-    readonly property color bgContainer:  dark ? "#1E1E20" : "#F7F5EE"
-    readonly property color bgElevated:   dark ? "#252528" : "#EBE7DB"
-    readonly property color bgInput:      dark ? "#2E2E33" : "#FDFCF8"
+    // bgBase is the window's root fill. In glass mode it goes fully
+    // transparent so the AmbientBackground (drawn behind it in main.qml)
+    // is what you see through every translucent panel.
+    readonly property color bgBase:       glass ? "transparent"
+                                                 : (dark ? "#1C1C1E" : "#F0EEE6")
+    readonly property color bgPanel:      glass ? (dark ? Qt.rgba(1,1,1,0.05) : Qt.rgba(1,1,1,0.44))
+                                                 : (dark ? "#1A1A1C" : "#E8E4D8")
+    readonly property color bgContainer:  glass ? (dark ? Qt.rgba(1,1,1,0.07) : Qt.rgba(1,1,1,0.55))
+                                                 : (dark ? "#1E1E20" : "#F7F5EE")
+    readonly property color bgElevated:   glass ? (dark ? Qt.rgba(1,1,1,0.12) : Qt.rgba(1,1,1,0.64))
+                                                 : (dark ? "#252528" : "#EBE7DB")
+    // Input fields stay near-opaque even in glass mode — editable text
+    // must stay legible over the busy ambient.
+    readonly property color bgInput:      glass ? (dark ? Qt.rgba(0.16,0.16,0.19,0.86) : Qt.rgba(1,1,1,0.90))
+                                                 : (dark ? "#2E2E33" : "#FDFCF8")
+    // Plot background: opaque in every mode. Real-time Canvas traces are
+    // the clinical payload — never let the ambient bleed through them.
     readonly property color bgPlot:       dark ? "#141417" : "#F5F3EB"
-    readonly property color bgHover:      dark ? "#2E2E33" : "#E3DFD1"
-    readonly property color bgCard:       dark ? "#262630" : "#FAF9F4"
-    readonly property color bgCardAlt:    dark ? "#232329" : "#F1EEE5"
+    readonly property color bgHover:      glass ? (dark ? Qt.rgba(1,1,1,0.16) : Qt.rgba(1,1,1,0.78))
+                                                 : (dark ? "#2E2E33" : "#E3DFD1")
+    readonly property color bgCard:       glass ? (dark ? Qt.rgba(1,1,1,0.08) : Qt.rgba(1,1,1,0.58))
+                                                 : (dark ? "#262630" : "#FAF9F4")
+    readonly property color bgCardAlt:    glass ? (dark ? Qt.rgba(1,1,1,0.045): Qt.rgba(1,1,1,0.40))
+                                                 : (dark ? "#232329" : "#F1EEE5")
 
     // ── borders ───────────────────────────────────────────────────
-    readonly property color borderStrong: dark ? "#2A2A2E" : "#CFC9BB"
-    readonly property color borderSubtle: dark ? "#3E4E6F" : "#C6C0B0"
-    readonly property color borderHover:  dark ? "#5A6B8C" : "#8F8877"
-    readonly property color borderSoft:   dark ? "#333340" : "#D8D3C5"
+    // In glass mode borders become bright hairlines — the light-catching
+    // edge that sells the material. borderHover is the specular edge.
+    readonly property color borderStrong: glass ? (dark ? Qt.rgba(1,1,1,0.14) : Qt.rgba(1,1,1,0.55))
+                                                 : (dark ? "#2A2A2E" : "#CFC9BB")
+    readonly property color borderSubtle: glass ? (dark ? Qt.rgba(1,1,1,0.22) : Qt.rgba(1,1,1,0.65))
+                                                 : (dark ? "#3E4E6F" : "#C6C0B0")
+    readonly property color borderHover:  glass ? (dark ? Qt.rgba(1,1,1,0.45) : Qt.rgba(1,1,1,0.85))
+                                                 : (dark ? "#5A6B8C" : "#8F8877")
+    readonly property color borderSoft:   glass ? (dark ? Qt.rgba(1,1,1,0.10) : Qt.rgba(1,1,1,0.45))
+                                                 : (dark ? "#333340" : "#D8D3C5")
 
     // ── text ──────────────────────────────────────────────────────
+    // Opaque in every mode. In glass+light the ambient is bright, so
+    // keep the darkest ink; glass+dark keeps pure white.
     readonly property color textPrimary:   dark ? "#FFFFFF" : "#1F1E1B"
     readonly property color textSecondary: dark ? "#BDC3C7" : "#57544A"
     readonly property color textTertiary:  dark ? "#7F8C8D" : "#8A867A"
@@ -75,21 +111,44 @@ QtObject {
     readonly property color plotGrid:     dark ? "#333333" : "#CFC9BA"
     readonly property color plotLabel:    dark ? "#999999" : "#6B675C"
     readonly property color plotText:     dark ? "#C9D1D9" : "#33312B"
-    // Plot cell / scrubber track surface. In dark mode this matches the
-    // old bgPanel value (no visual change); in light mode it is white so
-    // cells read as raised paper on the recessed bgPlot surface instead
-    // of the muddier panel gray.
+    // Plot cell / scrubber track surface. Opaque in every mode (see
+    // bgPlot) — clinical traces must never sit on a translucent fill.
     readonly property color plotCellBg:   dark ? "#1A1A1C" : "#FFFFFF"
 
     // ── floating overlays (pills, popups, tooltips over the plot) ──
     // Translucent in both modes; dark values match the previous
     // hard-coded Qt.rgba constants so dark mode is unchanged. Light
     // values are warm-tinted whites so overlays sit on the paper
-    // palette without going clinical-white.
-    readonly property color overlayBg:      dark ? Qt.rgba(0.10, 0.10, 0.12, 0.82)
-                                                 : Qt.rgba(0.99, 0.98, 0.95, 0.90)
-    readonly property color overlayBgSolid: dark ? Qt.rgba(0.12, 0.12, 0.14, 0.96)
-                                                 : Qt.rgba(0.99, 0.985, 0.96, 0.97)
+    // palette without going clinical-white. In glass mode they lean
+    // further into frost (lower alpha, cooler tint).
+    readonly property color overlayBg:      glass ? (dark ? Qt.rgba(0.10,0.10,0.14,0.60) : Qt.rgba(1,1,1,0.62))
+                                                   : (dark ? Qt.rgba(0.10, 0.10, 0.12, 0.82)
+                                                           : Qt.rgba(0.99, 0.98, 0.95, 0.90))
+    readonly property color overlayBgSolid: glass ? (dark ? Qt.rgba(0.12,0.12,0.16,0.80) : Qt.rgba(1,1,1,0.82))
+                                                   : (dark ? Qt.rgba(0.12, 0.12, 0.14, 0.96)
+                                                           : Qt.rgba(0.99, 0.985, 0.96, 0.97))
+
+    // ── liquid-glass helper tokens ────────────────────────────────
+    // Used by GlassSurface / AmbientBackground and any panel that wants
+    // to lean into the material explicitly. Harmless when glass is off
+    // (nothing references them then).
+    //
+    // glassTint     — the frost fill laid over the blurred backdrop.
+    // glassHighlight— bright specular line for the top edge.
+    // glassEdge     — the thin outer stroke that defines the pane.
+    // glassShadow   — soft drop shadow colour under a floating pane.
+    readonly property color glassTint:      dark ? Qt.rgba(1,1,1,0.06) : Qt.rgba(1,1,1,0.30)
+    readonly property color glassHighlight: dark ? Qt.rgba(1,1,1,0.55) : Qt.rgba(1,1,1,0.90)
+    readonly property color glassEdge:      dark ? Qt.rgba(1,1,1,0.18) : Qt.rgba(1,1,1,0.70)
+    readonly property color glassShadow:    dark ? Qt.rgba(0,0,0,0.55) : Qt.rgba(0.25,0.22,0.18,0.28)
+
+    // AmbientBackground gradient + blob palette. Deep blue-violet dusk
+    // in dark; pearlescent warm dawn in light.
+    readonly property color ambientTop:     dark ? "#0B0D18" : "#EAF0F7"
+    readonly property color ambientBottom:  dark ? "#141020" : "#F3ECF2"
+    readonly property color ambientBlobA:   dark ? "#2B4C8C" : "#BFD4F2"   // cool
+    readonly property color ambientBlobB:   dark ? "#6E3B8C" : "#E7C9DA"   // violet
+    readonly property color ambientBlobC:   dark ? "#1F6E7A" : "#CDE7E2"   // teal / warm
 
     // Guard a user-configured accent (e.g. trace colors) for legibility
     // against the current plot background: colors too light to read in

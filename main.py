@@ -172,6 +172,11 @@ def _load_app_config() -> dict:
         "bviClampLow": 0.0,
         "bviClampHigh": 10.0,
         "darkMode": True,
+        # Liquid Glass theme — translucent frosted surfaces over an
+        # animated ambient backdrop (Settings → Appearance). Orthogonal
+        # to darkMode; both light and dark have a glass variant. Off by
+        # default so clinical builds keep the solid palette.
+        "liquidGlass": False,
         "cq_check_duration_sec": 1.0,
         "cq_rolling_avg_window": 10,
         "cq_dark_threshold_per_camera": [3.0] * 8,
