@@ -163,3 +163,25 @@ def test_tec_trip_temp_present_in_shipped_config():
     with open(shipped, "r", encoding="utf-8") as f:
         data = json.load(f)
     assert data["tecTripTempC"] == 40
+
+
+def test_connection_timeout_default_is_eight_seconds(tmp_path, monkeypatch):
+    """The startup connection watchdog fires 8 s after launch.
+
+    It owns both the E-104/E-106 warning toast and (research builds only)
+    the sample-dataset offer, so 30 s left the user staring at an empty
+    scan page. One timer, one timeout — there is no separate offer timer.
+    """
+    config_path = tmp_path / "app_config.json"
+    config_path.write_text(json.dumps({}), encoding="utf-8")
+    _patch_config_path(monkeypatch, config_path)
+    cfg = app_main._load_app_config()
+    assert cfg["connectionTimeoutSec"] == 8
+
+
+def test_shipped_config_connection_timeout_is_eight_seconds():
+    """The shipped config overrides the in-code default, so it must agree
+    with it — otherwise the field build still waits 30 s."""
+    shipped = json.loads(
+        (REPO_ROOT / "config" / "app_config.json").read_text(encoding="utf-8"))
+    assert shipped["connectionTimeoutSec"] == 8
