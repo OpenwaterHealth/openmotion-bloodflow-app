@@ -31,8 +31,9 @@ Rectangle {
     // app tears down.
     readonly property alias modalManager: modalManager
 
-    // FDA mode (read from app config). Forces Far camera pattern + free run,
-    // hides scan-settings button, and swaps in the FDA plot view.
+    // Clinical mode (read from app config). Forces Far camera pattern +
+    // free run, hides scan-settings button, and swaps in the clinical
+    // plot view.
     property bool clinicalMode: MotionInterface.appConfig.clinicalMode === true
     // In clinical mode, Start first runs a contact-quality preflight check.
     property bool clinicalStartPending: false
@@ -56,7 +57,7 @@ Rectangle {
 
     // Duration from scan time modal
     property bool freeRun: clinicalMode
-    property int durationSec: clinicalMode ? 43200 : 3600  // 12h in FDA mode, 1h default
+    property int durationSec: clinicalMode ? 43200 : 3600  // 12h in clinical mode, 1h default
 
     onClinicalModeChanged: {
         if (clinicalMode) {
@@ -267,6 +268,9 @@ Rectangle {
         onNotesClicked:    modalManager.toggle(notesModal)
         onHistoryClicked:  modalManager.toggle(historyModal)
         onSettingsClicked: modalManager.toggle(settingsModal)
+        // App-log viewer is a separate Window, not a ModalManager modal —
+        // clicking Logs just shows/raises it (close via its title bar).
+        onLogsClicked:     logViewerWindow.open()
     }
 
     // Allow external callers (firmware banner) to open the Settings overlay.
@@ -405,6 +409,12 @@ Rectangle {
 
     LogsModal {
         id: logsModal
+    }
+
+    // Engineering live app-log viewer (icon-bar Logs button) — a separate
+    // non-modal Window, distinct from the audit-log LogsModal above.
+    LogViewerWindow {
+        id: logViewerWindow
     }
 
     ContactQualityModal {
@@ -656,6 +666,11 @@ Rectangle {
             rightMask = _cfg.clinicalModeRightMask !== undefined ? _cfg.clinicalModeRightMask : 0xC3
         }
         applyDefaultCameras()
+        // No device at boot → load a real sample scan into the replay
+        // viewer so the user can pan/zoom/scrub actual BFI/BVI traces
+        // instead of landing on an empty page (#314). No-op when a device
+        // is connected; the connector owns the gating + fail-soft parsing.
+        MotionInterface.loadSampleScanIfNoDevice()
     }
 
     Component.onDestruction: {

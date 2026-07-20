@@ -4,9 +4,12 @@ import QtQuick.Layouts 6.0
 import QtQuick.Dialogs as Dialogs
 import OpenMotion 1.0
 
-// Audit-log viewer. Lists machine-readable audit entries (newest first)
-// and exports them as CSV. Opened from the password gate in SettingsModal.
-// Governed by ModalManager (see HistoryModal.qml for the modal contract).
+// Audit-log viewer. Lists machine-readable audit entries (newest first),
+// filterable by event type / date range / free text (#226), and exports
+// them as CSV (always the COMPLETE log — filters are view-only, so the
+// export stays the full audit record). Opened from the password gate in
+// SettingsModal. Governed by ModalManager (see HistoryModal.qml for the
+// modal contract).
 Item {
     id: root
     anchors.fill: parent
@@ -17,17 +20,80 @@ Item {
     readonly property string label: "Audit Log"
     property var entries: []
 
+    // ── filter state (#226) ────────────────────────────────────────
+    property var eventTypes: []
+    property string filterEventType: ""
+    readonly property bool filtersActive: filterEventType !== ""
+                                          || fromField.text !== ""
+                                          || toField.text !== ""
+                                          || searchField.text !== ""
+
     function open() {
         // Record the view first, then load (so the view event is included).
         MotionInterface.recordAuditLogViewed()
+        reloadEventTypes()
         refresh()
         root.visible = true
     }
     function close() { root.visible = false }
 
     function refresh() {
-        try { entries = MotionInterface.auditLogEntries(500) || [] }
-        catch (e) { entries = [] }
+        try {
+            entries = MotionInterface.filteredAuditLogEntries({
+                eventType: filterEventType,
+                dateFrom: fromField.text,
+                dateTo: toField.text,
+                text: searchField.text,
+                limit: 500
+            }) || []
+        } catch (e) { entries = [] }
+    }
+
+    function reloadEventTypes() {
+        try { eventTypes = MotionInterface.auditEventTypes() || [] }
+        catch (e) { eventTypes = [] }
+        // Rebinding the combo model resets its index — restore the active
+        // selection (or fall back to "All events" if the type vanished).
+        var idx = eventTypes.indexOf(filterEventType)
+        typeCombo.currentIndex = idx >= 0 ? idx + 1 : 0
+        if (idx < 0) filterEventType = ""
+    }
+
+    function clearFilters() {
+        typeCombo.currentIndex = 0
+        filterEventType = ""
+        fromField.text = ""
+        toField.text = ""
+        searchField.text = ""
+        refresh()
+    }
+
+    // Debounce free-typing in the filter fields so each keystroke doesn't
+    // hit the database.
+    Timer {
+        id: filterDebounce
+        interval: 250
+        onTriggered: root.refresh()
+    }
+
+    // Shared look for the filter text inputs. validDate drives the red
+    // border on malformed dates (a malformed date simply doesn't filter).
+    component FilterField: TextField {
+        id: ff
+        property bool validDate: true
+        Layout.preferredHeight: 30
+        font.pixelSize: 12
+        color: AppTheme.textPrimary
+        placeholderTextColor: AppTheme.textTertiary
+        selectByMouse: true
+        background: Rectangle {
+            color: AppTheme.bgInput
+            radius: 4
+            border.color: !ff.validDate ? "#C0392B"
+                          : ff.activeFocus ? AppTheme.accentInteractive
+                                           : AppTheme.borderSubtle
+            border.width: 1
+        }
     }
 
     QtObject {
@@ -87,7 +153,7 @@ Item {
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? AppTheme.accentBlue : AppTheme.bgInput
+                        color: parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput
                         border.color: parent.hovered ? AppTheme.textPrimary : AppTheme.textSecondary; radius: 4
                     }
                     onClicked: {
@@ -105,7 +171,7 @@ Item {
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? AppTheme.accentBlue : AppTheme.bgInput
+                        color: parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput
                         border.color: parent.hovered ? AppTheme.textPrimary : AppTheme.textSecondary; radius: 4
                     }
                     onClicked: root.refresh()
@@ -120,6 +186,123 @@ Item {
                         id: xArea; anchors.fill: parent; hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor; onClicked: root.close()
                     }
+                }
+            }
+
+            // ── filter bar (#226) ──────────────────────────────────
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                ComboBox {
+                    id: typeCombo
+                    objectName: "auditFilterType"
+                    Layout.preferredWidth: 190
+                    Layout.preferredHeight: 30
+                    font.pixelSize: 12
+                    model: ["All events"].concat(root.eventTypes)
+                    onActivated: {
+                        root.filterEventType =
+                            currentIndex === 0 ? "" : currentText
+                        root.refresh()
+                    }
+                    contentItem: Text {
+                        leftPadding: 10; rightPadding: 24
+                        text: typeCombo.displayText
+                        font: typeCombo.font
+                        color: AppTheme.textPrimary
+                        verticalAlignment: Text.AlignVCenter
+                        elide: Text.ElideRight
+                    }
+                    background: Rectangle {
+                        color: AppTheme.bgInput; radius: 4
+                        border.color: typeCombo.activeFocus
+                                      ? AppTheme.accentInteractive : AppTheme.borderSubtle
+                        border.width: 1
+                    }
+                    indicator: Text {
+                        x: typeCombo.width - width - 8
+                        y: (typeCombo.height - height) / 2
+                        text: "▾"; font.pixelSize: 12
+                        color: AppTheme.textSecondary
+                    }
+                    popup: Popup {
+                        y: typeCombo.height
+                        width: typeCombo.width
+                        implicitHeight: Math.min(contentItem.implicitHeight + 2, 320)
+                        padding: 1
+                        contentItem: ListView {
+                            clip: true
+                            implicitHeight: contentHeight
+                            model: typeCombo.delegateModel
+                            ScrollBar.vertical: ScrollBar {}
+                        }
+                        background: Rectangle {
+                            color: AppTheme.bgCard; radius: 4
+                            border.color: AppTheme.borderSubtle; border.width: 1
+                        }
+                    }
+                    delegate: ItemDelegate {
+                        width: typeCombo.width
+                        height: 28
+                        highlighted: typeCombo.highlightedIndex === index
+                        contentItem: Text {
+                            text: modelData
+                            font.pixelSize: 12
+                            color: AppTheme.textPrimary
+                            verticalAlignment: Text.AlignVCenter
+                            leftPadding: 8
+                        }
+                        background: Rectangle {
+                            color: highlighted ? AppTheme.accentInteractive : "transparent"
+                        }
+                    }
+                }
+
+                FilterField {
+                    id: fromField
+                    objectName: "auditFilterFrom"
+                    Layout.preferredWidth: 118
+                    placeholderText: "From YYYY-MM-DD"
+                    validDate: text === "" || /^\d{4}-\d{2}-\d{2}$/.test(text)
+                    onTextChanged: filterDebounce.restart()
+                }
+                Text { text: "–"; color: AppTheme.textSecondary; font.pixelSize: 12 }
+                FilterField {
+                    id: toField
+                    objectName: "auditFilterTo"
+                    Layout.preferredWidth: 118
+                    placeholderText: "To YYYY-MM-DD"
+                    validDate: text === "" || /^\d{4}-\d{2}-\d{2}$/.test(text)
+                    onTextChanged: filterDebounce.restart()
+                }
+                FilterField {
+                    id: searchField
+                    objectName: "auditFilterSearch"
+                    Layout.fillWidth: true
+                    placeholderText: "Search events and details…"
+                    onTextChanged: filterDebounce.restart()
+                }
+                Button {
+                    text: "Clear"
+                    enabled: root.filtersActive
+                    Layout.preferredWidth: 64; Layout.preferredHeight: 30
+                    hoverEnabled: true
+                    contentItem: Text {
+                        text: parent.text; font.pixelSize: 12
+                        color: parent.enabled ? AppTheme.textSecondary
+                                              : AppTheme.textTertiary
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle {
+                        color: parent.enabled && parent.hovered
+                               ? AppTheme.accentInteractive : AppTheme.bgInput
+                        border.color: parent.enabled && parent.hovered
+                                      ? AppTheme.textPrimary : AppTheme.borderSubtle
+                        radius: 4
+                    }
+                    onClicked: root.clearFilters()
                 }
             }
 
@@ -189,7 +372,9 @@ Item {
                     Text {
                         anchors.centerIn: parent
                         visible: root.entries.length === 0
-                        text: "No audit entries yet."
+                        text: root.filtersActive
+                              ? "No entries match the current filters."
+                              : "No audit entries yet."
                         color: AppTheme.textSecondary; font.pixelSize: 14
                     }
                 }

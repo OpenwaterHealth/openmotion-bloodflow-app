@@ -295,7 +295,7 @@ Item {
                     verticalAlignment: TextInput.AlignVCenter
                     background: Rectangle {
                         color: AppTheme.bgInput; radius: 6
-                        border.color: searchField.activeFocus ? AppTheme.accentBlue : AppTheme.borderSubtle
+                        border.color: searchField.activeFocus ? AppTheme.accentInteractive : AppTheme.borderSubtle
                         border.width: 1
                     }
                     onTextChanged: root.searchText = text
@@ -573,8 +573,8 @@ Item {
                     background: Rectangle {
                         radius: 6
                         color: !loadBtn.enabled ? AppTheme.bgInput
-                               : (loadBtn.hovered ? Qt.lighter(AppTheme.accentBlue, 1.12)
-                                                  : AppTheme.accentBlue)
+                               : (loadBtn.hovered ? Qt.lighter(AppTheme.accentInteractive, 1.12)
+                                                  : AppTheme.accentInteractive)
                     }
                     onClicked: {
                         root.loadingPlot = true

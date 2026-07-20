@@ -1190,9 +1190,9 @@ Rectangle {
             height: 36
             radius: 18
             color: settingsPopup.opened
-                   ? Qt.rgba(0.29, 0.56, 0.89, 0.85)
+                   ? Qt.alpha(AppTheme.accentInteractive, 0.85)
                    : AppTheme.overlayBg
-            border.color: settingsPopup.opened ? "#4A90E2" : AppTheme.borderSubtle
+            border.color: settingsPopup.opened ? AppTheme.accentInteractive : AppTheme.borderSubtle
             border.width: 1
 
             Text {
@@ -1231,7 +1231,7 @@ Rectangle {
                 }
 
                 // Mini Switch styled to match SettingsModal's PillSwitch —
-                // blue-background pill with white thumb when on, dark
+                // accent-background pill with white thumb when on, plain
                 // background when off. Animated thumb glide on toggle.
                 component PopupPillSwitch: Switch {
                     id: psCtrl
@@ -1240,8 +1240,8 @@ Rectangle {
                         x:      psCtrl.leftPadding
                         y:      (psCtrl.height - height) / 2
                         width:  44; height: 24; radius: 12
-                        color:  psCtrl.checked ? AppTheme.accentBlue : AppTheme.bgInput
-                        border.color: psCtrl.checked ? AppTheme.accentBlue : AppTheme.borderSoft
+                        color:  psCtrl.checked ? AppTheme.accentInteractive : AppTheme.bgInput
+                        border.color: psCtrl.checked ? AppTheme.accentInteractive : AppTheme.borderSoft
                         border.width: 1
                         Behavior on color { ColorAnimation { duration: 120 } }
 

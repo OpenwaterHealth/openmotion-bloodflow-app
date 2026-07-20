@@ -50,15 +50,17 @@ from motion_config import (
     TEC_TRIP_MIN_C,
     TecTripOutcome,
     ensure_tec_trip,
-    load_tec_params,
+    load_tec_voltage_params,
+    select_tec_voltage,
 )
 import error_codes
 import bug_report
 from nan_gap_tracker import NanGapTracker, gap_note_line
 from utils.resource_path import resource_path
-from utils import app_paths, config_store
+from utils import app_paths, config_store, log_tail
 from data_sources import (
     LiveScanSource, PastScanSource, ScanDataSource, buffers_are_empty,
+    load_csv_scan_buffers, resolve_bvi_lpf_cutoff,
 )
 
 # constants for calculations
@@ -954,6 +956,10 @@ class MotionConnector(QObject):
         self._support_email = cfg.get("support_email", "support@openwater.health")
         self._bug_report_smtp = cfg.get("bug_report_smtp")
 
+        # Incremental app-log reader behind readAppLog() (engineering
+        # Logs window). Created lazily on the first poll.
+        self._app_log_tail: log_tail.LogTail | None = None
+
         # Connection watchdog (E-104/E-106): one-shot check armed at startup
         # that flags expected devices that never enumerated. 0 disables it.
         self._connection_timeout_sec = float(cfg.get("connectionTimeoutSec", 30))
@@ -1122,7 +1128,7 @@ class MotionConnector(QObject):
         # doesn't match the latest request is stale and dropped.
         self._past_scan_load_seq = 0
 
-        self._tec_voltage_default = load_tec_params(config_dir)
+        self._tec_voltage_params = load_tec_voltage_params(config_dir)
         self._console_mutex = QRecursiveMutex()
 
         ft_mean     = cfg.get("ft_min_mean_per_camera")
@@ -1514,9 +1520,11 @@ class MotionConnector(QObject):
                     "(E-106: %d of %d)", n_sensors, self._min_sensors)
                 msg = ("Sensor not detected. Check the sensor USB cable and "
                        "power, then reconnect.")
-            # Sticky, single (tagged) yellow toast — the user must act, but it
-            # never blocks the UI like the critical modal.
-            self.notify(msg, "warning", duration_ms=0, dismissible=True,
+            # Single (tagged) yellow toast — never blocks the UI like the
+            # critical modal. Auto-dismisses after 10 s so it doesn't nag while
+            # the user explores the no-device sample scan (#314); the user can
+            # still dismiss it early via the ✕.
+            self.notify(msg, "warning", duration_ms=10000, dismissible=True,
                         tag="connection-watchdog")
         except Exception:
             logger.exception("connection watchdog check failed")
@@ -1830,11 +1838,21 @@ class MotionConnector(QObject):
                 # exception and terminates the app process.
                 try:
                     self._interface.log_console_info()
-                    if self._interface.console.tec_voltage(self._tec_voltage_default):
-                        logger.info(f"Console TEC voltage set to {self._tec_voltage_default}V")
+                    # EVT2 consoles (board-ID strap 1) need +1.16 V on the
+                    # TEC DAC to hold the lasers at 25 C; DVT and beyond use
+                    # TEC_VOLTAGE_DEFAULT from tec_params.json (issue #269).
+                    tec_voltage, tec_reason = select_tec_voltage(
+                        self._interface.console, self._tec_voltage_params
+                    )
+                    if self._interface.console.tec_voltage(tec_voltage):
+                        logger.info(
+                            f"Console TEC voltage set to {tec_voltage}V "
+                            f"({tec_reason})"
+                        )
                     else:
                         logger.error(
-                            f"Failed to set console TEC voltage to {self._tec_voltage_default}V"
+                            f"Failed to set console TEC voltage to "
+                            f"{tec_voltage}V ({tec_reason})"
                         )
                     if self._interface.console.set_fan_speed(fan_speed=100):
                         logger.info("Console fan speed set to 100%")
@@ -2661,6 +2679,39 @@ class MotionConnector(QObject):
             logger.warning("auditLogEntries failed", exc_info=True)
             return []
 
+    @pyqtSlot("QVariantMap", result="QVariantList")
+    def filteredAuditLogEntries(self, filters):
+        """Audit-log rows (newest first) matching the Logs modal's filter
+        bar (#226). ``filters`` keys, all optional: ``eventType`` (exact
+        event type), ``dateFrom`` / ``dateTo`` (``YYYY-MM-DD``, local,
+        inclusive whole days), ``text`` (case-insensitive substring
+        across event type + details), ``limit`` (int, default 500).
+        Empty/invalid values are ignored. Pure read — does not itself
+        log, so refreshing never double-logs."""
+        try:
+            from audit_log import parse_date_bound
+            f = dict(filters or {})
+            return self._audit.query(
+                limit=int(f.get("limit") or 500),
+                event_type=str(f.get("eventType") or "") or None,
+                since_epoch=parse_date_bound(f.get("dateFrom")),
+                until_epoch=parse_date_bound(f.get("dateTo"), end=True),
+                contains=str(f.get("text") or "") or None,
+            )
+        except Exception:
+            logger.warning("filteredAuditLogEntries failed", exc_info=True)
+            return []
+
+    @pyqtSlot(result="QVariantList")
+    def auditEventTypes(self):
+        """Distinct event types present in the audit log (sorted), for
+        the Logs modal's filter dropdown (#226)."""
+        try:
+            return self._audit.distinct_event_types()
+        except Exception:
+            logger.warning("auditEventTypes failed", exc_info=True)
+            return []
+
     @pyqtSlot()
     def recordAuditLogViewed(self):
         """Record that the audit log was opened. Called once from
@@ -2780,6 +2831,37 @@ class MotionConnector(QObject):
                 "could not reveal %s in file explorer", path, exc_info=True
             )
 
+    # ── Engineering log viewer (LogViewerWindow.qml) ─────────────────────
+    @pyqtSlot(result=str)
+    def appLogPath(self) -> str:
+        """Absolute path of this launch's app log file, or ''.
+
+        Prefers the exact path main.py handed in (log_path); falls back
+        to the newest logs/open-motion-*.log under the data root for
+        callers that construct the connector without one (tests).
+        """
+        if self._log_path and os.path.isfile(self._log_path):
+            return self._log_path
+        return log_tail.latest_log_path(
+            os.path.join(self._directory, app_paths.LOGS_DIRNAME))
+
+    @pyqtSlot(result=str)
+    def readAppLog(self) -> str:
+        """New app-log text since the last call (see utils/log_tail.py).
+
+        Bounded, shared-read, opens the file per call — safe for the
+        Logs window's GUI-thread QTimer poll. The first call returns
+        the tail of the file; '' means nothing new (or no log file
+        yet). Re-resolves the path each call so the viewer recovers if
+        the log only appears after the connector was constructed.
+        """
+        path = self.appLogPath()
+        if not path:
+            return ""
+        if self._app_log_tail is None or self._app_log_tail.path != path:
+            self._app_log_tail = log_tail.LogTail(path)
+        return self._app_log_tail.read_new()
+
     @pyqtProperty(str, notify=directoryChanged)
     def directory(self):
         return self._directory
@@ -2800,8 +2882,8 @@ class MotionConnector(QObject):
     def _data_root(self) -> str:
         """Where scan files, calibrations, debug-bundles, and
         the scan DB live: self._directory/data. A sibling of the app-wide
-        logs/ folder (main.py's concern only — the connector never touches
-        it)."""
+        logs/ folder (written by main.py only; the connector reads it for
+        the engineering log viewer — see appLogPath)."""
         return os.path.join(self._directory, app_paths.DATA_DIRNAME)
 
     # ── App config — generic read/write API ──────────────────────────────────
@@ -3034,6 +3116,77 @@ class MotionConnector(QObject):
             return
         self._set_current_scan_source(self._live_scan_source)
         logger.info("[Plot] viewer switched back to live source")
+
+    def _any_device_connected(self) -> bool:
+        """True when the console OR either sensor is currently connected.
+
+        A lone sensor (no console) still counts as a device, so this gates
+        on the raw connection flags rather than the DISCONNECTED FSM state
+        (which reads DISCONNECTED for a single sensor with no console)."""
+        return bool(self._consoleConnected
+                    or self._leftSensorConnected
+                    or self._rightSensorConnected)
+
+    @pyqtSlot()
+    def loadSampleScanIfNoDevice(self) -> None:
+        """Boot helper (#314): when NO device is present, load a bundled
+        real sample scan into the replay viewer so a hardware-free launch
+        lands on explorable BFI/BVI traces the user can pan/zoom/scrub,
+        instead of an empty scan page.
+
+        No-op when any device is connected — a real session proceeds
+        unchanged, and once the user runs a scan startCapture's fresh
+        LiveScanSource retires the sample source (the sample is never
+        written anywhere, so real scan data is never polluted). Called from
+        BloodFlow.qml Component.onCompleted; safe to call more than once —
+        it only binds the sample while nothing else is showing."""
+        if self._any_device_connected():
+            logger.info(
+                "[Plot] sample scan skipped — device present at boot")
+            return
+        if self._current_scan_source is not None:
+            # Something is already bound (e.g. a scan already ran, or a
+            # previous call). Don't clobber it.
+            return
+        self._load_sample_scan(
+            str(resource_path("resources", "sample_scan.csv")))
+
+    def _load_sample_scan(self, csv_path: str) -> None:
+        """Parse a scan-export CSV and bind it to the viewer as a DB-free
+        PastScanSource. Fail-soft: a missing/unreadable/empty CSV logs a
+        warning and leaves the viewer untouched (never raises — a bad
+        sample file must not break boot). Split from the slot so unit tests
+        can drive it with an arbitrary path."""
+        try:
+            buffers = load_csv_scan_buffers(csv_path)
+        except Exception:
+            logger.warning(
+                "[Plot] sample scan load failed: %s", csv_path, exc_info=True)
+            return
+        if buffers_are_empty(buffers):
+            logger.warning(
+                "[Plot] sample scan unavailable or empty: %s", csv_path)
+            return
+        try:
+            sample = PastScanSource(
+                scan_db=None,
+                session_id=-1,
+                parent=self,
+                preloaded_buffers=buffers,
+                user_label="Sample scan",
+                date_time="",
+            )
+        except Exception:
+            logger.warning(
+                "[Plot] sample scan source construction failed",
+                exc_info=True)
+            return
+        self._set_current_scan_source(sample)
+        n_samples = sum(b.n for b in sample.buffers.values())
+        logger.info(
+            "[Plot] loaded sample scan (no device at boot): "
+            "buffers=%d samples=%d from %s",
+            len(sample.buffers), n_samples, csv_path)
 
     @pyqtSlot(int, str)
     def loadPastScan(self, session_id: int, session_label: str) -> None:
@@ -3476,6 +3629,22 @@ class MotionConnector(QObject):
             f"disable_laser={disable_laser})"
         )
 
+        # Issue #352: a disconnected side's mask must be recorded as 0x00
+        # ("None"), not the UI's pending selection — the SDK persists the
+        # ScanRequest masks verbatim into session_meta.sdk_flags, which
+        # History and the replay grid trust (#175), so an ungated mask shows
+        # a phantom config and empty panes for hardware that was never
+        # there. The UI keeps the pending selection (it applies if the
+        # sensor is plugged in before scanning; zeroing it would regress the
+        # #127 preserve-across-power-cycle behavior), so the gate lives
+        # here — mirroring runContactQualityCheck and calibration/test.
+        left_camera_mask = (
+            int(left_camera_mask) if self._leftSensorConnected else 0x00
+        )
+        right_camera_mask = (
+            int(right_camera_mask) if self._rightSensorConnected else 0x00
+        )
+
         if duration_sec <= 0:
             logger.warning("duration_sec was %s, clamping to 3600", duration_sec)
             duration_sec = 3600
@@ -3535,11 +3704,22 @@ class MotionConnector(QObject):
         # exercise the DB lazy-load quickly (e.g. 60 → eviction after 1 min).
         _live_cache_sec = self._app_config.get("liveCacheMaxSeconds", 1800)
         _live_cache_samples = max(2, int(float(_live_cache_sec) * 40))
+        # BVI display low-pass (issue #228): config-only — the number is
+        # the whole contract (missing/invalid → 20 Hz, <= 0 → off).
+        # Applied at live ingest only; scans.db / CSVs / replay stay raw.
+        _bvi_lpf_cutoff = resolve_bvi_lpf_cutoff(
+            self._app_config.get("bviLowPassCutoffHz"))
+        logger.info(
+            "BVI display low-pass: %s",
+            f"{_bvi_lpf_cutoff:g} Hz cutoff" if _bvi_lpf_cutoff > 0.0
+            else "disabled (bviLowPassCutoffHz <= 0)",
+        )
         live_source = LiveScanSource(
             plot_t0=plot_t0,
             parent=self,
             scan_db_path=getattr(self._interface, "scan_db_path", None),
             cache_max_samples=_live_cache_samples,
+            bvi_lpf_cutoff_hz=_bvi_lpf_cutoff,
         )
         # Track the live source separately so the user can navigate
         # to a past scan and return; emit so QML rebinds the
@@ -3691,9 +3871,16 @@ class MotionConnector(QObject):
             self.captureFinished.emit(True, "", "", "")
             self.scanNotesReady.emit()
 
-        # Issue #43: telemetry and raw CSVs are engineering diagnostics —
-        # clinical users must not get them. Default False (fail closed).
+        # Issue #43: telemetry CSVs are engineering diagnostics — clinical
+        # users must not get them. Default False (fail closed). Raw
+        # histogram CSVs are research data (#234): allowed whenever the
+        # build is not clinical (clinicalMode false) or engineeringMode is
+        # unlocked — never on a plain clinical build.
         engineering_mode = self._app_config.get("engineeringMode", False)
+        raw_csv_allowed = (
+            not self._app_config.get("clinicalMode", False)
+            or engineering_mode
+        )
 
         req = ScanRequest(
             subject_id=subject_id,
@@ -3715,13 +3902,14 @@ class MotionConnector(QObject):
             write_telemetry_csv=engineering_mode,
             # Raw CSV duration forwarded to the pipeline's Tee("raw") gate
             # via raw_save_max_duration_s. None means unbounded (write entire
-            # scan); 0 omits raw tee entirely. The writeRawCsv toggle lives
-            # in the engineering-only Settings card, so its persisted value is
-            # additionally gated on engineeringMode (#43) — flipping engineering
-            # mode off must stop raw output even if the toggle was left on.
+            # scan); 0 omits raw tee entirely. The persisted writeRawCsv
+            # toggle is additionally gated on the mode flags (#234: research
+            # users get raw CSVs) so a Clinical build never writes raw CSVs
+            # even if a prior research/engineering session left the toggle
+            # on (#43 invariant).
             raw_save_max_duration_s=(
                 self._raw_csv_duration_sec
-                if (engineering_mode and self._write_raw_csv) else 0
+                if (raw_csv_allowed and self._write_raw_csv) else 0
             ),
             sinks=[
                 _LivePlotSink(connector=self, plot_t0=plot_t0, live_source=live_source,

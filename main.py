@@ -162,8 +162,11 @@ def _load_app_config() -> dict:
         "plotWindowSec": 15,
         "bfiColor": "#E74C3C",
         "bviColor": "#3498DB",
-        "bviLowPassEnabled": False,
-        "bviLowPassCutoffHz": 40.0,
+        # 1-pole low-pass on the DISPLAYED BVI stream (live plots +
+        # clinical side averages); scans.db/CSVs/replay stay raw. The
+        # number is the only control (#228 — no enabled bool, no
+        # Settings UI): missing/invalid → 20.0, <= 0 disables.
+        "bviLowPassCutoffHz": 20.0,
         "bfiClampLow": 0.0,
         "bfiClampHigh": 10.0,
         "bviClampLow": 0.0,
