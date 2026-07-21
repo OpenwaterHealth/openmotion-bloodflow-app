@@ -170,11 +170,14 @@ Rectangle {
             Item { Layout.fillWidth: true }
             Rectangle {
                 Layout.preferredWidth: 130; Layout.preferredHeight: 24; radius: 12
+                // Verdict tint derived from the semantic accent tokens so the
+                // pill tracks the palette across dark / light / Liquid Glass.
                 color: {
                     if (!isFinite(root._shapeMatch)) return AppTheme.bgElevated
-                    if (root._shapeMatch >= 0.95) return Qt.rgba(0.18, 0.80, 0.44, 0.22)
-                    if (root._shapeMatch >= 0.85) return Qt.rgba(0.95, 0.77, 0.06, 0.22)
-                    return Qt.rgba(0.91, 0.30, 0.24, 0.22)
+                    var c = root._shapeMatch >= 0.95 ? AppTheme.accentGreen
+                          : root._shapeMatch >= 0.85 ? AppTheme.accentYellow
+                          :                            AppTheme.accentRed
+                    return Qt.rgba(c.r, c.g, c.b, 0.22)
                 }
                 Text {
                     anchors.centerIn: parent

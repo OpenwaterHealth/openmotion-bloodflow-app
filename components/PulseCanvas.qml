@@ -35,10 +35,13 @@ Item {
     onYMinChanged: canvas.requestPaint()
     onYMaxChanged: canvas.requestPaint()
 
+    // Data-bearing tile, so it uses plotCellBg (not bgPlot, which is the
+    // gutter and goes fully transparent in Liquid Glass) — the frosted
+    // cell keeps the trace and axis numbers high-contrast over the ambient.
     Rectangle {
         anchors.fill: parent
         radius: 10
-        color: AppTheme.bgPlot
+        color: AppTheme.plotCellBg
         border.color: AppTheme.borderSoft
         border.width: 1
     }
@@ -215,7 +218,9 @@ Item {
         anchors.centerIn: parent
         width: noPulseLabel.width + 28; height: noPulseLabel.height + 16
         radius: 8
-        color: Qt.rgba(0.95, 0.77, 0.06, 0.14)
+        // Tint derived from the accent so it tracks the palette in every theme.
+        color: Qt.rgba(AppTheme.accentYellow.r, AppTheme.accentYellow.g,
+                       AppTheme.accentYellow.b, 0.14)
         border.color: AppTheme.accentYellow; border.width: 1
         Text {
             id: noPulseLabel

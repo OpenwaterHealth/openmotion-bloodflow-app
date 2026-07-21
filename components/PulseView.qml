@@ -68,10 +68,15 @@ Item {
         }
     }
 
+    // Matches PlotViewer's surface treatment — this fills the same slot, so
+    // it uses the plot-region token (transparent under Liquid Glass, letting
+    // the ambient through) rather than the window base.
     Rectangle {
         anchors.fill: parent
-        color: AppTheme.bgBase
-        radius: 0
+        color: AppTheme.bgPlot
+        radius: 8
+        border.color: AppTheme.borderSoft
+        border.width: 1
     }
 
     ColumnLayout {
@@ -96,9 +101,12 @@ Item {
                 Layout.preferredHeight: 22
                 Layout.preferredWidth: liveLbl.width + 20
                 radius: 11
-                color: MotionInterface.appConfig.demoMode === true
-                       ? Qt.rgba(0.29, 0.56, 0.89, 0.20)
-                       : Qt.rgba(0.18, 0.80, 0.44, 0.20)
+                // Tint derived from the accent token so the pill tracks the
+                // palette across dark / light / Liquid Glass.
+                readonly property color _pillAccent:
+                    MotionInterface.appConfig.demoMode === true
+                    ? AppTheme.accentBlue : AppTheme.accentGreen
+                color: Qt.rgba(_pillAccent.r, _pillAccent.g, _pillAccent.b, 0.20)
                 Text {
                     id: liveLbl
                     anchors.centerIn: parent
@@ -154,7 +162,11 @@ Item {
     Rectangle {
         anchors.fill: parent
         visible: !root.hasData
-        color: Qt.rgba(0, 0, 0, 0.35)
+        // overlayBg is the palette's "floating overlay over the plot" token —
+        // a dark veil in dark mode, a warm paper veil on the light palette,
+        // and a lighter frost in Liquid Glass. A hardcoded black scrim would
+        // read as a bruise on the light theme.
+        color: AppTheme.overlayBg
 
         Text {
             anchors.centerIn: parent
