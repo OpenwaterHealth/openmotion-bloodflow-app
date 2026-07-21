@@ -9,7 +9,7 @@ Covers:
   - ``load_csv_scan_buffers`` column mapping / timestamps / per-cam series,
     against both a synthetic CSV and the shipped ``resources/sample_scan.csv``.
   - the replay-source interface those buffers feed (points_for_window, masks).
-  - the connector's no-device-only gating.
+  - the connector's watchdog-driven offer gating (research-only, no-device-only).
   - the fail-soft missing/empty-file path.
 """
 
@@ -167,25 +167,30 @@ def test_past_scan_source_from_csv_serves_replay_points(tmp_path):
 # ── connector gating + fail-soft ─────────────────────────────────────
 
 
-def _connector(tmp_path, *, console, left, right, scan_db_path=None):
+def _connector(tmp_path, *, console, left, right, scan_db_path=None,
+               app_config=None):
     iface = MagicMock()
     iface.is_device_connected.return_value = (console, left, right)
     iface.scan_workflow.running = False
     iface.scan_workflow.config_running = False
     iface.scan_db_path = scan_db_path
+    cfg = {"engineeringMode": False}
+    if app_config:
+        cfg.update(app_config)
     return MotionConnector(
-        interface=iface, app_config={"engineeringMode": False},
+        interface=iface, app_config=cfg,
         data_dir=str(tmp_path), config_dir="config",
     )
 
 
-def test_no_device_at_boot_loads_sample_into_replay(tmp_path):
-    """No console, no sensors → the shipped sample is bound to the viewer
-    as a non-live (replay) PastScanSource."""
+def test_load_sample_scan_binds_replay_source(tmp_path):
+    """The slot binds the shipped sample as a non-live (replay)
+    PastScanSource. No device check here — the caller (the watchdog offer,
+    via the dialog) has already decided."""
     c = _connector(tmp_path, console=False, left=False, right=False)
     assert c.currentScanSource is None
 
-    c.loadSampleScanIfNoDevice()
+    c.loadSampleScan()
 
     src = c.currentScanSource
     assert isinstance(src, PastScanSource)
@@ -195,26 +200,14 @@ def test_no_device_at_boot_loads_sample_into_replay(tmp_path):
     assert sum(b.n for b in src.buffers.values()) > 0
 
 
-@pytest.mark.parametrize(
-    "console,left,right",
-    [(True, False, False), (False, True, False),
-     (False, False, True), (True, True, True)],
-)
-def test_device_present_at_boot_loads_no_sample(tmp_path, console, left, right):
-    """Any device connected → no sample; a real session is unchanged."""
-    c = _connector(tmp_path, console=console, left=left, right=right)
-    c.loadSampleScanIfNoDevice()
-    assert c.currentScanSource is None
-
-
 def test_sample_not_reloaded_when_a_source_is_already_bound(tmp_path):
     """Idempotent: with a source already bound the call is a no-op, so it
     can't clobber a live scan the user has since started."""
     c = _connector(tmp_path, console=False, left=False, right=False)
-    c.loadSampleScanIfNoDevice()
+    c.loadSampleScan()
     first = c.currentScanSource
     assert first is not None
-    c.loadSampleScanIfNoDevice()
+    c.loadSampleScan()
     assert c.currentScanSource is first
 
 
@@ -223,7 +216,7 @@ def test_sample_source_replaced_by_a_real_scan_source(tmp_path):
     supersedes the sample (proving the sample never blocks/pollutes a
     real scan)."""
     c = _connector(tmp_path, console=False, left=False, right=False)
-    c.loadSampleScanIfNoDevice()
+    c.loadSampleScan()
     sample = c.currentScanSource
     assert isinstance(sample, PastScanSource)
 
@@ -250,3 +243,85 @@ def test_empty_sample_file_is_fail_soft(tmp_path):
     c = _connector(tmp_path, console=False, left=False, right=False)
     c._load_sample_scan(str(bad))
     assert c.currentScanSource is None
+
+
+# ── watchdog-driven offer gating ─────────────────────────────────────
+
+
+def _offers(conn):
+    """Capture sampleScanOfferRequested emissions."""
+    out = []
+    conn.sampleScanOfferRequested.connect(lambda: out.append(True))
+    return out
+
+
+def test_watchdog_offers_sample_in_research_with_no_device(tmp_path):
+    """Research build, nothing connected → offer the sample dataset."""
+    c = _connector(tmp_path, console=False, left=False, right=False,
+                   app_config={"clinicalMode": False})
+    offers = _offers(c)
+
+    c._check_connection_watchdog()
+
+    assert len(offers) == 1
+    # The offer is only an offer — nothing is loaded until the user accepts.
+    assert c.currentScanSource is None
+
+
+def test_watchdog_never_offers_in_clinical_mode(tmp_path):
+    """Clinical builds get no offer and no sample — ever. A clinical user
+    must never see fabricated traces they didn't ask for."""
+    c = _connector(tmp_path, console=False, left=False, right=False,
+                   app_config={"clinicalMode": True})
+    offers = _offers(c)
+
+    c._check_connection_watchdog()
+
+    assert offers == []
+    assert c.currentScanSource is None
+
+
+@pytest.mark.parametrize(
+    "console,left,right",
+    [(True, False, False), (False, True, False), (False, False, True)],
+)
+def test_watchdog_no_offer_when_any_device_is_connected(
+        tmp_path, console, left, right):
+    """Gated on the whole system, not just the console: a console-less rig
+    with a live sensor attached must never be offered a sample."""
+    c = _connector(tmp_path, console=console, left=left, right=right,
+                   app_config={"clinicalMode": False})
+    offers = _offers(c)
+
+    c._check_connection_watchdog()
+
+    assert offers == []
+
+
+def test_watchdog_no_offer_when_a_source_is_already_bound(tmp_path):
+    """Something already showing (e.g. a past scan the user opened from
+    History during the 12 s window) is never clobbered by the offer."""
+    c = _connector(tmp_path, console=False, left=False, right=False,
+                   app_config={"clinicalMode": False})
+    c.loadSampleScan()
+    assert c.currentScanSource is not None
+    offers = _offers(c)
+
+    c._check_connection_watchdog()
+
+    assert offers == []
+
+
+def test_watchdog_still_warns_while_offering(tmp_path):
+    """The offer is additive: the E-104/E-106 warning toast still fires."""
+    c = _connector(tmp_path, console=False, left=False, right=False,
+                   app_config={"clinicalMode": False})
+    notifs = []
+    c.notificationRequested.connect(lambda p: notifs.append(p))
+    offers = _offers(c)
+
+    c._check_connection_watchdog()
+
+    assert len(offers) == 1
+    assert len(notifs) == 1
+    assert notifs[0]["type"] == "warning"

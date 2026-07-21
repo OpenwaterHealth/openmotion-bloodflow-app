@@ -191,8 +191,10 @@ def _load_app_config() -> dict:
         # Critical-error bug report (see error_codes.py / CriticalErrorModal).
         "support_email": "support@openwater.health",
         "bug_report_smtp": None,
-        # Startup connection watchdog (E-104/E-106).
-        "connectionTimeoutSec": 30,
+        # Startup connection watchdog (E-104/E-106). Also gates the
+        # research-build sample-dataset offer, so this is deliberately
+        # short — the user should not stare at an empty scan page.
+        "connectionTimeoutSec": 12,
         "requireConsole": True,
         "minSensors": 1,
     }

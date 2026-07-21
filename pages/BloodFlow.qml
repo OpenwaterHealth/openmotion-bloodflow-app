@@ -284,7 +284,8 @@ Rectangle {
     ModalManager {
         id: modalManager
         modals: [scanSettingsModal, notesModal, historyModal,
-                 settingsModal, contactQualityModal, logsModal]
+                 settingsModal, contactQualityModal, logsModal,
+                 sampleScanOfferModal]
     }
 
     // Data viewer — fills remaining space to the right of ButtonPanel.
@@ -352,6 +353,12 @@ Rectangle {
         id: notesModal
     }
 
+    // No-device offer to open the bundled sample scan. Raised by the
+    // connector's startup watchdog; research builds only.
+    SampleScanOfferModal {
+        id: sampleScanOfferModal
+    }
+
     // Spacebar during an active scan pops the Notes modal with a fresh
     // newline + [elapsed / wall-clock] timestamp, cursor ready to type.
     // Gated so it only fires mid-scan and never over another modal; once
@@ -379,6 +386,13 @@ Rectangle {
     Connections {
         target: MotionInterface
         function onScanNotesReady() { notesModal.open() }
+        // Startup watchdog found no device (research builds only). Don't
+        // stomp a modal the user opened during the 12 s window. The
+        // watchdog is one-shot, so an offer dropped here is not retried
+        // this launch (relaunch to be offered again).
+        function onSampleScanOfferRequested() {
+            if (!modalManager.current) sampleScanOfferModal.open()
+        }
         // Snap the header counter to the authoritative value on every
         // trigger edge. The OFF edge matters most: it carries the SDK
         // timestamp correction, so the final displayed value lands on
@@ -666,11 +680,6 @@ Rectangle {
             rightMask = _cfg.clinicalModeRightMask !== undefined ? _cfg.clinicalModeRightMask : 0xC3
         }
         applyDefaultCameras()
-        // No device at boot → load a real sample scan into the replay
-        // viewer so the user can pan/zoom/scrub actual BFI/BVI traces
-        // instead of landing on an empty page (#314). No-op when a device
-        // is connected; the connector owns the gating + fail-soft parsing.
-        MotionInterface.loadSampleScanIfNoDevice()
     }
 
     Component.onDestruction: {

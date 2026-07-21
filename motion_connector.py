@@ -838,6 +838,9 @@ class MotionConnector(QObject):
 
     # Real-time plot viewer source — see data_sources.py.
     currentScanSourceChanged = pyqtSignal()
+    # No device at the startup watchdog → offer the bundled sample scan.
+    # Research builds only; see _maybe_offer_sample_scan.
+    sampleScanOfferRequested = pyqtSignal()
     liveSourceAvailableChanged = pyqtSignal()
     # History → "View in plot": fires on the GUI thread when an async
     # loadPastScan completes. (session_label, ok). HistoryModal uses it
@@ -962,7 +965,7 @@ class MotionConnector(QObject):
 
         # Connection watchdog (E-104/E-106): one-shot check armed at startup
         # that flags expected devices that never enumerated. 0 disables it.
-        self._connection_timeout_sec = float(cfg.get("connectionTimeoutSec", 30))
+        self._connection_timeout_sec = float(cfg.get("connectionTimeoutSec", 12))
         self._require_console = bool(cfg.get("requireConsole", True))
         self._min_sensors = int(cfg.get("minSensors", 1))
 
@@ -1247,8 +1250,12 @@ class MotionConnector(QObject):
         # once the Qt event loop runs. main.py starts device monitoring with
         # wait=False (issue #223 — no blocking wait before app.exec()), so
         # already-attached devices enumerate concurrently with this timer;
-        # the default 30s timeout comfortably covers normal enumeration time
-        # (console handshake is ~5s normally).
+        # the default 12s is a deliberate compromise — it also gates the
+        # research-build sample-dataset offer, so it can't be generous, but
+        # it leaves ~7s of headroom over a normal ~5s console handshake:
+        # short enough that a hardware-free user isn't left staring at an
+        # empty scan page, long enough that a normally-enumerating console
+        # won't trip a false E-104/E-106 and a spurious sample-dataset offer.
         self._arm_connection_watchdog()
 
     def set_ft_thresholds(
@@ -1526,8 +1533,34 @@ class MotionConnector(QObject):
             # still dismiss it early via the ✕.
             self.notify(msg, "warning", duration_ms=10000, dismissible=True,
                         tag="connection-watchdog")
+            self._maybe_offer_sample_scan()
         except Exception:
             logger.exception("connection watchdog check failed")
+
+    def _maybe_offer_sample_scan(self) -> None:
+        """Offer the bundled sample scan when the watchdog found nothing.
+
+        Three gates, all required:
+          * research build — a clinical user must never be shown fabricated
+            traces, not even behind a prompt;
+          * no device at all (`_any_device_connected`, not merely
+            `console_missing`) — a console-less rig with a live sensor is a
+            real session, not a demo;
+          * nothing already bound to the viewer.
+
+        Emits only. Nothing loads until the user accepts the dialog, which
+        calls `loadSampleScan`. One-shot, because the watchdog is: a user
+        who declines gets no second offer this launch.
+        """
+        if bool(self._app_config.get("clinicalMode", False)):
+            logger.info("[Plot] sample scan offer suppressed — clinical build")
+            return
+        if self._any_device_connected():
+            return
+        if self._current_scan_source is not None:
+            return
+        logger.info("[Plot] no device at watchdog — offering sample scan")
+        self.sampleScanOfferRequested.emit()
 
     @staticmethod
     def _i2c_missing_devices(health: dict) -> str:
@@ -3128,25 +3161,20 @@ class MotionConnector(QObject):
                     or self._rightSensorConnected)
 
     @pyqtSlot()
-    def loadSampleScanIfNoDevice(self) -> None:
-        """Boot helper (#314): when NO device is present, load a bundled
-        real sample scan into the replay viewer so a hardware-free launch
-        lands on explorable BFI/BVI traces the user can pan/zoom/scrub,
-        instead of an empty scan page.
+    def loadSampleScan(self) -> None:
+        """Load the bundled sample scan into the replay viewer (#314).
 
-        No-op when any device is connected — a real session proceeds
-        unchanged, and once the user runs a scan startCapture's fresh
-        LiveScanSource retires the sample source (the sample is never
-        written anywhere, so real scan data is never polluted). Called from
-        BloodFlow.qml Component.onCompleted; safe to call more than once —
-        it only binds the sample while nothing else is showing."""
-        if self._any_device_connected():
-            logger.info(
-                "[Plot] sample scan skipped — device present at boot")
-            return
+        Called from SampleScanOfferModal when the user accepts the offer
+        the startup watchdog raised — never automatically, and never in a
+        clinical build (the connector doesn't emit the offer there). The
+        sample is never written anywhere, so real scan data is never
+        polluted; once the user runs a scan, startCapture's fresh
+        LiveScanSource retires it.
+
+        Guarded so it can't clobber a source that got bound between the
+        offer and the user's click.
+        """
         if self._current_scan_source is not None:
-            # Something is already bound (e.g. a scan already ran, or a
-            # previous call). Don't clobber it.
             return
         self._load_sample_scan(
             str(resource_path("resources", "sample_scan.csv")))
@@ -3184,8 +3212,7 @@ class MotionConnector(QObject):
         self._set_current_scan_source(sample)
         n_samples = sum(b.n for b in sample.buffers.values())
         logger.info(
-            "[Plot] loaded sample scan (no device at boot): "
-            "buffers=%d samples=%d from %s",
+            "[Plot] loaded sample scan: buffers=%d samples=%d from %s",
             len(sample.buffers), n_samples, csv_path)
 
     @pyqtSlot(int, str)
