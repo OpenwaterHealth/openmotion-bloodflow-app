@@ -249,7 +249,7 @@ Item {
         width: 520
         height: 480
         radius: 10
-        color: AppTheme.bgContainer
+        color: AppTheme.sheetBg
         border.width: 2
         border.color: root.state_ === "ok" ? AppTheme.accentGreen
                     : (root.state_ === "warnings"
@@ -487,8 +487,8 @@ Item {
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? AppTheme.accentBlue : AppTheme.bgInput
-                        radius: 4; border.color: parent.hovered ? AppTheme.accentBlue : AppTheme.borderSoft; border.width: 1
+                        color: parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput
+                        radius: 4; border.color: parent.hovered ? AppTheme.accentInteractive : AppTheme.borderSoft; border.width: 1
                     }
                     onClicked: { root.close(); root.dismissed() }
                 }
@@ -503,8 +503,8 @@ Item {
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? AppTheme.accentBlue : AppTheme.bgInput
-                        radius: 4; border.color: parent.hovered ? AppTheme.accentBlue : AppTheme.borderSoft; border.width: 1
+                        color: parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput
+                        radius: 4; border.color: parent.hovered ? AppTheme.accentInteractive : AppTheme.borderSoft; border.width: 1
                     }
                     onClicked: { root.close(); root.retestRequested() }
                 }
@@ -567,10 +567,10 @@ Item {
                     }
                     background: Rectangle {
                         color: !parent.enabled ? AppTheme.bgCard
-                              : (parent.hovered ? AppTheme.accentBlue : AppTheme.bgInput)
+                              : (parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput)
                         radius: 4
                         border.color: !parent.enabled ? AppTheme.borderSubtle
-                                    : (parent.hovered ? AppTheme.accentBlue : AppTheme.borderSoft)
+                                    : (parent.hovered ? AppTheme.accentInteractive : AppTheme.borderSoft)
                         border.width: 1
                     }
                     onClicked: { root.continueRequested(); root.close(); root.dismissed() }
@@ -588,8 +588,8 @@ Item {
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? AppTheme.accentBlue : AppTheme.bgInput
-                        radius: 4; border.color: parent.hovered ? AppTheme.accentBlue : AppTheme.borderSoft; border.width: 1
+                        color: parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput
+                        radius: 4; border.color: parent.hovered ? AppTheme.accentInteractive : AppTheme.borderSoft; border.width: 1
                     }
                     onClicked: { root.close(); root.dismissed() }
                 }
@@ -604,8 +604,8 @@ Item {
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? AppTheme.accentBlue : AppTheme.bgInput
-                        radius: 4; border.color: parent.hovered ? AppTheme.accentBlue : AppTheme.borderSoft; border.width: 1
+                        color: parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput
+                        radius: 4; border.color: parent.hovered ? AppTheme.accentInteractive : AppTheme.borderSoft; border.width: 1
                     }
                     onClicked: { root.close(); root.retestRequested() }
                 }

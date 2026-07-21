@@ -174,13 +174,23 @@ def _load_app_config() -> dict:
         "plotWindowSec": 15,
         "bfiColor": "#E74C3C",
         "bviColor": "#3498DB",
-        "bviLowPassEnabled": False,
-        "bviLowPassCutoffHz": 40.0,
+        # 1-pole low-pass on the DISPLAYED BVI stream (live plots +
+        # clinical side averages); scans.db/CSVs/replay stay raw. The
+        # number is the only control (#228 — no enabled bool, no
+        # Settings UI): missing/invalid → 20.0, <= 0 disables.
+        "bviLowPassCutoffHz": 20.0,
         "bfiClampLow": 0.0,
         "bfiClampHigh": 10.0,
         "bviClampLow": 0.0,
         "bviClampHigh": 10.0,
         "darkMode": True,
+        # Liquid Glass theme — translucent frosted surfaces over an
+        # animated ambient backdrop (Settings → Appearance → Theme).
+        # Orthogonal to darkMode; both light and dark have a glass
+        # variant, and "Liquid Glass" in the Theme selector is the
+        # dark-based one. Default ON for macOS (its native Tahoe look),
+        # OFF elsewhere so Windows clinical builds keep the solid palette.
+        "liquidGlass": sys.platform == "darwin",
         "cq_check_duration_sec": 1.0,
         "cq_rolling_avg_window": 10,
         "cq_dark_threshold_per_camera": [3.0] * 8,
@@ -193,8 +203,10 @@ def _load_app_config() -> dict:
         # Critical-error bug report (see error_codes.py / CriticalErrorModal).
         "support_email": "support@openwater.health",
         "bug_report_smtp": None,
-        # Startup connection watchdog (E-104/E-106).
-        "connectionTimeoutSec": 30,
+        # Startup connection watchdog (E-104/E-106). Also gates the
+        # research-build sample-dataset offer, so this is deliberately
+        # short — the user should not stare at an empty scan page.
+        "connectionTimeoutSec": 12,
         "requireConsole": True,
         "minSensors": 1,
     }
@@ -381,10 +393,16 @@ def main():
         logger.error("Error: Failed to load QML file")
         sys.exit(-1)
 
-    # Start the SDK's connection monitor synchronously — it owns its own
-    # daemon thread, so the app's Qt event loop runs unblocked.
+    # wait=False: the QML window is already visible at this point (main.qml's
+    # ApplicationWindow is `visible: true`) and Qt's event loop hasn't started
+    # yet (app.exec() is below) — a blocking wait here starves Explorer's
+    # taskbar icon/thumbnail negotiation for the freshly-shown window and can
+    # leave it showing the generic icon (issue #223). Real console handshakes
+    # take ~5s normally, well past the old 2s cap, so this reliably blocked on
+    # any hardware-attached launch. Already-attached devices still reach the
+    # UI via the same _on_handle_state_changed signal path as any hotplug.
     logger.info("Starting Motion monitoring...")
-    motion_interface.start(wait=True, wait_timeout=2.0)
+    motion_interface.start(wait=False)
 
     def handle_exit():
         logger.info("Application closing...")

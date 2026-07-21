@@ -3,47 +3,36 @@ import QtQuick.Controls 6.0
 import QtQuick.Layouts 6.0
 import OpenMotion 1.0
 
-// Reusable password prompt modal. Checks against the engineering password
-// and emits accepted() on success. Caller sets title, description, and
-// confirmLabel to customise the appearance.
+// Offer to open the bundled sample scan when the startup connection
+// watchdog finds no device (#314 follow-up). Presentation only — the
+// connector owns every gate: it never emits sampleScanOfferRequested in a
+// clinical build, with any device connected, or with a source already
+// bound. Nothing auto-loads in either mode, and declining is final for
+// the launch (relaunch to be offered again).
 Item {
     id: root
     anchors.fill: parent
     visible: false
-    z: 10000
+    z: 9998
 
+    // Modal interface — see HistoryModal.qml for rationale.
+    readonly property string label: "Sample Dataset"
 
-    property string title: "Password Required"
-    property string description: "Enter the password to continue."
-    property string confirmLabel: "Confirm"
-
-    signal accepted()
+    // Left-edge space to keep clear of the icon bar (ButtonPanel is 80px
+    // + 8px margin at z:10000, ABOVE this modal's z:9998), so the card
+    // never slides under it on narrow windows. See HistoryModal.qml.
+    readonly property int iconBarInset: 104
 
     function open() {
-        pwField.text = ""
-        errorLabel.visible = false
         root.visible = true
-        pwField.forceActiveFocus()
+        card.forceActiveFocus()
     }
-    function close() {
-        root.visible = false
-    }
+    function close() { root.visible = false }
 
-    function _submit() {
-        if (MotionInterface.checkEngineeringPassword(pwField.text)) {
-            root.accepted()
-            root.close()
-        } else {
-            errorLabel.visible = true
-            pwField.text = ""
-            pwField.forceActiveFocus()
-        }
-    }
-
-    // Backdrop — click outside closes.
+    // Dimmed backdrop
     Rectangle {
         anchors.fill: parent
-        color: "#000000B0"
+        color: "#000000AA"
         // Capture ALL pointer input so scroll/hover can't fall through to
         // the interactive plot viewer behind the modal (issue #214).
         MouseArea {
@@ -54,17 +43,21 @@ Item {
         }
     }
 
-    // Panel
     Rectangle {
-        width: 360
+        id: card
+        width: Math.min(parent.width - root.iconBarInset - 40, 460)
         height: contentCol.implicitHeight + 48
-        radius: 14
+        radius: 12
         color: AppTheme.sheetBg
-        border.color: AppTheme.borderStrong
-        border.width: 1
-        anchors.centerIn: parent
+        border.color: AppTheme.borderSubtle
+        border.width: 2
+        // Center within [iconBarInset, parent.width] so the card clears the
+        // icon bar instead of bleeding under it.
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.horizontalCenterOffset: root.iconBarInset / 2
 
-        // Absorb clicks so they don't reach the backdrop.
+        // Absorb empty-space clicks so they don't reach the backdrop.
         MouseArea { anchors.fill: parent }
 
         ColumnLayout {
@@ -74,49 +67,20 @@ Item {
             spacing: 16
 
             Text {
-                text: root.title
+                text: "No console detected"
                 color: AppTheme.textPrimary
                 font.pixelSize: 18
                 font.weight: Font.DemiBold
             }
 
             Text {
-                text: root.description
+                text: "Would you like to open a sample dataset? You can " +
+                      "explore real BFI/BVI traces without any hardware " +
+                      "connected."
                 color: AppTheme.textSecondary
                 font.pixelSize: 13
                 wrapMode: Text.WordWrap
                 Layout.fillWidth: true
-            }
-
-            TextField {
-                id: pwField
-                Layout.fillWidth: true
-                Layout.preferredHeight: 38
-                echoMode: TextInput.Password
-                placeholderText: ""
-                color: AppTheme.textPrimary
-                placeholderTextColor: AppTheme.textSecondary
-                font.pixelSize: 14
-                verticalAlignment: TextInput.AlignVCenter
-                leftPadding: 10
-                rightPadding: 10
-                topPadding: 0
-                bottomPadding: 0
-                background: Rectangle {
-                    color: AppTheme.bgInput
-                    radius: 4
-                    border.color: pwField.activeFocus ? AppTheme.accentInteractive : AppTheme.borderSoft
-                    border.width: 1
-                }
-                onAccepted: root._submit()
-            }
-
-            Text {
-                id: errorLabel
-                text: "Incorrect password"
-                color: AppTheme.accentRed
-                font.pixelSize: 12
-                visible: false
             }
 
             RowLayout {
@@ -125,7 +89,7 @@ Item {
                 Item { Layout.fillWidth: true }
 
                 Button {
-                    text: "Cancel"
+                    text: "Not now"
                     Layout.preferredHeight: 32
                     onClicked: root.close()
                     contentItem: Text {
@@ -142,9 +106,12 @@ Item {
                 }
 
                 Button {
-                    text: root.confirmLabel
+                    text: "Open sample dataset"
                     Layout.preferredHeight: 32
-                    onClicked: root._submit()
+                    onClicked: {
+                        MotionInterface.loadSampleScan()
+                        root.close()
+                    }
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 13
                         color: "#FFFFFF"

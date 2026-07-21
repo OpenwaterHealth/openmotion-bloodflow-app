@@ -29,6 +29,46 @@ logger = logging.getLogger("openmotion.bloodflow-app.data_sources")
 
 _MAX_CAPACITY = 72000       # ≈ 30 min @ 40 Hz; ring-trim above this.
 _INITIAL_CAPACITY = _MAX_CAPACITY
+
+# ── BVI display low-pass (issue #228) ───────────────────────────────────
+# The live display applies a 1-pole IIR low-pass to the BVI stream at
+# LiveScanSource ingest, governed ONLY by the bviLowPassCutoffHz config
+# key (the Settings switch and the bviLowPassEnabled bool are gone).
+# Display-side only: the scan DB record (SDK ScanDBSink), CSVs, the
+# DB-tail history windows, and replay all stay raw.
+BVI_LPF_DEFAULT_CUTOFF_HZ = 20.0
+_BVI_LPF_SAMPLE_HZ = 40.0   # nominal live sample rate (dt = 1/40 s)
+
+
+def resolve_bvi_lpf_cutoff(value) -> float:
+    """Resolve the ``bviLowPassCutoffHz`` config value to an effective
+    cutoff in Hz. Contract (#228): the number is the only control —
+    missing or invalid → the 20 Hz default; ``<= 0`` → 0.0, the
+    documented escape hatch that turns the filter off. Bools are
+    rejected as invalid (a leftover ``true`` must not become 1 Hz)."""
+    if isinstance(value, bool):
+        return BVI_LPF_DEFAULT_CUTOFF_HZ
+    try:
+        cutoff = float(value)
+    except (TypeError, ValueError):
+        return BVI_LPF_DEFAULT_CUTOFF_HZ
+    if math.isnan(cutoff):
+        return BVI_LPF_DEFAULT_CUTOFF_HZ
+    return cutoff if cutoff > 0.0 else 0.0
+
+
+def bvi_lpf_alpha(cutoff_hz: float) -> float:
+    """Smoothing factor for the 1-pole IIR at the nominal 40 Hz live
+    sample rate: ``alpha = dt / (RC + dt)``, ``RC = 1/(2*pi*fc)``,
+    ``dt = 1/40 s`` — the same discretization the legacy QML filter
+    used (37f7dc9). ``cutoff_hz <= 0`` → 1.0 (pass-through). At the
+    20 Hz default this is mild smoothing (alpha ≈ 0.759), since 20 Hz
+    sits at Nyquist for the ~40 fps BVI stream."""
+    if cutoff_hz <= 0.0:
+        return 1.0
+    dt = 1.0 / _BVI_LPF_SAMPLE_HZ
+    rc = 1.0 / (2.0 * math.pi * float(cutoff_hz))
+    return dt / (rc + dt)
 # Pre-allocate at the cap. Mid-scan grow events (np.resize → alloc +
 # copy) at the 7-min and 14-min doublings stressed Python's allocator
 # hard enough to stall the SDK parser thread — the data_queue would
@@ -614,10 +654,20 @@ class LiveScanSource(ScanDataSource):
 
     def __init__(self, plot_t0: float, parent: Optional[QObject] = None,
                  scan_db_path: Optional[str] = None,
-                 cache_max_samples: int = _MAX_CAPACITY) -> None:
+                 cache_max_samples: int = _MAX_CAPACITY,
+                 bvi_lpf_cutoff_hz: float = 0.0) -> None:
         super().__init__(plot_t0=plot_t0, parent=parent,
                          buffer_max_capacity=cache_max_samples)
         self._live = True
+        # BVI display low-pass (issue #228): 1-pole IIR applied at ingest,
+        # per (side, cam_id) stream (cam_id -1 = clinical side average).
+        # The constructor default 0.0 = OFF, preserving raw-storage
+        # semantics for direct constructions (tests); the connector — the
+        # sole production construction site — passes the config-resolved
+        # cutoff (resolve_bvi_lpf_cutoff: missing/invalid → 20 Hz). State
+        # is per-scan by construction: a fresh source per scan.
+        self._bvi_lpf_alpha = bvi_lpf_alpha(float(bvi_lpf_cutoff_hz))
+        self._bvi_lpf_prev: dict[tuple[str, int], float] = {}
         # DB tail state — all lazily initialized on first pan-into-past.
         self._scan_db_path = scan_db_path
         self._db = None                       # omotion.ScanDatabase read handle
@@ -917,12 +967,15 @@ class LiveScanSource(ScanDataSource):
         """Append one frame's worth of uncorrected metrics.
 
         bfi and bvi are always appended (NaN included — the source stores
-        what arrives). mean/contrast/temp are appended only when non-None;
+        what arrives). bvi alone passes through the display low-pass
+        first when a cutoff was configured (see _bvi_lpf; issue #228).
+        mean/contrast/temp are appended only when non-None;
         the existing _LivePlotSink passes None for samples where the
         SDK reported a non-finite mean_dc_rt / contrast_sn_rt, and None
         temp for dark frames (whose camera-temp reading is meaningless)."""
         self._append_one(side, cam_id, "bfi", frame_id, t, bfi)
-        self._append_one(side, cam_id, "bvi", frame_id, t, bvi)
+        self._append_one(side, cam_id, "bvi", frame_id, t,
+                         self._bvi_lpf(side, cam_id, bvi))
         if mean is not None:
             self._append_one(side, cam_id, "mean", frame_id, t, mean)
         if contrast is not None:
@@ -939,6 +992,24 @@ class LiveScanSource(ScanDataSource):
                 buf.mark_dropped(t)
 
     # ── internal ──────────────────────────────────────────────────────────
+
+    def _bvi_lpf(self, side: str, cam_id: int, bvi: float) -> float:
+        """1-pole IIR low-pass on the DISPLAY BVI stream (issue #228).
+
+        ``y[n] = y[n-1] + alpha * (x[n] - y[n-1])``; the first finite
+        sample seeds the state (no ramp-in from zero). Non-finite input
+        (NaN side averages while sensors are covered) is returned as-is —
+        the renderer skips NaN — and leaves the state untouched, so the
+        filter resumes from the last finite output. alpha >= 1 (filter
+        off) short-circuits to raw."""
+        alpha = self._bvi_lpf_alpha
+        if alpha >= 1.0 or not math.isfinite(bvi):
+            return bvi
+        key = (side, int(cam_id))
+        prev = self._bvi_lpf_prev.get(key)
+        out = bvi if prev is None else prev + alpha * (bvi - prev)
+        self._bvi_lpf_prev[key] = out
+        return out
 
     def _append_one(
         self,
@@ -972,7 +1043,7 @@ def _bucketize_session_rows(
 
     Rows are bucketed by their stored cam_id verbatim:
       - cam_id 0..7 — per-camera BFI/BVI/mean/contrast (normal-mode scans).
-      - cam_id == -1 — the reduced-mode dark-corrected per-side average
+      - cam_id == -1 — the clinical-mode dark-corrected per-side average
         (bfi/bvi/mean/contrast), persisted by ScanDBSink from the cam_id=-1
         frames the SDK's SideAverageStage routes onto the "final" channel.
     has_bfi reflects whether ANY finite BFI/BVI landed (either layout) — the
@@ -1110,7 +1181,7 @@ def _derive_masks_from_buffers(buffers: dict) -> tuple[int, int]:
     """Reconstruct (left_mask, right_mask) from which per-camera streams a
     loaded scan carries — bit c set ⇒ camera c (cam_id 0..7) recorded data.
 
-    Returns (-1, -1) when no per-camera streams exist (e.g. a reduced-mode
+    Returns (-1, -1) when no per-camera streams exist (e.g. a clinical-mode
     scan whose only buffers are the cam_id=-1 side average) so the viewer
     falls back to its live/preview masks rather than rendering an empty
     normal-mode grid. A side that recorded nothing yields mask 0 as long as
@@ -1199,16 +1270,35 @@ def load_past_scan_buffers(
 
     session_data carries, by cam_id:
       - cam_id 0..7  — per-camera BFI/BVI/mean/contrast (normal-mode scans).
-      - cam_id == -1 — the reduced-mode dark-corrected per-side average
+      - cam_id == -1 — the clinical-mode dark-corrected per-side average
         (cam_id=-1 frames on the "final" channel, persisted by ScanDBSink).
-        Reduced cells query cam_id=-1, so replay reads it straight from the
-        DB — no derivation.
+        Clinical cells query cam_id=-1, so replay reads it straight from
+        the DB — no derivation.
     Pre-pipeline scans carry no BFI/BVI in the DB; the corrected-CSV
     fallback covers those (CsvSink writes it for every scan)."""
     buffers, has_bfi = _bucketize_session_rows(scan_db, int(session_id))
     if not has_bfi and corrected_csv_path:
         _load_corrected_csv_into(buffers, corrected_csv_path)
     return buffers, has_bfi
+
+
+def load_csv_scan_buffers(csv_path: str) -> dict:
+    """Bulk-load a scan-export CSV into a fresh
+    {(side, cam_id, metric): _CameraBuffer} dict, DB-free.
+
+    The History → Export CSV / SDK ``materialize_corrected_csv`` output is
+    the same per-cam wide format ``_load_corrected_csv_into`` already parses
+    (frame_id, timestamp_s, bfi/bvi/mean/contrast per camera; trailing temp/
+    quality columns are ignored). Used to feed a ``PastScanSource`` straight
+    from a CSV — no ``scans.db`` involvement — e.g. the bundled sample scan
+    shown in the replay viewer when no device is connected at boot (#314).
+
+    Fail-soft: a missing or unreadable file yields an empty dict (the
+    OSError guard lives in ``_load_corrected_csv_into``); callers check
+    ``buffers_are_empty`` before displaying."""
+    buffers: dict = {}
+    _load_corrected_csv_into(buffers, csv_path)
+    return buffers
 
 
 class PastScanSource(ScanDataSource):

@@ -23,6 +23,13 @@ for folder in ("pages", "components", "assets", "models", "config", "models", "p
     if os.path.isdir(folder):
         datas.append((folder, folder))
 
+# Bundle the replay sample scan (#314) — loaded into the viewer when no
+# device is connected at boot. Located at runtime via
+# utils.resource_path.resource_path("resources", "sample_scan.csv").
+_SAMPLE_SCAN = os.path.join("resources", "sample_scan.csv")
+if os.path.exists(_SAMPLE_SCAN):
+    datas.append((_SAMPLE_SCAN, "resources"))
+
 # Ensure the icon is explicitly included
 if os.path.exists(ICON_FILE):
     datas.append((ICON_FILE, "assets/images"))
@@ -49,6 +56,22 @@ hidden += [
     "usb.core",
     "usb.util",
     "usb.backend.libusb1",
+]
+
+# --- force include omotion's + our own third-party deps ---
+# collect_all("omotion") above only walks omotion's own submodules/data, not its
+# third-party deps, and PyInstaller's static analysis doesn't trace into them
+# either - same class of gap as the serial/usb block above. requests backs
+# omotion.firmware_update; crcmod backs omotion's i2c packet framing; base58
+# is imported directly by motion_connector.py.
+hidden += [
+    "requests",
+    "urllib3",
+    "certifi",
+    "charset_normalizer",
+    "idna",
+    "crcmod",
+    "base58",
 ]
 
 # Optional: if you also have a separate 'libusb' wheel installed, this won't hurt
@@ -119,17 +142,8 @@ exe_gui = EXE(
     upx=False   # safer for DLLs on Windows
 )
 
-exe_cli = EXE(
-    pyz, a.scripts, [],
-    exclude_binaries=True,
-    name=f"{APP_NAME}_console",
-    console=True,
-    icon=ICON_FILE,
-    upx=False
-)
-
 coll = COLLECT(
-    exe_gui, exe_cli,
+    exe_gui,
     a.binaries, a.zipfiles, a.datas,
     strip=False, upx=False, upx_exclude=[],
     name=APP_NAME

@@ -103,6 +103,67 @@ def test_get_scan_sessions_rows_and_sort(tmp_path):
     assert top["dateTime"] == "2026-06-12 09:31:00"
 
 
+# ── Issue #335 — History duration must be the actual trigger-ON scan time ──
+# session_end - session_start brackets the whole pipeline lifetime (pre-trigger
+# setup + post-trigger USB drain), ~3 s longer than the laser-on window. The
+# completion handler stamps the trigger-ON duration into
+# session_meta.actual_duration_sec; _session_to_row must prefer it.
+
+
+def test_session_to_row_prefers_actual_duration_from_meta(tmp_path):
+    c = _connector(tmp_path, str(tmp_path / "scans.db"))
+    # Wall-clock window is 123.2 s (renders "2:03"); the actual trigger-ON
+    # duration the app recorded is 120.02 s ("2:00").
+    session = {
+        "id": 1,
+        "session_label": "20260708_114526_ow2P964L",
+        "session_start": 1000.0,
+        "session_end": 1123.2,
+        "session_notes": None,
+        "session_meta": {
+            "subject_id": "ow2P964L",
+            "actual_duration_sec": 120.02,
+            "sdk_flags": {"reduced_mode": True,
+                          "left_camera_mask": 0x66, "right_camera_mask": 0x66},
+        },
+    }
+    row = c._session_to_row(session)
+    assert row["durationSec"] == pytest.approx(120.02)
+
+
+def test_session_to_row_falls_back_to_wall_clock_without_actual_duration(tmp_path):
+    """Old rows written before the fix have no actual_duration_sec, so
+    _session_to_row keeps the wall-clock delta (backward compatible)."""
+    c = _connector(tmp_path, str(tmp_path / "scans.db"))
+    session = {
+        "id": 1, "session_label": "20260101_000000_s",
+        "session_start": 1000.0, "session_end": 1015.0,
+        "session_notes": None, "session_meta": {"sdk_flags": {}},
+    }
+    row = c._session_to_row(session)
+    assert row["durationSec"] == 15.0
+
+
+def test_persist_scan_notes_stamps_actual_duration(tmp_path):
+    """The completion handler passes the trigger-ON elapsed to
+    _persist_scan_notes, which merges actual_duration_sec into session_meta
+    without clobbering the existing meta (sdk_flags, diagnostics)."""
+    db_path = str(tmp_path / "scans.db")
+    _make_session(db_path, "20260708_114526_ow2P964L", 1000.0, 1123.2,
+                  0x66, 0x66, subject="ow2P964L")
+    c = _connector(tmp_path, db_path)
+    c._scan_notes = "some notes"
+    assert c._persist_scan_notes("20260708_114526_ow2P964L",
+                                 actual_duration_sec=120.02) is True
+
+    # Read back through the History row: it must now show the actual duration,
+    # and the pre-existing sdk_flags must survive the merge.
+    row = c.get_scan_sessions()[0]
+    assert row["durationSec"] == pytest.approx(120.02)
+    assert row["leftMask"] == 0x66 and row["rightMask"] == 0x66
+    assert row["notes"] == "some notes"
+
+
 def test_get_scan_sessions_interrupted_open_session(tmp_path):
     db_path = str(tmp_path / "scans.db")
     _make_session(db_path, "20260612_100000_subjC", 300.0, None, 0xFF, 0xFF)

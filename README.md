@@ -98,10 +98,10 @@ Edit `config/app_config.json` to customize behavior:
 | Key | Default | Description |
 |-----|---------|-------------|
 | `dataDirectory` | `null` | Root directory for `logs/` and `data/` (null = auto-detect) |
-| `engineeringMode` | `false` | Enable engineering UI features |
-| `clinicalMode` | `false` | Simplified clinical UI: forces far camera config + free run, hides scan settings, shows large left/right BFI/BVI panels |
+| `engineeringMode` | `false` | Enable engineering UI features (runtime-unlockable) |
+| `clinicalMode` | `false` | Simplified clinical UI: forces far camera config + free run, hides scan settings, shows large left/right BFI/BVI panels. Build-time only — never persisted as a runtime override |
 | `leftMask` / `rightMask` | `0x66` | Camera bitmask for left/right sensor modules |
-| `writeRawCsv` | `true` | Write raw histogram CSV during capture |
+| `writeRawCsv` | `true` | Write raw histogram CSV during capture (requires `clinicalMode` off, or `engineeringMode` on) |
 | `rawCsvDurationSec` | `null` | Limit raw CSV capture duration (null = unlimited) |
 | `showBfiBvi` | `true` | Plot BFI/BVI instead of raw mean/contrast |
 | `plotWindowSec` | `15` | Realtime plot time window (3 / 5 / 15 / 30) |
@@ -109,15 +109,14 @@ Edit `config/app_config.json` to customize behavior:
 | `bfiColor` / `bviColor` | `#ff0000` / `#3437db` | Trace colors for BFI / BVI |
 | `bfiClampLow` / `bfiClampHigh` | `0.0` / `10.0` | BFI display clamps — values outside show `--` |
 | `bviClampLow` / `bviClampHigh` | `0.0` / `10.0` | BVI display clamps — values outside show `--` |
-| `bviLowPassEnabled` | `false` | Enable 1-pole low-pass filter on BVI samples |
-| `bviLowPassCutoffHz` | `40.0` | Cutoff frequency for the BVI LPF |
+| `bviLowPassCutoffHz` | `20.0` | Cutoff (Hz) for the 1-pole low-pass on the *displayed* BVI stream; `<= 0` disables, missing/invalid → 20. Display-only — stored scan data stays raw. No Settings UI |
 | `bfiMin` / `bfiMax` | `4.0` / `9.0` | Manual BFI plot bounds (when autoscale is off) |
 | `bviMin` / `bviMax` | `4.0` / `8.0` | Manual BVI plot bounds (when autoscale is off) |
 | `meanMin` / `meanMax` | `0` / `200` | Manual mean plot bounds |
 | `contrastMin` / `contrastMax` | `0.0` / `0.7` | Manual contrast plot bounds |
 | `support_email` | `support@openwater.health` | Destination for the critical-error modal's **Send Bug Report** button |
 | `bug_report_smtp` | _(absent)_ | Optional `{host, port, username, password, from_addr, use_tls}` block. When set, bug reports are emailed automatically with the session log attached; otherwise the app opens your mail client for manual send |
-| `connectionTimeoutSec` | `30` | Startup connection watchdog grace period before warning about missing devices (E-104/E-106, yellow toast); `0` disables it |
+| `connectionTimeoutSec` | `12` | Startup connection watchdog grace period before warning about missing devices (E-104/E-106, yellow toast); `0` disables it |
 | `requireConsole` | `true` | Watchdog warns (E-104) if no console connected at startup |
 | `minSensors` | `1` | Watchdog warns (E-106) if fewer than this many sensors connected at startup |
 

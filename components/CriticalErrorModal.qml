@@ -102,7 +102,7 @@ Item {
         width: 520
         height: contentCol.implicitHeight + headerBar.height + 16 + 20
         radius: 14
-        color: AppTheme.bgContainer
+        color: AppTheme.sheetBg
         border.color: AppTheme.accentRed
         border.width: 1
         anchors.centerIn: parent

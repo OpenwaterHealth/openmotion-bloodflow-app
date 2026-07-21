@@ -16,7 +16,7 @@ PasswordPromptModal {
 
     onAccepted: {
         MotionInterface.setConfig("engineeringMode", true)
-        MotionInterface.notify("Engineering mode enabled.", "info", 3000, false, "dev-mode")
+        MotionInterface.notify("Engineering mode enabled.", "info", 3000, false, "engineering-mode")
         root.unlocked()
     }
 }

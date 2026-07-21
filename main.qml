@@ -1,6 +1,7 @@
 import QtQuick 6.0
 import QtQuick.Controls 6.0
 import QtQuick.Layouts 6.0
+import QtQuick.Effects
 import OpenMotion 1.0
 
 import "components"
@@ -13,6 +14,36 @@ ApplicationWindow {
     height: 800
     flags: Qt.FramelessWindowHint | Qt.Window | Qt.CustomizeWindowHint | Qt.WindowTitleHint
     color: "transparent"
+
+    // ── Liquid Glass ambient backdrop ─────────────────────────────
+    // Behind all content, only while the glass theme is on. The window
+    // is frameless + transparent with 20px rounded corners, so the
+    // ambient (and its blurred blobs) is masked to that same rounded
+    // shape — otherwise the rectangular blur layer would poke square
+    // glowing corners past the window edge. In the normal theme this
+    // is not rendered and AppTheme.bgBase paints the opaque surface as
+    // before.
+    Item {
+        id: glassBackdrop
+        anchors.fill: parent
+        visible: AppTheme.glass
+        layer.enabled: true
+        layer.effect: MultiEffect {
+            maskEnabled: true
+            maskSource: cornerMask
+        }
+        AmbientBackground {
+            anchors.fill: parent
+            animate: window.visibility !== Window.Minimized
+        }
+    }
+    Item {
+        id: cornerMask
+        anchors.fill: parent
+        visible: false
+        layer.enabled: true
+        Rectangle { anchors.fill: parent; radius: 20; color: "white" }
+    }
 
 
     // Issue #75: aggregate 'something is happening' state used by the

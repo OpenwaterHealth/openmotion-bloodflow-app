@@ -31,8 +31,9 @@ Rectangle {
     // app tears down.
     readonly property alias modalManager: modalManager
 
-    // FDA mode (read from app config). Forces Far camera pattern + free run,
-    // hides scan-settings button, and swaps in the FDA plot view.
+    // Clinical mode (read from app config). Forces Far camera pattern +
+    // free run, hides scan-settings button, and swaps in the clinical
+    // plot view.
     property bool clinicalMode: MotionInterface.appConfig.clinicalMode === true
 
     // Research-only "Pulse" viewer mode (Scan Settings → Viewer Mode). When on,
@@ -64,7 +65,7 @@ Rectangle {
 
     // Duration from scan time modal
     property bool freeRun: clinicalMode
-    property int durationSec: clinicalMode ? 43200 : 3600  // 12h in FDA mode, 1h default
+    property int durationSec: clinicalMode ? 43200 : 3600  // 12h in clinical mode, 1h default
 
     onClinicalModeChanged: {
         if (clinicalMode) {
@@ -279,6 +280,9 @@ Rectangle {
         onNotesClicked:    modalManager.toggle(notesModal)
         onHistoryClicked:  modalManager.toggle(historyModal)
         onSettingsClicked: modalManager.toggle(settingsModal)
+        // App-log viewer is a separate Window, not a ModalManager modal —
+        // clicking Logs just shows/raises it (close via its title bar).
+        onLogsClicked:     logViewerWindow.open()
     }
 
     // Allow external callers (firmware banner) to open the Settings overlay.
@@ -292,7 +296,8 @@ Rectangle {
     ModalManager {
         id: modalManager
         modals: [scanSettingsModal, notesModal, historyModal,
-                 settingsModal, contactQualityModal, logsModal]
+                 settingsModal, contactQualityModal, logsModal,
+                 sampleScanOfferModal]
     }
 
     // Pulse viewer (Research "Pulse" viewer mode) — fills the same area as
@@ -376,6 +381,12 @@ Rectangle {
         id: notesModal
     }
 
+    // No-device offer to open the bundled sample scan. Raised by the
+    // connector's startup watchdog; research builds only.
+    SampleScanOfferModal {
+        id: sampleScanOfferModal
+    }
+
     // Spacebar during an active scan pops the Notes modal with a fresh
     // newline + [elapsed / wall-clock] timestamp, cursor ready to type.
     // Gated so it only fires mid-scan and never over another modal; once
@@ -403,6 +414,13 @@ Rectangle {
     Connections {
         target: MotionInterface
         function onScanNotesReady() { notesModal.open() }
+        // Startup watchdog found no device (research builds only). Don't
+        // stomp a modal the user opened during the 12 s window. The
+        // watchdog is one-shot, so an offer dropped here is not retried
+        // this launch (relaunch to be offered again).
+        function onSampleScanOfferRequested() {
+            if (!modalManager.current) sampleScanOfferModal.open()
+        }
         // Snap the header counter to the authoritative value on every
         // trigger edge. The OFF edge matters most: it carries the SDK
         // timestamp correction, so the final displayed value lands on
@@ -433,6 +451,12 @@ Rectangle {
 
     LogsModal {
         id: logsModal
+    }
+
+    // Engineering live app-log viewer (icon-bar Logs button) — a separate
+    // non-modal Window, distinct from the audit-log LogsModal above.
+    LogViewerWindow {
+        id: logViewerWindow
     }
 
     ContactQualityModal {

@@ -45,6 +45,7 @@ python -m PyInstaller -y openwater.spec # package .exe → dist/Open-Motion/
 | `processing/visualize_bloodflow.py` | BFI/BVI computation from CSV histograms. |
 | `config/app_config.json` | 56 feature flags / thresholds, grouped by topic: output paths, scan/camera masks, plot/UI, calibration + FT thresholds, contact quality, developer/debug. |
 | `config/laser_params.json` | 18 laser I2C register sets (TA / SEED / EE / OPT variants). **Not user-tunable calibration data** — init/baseline commands for the laser driver chips. |
+| `resources/sample_scan.csv` | Real exported scan (History → Export CSV / SDK `materialize_corrected_csv` per-cam wide format). Offered — never auto-loaded — into the replay viewer when a **research build** boots with **no device connected** (#314): the startup connection watchdog raises `components/SampleScanOfferModal.qml`, and only accepting it binds the sample. Clinical builds never see the offer. Swap this one file to change the sample dataset. Bundled by `openwater.spec` (targeted `datas` entry); located at runtime via `utils.resource_path.resource_path("resources", "sample_scan.csv")`. Parsed DB-free by `data_sources.load_csv_scan_buffers` → `PastScanSource(preloaded_buffers=…, scan_db=None)`; the user's real `scans.db` is never touched. |
 | `openwater.spec` | PyInstaller spec. Custom logic mirrors vendored libusb binaries into `_internal\_vendor` so the runtime hook can find them. |
 | `tests/` | Hardware-in-loop pytest suite, ~23 files. Markers: `@pytest.mark.dev` (~1–2 min, runs on every push to `next`), `@pytest.mark.release` (~6–8 min, runs on release tags). |
 
@@ -69,6 +70,8 @@ There is currently **no working no-hardware mock mode** for the running app:
 
 To exercise app logic without hardware, write unit tests that mock the hardware seams instead — see the tests marked `@pytest.mark.unit` (e.g. `tests/test_live_plot_sink.py`, `tests/test_scan_notes_db.py`). The conftest autouse fixtures short-circuit on that marker, so no app launch or UI machinery fires.
 
+**Boot with no device → sample scan offer (#314):** nothing auto-loads in any build variant anymore. Instead, the existing startup connection watchdog (`connectionTimeoutSec`, default `12` s — same one-shot timer that raises the E-104/E-106 warning toast) also calls `_maybe_offer_sample_scan()`. In **research (non-clinical) builds only**, when no device at all is connected (`_any_device_connected()`, not merely a missing console) and nothing is already bound to the viewer, the connector emits `sampleScanOfferRequested`; `components/SampleScanOfferModal.qml` shows a "No console detected — would you like to open a sample dataset?" dialog. Only clicking "Open sample dataset" calls the `loadSampleScan()` slot, which binds `resources/sample_scan.csv` to the plot viewer as a DB-free `PastScanSource` so you can pan/zoom/scrub real BFI/BVI traces. Clinical builds get neither the auto-load nor the dialog — a clinical user is never shown fabricated traces, not even behind a prompt. Declining (or just not answering) is final for that launch; relaunch to be offered again. This is NOT a mock mode (no live capture, no CQ, no scan flow); it just gives the replay/DVR machinery real data to explore. Starting a real scan later replaces the sample source; a missing/corrupt CSV fails soft (logged, viewer stays empty). Gating + parsing are unit-tested in `tests/test_sample_scan_replay.py`.
+
 Debug flags that are still useful when hardware **is** attached (`config/app_config.json`):
 
 - `engineeringMode: true` — show per-camera CQ dots, test buttons, debug telemetry.
@@ -78,8 +81,8 @@ Debug flags that are still useful when hardware **is** attached (`config/app_con
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `engineeringMode` | `false` | Engineering UI + diagnostics: debug telemetry, per-camera CQ dots, test buttons, Force Dismiss in the CQ modal footer, firmware-update banner, profiling HUD. Also gates the per-scan telemetry and raw CSVs (issue #43 — clinical users must not get them). Unlockable at runtime via `EngineeringUnlockModal`. |
-| `clinicalMode` | `true` (repo config) | Clinical UI: hide settings, large BFI/BVI panels. `main.py` baseline default is `false` (= Research distribution; window title "Open-Motion Research"). The build flips it per artifact variant (`scripts/build_common.ps1`); env override `OPENMOTION_CLINICAL=1/0` beats both. No Settings toggle. |
+| `engineeringMode` | `false` | Engineering UI + diagnostics: debug telemetry, per-camera CQ dots, test buttons, Force Dismiss in the CQ modal footer, firmware-update banner, profiling HUD. Also gates the per-scan telemetry CSV (issue #43 — clinical users must not get it; raw CSVs are gated `!clinicalMode \|\| engineeringMode` since #234). Unlockable at runtime via `EngineeringUnlockModal`. |
+| `clinicalMode` | `true` (repo config) | Clinical build variant: hide settings, large BFI/BVI panels. `main.py` baseline default is `false` (= Research distribution; window title "Open-Motion Research"). The build flips it per artifact variant (`scripts/build_common.ps1`); env override `OPENMOTION_CLINICAL=1/0` beats both. Build-time only (#233): no Settings toggle, and `config_store` neither loads nor persists it as a runtime override. |
 | `portableMode` | `false` | Build-time flag: `true` keeps all writable state (config overrides, logs, scan data/db) next to the exe (old un-installed layout); `false` scatters it to `%PROGRAMDATA%\Openwater`. Portable zips ship `true`, installers force `false` — see `Set-PortableMode` (`scripts/build_common.ps1`) and `utils/app_paths.py:writable_root`. Env override `OPENMOTION_PORTABLE=1` for dev testing. |
 | `forceLaserFail` | `false` | Debug: simulate a laser safety trip. |
 | `cameraFakeData` | `false` | **Broken — do not use.** Was meant to request firmware fake histograms; see "Working without hardware". |
@@ -93,8 +96,8 @@ Debug flags that are still useful when hardware **is** attached (`config/app_con
 | `test_scan_duration_sec` | `5` | "Test" scan runtime (feature #132). |
 | `cq_dark_threshold_per_camera` | `[3.0,…]` | Contact-quality dark threshold. |
 | `bfiClampLow` / `bfiClampHigh` | `0.0` / `10.0` | Display clamps (values outside show `--`). |
-| `bviLowPassEnabled` | `true` | 1-pole LPF on BVI (cutoff 40 Hz). |
-| `writeRawCsv` | `false` | Opt-in raw histogram CSVs (`{scan_id}_(left\|right)_mask*_raw.csv`). Settings → Engineering toggle; additionally gated on `engineeringMode` — flipping engineering mode off stops raw output even if the toggle was left on. `rawCsvDurationSec` caps seconds written (`null` = whole scan). |
+| `bviLowPassCutoffHz` | `20.0` | 1-pole IIR low-pass on the **displayed** BVI stream only (live PlotViewer traces + clinical side averages, applied at `LiveScanSource` ingest); `scans.db`, CSVs, DB-tail history, and replay stay raw. Config-only, no Settings UI — the switch and `bviLowPassEnabled` were removed (#228); the number is the whole contract: missing/invalid → 20, `<= 0` disables. alpha = dt/(RC+dt) at nominal 40 Hz (≈ 0.76 at 20 Hz). |
+| `writeRawCsv` | `false` | Opt-in raw histogram CSVs (`{scan_id}_(left\|right)_mask*_raw.csv`). Settings → Data Output toggle, shown when `!clinicalMode \|\| engineeringMode` (#234 — research users get raw CSVs); the same flag gate is re-checked at scan start, so a plain clinical build never writes raw output even if the toggle was left on (#43). `rawCsvDurationSec` caps seconds written (`null` = whole scan). |
 | `writeCorrectedCsv` | `false` | Opt-in corrected per-cam CSV (`{scan_id}.csv`) — redundant now that per-cam BFI/BVI lands in `scans.db`. Config-only, no Settings UI. |
 | `dataDirectory` | `null` | Single output root — `logs/` and `data/` (`scans.db`, calibrations) live under it. `null` = `app_paths.writable_root()`: cwd for dev runs, exe-adjacent or `%PROGRAMDATA%\Openwater` per `portableMode` when frozen. |
 
@@ -123,7 +126,7 @@ Get-ChildItem C:\Users\ethan\Projects\openmotion-bloodflow-app\logs\open-motion-
 
 The `dataDirectory` config key controls the root (defaults to cwd if unset — falls back to `~/Documents/Open-Motion` on macOS). When unset on a frozen build, the default instead follows `portableMode`: next to the exe (portable zip) or `%PROGRAMDATA%\Openwater` (installer). Two fixed children live under that root:
 - `logs/` — app log files (one per launch)
-- `data/` — everything else. **Scan output is DB-only by default**: everything lands in `scans.db` (per-cam BFI/BVI, sessions, notes in `sessions.session_notes`); no per-scan CSVs are written unless opted in. User-facing CSVs are export-time artifacts: History → Export CSV (`exportScanCsv`). The opt-in engineering per-scan CSVs land directly in `data/`: telemetry CSV (`{scan_id}_{subject}_telemetry.csv`, gated on `engineeringMode` — issue #43), raw histogram CSVs (`engineeringMode && writeRawCsv`), corrected per-cam CSV (`writeCorrectedCsv`). `data/calibrations/` holds saved calibration JSONs plus the SDK's per-camera PASS/FAIL CSVs (`calibration-<ts>.csv` / `test-<ts>.csv`); `data/debug-bundles/` holds "Send Debug Logs" zips; `data/updates/` holds in-app-updater downloads. `*_notes.txt` files are legacy read-only fallbacks. (`data/ft-test-csvs/` was a legacy per-scan factory-test export — dead since May 2026 and retired; the Test/Calibrate flows' CSVs are its superset.)
+- `data/` — everything else. **Scan output is DB-only by default**: everything lands in `scans.db` (per-cam BFI/BVI, sessions, notes in `sessions.session_notes`); no per-scan CSVs are written unless opted in. User-facing CSVs are export-time artifacts: History → Export CSV (`exportScanCsv`). The opt-in per-scan CSVs land directly in `data/`: telemetry CSV (`{scan_id}_{subject}_telemetry.csv`, gated on `engineeringMode` — issue #43), raw histogram CSVs (`(!clinicalMode \|\| engineeringMode) && writeRawCsv`, #234), corrected per-cam CSV (`writeCorrectedCsv`). `data/calibrations/` holds saved calibration JSONs plus the SDK's per-camera PASS/FAIL CSVs (`calibration-<ts>.csv` / `test-<ts>.csv`); `data/debug-bundles/` holds "Send Debug Logs" zips; `data/updates/` holds in-app-updater downloads. `*_notes.txt` files are legacy read-only fallbacks. (`data/ft-test-csvs/` was a legacy per-scan factory-test export — dead since May 2026 and retired; the Test/Calibrate flows' CSVs are its superset.)
 
 **Important:** the runner is fail-soft. `ScanRunner._safe_consume` catches sink exceptions and logs them as `sink %r raised on channel ...` at ERROR; `pipeline.process` exceptions log as `pipeline.process raised — resetting and continuing` at ERROR. **Neither aborts the scan**, so the app may report "complete" while every interval was actually broken. Always grep for `raised|exception` even on apparent successes when something downstream looks wrong.
 
@@ -141,6 +144,36 @@ The `dataDirectory` config key controls the root (defaults to cwd if unset — f
 - Default branch: `main`; daily work on `next`. PR feature → `next`, `next` → `main` for release.
 - Releases triggered by semver tags (e.g. `1.1.2`, `1.1.2-dev.0`, `1.1.2-rc.1`) — see [../CLAUDE.md](../CLAUDE.md) for tag format.
 - CI workflows: `.github/workflows/release-build.yml` (Windows runner, builds .exe + zip on tags / manual dispatch) and `hil-tests.yml` (self-hosted Windows runner with Shelly IoT outlet power control, runs after the release build completes).
+
+### Curating release notes (issue #348)
+
+`release-build.yml`'s auto-generated GitHub Release body is just a raw commit
+list since the *previous tag* — dev/rc noise included, and it resets on every
+pre-release so it never shows the full diff since the last production
+version. Treat it as a traceability appendix, not release notes. Before
+announcing an rc/dev build to the test team, curate the release
+(`gh release edit <tag> --notes-file <file>`) by adding two sections above
+that commit list:
+
+1. **Changelog** — plain-English feature summary since the last *production*
+   release (not the last pre-release tag — diff against the last `X.Y.Z`
+   with no suffix), grouped by theme. Include `openmotion-sdk` changes too:
+   prod/rc tags install the SDK's latest PyPI release at build time (see
+   `release-build.yml`'s SDK-selection step), so diff the SDK version bundled
+   at the last production release (check that build's CI log for
+   `Successfully installed ... openmotion-sdk-X.Y.Z`) against whatever's
+   currently on PyPI, and fold in anything user-visible.
+2. **Known Issues** — currently-open bugs a tester could hit in this build.
+   Never list unimplemented/future features here. Cross-check each candidate
+   against the merge log first — a ticket can still show "open" on the board
+   after its fix merged, since tickets stay in **In review** through
+   pre-release validation (see the board process in [../CLAUDE.md](../CLAUDE.md)).
+   **Always confirm the candidate list with Ethan before publishing** — the
+   backlog accumulates duplicates, stale hardware-specific reports, and
+   test-infra-only bugs that don't belong in a test-team-facing note.
+
+Keep the raw commit list / compare-diff link below the curated sections —
+it's the audit trail, not something to delete.
 
 ## "Start here" by task
 
