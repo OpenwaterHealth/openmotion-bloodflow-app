@@ -949,6 +949,85 @@ Item {
                     title: "Engineering"
                     visible: MotionInterface.appConfig.engineeringMode ? true : false
 
+                    // ── Demo mode: replay a recorded scan file at the top of
+                    // the pipeline instead of streaming from sensors. Start
+                    // (regular or pulse view) then runs a no-hardware replay.
+                    FieldRow {
+                        label: "Demo mode (replay file)"
+                        PillSwitch {
+                            checked: MotionInterface.appConfig.demoMode === true
+                            onToggled: MotionInterface.setConfig("demoMode", checked)
+                        }
+                        Text {
+                            text: MotionInterface.appConfig.demoMode === true ? "On" : "Off"
+                            color: MotionInterface.appConfig.demoMode === true ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+                    FieldRow {
+                        visible: MotionInterface.appConfig.demoMode === true
+                        label: "Demo left cameras"
+                        StyledCombo {
+                            model: cameraPatterns
+                            textRole: "name"
+                            Layout.preferredWidth: 150
+                            currentIndex: maskToIndex(MotionInterface.appConfig.demoModeLeftMask !== undefined
+                                                      ? MotionInterface.appConfig.demoModeLeftMask : 255)
+                            onActivated: MotionInterface.setConfig("demoModeLeftMask", maskFromIndex(currentIndex))
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+                    FieldRow {
+                        visible: MotionInterface.appConfig.demoMode === true
+                        label: "Demo right cameras"
+                        StyledCombo {
+                            model: cameraPatterns
+                            textRole: "name"
+                            Layout.preferredWidth: 150
+                            currentIndex: maskToIndex(MotionInterface.appConfig.demoModeRightMask !== undefined
+                                                      ? MotionInterface.appConfig.demoModeRightMask : 255)
+                            onActivated: MotionInterface.setConfig("demoModeRightMask", maskFromIndex(currentIndex))
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+                    FieldRow {
+                        visible: MotionInterface.appConfig.demoMode === true
+                        label: "Demo data file"
+                        TextField {
+                            id: demoFileField
+                            readOnly: true
+                            text: (MotionInterface.appConfig.demoDataFile && ("" + MotionInterface.appConfig.demoDataFile).length > 0)
+                                  ? MotionInterface.appConfig.demoDataFile : "(bundled sample scan)"
+                            font.pixelSize: 12
+                            color: root.colTextPri
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 30
+                            background: Rectangle {
+                                color: root.colBgInput; radius: 4
+                                border.color: root.colBorderSoft; border.width: 1
+                            }
+                        }
+                        ActionButton {
+                            text: "Browse"
+                            Layout.preferredWidth: 80
+                            onClicked: demoFileDialog.open()
+                        }
+                        ActionButton {
+                            text: "Clear"
+                            Layout.preferredWidth: 64
+                            onClicked: MotionInterface.setConfig("demoDataFile", "")
+                        }
+                        Dialogs.FileDialog {
+                            id: demoFileDialog
+                            title: "Select demo data (bfi_results CSV)"
+                            nameFilters: ["CSV files (*.csv)", "All files (*)"]
+                            onAccepted: MotionInterface.setConfig(
+                                "demoDataFile",
+                                ("" + selectedFile).replace("file:///", ""))
+                        }
+                    }
+
                     FieldRow {
                         label: "Console"
                         ActionButton {

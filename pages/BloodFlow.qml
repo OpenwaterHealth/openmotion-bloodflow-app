@@ -35,6 +35,14 @@ Rectangle {
     // free run, hides scan-settings button, and swaps in the clinical
     // plot view.
     property bool clinicalMode: MotionInterface.appConfig.clinicalMode === true
+
+    // Research-only "Pulse" viewer mode (Scan Settings → Viewer Mode). When on,
+    // the main content shows the cardiac pulse waveforms instead of the default
+    // BFI/BVI plots. Never active in clinical mode.
+    readonly property bool pulseViewerActive:
+        !clinicalMode
+        && MotionInterface.appConfig.pulseView !== false
+        && MotionInterface.appConfig.viewerMode === "pulse"
     // In clinical mode, Start first runs a contact-quality preflight check.
     property bool clinicalStartPending: false
     // Prevent late CQ callbacks from re-opening the modal while a stop/cancel
@@ -219,6 +227,7 @@ Rectangle {
         // on every sensor (re)connect, so a mid-session replug re-gates too.
         camerasReady: bloodFlow.camerasReady && !MotionInterface.sensorInitBusy
         clinicalMode: bloodFlow.clinicalMode
+        demoMode: MotionInterface.appConfig.demoMode === true
 
         // Action buttons — close any open modal first (which by
         // convention saves), then perform the action. If the open
@@ -237,7 +246,10 @@ Rectangle {
                 // has been appended to scanNotes. Opening it here would
                 // race the append and pop an empty modal.
             } else {
-                if (bloodFlow.clinicalMode) {
+                // Demo mode replays a file — no hardware, so skip the clinical
+                // contact-quality preflight and start the (demo) scan directly.
+                if (bloodFlow.clinicalMode
+                        && MotionInterface.appConfig.demoMode !== true) {
                     clinicalStartPending = true
                     contactQualityModal.preScanMode = true
                     contactQualityModal.reset(true)
@@ -288,6 +300,20 @@ Rectangle {
                  sampleScanOfferModal]
     }
 
+    // Pulse viewer (Research "Pulse" viewer mode) — fills the same area as
+    // the plot viewer, shown instead of it when Viewer Mode is "Pulse".
+    PulseView {
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.left: buttonPanel.right
+        anchors.right: parent.right
+        anchors.margins: 8
+        anchors.leftMargin: 16
+        visible: bloodFlow.pulseViewerActive
+        active: bloodFlow.pulseViewerActive
+        scanning: bloodFlow.scanning
+    }
+
     // Data viewer — fills remaining space to the right of ButtonPanel.
     PlotViewer {
         anchors.top: parent.top
@@ -296,6 +322,7 @@ Rectangle {
         anchors.right: parent.right
         anchors.margins: 8
         anchors.leftMargin: 16
+        visible: !bloodFlow.pulseViewerActive
         clinicalMode: bloodFlow.clinicalMode
         // Clinical mode never autoscales: the toggle is hidden in both the
         // Settings modal and the viewer's three-dot popup, so a stale
@@ -333,6 +360,7 @@ Rectangle {
     // ===== MODALS =====
     ScanSettingsModal {
         id: scanSettingsModal
+        clinicalMode: bloodFlow.clinicalMode
         onSelectionChanged: function(newLeftMask, newRightMask) {
             bloodFlow.freeRun = scanSettingsModal.freeRun
             var dur = scanSettingsModal.freeRun ? 43200 : scanSettingsModal.durationSec

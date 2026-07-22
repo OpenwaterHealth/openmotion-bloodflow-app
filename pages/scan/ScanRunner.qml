@@ -207,6 +207,15 @@ QtObject {
         }
         _done = false
         progressUpdate(1)
+        // Demo mode replays a recorded file at the pipeline top — there is no
+        // FPGA flash or trigger/laser to set up, so skip straight to capture.
+        if (runner.mode === "capture" && connector && connector.appConfig
+                && connector.appConfig.demoMode === true) {
+            stageUpdate("Starting demo replay…")
+            messageOut("ScanRunner: demo mode — skipping flash/trigger")
+            runner.captureTask.run()
+            return
+        }
         stageUpdate("Preparing…")
         messageOut("ScanRunner: start(mode=" + runner.mode + ")")
         flashTask.run()

@@ -62,6 +62,7 @@ from data_sources import (
     LiveScanSource, PastScanSource, ScanDataSource, buffers_are_empty,
     load_csv_scan_buffers, resolve_bvi_lpf_cutoff,
 )
+from pulse_view import PulseSink
 
 # constants for calculations
 SCALE_V = 0.0909
@@ -930,6 +931,11 @@ class MotionConnector(QObject):
     updateNotAvailable = pyqtSignal()
     updateCheckFailed = pyqtSignal(str)      # error message
     updateProgress = pyqtSignal(str)         # human-readable progress status
+
+    # Pulse-view signal. pulseSnapshot carries one side's PulseAnalysis as a
+    # plain QVariantMap (see PulseAnalysis.to_qvariant) — fired by the pipeline
+    # PulseSink from the scan worker thread (delivered queued to the GUI).
+    pulseSnapshot = pyqtSignal(str, "QVariant")   # (side, snapshot map)
 
     def __init__(
         self,
@@ -2287,6 +2293,11 @@ class MotionConnector(QObject):
     @pyqtSlot()
     def stopCapture(self):
         """Stop capture (Cancel button or app close). Ceases scan, disables cameras, waits for worker."""
+        logger.info(
+            "=== STOP requested (capture_running=%s, demo=%s) ===",
+            self._capture_running,
+            bool(self._app_config.get("demoMode", False)),
+        )
         if self._capture_running:
             self.captureLog.emit("Stop requested.")
 
@@ -2924,6 +2935,19 @@ class MotionConnector(QObject):
     @pyqtProperty('QVariantMap', notify=appConfigChanged)
     def appConfig(self):
         return self._app_config
+
+    # ── Pulse view ───────────────────────────────────────────────────────────
+
+    def _emit_pulse_snapshot(self, analysis) -> None:
+        """Forward one PulseAnalysis to QML as a QVariantMap. Called from the
+        pipeline PulseSink on the scan worker thread (delivered queued to the
+        GUI). Fail-soft: a serialization bug must never crash a scan."""
+        try:
+            payload = analysis.to_qvariant()
+        except Exception:
+            logger.exception("failed to serialize pulse snapshot")
+            return
+        self.pulseSnapshot.emit(str(payload.get("side", "")), payload)
 
     def _save_app_config(self):
         """Persist runtime config changes as a diff vs the shipped baseline.
@@ -3640,6 +3664,15 @@ class MotionConnector(QObject):
         except Exception as e:
             logger.error(f"Error querying device info: {e}")
 
+    def _resolve_demo_data_file(self) -> "str | None":
+        """The demo-mode replay file: the configured demoDataFile if it exists,
+        else the bundled sample scan. None if neither is present."""
+        p = self._app_config.get("demoDataFile", "") or ""
+        if p and os.path.isfile(p):
+            return p
+        bundled = resource_path("assets/sample_pulse_scan.csv")
+        return bundled if os.path.isfile(bundled) else None
+
     @pyqtSlot(str, int, int, int, bool, result=bool)
     def startCapture(
         self,
@@ -3697,6 +3730,26 @@ class MotionConnector(QObject):
         except Exception as e:
             self.captureLog.emit(f"Failed to create data dir: {e}")
             return False
+
+        # Demo mode (engineering): replay a recorded bfi_results CSV at the
+        # pipeline top instead of streaming from sensors. Override the masks
+        # with the demo masks, force the laser off, and pass demo_csv so the
+        # SDK builds a DemoScanSource (no camera enable / trigger / laser). The
+        # scan auto-stops when the recording is exhausted.
+        demo_csv = None
+        if self._app_config.get("demoMode", False):
+            demo_csv = self._resolve_demo_data_file()
+            if not demo_csv:
+                self.captureLog.emit(
+                    "Demo mode is on but no demo data file was found.")
+                return False
+            left_camera_mask = int(self._app_config.get("demoModeLeftMask", 0xFF))
+            right_camera_mask = int(self._app_config.get("demoModeRightMask", 0xFF))
+            disable_laser = True
+            logger.info("Demo mode: replaying %s (left=0x%02X right=0x%02X)",
+                        demo_csv, left_camera_mask, right_camera_mask)
+            self.captureLog.emit(
+                f"Demo mode: replaying {os.path.basename(demo_csv)}")
 
         self._capture_stop = threading.Event()
         # Each new scan starts with a fresh notes buffer
@@ -3915,7 +3968,11 @@ class MotionConnector(QObject):
             left_camera_mask=left_camera_mask,
             right_camera_mask=right_camera_mask,
             disable_laser=disable_laser,
-            reduced_mode=self._app_config.get("clinicalMode", False),
+            # Side-averaged (reduced) mode in clinical mode, OR when the
+            # research "Pulse" viewer is active — the pulse stage needs the
+            # per-side average, so a pulse-viewer scan produces live pulse data.
+            reduced_mode=(self._app_config.get("clinicalMode", False)
+                          or self._app_config.get("viewerMode") == "pulse"),
             # Corrected CSV is opt-in now that per-cam BFI/BVI lands in
             # the scan DB (the new viewer + past replay read from there).
             # Default False to skip the redundant {scan_id}.csv; flip
@@ -3938,12 +3995,20 @@ class MotionConnector(QObject):
                 self._raw_csv_duration_sec
                 if (raw_csv_allowed and self._write_raw_csv) else 0
             ),
+            # Cardiac pulse-waveform analysis for the pulse view. Enabled when
+            # the pulseView flag is on; the SDK only inserts PulseWaveformStage
+            # in reduced (clinical) mode, so the sink is otherwise idle.
+            pulse_analysis=self._app_config.get("pulseView", True),
+            # Demo mode: replay this recorded file at the pipeline top instead
+            # of the sensors (None in normal scans). See _resolve_demo_data_file.
+            demo_csv=demo_csv,
             sinks=[
                 _LivePlotSink(connector=self, plot_t0=plot_t0, live_source=live_source,
                               nan_gap_tracker=nan_gap_tracker),
                 _TriggerStateSink(connector=self),
                 outcome_sink,
                 _CompletionSink(connector=self, on_complete_cb=_on_pipeline_complete),
+                PulseSink(emit_fn=self._emit_pulse_snapshot),
             ],
             # Async backstop (#213): if the worker aborts after start_scan
             # returned True (e.g. a critical sink dies because the scan DB
@@ -3957,9 +4022,10 @@ class MotionConnector(QObject):
         if started:
             logger.info(
                 "=== Full scan started: subject=%s duration=%ss "
-                "left=0x%02X right=0x%02X laser=%s ===",
+                "left=0x%02X right=0x%02X laser=%s demo=%s ===",
                 subject_id, duration_sec, left_camera_mask, right_camera_mask,
                 "off" if disable_laser else "on",
+                "REPLAY" if demo_csv else "off",
             )
             # Bind the live source's DB tail to THIS scan's session row by its
             # exact label (set synchronously inside start_scan), so a later

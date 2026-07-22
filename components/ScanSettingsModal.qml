@@ -27,6 +27,10 @@ Item {
     property var leftSensorActive: [false, false, false, false, false, false, false, false]
     property var rightSensorActive: [false, false, false, false, false, false, false, false]
 
+    // Clinical (FDA) mode hides the research-only Viewer Mode picker. Falls
+    // back to appConfig so the gate holds even if the caller doesn't bind it.
+    property bool clinicalMode: MotionInterface.appConfig.clinicalMode === true
+
     // Scan duration
     property bool freeRun: false
     property int hours: 1
@@ -168,8 +172,11 @@ Item {
     }
 
     Rectangle {
+        id: card
         width: Math.min(parent.width - root.iconBarInset - 40, 520)
-        height: Math.min(parent.height - 60, 640)
+        // Grow to fit the content (Viewer Mode + Camera + Duration), capped to
+        // the window so it never overflows; the body scrolls past the cap.
+        height: Math.min(parent.height - 60, contentCol.implicitHeight + 40)
         radius: 14
         color: AppTheme.sheetBg
         border.color: AppTheme.borderSubtle
@@ -204,10 +211,23 @@ Item {
             }
         }
 
-        ColumnLayout {
+        // Scrollable body: the card auto-sizes to fit this content, but on a
+        // short window the content exceeds the cap and this Flickable scrolls
+        // instead of clipping the bottom (Scan Duration) off the card.
+        Flickable {
+            id: contentFlick
             anchors.fill: parent
             anchors.margins: 20
-            spacing: 10
+            contentWidth: width
+            contentHeight: contentCol.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+            ColumnLayout {
+            id: contentCol
+            width: contentFlick.width
+            spacing: 8
 
             // Title
             Text {
@@ -264,6 +284,58 @@ Item {
                             text = MotionInterface.userLabel  // reflect normalization
                         }
                     }
+                }
+            }
+
+            // ── Viewer Mode (Research only — hidden in clinical/FDA mode) ─
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 10
+                visible: !root.clinicalMode
+
+                Rectangle { Layout.fillWidth: true; height: 1; color: AppTheme.borderSubtle }
+
+                Text {
+                    text: "Viewer Mode"
+                    color: AppTheme.textSecondary
+                    font.pixelSize: 15
+                    font.weight: Font.DemiBold
+                }
+
+                RowLayout {
+                    Layout.alignment: Qt.AlignHCenter
+                    spacing: 10
+                    Repeater {
+                        model: [["Default", "default"], ["Pulse", "pulse"]]
+                        delegate: Button {
+                            required property var modelData
+                            Layout.preferredWidth: 130
+                            Layout.preferredHeight: 34
+                            onClicked: MotionInterface.setConfig("viewerMode", modelData[1])
+                            background: Rectangle {
+                                radius: 6
+                                color: (MotionInterface.appConfig.viewerMode || "default") === modelData[1]
+                                       ? AppTheme.accentBlue : AppTheme.bgInput
+                                border.color: AppTheme.borderSubtle; border.width: 1
+                            }
+                            contentItem: Text {
+                                text: modelData[0]
+                                color: (MotionInterface.appConfig.viewerMode || "default") === modelData[1]
+                                       ? "#FFFFFF" : AppTheme.textPrimary
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                                font.pixelSize: 14
+                            }
+                        }
+                    }
+                }
+                Text {
+                    text: (MotionInterface.appConfig.viewerMode || "default") === "pulse"
+                          ? "Main view shows cardiac pulse waveforms."
+                          : "Main view shows the default BFI/BVI plots."
+                    color: AppTheme.textTertiary
+                    font.pixelSize: 12
+                    Layout.alignment: Qt.AlignHCenter
                 }
             }
 
@@ -498,8 +570,7 @@ Item {
                 font.pixelSize: 13
                 Layout.alignment: Qt.AlignHCenter
             }
-
-            Item { Layout.fillHeight: true }
+            }
         }
 
         Keys.onReleased: function(event) {
