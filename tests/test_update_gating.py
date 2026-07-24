@@ -164,3 +164,64 @@ def test_apply_update_refused_in_clinical(tmp_path, monkeypatch):
         lambda **k: MagicMock(start=lambda: started.append(1)))
     c.applyUpdate("https://x/Open-Motion-Research-Setup-1.6.0-rc.1.exe")
     assert started == [], "clinical build must not start an app-update install"
+
+
+# ── Withdraw an offered beta when engineering mode is turned OFF ──────────
+
+def test_eng_off_withdraws_app_offer_synchronously(tmp_path):
+    c = _connector(tmp_path, clinicalMode=False, engineeringMode=True,
+                   downloadBetaUpdates=True)
+    c.checkForUpdates = lambda: None   # don't spawn the real re-check thread
+    withdrawn = []
+    c.updateNotAvailable.connect(lambda: withdrawn.append(1))
+    c.setConfig("engineeringMode", False)
+    assert withdrawn == [1], "app offer must be withdrawn synchronously on eng-off"
+
+
+def test_eng_off_withdraws_firmware_offer(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_check(kind, *, include_prerelease=False):
+        seen["beta"] = include_prerelease
+        return None
+
+    monkeypatch.setattr(motion_connector, "check_latest", fake_check)
+    c = _connector(tmp_path, clinicalMode=False, engineeringMode=True,
+                   downloadBetaUpdates=True)
+    c.checkForUpdates = lambda: None
+    c._firmware_versions["left"] = "1.8.0"
+    c._firmware_latest_by_kind["sensor"] = "1.8.1-dev.5"
+    c._firmware_update_available["left"] = True
+    monkeypatch.setattr(
+        motion_connector.threading, "Thread",
+        lambda **k: MagicMock(start=lambda: k["target"](*k["args"])))
+    c.setConfig("engineeringMode", False)
+    assert c._firmware_update_available["left"] is False   # stale beta withdrawn
+    assert seen.get("beta") is False                       # re-checked on stable
+
+
+def test_saveconfigs_refreshes_both_updaters(tmp_path):
+    c = _connector(tmp_path, clinicalMode=False, engineeringMode=False,
+                   downloadBetaUpdates=False)
+    fw, app = [], []
+    c._refresh_firmware_update_check = lambda: fw.append(1)
+    c.checkForUpdates = lambda: app.append(1)
+    c.saveConfigs({"engineeringMode": True})
+    assert fw == [1]
+    assert app == [1]
+
+
+def test_app_beta_override_single_object_does_not_crash(tmp_path, monkeypatch):
+    # An updateApiUrl override that returns a single release object (not a list)
+    # on the beta channel must be handled by shape, not crash _select_release.
+    obj = {"tag_name": "1.6.0-rc.1", "draft": False, "prerelease": True,
+           "assets": [{"name": "Open-Motion-Research-Setup-1.6.0-rc.1.exe",
+                       "browser_download_url": "https://x/rc.exe"}]}
+    cap = {}
+    _patch_http(monkeypatch, obj, cap)
+    c = _connector(tmp_path, clinicalMode=False, engineeringMode=True,
+                   downloadBetaUpdates=True, updateApiUrl="http://localhost:9/custom")
+    out = []
+    c.updateAvailable.connect(lambda v, u: out.append((v, u)))
+    c._check_for_updates_worker()
+    assert out == [("1.6.0-rc.1", "https://x/rc.exe")]

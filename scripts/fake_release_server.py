@@ -24,19 +24,25 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 def build_handler(bundle_path: str, tag: str, host_port: str):
     asset_name = os.path.basename(bundle_path)
     download_url = f"http://{host_port}/{asset_name}"
-    latest_json = json.dumps(
-        {
-            "tag_name": tag,
-            "name": tag,
-            "html_url": f"http://{host_port}/",
-            "assets": [
-                {
-                    "name": asset_name,
-                    "browser_download_url": download_url,
-                }
-            ],
-        }
-    ).encode()
+    release_obj = {
+        "tag_name": tag,
+        "name": tag,
+        "draft": False,
+        # A dash marks a prerelease tag (e.g. 1.3.1-rc.2 / -dev.0); the beta
+        # channel (#386) selects the newest non-draft from the /releases list.
+        "prerelease": "-" in tag,
+        "html_url": f"http://{host_port}/",
+        "assets": [
+            {
+                "name": asset_name,
+                "browser_download_url": download_url,
+            }
+        ],
+    }
+    # Stable channel hits /releases/latest (one object); beta hits /releases
+    # (a newest-first list). Serve both so either channel is testable.
+    latest_json = json.dumps(release_obj).encode()
+    releases_json = json.dumps([release_obj]).encode()
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
@@ -50,6 +56,12 @@ def build_handler(bundle_path: str, tag: str, host_port: str):
                 self.send_header("Content-Length", str(len(latest_json)))
                 self.end_headers()
                 self.wfile.write(latest_json)
+            elif path.endswith("/releases"):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(releases_json)))
+                self.end_headers()
+                self.wfile.write(releases_json)
             elif path == f"/{asset_name}":
                 size = os.path.getsize(bundle_path)
                 self.send_response(200)
@@ -84,8 +96,9 @@ def main():
     handler = build_handler(args.bundle, args.tag, host_port)
     server = ThreadingHTTPServer((args.host, args.port), handler)
     print(f"[fake-release] serving tag {args.tag} ({os.path.basename(args.bundle)})")
-    print(f"[fake-release]   releases/latest -> http://{host_port}/releases/latest")
-    print(f"[fake-release]   set the old build's updateApiUrl to that URL")
+    print(f"[fake-release]   releases/latest -> http://{host_port}/releases/latest  (stable)")
+    print(f"[fake-release]   releases        -> http://{host_port}/releases         (beta)")
+    print(f"[fake-release]   set the old build's updateApiUrl to the /releases/latest URL")
     print("[fake-release] Ctrl+C to stop")
     try:
         server.serve_forever()

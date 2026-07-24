@@ -2172,6 +2172,11 @@ class MotionConnector(QObject):
         and both banners drop the old offer if it no longer qualifies."""
         self._refresh_firmware_update_check()
         if not self._app_config.get("clinicalMode", False):
+            # Withdraw any currently-shown app-update offer synchronously (it may
+            # be a now-ineligible beta), mirroring the firmware side; the
+            # re-check re-offers only if a valid update still exists, so a failed
+            # re-check leaves the stale offer withdrawn rather than clickable.
+            self.updateNotAvailable.emit()
             self.checkForUpdates()
 
     @pyqtSlot(str, result=bool)
@@ -5745,9 +5750,12 @@ class MotionConnector(QObject):
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode())
 
-            # Stable: /releases/latest returns one release object. Beta:
-            # /releases returns a newest-first list -> pick the newest non-draft.
-            release = _select_release(data, include_prerelease=True) if beta else data
+            # Select by RESPONSE SHAPE, not the beta flag: the beta channel hits
+            # the /releases LIST endpoint (newest-first) -> pick newest non-draft;
+            # stable /releases/latest returns one object. An updateApiUrl override
+            # may return a single object even on beta, so handle both (#386).
+            release = (_select_release(data, include_prerelease=True)
+                       if isinstance(data, list) else data)
             if not release:
                 self.updateNotAvailable.emit()
                 return
