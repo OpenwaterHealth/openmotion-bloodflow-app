@@ -98,7 +98,7 @@ def main():
     print(f"[fake-release] serving tag {args.tag} ({os.path.basename(args.bundle)})")
     print(f"[fake-release]   releases/latest -> http://{host_port}/releases/latest  (stable)")
     print(f"[fake-release]   releases        -> http://{host_port}/releases         (beta)")
-    print(f"[fake-release]   set the old build's updateApiUrl to the /releases/latest URL")
+    print("[fake-release]   set the old build's updateApiUrl to the /releases/latest URL")
     print("[fake-release] Ctrl+C to stop")
     try:
         server.serve_forever()
