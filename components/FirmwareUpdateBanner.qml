@@ -4,8 +4,9 @@ import QtQuick.Layouts 6.0
 import OpenMotion 1.0
 
 /*  FirmwareUpdateBanner — slides in below the header when newer device
- *  firmware is available. engineeringMode-gated (technician task). The "View"
- *  button asks the host to open the Settings overlay (firmware card).
+ *  firmware is available. Shown in Research builds; never in Clinical — the
+ *  connector never flags a firmware update in a clinical build (#386). The
+ *  "View" button asks the host to open the Settings overlay (firmware card).
  */
 Rectangle {
     id: banner
@@ -16,9 +17,11 @@ Rectangle {
 
     signal viewRequested()
 
-    readonly property bool _devMode: MotionInterface.appConfig.engineeringMode === true
+    // Clinical builds never flag a firmware update (the connector skips the
+    // check), but gate the banner on !clinicalMode too for defence in depth.
+    readonly property bool _clinical: MotionInterface.appConfig.clinicalMode === true
     property bool _dismissed: false
-    visible: _devMode && MotionInterface.anyFirmwareUpdateAvailable && !_dismissed
+    visible: !_clinical && MotionInterface.anyFirmwareUpdateAvailable && !_dismissed
 
     color: AppTheme.accentInteractive
     radius: 0
