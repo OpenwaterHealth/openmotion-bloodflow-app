@@ -2065,6 +2065,15 @@ class MotionConnector(QObject):
     def _devices_for_kind(kind: FirmwareKind) -> list[str]:
         return ["console"] if kind == FirmwareKind.CONSOLE else ["left", "right"]
 
+    def _beta_enabled(self) -> bool:
+        """Prerelease (beta) channel is active only for a Research build with
+        engineering mode unlocked and the beta toggle on. Clinical never opts
+        in; disabling engineering mode drops back to stable. Shared by the
+        firmware updater and the app self-updater (#386)."""
+        return (not self._app_config.get("clinicalMode", False)
+                and self._app_config.get("engineeringMode", False)
+                and self._app_config.get("downloadBetaUpdates", False))
+
     def _maybe_check_firmware_update(self, name: str) -> None:
         """If engineeringMode, ensure this device's firmware-update availability
         is computed — reusing a cached 'latest' for the kind, or kicking one
@@ -2089,7 +2098,7 @@ class MotionConnector(QObject):
 
     def _firmware_check_worker(self, kind: FirmwareKind, generation: int | None = None) -> None:
         try:
-            beta = self._app_config.get("downloadBetaUpdates", False)
+            beta = self._beta_enabled()
             info = check_latest(kind, include_prerelease=beta)
         except Exception:                           # defensive; check_latest is fail-soft
             info = None
@@ -2112,7 +2121,7 @@ class MotionConnector(QObject):
         kind = self._kind_for_device(name)
         installed = self._firmware_versions.get(name, "")
         latest = self._firmware_latest_by_kind.get(kind.value, "")
-        beta = self._app_config.get("downloadBetaUpdates", False)
+        beta = self._beta_enabled()
         avail = (bool(installed) and bool(latest)
                  and is_update_available(installed, latest, prerelease=beta))
         self._firmware_latest[name] = latest
@@ -2173,7 +2182,7 @@ class MotionConnector(QObject):
             kind = self._kind_for_device(device_key)
             self.firmwareUpdateProgress.emit(
                 device_key, "check", -1, "Checking latest release…")
-            beta = self._app_config.get("downloadBetaUpdates", False)
+            beta = self._beta_enabled()
             info = check_latest(kind, include_prerelease=beta)
             if info is None:
                 raise RuntimeError("Could not reach GitHub to fetch firmware.")
