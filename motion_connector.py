@@ -3914,6 +3914,32 @@ class MotionConnector(QObject):
             or engineering_mode
         )
 
+        # Contact-quality thresholds for the live monitor sink below
+        # (issue #364). Nothing in Settings writes these keys today, so
+        # the only way to hit a bad value is a hand-edited config — but a
+        # malformed cq_dark_threshold_per_camera / cq_light_threshold_per_camera
+        # (wrong type, a null/non-numeric element) must degrade to the
+        # shipped defaults rather than raise out of CQThresholds.from_sequences
+        # and crash startCapture before the SDK's own non-critical/safe-consume
+        # protections for this sink ever get a chance to apply.
+        try:
+            _cq_thresholds = CQThresholds.from_sequences(
+                self._app_config.get("cq_dark_threshold_per_camera")
+                or [_CQ_DEFAULT_DARK_THRESHOLD_DN] * 8,
+                self._app_config.get("cq_light_threshold_per_camera")
+                or [_CQ_DEFAULT_LIGHT_THRESHOLD_DN] * 8,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Invalid cq_dark_threshold_per_camera / "
+                "cq_light_threshold_per_camera config (%s); falling back "
+                "to default CQ thresholds", exc,
+            )
+            _cq_thresholds = CQThresholds.from_sequences(
+                [_CQ_DEFAULT_DARK_THRESHOLD_DN] * 8,
+                [_CQ_DEFAULT_LIGHT_THRESHOLD_DN] * 8,
+            )
+
         req = ScanRequest(
             subject_id=subject_id,
             duration_sec=duration_sec,
@@ -3956,17 +3982,12 @@ class MotionConnector(QObject):
                 # since. Not `critical`: a contact fault must never abort a
                 # clinical scan in progress.
                 ContactQualityMonitor(
-                    thresholds=CQThresholds.from_sequences(
-                        self._app_config.get("cq_dark_threshold_per_camera")
-                        or [_CQ_DEFAULT_DARK_THRESHOLD_DN] * 8,
-                        self._app_config.get("cq_light_threshold_per_camera")
-                        or [_CQ_DEFAULT_LIGHT_THRESHOLD_DN] * 8,
-                    ),
+                    thresholds=_cq_thresholds,
                     on_transition=self._on_cq_transition,
                     rolling_window=int(self._app_config.get(
-                        "cq_rolling_avg_window", _CQ_DEFAULT_ROLLING_WINDOW)),
+                        "cq_rolling_avg_window") or _CQ_DEFAULT_ROLLING_WINDOW),
                     light_debounce=int(self._app_config.get(
-                        "cq_live_debounce_frames", 80)),
+                        "cq_live_debounce_frames") or 80),
                 ),
             ],
             # Async backstop (#213): if the worker aborts after start_scan

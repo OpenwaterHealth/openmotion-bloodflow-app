@@ -121,6 +121,146 @@ def test_marshal_forwards_transition_with_coerced_types():
     assert isinstance(active, bool) and isinstance(side, str)
 
 
+def _make_scan_connector(tmp_path, app_config):
+    """Full MotionConnector with a mocked hardware interface — same pattern
+    as test_scan_mask_disconnected_gate.py / test_telemetry_dev_gate.py.
+    Needed here (rather than the no-init _connector() helper above) because
+    these tests exercise startCapture end-to-end and inspect the
+    ScanRequest.sinks list it builds, not just the adapter methods."""
+    from unittest.mock import MagicMock
+
+    from motion_connector import MotionConnector
+
+    iface = MagicMock()
+    iface.console = MagicMock()
+    iface.left = MagicMock()
+    iface.right = MagicMock()
+    iface.is_device_connected.return_value = (True, True, True)
+    iface.scan_workflow = MagicMock()
+    iface.scan_workflow.running = False
+    iface.scan_workflow.config_running = False
+    iface.start_scan.return_value = True
+    # LiveScanSource treats scan_db_path as an optional path string; a bare
+    # MagicMock attribute would leak into os.path calls.
+    iface.scan_db_path = None
+
+    c = MotionConnector(
+        interface=iface,
+        app_config=app_config,
+        data_dir=str(tmp_path),
+        config_dir="config",
+    )
+    c._consoleConnected = True
+    c._leftSensorConnected = True
+    c._rightSensorConnected = True
+    return c
+
+
+def _captured_scan_request(connector):
+    ok = connector.startCapture("subj", 5, 0x66, 0x66, False)
+    assert ok is True
+    connector._interface.start_scan.assert_called_once()
+    return connector._interface.start_scan.call_args.args[0]
+
+
+def test_startcapture_attaches_exactly_one_contact_quality_monitor_from_config(tmp_path):
+    """The regression this whole feature exists to fix (#364): the sink
+    must actually reach ScanRequest.sinks, and it must be built from
+    config rather than silently from the hardcoded defaults — using
+    distinguishable values proves the construction actually read
+    self._app_config rather than happening to pass with defaults that
+    look plausible either way."""
+    from omotion.contact_quality import ContactQualityMonitor
+
+    dark = [1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8]
+    light = [10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 10.7, 10.8]
+    connector = _make_scan_connector(tmp_path, {
+        "cq_dark_threshold_per_camera": dark,
+        "cq_light_threshold_per_camera": light,
+        "cq_rolling_avg_window": 7,
+        "cq_live_debounce_frames": 33,
+    })
+
+    req = _captured_scan_request(connector)
+
+    cq_sinks = [s for s in req.sinks if isinstance(s, ContactQualityMonitor)]
+    assert len(cq_sinks) == 1, (
+        f"expected exactly one ContactQualityMonitor in sinks, found "
+        f"{len(cq_sinks)} among {[type(s).__name__ for s in req.sinks]}"
+    )
+    sink = cq_sinks[0]
+    assert sink._thresholds.dark == tuple(dark)
+    assert sink._thresholds.light == tuple(light)
+    assert sink._window_size == 7
+    assert sink._light_debounce == 33
+    # Plain bound methods aren't cached — connector._on_cq_transition
+    # fetched here and the one startCapture fetched when constructing the
+    # sink are two distinct MethodType objects (`is` is False even when
+    # correct), but MethodType.__eq__ compares __func__ and __self__, which
+    # is exactly "same underlying function bound to the same instance".
+    assert sink._on_transition == connector._on_cq_transition
+    assert sink._on_transition.__func__ is connector._on_cq_transition.__func__
+    assert sink._on_transition.__self__ is connector
+
+
+def test_startcapture_survives_null_light_debounce_config(tmp_path):
+    """A key present in config with a JSON null value yields None from
+    .get(), and int(None) raises TypeError — which would otherwise crash
+    startCapture on the primary clinical scan path, contradicting the
+    sink's own "must never abort a clinical scan in progress" contract.
+    Must fall back to the shipped default instead of raising."""
+    from omotion.contact_quality import ContactQualityMonitor
+
+    connector = _make_scan_connector(tmp_path, {"cq_live_debounce_frames": None})
+
+    req = _captured_scan_request(connector)
+
+    cq_sinks = [s for s in req.sinks if isinstance(s, ContactQualityMonitor)]
+    assert len(cq_sinks) == 1
+    assert cq_sinks[0]._light_debounce == 80
+
+
+def test_startcapture_survives_null_rolling_window_config(tmp_path):
+    """Same null-config hazard as the debounce case above, for the
+    sibling cq_rolling_avg_window key that feeds the same construction."""
+    from motion_connector import _CQ_DEFAULT_ROLLING_WINDOW
+    from omotion.contact_quality import ContactQualityMonitor
+
+    connector = _make_scan_connector(tmp_path, {"cq_rolling_avg_window": None})
+
+    req = _captured_scan_request(connector)
+
+    cq_sinks = [s for s in req.sinks if isinstance(s, ContactQualityMonitor)]
+    assert len(cq_sinks) == 1
+    assert cq_sinks[0]._window_size == _CQ_DEFAULT_ROLLING_WINDOW
+
+
+def test_startcapture_survives_malformed_threshold_array_element(tmp_path):
+    """A null/non-numeric element inside either threshold array reaches
+    float() inside CQThresholds.from_sequences and must degrade the whole
+    construction to the shipped defaults rather than raise. Only the dark
+    array is malformed here; the light key is left unset (its own default)
+    to confirm the fallback is the documented combined one — both arrays
+    go to defaults together, not just the offending one — so this is not
+    mistaken for a partial fix if that ever changes."""
+    from motion_connector import (
+        _CQ_DEFAULT_DARK_THRESHOLD_DN,
+        _CQ_DEFAULT_LIGHT_THRESHOLD_DN,
+    )
+    from omotion.contact_quality import ContactQualityMonitor
+
+    connector = _make_scan_connector(tmp_path, {
+        "cq_dark_threshold_per_camera": [3.0, None, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0],
+    })
+
+    req = _captured_scan_request(connector)
+
+    cq_sinks = [s for s in req.sinks if isinstance(s, ContactQualityMonitor)]
+    assert len(cq_sinks) == 1
+    assert cq_sinks[0]._thresholds.dark == tuple([_CQ_DEFAULT_DARK_THRESHOLD_DN] * 8)
+    assert cq_sinks[0]._thresholds.light == tuple([_CQ_DEFAULT_LIGHT_THRESHOLD_DN] * 8)
+
+
 def test_marshal_coerces_numpy_scalar_types_to_plain_python():
     """The test above passes trivially even without the str/int/float/bool()
     casts in _on_cq_transition, because plain Python inputs already are what
