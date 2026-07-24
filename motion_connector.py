@@ -4667,9 +4667,13 @@ class MotionConnector(QObject):
         every edge so QML can clear the entry.
         """
         label = self._camera_label(side, cam_id)
-        # The modal knows two type keys. no_signal is reported to the
-        # operator as poor contact, matching _on_cq_result_ready's preflight
-        # mapping so live and preflight wording agree.
+        # The modal knows two type keys. Defensive, not a live path today:
+        # the SDK's ContactQualityMonitor skips non-finite readings before
+        # on_transition ever fires, so it does not currently emit
+        # "no_signal". Collapsing it to poor_contact here costs nothing and
+        # keeps live and preflight wording identical — matching
+        # _on_cq_result_ready's preflight mapping — if that contract ever
+        # changes.
         type_key = "poor_contact" if reason == "no_signal" else reason
         type_text = self._warning_text(type_key)
         try:

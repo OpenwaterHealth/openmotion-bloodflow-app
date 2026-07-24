@@ -101,3 +101,48 @@ def test_adapter_collapses_no_signal_to_poor_contact():
     conn._on_cq_transition_main("left", 3, "no_signal", 0.0, True)
 
     assert emitted == [("L4", "poor_contact", "Poor sensor contact", 0.0)]
+
+
+def test_marshal_forwards_transition_with_coerced_types():
+    """The runner-thread half must hop to the main thread and nothing else.
+    It is the production entry point, and its broad except would otherwise
+    hide exactly the silent failure this feature exists to fix (#364)."""
+    conn = _connector()
+    emitted = []
+    conn._cqTransitionSignal = type(
+        "S", (), {"emit": lambda _s, *a: emitted.append(a)}
+    )()
+
+    conn._on_cq_transition("left", 0, "poor_contact", 1.0, True)
+
+    assert emitted == [("left", 0, "poor_contact", 1.0, True)]
+    side, cam_id, reason, value, active = emitted[0]
+    assert isinstance(cam_id, int) and isinstance(value, float)
+    assert isinstance(active, bool) and isinstance(side, str)
+
+
+def test_marshal_coerces_numpy_scalar_types_to_plain_python():
+    """The test above passes trivially even without the str/int/float/bool()
+    casts in _on_cq_transition, because plain Python inputs already are what
+    they claim to be. numpy scalar types are NOT subclasses of the builtins
+    (numpy.int64 is not an int, numpy.bool_ is not a bool — confirmed with
+    numpy 2.2.5), so feeding them in is what actually exercises the
+    coercion. Realistic per the SDK's numpy-backed pipeline (e.g. a bare
+    array index or a boolean array comparison reaching on_transition)."""
+    import numpy as np
+
+    conn = _connector()
+    emitted = []
+    conn._cqTransitionSignal = type(
+        "S", (), {"emit": lambda _s, *a: emitted.append(a)}
+    )()
+
+    conn._on_cq_transition(
+        "right", np.int64(2), "poor_contact", np.float64(3.5), np.bool_(True)
+    )
+
+    side, cam_id, reason, value, active = emitted[0]
+    assert type(cam_id) is int and cam_id == 2
+    assert type(value) is float and value == 3.5
+    assert type(active) is bool and active is True
+    assert type(side) is str and type(reason) is str
