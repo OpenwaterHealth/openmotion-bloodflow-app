@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import motion_connector
 import version as version_mod
 from motion_connector import MotionConnector
 
@@ -138,3 +139,28 @@ def test_app_stable_uses_latest_endpoint(tmp_path, monkeypatch):
     c._check_for_updates_worker()
     assert cap["url"].endswith("/releases/latest")
     assert seen == ["uptodate"]                      # 1.5.0 == local 1.5.0
+
+
+# ── Clinical hard-block for the APP self-updater (Python backstop) ────────
+
+def test_app_check_no_network_in_clinical(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: calls.append(1))
+    # Clinical + engineering unlocked + beta on: still no outbound call.
+    c = _connector(tmp_path, clinicalMode=True, engineeringMode=True,
+                   downloadBetaUpdates=True)
+    emitted = []
+    c.updateAvailable.connect(lambda v, u: emitted.append((v, u)))
+    c._check_for_updates_worker()
+    assert calls == [], "clinical build must make no outbound update request"
+    assert emitted == []
+
+
+def test_apply_update_refused_in_clinical(tmp_path, monkeypatch):
+    c = _connector(tmp_path, clinicalMode=True)
+    started = []
+    monkeypatch.setattr(
+        motion_connector.threading, "Thread",
+        lambda **k: MagicMock(start=lambda: started.append(1)))
+    c.applyUpdate("https://x/Open-Motion-Research-Setup-1.6.0-rc.1.exe")
+    assert started == [], "clinical build must not start an app-update install"

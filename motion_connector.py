@@ -5720,6 +5720,8 @@ class MotionConnector(QObject):
         t.start()
 
     def _check_for_updates_worker(self):
+        if self._app_config.get("clinicalMode", False):
+            return   # clinical builds never check for app updates (#96, #386)
         import urllib.request
         from version import get_version
 
@@ -5838,6 +5840,8 @@ class MotionConnector(QObject):
         Guarded against re-entry so repeated clicks can't spawn racing
         download threads against the same file.
         """
+        if self._app_config.get("clinicalMode", False):
+            return   # clinical builds never install app updates (#96, #386)
         if getattr(self, "_update_in_progress", False):
             logger.info("Update already in progress; ignoring repeat request")
             return
