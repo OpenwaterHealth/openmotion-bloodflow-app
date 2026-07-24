@@ -32,3 +32,27 @@ def test_beta_enabled_matrix(tmp_path, clinical, eng, beta, expected):
     c = _connector(tmp_path, clinicalMode=clinical,
                    engineeringMode=eng, downloadBetaUpdates=beta)
     assert c._beta_enabled() is expected
+
+
+# ── Refresh / withdraw on engineering-mode or beta-toggle change ──────────
+
+def test_eng_mode_change_refreshes_both_updaters_in_research(tmp_path):
+    c = _connector(tmp_path, clinicalMode=False, engineeringMode=False,
+                   downloadBetaUpdates=False)
+    fw, app = [], []
+    c._refresh_firmware_update_check = lambda: fw.append(1)
+    c.checkForUpdates = lambda: app.append(1)
+    c.setConfig("engineeringMode", True)
+    assert fw == [1], "firmware detection must re-run on engineering-mode change"
+    assert app == [1], "app updater must re-check on engineering-mode change"
+
+
+def test_eng_mode_change_makes_no_network_call_in_clinical(tmp_path):
+    c = _connector(tmp_path, clinicalMode=True, engineeringMode=False,
+                   downloadBetaUpdates=False)
+    fw, app = [], []
+    c._refresh_firmware_update_check = lambda: fw.append(1)
+    c.checkForUpdates = lambda: app.append(1)
+    c.setConfig("engineeringMode", True)
+    assert fw == [1], "the refresh hook must fire on engineering-mode change"
+    assert app == [], "clinical build must not make an outbound app-update call"

@@ -2148,6 +2148,17 @@ class MotionConnector(QObject):
             if self._firmware_versions.get(name):
                 self._maybe_check_firmware_update(name)
 
+    def _refresh_update_checks(self) -> None:
+        """Re-evaluate BOTH updaters after a change to the beta channel or
+        engineering mode. Firmware re-detects for connected devices; the app
+        self-updater re-checks — but only in a Research build, so a Clinical
+        build makes no outbound GitHub call (#96, #386). Also withdraws a stale
+        beta offer: the re-check runs on the now-current (post-change) channel,
+        and both banners drop the old offer if it no longer qualifies."""
+        self._refresh_firmware_update_check()
+        if not self._app_config.get("clinicalMode", False):
+            self.checkForUpdates()
+
     @pyqtSlot(str, result=bool)
     def startFirmwareUpdate(self, device_key: str) -> bool:
         """Download the latest firmware for device_key and flash it over DFU.
@@ -2968,8 +2979,8 @@ class MotionConnector(QObject):
         if old != value:
             self._audit.log("settings_changed",
                             {"changes": {key: {"old": old, "new": value}}})
-        if key == "downloadBetaUpdates" and old != value:
-            self._refresh_firmware_update_check()
+        if old != value and key in ("downloadBetaUpdates", "engineeringMode"):
+            self._refresh_update_checks()
 
     @pyqtSlot('QVariantMap')
     def saveConfigs(self, configs: dict):
@@ -2985,8 +2996,8 @@ class MotionConnector(QObject):
         logger.debug(f"[Connector] Config saved: {sorted(configs.keys())}")
         if changes:
             self._audit.log("settings_changed", {"changes": changes})
-        if "downloadBetaUpdates" in changes:
-            self._refresh_firmware_update_check()
+        if any(k in changes for k in ("downloadBetaUpdates", "engineeringMode")):
+            self._refresh_update_checks()
 
     # Sensor debug-flag config keys surfaced as live Settings → Engineering
     # toggles, mapped to the runtime cache attribute that
