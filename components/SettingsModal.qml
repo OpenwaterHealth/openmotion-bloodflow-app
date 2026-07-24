@@ -1338,13 +1338,15 @@ Item {
                         }
                         Item { Layout.fillWidth: true }
                         Text {
-                            visible: connected && !updateAvailable
+                            // Clinical never runs the firmware check, so it must
+                            // not claim "Up to date" — show the version only (#386).
+                            visible: !root.clinicalMode && connected && !updateAvailable
                             text: "Up to date"
                             color: AppTheme.statusGreen
                             font.pixelSize: 12
                         }
                         UpdateChip {
-                            visible: connected && updateAvailable
+                            visible: !root.clinicalMode && connected && updateAvailable
                             onChipClicked: fwConfirm.openFor(label, dev)
                         }
                     }
@@ -1392,11 +1394,11 @@ Item {
                         }
                     }
 
-                    // Beta firmware: when on, the autoupdater targets the
+                    // Beta Updates: when on (engineering mode only), BOTH the
+                    // app self-updater and the device firmware check target the
                     // most-recently-published release (incl. dev/rc), not just
-                    // full releases. Plain config flag — the connector re-runs
-                    // the firmware check when it toggles (setConfig hook).
-                    // Engineering (engineering mode) only.
+                    // full releases. The connector re-checks on toggle and when
+                    // engineering mode changes (_refresh_update_checks). (#386)
                     Rectangle {
                         Layout.fillWidth: true; height: 1; color: root.colBorderSoft
                         visible: MotionInterface.appConfig.engineeringMode === true
