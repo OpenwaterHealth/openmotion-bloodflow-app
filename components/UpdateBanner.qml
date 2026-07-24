@@ -120,6 +120,12 @@ Rectangle {
             banner.downloadUrl = url
             banner.shown = true
         }
+        // Withdraw a stale offer: a re-check (e.g. after engineering mode is
+        // turned off, dropping beta back to stable) that finds nothing hides
+        // the banner. The initial up-to-date launch is a no-op — never shown.
+        function onUpdateNotAvailable() {
+            banner.shown = false
+        }
         // Reflect download/install progress on the button.
         function onUpdateProgress(message) {
             banner.statusText = message
