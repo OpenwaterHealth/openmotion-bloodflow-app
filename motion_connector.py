@@ -126,6 +126,21 @@ def _select_update_asset(assets: list, is_research: bool):
     return None
 
 
+def _select_release(releases, include_prerelease):
+    """Pick the newest published release from a GitHub /releases list.
+
+    GitHub returns releases newest-first. Drafts are never installable and are
+    always skipped. When include_prerelease is False, prereleases are skipped
+    too. Returns the chosen release dict, or None if nothing is eligible (#386)."""
+    for rel in releases or []:
+        if rel.get("draft"):
+            continue
+        if rel.get("prerelease") and not include_prerelease:
+            continue
+        return rel
+    return None
+
+
 def _authenticode_status(path: str) -> str:
     """Return the Authenticode signature status of ``path``.
 
