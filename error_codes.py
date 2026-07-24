@@ -134,6 +134,16 @@ _SCAN = [
         "Check the sensor cables and power, then reconnect and start a new "
         "scan. If it happens repeatedly, send a bug report.",
     ),
+    _e(
+        "E-304", "scan",
+        "Device disconnected during scan",
+        "A console or sensor was disconnected while the scan was running, so "
+        "the scan was stopped. Some data loss may have occurred — data "
+        "captured before the disconnection is not guaranteed to have been "
+        "saved.",
+        "Check the USB cables and power, reconnect the system, and start a "
+        "new scan. If it keeps happening, send a bug report.",
+    ),
 ]
 
 
