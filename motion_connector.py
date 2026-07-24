@@ -2075,11 +2075,12 @@ class MotionConnector(QObject):
                 and self._app_config.get("downloadBetaUpdates", False))
 
     def _maybe_check_firmware_update(self, name: str) -> None:
-        """If engineeringMode, ensure this device's firmware-update availability
-        is computed — reusing a cached 'latest' for the kind, or kicking one
-        background GitHub check per kind per session."""
-        if not self._app_config.get("engineeringMode", False):
-            return
+        """In a Research build, ensure this device's firmware-update
+        availability is computed — reusing a cached 'latest' for the kind, or
+        kicking one background GitHub check per kind per session. Clinical
+        builds never check, even with engineering mode unlocked (#386)."""
+        if self._app_config.get("clinicalMode", False):
+            return   # firmware updates are disabled in clinical builds (#386)
         if name not in self._firmware_versions or not self._firmware_versions[name]:
             return
         kind = self._kind_for_device(name)
@@ -2150,11 +2151,12 @@ class MotionConnector(QObject):
     @pyqtSlot(str, result=bool)
     def startFirmwareUpdate(self, device_key: str) -> bool:
         """Download the latest firmware for device_key and flash it over DFU.
-        engineeringMode-only; refused during a scan or while another update runs."""
+        Research-only (blocked in clinical builds); refused during a scan or
+        while another update runs (#386)."""
         if device_key not in ("console", "left", "right"):
             return False
-        if not self._app_config.get("engineeringMode", False):
-            return False
+        if self._app_config.get("clinicalMode", False):
+            return False   # firmware updates are disabled in clinical builds (#386)
         if self._state == RUNNING or self._running:
             self.firmwareUpdateFinished.emit(
                 device_key, False, "Cannot update firmware during a scan.")

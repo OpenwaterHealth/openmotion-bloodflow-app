@@ -12,7 +12,7 @@ from omotion.firmware_update import FirmwareKind, LatestInfo
 pytestmark = pytest.mark.unit
 
 
-def _connector(tmp_path, dev_mode):
+def _connector(tmp_path, dev_mode=False, clinical=False):
     iface = MagicMock()
     iface.is_device_connected.return_value = (False, False, False)
     iface.scan_workflow.running = False
@@ -20,18 +20,38 @@ def _connector(tmp_path, dev_mode):
     iface.scan_db_path = str(tmp_path / "scans.db")
     iface.get_sdk_version.return_value = "9.9.9"
     return MotionConnector(
-        interface=iface, app_config={"engineeringMode": dev_mode},
+        interface=iface,
+        app_config={"engineeringMode": dev_mode, "clinicalMode": clinical},
         data_dir=str(tmp_path), config_dir="config",
     )
 
 
-def test_no_check_when_developer_mode_off(tmp_path, monkeypatch):
-    called = []
-    monkeypatch.setattr(motion_connector, "check_latest", lambda k: called.append(k))
-    c = _connector(tmp_path, dev_mode=False)
+def test_no_check_in_clinical_mode(tmp_path, monkeypatch):
+    """Clinical build must never spawn a firmware check — even with
+    engineering mode unlocked (#386)."""
+    monkeypatch.setattr(motion_connector, "check_latest", lambda k, **_: None)
+    c = _connector(tmp_path, dev_mode=True, clinical=True)   # eng ON, clinical
     c._firmware_versions["left"] = "v1.0.0"
+    spawned = []
+    monkeypatch.setattr(
+        motion_connector.threading, "Thread",
+        lambda **k: MagicMock(start=lambda: spawned.append(1)))
     c._maybe_check_firmware_update("left")
-    assert called == [], "must not hit GitHub when engineeringMode is off"
+    assert spawned == [], "clinical build must not check firmware, even with eng mode on"
+
+
+def test_check_runs_in_research_without_eng(tmp_path, monkeypatch):
+    """Research build checks firmware on the stable channel with no
+    engineering mode required (#386)."""
+    monkeypatch.setattr(motion_connector, "check_latest", lambda k, **_: None)
+    c = _connector(tmp_path, dev_mode=False, clinical=False)  # research, eng OFF
+    c._firmware_versions["left"] = "v1.0.0"
+    spawned = []
+    monkeypatch.setattr(
+        motion_connector.threading, "Thread",
+        lambda **k: MagicMock(start=lambda: spawned.append(k.get("args"))))
+    c._maybe_check_firmware_update("left")
+    assert spawned, "research build must check firmware even with eng mode off"
 
 
 def test_worker_flags_update_and_emits(tmp_path, monkeypatch):

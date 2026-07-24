@@ -20,7 +20,7 @@ def _no_network_check(monkeypatch):
     monkeypatch.setattr(motion_connector, "check_latest", lambda kind, **_: None)
 
 
-def _connector(tmp_path, dev_mode=True):
+def _connector(tmp_path, dev_mode=True, clinical=False):
     iface = MagicMock()
     iface.is_device_connected.return_value = (True, True, True)
     iface.scan_workflow.running = False
@@ -28,7 +28,8 @@ def _connector(tmp_path, dev_mode=True):
     iface.scan_db_path = str(tmp_path / "scans.db")
     iface.get_sdk_version.return_value = "9.9.9"
     return MotionConnector(
-        interface=iface, app_config={"engineeringMode": dev_mode},
+        interface=iface,
+        app_config={"engineeringMode": dev_mode, "clinicalMode": clinical},
         data_dir=str(tmp_path), config_dir="config",
     )
 
@@ -39,10 +40,33 @@ def _finished(c):
     return out
 
 
-def test_refuses_when_not_developer_mode(tmp_path):
-    c = _connector(tmp_path, dev_mode=False)
+def test_refuses_in_clinical_mode(tmp_path, monkeypatch):
+    """Clinical build refuses to flash firmware even with engineering mode
+    unlocked and an update available (#386)."""
+    c = _connector(tmp_path, dev_mode=True, clinical=True)   # eng ON, clinical
+    c._state = READY
     c._firmware_update_available["left"] = True
+    # Defensive: if the gate were wrong, this stops a real DFU flash from a test.
+    monkeypatch.setattr(c, "_firmware_update_worker", lambda dev: None)
+    monkeypatch.setattr(
+        motion_connector.threading, "Thread",
+        lambda **k: MagicMock(start=lambda: k["target"](*k["args"])))
     assert c.startFirmwareUpdate("left") is False
+
+
+def test_allowed_in_research_without_eng(tmp_path, monkeypatch):
+    """Research build flashes firmware with no engineering mode required (#386)."""
+    c = _connector(tmp_path, dev_mode=False, clinical=False)  # research, eng OFF
+    c._state = READY
+    c._firmware_update_available["left"] = True
+    started = []
+    monkeypatch.setattr(c, "_firmware_update_worker", lambda dev: started.append(dev))
+    monkeypatch.setattr(
+        motion_connector.threading, "Thread",
+        lambda **k: MagicMock(start=lambda: k["target"](*k["args"])))
+    assert c.startFirmwareUpdate("left") is True
+    assert c._firmware_update_in_progress == "left"
+    assert started == ["left"]
 
 
 def test_refuses_during_scan(tmp_path):
