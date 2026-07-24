@@ -3949,6 +3949,25 @@ class MotionConnector(QObject):
                 _TriggerStateSink(connector=self),
                 outcome_sink,
                 _CompletionSink(connector=self, on_complete_cb=_on_pipeline_complete),
+                # Live mid-scan contact-quality warnings (issue #364). This
+                # is the sink that was never written when the app's
+                # callbacks were ported to sink classes in 2026-05 — the
+                # QML modal and both Qt signals have been waiting for it
+                # since. Not `critical`: a contact fault must never abort a
+                # clinical scan in progress.
+                ContactQualityMonitor(
+                    thresholds=CQThresholds.from_sequences(
+                        self._app_config.get("cq_dark_threshold_per_camera")
+                        or [_CQ_DEFAULT_DARK_THRESHOLD_DN] * 8,
+                        self._app_config.get("cq_light_threshold_per_camera")
+                        or [_CQ_DEFAULT_LIGHT_THRESHOLD_DN] * 8,
+                    ),
+                    on_transition=self._on_cq_transition,
+                    rolling_window=int(self._app_config.get(
+                        "cq_rolling_avg_window", _CQ_DEFAULT_ROLLING_WINDOW)),
+                    light_debounce=int(self._app_config.get(
+                        "cq_live_debounce_frames", 80)),
+                ),
             ],
             # Async backstop (#213): if the worker aborts after start_scan
             # returned True (e.g. a critical sink dies because the scan DB
