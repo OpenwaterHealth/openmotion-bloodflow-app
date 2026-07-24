@@ -72,10 +72,11 @@ SCALE_I = 0.25
 
 # Contact-quality quick-check defaults (overridable via app_config keys
 # cq_dark_threshold_per_camera / cq_light_threshold_per_camera /
-# cq_rolling_avg_window).
+# cq_rolling_avg_window / cq_live_debounce_frames).
 _CQ_DEFAULT_DARK_THRESHOLD_DN = 3.0
 _CQ_DEFAULT_LIGHT_THRESHOLD_DN = 15.0
 _CQ_DEFAULT_ROLLING_WINDOW = 10
+_CQ_DEFAULT_LIVE_DEBOUNCE_FRAMES = 80
 
 # Console front-panel RGB LED states — wire values of the firmware's
 # OW_CTRL_SET_IND command (console-fw led_driver.c, via
@@ -3914,13 +3915,12 @@ class MotionConnector(QObject):
             or engineering_mode
         )
 
-        # Contact-quality thresholds for the live monitor sink below
-        # (issue #364). Nothing in Settings writes these keys today, so
-        # the only way to hit a bad value is a hand-edited config — but a
-        # malformed cq_dark_threshold_per_camera / cq_light_threshold_per_camera
-        # (wrong type, a null/non-numeric element) must degrade to the
-        # shipped defaults rather than raise out of CQThresholds.from_sequences
-        # and crash startCapture before the SDK's own non-critical/safe-consume
+        # Contact-quality config for the live monitor sink below (issue
+        # #364). Nothing in Settings writes these keys today, so the only
+        # way to hit a bad value is a hand-edited config — but a malformed
+        # one (wrong type, a null/non-numeric element, a null scalar) must
+        # degrade to the shipped defaults rather than raise on the clinical
+        # scan path, before the SDK's own non-critical/safe-consume
         # protections for this sink ever get a chance to apply.
         try:
             _cq_thresholds = CQThresholds.from_sequences(
@@ -3939,6 +3939,34 @@ class MotionConnector(QObject):
                 [_CQ_DEFAULT_DARK_THRESHOLD_DN] * 8,
                 [_CQ_DEFAULT_LIGHT_THRESHOLD_DN] * 8,
             )
+
+        def _cq_int_or(key, default):
+            """int(app_config[key]) with a fallback for a missing/null
+            config key (value is None — cfg.get(key, default) only
+            substitutes default when the key is *absent*, not when it's
+            present as JSON null) and for a present-but-malformed one
+            (non-numeric string, wrong type) alike. Checking `is not None`
+            rather than `value or default` also means an explicit 0
+            converts to 0, not default — ContactQualityMonitor's own
+            max(1, int(...)) clamp is what turns a deliberate 0 into "no
+            debounce", not this fallback.
+            """
+            value = self._app_config.get(key)
+            if value is None:
+                return default
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid %s config value %r; using default %s",
+                    key, value, default,
+                )
+                return default
+
+        _cq_rolling_window = _cq_int_or(
+            "cq_rolling_avg_window", _CQ_DEFAULT_ROLLING_WINDOW)
+        _cq_light_debounce = _cq_int_or(
+            "cq_live_debounce_frames", _CQ_DEFAULT_LIVE_DEBOUNCE_FRAMES)
 
         req = ScanRequest(
             subject_id=subject_id,
@@ -3984,10 +4012,8 @@ class MotionConnector(QObject):
                 ContactQualityMonitor(
                     thresholds=_cq_thresholds,
                     on_transition=self._on_cq_transition,
-                    rolling_window=int(self._app_config.get(
-                        "cq_rolling_avg_window") or _CQ_DEFAULT_ROLLING_WINDOW),
-                    light_debounce=int(self._app_config.get(
-                        "cq_live_debounce_frames") or 80),
+                    rolling_window=_cq_rolling_window,
+                    light_debounce=_cq_light_debounce,
                 ),
             ],
             # Async backstop (#213): if the worker aborts after start_scan

@@ -209,6 +209,7 @@ def test_startcapture_survives_null_light_debounce_config(tmp_path):
     startCapture on the primary clinical scan path, contradicting the
     sink's own "must never abort a clinical scan in progress" contract.
     Must fall back to the shipped default instead of raising."""
+    from motion_connector import _CQ_DEFAULT_LIVE_DEBOUNCE_FRAMES
     from omotion.contact_quality import ContactQualityMonitor
 
     connector = _make_scan_connector(tmp_path, {"cq_live_debounce_frames": None})
@@ -217,7 +218,45 @@ def test_startcapture_survives_null_light_debounce_config(tmp_path):
 
     cq_sinks = [s for s in req.sinks if isinstance(s, ContactQualityMonitor)]
     assert len(cq_sinks) == 1
-    assert cq_sinks[0]._light_debounce == 80
+    assert cq_sinks[0]._light_debounce == _CQ_DEFAULT_LIVE_DEBOUNCE_FRAMES
+
+
+def test_startcapture_survives_non_numeric_debounce_config(tmp_path):
+    """A different bad-value shape than the null case above: int("abc")
+    raises ValueError, not TypeError, but it is the same hazard class —
+    a hand-edited config must degrade to the shipped default rather than
+    raise out of the ScanRequest(...) construction on the clinical scan
+    path."""
+    from motion_connector import _CQ_DEFAULT_LIVE_DEBOUNCE_FRAMES
+    from omotion.contact_quality import ContactQualityMonitor
+
+    connector = _make_scan_connector(tmp_path, {"cq_live_debounce_frames": "abc"})
+
+    req = _captured_scan_request(connector)
+
+    cq_sinks = [s for s in req.sinks if isinstance(s, ContactQualityMonitor)]
+    assert len(cq_sinks) == 1
+    assert cq_sinks[0]._light_debounce == _CQ_DEFAULT_LIVE_DEBOUNCE_FRAMES
+
+
+def test_startcapture_zero_debounce_config_is_not_conflated_with_missing(tmp_path):
+    """0 is a deliberate, valid "no debounce" value, distinct from a
+    missing/null key. A naive `app_config.get(key) or default` fallback
+    would silently promote a configured 0 to the default (2 s worth of
+    debounce) — wrong for whoever configured 0 on purpose. This checks
+    `is not None` instead, so 0 passes through unchanged; it is
+    ContactQualityMonitor's own max(1, int(...)) clamp that turns a
+    deliberate 0 into 1 ("no debounce"), not this fallback — confirmed
+    end-to-end through the real sink, not just the intermediate value."""
+    from omotion.contact_quality import ContactQualityMonitor
+
+    connector = _make_scan_connector(tmp_path, {"cq_live_debounce_frames": 0})
+
+    req = _captured_scan_request(connector)
+
+    cq_sinks = [s for s in req.sinks if isinstance(s, ContactQualityMonitor)]
+    assert len(cq_sinks) == 1
+    assert cq_sinks[0]._light_debounce == 1
 
 
 def test_startcapture_survives_null_rolling_window_config(tmp_path):
@@ -286,3 +325,37 @@ def test_marshal_coerces_numpy_scalar_types_to_plain_python():
     assert type(value) is float and value == 3.5
     assert type(active) is bool and active is True
     assert type(side) is str and type(reason) is str
+
+
+def test_private_transition_signal_is_connected_to_the_main_thread_slot(tmp_path):
+    """Covers the one hop none of the tests above do.
+
+    _cqTransitionSignal.connect(self._on_cq_transition_main) (wired in
+    __init__'s connect_signals) is the single line that actually carries
+    this feature into QML. Every test above either calls
+    _on_cq_transition_main directly, replaces _cqTransitionSignal with a
+    stub, or inspects ScanRequest.sinks — none of them observe the
+    connection between the runner-thread marshal and the main-thread
+    slot. That is exactly the shape issue #364 was: a signal stayed
+    declared while nothing emitted through it, and Qt does not complain
+    about a declared-but-unconnected signal. This test is what would have
+    caught that, and would catch it again if the connect line were ever
+    deleted or moved behind a condition that stops running.
+
+    Do NOT delete this as redundant with the adapter/marshal tests above
+    — it is the only one that exercises the real, __init__-wired signal
+    rather than a stand-in for it. A same-thread .emit() resolves to a
+    direct connection, so no event loop / qapp fixture is needed.
+    """
+    connector = _make_scan_connector(tmp_path, {})
+    seen = []
+    connector.contactQualityWarning.connect(lambda *a: seen.append(("warn", a)))
+    connector.contactQualityIssueStateChanged.connect(
+        lambda *a: seen.append(("state", a)))
+
+    connector._cqTransitionSignal.emit("left", 2, "poor_contact", 4.5, True)
+
+    assert seen == [
+        ("warn", ("L3", "poor_contact", "Poor sensor contact", 4.5)),
+        ("state", ("L3", "poor_contact", "Poor sensor contact", 4.5, True)),
+    ]
