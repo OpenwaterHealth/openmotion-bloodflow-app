@@ -185,3 +185,27 @@ def test_shipped_config_connection_timeout_is_twelve_seconds():
     shipped = json.loads(
         (REPO_ROOT / "config" / "app_config.json").read_text(encoding="utf-8"))
     assert shipped["connectionTimeoutSec"] == 12
+
+
+def test_beta_updates_default_is_registered(tmp_path, monkeypatch):
+    """downloadBetaUpdates must be in the in-code defaults whitelist or
+    _load_app_config silently drops it and the beta toggle never persists."""
+    _patch_config_path(monkeypatch, tmp_path / "app_config.json")
+    cfg = app_main._load_app_config()
+    assert cfg["downloadBetaUpdates"] is False
+
+    config_path = tmp_path / "app_config.json"
+    config_path.write_text(json.dumps({"downloadBetaUpdates": True}), encoding="utf-8")
+    _patch_config_path(monkeypatch, config_path)
+    cfg = app_main._load_app_config()
+    assert cfg["downloadBetaUpdates"] is True
+
+
+def test_beta_updates_present_in_shipped_config():
+    """Shipped config carries downloadBetaUpdates (default off); the old
+    downloadBetaFirmware key is fully retired."""
+    shipped = app_main.resource_path("config", "app_config.json")
+    with open(shipped, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    assert data["downloadBetaUpdates"] is False
+    assert "downloadBetaFirmware" not in data

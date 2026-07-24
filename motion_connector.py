@@ -2089,7 +2089,7 @@ class MotionConnector(QObject):
 
     def _firmware_check_worker(self, kind: FirmwareKind, generation: int | None = None) -> None:
         try:
-            beta = self._app_config.get("downloadBetaFirmware", False)
+            beta = self._app_config.get("downloadBetaUpdates", False)
             info = check_latest(kind, include_prerelease=beta)
         except Exception:                           # defensive; check_latest is fail-soft
             info = None
@@ -2112,7 +2112,7 @@ class MotionConnector(QObject):
         kind = self._kind_for_device(name)
         installed = self._firmware_versions.get(name, "")
         latest = self._firmware_latest_by_kind.get(kind.value, "")
-        beta = self._app_config.get("downloadBetaFirmware", False)
+        beta = self._app_config.get("downloadBetaUpdates", False)
         avail = (bool(installed) and bool(latest)
                  and is_update_available(installed, latest, prerelease=beta))
         self._firmware_latest[name] = latest
@@ -2125,7 +2125,7 @@ class MotionConnector(QObject):
 
     def _refresh_firmware_update_check(self) -> None:
         """Invalidate the firmware-latest caches and re-run detection for every
-        connected device — called when downloadBetaFirmware toggles so the
+        connected device — called when downloadBetaUpdates toggles so the
         banner/Settings card reflect the new release pool immediately."""
         self._firmware_latest_by_kind.clear()
         self._firmware_checking_kinds.clear()
@@ -2173,7 +2173,7 @@ class MotionConnector(QObject):
             kind = self._kind_for_device(device_key)
             self.firmwareUpdateProgress.emit(
                 device_key, "check", -1, "Checking latest release…")
-            beta = self._app_config.get("downloadBetaFirmware", False)
+            beta = self._app_config.get("downloadBetaUpdates", False)
             info = check_latest(kind, include_prerelease=beta)
             if info is None:
                 raise RuntimeError("Could not reach GitHub to fetch firmware.")
@@ -2957,7 +2957,7 @@ class MotionConnector(QObject):
         if old != value:
             self._audit.log("settings_changed",
                             {"changes": {key: {"old": old, "new": value}}})
-        if key == "downloadBetaFirmware" and old != value:
+        if key == "downloadBetaUpdates" and old != value:
             self._refresh_firmware_update_check()
 
     @pyqtSlot('QVariantMap')
@@ -2974,7 +2974,7 @@ class MotionConnector(QObject):
         logger.debug(f"[Connector] Config saved: {sorted(configs.keys())}")
         if changes:
             self._audit.log("settings_changed", {"changes": changes})
-        if "downloadBetaFirmware" in changes:
+        if "downloadBetaUpdates" in changes:
             self._refresh_firmware_update_check()
 
     # Sensor debug-flag config keys surfaced as live Settings → Engineering

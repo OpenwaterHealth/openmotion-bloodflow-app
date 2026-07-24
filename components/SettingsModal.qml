@@ -1405,12 +1405,12 @@ Item {
                         label: "Beta Updates"
                         visible: MotionInterface.appConfig.engineeringMode === true
                         PillSwitch {
-                            checked: MotionInterface.appConfig.downloadBetaFirmware === true
-                            onToggled: MotionInterface.setConfig("downloadBetaFirmware", checked)
+                            checked: MotionInterface.appConfig.downloadBetaUpdates === true
+                            onToggled: MotionInterface.setConfig("downloadBetaUpdates", checked)
                         }
                         Text {
-                            text: MotionInterface.appConfig.downloadBetaFirmware === true ? "On" : "Off"
-                            color: MotionInterface.appConfig.downloadBetaFirmware === true ? root.colAccent : root.colTextMuted
+                            text: MotionInterface.appConfig.downloadBetaUpdates === true ? "On" : "Off"
+                            color: MotionInterface.appConfig.downloadBetaUpdates === true ? root.colAccent : root.colTextMuted
                             font.pixelSize: 12
                         }
                         Item { Layout.fillWidth: true }
