@@ -43,6 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from motion_connector import (  # noqa: E402
     MotionConnector,
     _should_abort_on_disconnect,
+    _disconnect_toast_text,
 )
 
 pytestmark = pytest.mark.unit
@@ -81,6 +82,64 @@ def test_disconnect_while_not_capturing_does_not_abort():
         name="console", capture_running=False,
         active_sides={"console", "left"},
     ) is False
+
+
+# ── _disconnect_toast_text ──────────────────────────────────────────────
+
+
+def test_disconnect_toast_text_names_the_device():
+    assert _disconnect_toast_text("console") == "Console disconnected"
+    assert _disconnect_toast_text("left") == "Left sensor disconnected"
+    assert _disconnect_toast_text("right") == "Right sensor disconnected"
+
+
+# ── MotionConnector._surface_disconnect (unbound, fake) ─────────────────
+#
+# Routes a device drop to EITHER the E-304 modal (participating device lost
+# mid-scan) OR a low-key toast (idle, or a non-participating device) — never
+# both, so the operator gets exactly one notification per event.
+
+
+class _FakeSurface:
+    def __init__(self, capture_running, active_sides):
+        self._capture_running = capture_running
+        self._capture_active_sides = active_sides
+        self.aborted = []
+        self.toasts = []
+
+    def _abort_scan_device_disconnect(self, name):
+        self.aborted.append(name)
+
+    def notify(self, text, type_="info", duration_ms=4000,
+               dismissible=True, tag=""):
+        self.toasts.append((text, type_, tag))
+
+
+def test_surface_disconnect_mid_scan_participating_aborts_no_toast():
+    fake = _FakeSurface(capture_running=True, active_sides={"console", "left"})
+    MotionConnector._surface_disconnect(fake, "console")
+    assert fake.aborted == ["console"]
+    assert fake.toasts == []
+
+
+def test_surface_disconnect_idle_shows_toast_no_abort():
+    fake = _FakeSurface(capture_running=False, active_sides=set())
+    MotionConnector._surface_disconnect(fake, "left")
+    assert fake.aborted == []
+    assert len(fake.toasts) == 1
+    text, type_, tag = fake.toasts[0]
+    assert text == "Left sensor disconnected"
+    assert type_ == "warning"
+    assert tag == "disconnect_left"
+
+
+def test_surface_disconnect_nonparticipating_sensor_mid_scan_toasts():
+    # Scan on left only; the idle right sensor drops → toast, not an abort.
+    fake = _FakeSurface(capture_running=True, active_sides={"console", "left"})
+    MotionConnector._surface_disconnect(fake, "right")
+    assert fake.aborted == []
+    assert len(fake.toasts) == 1
+    assert fake.toasts[0][0] == "Right sensor disconnected"
 
 
 # ── MotionConnector._abort_scan_device_disconnect (unbound, fake) ───────

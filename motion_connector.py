@@ -378,6 +378,18 @@ def _should_abort_on_disconnect(
     return bool(capture_running) and name in active_sides
 
 
+def _disconnect_toast_text(name: str) -> str:
+    """Toast copy for a device that dropped off USB (issue #387). Used for the
+    low-key notice when the drop does NOT abort a running scan (idle, or a
+    non-participating device)."""
+    label = {
+        "console": "Console",
+        "left": "Left sensor",
+        "right": "Right sensor",
+    }.get(name, name)
+    return f"{label} disconnected"
+
+
 _SIDE_NAMES = ("left", "right")
 
 
@@ -2052,17 +2064,14 @@ class MotionConnector(QObject):
                 self.configFinished.emit(
                     False, f"Device disconnected during sensor configuration ({name})"
                 )
-            # Unplugged mid-scan (issue #387): a device participating in the
-            # running scan dropped — raise the E-304 critical modal and abort.
-            # The SDK's own mid-scan disconnect subscription is already tearing
-            # the scan down; this adds the operator-facing modal the app would
-            # otherwise omit (a real unplug rarely trips the E-303 stall
-            # watchdog). An idle / masked-out sensor is not in
-            # _capture_active_sides, so unplugging it won't abort a good scan.
-            if _should_abort_on_disconnect(
-                name, self._capture_running, self._capture_active_sides
-            ):
-                self._abort_scan_device_disconnect(name)
+            # A device dropped off USB (issue #387). If it's a device taking
+            # part in a running scan, raise the E-304 critical modal and abort;
+            # otherwise (idle, or a non-participating device) show a low-key
+            # disconnect toast. The SDK's own mid-scan disconnect subscription
+            # is already tearing a running scan down; the E-304 modal is the
+            # operator-facing notice the app would otherwise omit (a real
+            # unplug rarely trips the E-303 stall watchdog).
+            self._surface_disconnect(name)
         # CONNECTING / DISCONNECTING are intermediate; UI doesn't need to
         # fire a connect/disconnect signal for those, and emitting
         # connectionStatusChanged on every intermediate transition would
@@ -4804,6 +4813,23 @@ class MotionConnector(QObject):
             detail=f"{name} disconnected mid-scan (scan elapsed {elapsed_str})",
         )
         self.stopCapture()
+
+    def _surface_disconnect(self, name: str) -> None:
+        """Surface a device dropping off USB (issue #387). If the drop aborts a
+        running scan (a participating device lost mid-scan), raise the E-304
+        modal; otherwise show a low-key toast (an idle disconnect, or a
+        non-participating device). Exactly one notification per event."""
+        if _should_abort_on_disconnect(
+            name, self._capture_running, self._capture_active_sides
+        ):
+            self._abort_scan_device_disconnect(name)
+        else:
+            self.notify(
+                _disconnect_toast_text(name),
+                type_="warning",
+                duration_ms=6000,
+                tag=f"disconnect_{name}",
+            )
 
     def _emit_or_defer_scan_notes(self) -> None:
         """Open the end-of-scan notes modal, or defer it if a critical-error

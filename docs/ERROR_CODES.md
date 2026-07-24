@@ -94,10 +94,10 @@ new scan. If it happens repeatedly, send a bug report.
 
 ### E-304 — Device disconnected during scan
 A console or sensor was disconnected while the scan was running, so the scan was
-stopped. Any data captured before the disconnection was saved. Fired when a
-device participating in the running scan — the console, or a sensor whose camera
-mask was non-zero at scan start — drops off USB during the trigger-on capture
-phase. Distinct from E-303: a physical unplug rarely trips the data-stall
+stopped. Some data loss may have occurred — data captured before the
+disconnection is not guaranteed to have been saved. Fired when a device
+participating in the running scan — the console, or a sensor whose camera mask
+was non-zero at scan start — drops off USB during the trigger-on capture phase. Distinct from E-303: a physical unplug rarely trips the data-stall
 watchdog (the SDK tears the scan down first), so this is the coded modal for a
 device being removed mid-scan. Unplugging an idle / masked-out sensor, or any
 device while not scanning, does not raise this.
