@@ -180,7 +180,15 @@ def _load_app_config() -> dict:
         # OFF elsewhere so Windows clinical builds keep the solid palette.
         "liquidGlass": sys.platform == "darwin",
         "cq_check_duration_sec": 1.0,
-        "cq_rolling_avg_window": 10,
+        "cq_rolling_avg_window": 5,
+        # Live contact-quality monitor debounce (issue #364), asymmetric:
+        # RAISE the warning fast (a late warning is a safety miss) but CLEAR
+        # it slowly (a premature dismiss strands the operator on a still-bad
+        # camera). Counts consecutive light-frame evaluations at ~40 Hz, so
+        # 10 ~= 0.25 s to pop up, 80 ~= 2 s to dismiss. The dark/ambient path
+        # is not debounced — darks are ~15 s apart, their own debounce.
+        "cq_live_activate_frames": 10,
+        "cq_live_clear_frames": 80,
         "cq_dark_threshold_per_camera": [3.0] * 8,
         "cq_light_threshold_per_camera": [15.0] * 8,
         # Phase 2b: profile HUD overlay on the PlotViewer — sample

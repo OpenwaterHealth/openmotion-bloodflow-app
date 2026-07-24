@@ -45,6 +45,7 @@ from omotion.config import (
 )
 from omotion.MotionProcessing import process_bin_file
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
+from omotion.contact_quality import CQThresholds, ContactQualityMonitor
 from motion_config import (
     TEC_TRIP_MAX_C,
     TEC_TRIP_MIN_C,
@@ -71,10 +72,13 @@ SCALE_I = 0.25
 
 # Contact-quality quick-check defaults (overridable via app_config keys
 # cq_dark_threshold_per_camera / cq_light_threshold_per_camera /
-# cq_rolling_avg_window).
+# cq_rolling_avg_window / cq_live_activate_frames / cq_live_clear_frames).
 _CQ_DEFAULT_DARK_THRESHOLD_DN = 3.0
 _CQ_DEFAULT_LIGHT_THRESHOLD_DN = 15.0
 _CQ_DEFAULT_ROLLING_WINDOW = 10
+# Asymmetric live debounce (#364): RAISE fast, CLEAR slow.
+_CQ_DEFAULT_LIVE_ACTIVATE_FRAMES = 10
+_CQ_DEFAULT_LIVE_CLEAR_FRAMES = 80
 
 # Console front-panel RGB LED states — wire values of the firmware's
 # OW_CTRL_SET_IND command (console-fw led_driver.c, via
@@ -929,6 +933,10 @@ class MotionConnector(QObject):
     # ``False`` edge to clear an entry from the live modal.
     contactQualityIssueStateChanged = pyqtSignal(str, str, str, float, bool)
     contactQualityScanInProgress = pyqtSignal(bool)
+    # Runner thread → main thread marshal for live CQ transitions from the
+    # SDK's ContactQualityMonitor. Same pattern as _cq_result_signal; QML
+    # must never be touched from the pipeline worker thread.
+    _cqTransitionSignal = pyqtSignal(str, int, str, float, bool)
     cameraDropoutDetected = pyqtSignal(str, int, str)  # side ("left"/"right"), cam_id (0-7), elapsed HH:MM:SS
     # Frames resumed for a camera previously flagged Connection Lost — the
     # watchdog was re-armed and display resumed. Mirror of cameraDropoutDetected.
@@ -3976,6 +3984,62 @@ class MotionConnector(QObject):
             or engineering_mode
         )
 
+        # Contact-quality config for the live monitor sink below (issue
+        # #364). Nothing in Settings writes these keys today, so the only
+        # way to hit a bad value is a hand-edited config — but a malformed
+        # one (wrong type, a null/non-numeric element, a null scalar) must
+        # degrade to the shipped defaults rather than raise on the clinical
+        # scan path, before the SDK's own non-critical/safe-consume
+        # protections for this sink ever get a chance to apply.
+        try:
+            _cq_thresholds = CQThresholds.from_sequences(
+                self._app_config.get("cq_dark_threshold_per_camera")
+                or [_CQ_DEFAULT_DARK_THRESHOLD_DN] * 8,
+                self._app_config.get("cq_light_threshold_per_camera")
+                or [_CQ_DEFAULT_LIGHT_THRESHOLD_DN] * 8,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Invalid cq_dark_threshold_per_camera / "
+                "cq_light_threshold_per_camera config (%s); falling back "
+                "to default CQ thresholds", exc,
+            )
+            _cq_thresholds = CQThresholds.from_sequences(
+                [_CQ_DEFAULT_DARK_THRESHOLD_DN] * 8,
+                [_CQ_DEFAULT_LIGHT_THRESHOLD_DN] * 8,
+            )
+
+        def _cq_int_or(key, default):
+            """int(app_config[key]) with a fallback for a missing/null
+            config key (value is None — cfg.get(key, default) only
+            substitutes default when the key is *absent*, not when it's
+            present as JSON null) and for a present-but-malformed one
+            (non-numeric string, wrong type) alike. Checking `is not None`
+            rather than `value or default` also means an explicit 0
+            converts to 0, not default — ContactQualityMonitor's own
+            max(1, int(...)) clamp is what turns a deliberate 0 into "no
+            debounce", not this fallback.
+            """
+            value = self._app_config.get(key)
+            if value is None:
+                return default
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid %s config value %r; using default %s",
+                    key, value, default,
+                )
+                return default
+
+        _cq_rolling_window = _cq_int_or(
+            "cq_rolling_avg_window", _CQ_DEFAULT_ROLLING_WINDOW)
+        # Asymmetric debounce (#364): RAISE the warning fast, CLEAR it slow.
+        _cq_light_activate = _cq_int_or(
+            "cq_live_activate_frames", _CQ_DEFAULT_LIVE_ACTIVATE_FRAMES)
+        _cq_light_clear = _cq_int_or(
+            "cq_live_clear_frames", _CQ_DEFAULT_LIVE_CLEAR_FRAMES)
+
         req = ScanRequest(
             subject_id=subject_id,
             duration_sec=duration_sec,
@@ -4011,6 +4075,19 @@ class MotionConnector(QObject):
                 _TriggerStateSink(connector=self),
                 outcome_sink,
                 _CompletionSink(connector=self, on_complete_cb=_on_pipeline_complete),
+                # Live mid-scan contact-quality warnings (issue #364). This
+                # is the sink that was never written when the app's
+                # callbacks were ported to sink classes in 2026-05 — the
+                # QML modal and both Qt signals have been waiting for it
+                # since. Not `critical`: a contact fault must never abort a
+                # clinical scan in progress.
+                ContactQualityMonitor(
+                    thresholds=_cq_thresholds,
+                    on_transition=self._on_cq_transition,
+                    rolling_window=_cq_rolling_window,
+                    light_activate_debounce=_cq_light_activate,
+                    light_clear_debounce=_cq_light_clear,
+                ),
             ],
             # Async backstop (#213): if the worker aborts after start_scan
             # returned True (e.g. a critical sink dies because the scan DB
@@ -4685,6 +4762,48 @@ class MotionConnector(QObject):
         ok = result.passed
         err_msg = "" if ok else "Contact quality check failed"
         self.contactQualityCheckFinished.emit(ok, err_msg, warning_list)
+
+    def _on_cq_transition(self, side, cam_id, reason, value, active):
+        """Runner-thread callback from the SDK's ContactQualityMonitor.
+
+        Does nothing but hop to the main thread — see the cross-thread
+        gotcha in CLAUDE.md. Never raises: an exception escaping a sink's
+        consume() aborts that batch mid-flight and the loss is invisible,
+        which is exactly the regression this feature exists to fix (#364).
+        """
+        try:
+            self._cqTransitionSignal.emit(
+                str(side), int(cam_id), str(reason), float(value), bool(active)
+            )
+        except Exception as exc:
+            logger.warning("contact-quality transition marshal failed: %s", exc)
+
+    @pyqtSlot(str, int, str, float, bool)
+    def _on_cq_transition_main(self, side, cam_id, reason, value, active):
+        """Main thread: adapt an SDK CQ transition to the modal's signals.
+
+        Mirrors the deleted _on_cq_warning closure. contactQualityWarning
+        fires on activation only; contactQualityIssueStateChanged fires on
+        every edge so QML can clear the entry.
+        """
+        label = self._camera_label(side, cam_id)
+        # The modal knows two type keys. Defensive, not a live path today:
+        # the SDK's ContactQualityMonitor skips non-finite readings before
+        # on_transition ever fires, so it does not currently emit
+        # "no_signal". Collapsing it to poor_contact here costs nothing and
+        # keeps live and preflight wording identical — matching
+        # _on_cq_result_ready's preflight mapping — if that contract ever
+        # changes.
+        type_key = "poor_contact" if reason == "no_signal" else reason
+        type_text = self._warning_text(type_key)
+        try:
+            if active:
+                self.contactQualityWarning.emit(label, type_key, type_text, value)
+            self.contactQualityIssueStateChanged.emit(
+                label, type_key, type_text, value, active
+            )
+        except Exception as exc:
+            logger.warning("contact-quality signal emit failed: %s", exc)
 
     @pyqtSlot()
     def _on_dropout_check(self):
@@ -5460,6 +5579,8 @@ class MotionConnector(QObject):
         self._testScanCompleteSignal.connect(self._on_test_scan_complete)
         # Worker → Qt main thread for the CQ workflow result.
         self._cq_result_signal.connect(self._on_cq_result_ready)
+        # Runner thread → Qt main thread for live contact-quality transitions.
+        self._cqTransitionSignal.connect(self._on_cq_transition_main)
         # Worker → Qt main thread for async past-scan loads (issue #152).
         self._pastScanBuffersReady.connect(self._on_past_scan_buffers_ready)
         # Auto-queued: emitted on the pipeline worker thread, runs the toast
