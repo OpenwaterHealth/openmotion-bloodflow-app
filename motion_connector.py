@@ -5809,9 +5809,20 @@ class MotionConnector(QObject):
 
         if r_parts != l_parts:
             return r_parts > l_parts
-        # Same base version: non-pre > pre
+        # Same numeric base.
         if l_pre and not r_pre:
-            return True
+            return True   # local prerelease, remote full -> remote is newer
+        if r_pre and l_pre:
+            # Both prereleases of the same base (rc.1 -> rc.2, dev.0 -> dev.1,
+            # dev -> rc): order by PEP 440 prerelease precedence. Only the beta
+            # channel ever compares pre-vs-pre (#386). packaging parses the
+            # project's rc.N/dev.N tags; if it can't, keep the old not-newer
+            # behavior so a weird tag never triggers a spurious "update".
+            try:
+                from packaging.version import Version
+                return Version(remote) > Version(local)
+            except Exception:
+                return False
         return False
 
     @pyqtSlot(str)
