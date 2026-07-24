@@ -45,6 +45,7 @@ from omotion.config import (
 )
 from omotion.MotionProcessing import process_bin_file
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
+from omotion.contact_quality import CQThresholds, ContactQualityMonitor
 from motion_config import (
     TEC_TRIP_MAX_C,
     TEC_TRIP_MIN_C,
@@ -900,6 +901,10 @@ class MotionConnector(QObject):
     # ``False`` edge to clear an entry from the live modal.
     contactQualityIssueStateChanged = pyqtSignal(str, str, str, float, bool)
     contactQualityScanInProgress = pyqtSignal(bool)
+    # Runner thread → main thread marshal for live CQ transitions from the
+    # SDK's ContactQualityMonitor. Same pattern as _cq_result_signal; QML
+    # must never be touched from the pipeline worker thread.
+    _cqTransitionSignal = pyqtSignal(str, int, str, float, bool)
     cameraDropoutDetected = pyqtSignal(str, int, str)  # side ("left"/"right"), cam_id (0-7), elapsed HH:MM:SS
     # Frames resumed for a camera previously flagged Connection Lost — the
     # watchdog was re-armed and display resumed. Mirror of cameraDropoutDetected.
@@ -4619,6 +4624,44 @@ class MotionConnector(QObject):
         err_msg = "" if ok else "Contact quality check failed"
         self.contactQualityCheckFinished.emit(ok, err_msg, warning_list)
 
+    def _on_cq_transition(self, side, cam_id, reason, value, active):
+        """Runner-thread callback from the SDK's ContactQualityMonitor.
+
+        Does nothing but hop to the main thread — see the cross-thread
+        gotcha in CLAUDE.md. Never raises: an exception escaping a sink's
+        consume() aborts that batch mid-flight and the loss is invisible,
+        which is exactly the regression this feature exists to fix (#364).
+        """
+        try:
+            self._cqTransitionSignal.emit(
+                str(side), int(cam_id), str(reason), float(value), bool(active)
+            )
+        except Exception as exc:
+            logger.warning("contact-quality transition marshal failed: %s", exc)
+
+    @pyqtSlot(str, int, str, float, bool)
+    def _on_cq_transition_main(self, side, cam_id, reason, value, active):
+        """Main thread: adapt an SDK CQ transition to the modal's signals.
+
+        Mirrors the deleted _on_cq_warning closure. contactQualityWarning
+        fires on activation only; contactQualityIssueStateChanged fires on
+        every edge so QML can clear the entry.
+        """
+        label = self._camera_label(side, cam_id)
+        # The modal knows two type keys. no_signal is reported to the
+        # operator as poor contact, matching _on_cq_result_ready's preflight
+        # mapping so live and preflight wording agree.
+        type_key = "poor_contact" if reason == "no_signal" else reason
+        type_text = self._warning_text(type_key)
+        try:
+            if active:
+                self.contactQualityWarning.emit(label, type_key, type_text, value)
+            self.contactQualityIssueStateChanged.emit(
+                label, type_key, type_text, value, active
+            )
+        except Exception as exc:
+            logger.warning("contact-quality signal emit failed: %s", exc)
+
     @pyqtSlot()
     def _on_dropout_check(self):
         """1 Hz watchdog: emit cameraDropoutDetected for any camera silent > threshold."""
@@ -5313,6 +5356,8 @@ class MotionConnector(QObject):
         self._testScanCompleteSignal.connect(self._on_test_scan_complete)
         # Worker → Qt main thread for the CQ workflow result.
         self._cq_result_signal.connect(self._on_cq_result_ready)
+        # Runner thread → Qt main thread for live contact-quality transitions.
+        self._cqTransitionSignal.connect(self._on_cq_transition_main)
         # Worker → Qt main thread for async past-scan loads (issue #152).
         self._pastScanBuffersReady.connect(self._on_past_scan_buffers_ready)
         # Auto-queued: emitted on the pipeline worker thread, runs the toast
