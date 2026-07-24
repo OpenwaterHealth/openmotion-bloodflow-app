@@ -129,7 +129,7 @@
         15.0
     ],
     "engineeringMode": false,
-    "downloadBetaFirmware": false,
+    "downloadBetaUpdates": false,
     "forceLaserFail": false,
     "cameraFakeData": false,
     "cameraTempAlertThresholdC": 110,

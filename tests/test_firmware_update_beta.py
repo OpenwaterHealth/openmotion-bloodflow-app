@@ -1,4 +1,4 @@
-"""downloadBetaFirmware flows into the SDK check + a toggle re-checks."""
+"""downloadBetaUpdates flows into the SDK check + a toggle re-checks."""
 from unittest.mock import MagicMock
 
 import pytest
@@ -19,7 +19,7 @@ def _connector(tmp_path, dev_mode=True, beta=False):
     iface.get_sdk_version.return_value = "9.9.9"
     return MotionConnector(
         interface=iface,
-        app_config={"engineeringMode": dev_mode, "downloadBetaFirmware": beta},
+        app_config={"engineeringMode": dev_mode, "downloadBetaUpdates": beta},
         data_dir=str(tmp_path), config_dir="config",
     )
 
@@ -58,8 +58,9 @@ def test_toggle_invalidates_and_rechecks(tmp_path):
     c._firmware_update_available["left"] = True
     called = []
     c._maybe_check_firmware_update = lambda name: called.append(name)
+    c.checkForUpdates = lambda: None   # avoid the app-update network thread (#386)
 
-    c.setConfig("downloadBetaFirmware", True)
+    c.setConfig("downloadBetaUpdates", True)
 
     assert c._firmware_latest_by_kind == {}      # cache invalidated
     assert "left" in called                      # re-check for the connected device

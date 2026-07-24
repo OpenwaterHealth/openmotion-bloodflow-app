@@ -85,6 +85,12 @@ def _load_app_config() -> dict:
         # the releases-latest endpoint (used by the local update-test server).
         "updateRepo": None,
         "updateApiUrl": None,
+        # Beta/prerelease update channel for BOTH updaters (app self-update
+        # + device firmware). Effective only in a Research build with
+        # engineering mode unlocked — see MotionConnector._beta_enabled().
+        # Must be registered here or config_store drops it (silently
+        # non-persistent). Renamed from downloadBetaFirmware (#386).
+        "downloadBetaUpdates": False,
         "cameraTempAlertThresholdC": 105,
         # Whole-scan data-stall watchdog (issue #248): abort the scan with
         # E-303 when no camera delivers a frame for this many seconds while

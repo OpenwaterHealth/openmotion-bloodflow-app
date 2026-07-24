@@ -130,6 +130,21 @@ def _select_update_asset(assets: list, is_research: bool):
     return None
 
 
+def _select_release(releases, include_prerelease):
+    """Pick the newest published release from a GitHub /releases list.
+
+    GitHub returns releases newest-first. Drafts are never installable and are
+    always skipped. When include_prerelease is False, prereleases are skipped
+    too. Returns the chosen release dict, or None if nothing is eligible (#386)."""
+    for rel in releases or []:
+        if rel.get("draft"):
+            continue
+        if rel.get("prerelease") and not include_prerelease:
+            continue
+        return rel
+    return None
+
+
 def _authenticode_status(path: str) -> str:
     """Return the Authenticode signature status of ``path``.
 
@@ -2127,12 +2142,22 @@ class MotionConnector(QObject):
     def _devices_for_kind(kind: FirmwareKind) -> list[str]:
         return ["console"] if kind == FirmwareKind.CONSOLE else ["left", "right"]
 
+    def _beta_enabled(self) -> bool:
+        """Prerelease (beta) channel is active only for a Research build with
+        engineering mode unlocked and the beta toggle on. Clinical never opts
+        in; disabling engineering mode drops back to stable. Shared by the
+        firmware updater and the app self-updater (#386)."""
+        return (not self._app_config.get("clinicalMode", False)
+                and self._app_config.get("engineeringMode", False)
+                and self._app_config.get("downloadBetaUpdates", False))
+
     def _maybe_check_firmware_update(self, name: str) -> None:
-        """If engineeringMode, ensure this device's firmware-update availability
-        is computed — reusing a cached 'latest' for the kind, or kicking one
-        background GitHub check per kind per session."""
-        if not self._app_config.get("engineeringMode", False):
-            return
+        """In a Research build, ensure this device's firmware-update
+        availability is computed — reusing a cached 'latest' for the kind, or
+        kicking one background GitHub check per kind per session. Clinical
+        builds never check, even with engineering mode unlocked (#386)."""
+        if self._app_config.get("clinicalMode", False):
+            return   # firmware updates are disabled in clinical builds (#386)
         if name not in self._firmware_versions or not self._firmware_versions[name]:
             return
         kind = self._kind_for_device(name)
@@ -2151,7 +2176,7 @@ class MotionConnector(QObject):
 
     def _firmware_check_worker(self, kind: FirmwareKind, generation: int | None = None) -> None:
         try:
-            beta = self._app_config.get("downloadBetaFirmware", False)
+            beta = self._beta_enabled()
             info = check_latest(kind, include_prerelease=beta)
         except Exception:                           # defensive; check_latest is fail-soft
             info = None
@@ -2174,7 +2199,7 @@ class MotionConnector(QObject):
         kind = self._kind_for_device(name)
         installed = self._firmware_versions.get(name, "")
         latest = self._firmware_latest_by_kind.get(kind.value, "")
-        beta = self._app_config.get("downloadBetaFirmware", False)
+        beta = self._beta_enabled()
         avail = (bool(installed) and bool(latest)
                  and is_update_available(installed, latest, prerelease=beta))
         self._firmware_latest[name] = latest
@@ -2187,7 +2212,7 @@ class MotionConnector(QObject):
 
     def _refresh_firmware_update_check(self) -> None:
         """Invalidate the firmware-latest caches and re-run detection for every
-        connected device — called when downloadBetaFirmware toggles so the
+        connected device — called when downloadBetaUpdates toggles so the
         banner/Settings card reflect the new release pool immediately."""
         self._firmware_latest_by_kind.clear()
         self._firmware_checking_kinds.clear()
@@ -2200,14 +2225,31 @@ class MotionConnector(QObject):
             if self._firmware_versions.get(name):
                 self._maybe_check_firmware_update(name)
 
+    def _refresh_update_checks(self) -> None:
+        """Re-evaluate BOTH updaters after a change to the beta channel or
+        engineering mode. Firmware re-detects for connected devices; the app
+        self-updater re-checks — but only in a Research build, so a Clinical
+        build makes no outbound GitHub call (#96, #386). Also withdraws a stale
+        beta offer: the re-check runs on the now-current (post-change) channel,
+        and both banners drop the old offer if it no longer qualifies."""
+        self._refresh_firmware_update_check()
+        if not self._app_config.get("clinicalMode", False):
+            # Withdraw any currently-shown app-update offer synchronously (it may
+            # be a now-ineligible beta), mirroring the firmware side; the
+            # re-check re-offers only if a valid update still exists, so a failed
+            # re-check leaves the stale offer withdrawn rather than clickable.
+            self.updateNotAvailable.emit()
+            self.checkForUpdates()
+
     @pyqtSlot(str, result=bool)
     def startFirmwareUpdate(self, device_key: str) -> bool:
         """Download the latest firmware for device_key and flash it over DFU.
-        engineeringMode-only; refused during a scan or while another update runs."""
+        Research-only (blocked in clinical builds); refused during a scan or
+        while another update runs (#386)."""
         if device_key not in ("console", "left", "right"):
             return False
-        if not self._app_config.get("engineeringMode", False):
-            return False
+        if self._app_config.get("clinicalMode", False):
+            return False   # firmware updates are disabled in clinical builds (#386)
         if self._state == RUNNING or self._running:
             self.firmwareUpdateFinished.emit(
                 device_key, False, "Cannot update firmware during a scan.")
@@ -2235,7 +2277,7 @@ class MotionConnector(QObject):
             kind = self._kind_for_device(device_key)
             self.firmwareUpdateProgress.emit(
                 device_key, "check", -1, "Checking latest release…")
-            beta = self._app_config.get("downloadBetaFirmware", False)
+            beta = self._beta_enabled()
             info = check_latest(kind, include_prerelease=beta)
             if info is None:
                 raise RuntimeError("Could not reach GitHub to fetch firmware.")
@@ -3019,8 +3061,8 @@ class MotionConnector(QObject):
         if old != value:
             self._audit.log("settings_changed",
                             {"changes": {key: {"old": old, "new": value}}})
-        if key == "downloadBetaFirmware" and old != value:
-            self._refresh_firmware_update_check()
+        if old != value and key in ("downloadBetaUpdates", "engineeringMode"):
+            self._refresh_update_checks()
 
     @pyqtSlot('QVariantMap')
     def saveConfigs(self, configs: dict):
@@ -3036,8 +3078,8 @@ class MotionConnector(QObject):
         logger.debug(f"[Connector] Config saved: {sorted(configs.keys())}")
         if changes:
             self._audit.log("settings_changed", {"changes": changes})
-        if "downloadBetaFirmware" in changes:
-            self._refresh_firmware_update_check()
+        if any(k in changes for k in ("downloadBetaUpdates", "engineeringMode")):
+            self._refresh_update_checks()
 
     # Sensor debug-flag config keys surfaced as live Settings → Engineering
     # toggles, mapped to the runtime cache attribute that
@@ -5951,23 +5993,42 @@ class MotionConnector(QObject):
         t.start()
 
     def _check_for_updates_worker(self):
+        if self._app_config.get("clinicalMode", False):
+            return   # clinical builds never check for app updates (#96, #386)
         import urllib.request
         from version import get_version
 
         # ``updateRepo`` points the check at a staging/mirror repo; the broader
-        # ``updateApiUrl`` fully overrides the releases-latest endpoint (used by
+        # ``updateApiUrl`` fully overrides the single-release endpoint (used by
         # the local fake-releases server for offline end-to-end update testing).
-        # Both absent => the production GitHub repo.
+        # Both absent => the production GitHub repo. On the beta channel we hit
+        # the /releases LIST endpoint and pick the newest published (incl.
+        # prerelease); otherwise the stable /releases/latest single object (#386).
         repo = self._app_config.get("updateRepo") or self._GITHUB_REPO
-        api_url = self._app_config.get("updateApiUrl") or (
-            f"https://api.github.com/repos/{repo}/releases/latest"
-        )
+        beta = self._beta_enabled()
+        override = self._app_config.get("updateApiUrl")
+        if override:
+            api_url = override.replace("/releases/latest", "/releases") if beta else override
+        else:
+            base = f"https://api.github.com/repos/{repo}/releases"
+            api_url = base if beta else base + "/latest"
         try:
-            req = urllib.request.Request(api_url, headers={"Accept": "application/vnd.github+json"})
+            req = urllib.request.Request(
+                api_url, headers={"Accept": "application/vnd.github+json"})
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode())
 
-            remote_tag = data.get("tag_name", "").lstrip("v")
+            # Select by RESPONSE SHAPE, not the beta flag: the beta channel hits
+            # the /releases LIST endpoint (newest-first) -> pick newest non-draft;
+            # stable /releases/latest returns one object. An updateApiUrl override
+            # may return a single object even on beta, so handle both (#386).
+            release = (_select_release(data, include_prerelease=True)
+                       if isinstance(data, list) else data)
+            if not release:
+                self.updateNotAvailable.emit()
+                return
+
+            remote_tag = release.get("tag_name", "").lstrip("v")
             if not remote_tag:
                 self.updateCheckFailed.emit("Could not determine latest release tag.")
                 return
@@ -5975,33 +6036,28 @@ class MotionConnector(QObject):
             # Find the Setup bundle matching this build's variant.
             # clinicalMode True = clinical build; False = Research/full build.
             is_research = not bool(self._app_config.get("clinicalMode", False))
-            download_url = _select_update_asset(data.get("assets", []), is_research)
+            download_url = _select_update_asset(release.get("assets", []), is_research)
 
-            local_version = get_version()
-            # Strip local metadata for comparison (e.g. "+3.gabc1234.dirty")
-            local_base = local_version.split("+")[0]
+            # Strip local metadata for comparison (e.g. "+3.gabc1234.dirty").
+            local_base = get_version().split("+")[0]
 
             if not self._version_newer(remote_tag, local_base):
-                logger.info(f"App is up to date ({local_base} >= {remote_tag})")
+                logger.info("App is up to date (%s >= %s)", local_base, remote_tag)
                 self.updateNotAvailable.emit()
             elif not _is_bundle_url(download_url):
                 # Newer release exists but has no matching installer asset
                 # (e.g. assets still uploading) -- don't offer an in-place
                 # update we can't actually perform.
                 logger.warning(
-                    "Update %s available but no installer asset found",
-                    remote_tag,
-                )
+                    "Update %s available but no installer asset found", remote_tag)
                 self.updateNotAvailable.emit()
             else:
                 logger.info(
-                    "Update available: %s (current: %s)",
-                    remote_tag, local_base,
-                )
+                    "Update available: %s (current: %s)", remote_tag, local_base)
                 self.updateAvailable.emit(remote_tag, download_url)
 
         except Exception as e:
-            logger.warning(f"Update check failed: {e}")
+            logger.warning("Update check failed: %s", e)
             self.updateCheckFailed.emit(str(e))
 
     @staticmethod
@@ -6031,9 +6087,20 @@ class MotionConnector(QObject):
 
         if r_parts != l_parts:
             return r_parts > l_parts
-        # Same base version: non-pre > pre
+        # Same numeric base.
         if l_pre and not r_pre:
-            return True
+            return True   # local prerelease, remote full -> remote is newer
+        if r_pre and l_pre:
+            # Both prereleases of the same base (rc.1 -> rc.2, dev.0 -> dev.1,
+            # dev -> rc): order by PEP 440 prerelease precedence. Only the beta
+            # channel ever compares pre-vs-pre (#386). packaging parses the
+            # project's rc.N/dev.N tags; if it can't, keep the old not-newer
+            # behavior so a weird tag never triggers a spurious "update".
+            try:
+                from packaging.version import Version
+                return Version(remote) > Version(local)
+            except Exception:
+                return False
         return False
 
     @pyqtSlot(str)
@@ -6049,6 +6116,8 @@ class MotionConnector(QObject):
         Guarded against re-entry so repeated clicks can't spawn racing
         download threads against the same file.
         """
+        if self._app_config.get("clinicalMode", False):
+            return   # clinical builds never install app updates (#96, #386)
         if getattr(self, "_update_in_progress", False):
             logger.info("Update already in progress; ignoring repeat request")
             return
