@@ -72,11 +72,13 @@ SCALE_I = 0.25
 
 # Contact-quality quick-check defaults (overridable via app_config keys
 # cq_dark_threshold_per_camera / cq_light_threshold_per_camera /
-# cq_rolling_avg_window / cq_live_debounce_frames).
+# cq_rolling_avg_window / cq_live_activate_frames / cq_live_clear_frames).
 _CQ_DEFAULT_DARK_THRESHOLD_DN = 3.0
 _CQ_DEFAULT_LIGHT_THRESHOLD_DN = 15.0
 _CQ_DEFAULT_ROLLING_WINDOW = 10
-_CQ_DEFAULT_LIVE_DEBOUNCE_FRAMES = 80
+# Asymmetric live debounce (#364): RAISE fast, CLEAR slow.
+_CQ_DEFAULT_LIVE_ACTIVATE_FRAMES = 10
+_CQ_DEFAULT_LIVE_CLEAR_FRAMES = 80
 
 # Console front-panel RGB LED states — wire values of the firmware's
 # OW_CTRL_SET_IND command (console-fw led_driver.c, via
@@ -3965,8 +3967,11 @@ class MotionConnector(QObject):
 
         _cq_rolling_window = _cq_int_or(
             "cq_rolling_avg_window", _CQ_DEFAULT_ROLLING_WINDOW)
-        _cq_light_debounce = _cq_int_or(
-            "cq_live_debounce_frames", _CQ_DEFAULT_LIVE_DEBOUNCE_FRAMES)
+        # Asymmetric debounce (#364): RAISE the warning fast, CLEAR it slow.
+        _cq_light_activate = _cq_int_or(
+            "cq_live_activate_frames", _CQ_DEFAULT_LIVE_ACTIVATE_FRAMES)
+        _cq_light_clear = _cq_int_or(
+            "cq_live_clear_frames", _CQ_DEFAULT_LIVE_CLEAR_FRAMES)
 
         req = ScanRequest(
             subject_id=subject_id,
@@ -4013,7 +4018,8 @@ class MotionConnector(QObject):
                     thresholds=_cq_thresholds,
                     on_transition=self._on_cq_transition,
                     rolling_window=_cq_rolling_window,
-                    light_debounce=_cq_light_debounce,
+                    light_activate_debounce=_cq_light_activate,
+                    light_clear_debounce=_cq_light_clear,
                 ),
             ],
             # Async backstop (#213): if the worker aborts after start_scan

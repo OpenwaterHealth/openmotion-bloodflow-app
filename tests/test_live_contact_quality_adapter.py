@@ -10,12 +10,14 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
-def test_cq_live_debounce_frames_is_shipped_and_whitelisted(tmp_path, monkeypatch):
-    """Both halves must hold or the key is silently non-persistent: it must
-    ship in config/app_config.json AND appear in the in-code defaults inside
-    _load_app_config(), which filters the file and the runtime overrides to
-    that whitelist. A key registered in only one place looks fine until a
-    user toggles it and the change evaporates."""
+def test_cq_live_debounce_keys_are_shipped_and_whitelisted(tmp_path, monkeypatch):
+    """Both halves must hold for BOTH asymmetric debounce keys or the key is
+    silently non-persistent: each must ship in config/app_config.json AND
+    appear in the in-code defaults inside _load_app_config(), which filters
+    the file and the runtime overrides to that whitelist. A key registered in
+    only one place looks fine until a user toggles it and the change
+    evaporates. The old single cq_live_debounce_frames key is retired; the
+    raise/clear edges are now configured independently (#364)."""
     import json
     from pathlib import Path
 
@@ -26,10 +28,11 @@ def test_cq_live_debounce_frames_is_shipped_and_whitelisted(tmp_path, monkeypatc
     shipped_path = repo_root / "config" / "app_config.json"
     shipped = json.loads(shipped_path.read_text(encoding="utf-8"))
 
-    # Half 1: the key ships in the config file.
-    assert shipped["cq_live_debounce_frames"] == 80
+    # Half 1: both keys ship in the config file (RAISE fast, CLEAR slow).
+    assert shipped["cq_live_activate_frames"] == 10
+    assert shipped["cq_live_clear_frames"] == 80
 
-    # Half 2: it survives the whitelist filter. Pin the loader at the shipped
+    # Half 2: they survive the whitelist filter. Pin the loader at the shipped
     # file and redirect the writable-overrides layer at tmp_path so a local
     # app_config.local.json left over from running the app can't skew this.
     real_resource_path = config_store.resource_path
@@ -42,7 +45,9 @@ def test_cq_live_debounce_frames_is_shipped_and_whitelisted(tmp_path, monkeypatc
     monkeypatch.setattr(config_store, "resource_path", fake_resource_path)
     monkeypatch.setenv("OPENWATER_DATA_ROOT", str(tmp_path))
 
-    assert app_main._load_app_config()["cq_live_debounce_frames"] == 80
+    loaded = app_main._load_app_config()
+    assert loaded["cq_live_activate_frames"] == 10
+    assert loaded["cq_live_clear_frames"] == 80
 
 
 def _connector():
@@ -174,11 +179,16 @@ def test_startcapture_attaches_exactly_one_contact_quality_monitor_from_config(t
 
     dark = [1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8]
     light = [10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 10.7, 10.8]
+    # Three distinct values (none equal to each other or to the shipped
+    # defaults of window=10/activate=10/clear=80) so a cross-wire — activate
+    # read from the window key, or activate/clear swapped — cannot pass by
+    # coincidence.
     connector = _make_scan_connector(tmp_path, {
         "cq_dark_threshold_per_camera": dark,
         "cq_light_threshold_per_camera": light,
-        "cq_rolling_avg_window": 7,
-        "cq_live_debounce_frames": 33,
+        "cq_rolling_avg_window": 9,
+        "cq_live_activate_frames": 7,
+        "cq_live_clear_frames": 33,
     })
 
     req = _captured_scan_request(connector)
@@ -191,8 +201,12 @@ def test_startcapture_attaches_exactly_one_contact_quality_monitor_from_config(t
     sink = cq_sinks[0]
     assert sink._thresholds.dark == tuple(dark)
     assert sink._thresholds.light == tuple(light)
-    assert sink._window_size == 7
-    assert sink._light_debounce == 33
+    assert sink._window_size == 9
+    # Prove the two edges are wired independently and not swapped: the RAISE
+    # (activate) bound comes from cq_live_activate_frames, the CLEAR bound from
+    # cq_live_clear_frames.
+    assert sink._light_activate_debounce == 7
+    assert sink._light_clear_debounce == 33
     # Plain bound methods aren't cached — connector._on_cq_transition
     # fetched here and the one startCapture fetched when constructing the
     # sink are two distinct MethodType objects (`is` is False even when
@@ -208,17 +222,26 @@ def test_startcapture_survives_null_light_debounce_config(tmp_path):
     .get(), and int(None) raises TypeError — which would otherwise crash
     startCapture on the primary clinical scan path, contradicting the
     sink's own "must never abort a clinical scan in progress" contract.
-    Must fall back to the shipped default instead of raising."""
-    from motion_connector import _CQ_DEFAULT_LIVE_DEBOUNCE_FRAMES
+    Each edge must fall back to its OWN shipped default instead of raising:
+    a null activate → 10, a null clear → 80 (they are distinct defaults, so
+    this also proves the two fallbacks are not conflated)."""
+    from motion_connector import (
+        _CQ_DEFAULT_LIVE_ACTIVATE_FRAMES,
+        _CQ_DEFAULT_LIVE_CLEAR_FRAMES,
+    )
     from omotion.contact_quality import ContactQualityMonitor
 
-    connector = _make_scan_connector(tmp_path, {"cq_live_debounce_frames": None})
+    connector = _make_scan_connector(tmp_path, {
+        "cq_live_activate_frames": None,
+        "cq_live_clear_frames": None,
+    })
 
     req = _captured_scan_request(connector)
 
     cq_sinks = [s for s in req.sinks if isinstance(s, ContactQualityMonitor)]
     assert len(cq_sinks) == 1
-    assert cq_sinks[0]._light_debounce == _CQ_DEFAULT_LIVE_DEBOUNCE_FRAMES
+    assert cq_sinks[0]._light_activate_debounce == _CQ_DEFAULT_LIVE_ACTIVATE_FRAMES
+    assert cq_sinks[0]._light_clear_debounce == _CQ_DEFAULT_LIVE_CLEAR_FRAMES
 
 
 def test_startcapture_survives_non_numeric_debounce_config(tmp_path):
@@ -226,37 +249,49 @@ def test_startcapture_survives_non_numeric_debounce_config(tmp_path):
     raises ValueError, not TypeError, but it is the same hazard class —
     a hand-edited config must degrade to the shipped default rather than
     raise out of the ScanRequest(...) construction on the clinical scan
-    path."""
-    from motion_connector import _CQ_DEFAULT_LIVE_DEBOUNCE_FRAMES
+    path. Checked on both edges independently."""
+    from motion_connector import (
+        _CQ_DEFAULT_LIVE_ACTIVATE_FRAMES,
+        _CQ_DEFAULT_LIVE_CLEAR_FRAMES,
+    )
     from omotion.contact_quality import ContactQualityMonitor
 
-    connector = _make_scan_connector(tmp_path, {"cq_live_debounce_frames": "abc"})
+    connector = _make_scan_connector(tmp_path, {
+        "cq_live_activate_frames": "abc",
+        "cq_live_clear_frames": "xyz",
+    })
 
     req = _captured_scan_request(connector)
 
     cq_sinks = [s for s in req.sinks if isinstance(s, ContactQualityMonitor)]
     assert len(cq_sinks) == 1
-    assert cq_sinks[0]._light_debounce == _CQ_DEFAULT_LIVE_DEBOUNCE_FRAMES
+    assert cq_sinks[0]._light_activate_debounce == _CQ_DEFAULT_LIVE_ACTIVATE_FRAMES
+    assert cq_sinks[0]._light_clear_debounce == _CQ_DEFAULT_LIVE_CLEAR_FRAMES
 
 
 def test_startcapture_zero_debounce_config_is_not_conflated_with_missing(tmp_path):
     """0 is a deliberate, valid "no debounce" value, distinct from a
     missing/null key. A naive `app_config.get(key) or default` fallback
-    would silently promote a configured 0 to the default (2 s worth of
-    debounce) — wrong for whoever configured 0 on purpose. This checks
-    `is not None` instead, so 0 passes through unchanged; it is
-    ContactQualityMonitor's own max(1, int(...)) clamp that turns a
+    would silently promote a configured 0 to the default — wrong for whoever
+    configured 0 on purpose. The connector's _cq_int_or checks `is None`
+    instead, so a configured 0 passes through unchanged on both edges; it is
+    ContactQualityMonitor's own max(1, int(...)) clamp that then turns a
     deliberate 0 into 1 ("no debounce"), not this fallback — confirmed
-    end-to-end through the real sink, not just the intermediate value."""
+    end-to-end through the real sink, for both the activate and clear
+    edges, not just the intermediate value."""
     from omotion.contact_quality import ContactQualityMonitor
 
-    connector = _make_scan_connector(tmp_path, {"cq_live_debounce_frames": 0})
+    connector = _make_scan_connector(tmp_path, {
+        "cq_live_activate_frames": 0,
+        "cq_live_clear_frames": 0,
+    })
 
     req = _captured_scan_request(connector)
 
     cq_sinks = [s for s in req.sinks if isinstance(s, ContactQualityMonitor)]
     assert len(cq_sinks) == 1
-    assert cq_sinks[0]._light_debounce == 1
+    assert cq_sinks[0]._light_activate_debounce == 1
+    assert cq_sinks[0]._light_clear_debounce == 1
 
 
 def test_startcapture_survives_null_rolling_window_config(tmp_path):
