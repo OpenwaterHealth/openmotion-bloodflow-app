@@ -5724,19 +5724,33 @@ class MotionConnector(QObject):
         from version import get_version
 
         # ``updateRepo`` points the check at a staging/mirror repo; the broader
-        # ``updateApiUrl`` fully overrides the releases-latest endpoint (used by
+        # ``updateApiUrl`` fully overrides the single-release endpoint (used by
         # the local fake-releases server for offline end-to-end update testing).
-        # Both absent => the production GitHub repo.
+        # Both absent => the production GitHub repo. On the beta channel we hit
+        # the /releases LIST endpoint and pick the newest published (incl.
+        # prerelease); otherwise the stable /releases/latest single object (#386).
         repo = self._app_config.get("updateRepo") or self._GITHUB_REPO
-        api_url = self._app_config.get("updateApiUrl") or (
-            f"https://api.github.com/repos/{repo}/releases/latest"
-        )
+        beta = self._beta_enabled()
+        override = self._app_config.get("updateApiUrl")
+        if override:
+            api_url = override.replace("/releases/latest", "/releases") if beta else override
+        else:
+            base = f"https://api.github.com/repos/{repo}/releases"
+            api_url = base if beta else base + "/latest"
         try:
-            req = urllib.request.Request(api_url, headers={"Accept": "application/vnd.github+json"})
+            req = urllib.request.Request(
+                api_url, headers={"Accept": "application/vnd.github+json"})
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode())
 
-            remote_tag = data.get("tag_name", "").lstrip("v")
+            # Stable: /releases/latest returns one release object. Beta:
+            # /releases returns a newest-first list -> pick the newest non-draft.
+            release = _select_release(data, include_prerelease=True) if beta else data
+            if not release:
+                self.updateNotAvailable.emit()
+                return
+
+            remote_tag = release.get("tag_name", "").lstrip("v")
             if not remote_tag:
                 self.updateCheckFailed.emit("Could not determine latest release tag.")
                 return
@@ -5744,33 +5758,28 @@ class MotionConnector(QObject):
             # Find the Setup bundle matching this build's variant.
             # clinicalMode True = clinical build; False = Research/full build.
             is_research = not bool(self._app_config.get("clinicalMode", False))
-            download_url = _select_update_asset(data.get("assets", []), is_research)
+            download_url = _select_update_asset(release.get("assets", []), is_research)
 
-            local_version = get_version()
-            # Strip local metadata for comparison (e.g. "+3.gabc1234.dirty")
-            local_base = local_version.split("+")[0]
+            # Strip local metadata for comparison (e.g. "+3.gabc1234.dirty").
+            local_base = get_version().split("+")[0]
 
             if not self._version_newer(remote_tag, local_base):
-                logger.info(f"App is up to date ({local_base} >= {remote_tag})")
+                logger.info("App is up to date (%s >= %s)", local_base, remote_tag)
                 self.updateNotAvailable.emit()
             elif not _is_bundle_url(download_url):
                 # Newer release exists but has no matching installer asset
                 # (e.g. assets still uploading) -- don't offer an in-place
                 # update we can't actually perform.
                 logger.warning(
-                    "Update %s available but no installer asset found",
-                    remote_tag,
-                )
+                    "Update %s available but no installer asset found", remote_tag)
                 self.updateNotAvailable.emit()
             else:
                 logger.info(
-                    "Update available: %s (current: %s)",
-                    remote_tag, local_base,
-                )
+                    "Update available: %s (current: %s)", remote_tag, local_base)
                 self.updateAvailable.emit(remote_tag, download_url)
 
         except Exception as e:
-            logger.warning(f"Update check failed: {e}")
+            logger.warning("Update check failed: %s", e)
             self.updateCheckFailed.emit(str(e))
 
     @staticmethod

@@ -1,9 +1,12 @@
 """Unified update gating (#386): _beta_enabled, _select_release, app beta path,
 and the refresh/withdraw hook that ties engineering mode to the beta channel."""
+import json as _json
+import urllib.request
 from unittest.mock import MagicMock
 
 import pytest
 
+import version as version_mod
 from motion_connector import MotionConnector
 
 pytestmark = pytest.mark.unit
@@ -80,3 +83,58 @@ def test_select_release_empty_is_none():
     from motion_connector import _select_release
     assert _select_release([], include_prerelease=True) is None
     assert _select_release([_DRAFT], include_prerelease=True) is None
+
+
+# ── App self-updater beta channel (conditional /releases endpoint) ────────
+
+class _FakeResp:
+    def __init__(self, payload):
+        self._p = payload
+
+    def read(self):
+        return _json.dumps(self._p).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _patch_http(monkeypatch, payload, capture):
+    def fake_urlopen(req, timeout=0):
+        capture["url"] = req.full_url
+        return _FakeResp(payload)
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(version_mod, "get_version", lambda: "1.5.0")
+
+
+def test_app_beta_offers_newest_prerelease(tmp_path, monkeypatch):
+    releases = [
+        {"tag_name": "1.6.0-rc.1", "draft": False, "prerelease": True,
+         "assets": [{"name": "Open-Motion-Research-Setup-1.6.0-rc.1.exe",
+                     "browser_download_url": "https://x/rc.exe"}]},
+        {"tag_name": "1.5.0", "draft": False, "prerelease": False, "assets": []},
+    ]
+    cap = {}
+    _patch_http(monkeypatch, releases, cap)
+    c = _connector(tmp_path, clinicalMode=False, engineeringMode=True,
+                   downloadBetaUpdates=True)
+    out = []
+    c.updateAvailable.connect(lambda v, u: out.append((v, u)))
+    c._check_for_updates_worker()
+    assert cap["url"].endswith("/releases")          # list endpoint, not /latest
+    assert out == [("1.6.0-rc.1", "https://x/rc.exe")]
+
+
+def test_app_stable_uses_latest_endpoint(tmp_path, monkeypatch):
+    latest = {"tag_name": "1.5.0", "draft": False, "prerelease": False, "assets": []}
+    cap = {}
+    _patch_http(monkeypatch, latest, cap)
+    c = _connector(tmp_path, clinicalMode=False, engineeringMode=False,
+                   downloadBetaUpdates=False)
+    seen = []
+    c.updateNotAvailable.connect(lambda: seen.append("uptodate"))
+    c._check_for_updates_worker()
+    assert cap["url"].endswith("/releases/latest")
+    assert seen == ["uptodate"]                      # 1.5.0 == local 1.5.0
