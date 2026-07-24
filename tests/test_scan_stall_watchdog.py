@@ -136,7 +136,7 @@ class _FakeConnector:
     """Just the attributes _abort_scan_data_stall touches."""
 
     def __init__(self):
-        self._scan_stall_abort_fired = False
+        self._scan_abort_notified = False
         self._scan_data_stall_timeout_sec = 15.0
         self.captureLog = _Signal()
         self.criticals = []
@@ -156,7 +156,7 @@ def test_abort_raises_e303_and_stops_capture():
     fake = _FakeConnector()
     MotionConnector._abort_scan_data_stall(fake, 16.2)
 
-    assert fake._scan_stall_abort_fired is True
+    assert fake._scan_abort_notified is True
     assert fake.stop_calls == 1
     # E-303 critical modal with the stall duration + elapsed in the detail.
     assert len(fake.criticals) == 1

@@ -92,6 +92,19 @@ data-stall watchdog when no camera has delivered a frame for
 **What to do:** Check the sensor cables and power, then reconnect and start a
 new scan. If it happens repeatedly, send a bug report.
 
+### E-304 — Device disconnected during scan
+A console or sensor was disconnected while the scan was running, so the scan was
+stopped. Any data captured before the disconnection was saved. Fired when a
+device participating in the running scan — the console, or a sensor whose camera
+mask was non-zero at scan start — drops off USB during the trigger-on capture
+phase. Distinct from E-303: a physical unplug rarely trips the data-stall
+watchdog (the SDK tears the scan down first), so this is the coded modal for a
+device being removed mid-scan. Unplugging an idle / masked-out sensor, or any
+device while not scanning, does not raise this.
+
+**What to do:** Check the USB cables and power, reconnect the system, and start a
+new scan. If it keeps happening, send a bug report.
+
 ## Startup warnings (connection watchdog)
 
 A one-shot check armed at app launch flags expected devices that never showed

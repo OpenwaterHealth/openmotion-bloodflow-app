@@ -69,7 +69,7 @@ def _watchdog_self(src, *, plot_t0, last_seen, threshold=2.0):
         cameraDropoutDetected=_Signal(),
         # All-camera stall watchdog (issue #248) — armed but far from
         # tripping; these tests exercise the per-camera marker path.
-        _scan_stall_abort_fired=False,
+        _scan_abort_notified=False,
         _scan_data_stall_timeout_sec=15.0,
         _trigger_on_mono=plot_t0,
     )

@@ -361,6 +361,23 @@ def _scan_data_stall_decision(
     return stalled if stalled > timeout_sec else None
 
 
+def _should_abort_on_disconnect(
+    name: str,
+    capture_running: bool,
+    active_sides: set,
+) -> bool:
+    """Decide whether losing device ``name`` must abort the scan (issue #387).
+
+    A device unplugged mid-scan aborts with the E-304 critical modal only
+    when a capture is actually running AND the dropped device is part of
+    THIS scan — the console (always; it drives the trigger/laser) or a
+    sensor whose camera mask was non-zero at scan start (``active_sides``,
+    snapshotted in startCapture). An idle / masked-out sensor unplugged
+    mid-scan, or any disconnect while not capturing, must not abort.
+    """
+    return bool(capture_running) and name in active_sides
+
+
 _SIDE_NAMES = ("left", "right")
 
 
@@ -1002,9 +1019,17 @@ class MotionConnector(QObject):
         self._camera_last_seen: dict[tuple[str, int], float] = {}
         self._camera_last_temp: dict[tuple[str, int], float] = {}
         self._camera_dropped: set[tuple[str, int]] = set()
-        # One-shot guard for the all-camera stall abort (issue #248) —
-        # set when E-303 fires, cleared at the next startCapture.
-        self._scan_stall_abort_fired = False
+        # Shared one-shot guard for a scan-ending abort modal — set when the
+        # all-camera stall fires E-303 (issue #248) OR a participating device
+        # is unplugged mid-scan and fires E-304 (issue #387). Whichever fires
+        # first wins so the two can't stack two modals. Cleared at the next
+        # startCapture.
+        self._scan_abort_notified = False
+        # Sides participating in the CURRENT scan — {"console"} plus any
+        # sensor with a non-zero camera mask at scan start. Snapshotted in
+        # startCapture; consulted by the disconnect handler so unplugging an
+        # idle / masked-out sensor doesn't abort a good scan (issue #387).
+        self._capture_active_sides: set[str] = set()
 
         # NaN-gap tracker — replaced with a fresh instance at each scan
         # start. Kept on the instance for debugging/introspection only;
@@ -1026,6 +1051,15 @@ class MotionConnector(QObject):
         self._error_led_timer.setInterval(_ERROR_LED_BLINK_MS)
         self._error_led_timer.timeout.connect(self._on_error_led_tick)
         self._error_led_on = False  # True while the blue half-period is lit
+        # Critical-error modal coordination (issue #387). While a critical
+        # modal is on screen, the end-of-scan notes modal must not pop under
+        # it (it opens seconds after an abort, once the scan unwinds, and
+        # would steal keyboard focus behind the error modal). _raise_critical
+        # sets _critical_modal_active; _emit_or_defer_scan_notes defers the
+        # open when it is set; criticalErrorsDismissed clears it and flushes
+        # any deferred open so the notes modal appears once the error is gone.
+        self._critical_modal_active = False
+        self._scan_notes_pending = False
         self._plot_t0: float = 0.0  # set at scan start; scan-start monotonic anchor
 
         # Trigger-ON clock (issue #201) — the single scan-time source of
@@ -2018,6 +2052,17 @@ class MotionConnector(QObject):
                 self.configFinished.emit(
                     False, f"Device disconnected during sensor configuration ({name})"
                 )
+            # Unplugged mid-scan (issue #387): a device participating in the
+            # running scan dropped — raise the E-304 critical modal and abort.
+            # The SDK's own mid-scan disconnect subscription is already tearing
+            # the scan down; this adds the operator-facing modal the app would
+            # otherwise omit (a real unplug rarely trips the E-303 stall
+            # watchdog). An idle / masked-out sensor is not in
+            # _capture_active_sides, so unplugging it won't abort a good scan.
+            if _should_abort_on_disconnect(
+                name, self._capture_running, self._capture_active_sides
+            ):
+                self._abort_scan_device_disconnect(name)
         # CONNECTING / DISCONNECTING are intermediate; UI doesn't need to
         # fire a connect/disconnect signal for those, and emitting
         # connectionStatusChanged on every intermediate transition would
@@ -3767,7 +3812,15 @@ class MotionConnector(QObject):
         self._camera_last_seen = {}
         self._camera_last_temp = {}
         self._camera_dropped = set()
-        self._scan_stall_abort_fired = False
+        self._scan_abort_notified = False
+        # Snapshot the devices participating in THIS scan for the mid-scan
+        # disconnect abort (issue #387): the console always participates;
+        # a sensor participates only when its gated camera mask is non-zero.
+        self._capture_active_sides = (
+            {"console"}
+            | ({"left"} if left_camera_mask else set())
+            | ({"right"} if right_camera_mask else set())
+        )
         self._dropout_timer.start()
 
         # NaN-gap tracker — fresh per scan (same lifecycle as the watchdog).
@@ -3896,7 +3949,12 @@ class MotionConnector(QObject):
                 "outcome": _outcome_kind,
             })
             self.captureFinished.emit(True, "", "", "")
-            self.scanNotesReady.emit()
+            # Open the notes modal now, UNLESS a critical-error modal is on
+            # screen (e.g. an E-304 device-disconnect abort raised it seconds
+            # ago): defer the open until the error is dismissed so the error
+            # modal stays on top and doesn't lose focus to the notes field
+            # behind it (issue #387).
+            self._emit_or_defer_scan_notes()
 
         # Issue #43: telemetry CSVs are engineering diagnostics — clinical
         # users must not get them. Default False (fail closed). Raw
@@ -4680,7 +4738,7 @@ class MotionConnector(QObject):
         # is NOT fail-soft: if no camera has delivered a frame for
         # scanDataStallTimeoutSec the scan is dead air — abort it and
         # tell the user instead of counting down to a hollow "complete".
-        if not self._scan_stall_abort_fired:
+        if not self._scan_abort_notified:
             stalled_s = _scan_data_stall_decision(
                 now,
                 self._trigger_on_mono,
@@ -4699,7 +4757,7 @@ class MotionConnector(QObject):
         data files and emits captureFinished, returning the QML scan flow
         (and the state machine) to idle exactly like a user Stop.
         """
-        self._scan_stall_abort_fired = True
+        self._scan_abort_notified = True
         elapsed_str = self._scan_elapsed_str()
         msg = (
             f"[{elapsed_str}] No data from any camera for "
@@ -4717,6 +4775,58 @@ class MotionConnector(QObject):
             ),
         )
         self.stopCapture()
+
+    def _abort_scan_device_disconnect(self, name: str) -> None:
+        """Abort the running scan because a participating device was
+        unplugged mid-scan (issue #387). Runs on the main thread from the
+        connection handler. Twin of _abort_scan_data_stall: it shares the
+        one-shot guard (so a disconnect + a stall — or two devices dropping
+        — can't stack two modals), writes a capture-log line, raises the
+        E-304 critical modal, then stopCapture(). The SDK is already tearing
+        the scan down via its own mid-scan disconnect subscription; the
+        stopCapture() here cancels it app-side too and, by marking the scan
+        canceled, suppresses the redundant end-of-scan outcome toast — the
+        modal is the notification.
+        """
+        if self._scan_abort_notified:
+            return
+        self._scan_abort_notified = True
+        elapsed_str = self._scan_elapsed_str()
+        msg = (
+            f"[{elapsed_str}] {name} disconnected during the scan — "
+            f"stopping the scan; data captured before the disconnection "
+            f"is saved."
+        )
+        logger.error(msg)
+        self.captureLog.emit(msg)
+        self._raise_critical(
+            "E-304",
+            detail=f"{name} disconnected mid-scan (scan elapsed {elapsed_str})",
+        )
+        self.stopCapture()
+
+    def _emit_or_defer_scan_notes(self) -> None:
+        """Open the end-of-scan notes modal, or defer it if a critical-error
+        modal is currently on screen (issue #387).
+
+        On an E-304 device-disconnect abort (and E-303 / E-202) the critical
+        modal is raised, then the scan unwinds for a second or two before
+        this completion handler runs. The notes modal opening now would pop
+        UNDER the error modal and steal keyboard focus. Deferring holds the
+        open until criticalErrorsDismissed() flushes it, so the error modal
+        stays on top and only one modal is on screen at a time.
+
+        Called from the pipeline completion handler (worker thread). The
+        re-check after setting the pending flag closes the tiny race where
+        the modal is dismissed between the check and the set.
+        """
+        if not self._critical_modal_active:
+            self.scanNotesReady.emit()
+            return
+        self._scan_notes_pending = True
+        if not self._critical_modal_active:
+            self._scan_notes_pending = False
+            self.scanNotesReady.emit()
 
     def _on_camera_dropout_recovered(self, side: str, cam_id: int) -> None:
         """Frames resumed for a camera the watchdog had flagged Connection
@@ -5168,6 +5278,9 @@ class MotionConnector(QObject):
                          f" ({detail})" if detail else "")
             self.criticalErrorRaised.emit(
                 code, err.title, err.message, err.suggested_action, detail)
+            # A critical modal is now on screen; hold back the end-of-scan
+            # notes modal until it is dismissed (issue #387).
+            self._critical_modal_active = True
             self._errorLedBlinkRequested.emit()
         except Exception:
             logger.exception("Failed to raise critical error %s", code)
@@ -5213,9 +5326,17 @@ class MotionConnector(QObject):
     @pyqtSlot()
     def criticalErrorsDismissed(self):
         """Called from CriticalErrorModal when the last queued error is
-        dismissed: stop the error blink and restore the idle green LED
-        (issue #257). No-op if the blink never started (e.g. the console
-        was never reachable)."""
+        dismissed: release the notes modal deferred behind it (issue #387),
+        then stop the error blink and restore the idle green LED (issue
+        #257)."""
+        # The error modal is gone — open the notes modal if a scan finished
+        # behind it (E-304 device disconnect, or E-303 / E-202). Must run
+        # before the LED early-return below, which returns when no blink was
+        # ever started (e.g. the console itself was the disconnected device).
+        self._critical_modal_active = False
+        if self._scan_notes_pending:
+            self._scan_notes_pending = False
+            self.scanNotesReady.emit()
         if not self._error_led_timer.isActive() and not self._error_led_on:
             return
         self._error_led_timer.stop()
