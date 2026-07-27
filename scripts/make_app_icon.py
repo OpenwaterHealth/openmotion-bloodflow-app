@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Regenerate assets/images/favicon.ico from assets/images/favicon.png.
+"""Regenerate the committed icon assets from assets/images/favicon.png.
+
+Outputs, both tracked in git (no build step runs this script, so a regen
+is a manual step whenever favicon.png changes):
+
+* assets/images/favicon.ico — the Windows app icon.
+* assets/images/installer-logo.png — the 64x64 mark the installer's setup
+  wizard shows in its logo slot (issue #402).
 
 Writes classic BMP/DIB frames for 16..128 px and a single PNG-compressed
 256 px frame, which is the conventional layout Microsoft's icon guidance
@@ -28,9 +35,14 @@ from PIL import Image
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SOURCE_PNG = REPO_ROOT / "assets" / "images" / "favicon.png"
 TARGET_ICO = REPO_ROOT / "assets" / "images" / "favicon.ico"
+TARGET_LOGO = REPO_ROOT / "assets" / "images" / "installer-logo.png"
 
 BMP_SIZES = [16, 24, 32, 48, 64, 128]  # classic DIB frames
 PNG_SIZE = 256  # the one size where PNG compression is supported
+# The installer wizard's logo slot is a fixed 64x64 ImageControl in
+# installer/bundle-theme.xml — the same size as the stock WiX logo.png it
+# replaces — so emit exactly that and let no scaling happen at runtime.
+LOGO_SIZE = 64
 
 
 def main() -> None:
@@ -74,6 +86,15 @@ def main() -> None:
 
     TARGET_ICO.write_bytes(out)
     print(f"wrote {TARGET_ICO} ({len(out)} bytes, {count + 1} frames)")
+
+    # Installer wizard logo. Alpha is kept: the theme draws this over the
+    # dialog's COLOR_WINDOW background, and WixStdBA renders the PNG through
+    # GDI+, which honors the alpha channel.
+    src.resize((LOGO_SIZE, LOGO_SIZE), Image.Resampling.LANCZOS).save(
+        TARGET_LOGO, format="PNG"
+    )
+    print(f"wrote {TARGET_LOGO} ({TARGET_LOGO.stat().st_size} bytes, "
+          f"{LOGO_SIZE}x{LOGO_SIZE})")
 
 
 if __name__ == "__main__":
