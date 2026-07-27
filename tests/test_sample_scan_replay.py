@@ -320,29 +320,100 @@ def test_successful_load_logs_no_warning(tmp_path, caplog):
     assert _warnings(caplog) == []
 
 
-def test_offer_logs_sample_availability_before_the_user_decides(
-        tmp_path, caplog, monkeypatch):
-    """The watchdog probes the file and logs the absence at offer time.
-
-    A user who DECLINES the dialog never reaches the loader, so without
-    this probe a build shipping without the CSV would leave no trace at
-    all in the log."""
-    c = _connector(tmp_path, console=False, left=False, right=False,
-                   app_config={"clinicalMode": False})
+def _sample_at(monkeypatch, path):
+    """Point the connector's bundled-sample lookup at `path`."""
     monkeypatch.setattr(
         MotionConnector, "_sample_scan_path",
-        staticmethod(lambda: Path(tmp_path / "not_bundled.csv")))
+        staticmethod(lambda: Path(path)))
+
+
+@pytest.mark.parametrize("kind", ["missing", "zero_byte", "wrong_header",
+                                  "header_only", "undecodable"])
+def test_unavailable_sample_suppresses_the_offer(
+        tmp_path, caplog, monkeypatch, kind):
+    """Never offer what accepting can't deliver.
+
+    The dialog's only action is "Open sample dataset"; if the sample
+    can't load, that button silently does nothing. Each unloadable shape
+    must suppress the offer outright AND say why in the log."""
+    path = tmp_path / "sample.csv"
+    if kind == "missing":
+        path = tmp_path / "not_bundled.csv"          # never created
+    elif kind == "zero_byte":
+        path.write_bytes(b"")
+    elif kind == "wrong_header":
+        path.write_text("x,y\n1,2\n", encoding="utf-8")
+    elif kind == "header_only":
+        path.write_text(",".join(_per_cam_header()) + "\n", encoding="utf-8")
+    elif kind == "undecodable":
+        # The loader opens utf-8, so a file that won't decode won't parse.
+        path.write_bytes(b"\xff\xfe\x00bfi_l1\x00\xff\n\xff\xfe\n")
+    _sample_at(monkeypatch, path)
+
+    c = _connector(tmp_path, console=False, left=False, right=False,
+                   app_config={"clinicalMode": False})
     offers = _offers(c)
 
     with caplog.at_level(logging.INFO, logger=CONNECTOR_LOGGER):
         c._check_connection_watchdog()
 
-    # The offer still fires (gating behaviour unchanged) …
-    assert len(offers) == 1
-    # … but the unavailability is already on the record.
+    assert offers == [], f"{kind}: offered an unloadable sample"
     warns = _warnings(caplog)
     assert any("sample scan unavailable" in m for m in warns), warns
-    assert any("not_bundled.csv" in m for m in warns), warns
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any("offer suppressed — sample not available" in m
+               for m in msgs), msgs
+
+
+def test_suppression_warning_names_the_resolved_path(
+        tmp_path, caplog, monkeypatch):
+    """The path is the only clue to where a frozen build searched —
+    resource_path returns a non-existent candidate on a miss."""
+    missing = tmp_path / "not_bundled.csv"
+    _sample_at(monkeypatch, missing)
+    c = _connector(tmp_path, console=False, left=False, right=False,
+                   app_config={"clinicalMode": False})
+
+    with caplog.at_level(logging.INFO, logger=CONNECTOR_LOGGER):
+        c._check_connection_watchdog()
+
+    assert any(str(missing) in m for m in _warnings(caplog)), _warnings(caplog)
+
+
+def test_probe_accepts_the_reduced_clinical_export_header(
+        tmp_path, caplog, monkeypatch):
+    """The probe must not reject the other valid export format, or a
+    clinical-mode sample dataset would be wrongly suppressed."""
+    path = tmp_path / "reduced.csv"
+    path.write_text(
+        "frame_id,timestamp_s,bfi_left,bfi_right,bvi_left,bvi_right\n"
+        "1,0.0,1.0,2.0,3.0,4.0\n", encoding="utf-8")
+    _sample_at(monkeypatch, path)
+    c = _connector(tmp_path, console=False, left=False, right=False,
+                   app_config={"clinicalMode": False})
+    offers = _offers(c)
+
+    with caplog.at_level(logging.INFO, logger=CONNECTOR_LOGGER):
+        c._check_connection_watchdog()
+
+    assert len(offers) == 1
+    assert not any("sample scan unavailable" in m for m in _warnings(caplog))
+
+
+def test_probe_does_not_parse_the_whole_file(tmp_path, monkeypatch):
+    """The probe is structural, not a parse. A full parse of the shipped
+    sample costs ~170 ms — paid on the GUI thread inside the watchdog
+    callback, and again when the user accepts."""
+    calls = []
+    import motion_connector as mc
+    monkeypatch.setattr(
+        mc, "load_csv_scan_buffers",
+        lambda p: calls.append(p) or {})
+    c = _connector(tmp_path, console=False, left=False, right=False,
+                   app_config={"clinicalMode": False})
+
+    assert c._sample_scan_available() is True
+    assert calls == []
 
 
 def test_offer_logs_the_shipped_sample_as_available(tmp_path, caplog):

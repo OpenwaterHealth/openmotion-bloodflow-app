@@ -1609,25 +1609,24 @@ class MotionConnector(QObject):
     def _maybe_offer_sample_scan(self) -> None:
         """Offer the bundled sample scan when the watchdog found nothing.
 
-        Three gates, all required:
+        Four gates, all required:
           * research build — a clinical user must never be shown fabricated
             traces, not even behind a prompt;
           * no device at all (`_any_device_connected`, not merely
             `console_missing`) — a console-less rig with a live sensor is a
             real session, not a demo;
-          * nothing already bound to the viewer.
+          * nothing already bound to the viewer;
+          * the sample is actually loadable — never offer what accepting
+            can't deliver, or the dialog's only button silently does
+            nothing (see `_sample_scan_available`).
 
         Emits only. Nothing loads until the user accepts the dialog, which
         calls `loadSampleScan`. One-shot, because the watchdog is: a user
         who declines gets no second offer this launch.
 
         Every exit logs its reason. The offer is a once-per-launch event
-        with three independent gates, so a silent return leaves no way to
-        tell "correctly suppressed" from "broken" after the fact. The
-        sample file's availability is also probed and logged HERE rather
-        than only in `_load_sample_scan`, because a user who declines the
-        dialog never reaches the loader — without this, a build shipping
-        without the CSV would look identical in the log to a healthy one.
+        with four independent gates, so a silent return leaves no way to
+        tell "correctly suppressed" from "broken" after the fact.
         """
         if bool(self._app_config.get("clinicalMode", False)):
             logger.info("[Plot] sample scan offer suppressed — clinical build")
@@ -1644,7 +1643,12 @@ class MotionConnector(QObject):
                 "[Plot] sample scan offer suppressed — viewer already bound "
                 "to %s", type(self._current_scan_source).__name__)
             return
-        self._log_sample_scan_availability()
+        if not self._sample_scan_available():
+            # The WARNING from the probe carries the why; this records the
+            # consequence, so the missing offer isn't mistaken for a bug.
+            logger.info(
+                "[Plot] sample scan offer suppressed — sample not available")
+            return
         logger.info("[Plot] no device at watchdog — offering sample scan")
         self.sampleScanOfferRequested.emit()
 
@@ -1653,17 +1657,30 @@ class MotionConnector(QObject):
         """Resolved location of the bundled sample scan.
 
         Note `resource_path` returns its under-base candidate even when
-        nothing exists there, so this path is a *guess* until stat'd — see
-        `_log_sample_scan_availability`."""
+        nothing exists there, so this path is a *guess* until probed — see
+        `_sample_scan_available`."""
         return Path(resource_path("resources", "sample_scan.csv"))
 
-    def _log_sample_scan_availability(self) -> None:
-        """Record whether the bundled sample scan is actually on disk.
+    def _sample_scan_available(self) -> bool:
+        """True when the bundled sample scan looks loadable.
 
-        Logged at WARNING when it isn't: a missing sample in a research
-        build is a packaging fault (openwater.spec drops the `datas` entry
-        when the CSV is absent at build time), and the resolved absolute
-        path is the only clue to where the frozen app searched."""
+        A cheap STRUCTURAL probe — exists, non-empty, a recognised
+        scan-export header, at least one data row — deliberately not a
+        full parse. Parsing the shipped sample costs ~170 ms, which would
+        stall the GUI thread inside the watchdog callback and be paid
+        again when the user accepts; this probe is microseconds and still
+        catches both realistic failures: the CSV dropped from the bundle
+        (openwater.spec skips its `datas` entry when the file is absent at
+        build time) and a hand-swapped dataset in the wrong format
+        (replacing this one file is the supported way to change the
+        sample). A file that clears the probe but yields no usable rows
+        still fails soft in `_load_sample_scan`, which stays the backstop.
+
+        Logs its verdict either way. This runs once per launch and is the
+        only record of why the offer did or didn't appear; the resolved
+        absolute path matters because a frozen build searches several
+        candidate roots and `resource_path` returns a non-existent one on
+        a miss."""
         path = self._sample_scan_path()
         try:
             size = path.stat().st_size
@@ -1671,8 +1688,39 @@ class MotionConnector(QObject):
             logger.warning(
                 "[Plot] sample scan unavailable — cannot stat %s (%s)",
                 path, exc)
-            return
+            return False
+        if size == 0:
+            logger.warning(
+                "[Plot] sample scan unavailable — file is empty (0 bytes): "
+                "%s", path)
+            return False
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                header = fh.readline()
+                first_row = fh.readline()
+        except (OSError, UnicodeDecodeError) as exc:
+            # UnicodeDecodeError matters: the loader opens utf-8 too, so a
+            # file this can't decode is one it can't parse either.
+            logger.warning(
+                "[Plot] sample scan unavailable — cannot read %s (%s)",
+                path, exc)
+            return False
+        cols = {c.strip() for c in header.split(",")}
+        # Same two formats _load_corrected_csv_into detects: per-cam wide
+        # (bfi_l1..) and reduced/clinical per-side (bfi_left..).
+        if not ({"bfi_l1", "bfi_left"} & cols):
+            logger.warning(
+                "[Plot] sample scan unavailable — %s has no recognised "
+                "scan-export header (want bfi_l1 for per-cam or bfi_left "
+                "for clinical); got: %.200s", path, header.strip())
+            return False
+        if not first_row.strip():
+            logger.warning(
+                "[Plot] sample scan unavailable — %s has a header but no "
+                "data rows", path)
+            return False
         logger.info("[Plot] sample scan available: %s (%d bytes)", path, size)
+        return True
 
     @staticmethod
     def _i2c_missing_devices(health: dict) -> str:
