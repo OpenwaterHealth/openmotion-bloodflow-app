@@ -238,7 +238,8 @@ Item {
                             ScrollBar.vertical: ScrollBar {}
                         }
                         background: Rectangle {
-                            color: AppTheme.bgCard; radius: 4
+                            // menuBg — readable over the glass ambient (#398).
+                            color: AppTheme.menuBg; radius: 4
                             border.color: AppTheme.borderSubtle; border.width: 1
                         }
                     }

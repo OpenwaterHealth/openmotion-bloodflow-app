@@ -325,7 +325,8 @@ Item {
                         popup: Popup {
                             y: leftSelector.height; width: leftSelector.width; implicitHeight: contentItem.implicitHeight + 2; padding: 1
                             contentItem: ListView { clip: true; implicitHeight: contentHeight; model: leftSelector.delegateModel; ScrollIndicator.vertical: ScrollIndicator {} }
-                            background: Rectangle { color: AppTheme.bgCard; radius: 4; border.color: AppTheme.borderSubtle; border.width: 1 }
+                            // menuBg — readable over the glass ambient (#398).
+                            background: Rectangle { color: AppTheme.menuBg; radius: 4; border.color: AppTheme.borderSubtle; border.width: 1 }
                         }
                         Component.onCompleted: {
                             var defMask = MotionInterface.appConfig.leftMask !== undefined
@@ -377,7 +378,8 @@ Item {
                         popup: Popup {
                             y: rightSelector.height; width: rightSelector.width; implicitHeight: contentItem.implicitHeight + 2; padding: 1
                             contentItem: ListView { clip: true; implicitHeight: contentHeight; model: rightSelector.delegateModel; ScrollIndicator.vertical: ScrollIndicator {} }
-                            background: Rectangle { color: AppTheme.bgCard; radius: 4; border.color: AppTheme.borderSubtle; border.width: 1 }
+                            // menuBg — readable over the glass ambient (#398).
+                            background: Rectangle { color: AppTheme.menuBg; radius: 4; border.color: AppTheme.borderSubtle; border.width: 1 }
                         }
                         Component.onCompleted: {
                             var defMask = MotionInterface.appConfig.rightMask !== undefined

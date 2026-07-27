@@ -60,6 +60,7 @@ Item {
     // ── Theme tokens (aliased from AppTheme) ──────────────────────────────
     readonly property color colBgPanel:    AppTheme.sheetBg
     readonly property color colBgCard:     AppTheme.bgCard
+    readonly property color colMenuBg:     AppTheme.menuBg
     readonly property color colBgInput:    AppTheme.bgInput
     readonly property color colBorder:     AppTheme.borderStrong
     readonly property color colBorderSoft: AppTheme.borderSoft
@@ -294,7 +295,9 @@ Item {
                 ScrollIndicator.vertical: ScrollIndicator {}
             }
             background: Rectangle {
-                color: root.colBgCard
+                // menuBg, not bgCard — an open dropdown has to be readable
+                // over the Liquid Glass ambient (#398).
+                color: root.colMenuBg
                 radius: 4
                 border.color: root.colBorderSoft
                 border.width: 1
