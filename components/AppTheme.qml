@@ -130,9 +130,41 @@ QtObject {
     readonly property color overlayBg:      glass ? (dark ? Qt.rgba(0.10,0.10,0.14,0.60) : Qt.rgba(1,1,1,0.62))
                                                    : (dark ? Qt.rgba(0.10, 0.10, 0.12, 0.82)
                                                            : Qt.rgba(0.99, 0.98, 0.95, 0.90))
-    readonly property color overlayBgSolid: glass ? (dark ? Qt.rgba(0.12,0.12,0.16,0.80) : Qt.rgba(1,1,1,0.82))
+    // overlayBgSolid is the "you are reading something off this" tier —
+    // the hover tooltip, the window-length menu, the ⋯ settings popup. In
+    // glass it therefore carries the same near-opaque weight as menuBg /
+    // toastBg: these float over live traces, and a readout you can see the
+    // plot through is a readout you have to squint at. (overlayBg above
+    // stays airy — it backs pills and chips, which are chrome, not text
+    // you stop to read.)
+    readonly property color overlayBgSolid: glass ? (dark ? Qt.rgba(0.12,0.12,0.16,0.94) : Qt.rgba(1,1,1,0.94))
                                                    : (dark ? Qt.rgba(0.12, 0.12, 0.14, 0.96)
                                                            : Qt.rgba(0.99, 0.985, 0.96, 0.97))
+
+    // ── toast surface ─────────────────────────────────────────────
+    // Transient chrome that must stay readable over whatever it lands on,
+    // including the busy ambient. In glass mode it can't inherit
+    // bgElevated: that token is a 12% *white* wash, which would leave the
+    // white body text sitting on bright frost. So toasts go dark-dominant
+    // and near-opaque here (same trick as sheetBg / plotCellBg), a touch
+    // lighter than a modal sheet so they still read as floating chrome
+    // rather than a focused task surface. Solid-theme values are
+    // byte-identical to bgElevated so turning glass off is a perfect
+    // revert.
+    readonly property color toastBg: glass ? (dark ? Qt.rgba(0.12,0.12,0.16,0.94)
+                                                    : Qt.rgba(1,1,1,0.94))
+                                            : (dark ? "#252528" : "#EBE7DB")
+
+    // ── menu / dropdown surface ───────────────────────────────────
+    // The list panel a ComboBox drops open. Same reasoning as toastBg,
+    // and more urgent: these popups previously took bgCard, which in
+    // glass+dark is only 8% white — an open dropdown all but vanished
+    // into the ambient, and its options are a list you have to read to
+    // click. Solid-theme values are byte-identical to bgCard so turning
+    // glass off is a perfect revert.
+    readonly property color menuBg: glass ? (dark ? Qt.rgba(0.12,0.12,0.16,0.94)
+                                                   : Qt.rgba(1,1,1,0.94))
+                                           : (dark ? "#262630" : "#FAF9F4")
 
     // ── modal sheet surface ───────────────────────────────────────
     // Modal panels (Settings, History, Contact Quality, …) need a much

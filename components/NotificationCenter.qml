@@ -248,7 +248,9 @@ Item {
                     implicitHeight: contentRow.implicitHeight + 24
                     height: implicitHeight
                     radius: 10
-                    color: AppTheme.bgElevated
+                    // Dedicated token, not bgElevated — a toast has to stay
+                    // readable over the Liquid Glass ambient (#396).
+                    color: AppTheme.toastBg
                     border.color: AppTheme.borderSubtle
                     border.width: 1
 
