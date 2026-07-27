@@ -1620,16 +1620,59 @@ class MotionConnector(QObject):
         Emits only. Nothing loads until the user accepts the dialog, which
         calls `loadSampleScan`. One-shot, because the watchdog is: a user
         who declines gets no second offer this launch.
+
+        Every exit logs its reason. The offer is a once-per-launch event
+        with three independent gates, so a silent return leaves no way to
+        tell "correctly suppressed" from "broken" after the fact. The
+        sample file's availability is also probed and logged HERE rather
+        than only in `_load_sample_scan`, because a user who declines the
+        dialog never reaches the loader — without this, a build shipping
+        without the CSV would look identical in the log to a healthy one.
         """
         if bool(self._app_config.get("clinicalMode", False)):
             logger.info("[Plot] sample scan offer suppressed — clinical build")
             return
         if self._any_device_connected():
+            logger.info(
+                "[Plot] sample scan offer suppressed — a device is connected "
+                "(console=%s left=%s right=%s)",
+                self._consoleConnected, self._leftSensorConnected,
+                self._rightSensorConnected)
             return
         if self._current_scan_source is not None:
+            logger.info(
+                "[Plot] sample scan offer suppressed — viewer already bound "
+                "to %s", type(self._current_scan_source).__name__)
             return
+        self._log_sample_scan_availability()
         logger.info("[Plot] no device at watchdog — offering sample scan")
         self.sampleScanOfferRequested.emit()
+
+    @staticmethod
+    def _sample_scan_path() -> Path:
+        """Resolved location of the bundled sample scan.
+
+        Note `resource_path` returns its under-base candidate even when
+        nothing exists there, so this path is a *guess* until stat'd — see
+        `_log_sample_scan_availability`."""
+        return Path(resource_path("resources", "sample_scan.csv"))
+
+    def _log_sample_scan_availability(self) -> None:
+        """Record whether the bundled sample scan is actually on disk.
+
+        Logged at WARNING when it isn't: a missing sample in a research
+        build is a packaging fault (openwater.spec drops the `datas` entry
+        when the CSV is absent at build time), and the resolved absolute
+        path is the only clue to where the frozen app searched."""
+        path = self._sample_scan_path()
+        try:
+            size = path.stat().st_size
+        except OSError as exc:
+            logger.warning(
+                "[Plot] sample scan unavailable — cannot stat %s (%s)",
+                path, exc)
+            return
+        logger.info("[Plot] sample scan available: %s (%d bytes)", path, size)
 
     @staticmethod
     def _i2c_missing_devices(health: dict) -> str:
@@ -3279,16 +3322,41 @@ class MotionConnector(QObject):
         offer and the user's click.
         """
         if self._current_scan_source is not None:
+            logger.info(
+                "[Plot] sample scan request ignored — viewer already bound "
+                "to %s", type(self._current_scan_source).__name__)
             return
-        self._load_sample_scan(
-            str(resource_path("resources", "sample_scan.csv")))
+        self._load_sample_scan(str(self._sample_scan_path()))
 
     def _load_sample_scan(self, csv_path: str) -> None:
         """Parse a scan-export CSV and bind it to the viewer as a DB-free
         PastScanSource. Fail-soft: a missing/unreadable/empty CSV logs a
         warning and leaves the viewer untouched (never raises — a bad
         sample file must not break boot). Split from the slot so unit tests
-        can drive it with an arbitrary path."""
+        can drive it with an arbitrary path.
+
+        Every failure exit names the resolved path and distinguishes WHY.
+        The three causes need different fixes — file absent is a packaging
+        fault, unreadable is a permissions/IO fault, parsed-but-empty is a
+        bad dataset — and the user-visible symptom is identical in all
+        three (an empty viewer), so the log is the only place they can be
+        told apart."""
+        # Stat first: the loader below is fail-soft on a missing file
+        # (`_load_corrected_csv_into` swallows OSError), which would
+        # otherwise land a packaging fault in the generic empty-buffers
+        # branch and read as a bad dataset.
+        try:
+            size = os.stat(csv_path).st_size
+        except OSError as exc:
+            logger.warning(
+                "[Plot] sample scan unavailable — cannot read %s (%s)",
+                csv_path, exc)
+            return
+        if size == 0:
+            logger.warning(
+                "[Plot] sample scan unavailable — file is empty (0 bytes): %s",
+                csv_path)
+            return
         try:
             buffers = load_csv_scan_buffers(csv_path)
         except Exception:
@@ -3297,7 +3365,9 @@ class MotionConnector(QObject):
             return
         if buffers_are_empty(buffers):
             logger.warning(
-                "[Plot] sample scan unavailable or empty: %s", csv_path)
+                "[Plot] sample scan unavailable — %s (%d bytes) parsed but "
+                "held no usable samples; expected a per-cam scan-export CSV "
+                "with bfi_l1..contrast_r8 columns", csv_path, size)
             return
         try:
             sample = PastScanSource(
