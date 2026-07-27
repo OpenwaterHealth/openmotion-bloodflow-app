@@ -134,6 +134,20 @@ QtObject {
                                                    : (dark ? Qt.rgba(0.12, 0.12, 0.14, 0.96)
                                                            : Qt.rgba(0.99, 0.985, 0.96, 0.97))
 
+    // ── toast surface ─────────────────────────────────────────────
+    // Transient chrome that must stay readable over whatever it lands on,
+    // including the busy ambient. In glass mode it can't inherit
+    // bgElevated: that token is a 12% *white* wash, which would leave the
+    // white body text sitting on bright frost. So toasts go dark-dominant
+    // and near-opaque here (same trick as sheetBg / plotCellBg), a touch
+    // lighter than a modal sheet so they still read as floating chrome
+    // rather than a focused task surface. Solid-theme values are
+    // byte-identical to bgElevated so turning glass off is a perfect
+    // revert.
+    readonly property color toastBg: glass ? (dark ? Qt.rgba(0.12,0.12,0.16,0.94)
+                                                    : Qt.rgba(1,1,1,0.94))
+                                            : (dark ? "#252528" : "#EBE7DB")
+
     // ── modal sheet surface ───────────────────────────────────────
     // Modal panels (Settings, History, Contact Quality, …) need a much
     // heavier frost than chrome like the header: a focused task sheet
