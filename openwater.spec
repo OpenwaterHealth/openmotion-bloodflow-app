@@ -9,17 +9,39 @@ from PyInstaller.building.build_main import Analysis, PYZ, EXE, COLLECT
 
 APP_NAME = "Open-Motion"
 ENTRY = "main.py"
-ICON_FILE = os.path.abspath("assets/images/favicon.ico")
+
+# Anchor to the spec's own directory rather than the build-time CWD:
+# os.path.abspath("assets/...") silently resolved against wherever PyInstaller
+# happened to be invoked from, so a build launched from another directory got a
+# nonexistent icon path.
+ICON_FILE = os.path.join(SPECPATH, "assets", "images", "favicon.ico")
+if not os.path.exists(ICON_FILE):
+    raise SystemExit(f"[spec] FATAL: app icon missing: {ICON_FILE}")
 
 datas = []
 hidden = []
 binaries = []
 
-# --- your existing resource folders (keep what you already had) ---
+# --- resource folders ---
+# These are hard failures, not silent skips. The source paths below are still
+# CWD-relative, so skipping a missing one would quietly produce a build with no
+# QML and no assets at all — strictly worse than the wrong-CWD icon bug that
+# motivated anchoring ICON_FILE above.
 for item in ("main.qml",):
-    if os.path.exists(item):
-        datas.append((item, "."))
-for folder in ("pages", "components", "assets", "models", "config", "models", "processing"):
+    if not os.path.exists(item):
+        raise SystemExit(
+            f"[spec] FATAL: {item!r} not found in {os.getcwd()} — "
+            f"run PyInstaller from the repo root ({SPECPATH})."
+        )
+    datas.append((item, "."))
+for folder in ("pages", "components", "assets", "config", "processing"):
+    if not os.path.isdir(folder):
+        raise SystemExit(
+            f"[spec] FATAL: required resource folder {folder!r} not found in "
+            f"{os.getcwd()} — run PyInstaller from the repo root ({SPECPATH})."
+        )
+    datas.append((folder, folder))
+for folder in ("models",):  # optional
     if os.path.isdir(folder):
         datas.append((folder, folder))
 
@@ -30,9 +52,10 @@ _SAMPLE_SCAN = os.path.join("resources", "sample_scan.csv")
 if os.path.exists(_SAMPLE_SCAN):
     datas.append((_SAMPLE_SCAN, "resources"))
 
-# Ensure the icon is explicitly included
-if os.path.exists(ICON_FILE):
-    datas.append((ICON_FILE, "assets/images"))
+# Ensure the icon is explicitly included (also reachable via the `assets` tree
+# above; the runtime class-icon hardening in utils/win_taskbar_icon.py loads it
+# from disk, so a missing copy would be a silent downgrade).
+datas.append((ICON_FILE, "assets/images"))
 
 # --- PyQt6 (keep as before) ---
 qt_datas, qt_bins, qt_hidden = collect_all("PyQt6")
@@ -192,6 +215,25 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
+# ---------- Qt window-class icon (issue #223) ----------
+# Qt sets the Win32 *window-class* icon with LoadImage(hInst, L"IDI_ICON1", ...)
+# and falls back to the generic IDI_APPLICATION when that name isn't found.
+# PyInstaller publishes the icon group under the *integer* id 1, which a name
+# lookup never matches — so the class icon is generic in every PyInstaller+Qt
+# build. The shell falls back to the class icon whenever its WM_GETICON probe
+# of a freshly shown window times out (SMTO_ABORTIFHUNG), which is why the
+# generic taskbar icon showed up intermittently and only on slower machines.
+#
+# The hook makes PyInstaller publish a second, *named* group alongside its own.
+# It must be installed before EXE() runs: EXE.assemble() embeds resources
+# before appending the PKG archive and before fixing up the PE checksum, and
+# rewriting resources after that point truncates the appended archive and
+# produces an exe that cannot start.
+if sys.platform == "win32":
+    sys.path.insert(0, os.path.join(SPECPATH, "scripts"))
+    from win_icon_resource import install_pyinstaller_hook, has_named_group_icon
+    install_pyinstaller_hook()
+
 exe_gui = EXE(
     pyz, a.scripts, [],
     exclude_binaries=True,
@@ -207,3 +249,16 @@ coll = COLLECT(
     strip=False, upx=False, upx_exclude=[],
     name=APP_NAME
 )
+
+# Verify on the artifact that actually ships. This also catches a warm build/
+# tree: PyInstaller's EXE cache compares the icon *path*, not its contents, so
+# a cached exe can silently carry stale resources — fail loudly instead.
+if sys.platform == "win32":
+    _dist_exe = os.path.join(DISTPATH, APP_NAME, APP_NAME + ".exe")
+    if not has_named_group_icon(_dist_exe):
+        raise SystemExit(
+            f"[spec] FATAL: {_dist_exe} has no 'IDI_ICON1' icon resource — Qt "
+            f"would register its window classes with the generic Windows icon "
+            f"(#223). Rebuild with --clean."
+        )
+    print(f"[spec] verified 'IDI_ICON1' window-class icon in {_dist_exe}")
