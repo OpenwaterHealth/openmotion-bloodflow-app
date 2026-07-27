@@ -102,10 +102,12 @@ Item {
         // Fixed width, centred on the full window — deliberately NOT the
         // Math.min(parent.width - iconBarInset - 40, …) clamp the other modals
         // use. This modal's footer carries three buttons whose combined
-        // minimum is ~466px, so a clamp that shrinks the card below ~514px
-        // makes the row overflow the card and clip (verified: fine at 640px,
-        // broken at 560px). A fixed 520 has the room at every window size the
-        // clamp would have shrunk for. The icon-bar inset is unnecessary here
+        // minimum was ~466px when the middle one read "Send Bug Report to
+        // Openwater", so a clamp that shrinks the card below ~514px made the
+        // row overflow the card and clip (verified: fine at 640px, broken at
+        // 560px). The #340 rename to "Contact Support" bought ~85px of that
+        // back, but the fixed 520 stays: it has the room at every window size
+        // the clamp would have shrunk for. The icon-bar inset is unnecessary
         // too — at z:100000 this modal is above ButtonPanel, so the bar sits
         // dimmed behind the backdrop rather than overlapping the card.
         width: 520
@@ -150,7 +152,10 @@ Item {
                 }
 
                 Text {
-                    text: "CRITICAL ERROR"
+                    // "ERROR", not "CRITICAL ERROR" (#340) — the internal
+                    // documentation calls these errors, and the extra word
+                    // escalated conditions that are often recoverable.
+                    text: "ERROR"
                     color: AppTheme.textTertiary
                     font.pixelSize: 11
                     font.letterSpacing: 0.5
@@ -264,7 +269,7 @@ Item {
                 }
 
                 Button {
-                    text: "Send Bug Report to Openwater"
+                    text: "Contact Support"
                     Layout.preferredHeight: 32
                     onClicked: MotionInterface.sendBugReport(root.code)
                     contentItem: Text {

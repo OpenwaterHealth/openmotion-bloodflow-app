@@ -2,7 +2,7 @@
 
 When the BloodFlow app hits a showstopper condition it raises a **critical-error
 modal** carrying a stable code (e.g. `E-101`). The modal is dismissible and
-offers **Copy details** and **Send Bug Report to Openwater**.
+offers **Copy details** and **Contact Support**.
 
 Codes are the single source of truth in [`error_codes.py`](../error_codes.py);
 this document is generated from that registry. They are grouped by subsystem:
@@ -26,7 +26,7 @@ camera, or an FPGA) did not respond during the firmware's power-on self-check.
 The system cannot scan reliably in this state.
 
 **What to do:** Power-cycle the sensor and reconnect. If it persists, the sensor
-hardware needs service — send a bug report.
+hardware needs service — contact support.
 
 ### E-102 — Sensor self-check unreadable
 The sensor connected but did not return its power-on self-check result, so its
@@ -34,14 +34,14 @@ internal device health is unknown (typically older firmware, or the status
 command was rejected).
 
 **What to do:** Power-cycle the sensor and reconnect. If it persists, update the
-sensor firmware or send a bug report.
+sensor firmware or contact support.
 
 ### E-103 — Console initialization failed
 The console connected but its laser-power configuration could not be applied.
 The laser may not operate correctly until this is resolved.
 
-**What to do:** Power-cycle the console and reconnect. If it persists, send a bug
-report — the console firmware or config may need attention.
+**What to do:** Power-cycle the console and reconnect. If it persists, contact
+support — the console firmware or config may need attention.
 
 ### E-105 — Camera power-on failed
 The sensor could not power on its cameras during initialization, so camera
@@ -58,14 +58,14 @@ the allowed transient window, so laser safety cannot be confirmed. The laser was
 shut off as a precaution.
 
 **What to do:** Power-cycle the system and reconnect. Do not scan until this
-clears — send a bug report if it persists; the safety I2C link may be failing.
+clears — contact support if it persists; the safety I2C link may be failing.
 
 ### E-202 — Laser safety trip
 The laser-safety monitor tripped during a scan and the laser was shut off. The
 scan was stopped.
 
 **What to do:** Remove any obstruction, let the system settle, and start a new
-scan. If it trips repeatedly, stop and send a bug report.
+scan. If it trips repeatedly, stop and contact support.
 
 ## E-3xx — Scan / capture
 
@@ -90,7 +90,7 @@ data-stall watchdog when no camera has delivered a frame for
 `scanDataStallTimeoutSec` (default 3 s) while the trigger is ON.
 
 **What to do:** Check the sensor cables and power, then reconnect and start a
-new scan. If it happens repeatedly, send a bug report.
+new scan. If it happens repeatedly, contact support.
 
 ### E-304 — Device disconnected during scan
 A console or sensor was disconnected while the scan was running, so the scan was
@@ -103,7 +103,7 @@ device being removed mid-scan. Unplugging an idle / masked-out sensor, or any
 device while not scanning, does not raise this.
 
 **What to do:** Check the USB cables and power, reconnect the system, and start a
-new scan. If it keeps happening, send a bug report.
+new scan. If it keeps happening, contact support.
 
 ## Startup warnings (connection watchdog)
 
@@ -133,10 +133,10 @@ Tunable in [`config/app_config.json`](../config/app_config.json):
 Disconnects that happen *after* startup are handled by the normal connection
 status UI, not by this watchdog.
 
-## Sending a bug report
+## Contacting support
 
-The **Send Bug Report to Openwater** button packages the current session log plus
-the error context for support.
+The **Contact Support** button packages the current session log plus the error
+context for support.
 
 - By default it opens your mail client with a pre-filled message to
   `support@openwater.health`, copies the report to your clipboard, and reveals

@@ -51,7 +51,7 @@ _STARTUP = [
         "a camera, or an FPGA) did not respond during its power-on self-check. "
         "The system cannot scan reliably in this state.",
         "Power-cycle the sensor and reconnect. If it persists, the sensor "
-        "hardware needs service — send a bug report.",
+        "hardware needs service — contact support.",
     ),
     _e(
         "E-102", "startup",
@@ -59,15 +59,15 @@ _STARTUP = [
         "The sensor connected but did not return its power-on self-check "
         "result, so its internal device health is unknown.",
         "Power-cycle the sensor and reconnect. If it persists, update the "
-        "sensor firmware or send a bug report.",
+        "sensor firmware or contact support.",
     ),
     _e(
         "E-103", "startup",
         "Console initialization failed",
         "The console connected but its laser-power configuration could not be "
         "applied. The laser may not operate correctly until this is resolved.",
-        "Power-cycle the console and reconnect. If it persists, send a bug "
-        "report — the console firmware or config may need attention.",
+        "Power-cycle the console and reconnect. If it persists, contact "
+        "support — the console firmware or config may need attention.",
     ),
     _e(
         "E-105", "startup",
@@ -94,7 +94,7 @@ _SAFETY = [
         "longer than the allowed transient window, so laser safety cannot be "
         "confirmed. The laser was shut off as a precaution.",
         "Power-cycle the system and reconnect. Do not scan until this clears "
-        "— send a bug report if it persists; the safety I2C link may be "
+        "— contact support if it persists; the safety I2C link may be "
         "failing.",
     ),
     _e(
@@ -103,7 +103,7 @@ _SAFETY = [
         "The laser-safety monitor tripped during a scan and the laser was shut "
         "off. The scan was stopped.",
         "Remove any obstruction, let the system settle, and start a new scan. "
-        "If it trips repeatedly, stop and send a bug report.",
+        "If it trips repeatedly, stop and contact support.",
     ),
 ]
 
@@ -132,7 +132,7 @@ _SCAN = [
         "continue, so the scan was stopped. Data captured before the loss "
         "was saved.",
         "Check the sensor cables and power, then reconnect and start a new "
-        "scan. If it happens repeatedly, send a bug report.",
+        "scan. If it happens repeatedly, contact support.",
     ),
     _e(
         "E-304", "scan",
@@ -142,7 +142,7 @@ _SCAN = [
         "captured before the disconnection is not guaranteed to have been "
         "saved.",
         "Check the USB cables and power, reconnect the system, and start a "
-        "new scan. If it keeps happening, send a bug report.",
+        "new scan. If it keeps happening, contact support.",
     ),
 ]
 
@@ -165,7 +165,7 @@ def lookup(code: str) -> CriticalError:
     return CriticalError(
         code=code,
         category="startup",
-        title="Critical error",
-        message="A critical error occurred.",
-        suggested_action="Send a bug report with the session log attached.",
+        title="Error",
+        message="An error occurred.",
+        suggested_action="Contact support with the session log attached.",
     )

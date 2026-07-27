@@ -114,7 +114,7 @@ Edit `config/app_config.json` to customize behavior:
 | `bviMin` / `bviMax` | `4.0` / `8.0` | Manual BVI plot bounds (when autoscale is off) |
 | `meanMin` / `meanMax` | `0` / `200` | Manual mean plot bounds |
 | `contrastMin` / `contrastMax` | `0.0` / `0.7` | Manual contrast plot bounds |
-| `support_email` | `support@openwater.health` | Destination for the critical-error modal's **Send Bug Report** button |
+| `support_email` | `support@openwater.health` | Destination for the error modal's **Contact Support** button |
 | `bug_report_smtp` | _(absent)_ | Optional `{host, port, username, password, from_addr, use_tls}` block. When set, bug reports are emailed automatically with the session log attached; otherwise the app opens your mail client for manual send |
 | `connectionTimeoutSec` | `12` | Startup connection watchdog grace period before warning about missing devices (E-104/E-106, yellow toast); `0` disables it |
 | `requireConsole` | `true` | Watchdog warns (E-104) if no console connected at startup |
