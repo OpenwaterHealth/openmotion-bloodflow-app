@@ -31,11 +31,15 @@
       ],
       "supplier": {
         "name": "Openwater Inc.",
-        "url": ["https://www.openwater.cc"]
+        "url": [
+          "https://www.openwater.cc"
+        ]
       },
       "manufacturer": {
         "name": "Openwater Inc.",
-        "url": ["https://www.openwater.cc"]
+        "url": [
+          "https://www.openwater.cc"
+        ]
       },
       "properties": [
         {
@@ -435,7 +439,9 @@
       ],
       "supplier": {
         "name": "Openwater Inc.",
-        "url": ["https://www.openwater.cc"]
+        "url": [
+          "https://www.openwater.cc"
+        ]
       },
       "externalReferences": [
         {
@@ -544,6 +550,114 @@
         {
           "name": "ow:scope-note",
           "value": "Development/linting dependency only. Not included in deployed application binary."
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/sqlcipher3@0.6.2",
+      "name": "sqlcipher3",
+      "version": "0.6.2",
+      "description": "DB-API 2.0 binding bundling SQLCipher; encrypts scans.db at rest on clinical builds",
+      "purl": "pkg:pypi/sqlcipher3@0.6.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT",
+            "name": "MIT License"
+          }
+        }
+      ],
+      "supplier": {
+        "name": "Charles Leifer"
+      },
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/coleifer/sqlcipher3"
+        },
+        {
+          "type": "distribution",
+          "url": "https://pypi.org/project/sqlcipher3/"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:generic/sqlcipher@4.12.0",
+      "name": "SQLCipher",
+      "version": "4.12.0",
+      "description": "AES-256-CBC + per-page HMAC-SHA512 encryption layer for SQLite (Community Edition; statically linked into the sqlcipher3 wheel)",
+      "purl": "pkg:generic/sqlcipher@4.12.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause",
+            "name": "BSD 3-Clause License"
+          }
+        }
+      ],
+      "supplier": {
+        "name": "Zetetic LLC"
+      },
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://www.zetetic.net/sqlcipher/"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:generic/openssl@3.6.0",
+      "name": "OpenSSL",
+      "version": "3.6.0",
+      "description": "Cryptographic provider backing SQLCipher (statically linked into the sqlcipher3 wheel); CVE-tracked",
+      "purl": "pkg:generic/openssl@3.6.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0",
+            "name": "Apache License 2.0"
+          }
+        }
+      ],
+      "supplier": {
+        "name": "OpenSSL Project"
+      },
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://www.openssl.org/"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/keyring@25.6.0",
+      "name": "keyring",
+      "version": "25.6.0",
+      "description": "OS keystore access; holds the scans.db encryption key in the Windows Credential Manager",
+      "purl": "pkg:pypi/keyring@25.6.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT",
+            "name": "MIT License"
+          }
+        }
+      ],
+      "supplier": {
+        "name": "Jason R. Coombs"
+      },
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/jaraco/keyring"
+        },
+        {
+          "type": "distribution",
+          "url": "https://pypi.org/project/keyring/"
         }
       ]
     }

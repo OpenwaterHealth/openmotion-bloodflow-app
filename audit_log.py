@@ -129,10 +129,17 @@ class AuditLog:
             )
             return
         try:
-            conn = sqlite3.connect(str(db_path), check_same_thread=False)
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA busy_timeout=5000")
-            self._conn = conn
+            # Open through the SDK helper, not stdlib sqlite3. On a clinical
+            # build scans.db is SQLCipher-encrypted, and a stdlib connection
+            # raises "file is not a database" — which the fail-soft handler
+            # below would swallow, silently disabling the audit log on exactly
+            # the builds that need it. db_open picks the driver from the
+            # process encryption policy, applies the key, and sets the same
+            # WAL/busy_timeout PRAGMAs this used to set by hand. AuditLog
+            # itself never sees the key.
+            from omotion import db_open
+
+            self._conn = db_open.connect(db_path)
             self._init_schema()
         except Exception:
             logger.warning(

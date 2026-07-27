@@ -74,6 +74,35 @@ hidden += [
     "base58",
 ]
 
+# --- scan-DB encryption stack (clinical builds) ---
+# Belt-and-braces, NOT a fix for a known break: a frozen build was verified to
+# pick these up already, because PyInstaller's bytecode scan finds the lazy
+# `import sqlcipher3` / `import keyring` inside omotion.db_open/db_key, and
+# PyInstaller ships its own keyring hook for the entry-point-discovered
+# backends. Listing them explicitly means a refactor of those import sites (or
+# a hook change) cannot silently produce a clinical build that crashes on the
+# first scan or, worse, cannot open its own encrypted database.
+hidden += [
+    "sqlcipher3",
+    "sqlcipher3.dbapi2",
+    "keyring",
+    "keyring.backends",
+    "keyring.backends.Windows",          # WinVaultKeyring - found via entry points
+    "win32ctypes.core",                  # backs the Windows keyring backend
+    "win32ctypes.pywin32.win32cred",
+    "win32ctypes.pywin32.pywintypes",
+]
+try:
+    # sqlcipher3 is a single native extension with OpenSSL statically linked,
+    # so there are no side-car DLLs to chase - collect_all still future-proofs
+    # against that changing.
+    _sc_datas, _sc_bins, _sc_hidden = collect_all("sqlcipher3")
+    datas += _sc_datas
+    binaries += _sc_bins
+    hidden += _sc_hidden
+except Exception:
+    pass
+
 # Optional: if you also have a separate 'libusb' wheel installed, this won't hurt
 try:
     binaries += collect_dynamic_libs("libusb")
