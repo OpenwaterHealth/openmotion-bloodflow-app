@@ -1,19 +1,34 @@
 <!-- installer/bundle.wxs — one setup.exe: driver MSI then app MSI. -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+  <!-- IconSourceFile stamps the icon into the generated Setup.exe. Burn also
+       writes its ARP DisplayIcon pointing at the cached bundle exe, so this
+       one attribute fixes both the Setup.exe icon and the Add/Remove Programs
+       row (issue #402). Note the app MSI's own ARP row is irrelevant here:
+       Burn injects ARPSYSTEMCOMPONENT=1 into it, so that row is hidden and an
+       <Icon>/ARPPRODUCTICON in app.wxs would be dead code. -->
   <Bundle Name="$(var.ProductName)"
           Manufacturer="Openwater"
           Version="$(var.Version)"
-          UpgradeCode="$(var.BundleUpgradeCode)">
+          UpgradeCode="$(var.BundleUpgradeCode)"
+          IconSourceFile="$(var.IconFile)">
 
     <BootstrapperApplication>
       <!-- Custom theme = stock hyperlinkLicense + a "Create a desktop shortcut"
            checkbox. Theme="hyperlinkLicense" is kept so the standard payload
            group (logo.png etc.) is still provided; ThemeFile/LocalizationFile
-           override only the layout + strings. -->
+           override only the layout + strings.
+
+           LogoFile swaps the wizard's logo bits without touching the theme:
+           the stock payload is Name="logo.png" with a bind-variable source
+           (!(wix.WixStdbaLogo=logo.png)), so LogoFile redirects the source
+           while the payload keeps the name bundle-theme.xml resolves by
+           (ImageFile="logo.png"). The asset is 64x64 to match that theme's
+           ImageControl exactly — see scripts/make_app_icon.py. -->
       <bal:WixStandardBootstrapperApplication Theme="hyperlinkLicense"
                                               ThemeFile="bundle-theme.xml"
                                               LocalizationFile="bundle-theme.wxl"
+                                              LogoFile="$(var.LogoFile)"
                                               LicenseUrl="" />
     </BootstrapperApplication>
 
