@@ -51,6 +51,15 @@ for folder in ("models",):  # optional
 _SAMPLE_SCAN = os.path.join("resources", "sample_scan.csv")
 if os.path.exists(_SAMPLE_SCAN):
     datas.append((_SAMPLE_SCAN, "resources"))
+else:
+    # Optional, so not fatal — but never silent. Dropping it here is how the
+    # runtime file goes missing, and the app can only report the absence
+    # after the fact (a warning in the boot log, no sample in the viewer).
+    print(
+        f"[spec] WARNING: {_SAMPLE_SCAN!r} not found in {os.getcwd()} — the "
+        "build will ship without a replay sample scan; research builds will "
+        "log 'sample scan unavailable' and the offer dialog will do nothing."
+    )
 
 # Ensure the icon is explicitly included (also reachable via the `assets` tree
 # above; the runtime class-icon hardening in utils/win_taskbar_icon.py loads it
