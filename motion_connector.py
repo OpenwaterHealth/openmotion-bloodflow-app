@@ -76,6 +76,14 @@ SCALE_I = 0.25
 _CQ_DEFAULT_DARK_THRESHOLD_DN = 3.0
 _CQ_DEFAULT_LIGHT_THRESHOLD_DN = 15.0
 _CQ_DEFAULT_ROLLING_WINDOW = 10
+# Preflight verdict severity (#390). Total optical loss is a hardware fault,
+# not an operator-technique note, so it outranks the reposition-the-headset
+# reasons. Anything absent here (i.e. "ok") stays at INFO.
+_CQ_REASON_LOG_LEVEL = {
+    "no_signal": logging.ERROR,
+    "poor_contact": logging.WARNING,
+    "ambient_light": logging.WARNING,
+}
 # Asymmetric live debounce (#364): RAISE fast, CLEAR slow.
 _CQ_DEFAULT_LIVE_ACTIVATE_FRAMES = 10
 _CQ_DEFAULT_LIVE_CLEAR_FRAMES = 80
@@ -4566,6 +4574,11 @@ class MotionConnector(QObject):
         return {
             "ambient_light": "Ambient light detected",
             "poor_contact": "Poor sensor contact",
+            # Distinct from poor_contact on purpose (#390): a dark fiber and
+            # a loose headband used to read identically, so the operator was
+            # told to reposition the headset when the fix was to reseat a
+            # connector.
+            "no_signal": "No signal — check fiber and sensor seating",
         }.get(type_key, type_key)
 
     @staticmethod
@@ -4718,16 +4731,15 @@ class MotionConnector(QObject):
             time.monotonic() - self._cq_t0 if self._cq_t0 is not None else 0.0
         )
         if result is None:
-            logger.info(
-                "=== Contact-quality check ended: failed after %.1fs ===",
+            # Third state, not a failed verdict: the SDK workflow threw and
+            # we have no per-camera data at all. Keep it distinguishable from
+            # "ran, and the cameras failed" (#390).
+            logger.error(
+                "=== Contact-quality check ended: errored after %.1fs ===",
                 elapsed_s,
             )
             self.contactQualityCheckFinished.emit(False, "CQ check failed", [])
             return
-        logger.info(
-            "=== Contact-quality check ended: completed after %.1fs ===",
-            elapsed_s,
-        )
 
         # Convert CamCQResult.reason → (typeKey, warning dict) that the QML
         # ContactQualityModal expects.
@@ -4763,13 +4775,18 @@ class MotionConnector(QObject):
                     }
                     warn_tags.append("ambient_light")
                 elif reason in ("poor_contact", "no_signal"):
-                    warnings_by_key[(camera, "poor_contact")] = {
+                    # Keep the two apart (#390). They used to collapse into
+                    # "poor_contact", so a decoupled fiber told the operator
+                    # to reposition the headset. NB the live monitor keeps
+                    # mapping to poor_contact — the SDK guarantees no_signal
+                    # is preflight-only (omotion/contact_quality.py:20).
+                    warnings_by_key[(camera, reason)] = {
                         "camera": camera,
-                        "typeKey": "poor_contact",
-                        "typeText": self._warning_text("poor_contact"),
+                        "typeKey": reason,
+                        "typeText": self._warning_text(reason),
                         "value": float(light_avg_dn) if light_avg_dn == light_avg_dn else 0.0,
                     }
-                    warn_tags.append("poor_contact")
+                    warn_tags.append(reason)
 
                 table_rows.append({
                     "camera": camera,
@@ -4789,7 +4806,12 @@ class MotionConnector(QObject):
             "|--------|----------|---------|---------|----------|----------------|----------|"
         )
         for row in table_rows:
-            logger.info(
+            # Escalate the row itself, not just an aggregate (#390): the row
+            # carries the numbers, and the documented triage grep is
+            # WARNING|ERROR|FAIL|aborted — an INFO-only hardware fault is
+            # invisible to log review.
+            logger.log(
+                _CQ_REASON_LOG_LEVEL.get(row["reason"], logging.INFO),
                 "| %-6s | %8s | %7s | %7.2f | %8.2f | %-14s | %-8s |",
                 row["camera"],
                 row["light_avg_dn"],
@@ -4800,9 +4822,29 @@ class MotionConnector(QObject):
                 row["warnings"],
             )
 
+        # One greppable summary line per fault class, so a whole-side
+        # blackout does not have to be reconstructed from eight rows.
+        for reason, level in _CQ_REASON_LOG_LEVEL.items():
+            affected = [r["camera"] for r in table_rows if r["reason"] == reason]
+            if affected:
+                logger.log(
+                    level,
+                    "CQ %s on %d camera(s): %s",
+                    reason, len(affected), ", ".join(affected),
+                )
+
         warning_list = list(warnings_by_key.values())
         ok = result.passed
         err_msg = "" if ok else "Contact quality check failed"
+
+        # State the verdict (#390). This used to say "completed" over eight
+        # dead cameras, and it was emitted before the table was even built.
+        logger.log(
+            logging.INFO if ok else logging.ERROR,
+            "=== Contact-quality check ended: %s after %.1fs ===",
+            "passed" if ok else "FAILED",
+            elapsed_s,
+        )
         self.contactQualityCheckFinished.emit(ok, err_msg, warning_list)
 
     def _on_cq_transition(self, side, cam_id, reason, value, active):

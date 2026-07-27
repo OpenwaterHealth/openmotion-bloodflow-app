@@ -44,6 +44,12 @@ Item {
     property bool preScanMode: false
     // Live-scan modal is only dismissable when no CQ issues remain active.
     property bool liveScanDismissable: false
+    // The SDK's pass/fail verdict for the last completed check (#390). It
+    // used to be emitted and dropped, so nothing downstream could tell a
+    // passing check from one where a whole sensor side was dark. Defaults
+    // true: a modal that has not run a check yet has nothing to report.
+    // Consumed by the acknowledgement gate in #406.
+    property bool checkPassed: true
     // ModalManager opt-out: don't allow click-outside / icon-bar clicks to
     // close this modal while a check is in flight, while it is gating a
     // pre-scan Start, or while a live scan is running. The user must use

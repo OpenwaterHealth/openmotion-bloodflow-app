@@ -635,11 +635,21 @@ Rectangle {
                 // user can explicitly Continue into the main scan.
                 contactQualityModal.liveScan = true
             }
+            // Record the verdict before branching (#390). It used to be
+            // dropped on every path: the warnings branch returns early, so
+            // `ok` was never read, and a check where an entire sensor side
+            // reported no signal was indistinguishable downstream from a
+            // clean one.
+            contactQualityModal.checkPassed = ok
             if (warnings.length > 0) {
                 for (var i = 0; i < warnings.length; ++i) {
                     var w = warnings[i]
                     contactQualityModal.addWarning(w.camera, w.typeKey, w.typeText, w.value)
                 }
+                // Still returns, deliberately: the per-camera warnings are
+                // the specific, actionable view of a failed verdict, and
+                // falling through to showError would replace them with a
+                // generic message (8b7892c).
                 return
             }
             if (!ok) {
