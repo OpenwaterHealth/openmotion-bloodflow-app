@@ -347,11 +347,44 @@ def main():
     _scan_data_dir = os.path.join(_data_dir, app_paths.DATA_DIRNAME)
     os.makedirs(_scan_data_dir, exist_ok=True)
     _scan_db_path = os.path.join(_scan_data_dir, "scans.db")
+    # Clinical builds encrypt scans.db at rest (SQLCipher, key in the Windows
+    # Credential Manager). The flag is the SIGNED build config, so the encrypt
+    # decision cannot be independently forgotten. Constructing MotionInterface
+    # sets the SDK's process-wide policy exactly once.
+    _clinical = bool(app_config.get("clinicalMode", False))
     motion_interface = MotionInterface(
         data_dir=_scan_data_dir,
         scan_db_path=_scan_db_path,
         operator_id="bloodflow-app",
+        require_encrypted_db=_clinical,
     )
+
+    # An existing PLAINTEXT scans.db must be encrypted before anything opens it:
+    # under the policy the SDK refuses to open plaintext (it never silently
+    # appends PHI in the clear), and AuditLog opens the same file inside
+    # MotionConnector below. So this has to happen here — after the policy is
+    # set, before the connector exists.
+    if _clinical:
+        from omotion import db_migrate
+
+        try:
+            if db_migrate.migrate_plaintext_to_encrypted(_scan_db_path):
+                logger.warning(
+                    "scans.db was plaintext and has been encrypted in place. A "
+                    "backup of the original remains at %s.pre-encryption.bak — "
+                    "remove it per SOP once this build is confirmed.",
+                    _scan_db_path,
+                )
+        except Exception:
+            # Fail loudly but let the app start: the SDK's own pre-flight will
+            # refuse the scan before the laser fires, which is a far clearer
+            # failure than a dead splash screen.
+            logger.exception(
+                "scans.db encryption migration FAILED — scanning will be "
+                "refused until this is resolved. The original database is "
+                "untouched."
+            )
+
     motion_interface.log_system_info()
 
     qInstallMessageHandler(qt_message_handler)
