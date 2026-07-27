@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 """Regenerate assets/images/favicon.ico from assets/images/favicon.png.
 
-Windows shell components (exe-resource icon extraction, shortcut icons,
-the taskbar icon cache) only reliably support PNG-compressed frames at
-256x256; every smaller frame must be a classic BMP/DIB frame or the
-shell can fall back to the generic default icon (issue #223). Pillow's
-default ICO writer emits PNG-compressed frames at *every* size, so do
-not regenerate the icon with a plain `Image.save(..., format="ICO")` —
-run this script instead. It writes BMP frames for 16..128 px and a
-single PNG-compressed 256 px frame, matching Microsoft's icon guidance.
+Writes classic BMP/DIB frames for 16..128 px and a single PNG-compressed
+256 px frame, which is the conventional layout Microsoft's icon guidance
+describes. Run this rather than a plain `Image.save(..., format="ICO")`:
+Pillow's default ICO writer emits PNG-compressed frames at *every* size,
+so a casual regen silently changes the frame encoding of a shipped asset.
+
+Note on history: this script was written for issue #223 on the theory
+that the all-PNG icon was why the taskbar showed the generic Windows
+icon. That theory was wrong — Windows 10/11 loads PNG frames fine at
+every size, and the real cause was the Win32 window-class icon (see
+scripts/win_icon_resource.py). The BMP layout is kept because it is what
+now ships and is byte-for-byte reproducible from this script, not
+because the shell requires it. Regenerating the icon is not a fix for
+any icon bug; don't reach for it as one.
 
 Usage:  python scripts/make_app_icon.py
 """

@@ -250,18 +250,20 @@ def _app_icon() -> QIcon:
 
 
 def main():
-    # Set the Windows AppUserModelID as the very first thing, before any
-    # QApplication (and thus any HWND) is created. Windows binds the taskbar
-    # button to the process identity when the first window appears; setting
-    # this after QApplication() races the shell and intermittently leaves the
-    # taskbar showing the generic Windows icon (Explorer caches one icon per
-    # AUMID). This must run before check_single_instance()'s message box too.
+    # Set the Windows AppUserModelID before any QApplication (and thus any
+    # HWND) exists: Windows binds the taskbar button to the process identity
+    # when the first window appears, so this has to be settled first. It must
+    # run before check_single_instance()'s message box too.
     #
-    # The ".1" suffix retires the original "Openwater.OpenMotion" AUMID:
-    # machines that ever ran a pre-1.4.0-dev.1 build (which set the AUMID
-    # after QApplication and could lose the race) have the generic icon
-    # cached under the old ID, and Explorer keeps serving that cached icon
-    # to fixed builds forever. A new AUMID gets a fresh cache entry.
+    # DO NOT bump this string again. It was bumped once ("Openwater.OpenMotion"
+    # -> ".1") on the theory that Explorer caches an icon per AUMID and that a
+    # fresh ID would clear a poisoned entry. That theory did not hold up: the
+    # generic-icon bug reproduced under a brand-new AUMID and a clean relaunch
+    # under the *same* AUMID showed the correct icon, so the AUMID was never
+    # what was broken. The real cause was the Win32 window-class icon (see the
+    # #223 note further down, and utils/win_taskbar_icon.py). Changing the
+    # AUMID only mints a new identity and strands every taskbar pin users have
+    # made since 1.4.0 — a one-way cost with no benefit.
     # Keep in sync with the ShortcutProperty in installer/app.wxs.
     if sys.platform == "win32":
         try:
@@ -427,6 +429,21 @@ def main():
     if not engine.rootObjects():
         logger.error("Error: Failed to load QML file")
         sys.exit(-1)
+
+    # Pin the Win32 window-class icon (issue #223). Qt answers Explorer's
+    # WM_GETICON probe with the icon set above, but the shell asks with
+    # SMTO_ABORTIFHUNG and falls back to the *class* icon when the GUI thread
+    # is busy — and Qt leaves that at the generic IDI_APPLICATION, because its
+    # LoadImage(hInst, L"IDI_ICON1", ...) lookup finds nothing in a PyInstaller
+    # build. Frozen builds get the resource from openwater.spec's build hook;
+    # this makes the fallback correct at runtime too, including from source.
+    if sys.platform == "win32":
+        from utils.win_taskbar_icon import apply_window_class_icon
+
+        apply_window_class_icon(
+            int(engine.rootObjects()[0].winId()),
+            resource_path("assets", "images", "favicon.ico"),
+        )
 
     # wait=False: the QML window is already visible at this point (main.qml's
     # ApplicationWindow is `visible: true`) and Qt's event loop hasn't started
