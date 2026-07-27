@@ -103,6 +103,36 @@ try:
 except Exception:
     pass
 
+# Fail the BUILD, not the field, when a clinical package is missing its crypto.
+# PyInstaller can only bundle what is installed in the build environment, so an
+# env without these silently produces a clinical app that dies with
+# ModuleNotFoundError on first launch. build_and_zip.ps1 does not install
+# requirements.txt, so a local build inherits whatever happens to be in the
+# conda env - which is exactly how this shipped broken once. Research builds do
+# not need them, so only gate on clinicalMode.
+import json as _json
+try:
+    with open(os.path.join(os.path.dirname(os.path.abspath(SPEC)), "config",
+                           "app_config.json"), encoding="utf-8") as _f:
+        _is_clinical = bool(_json.load(_f).get("clinicalMode", False))
+except Exception:
+    _is_clinical = False
+if _is_clinical:
+    _missing = []
+    for _mod in ("keyring", "sqlcipher3"):
+        try:
+            __import__(_mod)
+        except ImportError:
+            _missing.append(_mod)
+    if _missing:
+        raise SystemExit(
+            "\n*** BUILD ABORTED: clinicalMode=true but these encryption packages "
+            f"are not installed in the build environment: {', '.join(_missing)}.\n"
+            "    PyInstaller cannot bundle what is not installed, so this build "
+            "would produce a clinical app that fails on first launch.\n"
+            "    Fix:  pip install -r requirements.txt\n"
+        )
+
 # Optional: if you also have a separate 'libusb' wheel installed, this won't hurt
 try:
     binaries += collect_dynamic_libs("libusb")
