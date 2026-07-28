@@ -33,6 +33,23 @@ Item {
     property var _queue: []
     property bool _detailExpanded: false
 
+    // One width for all three footer buttons. Left to size themselves they
+    // came out 119 / 142 / 92 px (label + Material 3's 24px-a-side padding),
+    // which made the primary action the narrowest thing in the row and gave
+    // each button a different padding-to-label ratio. Must stay >= the
+    // longest label plus _footerButtonPad*2 ("Contact Support" is 94px at
+    // 13px Segoe UI, so 118 is the floor); 132 leaves slack for a wider
+    // system font. Every other modal footer in the app sets explicit button
+    // widths the same way (HistoryModal, LogsModal).
+    readonly property int _footerButtonWidth: 132
+    // Material 3's default 24 is sized for standalone buttons; halved here so
+    // the label isn't squeezed inside the fixed width above (at 24 the
+    // longest label overflowed its content box and only stayed legible
+    // because the centred Text spilled into the padding). Must be set as
+    // left/rightPadding — the Material style assigns those directly, so a
+    // horizontalPadding override is silently ignored.
+    readonly property int _footerButtonPad: 12
+
     function _enqueue(code, title, message, action, detail) {
         var q = root._queue.slice()
         q.push({code: code, title: title, message: message,
@@ -105,11 +122,13 @@ Item {
         // minimum was ~466px when the middle one read "Send Bug Report to
         // Openwater", so a clamp that shrinks the card below ~514px made the
         // row overflow the card and clip (verified: fine at 640px, broken at
-        // 560px). The #340 rename to "Contact Support" bought ~85px of that
-        // back, but the fixed 520 stays: it has the room at every window size
-        // the clamp would have shrunk for. The icon-bar inset is unnecessary
-        // too — at z:100000 this modal is above ButtonPanel, so the bar sits
-        // dimmed behind the backdrop rather than overlapping the card.
+        // 560px). The #340 rename to "Contact Support" and the fixed button
+        // widths below bought that back — the row now needs 416px (3 × 132
+        // + 2 × 10 spacing) inside 472px of content — but the fixed 520
+        // stays: it has the room at every window size the clamp would have
+        // shrunk for. The icon-bar inset is unnecessary too — at z:100000
+        // this modal is above ButtonPanel, so the bar sits dimmed behind the
+        // backdrop rather than overlapping the card.
         width: 520
         height: contentCol.implicitHeight + 48
         radius: 12
@@ -244,8 +263,12 @@ Item {
                 spacing: 10
 
                 Button {
+                    objectName: "errCopyDetailsBtn"
                     text: "Copy details"
+                    Layout.preferredWidth: root._footerButtonWidth
                     Layout.preferredHeight: 32
+                    leftPadding: root._footerButtonPad
+                    rightPadding: root._footerButtonPad
                     // Confirm the copy — copyToClipboard succeeds silently, so
                     // without a toast this button is indistinguishable from a
                     // dead one. The tag keeps repeat clicks from stacking.
@@ -269,8 +292,12 @@ Item {
                 }
 
                 Button {
+                    objectName: "errContactSupportBtn"
                     text: "Contact Support"
+                    Layout.preferredWidth: root._footerButtonWidth
                     Layout.preferredHeight: 32
+                    leftPadding: root._footerButtonPad
+                    rightPadding: root._footerButtonPad
                     onClicked: MotionInterface.sendBugReport(root.code)
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 13
@@ -288,8 +315,12 @@ Item {
                 Item { Layout.fillWidth: true }
 
                 Button {
+                    objectName: "errDismissBtn"
                     text: "Dismiss"
+                    Layout.preferredWidth: root._footerButtonWidth
                     Layout.preferredHeight: 32
+                    leftPadding: root._footerButtonPad
+                    rightPadding: root._footerButtonPad
                     onClicked: root.dismiss()
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 13
