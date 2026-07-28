@@ -4217,6 +4217,19 @@ class MotionConnector(QObject):
                 subject_id, duration_sec, left_camera_mask, right_camera_mask,
                 "off" if disable_laser else "on",
             )
+            if self._sensor_debug_logging:
+                # DEBUG_FLAG_USB_PRINTF is set, so this scan carries an
+                # elevated camera-dropout risk on firmware without
+                # sensor-fw#115: the firmware's queue-full diagnostic is
+                # transmitted over COMM, and if the host stops draining COMM
+                # that send busy-waits the firmware main loop, starving the
+                # 25 ms camera DMA re-arm. Logged at WARNING so a scan taken
+                # in this state is identifiable after the fact.
+                logger.warning(
+                    "Scan started with sensor debug logging ENABLED "
+                    "(DEBUG_FLAG_USB_PRINTF) — elevated camera-dropout risk; "
+                    "not recommended for clinical acquisition"
+                )
             # Bind the live source's DB tail to THIS scan's session row by its
             # exact label (set synchronously inside start_scan), so a later
             # pan-into-past resolves the right session instead of guessing the

@@ -1010,6 +1010,29 @@ Item {
                         Item { Layout.fillWidth: true }
                     }
 
+                    // Sensor debug log sets DEBUG_FLAG_USB_PRINTF on both
+                    // sensors. On firmware without sensor-fw#115, the
+                    // firmware's own "HISTO enqueue fail: queue full" message
+                    // has to be transmitted over the COMM endpoint; if the
+                    // host stops draining COMM the send busy-waits the
+                    // firmware main loop for up to 500 ms, which starves the
+                    // 25 ms camera DMA re-arm and kills the camera for the
+                    // rest of the session. Bench: 6/6 scans lost a camera with
+                    // this on, 0/6 with it off, under the same induced stall.
+                    // Shown only when enabled — this is a live hazard, not a
+                    // general note about the setting.
+                    Text {
+                        visible: MotionInterface.appConfig.sensorDebugLogging === true
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 4
+                        Layout.bottomMargin: 6
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: 11
+                        color: AppTheme.accentYellow
+                        text: qsTr("Raises camera-dropout risk during acquisition. "
+                                   + "Turn off before clinical scans.")
+                    }
+
                     // Console USB-printf debug log — persisted to config AND
                     // pushed live to a connected console via
                     // setConsoleDebugLogging. Re-applied on connect (RAM-only
