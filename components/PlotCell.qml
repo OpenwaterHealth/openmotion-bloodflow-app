@@ -428,7 +428,8 @@ Item {
                 var dt = (dx / cell.width) * cell.windowSeconds
                 cell.panZoomTarget.setWindow(
                     panZoomArea._dragStartWindowStartT - dt,
-                    cell.windowSeconds
+                    cell.windowSeconds,
+                    "drag-pan"
                 )
             } else {
                 // Hover: broadcast cursor time to the viewer.
@@ -459,7 +460,7 @@ Item {
             var anchorT = tLoNow + ratio * cell.windowSeconds
             var newSec = cell.windowSeconds * factor
             var newStart = anchorT - ratio * newSec
-            cell.panZoomTarget.setWindow(newStart, newSec)
+            cell.panZoomTarget.setWindow(newStart, newSec, "wheel-zoom")
             wheel.accepted = true
         }
     }
@@ -498,7 +499,8 @@ Item {
                           + pinchZoom._anchorRatio * pinchZoom._baseWindowSeconds
             cell.panZoomTarget.setWindow(
                 anchorT - pinchZoom._anchorRatio * newSec,
-                newSec
+                newSec,
+                "pinch-zoom"
             )
         }
     }
