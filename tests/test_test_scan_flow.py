@@ -98,7 +98,7 @@ def test_on_test_scan_complete_passes_builds_rows(connector):
         started_timestamp="20260521_000000",
     )
     connector._on_test_scan_complete(res)
-    assert connector._test_scan_status == "done"
+    assert connector._test_scan_status == "passed"
     assert len(connector._test_scan_rows) == 1
     row = connector._test_scan_rows[0]
     assert row["side"] == "left"

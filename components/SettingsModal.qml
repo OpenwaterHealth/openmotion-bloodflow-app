@@ -1090,8 +1090,8 @@ Item {
                         target: MotionInterface
                         function onTestScanStateChanged() {
                             var s = MotionInterface.testScanStatus
-                            if (s === "running" || s === "done"
-                                || s === "failed" || s === "aborted") {
+                            if (s === "running" || s === "passed" || s === "failed"
+                                || s === "canceled" || s === "timed_out" || s === "error") {
                                 testResultsWindow.show()
                                 testResultsWindow.raise()
                                 testResultsWindow.requestActivate()

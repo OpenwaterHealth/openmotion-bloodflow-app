@@ -70,21 +70,25 @@ Window {
                 text: {
                     if (testWin.running) return "Running…"
                     switch (testWin.status) {
-                    case "done":    return "PASS"
+                    case "passed":  return "PASS"
                     case "failed":
                         return testWin.failureReason
                             ? "FAIL — " + testWin.failureReason
                             : "FAIL"
-                    case "aborted": return "Aborted"
+                    case "canceled":  return "Canceled"
+                    case "timed_out": return "Timed out"
+                    case "error":     return "Error"
                     default:        return ""
                     }
                 }
                 color: {
                     switch (testWin.status) {
-                    case "done":    return "#4CAF50"
-                    case "failed":  return "#F44336"
-                    case "aborted": return "#FF9800"
-                    case "running": return "#2196F3"
+                    case "passed":    return "#4CAF50"
+                    case "failed":    return "#F44336"
+                    case "canceled":  return "#9E9E9E"
+                    case "timed_out": return "#FF9800"
+                    case "error":     return "#F44336"
+                    case "running":   return "#2196F3"
                     default:        return AppTheme.textPrimary
                     }
                 }

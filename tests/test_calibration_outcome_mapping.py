@@ -72,3 +72,25 @@ def test_passed_and_failed_unchanged(connector):
     assert connector._calibration_status == "passed"
     connector._on_calibration_complete(_result(passed=False))
     assert connector._calibration_status == "failed"
+
+
+def _test_result(**kw):
+    base = dict(ok=True, passed=True, canceled=False, error="",
+                csv_path="t.csv", json_path="t.json", rows=[],
+                test_scan_left_path="", test_scan_right_path="",
+                started_timestamp="20260728_000000")
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_test_scan_pass_status_is_passed_not_done(connector):
+    connector._on_test_scan_complete(_test_result(passed=True))
+    assert connector._test_scan_status == "passed"
+
+
+def test_test_scan_error_outcome(connector):
+    connector._on_test_scan_complete(
+        _test_result(outcome="error", ok=False, passed=False,
+                     error="flash phase failed: x"))
+    assert connector._test_scan_status == "error"
+    assert connector.testScanFailureReason == "flash phase failed: x"

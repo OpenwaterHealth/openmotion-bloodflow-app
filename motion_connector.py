@@ -909,7 +909,7 @@ class MotionConnector(QObject):
     # Calibration procedure signals
     calibrationStateChanged = pyqtSignal()  # any of running/passed/failed/canceled/timed_out/error/idle
     _calibrationCompleteSignal = pyqtSignal(object)  # private worker→main marshalling
-    testScanStateChanged = pyqtSignal()                # any of running/done/aborted/failed/idle
+    testScanStateChanged = pyqtSignal()                # any of running/passed/failed/canceled/timed_out/error/idle
     _testScanCompleteSignal = pyqtSignal(object)       # private worker→main marshalling
     scanNotesChanged = pyqtSignal()
     # Fires once at the end of _on_complete (after the duration line has
@@ -1187,7 +1187,7 @@ class MotionConnector(QObject):
         self._calibration_status = ""  # "", "running", "passed", "failed", "canceled", "timed_out", "error"
         self._calibration_failure_reason = ""  # populated only on FAIL in dev mode
         self._calibration_target = None  # last runCalibration() target
-        self._test_scan_status = ""              # "", "running", "done", "aborted", "failed"
+        self._test_scan_status = ""              # "", "running", "passed", "failed", "canceled", "timed_out", "error"
         self._test_scan_failure_reason = ""
         self._test_scan_rows: list[dict] = []
 
@@ -5362,38 +5362,30 @@ class MotionConnector(QObject):
         _testScanCompleteSignal). Translates a TestScanResult into the
         QML-friendly _test_scan_rows model and updates _test_scan_status.
         """
-        self._test_scan_failure_reason = ""
-        if result.canceled:
-            self._test_scan_status = "aborted"
-            self.captureLog.emit(
-                f"⚠️ Test scan aborted: {result.error or 'canceled'}"
-            )
-        elif not result.ok:
-            self._test_scan_status = "aborted"
-            self.captureLog.emit(
-                f"⚠️ Test scan aborted: {result.error or 'unknown error'}"
-            )
-        elif result.passed:
-            self._test_scan_status = "done"
+        self._test_scan_failure_reason = ""  # reset each run
+        outcome = _result_outcome(result)
+        self._test_scan_status = outcome
+        if outcome == "passed":
             self.captureLog.emit(
                 f"✅ Test scan: PASS  (CSV: {result.csv_path})"
             )
-        else:
-            self._test_scan_status = "failed"
+        elif outcome == "failed":
             if self._app_config.get("engineeringMode", False):
                 tests = (("mean", "mean_test"), ("contrast", "contrast_test"),
                          ("ambient", "dark_test"))
-                breakdown = "; ".join(
-                    f"{'L' if r.side == 'left' else 'R'}{r.cam_id + 1}:"
-                    f"{','.join(n for n, a in tests if getattr(r, a) == 'FAIL')}"
-                    for r in result.rows
-                    if any(getattr(r, a) == "FAIL" for _, a in tests)
-                )
-                if any(r.dark_test == "FAIL" for r in result.rows):
-                    breakdown = f"too much ambient light — {breakdown}"
-                self._test_scan_failure_reason = breakdown
+                self._test_scan_failure_reason = _format_threshold_breakdown(
+                    result.rows, tests)
             self.captureLog.emit(
                 f"❌ Test scan: FAIL  (CSV: {result.csv_path})"
+            )
+        else:
+            # canceled / timed_out / error — surface the SDK's reason in the
+            # persistent status label, not just this transient log line.
+            self._test_scan_failure_reason = result.error or ""
+            icon = "⚠️" if outcome in ("canceled", "timed_out") else "❌"
+            self.captureLog.emit(
+                f"{icon} Test scan {outcome.replace('_', ' ')}: "
+                f"{result.error or 'unknown'}"
             )
 
         elapsed_s = (
