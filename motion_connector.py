@@ -559,13 +559,19 @@ class _LivePlotSink:
                         connector.captureLog.emit(msg)
                         logger.warning(msg)
 
-                # Skip NaN samples for the plot — Qt would otherwise render
-                # them as a spike from baseline to wherever NaN lands in the
-                # y-mapping. Common causes: warmup before the first dark
-                # observation, and unlit frames (the dark stage suppresses
-                # realtime emission — see low_light_rt above).
+                # Non-finite BFI/BVI: row-addressed LIGHT rows are appended
+                # anyway (issue #418) — an unlit (covered / off-target)
+                # camera must keep advancing its buffers and the source's
+                # liveEdge so the time axis scrolls through a contact loss;
+                # PlotCell breaks the trace at NaN so the run renders as a
+                # blank gap. Dark rows keep the finite gate (a NaN append at
+                # every scheduled dark would notch the trace ~each 15 s),
+                # and legacy fan-out batches keep it too — without
+                # side_ids/cam_ids a finite BFI is the only evidence this
+                # camera actually produced the row.
                 if not (math.isfinite(bfi) and math.isfinite(bvi)):
-                    continue
+                    if is_dark or not row_addressed:
+                        continue
 
                 mean_for_source: Optional[float] = None
                 contrast_for_source: Optional[float] = None
