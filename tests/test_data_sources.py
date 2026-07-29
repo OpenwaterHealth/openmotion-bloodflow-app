@@ -111,6 +111,28 @@ def test_camera_buffer_mark_dropped_sets_timestamp_once():
     assert buf.dropped_at == 1.5
 
 
+def test_camera_buffer_window_decimated_preserves_nan_gap():
+    """A NaN run (contact-loss gap, issue #418) must survive decimation:
+    a bin whose samples are all NaN comes out NaN (np.nanmean semantics),
+    so the renderer keeps the gap blank at zoomed-out windows instead of
+    bridging it with mean-binned neighbors."""
+    buf = _CameraBuffer(initial_capacity=64)
+    # 40 samples at 40 Hz: 10 finite, 20 NaN (the gap), 10 finite.
+    for i in range(40):
+        v = float("nan") if 10 <= i < 30 else 1.0
+        buf.append(t=i * 0.025, v=v, frame_id=i)
+
+    # (t_hi - t_lo) * 40 Hz = 40 expected samples; max_points=10 gives
+    # stride 4 — each output is the nanmean of 4 consecutive samples, so
+    # bins fully inside the 20-sample gap are all-NaN and must stay NaN.
+    t_arr, v_arr = buf.window_decimated(0.0, 1.0, 10)
+
+    assert len(v_arr) >= 3
+    assert np.isfinite(v_arr[0])       # leading finite region intact
+    assert np.isnan(v_arr).any()       # the gap survives as NaN bins
+    assert np.isfinite(v_arr[-1])      # trailing finite region intact
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ScanDataSource (base)
 # ─────────────────────────────────────────────────────────────────────────────
