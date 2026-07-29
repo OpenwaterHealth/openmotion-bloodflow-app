@@ -113,13 +113,27 @@ powershell -NoProfile -File installer\sign.ps1 -Files $appMsi
 # -bindpath installer so the custom BA ThemeFile/LocalizationFile payloads
 # (bundle-theme.xml/.wxl) resolve; WiX searches bind paths (default cwd=repo
 # root), NOT the .wxs directory, for payload source files.
+#
+# IconFile/LogoFile are passed as ABSOLUTE paths for the same reason SourceDir
+# is above: bind-path resolution is not relative to the .wxs directory, and a
+# relative path that silently resolves nowhere is the failure mode this script
+# has been bitten by before. Both assets are committed; regenerate them with
+# scripts/make_app_icon.py. (Issue #402.)
+$iconFile = Join-Path $root "assets\images\favicon.ico"
+$logoFile = Join-Path $root "assets\images\installer-logo.png"
+foreach ($asset in @($iconFile, $logoFile)) {
+    if (-not (Test-Path $asset)) { throw "installer branding asset not found: $asset" }
+}
+
 wix build installer\bundle.wxs -o $bundleExe -ext WixToolset.BootstrapperApplications.wixext `
     -bindpath installer `
     -d "ProductName=$($g.ProductName)" `
     -d "Version=$version" `
     -d "BundleUpgradeCode=$($g.BundleUpgradeCode)" `
     -d "DriverMsi=$driverMsi" `
-    -d "AppMsi=$appMsi"
+    -d "AppMsi=$appMsi" `
+    -d "IconFile=$iconFile" `
+    -d "LogoFile=$logoFile"
 if ($LASTEXITCODE -ne 0) { throw "bundle build failed" }
 
 # -- sign the bundle (insignia detach -> sign engine -> reattach -> sign) --

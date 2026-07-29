@@ -15,8 +15,11 @@ SPEC_FILE="openwater_macos.spec"
 DIST_DIR="dist"
 BUILD_DIR="build"
 
-# Resolve version from git
-VERSION="$(python version.py 2>/dev/null || echo "0.0.0")"
+# Resolve version: explicit override first (CI passes the release tag —
+# the version-stamp sed dirties the checkout, so git describe would
+# report "+dirty"), then git describe, then a placeholder.
+VERSION="${OPENMOTION_VERSION:-$(python version.py 2>/dev/null || echo "0.0.0")}"
+export OPENMOTION_VERSION="${VERSION}"   # let the spec's Info.plist use the same value
 DMG_NAME="Open-Motion-${VERSION}-macOS.dmg"
 
 echo "╔══════════════════════════════════════════════════════════════╗"
@@ -156,8 +159,10 @@ app = BUNDLE(
     bundle_identifier="com.openwaterhealth.bloodflow",
     info_plist={
         "CFBundleDisplayName": APP_NAME,
-        "CFBundleShortVersionString": os.popen("python version.py 2>/dev/null").read().strip() or "0.0.0",
-        "CFBundleVersion": os.popen("python version.py 2>/dev/null").read().strip() or "0.0.0",
+        "CFBundleShortVersionString": os.environ.get("OPENMOTION_VERSION")
+            or os.popen("python version.py 2>/dev/null").read().strip() or "0.0.0",
+        "CFBundleVersion": os.environ.get("OPENMOTION_VERSION")
+            or os.popen("python version.py 2>/dev/null").read().strip() or "0.0.0",
         "NSHighResolutionCapable": True,
         "LSMinimumSystemVersion": "12.0",
         "NSPrincipalClass": "NSApplication",
@@ -167,6 +172,11 @@ app = BUNDLE(
     },
 )
 SPEC_EOF
+
+# Clear previous output first: PyInstaller's -y overwrite can trip over
+# framework symlinks left by an earlier build (FileExistsError on
+# Versions/Current/* inside Qt .frameworks).
+rm -rf "${DIST_DIR}/${APP_NAME}" "${DIST_DIR}/${APP_NAME}.app"
 
 python -m PyInstaller --noconfirm --clean "$SPEC_FILE" 2>&1 | tail -5
 echo "  ✓ Built ${DIST_DIR}/${APP_NAME}.app"
@@ -266,7 +276,10 @@ MOUNT_POINT="/Volumes/${APP_NAME}"
 hdiutil detach "$MOUNT_POINT" >/dev/null 2>&1 || true
 hdiutil attach "$DMG_TEMP" -mountpoint "$MOUNT_POINT" >/dev/null 2>&1
 
-# Use AppleScript to set Finder window appearance
+# Use AppleScript to set Finder window appearance. Skipped in CI: headless
+# runners have no Finder session / automation permission, and the styling is
+# cosmetic — the DMG is fully functional without it.
+if [ -z "${CI:-}" ]; then
 osascript << APPLESCRIPT
 tell application "Finder"
     tell disk "$APP_NAME"
@@ -291,6 +304,9 @@ tell application "Finder"
     end tell
 end tell
 APPLESCRIPT
+else
+    echo "  (CI: skipping Finder window styling)"
+fi
 
 # Unmount
 sync
@@ -319,5 +335,7 @@ echo "║  DMG:  ${DMG_FINAL}                                         "
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 
-# Open the DMG so the user can see it
-open "$DMG_FINAL"
+# Open the DMG so the user can see it (interactive runs only)
+if [ -z "${CI:-}" ]; then
+    open "$DMG_FINAL"
+fi

@@ -14,3 +14,10 @@ pyusb==1.3.1
 libusb1==3.3.1
 keyboard==0.13.5
 pyinstaller==6.11.1
+# Scan-database encryption (clinical builds). These MUST be installed in the
+# build environment even though the SDK declares them in its [encryption]
+# extra: PyInstaller can only bundle packages that are actually installed, so
+# omitting them produces a packaged app that dies with ModuleNotFoundError on
+# first launch. See omotion/db_key.py and db_open.py.
+keyring==25.6.0
+sqlcipher3==0.6.2

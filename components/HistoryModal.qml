@@ -33,6 +33,13 @@ Item {
     // Async "Load in viewer" busy state (issue #152 pattern).
     property bool loadingPlot: false
 
+    // The completed/interrupted status dot is a diagnostic with no column
+    // header and no legend — clinical users only see an unexplained mark.
+    // Interrupted rows already announce themselves on export ("Interrupted
+    // scans can't be exported."), so hide the column outside engineering.
+    readonly property bool engineeringMode:
+        MotionInterface.appConfig.engineeringMode === true
+
     // Left-edge space to keep clear of the icon bar (BloodFlow's
     // ButtonPanel — 80px wide + 8px margin, pinned left at z:10000, which
     // is ABOVE this modal's z:9998). The card is centered in the region to
@@ -253,7 +260,7 @@ Item {
         width: Math.min(parent.width - root.iconBarInset - 40, 1040)
         height: Math.min(parent.height - 60, 680)
         radius: 12
-        color: AppTheme.bgContainer
+        color: AppTheme.sheetBg
         border.color: AppTheme.borderSubtle
         border.width: 2
         // Center within [iconBarInset, parent.width] so the card clears the
@@ -295,7 +302,7 @@ Item {
                     verticalAlignment: TextInput.AlignVCenter
                     background: Rectangle {
                         color: AppTheme.bgInput; radius: 6
-                        border.color: searchField.activeFocus ? AppTheme.accentBlue : AppTheme.borderSubtle
+                        border.color: searchField.activeFocus ? AppTheme.accentInteractive : AppTheme.borderSubtle
                         border.width: 1
                     }
                     onTextChanged: root.searchText = text
@@ -356,7 +363,10 @@ Item {
                         activeSort: root.sortKey; ascending: root.sortAsc
                         onSortRequested: function(name) { root.setSort(name) }
                     }
-                    Item { Layout.preferredWidth: col.status }
+                    Item {
+                        visible: root.engineeringMode
+                        Layout.preferredWidth: col.status
+                    }
                 }
             }
 
@@ -431,6 +441,7 @@ Item {
                                 verticalAlignment: Text.AlignVCenter
                             }
                             Text {
+                                visible: root.engineeringMode
                                 Layout.preferredWidth: col.status
                                 text: modelData.interrupted ? "⚠" : "●"
                                 color: modelData.interrupted ? "#E6A23C" : "#3EC97A"
@@ -573,8 +584,8 @@ Item {
                     background: Rectangle {
                         radius: 6
                         color: !loadBtn.enabled ? AppTheme.bgInput
-                               : (loadBtn.hovered ? Qt.lighter(AppTheme.accentBlue, 1.12)
-                                                  : AppTheme.accentBlue)
+                               : (loadBtn.hovered ? Qt.lighter(AppTheme.accentInteractive, 1.12)
+                                                  : AppTheme.accentInteractive)
                     }
                     onClicked: {
                         root.loadingPlot = true

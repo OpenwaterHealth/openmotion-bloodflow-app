@@ -24,8 +24,7 @@
     "bviClampHigh": 10.0,
     "bfiColor": "#ffffff",
     "bviColor": "#3437db",
-    "bviLowPassEnabled": true,
-    "bviLowPassCutoffHz": 40.0,
+    "bviLowPassCutoffHz": 20.0,
     "plotWindowSec": 5,
     "autoScale": false,
     "autoScalePerPlot": false,
@@ -37,12 +36,12 @@
     "calibration_scan_delay_sec": 1,
     "ft_min_mean_per_camera": [
         40,
-        40,
-        40,
-        40,
-        40,
-        40,
-        40,
+        80,
+        80,
+        80,
+        80,
+        80,
+        80,
         40
     ],
     "ft_min_contrast_per_camera": [
@@ -106,7 +105,9 @@
         3.0
     ],
     "cq_check_duration_sec": 1.0,
-    "cq_rolling_avg_window": 10,
+    "cq_rolling_avg_window": 5,
+    "cq_live_activate_frames": 10,
+    "cq_live_clear_frames": 80,
     "cq_dark_threshold_per_camera": [
         3.0,
         3.0,
@@ -128,7 +129,7 @@
         15.0
     ],
     "engineeringMode": false,
-    "downloadBetaFirmware": false,
+    "downloadBetaUpdates": false,
     "forceLaserFail": false,
     "cameraFakeData": false,
     "cameraTempAlertThresholdC": 110,
@@ -143,7 +144,7 @@
     "commVerbose": false,
     "verboseCommandHandling": false,
     "support_email": "support@openwater.health",
-    "connectionTimeoutSec": 30,
+    "connectionTimeoutSec": 12,
     "requireConsole": true,
     "minSensors": 1
 }

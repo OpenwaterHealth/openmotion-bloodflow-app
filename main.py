@@ -85,6 +85,12 @@ def _load_app_config() -> dict:
         # the releases-latest endpoint (used by the local update-test server).
         "updateRepo": None,
         "updateApiUrl": None,
+        # Beta/prerelease update channel for BOTH updaters (app self-update
+        # + device firmware). Effective only in a Research build with
+        # engineering mode unlocked — see MotionConnector._beta_enabled().
+        # Must be registered here or config_store drops it (silently
+        # non-persistent). Renamed from downloadBetaFirmware (#386).
+        "downloadBetaUpdates": False,
         "cameraTempAlertThresholdC": 105,
         # Whole-scan data-stall watchdog (issue #248): abort the scan with
         # E-303 when no camera delivers a frame for this many seconds while
@@ -162,15 +168,33 @@ def _load_app_config() -> dict:
         "plotWindowSec": 15,
         "bfiColor": "#E74C3C",
         "bviColor": "#3498DB",
-        "bviLowPassEnabled": False,
-        "bviLowPassCutoffHz": 40.0,
+        # 1-pole low-pass on the DISPLAYED BVI stream (live plots +
+        # clinical side averages); scans.db/CSVs/replay stay raw. The
+        # number is the only control (#228 — no enabled bool, no
+        # Settings UI): missing/invalid → 20.0, <= 0 disables.
+        "bviLowPassCutoffHz": 20.0,
         "bfiClampLow": 0.0,
         "bfiClampHigh": 10.0,
         "bviClampLow": 0.0,
         "bviClampHigh": 10.0,
         "darkMode": True,
+        # Liquid Glass theme — translucent frosted surfaces over an
+        # animated ambient backdrop (Settings → Appearance → Theme).
+        # Orthogonal to darkMode; both light and dark have a glass
+        # variant, and "Liquid Glass" in the Theme selector is the
+        # dark-based one. Default ON for macOS (its native Tahoe look),
+        # OFF elsewhere so Windows clinical builds keep the solid palette.
+        "liquidGlass": sys.platform == "darwin",
         "cq_check_duration_sec": 1.0,
-        "cq_rolling_avg_window": 10,
+        "cq_rolling_avg_window": 5,
+        # Live contact-quality monitor debounce (issue #364), asymmetric:
+        # RAISE the warning fast (a late warning is a safety miss) but CLEAR
+        # it slowly (a premature dismiss strands the operator on a still-bad
+        # camera). Counts consecutive light-frame evaluations at ~40 Hz, so
+        # 10 ~= 0.25 s to pop up, 80 ~= 2 s to dismiss. The dark/ambient path
+        # is not debounced — darks are ~15 s apart, their own debounce.
+        "cq_live_activate_frames": 10,
+        "cq_live_clear_frames": 80,
         "cq_dark_threshold_per_camera": [3.0] * 8,
         "cq_light_threshold_per_camera": [15.0] * 8,
         # Phase 2b: profile HUD overlay on the PlotViewer — sample
@@ -181,8 +205,10 @@ def _load_app_config() -> dict:
         # Critical-error bug report (see error_codes.py / CriticalErrorModal).
         "support_email": "support@openwater.health",
         "bug_report_smtp": None,
-        # Startup connection watchdog (E-104/E-106).
-        "connectionTimeoutSec": 30,
+        # Startup connection watchdog (E-104/E-106). Also gates the
+        # research-build sample-dataset offer, so this is deliberately
+        # short — the user should not stare at an empty scan page.
+        "connectionTimeoutSec": 12,
         "requireConsole": True,
         "minSensors": 1,
     }
@@ -224,18 +250,20 @@ def _app_icon() -> QIcon:
 
 
 def main():
-    # Set the Windows AppUserModelID as the very first thing, before any
-    # QApplication (and thus any HWND) is created. Windows binds the taskbar
-    # button to the process identity when the first window appears; setting
-    # this after QApplication() races the shell and intermittently leaves the
-    # taskbar showing the generic Windows icon (Explorer caches one icon per
-    # AUMID). This must run before check_single_instance()'s message box too.
+    # Set the Windows AppUserModelID before any QApplication (and thus any
+    # HWND) exists: Windows binds the taskbar button to the process identity
+    # when the first window appears, so this has to be settled first. It must
+    # run before check_single_instance()'s message box too.
     #
-    # The ".1" suffix retires the original "Openwater.OpenMotion" AUMID:
-    # machines that ever ran a pre-1.4.0-dev.1 build (which set the AUMID
-    # after QApplication and could lose the race) have the generic icon
-    # cached under the old ID, and Explorer keeps serving that cached icon
-    # to fixed builds forever. A new AUMID gets a fresh cache entry.
+    # DO NOT bump this string again. It was bumped once ("Openwater.OpenMotion"
+    # -> ".1") on the theory that Explorer caches an icon per AUMID and that a
+    # fresh ID would clear a poisoned entry. That theory did not hold up: the
+    # generic-icon bug reproduced under a brand-new AUMID and a clean relaunch
+    # under the *same* AUMID showed the correct icon, so the AUMID was never
+    # what was broken. The real cause was the Win32 window-class icon (see the
+    # #223 note further down, and utils/win_taskbar_icon.py). Changing the
+    # AUMID only mints a new identity and strands every taskbar pin users have
+    # made since 1.4.0 — a one-way cost with no benefit.
     # Keep in sync with the ShortcutProperty in installer/app.wxs.
     if sys.platform == "win32":
         try:
@@ -321,11 +349,44 @@ def main():
     _scan_data_dir = os.path.join(_data_dir, app_paths.DATA_DIRNAME)
     os.makedirs(_scan_data_dir, exist_ok=True)
     _scan_db_path = os.path.join(_scan_data_dir, "scans.db")
+    # Clinical builds encrypt scans.db at rest (SQLCipher, key in the Windows
+    # Credential Manager). The flag is the SIGNED build config, so the encrypt
+    # decision cannot be independently forgotten. Constructing MotionInterface
+    # sets the SDK's process-wide policy exactly once.
+    _clinical = bool(app_config.get("clinicalMode", False))
     motion_interface = MotionInterface(
         data_dir=_scan_data_dir,
         scan_db_path=_scan_db_path,
         operator_id="bloodflow-app",
+        require_encrypted_db=_clinical,
     )
+
+    # An existing PLAINTEXT scans.db must be encrypted before anything opens it:
+    # under the policy the SDK refuses to open plaintext (it never silently
+    # appends PHI in the clear), and AuditLog opens the same file inside
+    # MotionConnector below. So this has to happen here — after the policy is
+    # set, before the connector exists.
+    if _clinical:
+        from omotion import db_migrate
+
+        try:
+            if db_migrate.migrate_plaintext_to_encrypted(_scan_db_path):
+                logger.warning(
+                    "scans.db was plaintext and has been encrypted in place. A "
+                    "backup of the original remains at %s.pre-encryption.bak — "
+                    "remove it per SOP once this build is confirmed.",
+                    _scan_db_path,
+                )
+        except Exception:
+            # Fail loudly but let the app start: the SDK's own pre-flight will
+            # refuse the scan before the laser fires, which is a far clearer
+            # failure than a dead splash screen.
+            logger.exception(
+                "scans.db encryption migration FAILED — scanning will be "
+                "refused until this is resolved. The original database is "
+                "untouched."
+            )
+
     motion_interface.log_system_info()
 
     qInstallMessageHandler(qt_message_handler)
@@ -368,6 +429,21 @@ def main():
     if not engine.rootObjects():
         logger.error("Error: Failed to load QML file")
         sys.exit(-1)
+
+    # Pin the Win32 window-class icon (issue #223). Qt answers Explorer's
+    # WM_GETICON probe with the icon set above, but the shell asks with
+    # SMTO_ABORTIFHUNG and falls back to the *class* icon when the GUI thread
+    # is busy — and Qt leaves that at the generic IDI_APPLICATION, because its
+    # LoadImage(hInst, L"IDI_ICON1", ...) lookup finds nothing in a PyInstaller
+    # build. Frozen builds get the resource from openwater.spec's build hook;
+    # this makes the fallback correct at runtime too, including from source.
+    if sys.platform == "win32":
+        from utils.win_taskbar_icon import apply_window_class_icon
+
+        apply_window_class_icon(
+            int(engine.rootObjects()[0].winId()),
+            resource_path("assets", "images", "favicon.ico"),
+        )
 
     # wait=False: the QML window is already visible at this point (main.qml's
     # ApplicationWindow is `visible: true`) and Qt's event loop hasn't started

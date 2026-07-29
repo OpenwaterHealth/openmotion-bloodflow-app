@@ -77,21 +77,26 @@ pytestmark = pytest.mark.release
 # a UIA-based check would silently time out.
 RE_SAFETY_TRIP = re.compile(r"Laser safety failure:")
 
-# Positive proof that the laser actually pulsed during a Check run.
-# Emitted by the SDK's ScanWorkflow right before it calls the
-# console's start_trigger; Check / contact-quality preflight reaches
-# this code path through ``interface.start_scan``. Used by Step 9 to
-# distinguish "Check ran cleanly" from "Check never got far enough
-# to fire the laser, so we don't know if safety would have tripped or
-# not".
+# Positive proof that a Check run went the distance. Emitted by the
+# connector when the contact-quality preflight that Check kicks off
+# runs to completion — which requires the trigger to have started
+# and frames to be flowing. The line is absent from a trip run: a
+# safety trip cancels the CQ check before it can complete (the Step 4
+# log shows 'Trigger stopped.' instead). Combined with Step 9's
+# no-'Laser safety failure:' scan, it distinguishes "Check ran
+# cleanly" from "Check never got far enough to fire the laser".
 #
-# An earlier version of this regex looked for
-# "Trigger started successfully" — the line emitted by
-# ``motion_connector.startTrigger``. That path is *not* taken during
-# a Check run (the SDK uses its own start_trigger), so the regex
-# never matched and Step 9 falsely failed even when the laser fired
-# cleanly.
-RE_TRIGGER_STARTED = re.compile(r"Starting trigger")
+# This marker has rotted twice, both times to a log-line change
+# (issue #414):
+#   - v1 grepped "Trigger started successfully"
+#     (``motion_connector.startTrigger``) — a line the Check path
+#     never emits, so Step 9 false-failed even on clean runs.
+#   - v2 grepped "Starting trigger" (SDK ``ScanWorkflow`` _emit_log)
+#     — removed by SDK 0ac12f1 (2026-05-22, ScanRunner rewrite),
+#     which made start_trigger silent, so Step 9 false-failed again.
+# If Step 9 ever fails here while the bench log looks clean, check
+# whether this line was renamed before suspecting the hardware.
+RE_CHECK_COMPLETED = re.compile(r"Contact-quality check ended: completed")
 
 # Wall-clock budget for seeing the safety-failure log line after Check
 # fires. Fault-laser params trip the interlock almost immediately on
@@ -393,8 +398,10 @@ class TestForceLaserFail:
 
             # ─── Step 9: launch + click Check, expect clean run ──────
             # "Clean run" means two things, in order:
-            #   (a) the laser actually fires (we see
-            #       'Trigger started successfully' in the fresh log),
+            #   (a) the CQ preflight Check kicks off runs to
+            #       completion ('Contact-quality check ended:
+            #       completed' in the fresh log — requires the
+            #       trigger on and frames flowing),
             #   (b) no 'Laser safety failure:' line shows up — neither
             #       before, during, nor in the grace window after.
             #
@@ -415,28 +422,30 @@ class TestForceLaserFail:
             click_panel("Check")
             log.info(
                 f"  waiting up to {SAFETY_TRIP_TIMEOUT} s for "
-                f"'Trigger started successfully' (positive proof the "
-                f"laser pulsed)"
+                f"'Contact-quality check ended: completed' (positive "
+                f"proof the Check preflight ran to completion with "
+                f"the trigger on)"
             )
             log_path = find_app_log()
             assert log_path is not None, (
                 "Step 9: could not locate the bloodflow app log; "
                 "cannot verify Check fired the laser"
             )
-            trigger_line = wait_for_pattern(
-                RE_TRIGGER_STARTED, log_path, 0, SAFETY_TRIP_TIMEOUT
+            completed_line = wait_for_pattern(
+                RE_CHECK_COMPLETED, log_path, 0, SAFETY_TRIP_TIMEOUT
             )
-            assert trigger_line, (
-                f"Step 9: 'Trigger started successfully' did not "
-                f"appear in the fresh app log within "
+            assert completed_line, (
+                f"Step 9: 'Contact-quality check ended: completed' "
+                f"did not appear in the fresh app log within "
                 f"{SAFETY_TRIP_TIMEOUT} s of clicking Check. The "
-                f"laser never fired, so the test can't verify the "
-                f"safety interlock cleared. Likely causes: Check "
-                f"didn't actually click (panel calibration off), or "
-                f"contact-quality preflight stalled before reaching "
-                f"the trigger stage."
+                f"preflight never completed, so the test can't verify "
+                f"the safety interlock cleared. Likely causes: Check "
+                f"didn't actually click (panel calibration off), the "
+                f"preflight stalled before the trigger stage, or the "
+                f"CQ-completion log line was renamed (this marker has "
+                f"rotted twice before — see RE_CHECK_COMPLETED)."
             )
-            log.info(f"  laser fired: {trigger_line.strip()}")
+            log.info(f"  check completed: {completed_line.strip()}")
             log.info(
                 f"  grace window: waiting {POST_TRIGGER_SAFETY_GRACE_SEC} s "
                 f"to catch any late safety trip"

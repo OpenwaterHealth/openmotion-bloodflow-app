@@ -207,8 +207,12 @@ Item {
     }
 
     function cameraEnabled(side, camIndex1) {
-        // Camera 1 maps to bit 7 ... camera 8 maps to bit 0.
-        var bit = 8 - camIndex1
+        // Camera N maps to bit N-1, matching every data-side consumer:
+        // the SDK's `mask & (1 << cam_id)` and the connector's
+        // `cam_id + 1` labels. Only the non-palindromic masks (the
+        // Left/Right presets) can distinguish this from the reversed
+        // mapping — see #384.
+        var bit = camIndex1 - 1
         var mask = (side === "left") ? root.leftMask : root.rightMask
         return ((mask >> bit) & 1) === 1
     }
@@ -249,7 +253,7 @@ Item {
         width: 520
         height: 480
         radius: 10
-        color: AppTheme.bgContainer
+        color: AppTheme.sheetBg
         border.width: 2
         border.color: root.state_ === "ok" ? AppTheme.accentGreen
                     : (root.state_ === "warnings"
@@ -487,8 +491,8 @@ Item {
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? AppTheme.accentBlue : AppTheme.bgInput
-                        radius: 4; border.color: parent.hovered ? AppTheme.accentBlue : AppTheme.borderSoft; border.width: 1
+                        color: parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput
+                        radius: 4; border.color: parent.hovered ? AppTheme.accentInteractive : AppTheme.borderSoft; border.width: 1
                     }
                     onClicked: { root.close(); root.dismissed() }
                 }
@@ -503,8 +507,8 @@ Item {
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? AppTheme.accentBlue : AppTheme.bgInput
-                        radius: 4; border.color: parent.hovered ? AppTheme.accentBlue : AppTheme.borderSoft; border.width: 1
+                        color: parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput
+                        radius: 4; border.color: parent.hovered ? AppTheme.accentInteractive : AppTheme.borderSoft; border.width: 1
                     }
                     onClicked: { root.close(); root.retestRequested() }
                 }
@@ -567,10 +571,10 @@ Item {
                     }
                     background: Rectangle {
                         color: !parent.enabled ? AppTheme.bgCard
-                              : (parent.hovered ? AppTheme.accentBlue : AppTheme.bgInput)
+                              : (parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput)
                         radius: 4
                         border.color: !parent.enabled ? AppTheme.borderSubtle
-                                    : (parent.hovered ? AppTheme.accentBlue : AppTheme.borderSoft)
+                                    : (parent.hovered ? AppTheme.accentInteractive : AppTheme.borderSoft)
                         border.width: 1
                     }
                     onClicked: { root.continueRequested(); root.close(); root.dismissed() }
@@ -588,8 +592,8 @@ Item {
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? AppTheme.accentBlue : AppTheme.bgInput
-                        radius: 4; border.color: parent.hovered ? AppTheme.accentBlue : AppTheme.borderSoft; border.width: 1
+                        color: parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput
+                        radius: 4; border.color: parent.hovered ? AppTheme.accentInteractive : AppTheme.borderSoft; border.width: 1
                     }
                     onClicked: { root.close(); root.dismissed() }
                 }
@@ -604,8 +608,8 @@ Item {
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? AppTheme.accentBlue : AppTheme.bgInput
-                        radius: 4; border.color: parent.hovered ? AppTheme.accentBlue : AppTheme.borderSoft; border.width: 1
+                        color: parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput
+                        radius: 4; border.color: parent.hovered ? AppTheme.accentInteractive : AppTheme.borderSoft; border.width: 1
                     }
                     onClicked: { root.close(); root.retestRequested() }
                 }

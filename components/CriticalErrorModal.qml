@@ -33,6 +33,23 @@ Item {
     property var _queue: []
     property bool _detailExpanded: false
 
+    // One width for all three footer buttons. Left to size themselves they
+    // came out 119 / 142 / 92 px (label + Material 3's 24px-a-side padding),
+    // which made the primary action the narrowest thing in the row and gave
+    // each button a different padding-to-label ratio. Must stay >= the
+    // longest label plus _footerButtonPad*2 ("Contact Support" is 94px at
+    // 13px Segoe UI, so 118 is the floor); 132 leaves slack for a wider
+    // system font. Every other modal footer in the app sets explicit button
+    // widths the same way (HistoryModal, LogsModal).
+    readonly property int _footerButtonWidth: 132
+    // Material 3's default 24 is sized for standalone buttons; halved here so
+    // the label isn't squeezed inside the fixed width above (at 24 the
+    // longest label overflowed its content box and only stayed legible
+    // because the centred Text spilled into the padding). Must be set as
+    // left/rightPadding — the Material style assigns those directly, so a
+    // horizontalPadding override is silently ignored.
+    readonly property int _footerButtonPad: 12
+
     function _enqueue(code, title, message, action, detail) {
         var q = root._queue.slice()
         q.push({code: code, title: title, message: message,
@@ -86,7 +103,7 @@ Item {
     // Backdrop — click outside dismisses.
     Rectangle {
         anchors.fill: parent
-        color: "#000000C0"
+        color: "#000000AA"
         // Capture ALL pointer input so scroll/hover can't fall through to
         // the interactive plot viewer behind the modal (issue #214).
         MouseArea {
@@ -99,51 +116,54 @@ Item {
 
     // Panel
     Rectangle {
+        // Fixed width, centred on the full window — deliberately NOT the
+        // Math.min(parent.width - iconBarInset - 40, …) clamp the other modals
+        // use. This modal's footer carries three buttons whose combined
+        // minimum was ~466px when the middle one read "Send Bug Report to
+        // Openwater", so a clamp that shrinks the card below ~514px made the
+        // row overflow the card and clip (verified: fine at 640px, broken at
+        // 560px). The #340 rename to "Contact Support" and the fixed button
+        // widths below bought that back — the row now needs 416px (3 × 132
+        // + 2 × 10 spacing) inside 472px of content — but the fixed 520
+        // stays: it has the room at every window size the clamp would have
+        // shrunk for. The icon-bar inset is unnecessary too — at z:100000
+        // this modal is above ButtonPanel, so the bar sits dimmed behind the
+        // backdrop rather than overlapping the card.
         width: 520
-        height: contentCol.implicitHeight + headerBar.height + 16 + 20
-        radius: 14
-        color: AppTheme.bgContainer
-        border.color: AppTheme.accentRed
-        border.width: 1
+        height: contentCol.implicitHeight + 48
+        radius: 12
+        color: AppTheme.sheetBg
+        border.color: AppTheme.borderSubtle
+        border.width: 2
         anchors.centerIn: parent
 
         // Absorb clicks so they don't reach the backdrop.
         MouseArea { anchors.fill: parent }
 
-        // Red header bar with code badge.
-        Rectangle {
-            id: headerBar
-            anchors.top: parent.top
-            anchors.left: parent.left
-            anchors.right: parent.right
-            height: 44
-            radius: 14
-            color: AppTheme.accentRed
-            // square off the bottom corners so only the top is rounded
-            Rectangle {
-                anchors.bottom: parent.bottom
-                anchors.left: parent.left
-                anchors.right: parent.right
-                height: parent.radius
-                color: AppTheme.accentRed
-            }
+        ColumnLayout {
+            id: contentCol
+            anchors.fill: parent
+            anchors.margins: 24
+            spacing: 16
 
+            // Eyebrow row — code badge, label, queued-error counter. Replaces
+            // the old solid header bar: a coloured header bar is not a pattern
+            // used anywhere else in the app, and the saturated red read as an
+            // alarm for conditions that are often recoverable.
             RowLayout {
-                anchors.fill: parent
-                anchors.leftMargin: 16
-                anchors.rightMargin: 16
-                spacing: 10
+                Layout.fillWidth: true
+                spacing: 9
 
                 Rectangle {
                     Layout.preferredHeight: 24
                     Layout.preferredWidth: codeText.implicitWidth + 16
                     radius: 4
-                    color: "#FFFFFF"
+                    color: AppTheme.accentInteractive
                     Text {
                         id: codeText
                         anchors.centerIn: parent
                         text: root.code
-                        color: AppTheme.accentRed
+                        color: "#FFFFFF"
                         font.pixelSize: 13
                         font.weight: Font.Bold
                         font.family: "Consolas, monospace"
@@ -151,36 +171,28 @@ Item {
                 }
 
                 Text {
-                    text: "Critical Error"
-                    color: "#FFFFFF"
-                    font.pixelSize: 15
-                    font.weight: Font.DemiBold
+                    // "ERROR", not "CRITICAL ERROR" (#340) — the internal
+                    // documentation calls these errors, and the extra word
+                    // escalated conditions that are often recoverable.
+                    text: "ERROR"
+                    color: AppTheme.textTertiary
+                    font.pixelSize: 11
+                    font.letterSpacing: 0.5
                     Layout.fillWidth: true
                 }
 
                 Text {
                     visible: root._queue.length > 0
                     text: root._queue.length + " more"
-                    color: "#FFFFFFCC"
+                    color: AppTheme.textTertiary
                     font.pixelSize: 12
                 }
             }
-        }
-
-        ColumnLayout {
-            id: contentCol
-            anchors.top: headerBar.bottom
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.topMargin: 16
-            anchors.leftMargin: 20
-            anchors.rightMargin: 20
-            spacing: 12
 
             Text {
                 text: root.title
                 color: AppTheme.textPrimary
-                font.pixelSize: 17
+                font.pixelSize: 18
                 font.weight: Font.DemiBold
                 wrapMode: Text.WordWrap
                 Layout.fillWidth: true
@@ -251,9 +263,21 @@ Item {
                 spacing: 10
 
                 Button {
+                    objectName: "errCopyDetailsBtn"
                     text: "Copy details"
+                    Layout.preferredWidth: root._footerButtonWidth
                     Layout.preferredHeight: 32
-                    onClicked: MotionInterface.copyToClipboard(root._reportText())
+                    leftPadding: root._footerButtonPad
+                    rightPadding: root._footerButtonPad
+                    // Confirm the copy — copyToClipboard succeeds silently, so
+                    // without a toast this button is indistinguishable from a
+                    // dead one. The tag keeps repeat clicks from stacking.
+                    onClicked: {
+                        MotionInterface.copyToClipboard(root._reportText())
+                        MotionInterface.notify(
+                            "Error details copied to clipboard.",
+                            "success", 3000, true, "critical-error-copy")
+                    }
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 13
                         color: AppTheme.textSecondary
@@ -268,8 +292,12 @@ Item {
                 }
 
                 Button {
-                    text: "Send Bug Report to Openwater"
+                    objectName: "errContactSupportBtn"
+                    text: "Contact Support"
+                    Layout.preferredWidth: root._footerButtonWidth
                     Layout.preferredHeight: 32
+                    leftPadding: root._footerButtonPad
+                    rightPadding: root._footerButtonPad
                     onClicked: MotionInterface.sendBugReport(root.code)
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 13
@@ -287,8 +315,12 @@ Item {
                 Item { Layout.fillWidth: true }
 
                 Button {
+                    objectName: "errDismissBtn"
                     text: "Dismiss"
+                    Layout.preferredWidth: root._footerButtonWidth
                     Layout.preferredHeight: 32
+                    leftPadding: root._footerButtonPad
+                    rightPadding: root._footerButtonPad
                     onClicked: root.dismiss()
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 13
@@ -297,7 +329,8 @@ Item {
                         verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? Qt.lighter(AppTheme.accentRed, 1.1) : AppTheme.accentRed
+                        color: parent.hovered ? Qt.lighter(AppTheme.accentInteractive, 1.1)
+                                              : AppTheme.accentInteractive
                         radius: 4
                     }
                 }

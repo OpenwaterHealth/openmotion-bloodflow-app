@@ -412,25 +412,33 @@ def uia_window(retries: int = 3):
         ensure_visible()
         desktop = UiaDesktop(backend="uia")
         try:
-            spec = desktop.window(title="Open-Motion")
-            if spec.exists(timeout=5):
-                return spec
+            # The window title differs per build variant since the #278
+            # rename: "Open-Motion" (clinical) / "Open-Motion Research"
+            # (research). Match both in one snapshot query — the old
+            # exact title="Open-Motion" lookup silently missed every
+            # research-mode run.
+            hits = desktop.windows(
+                title_re=r"(?i)^Open-Motion( Research)?$")
+            if hits:
+                return desktop.window(title=hits[0].window_text())
         except Exception as e:
             log.warning(f"  UIA exact-title lookup failed: {e}")
-            # Fallback: match by keyword but require control_type=Window
-            # to reduce ambiguity with File Explorer etc.
-            for kw in APP_KEYWORDS:
-                try:
-                    hits = desktop.windows(title_re=f"(?i).*{kw}.*")
-                    for win in hits:
-                        title = win.window_text()
-                        # Skip File Explorer, browser tabs, etc.
-                        if "File Explorer" in title or "Chrome" in title:
-                            continue
-                        if any(k in title.lower() for k in APP_KEYWORDS):
-                            return desktop.window(title=title)
-                except Exception:
-                    continue
+        # Fallback: match by keyword but require control_type=Window
+        # to reduce ambiguity with File Explorer etc. Deliberately
+        # OUTSIDE the except above — a clean not-found (no exception)
+        # must reach it too.
+        for kw in APP_KEYWORDS:
+            try:
+                hits = desktop.windows(title_re=f"(?i).*{kw}.*")
+                for win in hits:
+                    title = win.window_text()
+                    # Skip File Explorer, browser tabs, etc.
+                    if "File Explorer" in title or "Chrome" in title:
+                        continue
+                    if any(k in title.lower() for k in APP_KEYWORDS):
+                        return desktop.window(title=title)
+            except Exception:
+                continue
         if attempt < retries - 1:
             log.warning(
                 f"  UIA window not found (attempt {attempt + 1}/{retries}), retrying..."
@@ -923,7 +931,7 @@ def _report_get_app_version() -> str:
     ``$OPENWATER_VERSION`` if no app process is detected.
     """
     try:
-        for proc_name in ("Open-Motion.exe", "Open-Motion_console.exe"):
+        for proc_name in ("Open-Motion.exe",):
             try:
                 result = subprocess.run(
                     ["wmic", "process", "where", f"name='{proc_name}'",
