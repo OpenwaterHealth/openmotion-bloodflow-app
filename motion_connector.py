@@ -795,6 +795,40 @@ class _ScanOutcomeSink:
         pass
 
 
+def _result_outcome(result) -> str:
+    """Terminal outcome of a Calibration/TestScan result as a plain string.
+
+    Prefers the SDK's authoritative ``outcome`` field; falls back to
+    deriving from the legacy boolean triple for SDKs that predate it
+    (pre-outcome SDKs cannot distinguish a watchdog timeout from a
+    cancel, so both report "canceled" there).
+    """
+    out = getattr(result, "outcome", None)
+    if out is not None:
+        return str(getattr(out, "value", out))
+    if result.canceled:
+        return "canceled"
+    if not result.ok:
+        return "error"
+    return "passed" if result.passed else "failed"
+
+
+def _format_threshold_breakdown(rows, tests) -> str:
+    """Per-camera FAIL breakdown, e.g. 'L1:mean,contrast; R3:bfi'.
+    ``tests`` is a tuple of (label, row_attr) pairs."""
+    breakdown = "; ".join(
+        f"{'L' if r.side == 'left' else 'R'}{r.cam_id + 1}:"
+        f"{','.join(n for n, a in tests if getattr(r, a) == 'FAIL')}"
+        for r in rows
+        if any(getattr(r, a) == "FAIL" for _, a in tests)
+    )
+    # #122: call out ambient explicitly so "ambient" isn't misread as a
+    # generic test name.
+    if any(r.dark_test == "FAIL" for r in rows):
+        breakdown = f"too much ambient light — {breakdown}"
+    return breakdown
+
+
 class MotionConnector(QObject):
     # Ensure signals are correctly defined
     signalConnected = pyqtSignal(str, str)  # (descriptor, port)
@@ -873,7 +907,7 @@ class MotionConnector(QObject):
     captureFinished = pyqtSignal(bool, str, str, str)  # ok, error, leftPath, rightPath
 
     # Calibration procedure signals
-    calibrationStateChanged = pyqtSignal()  # any of running/passed/failed/aborted/idle
+    calibrationStateChanged = pyqtSignal()  # any of running/passed/failed/canceled/timed_out/error/idle
     _calibrationCompleteSignal = pyqtSignal(object)  # private worker→main marshalling
     testScanStateChanged = pyqtSignal()                # any of running/done/aborted/failed/idle
     _testScanCompleteSignal = pyqtSignal(object)       # private worker→main marshalling
@@ -1150,7 +1184,7 @@ class MotionConnector(QObject):
         self._test_scan_duration_sec = int(
             cfg.get("test_scan_duration_sec", 5)
         )
-        self._calibration_status = ""  # "", "running", "passed", "failed", "aborted"
+        self._calibration_status = ""  # "", "running", "passed", "failed", "canceled", "timed_out", "error"
         self._calibration_failure_reason = ""  # populated only on FAIL in dev mode
         self._calibration_target = None  # last runCalibration() target
         self._test_scan_status = ""              # "", "running", "done", "aborted", "failed"
@@ -5417,41 +5451,30 @@ class MotionConnector(QObject):
     def _on_calibration_complete(self, result):
         """Runs on the Qt main thread (queued from worker via signal)."""
         self._calibration_failure_reason = ""  # reset each run
-        if result.canceled:
-            self._calibration_status = "aborted"
-            self.captureLog.emit(
-                f"⚠️ Calibration aborted: {result.error or 'canceled'}"
-            )
-        elif not result.ok:
-            self._calibration_status = "aborted"
-            self.captureLog.emit(
-                f"⚠️ Calibration aborted: {result.error or 'unknown error'}"
-            )
-        elif result.passed:
-            self._calibration_status = "passed"
-            self.captureLog.emit(
-                f"✅ Calibration: PASS  (CSV: {result.csv_path})"
-            )
-        else:
-            self._calibration_status = "failed"
+        outcome = _result_outcome(result)
+        self._calibration_status = outcome
+        if outcome == "passed":
+            self.captureLog.emit(f"✅ Calibration: PASS  (CSV: {result.csv_path})")
+        elif outcome == "failed":
             if self._app_config.get("engineeringMode", False):
                 tests = (("mean", "mean_test"), ("contrast", "contrast_test"),
                          ("bfi", "bfi_test"), ("bvi", "bvi_test"),
                          ("ambient", "dark_test"))
-                breakdown = "; ".join(
-                    f"{'L' if r.side == 'left' else 'R'}{r.cam_id + 1}:"
-                    f"{','.join(n for n, a in tests if getattr(r, a) == 'FAIL')}"
-                    for r in result.rows
-                    if any(getattr(r, a) == "FAIL" for _, a in tests)
-                )
-                # #122: dev-mode message must explicitly call out ambient-
-                # light failures so operators don't misread an "ambient"
-                # tag in the breakdown as a generic test name.
-                if any(r.dark_test == "FAIL" for r in result.rows):
-                    breakdown = f"too much ambient light — {breakdown}"
-                self._calibration_failure_reason = breakdown
+                self._calibration_failure_reason = _format_threshold_breakdown(
+                    result.rows, tests)
+            self.captureLog.emit(f"❌ Calibration: FAIL  (CSV: {result.csv_path})")
+        else:
+            # canceled / timed_out / error — surface the SDK's reason in the
+            # persistent status label, not just this transient log line.
+            self._calibration_failure_reason = result.error or ""
+            icon = "⚠️" if outcome in ("canceled", "timed_out") else "❌"
             self.captureLog.emit(
-                f"❌ Calibration: FAIL  (CSV: {result.csv_path})"
+                f"{icon} Calibration {outcome.replace('_', ' ')}: "
+                f"{result.error or 'unknown'}"
+            )
+        if getattr(result, "rolled_back", False):
+            self.captureLog.emit(
+                "↩️ Previous calibration restored on the console."
             )
         elapsed_s = (
             time.monotonic() - self._calibration_t0
