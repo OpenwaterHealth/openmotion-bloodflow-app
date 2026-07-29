@@ -35,14 +35,14 @@
     "test_scan_duration_sec": 5,
     "calibration_scan_delay_sec": 1,
     "ft_min_mean_per_camera": [
-        50,
-        70,
-        70,
-        70,
-        70,
-        70,
-        70,
-        50
+        40,
+        80,
+        80,
+        80,
+        80,
+        80,
+        80,
+        40
     ],
     "ft_min_contrast_per_camera": [
         0.25,
