@@ -1,3 +1,4 @@
+import math
 from types import SimpleNamespace
 
 import numpy as np
@@ -328,9 +329,9 @@ def test_live_plot_sink_records_every_arrival_into_gap_tracker():
         side_ids=np.array([0, 0, 0], dtype=np.int8),
         cam_ids=np.array([1, 1, 1], dtype=np.int8),
     )
-    # Middle sample is NaN → skipped for the PLOT, but still recorded in
-    # the tracker (the frame arrived). The only gap is the genuine
-    # delivery silence between t=0.125 and t=3.0.
+    # Middle sample is NaN → recorded in the tracker (the frame arrived)
+    # AND appended to the plot as a gap sample (issue #418). The only
+    # delivery gap is the genuine silence between t=0.125 and t=3.0.
     batch.bfi_live[:] = 7.0
     batch.bvi_live[:] = 4.0
     batch.bfi_live[1, 0, 1] = np.nan
@@ -340,16 +341,21 @@ def test_live_plot_sink_records_every_arrival_into_gap_tracker():
     assert tracker.merged_gaps() == [
         (pytest.approx(0.125), pytest.approx(3.0))
     ]
-    # Plot behavior unchanged: NaN sample not appended to the live source.
+    # The NaN light row is appended too (blank-gap sample) — the plot's
+    # buffers advance on every arriving light frame.
     assert [r["t"] for r in src.appended] == [
-        pytest.approx(0.1), pytest.approx(3.0)
+        pytest.approx(0.1), pytest.approx(0.125), pytest.approx(3.0)
     ]
+    assert math.isnan(src.appended[1]["bfi"])
 
 
-def test_live_plot_sink_covered_camera_stays_alive_and_unplotted():
+def test_live_plot_sink_covered_camera_appends_nan_gap_samples():
     """A covered / off-target camera streams light-typed frames whose
-    BFI/BVI are NaN. It must keep feeding the heartbeat and the gap
-    tracker (it is connected), while appending nothing to the plot."""
+    BFI/BVI are NaN. It keeps feeding the heartbeat and the gap tracker,
+    and (issue #418) the NaN sample IS appended — buffers and liveEdge
+    keep advancing so the time axis scrolls through a contact loss; the
+    renderer draws NaN runs as a blank gap. mean/contrast stay None
+    (non-finite); chip temperature is real and keeps flowing."""
     from nan_gap_tracker import NanGapTracker
 
     conn = _connector()
@@ -374,9 +380,89 @@ def test_live_plot_sink_covered_camera_stays_alive_and_unplotted():
 
     assert ("left", 2) in conn._camera_last_seen   # alive
     assert tracker.t0 == pytest.approx(0.1)        # delivery recorded
-    assert src.appended == []                      # nothing plottable
-    # Chip temperature is real even when the camera sees no light.
+    assert [(r["side"], r["cam_id"], r["frame_id"]) for r in src.appended] == [
+        ("left", 2, 10),
+        ("left", 2, 11),
+    ]
+    assert all(math.isnan(r["bfi"]) and math.isnan(r["bvi"])
+               for r in src.appended)
+    assert all(r["mean"] is None and r["contrast"] is None
+               for r in src.appended)
+    # Chip temperature is real even when the camera sees no light — the
+    # temp trace keeps updating through the gap.
+    assert [r["temp"] for r in src.appended] == [
+        pytest.approx(55.0, abs=1e-4), pytest.approx(55.0, abs=1e-4)]
     assert conn._camera_last_temp[("left", 2)] == pytest.approx(55.0, abs=1e-4)
+
+
+def test_live_plot_sink_dark_frame_nan_still_skipped():
+    """Scheduled dark frames with NaN BFI/BVI stay unappended — appending
+    them would notch every trace with a one-frame blank at each ~15 s
+    dark now that the renderer breaks the line at NaN samples (issue #418)."""
+    conn = _connector()
+    sink, src = _make_sink(conn)
+    batch = SimpleNamespace(
+        bfi_live=np.full((1, 2, 8), np.nan, dtype=np.float32),
+        bvi_live=np.full((1, 2, 8), np.nan, dtype=np.float32),
+        mean_dc_rt=np.full((1, 2, 8), np.nan, dtype=np.float32),
+        contrast_sn_rt=np.full((1, 2, 8), np.nan, dtype=np.float32),
+        temperature_c=np.full((1, 2, 8), 35.0, dtype=np.float32),
+        frame_type=np.array(["dark"], dtype="<U8"),
+        timestamp_s=np.array([0.5], dtype=np.float64),
+        abs_frame_ids=np.array([20], dtype=np.int64),
+        side_ids=np.array([0], dtype=np.int8),
+        cam_ids=np.array([1], dtype=np.int8),
+    )
+
+    sink.consume("live", batch)
+
+    assert src.appended == []
+
+
+def test_live_plot_sink_warmup_and_stale_nan_still_skipped():
+    """Warmup and stale frames are skipped before the NaN gate — the
+    relaxed append (issue #418) must not resurrect them."""
+    conn = _connector()
+    sink, src = _make_sink(conn)
+    batch = SimpleNamespace(
+        bfi_live=np.full((2, 2, 8), np.nan, dtype=np.float32),
+        bvi_live=np.full((2, 2, 8), np.nan, dtype=np.float32),
+        mean_dc_rt=np.full((2, 2, 8), np.nan, dtype=np.float32),
+        contrast_sn_rt=np.full((2, 2, 8), np.nan, dtype=np.float32),
+        temperature_c=np.full((2, 2, 8), 35.0, dtype=np.float32),
+        frame_type=np.array(["warmup", "stale"], dtype="<U8"),
+        timestamp_s=np.array([0.1, 0.125], dtype=np.float64),
+        abs_frame_ids=np.array([10, 11], dtype=np.int64),
+        side_ids=np.array([0, 0], dtype=np.int8),
+        cam_ids=np.array([2, 2], dtype=np.int8),
+    )
+
+    sink.consume("live", batch)
+
+    assert src.appended == []
+
+
+def test_live_plot_sink_legacy_batch_nan_still_skipped():
+    """Batches without side_ids/cam_ids fan every row out to all 16
+    cameras; a finite BFI is the only evidence a camera produced the
+    row. NaN rows must stay unappended there or every camera's buffer
+    would collect 16-way NaN garbage (issue #418)."""
+    conn = _connector()
+    sink, src = _make_sink(conn)
+    batch = SimpleNamespace(
+        bfi_live=np.full((1, 2, 8), np.nan, dtype=np.float32),
+        bvi_live=np.full((1, 2, 8), np.nan, dtype=np.float32),
+        mean_dc_rt=np.full((1, 2, 8), np.nan, dtype=np.float32),
+        contrast_sn_rt=np.full((1, 2, 8), np.nan, dtype=np.float32),
+        temperature_c=np.full((1, 2, 8), 35.0, dtype=np.float32),
+        frame_type=np.array(["light"], dtype="<U8"),
+        timestamp_s=np.array([0.5], dtype=np.float64),
+        abs_frame_ids=np.array([1], dtype=np.int64),
+    )
+
+    sink.consume("live", batch)
+
+    assert src.appended == []
 
 
 def test_live_plot_sink_rearms_dropped_camera_on_frame_arrival():
