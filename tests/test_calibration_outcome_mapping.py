@@ -94,3 +94,14 @@ def test_test_scan_error_outcome(connector):
                      error="flash phase failed: x"))
     assert connector._test_scan_status == "error"
     assert connector.testScanFailureReason == "flash phase failed: x"
+
+
+def test_cancel_calibration_calls_sdk_nonblocking(connector):
+    connector._calibration_status = "running"
+    connector.cancelCalibration()
+    connector._interface.cancel_calibration.assert_called_once_with(join_timeout=0)
+
+
+def test_cancel_is_noop_when_idle(connector):
+    connector.cancelCalibration()
+    connector._interface.cancel_calibration.assert_not_called()

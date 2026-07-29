@@ -5255,6 +5255,18 @@ class MotionConnector(QObject):
             self.captureLog.emit("⚠️ Calibration failed to start.")
 
     @pyqtSlot()
+    def cancelCalibration(self):
+        """Cancel the in-flight calibration or Test scan. Non-blocking:
+        join_timeout=0 skips the SDK's thread join (up to 10 s by default,
+        which would freeze the GUI thread); completion still arrives via
+        the normal on_complete callback with outcome=canceled."""
+        if (self._calibration_status != "running"
+                and self._test_scan_status != "running"):
+            return
+        self.captureLog.emit("Canceling…")
+        self._interface.cancel_calibration(join_timeout=0)
+
+    @pyqtSlot()
     @pyqtSlot(str)
     def runTestScan(self, target: str = "both"):
         """Run just the calibration scan (phase 1) as a Test diagnostic.

@@ -984,6 +984,16 @@ Item {
                             onClicked: calibrationPasswordModal.open()
                         }
 
+                        ActionButton {
+                            text: "Cancel"
+                            Layout.preferredWidth: 90
+                            Layout.preferredHeight: 34
+                            visible: MotionInterface.calibrationRunning
+                                  || MotionInterface.testScanRunning
+                            hoverColor: "#C0392B"
+                            onClicked: MotionInterface.cancelCalibration()
+                        }
+
                         Rectangle {
                             id: calibLight
                             width: 10
@@ -994,11 +1004,13 @@ Item {
                             border.color: root.colBorderSoft
                             color: {
                                 switch (MotionInterface.calibrationStatus) {
-                                case "running": return "#2196F3"
-                                case "passed":  return "#4CAF50"
-                                case "failed":  return "#F44336"
-                                case "aborted": return "#FF9800"
-                                default:        return "#9E9E9E"
+                                case "running":   return "#2196F3"
+                                case "passed":    return "#4CAF50"
+                                case "failed":    return "#F44336"
+                                case "canceled":  return "#9E9E9E"
+                                case "timed_out": return "#FF9800"
+                                case "error":     return "#F44336"
+                                default:          return "#9E9E9E"
                                 }
                             }
                         }
@@ -1034,7 +1046,17 @@ Item {
                                     return reason
                                         ? "Calibration Failed — " + reason
                                         : "Calibration Failed"
-                                case "aborted": return "Calibration Aborted"
+                                case "canceled":  return "Calibration Canceled"
+                                case "timed_out":
+                                    var r1 = MotionInterface.calibrationFailureReason
+                                    return r1
+                                        ? "Calibration Timed Out — " + r1
+                                        : "Calibration Timed Out"
+                                case "error":
+                                    var r2 = MotionInterface.calibrationFailureReason
+                                    return r2
+                                        ? "Calibration Error — " + r2
+                                        : "Calibration Error"
                                 default:        return ""
                                 }
                             }
