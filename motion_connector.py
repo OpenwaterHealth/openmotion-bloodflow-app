@@ -5466,6 +5466,21 @@ class MotionConnector(QObject):
                          ("ambient", "dark_test"))
                 self._calibration_failure_reason = _format_threshold_breakdown(
                     result.rows, tests)
+            # A FAILED outcome with a non-empty result.error means the SDK's
+            # EEPROM rollback failed (error reads "rollback failed: ...") —
+            # the console silently retains the unvalidated calibration. This
+            # is a device-state warning, not telemetry, so surface it
+            # regardless of engineeringMode.
+            if getattr(result, "error", ""):
+                self._calibration_failure_reason = (
+                    f"{self._calibration_failure_reason} — {result.error}"
+                    if self._calibration_failure_reason
+                    else result.error
+                )
+                self.captureLog.emit(
+                    f"⚠️ {result.error} — console may retain the "
+                    "unvalidated calibration."
+                )
             self.captureLog.emit(f"❌ Calibration: FAIL  (CSV: {result.csv_path})")
         else:
             # canceled / timed_out / error — surface the SDK's reason in the

@@ -105,3 +105,20 @@ def test_cancel_calibration_calls_sdk_nonblocking(connector):
 def test_cancel_is_noop_when_idle(connector):
     connector.cancelCalibration()
     connector._interface.cancel_calibration.assert_not_called()
+
+
+def test_failed_with_rollback_failure_surfaces_reason(connector):
+    connector._app_config["engineeringMode"] = False
+    connector._on_calibration_complete(
+        _result(passed=False, error="rollback failed: usb gone"))
+    assert connector._calibration_status == "failed"
+    assert "rollback failed: usb gone" in connector.calibrationFailureReason
+
+
+def test_outcome_enum_object_uses_value(connector):
+    class _FakeEnum:
+        value = "timed_out"
+    connector._on_calibration_complete(
+        _result(outcome=_FakeEnum(), ok=False, passed=False, canceled=True,
+                error="calibration exceeded max_duration_sec=600"))
+    assert connector._calibration_status == "timed_out"
