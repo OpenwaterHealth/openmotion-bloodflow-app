@@ -127,31 +127,51 @@ var aqua = {
 // gradients. The one new theme that leans on the existing glass machinery.
 var aero = {
     squareCorners: false, radiusScale: 1.1, bevel: false, gloss: true, elevation: 1,
+    // Vista glass is not just a translucent panel: it is a tinted pane with a
+    // bright inner glow, a hard-edged reflection across its top, and a crisp
+    // white rim. aeroGlass switches ThemedSurface to that full treatment.
+    aeroGlass: true,
     light: {
-        bgBase: "#D6E5F5",
-        bgPanel: Qt_rgba(1, 1, 1, 0.55), bgContainer: Qt_rgba(1, 1, 1, 0.68),
-        bgElevated: Qt_rgba(1, 1, 1, 0.80), bgInput: Qt_rgba(1, 1, 1, 0.94),
-        bgPlot: Qt_rgba(1, 1, 1, 0.45), bgHover: Qt_rgba(0.60, 0.80, 1.0, 0.45),
-        bgCard: Qt_rgba(1, 1, 1, 0.72), bgCardAlt: Qt_rgba(1, 1, 1, 0.55),
-        borderStrong: Qt_rgba(1, 1, 1, 0.85), borderSubtle: "#8FB8DE",
-        borderHover: "#1E90FF", borderSoft: Qt_rgba(1, 1, 1, 0.65),
-        textPrimary: "#10243A", textSecondary: "#2E4E6E",
-        textTertiary: "#5C7A96", textDisabled: "#9AB0C4", textLink: "#0B60C4",
-        accentInteractive: "#1E90FF",
-        statusGrey: "#7F97AC",
-        plotGrid: "#A9C6E0", plotLabel: "#3C5C7A", plotText: "#12283F",
-        plotCellBg: Qt_rgba(1, 1, 1, 0.88),
-        overlayBg: Qt_rgba(1, 1, 1, 0.70), overlayBgSolid: Qt_rgba(1, 1, 1, 0.94),
-        toastBg: Qt_rgba(1, 1, 1, 0.92), menuBg: Qt_rgba(1, 1, 1, 0.94),
-        sheetBg: Qt_rgba(1, 1, 1, 0.93),
-        glossTop: Qt_rgba(1, 1, 1, 0.75), glossBottom: Qt_rgba(1, 1, 1, 0.10),
-        glowColor: Qt_rgba(0.45, 0.72, 1.0, 0.55),
-        titleBar: Qt_rgba(1, 1, 1, 0.60), titleBarText: "#10243A",
-        ambientTop: "#BFD9F2", ambientBottom: "#E4F0FB",
-        ambientBlobA: "#8FC0EE", ambientBlobB: "#B9D8F5", ambientBlobC: "#9FD3E8"
+        // Transparent so the aurora backdrop shows through every panel —
+        // Aero *is* translucency, and panels on an opaque fill never read
+        // as Vista no matter how well the rim and reflection are drawn.
+        bgBase: "transparent",
+        bgPanel: Qt_rgba(0.82, 0.90, 0.98, 0.62),
+        bgContainer: Qt_rgba(0.86, 0.93, 0.99, 0.74),
+        bgElevated: Qt_rgba(0.78, 0.88, 0.97, 0.86),
+        bgInput: Qt_rgba(1, 1, 1, 0.94),
+        bgPlot: Qt_rgba(0.88, 0.94, 1.0, 0.55),
+        bgHover: Qt_rgba(0.55, 0.78, 1.0, 0.62),
+        bgCard: Qt_rgba(0.85, 0.92, 0.99, 0.78),
+        bgCardAlt: Qt_rgba(0.80, 0.89, 0.97, 0.62),
+        borderStrong: Qt_rgba(1, 1, 1, 0.92), borderSubtle: "#6E9FD0",
+        borderHover: "#1E90FF", borderSoft: Qt_rgba(1, 1, 1, 0.70),
+        textPrimary: "#0A1C2E", textSecondary: "#20415F",
+        textTertiary: "#4A6D8C", textDisabled: "#8AA4BC", textLink: "#0B60C4",
+        accentInteractive: "#1E7FD4",
+        statusGrey: "#6E88A0",
+        plotGrid: "#9BBBD8", plotLabel: "#33556F", plotText: "#0C1F33",
+        plotCellBg: Qt_rgba(1, 1, 1, 0.90),
+        overlayBg: Qt_rgba(0.90, 0.95, 1.0, 0.78), overlayBgSolid: Qt_rgba(1, 1, 1, 0.95),
+        toastBg: Qt_rgba(0.94, 0.97, 1.0, 0.94), menuBg: Qt_rgba(0.96, 0.98, 1.0, 0.96),
+        sheetBg: Qt_rgba(0.93, 0.96, 1.0, 0.95),
+        // The reflection is near-opaque white at the very top and stops hard —
+        // that hard stop is the single most recognisable Aero cue.
+        glossTop: Qt_rgba(1, 1, 1, 0.82), glossBottom: Qt_rgba(1, 1, 1, 0.24),
+        glowColor: Qt_rgba(0.60, 0.85, 1.0, 0.75),
+        glassRim: Qt_rgba(1, 1, 1, 0.95),
+        glassInnerGlow: Qt_rgba(0.75, 0.92, 1.0, 0.85),
+        textGlow: Qt_rgba(1, 1, 1, 0.85),
+        // Vista's close button was red glass while minimize/maximize stayed
+        // blue — one of the most recognisable things about the window chrome.
+        closeBg: "#C3453F", closeHoverBg: "#E05A52", closeGlyph: "#FFFFFF",
+        titleBar: Qt_rgba(0.80, 0.89, 0.98, 0.70), titleBarText: "#0A1C2E",
+        ambientTop: "#0A3A6E", ambientBottom: "#1E6FA8",
+        ambientBlobA: "#3FA9E0", ambientBlobB: "#7FD4F0", ambientBlobC: "#2E86C8",
+        auroraCore: "#BFEEFF", auroraGlow: "#4FC3F7"
     },
     dark: {
-        bgBase: "#0E1A28",
+        bgBase: "transparent",
         bgPanel: Qt_rgba(0.30, 0.50, 0.72, 0.22),
         bgContainer: Qt_rgba(0.32, 0.52, 0.74, 0.28),
         bgElevated: Qt_rgba(0.38, 0.58, 0.80, 0.34),
@@ -174,11 +194,16 @@ var aero = {
         toastBg: Qt_rgba(0.08, 0.16, 0.25, 0.94),
         menuBg: Qt_rgba(0.08, 0.16, 0.25, 0.95),
         sheetBg: Qt_rgba(0.07, 0.14, 0.22, 0.96),
-        glossTop: Qt_rgba(1, 1, 1, 0.22), glossBottom: Qt_rgba(1, 1, 1, 0.03),
-        glowColor: Qt_rgba(0.35, 0.65, 1.0, 0.50),
+        glossTop: Qt_rgba(1, 1, 1, 0.34), glossBottom: Qt_rgba(1, 1, 1, 0.06),
+        glowColor: Qt_rgba(0.35, 0.65, 1.0, 0.55),
+        glassRim: Qt_rgba(0.70, 0.88, 1.0, 0.55),
+        glassInnerGlow: Qt_rgba(0.45, 0.72, 1.0, 0.45),
+        textGlow: Qt_rgba(0.10, 0.25, 0.45, 0.90),
+        closeBg: "#A83A34", closeHoverBg: "#CE4A42", closeGlyph: "#FFFFFF",
         titleBar: Qt_rgba(0.20, 0.38, 0.58, 0.55), titleBarText: "#EAF3FC",
-        ambientTop: "#08131F", ambientBottom: "#12253A",
-        ambientBlobA: "#1E4E80", ambientBlobB: "#2A5C92", ambientBlobC: "#1C5F72"
+        ambientTop: "#03101F", ambientBottom: "#0A2B47",
+        ambientBlobA: "#155C93", ambientBlobB: "#1E7BA8", ambientBlobC: "#0F4E6B",
+        auroraCore: "#7FD8F5", auroraGlow: "#1E88C7"
     }
 };
 
@@ -202,6 +227,7 @@ var metro = {
         plotCellBg: "#FFFFFF",
         overlayBg: "#F2F2F2", overlayBgSolid: "#FFFFFF",
         toastBg: "#0078D7", menuBg: "#FFFFFF", sheetBg: "#FFFFFF",
+        closeHoverBg: "#E81123", closeGlyph: "#FFFFFF",
         titleBar: "#0078D7", titleBarText: "#FFFFFF",
         ambientTop: "#FFFFFF", ambientBottom: "#FFFFFF",
         ambientBlobA: "#FFFFFF", ambientBlobB: "#FFFFFF", ambientBlobC: "#FFFFFF"
@@ -221,6 +247,7 @@ var metro = {
         plotCellBg: "#000000",
         overlayBg: "#1F1F1F", overlayBgSolid: "#111111",
         toastBg: "#0078D7", menuBg: "#1F1F1F", sheetBg: "#111111",
+        closeHoverBg: "#E81123", closeGlyph: "#FFFFFF",
         titleBar: "#0078D7", titleBarText: "#FFFFFF",
         ambientTop: "#000000", ambientBottom: "#000000",
         ambientBlobA: "#000000", ambientBlobB: "#000000", ambientBlobC: "#000000"
@@ -312,7 +339,8 @@ function shape(name) {
         radiusScale: t.radiusScale,
         bevel: t.bevel,
         gloss: t.gloss,
-        elevation: t.elevation
+        elevation: t.elevation,
+        aeroGlass: t.aeroGlass === true
     };
 }
 

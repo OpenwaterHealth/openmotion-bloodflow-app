@@ -10,6 +10,15 @@ Rectangle {
     color: AppTheme.bgContainer // Header background color
     radius: AppTheme.r(20)
 
+    // The title bar is where Aero lived, so it gets the full glass
+    // treatment: reflection, inner glow and rim. Invisible on every other
+    // theme, which is why it can sit on the shared header unconditionally.
+    ThemedSurface {
+        anchors.fill: parent
+        color: "transparent"
+        radius: AppTheme.r(20)
+    }
+
     // Emitted when the user clicks the exit (X) icon in the title
     // bar. main.qml owns the actual quit decision so it can show the
     // close-while-busy warning before tearing down (issue #75).
@@ -163,11 +172,36 @@ Rectangle {
 
                 Item { Layout.fillWidth: true }
 
-                Text {
-                    text: "Open-Motion"
-                    color: AppTheme.textPrimary
-                    font.pixelSize: 14
-                    font.weight: Font.Bold
+                Item {
+                    implicitWidth: appTitle.implicitWidth
+                    implicitHeight: appTitle.implicitHeight
+
+                    // Vista's title-bar text glow. Glass shows whatever is
+                    // behind it, so Windows drew a soft halo behind the
+                    // caption to hold contrast no matter what that was.
+                    // Approximated by stamping the string in the glow colour
+                    // at eight offsets — cheaper than a blur effect and, at
+                    // this size, indistinguishable from one.
+                    Repeater {
+                        model: [[-1,-1],[0,-1],[1,-1],[-1,0],
+                                [1,0],[-1,1],[0,1],[1,1]]
+                        delegate: Text {
+                            visible: AppTheme.aeroGlass
+                            x: modelData[0]; y: modelData[1]
+                            text: appTitle.text
+                            color: AppTheme.textGlow
+                            font: appTitle.font
+                            opacity: 0.55
+                        }
+                    }
+
+                    Text {
+                        id: appTitle
+                        text: "Open-Motion"
+                        color: AppTheme.textPrimary
+                        font.pixelSize: 14
+                        font.weight: Font.Bold
+                    }
                 }
 
                 Rectangle {
@@ -243,6 +277,7 @@ Rectangle {
             IconWindowButton {
                 buttonIcon: "\ue9b3" // Exit (close) icon
                 squareGlyph: "✕"
+                isClose: true
                 Layout.alignment: Qt.AlignHCenter
                 onClicked: windowMenu.closeRequested()
             }

@@ -65,6 +65,14 @@ QtObject {
     readonly property bool bevel:         _s ? _s.bevel === true : false
     readonly property bool gloss:         _s ? _s.gloss === true : false
     readonly property real elevation:     _s ? _s.elevation : 0
+    // Vista's full glass treatment: rim + inner glow + hard reflection edge.
+    // Distinct from plain `gloss` (Aqua), which is only the top-half sheen.
+    readonly property bool aeroGlass:     _s ? _s.aeroGlass === true : false
+
+    // True for any theme whose panels are translucent over a rendered
+    // backdrop. Liquid Glass and Aero both are — Aero *is* translucency,
+    // so panels floating on an opaque fill never read as Vista.
+    readonly property bool ambient: glass || aeroGlass
 
     function r(n) {
         if (squareCorners) return 0
@@ -84,6 +92,31 @@ QtObject {
     // Aero outer glow / Material drop shadow.
     readonly property color glowColor:       (_p && _p.glowColor) ? _p.glowColor
                                                                   : Qt.rgba(0.3,0.6,1,0.5)
+    // Vista glass anatomy: a crisp white rim defines the pane, a soft inner
+    // glow sits just inside it, and text over glass carries a halo so it stays
+    // readable against whatever shows through.
+    // Vista's desktop aurora: a bright core ribbon over a wider soft glow.
+    readonly property color auroraCore: (_p && _p.auroraCore) ? _p.auroraCore
+                                                              : Qt.rgba(1,1,1,0.0)
+    readonly property color auroraGlow: (_p && _p.auroraGlow) ? _p.auroraGlow
+                                                              : Qt.rgba(1,1,1,0.0)
+    readonly property color glassRim:       (_p && _p.glassRim) ? _p.glassRim
+                                                                : Qt.rgba(1,1,1,0.8)
+    readonly property color glassInnerGlow: (_p && _p.glassInnerGlow) ? _p.glassInnerGlow
+                                                                      : Qt.rgba(0.7,0.9,1,0.6)
+    readonly property color textGlow:       (_p && _p.textGlow) ? _p.textGlow
+                                                                : Qt.rgba(1,1,1,0.85)
+
+    // Close-button treatment. A red close is an XP-and-later idea: Aero paints
+    // it red at rest, Metro only on hover, and Windows Classic never — Win95's
+    // close was the same grey as its siblings. "transparent" means "this theme
+    // doesn't do that", which is what IconWindowButton tests for.
+    readonly property color closeBg:      (_p && _p.closeBg)      ? _p.closeBg      : "transparent"
+    readonly property color closeHoverBg: (_p && _p.closeHoverBg) ? _p.closeHoverBg : "transparent"
+    readonly property color closeGlyph:   (_p && _p.closeGlyph)   ? _p.closeGlyph   : textPrimary
+    readonly property bool  hasCloseTint: (_p !== undefined)
+                                          && ((_p.closeBg !== undefined)
+                                              || (_p.closeHoverBg !== undefined))
     readonly property color elevationShadow: (_p && _p.elevationShadow) ? _p.elevationShadow
                                                                         : Qt.rgba(0,0,0,0.3)
     // Window chrome. Windows Classic and Metro colour their title bar;

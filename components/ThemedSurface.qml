@@ -64,6 +64,55 @@ Item {
         }
     }
 
+    // ── Windows Vista glass ────────────────────────────────────────────
+    // Aero's pane is built from three cues stacked in this order, and it
+    // stops reading as Vista if any one is missing:
+    //   1. the reflection terminating in a hard light edge partway down
+    //   2. a soft inner glow just inside the frame
+    //   3. a crisp near-white rim defining the pane against the desktop
+    // The rim and glow suit any pane; only the reflection needs `glossy`,
+    // since a half-height sheen down a tall panel reads as a gradient bug
+    // rather than glass.
+    Loader {
+        anchors.fill: parent
+        active: AppTheme.aeroGlass
+        sourceComponent: Item {
+
+            // 1. The reflection's hard terminating edge. Vista drew a
+            // 1px bright line where the reflection stops — without it the
+            // gradient just looks like a soft fade.
+            Rectangle {
+                visible: surf.glossy
+                anchors.left: parent.left
+                anchors.right: parent.right
+                y: Math.round(parent.height * 0.5) - 1
+                height: 1
+                color: AppTheme.glassRim
+                opacity: 0.55
+            }
+
+            // 2. Inner glow, inset by the rim so the two read as separate
+            // layers of the same pane rather than one thick border.
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: 1
+                color: "transparent"
+                radius: Math.max(0, surf.radius - 1)
+                border.color: AppTheme.glassInnerGlow
+                border.width: 1
+            }
+
+            // 3. Outer rim.
+            Rectangle {
+                anchors.fill: parent
+                color: "transparent"
+                radius: surf.radius
+                border.color: AppTheme.glassRim
+                border.width: 1
+            }
+        }
+    }
+
     // ── Windows Classic chisel ─────────────────────────────────────────
     // Two-tone 1px outset: light on the top/left faces, shadow on the
     // bottom/right, as if lit from the upper left. Inverted when raised is

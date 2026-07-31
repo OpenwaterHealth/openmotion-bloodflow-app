@@ -27,6 +27,70 @@ Item {
         }
     }
 
+    // ── Vista aurora ───────────────────────────────────────────────────
+    // Aero's desktop wasn't a diffuse wash, it was a light ribbon: a bright
+    // filament sweeping the field with a broad glow beneath it. Built from
+    // rotated, heavily-rounded bars so the curve reads without a shader —
+    // the blur below melts the straight edges into a arc.
+    Item {
+        id: aurora
+        anchors.fill: parent
+        // Hidden and consumed as the blur source, same as the blob layer —
+        // leaving it visible would draw the hard-edged bars on top of their
+        // own blurred copy.
+        visible: false
+        layer.enabled: AppTheme.aeroGlass
+
+        // Broad underglow that lifts the lower half off the deep blue.
+        Rectangle {
+            width: root.width * 1.6
+            height: root.height * 0.75
+            radius: height / 2
+            x: -root.width * 0.30
+            y: root.height * 0.42
+            rotation: -9
+            color: AppTheme.auroraGlow
+            opacity: 0.55
+        }
+        // The bright filament itself, thin and higher up.
+        Rectangle {
+            width: root.width * 1.5
+            height: root.height * 0.16
+            radius: height / 2
+            x: -root.width * 0.22
+            y: root.height * 0.34
+            rotation: -13
+            color: AppTheme.auroraCore
+            opacity: 0.75
+            SequentialAnimation on y {
+                running: root.animate; loops: Animation.Infinite
+                NumberAnimation { to: root.height * 0.40; duration: 17000; easing.type: Easing.InOutSine }
+                NumberAnimation { to: root.height * 0.34; duration: 17000; easing.type: Easing.InOutSine }
+            }
+        }
+        // A second, fainter crossing ribbon — the depth cue that stops the
+        // first one looking like a single painted stripe.
+        Rectangle {
+            width: root.width * 1.4
+            height: root.height * 0.10
+            radius: height / 2
+            x: -root.width * 0.18
+            y: root.height * 0.60
+            rotation: 7
+            color: AppTheme.auroraCore
+            opacity: 0.35
+        }
+    }
+    MultiEffect {
+        anchors.fill: parent
+        source: aurora
+        visible: AppTheme.aeroGlass
+        blurEnabled: true
+        blur: 1.0
+        blurMax: 64
+        autoPaddingEnabled: false
+    }
+
     // Raw blob layer — hidden; consumed as the blur source below.
     Item {
         id: blobs
@@ -97,6 +161,10 @@ Item {
         blurMax: 64
         blurMultiplier: 1.0
         autoPaddingEnabled: false
+        // This layer paints after the aurora, so at full strength it would
+        // smother the ribbon it is supposed to sit behind. Under Aero the
+        // blobs are atmosphere, not the subject.
+        opacity: AppTheme.aeroGlass ? 0.35 : 1.0
     }
 
     // Faint top sheen so the whole surface has a subtle vertical fall-off

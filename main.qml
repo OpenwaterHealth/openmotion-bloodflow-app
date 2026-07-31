@@ -26,7 +26,7 @@ ApplicationWindow {
     Item {
         id: glassBackdrop
         anchors.fill: parent
-        visible: AppTheme.glass
+        visible: AppTheme.ambient
         layer.enabled: true
         layer.effect: MultiEffect {
             maskEnabled: true
