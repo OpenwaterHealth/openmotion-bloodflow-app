@@ -172,35 +172,36 @@ Rectangle {
 
                 Item { Layout.fillWidth: true }
 
-                Item {
-                    implicitWidth: appTitle.implicitWidth
-                    implicitHeight: appTitle.implicitHeight
+                Text {
+                    id: appTitle
+                    text: "Open-Motion"
+                    color: AppTheme.textPrimary
+                    font.pixelSize: 14
+                    font.weight: Font.Bold
 
                     // Vista's title-bar text glow. Glass shows whatever is
-                    // behind it, so Windows drew a soft halo behind the
-                    // caption to hold contrast no matter what that was.
-                    // Approximated by stamping the string in the glow colour
-                    // at eight offsets — cheaper than a blur effect and, at
-                    // this size, indistinguishable from one.
+                    // behind it, so Windows drew a soft halo behind the caption
+                    // to hold contrast no matter what that was. Stamped at
+                    // eight offsets rather than blurred — indistinguishable at
+                    // this size and far cheaper.
+                    //
+                    // Deliberately children OF the Text rather than siblings in
+                    // a wrapper Item: a wrapper becomes the layout participant
+                    // and shifted the caption a few px in every theme. Children
+                    // don't contribute to a Text's implicit size, so this is
+                    // layout-neutral. z:-1 puts the halo behind the glyphs.
                     Repeater {
                         model: [[-1,-1],[0,-1],[1,-1],[-1,0],
                                 [1,0],[-1,1],[0,1],[1,1]]
                         delegate: Text {
                             visible: AppTheme.aeroGlass
+                            z: -1
                             x: modelData[0]; y: modelData[1]
                             text: appTitle.text
                             color: AppTheme.textGlow
                             font: appTitle.font
                             opacity: 0.55
                         }
-                    }
-
-                    Text {
-                        id: appTitle
-                        text: "Open-Motion"
-                        color: AppTheme.textPrimary
-                        font.pixelSize: 14
-                        font.weight: Font.Bold
                     }
                 }
 
