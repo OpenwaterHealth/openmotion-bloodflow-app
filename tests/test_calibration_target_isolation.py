@@ -55,6 +55,9 @@ import numpy as np
 import psutil
 import pyautogui
 import pytest
+# Windows-only UI automation; this whole module is a HIL test. Skip the module
+# rather than fail collection on a non-Windows dev machine.
+pytest.importorskip("pywinauto", reason="pywinauto is Windows-only (HIL test)")
 from pywinauto import findwindows
 
 from conftest import (
