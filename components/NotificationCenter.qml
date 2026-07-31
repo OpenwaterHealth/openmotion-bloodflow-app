@@ -247,7 +247,7 @@ Item {
                     anchors.right: parent.right
                     implicitHeight: contentRow.implicitHeight + 24
                     height: implicitHeight
-                    radius: 10
+                    radius: AppTheme.r(10)
                     // Dedicated token, not bgElevated — a toast has to stay
                     // readable over the Liquid Glass ambient (#396).
                     color: AppTheme.toastBg
@@ -270,7 +270,7 @@ Item {
                     Rectangle {
                         width: 3
                         height: parent.height - 8
-                        radius: 1.5
+                        radius: AppTheme.r(1.5)
                         color: root._accentColor(model.type)
                         anchors.left: parent.left
                         anchors.leftMargin: 4

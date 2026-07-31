@@ -131,7 +131,7 @@ Item {
         // backdrop rather than overlapping the card.
         width: 520
         height: contentCol.implicitHeight + 48
-        radius: 12
+        radius: AppTheme.r(12)
         color: AppTheme.sheetBg
         border.color: AppTheme.borderSubtle
         border.width: 2
@@ -157,7 +157,7 @@ Item {
                 Rectangle {
                     Layout.preferredHeight: 24
                     Layout.preferredWidth: codeText.implicitWidth + 16
-                    radius: 4
+                    radius: AppTheme.r(4)
                     color: AppTheme.accentInteractive
                     Text {
                         id: codeText
@@ -210,7 +210,7 @@ Item {
             Rectangle {
                 visible: root.suggestedAction !== ""
                 Layout.fillWidth: true
-                radius: 6
+                radius: AppTheme.r(6)
                 color: AppTheme.bgInput
                 Layout.preferredHeight: actionRow.implicitHeight + 16
                 RowLayout {
@@ -286,7 +286,7 @@ Item {
                     }
                     background: Rectangle {
                         color: parent.hovered ? AppTheme.bgHover : AppTheme.bgInput
-                        radius: 4
+                        radius: AppTheme.r(4)
                         border.color: AppTheme.borderSoft; border.width: 1
                     }
                 }
@@ -307,7 +307,7 @@ Item {
                     }
                     background: Rectangle {
                         color: parent.hovered ? AppTheme.bgHover : AppTheme.bgInput
-                        radius: 4
+                        radius: AppTheme.r(4)
                         border.color: AppTheme.borderSubtle; border.width: 1
                     }
                 }
@@ -331,7 +331,7 @@ Item {
                     background: Rectangle {
                         color: parent.hovered ? Qt.lighter(AppTheme.accentInteractive, 1.1)
                                               : AppTheme.accentInteractive
-                        radius: 4
+                        radius: AppTheme.r(4)
                     }
                 }
             }

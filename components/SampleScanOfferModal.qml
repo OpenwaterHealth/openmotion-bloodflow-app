@@ -47,7 +47,7 @@ Item {
         id: card
         width: Math.min(parent.width - root.iconBarInset - 40, 460)
         height: contentCol.implicitHeight + 48
-        radius: 12
+        radius: AppTheme.r(12)
         color: AppTheme.sheetBg
         border.color: AppTheme.borderSubtle
         border.width: 2
@@ -100,7 +100,7 @@ Item {
                     }
                     background: Rectangle {
                         color: parent.hovered ? AppTheme.bgHover : AppTheme.bgInput
-                        radius: 4
+                        radius: AppTheme.r(4)
                         border.color: AppTheme.borderSoft; border.width: 1
                     }
                 }
@@ -120,7 +120,7 @@ Item {
                     }
                     background: Rectangle {
                         color: parent.hovered ? Qt.lighter(AppTheme.accentInteractive, 1.1) : AppTheme.accentInteractive
-                        radius: 4
+                        radius: AppTheme.r(4)
                     }
                 }
             }

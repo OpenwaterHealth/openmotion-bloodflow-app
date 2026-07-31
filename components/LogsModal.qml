@@ -88,7 +88,7 @@ Item {
         selectByMouse: true
         background: Rectangle {
             color: AppTheme.bgInput
-            radius: 4
+            radius: AppTheme.r(4)
             border.color: !ff.validDate ? "#C0392B"
                           : ff.activeFocus ? AppTheme.accentInteractive
                                            : AppTheme.borderSubtle
@@ -119,7 +119,7 @@ Item {
     Rectangle {
         width: Math.min(parent.width - 60, 980)
         height: Math.min(parent.height - 60, 700)
-        radius: 12
+        radius: AppTheme.r(12)
         color: AppTheme.sheetBg
         border.color: AppTheme.borderSubtle
         border.width: 2
@@ -154,7 +154,7 @@ Item {
                     }
                     background: Rectangle {
                         color: parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput
-                        border.color: parent.hovered ? AppTheme.textPrimary : AppTheme.textSecondary; radius: 4
+                        border.color: parent.hovered ? AppTheme.textPrimary : AppTheme.textSecondary; radius: AppTheme.r(4)
                     }
                     onClicked: {
                         exportDialog.selectedFile = "file:///" + MotionInterface.directory
@@ -172,12 +172,12 @@ Item {
                     }
                     background: Rectangle {
                         color: parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput
-                        border.color: parent.hovered ? AppTheme.textPrimary : AppTheme.textSecondary; radius: 4
+                        border.color: parent.hovered ? AppTheme.textPrimary : AppTheme.textSecondary; radius: AppTheme.r(4)
                     }
                     onClicked: root.refresh()
                 }
                 Rectangle {
-                    width: 28; height: 28; radius: 14
+                    width: 28; height: 28; radius: AppTheme.r(14)
                     color: xArea.containsMouse ? "#C0392B" : AppTheme.borderStrong
                     border.color: AppTheme.borderHover; border.width: 1
                     Behavior on color { ColorAnimation { duration: 120 } }
@@ -215,7 +215,7 @@ Item {
                         elide: Text.ElideRight
                     }
                     background: Rectangle {
-                        color: AppTheme.bgInput; radius: 4
+                        color: AppTheme.bgInput; radius: AppTheme.r(4)
                         border.color: typeCombo.activeFocus
                                       ? AppTheme.accentInteractive : AppTheme.borderSubtle
                         border.width: 1
@@ -239,7 +239,7 @@ Item {
                         }
                         background: Rectangle {
                             // menuBg — readable over the glass ambient (#398).
-                            color: AppTheme.menuBg; radius: 4
+                            color: AppTheme.menuBg; radius: AppTheme.r(4)
                             border.color: AppTheme.borderSubtle; border.width: 1
                         }
                     }
@@ -301,7 +301,7 @@ Item {
                                ? AppTheme.accentInteractive : AppTheme.bgInput
                         border.color: parent.enabled && parent.hovered
                                       ? AppTheme.textPrimary : AppTheme.borderSubtle
-                        radius: 4
+                        radius: AppTheme.r(4)
                     }
                     onClicked: root.clearFilters()
                 }
@@ -311,7 +311,7 @@ Item {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 30
-                color: AppTheme.bgCardAlt; radius: 4
+                color: AppTheme.bgCardAlt; radius: AppTheme.r(4)
                 RowLayout {
                     anchors.fill: parent
                     anchors.leftMargin: 8; anchors.rightMargin: 8
@@ -328,7 +328,7 @@ Item {
             // ── table body ─────────────────────────────────────────
             Rectangle {
                 Layout.fillWidth: true; Layout.fillHeight: true
-                radius: 6; color: AppTheme.bgCardAlt
+                radius: AppTheme.r(6); color: AppTheme.bgCardAlt
                 border.color: AppTheme.borderSubtle; border.width: 1
                 clip: true
 

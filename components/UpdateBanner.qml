@@ -28,7 +28,7 @@ Rectangle {
     property string statusText: "Update"
 
     color: AppTheme.accentInteractive
-    radius: 0
+    radius: AppTheme.r(0)
 
     Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutQuad } }
 
@@ -55,14 +55,16 @@ Rectangle {
         Rectangle {
             width: downloadBtn.implicitWidth + 20
             height: 24
-            radius: 4
+            radius: AppTheme.r(4)
             color: "#FFFFFF"
 
             Text {
                 id: downloadBtn
                 anchors.centerIn: parent
                 text: banner.updating ? banner.statusText : "Update"
-                color: AppTheme.accentInteractive
+                // Painted on a near-white pill, so it needs the light-fill-safe
+                // variant — a light theme accent is unreadable here otherwise.
+                color: AppTheme.accentOnLight
                 font.pixelSize: 12
                 font.weight: Font.DemiBold
             }
@@ -85,7 +87,7 @@ Rectangle {
         }
 
         Rectangle {
-            width: 22; height: 22; radius: 11
+            width: 22; height: 22; radius: AppTheme.r(11)
             color: dismissArea.containsMouse ? "#FFFFFF30" : "transparent"
 
             Text {

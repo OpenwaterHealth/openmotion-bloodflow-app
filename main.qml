@@ -42,7 +42,7 @@ ApplicationWindow {
         anchors.fill: parent
         visible: false
         layer.enabled: true
-        Rectangle { anchors.fill: parent; radius: 20; color: "white" }
+        Rectangle { anchors.fill: parent; radius: AppTheme.r(20); color: "white" }
     }
 
 
@@ -92,7 +92,7 @@ ApplicationWindow {
     Rectangle {
         anchors.fill: parent
         color: AppTheme.bgBase
-        radius: 20
+        radius: AppTheme.r(20)
         border.color: "transparent"
 
         // Header Section (with drag functionality)

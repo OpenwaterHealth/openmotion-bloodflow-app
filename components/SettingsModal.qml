@@ -208,7 +208,7 @@ Item {
         Layout.leftMargin: 20
         Layout.rightMargin: 20
         color:        root.colBgCard
-        radius:       10
+        radius:       AppTheme.r(10)
         border.color: root.colBorderSoft
         border.width: 1
         implicitHeight: cardCol.implicitHeight + 36
@@ -272,7 +272,7 @@ Item {
         }
         background: Rectangle {
             color: root.colBgInput
-            radius: 4
+            radius: AppTheme.r(4)
             border.color: styledComboCtrl.activeFocus ? root.colAccent : root.colBorderSoft
             border.width: 1
         }
@@ -298,7 +298,7 @@ Item {
                 // menuBg, not bgCard — an open dropdown has to be readable
                 // over the Liquid Glass ambient (#398).
                 color: root.colMenuBg
-                radius: 4
+                radius: AppTheme.r(4)
                 border.color: root.colBorderSoft
                 border.width: 1
             }
@@ -339,7 +339,7 @@ Item {
         }
         background: Rectangle {
             color: root.colBgInput
-            radius: 4
+            radius: AppTheme.r(4)
             border.color: numFieldCtrl.activeFocus ? root.colAccent : root.colBorderSoft
             border.width: 1
         }
@@ -413,7 +413,7 @@ Item {
         indicator: Rectangle {
             x:      pillCtrl.leftPadding
             y:      (pillCtrl.height - height) / 2
-            width:  44; height: 24; radius: 12
+            width:  44; height: 24; radius: AppTheme.r(12)
             color:  pillCtrl.checked ? root.colAccent : root.colBgInput
             border.color: pillCtrl.checked ? root.colAccent : root.colBorderSoft
             border.width: 1
@@ -421,7 +421,7 @@ Item {
 
             Rectangle {
                 x:      pillCtrl.checked ? parent.width - width - 3 : 3
-                y:      3; width: 18; height: 18; radius: 9
+                y:      3; width: 18; height: 18; radius: AppTheme.r(9)
                 color:  "#FFFFFF"
                 Behavior on x { NumberAnimation { duration: 120 } }
             }
@@ -441,7 +441,7 @@ Item {
         }
         background: Rectangle {
             color:        parent.hovered ? parent.hoverColor : root.colBgInput
-            radius:       4
+            radius:       AppTheme.r(4)
             border.color: parent.hovered ? root.colAccent : root.colBorderSoft
             border.width: 1
         }
@@ -466,7 +466,7 @@ Item {
         id: panel
         width:  Math.min(parent.width - root.iconBarInset - 40, 680)
         height: Math.min(parent.height - 40, 800)
-        radius: 14
+        radius: AppTheme.r(14)
         color:  root.colBgPanel
         border.color: root.colBorder
         border.width: 1
@@ -502,7 +502,7 @@ Item {
             }
 
             Rectangle {
-                width: 30; height: 30; radius: 15
+                width: 30; height: 30; radius: AppTheme.r(15)
                 color: xArea.containsMouse ? "#C0392B" : root.colBorder
                 border.color: root.colBorderSoft; border.width: 1
                 anchors.right: parent.right
@@ -600,7 +600,7 @@ Item {
                             Layout.fillWidth: true
                             Layout.preferredHeight: 30
                             background: Rectangle {
-                                color: root.colBgInput; radius: 4
+                                color: root.colBgInput; radius: AppTheme.r(4)
                                 border.color: root.colBorderSoft; border.width: 1
                             }
                         }
@@ -671,7 +671,7 @@ Item {
                             background: Rectangle {
                                 color: root.colBgInput
                                 border.color: rawCsvDurationField.activeFocus ? root.colAccent : root.colBorderSoft
-                                radius: 4
+                                radius: AppTheme.r(4)
                             }
                             onEditingFinished: {
                                 var v = parseInt(text, 10)
@@ -751,7 +751,7 @@ Item {
                         visible: MotionInterface.appConfig.engineeringMode ? true : false
                         label: "Trace colors"
                         Rectangle {
-                            width: 26; height: 26; radius: 4
+                            width: 26; height: 26; radius: AppTheme.r(4)
                             color: root.bfiColor
                             border.color: root.colBorderSoft; border.width: 1
                             MouseArea {
@@ -763,7 +763,7 @@ Item {
                         Text { text: "BFI"; color: root.colTextSec; font.pixelSize: 12 }
                         Item { width: 8 }
                         Rectangle {
-                            width: 26; height: 26; radius: 4
+                            width: 26; height: 26; radius: AppTheme.r(4)
                             color: root.bviColor
                             border.color: root.colBorderSoft; border.width: 1
                             MouseArea {
@@ -895,26 +895,53 @@ Item {
                         spacing: 0
                         FieldRow {
                             label: "Theme"
-                            // Single selector over the two underlying booleans
-                            // (darkMode, liquidGlass). Liquid Glass is the
-                            // dark-based glass — the two solid themes are Dark
-                            // and Light (the warm-paper palette, #369). Written
-                            // atomically via saveConfigs so it's one persist +
-                            // one appConfigChanged + one audit entry.
+                            // Theme and light/dark are independent axes: every
+                            // theme ships both variants, so picking Metro does
+                            // not cost you the ability to choose light. Written
+                            // via saveConfigs so it's one persist + one
+                            // appConfigChanged + one audit entry.
+                            //
+                            // liquidGlass is written alongside themeName purely
+                            // to keep a downgrade to an older build coherent —
+                            // that build reads only the boolean.
                             StyledCombo {
                                 id: themeCombo
-                                Layout.preferredWidth: 150
-                                model: ["Dark Mode", "Light Mode", "Liquid Glass"]
-                                currentIndex: MotionInterface.appConfig.liquidGlass === true
-                                              ? 2
-                                              : (MotionInterface.appConfig.darkMode !== false ? 0 : 1)
+                                Layout.preferredWidth: 170
+                                readonly property var themeKeys: [
+                                    "default", "glass", "win-classic",
+                                    "aqua", "aero", "metro", "material"
+                                ]
+                                model: [
+                                    "Default", "Liquid Glass", "Windows Classic",
+                                    "Aqua", "Aero", "Metro", "Material"
+                                ]
+                                currentIndex: {
+                                    var name = MotionInterface.appConfig.themeName
+                                    if (!name)
+                                        name = MotionInterface.appConfig.liquidGlass === true
+                                               ? "glass" : "default"
+                                    var idx = themeKeys.indexOf(name)
+                                    return idx < 0 ? 0 : idx
+                                }
                                 onActivated: function(index) {
-                                    if (index === 0)
-                                        MotionInterface.saveConfigs({ "darkMode": true,  "liquidGlass": false })
-                                    else if (index === 1)
-                                        MotionInterface.saveConfigs({ "darkMode": false, "liquidGlass": false })
-                                    else
-                                        MotionInterface.saveConfigs({ "darkMode": true,  "liquidGlass": true })
+                                    var key = themeKeys[index]
+                                    MotionInterface.saveConfigs({
+                                        "themeName": key,
+                                        "liquidGlass": key === "glass"
+                                    })
+                                }
+                            }
+                        }
+                        FieldRow {
+                            label: "Appearance"
+                            // The light/dark axis, now independent of theme.
+                            StyledCombo {
+                                id: appearanceCombo
+                                Layout.preferredWidth: 170
+                                model: ["Dark", "Light"]
+                                currentIndex: MotionInterface.appConfig.darkMode !== false ? 0 : 1
+                                onActivated: function(index) {
+                                    MotionInterface.saveConfigs({ "darkMode": index === 0 })
                                 }
                             }
                         }
@@ -1105,7 +1132,7 @@ Item {
                             id: calibLight
                             width: 10
                             height: 10
-                            radius: 5
+                            radius: AppTheme.r(5)
                             Layout.alignment: Qt.AlignVCenter
                             border.width: 1
                             border.color: root.colBorderSoft
@@ -1258,7 +1285,7 @@ Item {
                         signal chipClicked()
                         property string label: "Update"
                         property bool chipEnabled: true
-                        width: chipText.implicitWidth + 18; height: 24; radius: 4
+                        width: chipText.implicitWidth + 18; height: 24; radius: AppTheme.r(4)
                         color: chipArea.containsMouse ? Qt.lighter(AppTheme.accentInteractive, 1.1) : AppTheme.accentInteractive
                         opacity: chipEnabled ? 1.0 : 0.6
                         Text {

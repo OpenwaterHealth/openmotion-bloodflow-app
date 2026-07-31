@@ -8,7 +8,7 @@ Rectangle {
     width: parent.width
     height: 60
     color: AppTheme.bgContainer // Header background color
-    radius: 20
+    radius: AppTheme.r(20)
 
     // Emitted when the user clicks the exit (X) icon in the title
     // bar. main.qml owns the actual quit decision so it can show the
@@ -62,7 +62,7 @@ Rectangle {
             width: 185
             height: 42
             color: "transparent" // No background color
-            radius: 6
+            radius: AppTheme.r(6)
 
             // Dark-mode: show the original white logo directly
             Image {
@@ -131,9 +131,21 @@ Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 34
             color: AppTheme.bgElevated
-            radius: 8
-            border.color: AppTheme.borderSubtle
-            border.width: 1
+            radius: AppTheme.r(8)
+            // The chisel replaces the flat border on bevelled themes.
+            border.color: AppTheme.bevel ? "transparent" : AppTheme.borderSubtle
+            border.width: AppTheme.bevel ? 0 : 1
+
+            // The session bar is the one always-present chrome surface wide
+            // enough to carry a material: Aqua/Aero put their sheen here, and
+            // Windows Classic sinks it like a status well. Invisible on flat
+            // themes. Declared before the row so it paints underneath.
+            ThemedSurface {
+                anchors.fill: parent
+                color: "transparent"
+                radius: AppTheme.r(8)
+                raised: false      // a readout is recessed, not a button
+            }
 
             RowLayout {
                 anchors.fill: parent
@@ -162,7 +174,7 @@ Rectangle {
                     visible: !windowMenu.clinicalMode
                     width: betaLabel.implicitWidth + 12
                     height: betaLabel.implicitHeight + 4
-                    radius: 4
+                    radius: AppTheme.r(4)
                     color: "#E67E22"
                     Text {
                         id: betaLabel
@@ -207,6 +219,7 @@ Rectangle {
             // Minimize Button
             IconWindowButton {
                 buttonIcon: "\ue9e4" // Minimize icon
+                squareGlyph: "–"   // en dash — the Win95 minimize bar
                 Layout.alignment: Qt.AlignHCenter
                 onClicked: {
                     window.showMinimized(); // Minimize the window
@@ -215,6 +228,7 @@ Rectangle {
             // Maximize/Restore Button
             IconWindowButton {
                 buttonIcon: window.visibility === Window.Maximized ? "\uea47" : "\ueb18"
+                squareGlyph: window.visibility === Window.Maximized ? "❐" : "□"
                 Layout.alignment: Qt.AlignHCenter
                 onClicked: {
                     if (window.visibility === Window.Maximized) {
@@ -228,6 +242,7 @@ Rectangle {
             // so the close-while-busy warning (#75) can intercept.
             IconWindowButton {
                 buttonIcon: "\ue9b3" // Exit (close) icon
+                squareGlyph: "✕"
                 Layout.alignment: Qt.AlignHCenter
                 onClicked: windowMenu.closeRequested()
             }

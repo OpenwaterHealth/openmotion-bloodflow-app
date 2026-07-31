@@ -170,7 +170,7 @@ Item {
     Rectangle {
         width: Math.min(parent.width - root.iconBarInset - 40, 520)
         height: Math.min(parent.height - 60, 640)
-        radius: 14
+        radius: AppTheme.r(14)
         color: AppTheme.sheetBg
         border.color: AppTheme.borderSubtle
         border.width: 2
@@ -190,7 +190,7 @@ Item {
 
         // X close button
         Rectangle {
-            width: 28; height: 28; radius: 14
+            width: 28; height: 28; radius: AppTheme.r(14)
             color: xArea.containsMouse ? "#C0392B" : AppTheme.borderStrong
             border.color: AppTheme.borderHover; border.width: 1
             anchors.top: parent.top; anchors.right: parent.right
@@ -254,7 +254,7 @@ Item {
                     font.pixelSize: 14
                     color: AppTheme.textPrimary
                     background: Rectangle {
-                        color: AppTheme.bgInput; radius: 4
+                        color: AppTheme.bgInput; radius: AppTheme.r(4)
                         border.color: userLabelField.activeFocus ? AppTheme.accentInteractive : AppTheme.borderSubtle
                         border.width: 1
                     }
@@ -314,7 +314,7 @@ Item {
                             leftPadding: 10; text: leftSelector.displayText; font: leftSelector.font
                             color: AppTheme.textPrimary; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight
                         }
-                        background: Rectangle { color: AppTheme.bgInput; radius: 4; border.color: AppTheme.borderSubtle; border.width: 1 }
+                        background: Rectangle { color: AppTheme.bgInput; radius: AppTheme.r(4); border.color: AppTheme.borderSubtle; border.width: 1 }
                         indicator: Text { x: leftSelector.width - width - 10; y: (leftSelector.height - height) / 2; text: "\u25BE"; font.pixelSize: 14; color: AppTheme.textSecondary }
                         delegate: ItemDelegate {
                             width: leftSelector.width; height: 32
@@ -326,7 +326,7 @@ Item {
                             y: leftSelector.height; width: leftSelector.width; implicitHeight: contentItem.implicitHeight + 2; padding: 1
                             contentItem: ListView { clip: true; implicitHeight: contentHeight; model: leftSelector.delegateModel; ScrollIndicator.vertical: ScrollIndicator {} }
                             // menuBg — readable over the glass ambient (#398).
-                            background: Rectangle { color: AppTheme.menuBg; radius: 4; border.color: AppTheme.borderSubtle; border.width: 1 }
+                            background: Rectangle { color: AppTheme.menuBg; radius: AppTheme.r(4); border.color: AppTheme.borderSubtle; border.width: 1 }
                         }
                         Component.onCompleted: {
                             var defMask = MotionInterface.appConfig.leftMask !== undefined
@@ -367,7 +367,7 @@ Item {
                             leftPadding: 10; text: rightSelector.displayText; font: rightSelector.font
                             color: AppTheme.textPrimary; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight
                         }
-                        background: Rectangle { color: AppTheme.bgInput; radius: 4; border.color: AppTheme.borderSubtle; border.width: 1 }
+                        background: Rectangle { color: AppTheme.bgInput; radius: AppTheme.r(4); border.color: AppTheme.borderSubtle; border.width: 1 }
                         indicator: Text { x: rightSelector.width - width - 10; y: (rightSelector.height - height) / 2; text: "\u25BE"; font.pixelSize: 14; color: AppTheme.textSecondary }
                         delegate: ItemDelegate {
                             width: rightSelector.width; height: 32
@@ -379,7 +379,7 @@ Item {
                             y: rightSelector.height; width: rightSelector.width; implicitHeight: contentItem.implicitHeight + 2; padding: 1
                             contentItem: ListView { clip: true; implicitHeight: contentHeight; model: rightSelector.delegateModel; ScrollIndicator.vertical: ScrollIndicator {} }
                             // menuBg — readable over the glass ambient (#398).
-                            background: Rectangle { color: AppTheme.menuBg; radius: 4; border.color: AppTheme.borderSubtle; border.width: 1 }
+                            background: Rectangle { color: AppTheme.menuBg; radius: AppTheme.r(4); border.color: AppTheme.borderSubtle; border.width: 1 }
                         }
                         Component.onCompleted: {
                             var defMask = MotionInterface.appConfig.rightMask !== undefined
@@ -419,13 +419,13 @@ Item {
                     onCheckedChanged: root.freeRun = checked
                     indicator: Rectangle {
                         x: modeSwitch.leftPadding; y: (modeSwitch.height - height) / 2
-                        width: 44; height: 24; radius: 12
+                        width: 44; height: 24; radius: AppTheme.r(12)
                         color: modeSwitch.checked ? AppTheme.accentInteractive : AppTheme.bgInput
                         border.color: modeSwitch.checked ? AppTheme.accentInteractive : AppTheme.borderSubtle; border.width: 1
                         Behavior on color { ColorAnimation { duration: 120 } }
                         Rectangle {
                             x: modeSwitch.checked ? parent.width - width - 3 : 3
-                            y: 3; width: 18; height: 18; radius: 9; color: "#FFFFFF"
+                            y: 3; width: 18; height: 18; radius: AppTheme.r(9); color: "#FFFFFF"
                             Behavior on x { NumberAnimation { duration: 120 } }
                         }
                     }
@@ -453,7 +453,7 @@ Item {
                     font.pixelSize: 20; color: AppTheme.textPrimary
                     horizontalAlignment: Text.AlignHCenter
                     Layout.preferredWidth: 54; Layout.preferredHeight: 40
-                    background: Rectangle { color: AppTheme.bgInput; radius: 6; border.color: AppTheme.borderSubtle; border.width: 1 }
+                    background: Rectangle { color: AppTheme.bgInput; radius: AppTheme.r(6); border.color: AppTheme.borderSubtle; border.width: 1 }
                     onEditingFinished: {
                         var v = parseInt(text); if (isNaN(v)) v = 0
                         root.hours = Math.max(0, Math.min(99, v)); text = String(root.hours)
@@ -468,7 +468,7 @@ Item {
                     font.pixelSize: 20; color: AppTheme.textPrimary
                     horizontalAlignment: Text.AlignHCenter
                     Layout.preferredWidth: 54; Layout.preferredHeight: 40
-                    background: Rectangle { color: AppTheme.bgInput; radius: 6; border.color: AppTheme.borderSubtle; border.width: 1 }
+                    background: Rectangle { color: AppTheme.bgInput; radius: AppTheme.r(6); border.color: AppTheme.borderSubtle; border.width: 1 }
                     onEditingFinished: {
                         var v = parseInt(text); if (isNaN(v)) v = 0
                         root.minutes = Math.max(0, Math.min(59, v)); text = String(root.minutes).padStart(2, '0')
@@ -483,7 +483,7 @@ Item {
                     font.pixelSize: 20; color: AppTheme.textPrimary
                     horizontalAlignment: Text.AlignHCenter
                     Layout.preferredWidth: 54; Layout.preferredHeight: 40
-                    background: Rectangle { color: AppTheme.bgInput; radius: 6; border.color: AppTheme.borderSubtle; border.width: 1 }
+                    background: Rectangle { color: AppTheme.bgInput; radius: AppTheme.r(6); border.color: AppTheme.borderSubtle; border.width: 1 }
                     onEditingFinished: {
                         var v = parseInt(text); if (isNaN(v)) v = 0
                         root.seconds = Math.max(0, Math.min(59, v)); text = String(root.seconds).padStart(2, '0')

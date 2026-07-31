@@ -11,7 +11,7 @@ Rectangle {
     width: parent.width
     height: parent.height
     color: AppTheme.bgBase
-    radius: 0
+    radius: AppTheme.r(0)
 
 
     property bool scanning: false

@@ -171,7 +171,7 @@ Window {
             Layout.fillWidth: true
             Layout.fillHeight: true
             color: AppTheme.bgPlot
-            radius: 6
+            radius: AppTheme.r(6)
             border.color: AppTheme.borderStrong
             border.width: 1
 

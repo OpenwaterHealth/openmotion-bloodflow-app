@@ -58,7 +58,7 @@ Item {
     Rectangle {
         width: 360
         height: contentCol.implicitHeight + 48
-        radius: 14
+        radius: AppTheme.r(14)
         color: AppTheme.sheetBg
         border.color: AppTheme.borderStrong
         border.width: 1
@@ -104,7 +104,7 @@ Item {
                 bottomPadding: 0
                 background: Rectangle {
                     color: AppTheme.bgInput
-                    radius: 4
+                    radius: AppTheme.r(4)
                     border.color: pwField.activeFocus ? AppTheme.accentInteractive : AppTheme.borderSoft
                     border.width: 1
                 }
@@ -136,7 +136,7 @@ Item {
                     }
                     background: Rectangle {
                         color: parent.hovered ? AppTheme.bgHover : AppTheme.bgInput
-                        radius: 4
+                        radius: AppTheme.r(4)
                         border.color: AppTheme.borderSoft; border.width: 1
                     }
                 }
@@ -153,7 +153,7 @@ Item {
                     }
                     background: Rectangle {
                         color: parent.hovered ? Qt.lighter(AppTheme.accentInteractive, 1.1) : AppTheme.accentInteractive
-                        radius: 4
+                        radius: AppTheme.r(4)
                     }
                 }
             }

@@ -17,7 +17,7 @@ Rectangle {
 
     width: 150
     height: 195
-    radius: 18
+    radius: AppTheme.r(18)
     color: AppTheme.bgContainer
     border.color: sensorConnected ? AppTheme.borderSubtle : "#6E3E3F"
     border.width: 2

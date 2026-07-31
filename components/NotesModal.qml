@@ -61,7 +61,7 @@ Item {
     Rectangle {
         width: Math.min(parent.width - root.iconBarInset - 40, 600)
         height: 450
-        radius: 12
+        radius: AppTheme.r(12)
         color: AppTheme.sheetBg
         border.color: AppTheme.borderSubtle
         border.width: 2
@@ -78,7 +78,7 @@ Item {
 
         // X close button
         Rectangle {
-            width: 28; height: 28; radius: 14
+            width: 28; height: 28; radius: AppTheme.r(14)
             color: xArea.containsMouse ? "#C0392B" : AppTheme.borderStrong
             border.color: AppTheme.borderHover; border.width: 1
             anchors.top: parent.top; anchors.right: parent.right
@@ -107,7 +107,7 @@ Item {
 
             Rectangle {
                 color: AppTheme.bgInput
-                radius: 6
+                radius: AppTheme.r(6)
                 border.color: AppTheme.borderSubtle
                 border.width: 1
                 Layout.fillWidth: true

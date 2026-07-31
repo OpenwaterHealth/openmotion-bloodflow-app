@@ -259,7 +259,7 @@ Item {
     Rectangle {
         width: Math.min(parent.width - root.iconBarInset - 40, 1040)
         height: Math.min(parent.height - 60, 680)
-        radius: 12
+        radius: AppTheme.r(12)
         color: AppTheme.sheetBg
         border.color: AppTheme.borderSubtle
         border.width: 2
@@ -301,7 +301,7 @@ Item {
                     leftPadding: 12; rightPadding: 12
                     verticalAlignment: TextInput.AlignVCenter
                     background: Rectangle {
-                        color: AppTheme.bgInput; radius: 6
+                        color: AppTheme.bgInput; radius: AppTheme.r(6)
                         border.color: searchField.activeFocus ? AppTheme.accentInteractive : AppTheme.borderSubtle
                         border.width: 1
                     }
@@ -309,7 +309,7 @@ Item {
                 }
 
                 Rectangle {
-                    width: 30; height: 30; radius: 15
+                    width: 30; height: 30; radius: AppTheme.r(15)
                     color: xArea.containsMouse ? "#C0392B" : AppTheme.borderStrong
                     border.color: AppTheme.borderHover; border.width: 1
                     Behavior on color { ColorAnimation { duration: 120 } }
@@ -325,7 +325,7 @@ Item {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 30
-                color: AppTheme.bgCardAlt; radius: 4
+                color: AppTheme.bgCardAlt; radius: AppTheme.r(4)
                 RowLayout {
                     anchors.fill: parent
                     anchors.leftMargin: 8; anchors.rightMargin: 8
@@ -373,7 +373,7 @@ Item {
             // ── table body ─────────────────────────────────────────
             Rectangle {
                 Layout.fillWidth: true; Layout.fillHeight: true
-                radius: 6; color: AppTheme.bgCardAlt
+                radius: AppTheme.r(6); color: AppTheme.bgCardAlt
                 border.color: AppTheme.borderSubtle; border.width: 1
                 clip: true
 
@@ -467,7 +467,7 @@ Item {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 230
-                radius: 6; color: AppTheme.bgCardAlt
+                radius: AppTheme.r(6); color: AppTheme.bgCardAlt
                 border.color: AppTheme.borderSubtle; border.width: 1
                 visible: root.focusedRow !== null
 
@@ -502,7 +502,7 @@ Item {
                     Text { text: "Notes (read-only):"; color: AppTheme.textSecondary; font.pixelSize: 12 }
                     Rectangle {
                         Layout.fillWidth: true; Layout.fillHeight: true
-                        radius: 4; color: AppTheme.bgInput
+                        radius: AppTheme.r(4); color: AppTheme.bgInput
                         border.color: AppTheme.borderSubtle; border.width: 1
                         ScrollView {
                             anchors.fill: parent; anchors.margins: 2
@@ -536,7 +536,7 @@ Item {
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        radius: 6
+                        radius: AppTheme.r(6)
                         color: deleteBtn.hovered && deleteBtn.enabled
                                ? Qt.rgba(0.75, 0.22, 0.17, 0.16) : "transparent"
                         border.color: deleteBtn.enabled ? AppTheme.accentRed : AppTheme.textTertiary
@@ -559,7 +559,7 @@ Item {
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        radius: 6
+                        radius: AppTheme.r(6)
                         color: exportBtn.hovered && exportBtn.enabled ? AppTheme.bgHover : "transparent"
                         border.color: exportBtn.enabled ? AppTheme.borderStrong : AppTheme.textTertiary
                         border.width: 1
@@ -582,7 +582,7 @@ Item {
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        radius: 6
+                        radius: AppTheme.r(6)
                         color: !loadBtn.enabled ? AppTheme.bgInput
                                : (loadBtn.hovered ? Qt.lighter(AppTheme.accentInteractive, 1.12)
                                                   : AppTheme.accentInteractive)
@@ -607,7 +607,7 @@ Item {
         // Busy overlay while "Load in viewer" is in flight.
         Rectangle {
             anchors.fill: parent; color: "#000"; opacity: 0.45
-            visible: root.loadingPlot; z: 9999; radius: 12
+            visible: root.loadingPlot; z: 9999; radius: AppTheme.r(12)
             MouseArea { anchors.fill: parent }
             Column {
                 anchors.centerIn: parent; spacing: 12

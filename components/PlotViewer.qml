@@ -14,7 +14,7 @@ import OpenMotion 1.0
 Rectangle {
     id: viewer
     color: AppTheme.bgPlot
-    radius: 8
+    radius: AppTheme.r(8)
     border.color: AppTheme.borderSoft
     border.width: 1
 
@@ -885,7 +885,7 @@ Rectangle {
         color: AppTheme.overlayBgSolid
         border.color: AppTheme.borderSubtle
         border.width: 1
-        radius: 4
+        radius: AppTheme.r(4)
         width: tooltipColumn.implicitWidth + 16
         height: tooltipColumn.implicitHeight + 12
 
@@ -1013,7 +1013,7 @@ Rectangle {
         visible: viewer._showBackToLive
         width: backToLiveText.implicitWidth + 28
         height: 36
-        radius: 18
+        radius: AppTheme.r(18)
         anchors.top: parent.top
         anchors.right: parent.right
         anchors.topMargin: viewer._overlayEdgeMarginPx
@@ -1077,7 +1077,7 @@ Rectangle {
         z: 6
         width: scanBadgeRow.implicitWidth + 28
         height: 36
-        radius: 18
+        radius: AppTheme.r(18)
         color: AppTheme.overlayBg
         border.color: AppTheme.borderSubtle
         border.width: 1
@@ -1123,7 +1123,7 @@ Rectangle {
             id: windowSecondsPill
             width: windowSecondsText.implicitWidth + 38
             height: 36
-            radius: 18
+            radius: AppTheme.r(18)
             color: AppTheme.overlayBg
             border.color: AppTheme.borderSubtle
             border.width: 1
@@ -1169,7 +1169,7 @@ Rectangle {
                     color: AppTheme.overlayBgSolid
                     border.color: AppTheme.borderSubtle
                     border.width: 1
-                    radius: 8
+                    radius: AppTheme.r(8)
                 }
                 Repeater {
                     model: viewer._windowOptions
@@ -1193,7 +1193,7 @@ Rectangle {
                      || MotionInterface.appConfig.engineeringMode === true
             width: 36
             height: 36
-            radius: 18
+            radius: AppTheme.r(18)
             color: settingsPopup.opened
                    ? Qt.alpha(AppTheme.accentInteractive, 0.85)
                    : AppTheme.overlayBg
@@ -1232,7 +1232,7 @@ Rectangle {
                     color: AppTheme.overlayBgSolid
                     border.color: AppTheme.borderSubtle
                     border.width: 1
-                    radius: 8
+                    radius: AppTheme.r(8)
                 }
 
                 // Mini Switch styled to match SettingsModal's PillSwitch —
@@ -1244,7 +1244,7 @@ Rectangle {
                     indicator: Rectangle {
                         x:      psCtrl.leftPadding
                         y:      (psCtrl.height - height) / 2
-                        width:  44; height: 24; radius: 12
+                        width:  44; height: 24; radius: AppTheme.r(12)
                         color:  psCtrl.checked ? AppTheme.accentInteractive : AppTheme.bgInput
                         border.color: psCtrl.checked ? AppTheme.accentInteractive : AppTheme.borderSoft
                         border.width: 1
@@ -1252,7 +1252,7 @@ Rectangle {
 
                         Rectangle {
                             x:      psCtrl.checked ? parent.width - width - 3 : 3
-                            y:      3; width: 18; height: 18; radius: 9
+                            y:      3; width: 18; height: 18; radius: AppTheme.r(9)
                             color:  "#FFFFFF"
                             Behavior on x { NumberAnimation { duration: 120 } }
                         }
@@ -1359,7 +1359,7 @@ Rectangle {
         color: Qt.rgba(0.10, 0.10, 0.12, 0.85)
         border.color: "#4A90E2"
         border.width: 1
-        radius: 4
+        radius: AppTheme.r(4)
 
         Column {
             id: hudColumn

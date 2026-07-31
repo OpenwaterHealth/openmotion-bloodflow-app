@@ -24,7 +24,7 @@ Rectangle {
     visible: !_clinical && MotionInterface.anyFirmwareUpdateAvailable && !_dismissed
 
     color: AppTheme.accentInteractive
-    radius: 0
+    radius: AppTheme.r(0)
     Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutQuad } }
 
     RowLayout {
@@ -43,7 +43,7 @@ Rectangle {
         }
 
         Rectangle {
-            width: viewBtn.implicitWidth + 20; height: 24; radius: 4; color: "#FFFFFF"
+            width: viewBtn.implicitWidth + 20; height: 24; radius: AppTheme.r(4); color: "#FFFFFF"
             Text {
                 id: viewBtn
                 anchors.centerIn: parent
@@ -62,7 +62,7 @@ Rectangle {
         }
 
         Rectangle {
-            width: 22; height: 22; radius: 11
+            width: 22; height: 22; radius: AppTheme.r(11)
             color: dismissArea.containsMouse ? "#FFFFFF30" : "transparent"
             Text { anchors.centerIn: parent; text: "✕"; color: "#FFFFFF"; font.pixelSize: 12 }
             MouseArea {

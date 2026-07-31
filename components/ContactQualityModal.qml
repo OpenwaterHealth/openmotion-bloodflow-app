@@ -252,7 +252,7 @@ Item {
         id: panel
         width: 520
         height: 480
-        radius: 10
+        radius: AppTheme.r(10)
         color: AppTheme.sheetBg
         border.width: 2
         border.color: root.state_ === "ok" ? AppTheme.accentGreen
@@ -338,7 +338,7 @@ Item {
                 // Left sensor
                 Rectangle {
                     visible: MotionInterface.leftSensorConnected
-                    width: 180; height: 210; radius: 22
+                    width: 180; height: 210; radius: AppTheme.r(22)
                     color: AppTheme.bgCard
                     border.color: AppTheme.borderSubtle; border.width: 2
 
@@ -384,7 +384,7 @@ Item {
                 // Right sensor
                 Rectangle {
                     visible: MotionInterface.rightSensorConnected
-                    width: 180; height: 210; radius: 22
+                    width: 180; height: 210; radius: AppTheme.r(22)
                     color: AppTheme.bgCard
                     border.color: AppTheme.borderSubtle; border.width: 2
 
@@ -438,14 +438,14 @@ Item {
 
                 RowLayout {
                     spacing: 6
-                    Rectangle { width: 10; height: 10; radius: 5
+                    Rectangle { width: 10; height: 10; radius: AppTheme.r(5)
                         color: AppTheme.accentOrangeAmbient
                         border.color: "black"; border.width: 1 }
                     Text { text: "ambient"; color: AppTheme.textSecondary; font.pixelSize: 11 }
                 }
                 RowLayout {
                     spacing: 6
-                    Rectangle { width: 10; height: 10; radius: 5
+                    Rectangle { width: 10; height: 10; radius: AppTheme.r(5)
                         color: AppTheme.accentOrangeContact
                         border.color: "black"; border.width: 1 }
                     Text { text: "contact"; color: AppTheme.textSecondary; font.pixelSize: 11 }
@@ -453,7 +453,7 @@ Item {
                 RowLayout {
                     spacing: 6
                     Rectangle {
-                        width: 10; height: 10; radius: 5
+                        width: 10; height: 10; radius: AppTheme.r(5)
                         border.color: "black"; border.width: 1
                         gradient: Gradient {
                             orientation: Gradient.Horizontal
@@ -492,7 +492,7 @@ Item {
                     }
                     background: Rectangle {
                         color: parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput
-                        radius: 4; border.color: parent.hovered ? AppTheme.accentInteractive : AppTheme.borderSoft; border.width: 1
+                        radius: AppTheme.r(4); border.color: parent.hovered ? AppTheme.accentInteractive : AppTheme.borderSoft; border.width: 1
                     }
                     onClicked: { root.close(); root.dismissed() }
                 }
@@ -508,7 +508,7 @@ Item {
                     }
                     background: Rectangle {
                         color: parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput
-                        radius: 4; border.color: parent.hovered ? AppTheme.accentInteractive : AppTheme.borderSoft; border.width: 1
+                        radius: AppTheme.r(4); border.color: parent.hovered ? AppTheme.accentInteractive : AppTheme.borderSoft; border.width: 1
                     }
                     onClicked: { root.close(); root.retestRequested() }
                 }
@@ -532,7 +532,7 @@ Item {
                     background: Rectangle {
                         color: !parent.enabled ? AppTheme.bgCard
                               : (parent.hovered ? AppTheme.accentGreen : AppTheme.bgInput)
-                        radius: 4
+                        radius: AppTheme.r(4)
                         border.color: !parent.enabled ? AppTheme.borderSubtle
                                     : (parent.hovered ? AppTheme.accentGreen : AppTheme.borderSoft)
                         border.width: 1
@@ -553,7 +553,7 @@ Item {
                     }
                     background: Rectangle {
                         color: parent.hovered ? AppTheme.accentRed : AppTheme.bgInput
-                        radius: 4; border.color: parent.hovered ? AppTheme.accentRed : AppTheme.borderSoft; border.width: 1
+                        radius: AppTheme.r(4); border.color: parent.hovered ? AppTheme.accentRed : AppTheme.borderSoft; border.width: 1
                     }
                     onClicked: { root.stopScanRequested(); root.close(); root.dismissed() }
                 }
@@ -572,7 +572,7 @@ Item {
                     background: Rectangle {
                         color: !parent.enabled ? AppTheme.bgCard
                               : (parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput)
-                        radius: 4
+                        radius: AppTheme.r(4)
                         border.color: !parent.enabled ? AppTheme.borderSubtle
                                     : (parent.hovered ? AppTheme.accentInteractive : AppTheme.borderSoft)
                         border.width: 1
@@ -593,7 +593,7 @@ Item {
                     }
                     background: Rectangle {
                         color: parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput
-                        radius: 4; border.color: parent.hovered ? AppTheme.accentInteractive : AppTheme.borderSoft; border.width: 1
+                        radius: AppTheme.r(4); border.color: parent.hovered ? AppTheme.accentInteractive : AppTheme.borderSoft; border.width: 1
                     }
                     onClicked: { root.close(); root.dismissed() }
                 }
@@ -609,7 +609,7 @@ Item {
                     }
                     background: Rectangle {
                         color: parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput
-                        radius: 4; border.color: parent.hovered ? AppTheme.accentInteractive : AppTheme.borderSoft; border.width: 1
+                        radius: AppTheme.r(4); border.color: parent.hovered ? AppTheme.accentInteractive : AppTheme.borderSoft; border.width: 1
                     }
                     onClicked: { root.close(); root.retestRequested() }
                 }
@@ -627,7 +627,7 @@ Item {
                     }
                     background: Rectangle {
                         color: parent.hovered ? "#B8740F" : AppTheme.bgInput
-                        radius: 4
+                        radius: AppTheme.r(4)
                         border.color: parent.hovered ? "#E8A020" : "#E8A020"
                         border.width: 1
                     }

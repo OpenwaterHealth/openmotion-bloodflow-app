@@ -185,6 +185,20 @@ def _load_app_config() -> dict:
         # dark-based one. Default ON for macOS (its native Tahoe look),
         # OFF elsewhere so Windows clinical builds keep the solid palette.
         "liquidGlass": sys.platform == "darwin",
+        # Named visual theme (Settings → Appearance → Theme). Orthogonal to
+        # darkMode: every theme ships a light and a dark variant, so the
+        # Light/Dark control applies whichever theme is selected.
+        #   default      the shipped palette (warm paper / neutral dark)
+        #   glass        Liquid Glass — equivalent to the old liquidGlass flag
+        #   win-classic  Windows 95/98 chisel
+        #   aqua         Mac OS X 10.0–10.4 lozenges + gloss
+        #   aero         Windows Vista/7 blue glass
+        #   metro        Windows 8 Modern UI flat
+        #   material     Google Material Design
+        # Palettes live in components/themePalettes.js. When unset, AppTheme
+        # falls back to the legacy liquidGlass boolean so an existing config
+        # keeps the appearance it already had.
+        "themeName": "glass" if sys.platform == "darwin" else "default",
         "cq_check_duration_sec": 1.0,
         "cq_rolling_avg_window": 5,
         # Live contact-quality monitor debounce (issue #364), asymmetric:
@@ -225,6 +239,16 @@ def _load_app_config() -> dict:
         clinical = os.environ["OPENMOTION_CLINICAL"] == "1"
         baseline["clinicalMode"] = clinical
         merged["clinicalMode"] = clinical
+    # Theme/appearance overrides — used by scripts/capture_theme.py to shoot
+    # every theme without mutating the user's saved config.
+    if "OPENMOTION_THEME" in os.environ:
+        theme = os.environ["OPENMOTION_THEME"]
+        baseline["themeName"] = theme
+        merged["themeName"] = theme
+    if "OPENMOTION_DARK" in os.environ:
+        is_dark = os.environ["OPENMOTION_DARK"] == "1"
+        baseline["darkMode"] = is_dark
+        merged["darkMode"] = is_dark
 
     _APP_CONFIG_BASELINE.clear()
     _APP_CONFIG_BASELINE.update(baseline)

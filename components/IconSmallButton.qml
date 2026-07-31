@@ -33,7 +33,7 @@ Item {
     Rectangle {
         id: bg
         anchors.fill: parent
-        radius: 4
+        radius: AppTheme.r(4)
         color: mouseArea.containsMouse ? hoverBackgroundColor : backgroundColor
         border.color: mouseArea.containsMouse ? hoverBorderColor : borderColor
         border.width: 1
@@ -55,7 +55,7 @@ Item {
         opacity: mouseArea.containsMouse ? 1.0 : 0.0
         width: Math.max(80, buttonText.length * 8)
         height: 28
-        radius: 4
+        radius: AppTheme.r(4)
         color: AppTheme.bgBase
         border.color: "transparent"
         z: 10

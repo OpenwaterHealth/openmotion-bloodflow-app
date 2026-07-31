@@ -175,7 +175,7 @@ Item {
         color: cell.bgColor
         border.color: cell.frameColor
         border.width: 1
-        radius: 4
+        radius: AppTheme.r(4)
     }
 
     Canvas {

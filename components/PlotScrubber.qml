@@ -42,7 +42,7 @@ Item {
         color: AppTheme.plotCellBg
         border.color: AppTheme.borderSubtle
         border.width: 1
-        radius: 4
+        radius: AppTheme.r(4)
     }
 
     // Visible-window inset — translucent so the scrubber background
@@ -58,7 +58,7 @@ Item {
         anchors.bottomMargin: 2
         color: scrubber.followLive ? AppTheme.statusBlue : AppTheme.accentOrange
         opacity: 0.35
-        radius: 3
+        radius: AppTheme.r(3)
     }
 
     // Right-edge "live" indicator — small bright tick at liveEdge so

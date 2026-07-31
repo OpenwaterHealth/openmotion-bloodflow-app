@@ -9,9 +9,20 @@ Rectangle {
 
     width: 80
     color: AppTheme.bgPanel
-    radius: 12
-    border.color: AppTheme.borderStrong
-    border.width: 1
+    radius: AppTheme.r(12)
+    // The chisel replaces the flat border on bevelled themes — drawing both
+    // gives the panel a muddy double edge.
+    border.color: AppTheme.bevel ? "transparent" : AppTheme.borderStrong
+    border.width: AppTheme.bevel ? 0 : 1
+
+    // Material layer for the themes that have one. Declared first so it paints
+    // under the buttons, and fully invisible on flat themes.
+    ThemedSurface {
+        anchors.fill: parent
+        color: "transparent"
+        radius: AppTheme.r(12)
+        glossy: false     // a sheen behind the icon column just muddies it
+    }
 
     property bool scanning: false
     property bool waiting: false       // true while a scan start is armed (pipeline-idle gate)
@@ -63,7 +74,7 @@ Rectangle {
                 Rectangle {
                     id: startStopCircle
                     Layout.alignment: Qt.AlignHCenter
-                    width: 36; height: 36; radius: 18
+                    width: 36; height: 36; radius: AppTheme.r(18)
                     color: !panel.allConnected ? AppTheme.textDisabled
                          : panel.waiting  ? "#F1C40F"
                          : panel.scanning ? "#E74C3C"
@@ -116,7 +127,7 @@ Rectangle {
             // Hover / press highlight background
             Rectangle {
                 anchors.fill: parent
-                radius: 10
+                radius: AppTheme.r(10)
                 color: ssArea.containsMouse ? AppTheme.bgHover : "transparent"
                 border.color: ssArea.containsMouse ? AppTheme.borderHover : "transparent"
                 border.width: 1
@@ -238,7 +249,7 @@ Rectangle {
 
         Rectangle {
             anchors.fill: parent
-            radius: 10
+            radius: AppTheme.r(10)
             color: btnMouseArea.containsMouse
                 ? (btnItem.highlighted ? Qt.lighter(btnItem.highlightColor, 1.2) : AppTheme.bgHover)
                 : (btnItem.highlighted ? btnItem.highlightColor : "transparent")
