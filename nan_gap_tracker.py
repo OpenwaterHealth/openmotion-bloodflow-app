@@ -2,7 +2,7 @@
 
 During a scan, _LivePlotSink (motion_connector.py) calls record() for every
 frame that ARRIVES for a camera, keyed by (side, cam_id) — cam_id is -1 for
-the reduced-mode per-side average. Frames flow at ~40 Hz, so during healthy
+the clinical-mode per-side average. Frames flow at ~40 Hz, so during healthy
 delivery each key's timestamp advances every ~25 ms. A stretch where a key
 received no frame for longer than MIN_GAP_S therefore means delivery
 genuinely stopped (camera dropout, USB stall, pipeline stall).

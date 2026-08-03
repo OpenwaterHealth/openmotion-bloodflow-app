@@ -45,20 +45,23 @@ from omotion.config import (
 )
 from omotion.MotionProcessing import process_bin_file
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
+from omotion.contact_quality import CQThresholds, ContactQualityMonitor
 from motion_config import (
     TEC_TRIP_MAX_C,
     TEC_TRIP_MIN_C,
     TecTripOutcome,
     ensure_tec_trip,
-    load_tec_params,
+    load_tec_voltage_params,
+    select_tec_voltage,
 )
 import error_codes
 import bug_report
 from nan_gap_tracker import NanGapTracker, gap_note_line
 from utils.resource_path import resource_path
-from utils import app_paths, config_store
+from utils import app_paths, config_store, log_tail
 from data_sources import (
     LiveScanSource, PastScanSource, ScanDataSource, buffers_are_empty,
+    load_csv_scan_buffers, resolve_bvi_lpf_cutoff,
 )
 
 # constants for calculations
@@ -69,10 +72,13 @@ SCALE_I = 0.25
 
 # Contact-quality quick-check defaults (overridable via app_config keys
 # cq_dark_threshold_per_camera / cq_light_threshold_per_camera /
-# cq_rolling_avg_window).
+# cq_rolling_avg_window / cq_live_activate_frames / cq_live_clear_frames).
 _CQ_DEFAULT_DARK_THRESHOLD_DN = 3.0
 _CQ_DEFAULT_LIGHT_THRESHOLD_DN = 15.0
 _CQ_DEFAULT_ROLLING_WINDOW = 10
+# Asymmetric live debounce (#364): RAISE fast, CLEAR slow.
+_CQ_DEFAULT_LIVE_ACTIVATE_FRAMES = 10
+_CQ_DEFAULT_LIVE_CLEAR_FRAMES = 80
 
 # Console front-panel RGB LED states — wire values of the firmware's
 # OW_CTRL_SET_IND command (console-fw led_driver.c, via
@@ -121,6 +127,21 @@ def _select_update_asset(assets: list, is_research: bool):
         asset_is_research = "research" in low
         if asset_is_research == is_research:
             return asset.get("browser_download_url")
+    return None
+
+
+def _select_release(releases, include_prerelease):
+    """Pick the newest published release from a GitHub /releases list.
+
+    GitHub returns releases newest-first. Drafts are never installable and are
+    always skipped. When include_prerelease is False, prereleases are skipped
+    too. Returns the chosen release dict, or None if nothing is eligible (#386)."""
+    for rel in releases or []:
+        if rel.get("draft"):
+            continue
+        if rel.get("prerelease") and not include_prerelease:
+            continue
+        return rel
     return None
 
 
@@ -359,6 +380,35 @@ def _scan_data_stall_decision(
     return stalled if stalled > timeout_sec else None
 
 
+def _should_abort_on_disconnect(
+    name: str,
+    capture_running: bool,
+    active_sides: set,
+) -> bool:
+    """Decide whether losing device ``name`` must abort the scan (issue #387).
+
+    A device unplugged mid-scan aborts with the E-304 critical modal only
+    when a capture is actually running AND the dropped device is part of
+    THIS scan — the console (always; it drives the trigger/laser) or a
+    sensor whose camera mask was non-zero at scan start (``active_sides``,
+    snapshotted in startCapture). An idle / masked-out sensor unplugged
+    mid-scan, or any disconnect while not capturing, must not abort.
+    """
+    return bool(capture_running) and name in active_sides
+
+
+def _disconnect_toast_text(name: str) -> str:
+    """Toast copy for a device that dropped off USB (issue #387). Used for the
+    low-key notice when the drop does NOT abort a running scan (idle, or a
+    non-participating device)."""
+    label = {
+        "console": "Console",
+        "left": "Left sensor",
+        "right": "Right sensor",
+    }.get(name, name)
+    return f"{label} disconnected"
+
+
 _SIDE_NAMES = ("left", "right")
 
 
@@ -423,6 +473,11 @@ class _LivePlotSink:
         n = batch.bfi_live.shape[0]
         connector = self._connector
         threshold = connector._camera_temp_alert_threshold_c
+        # Over-temp toast is Research-only: a clinical operator has no action
+        # to take on a chip-temperature reading and shouldn't get a mid-scan
+        # popup for one. Clinical builds still get the capture-log + app-log
+        # line below, so the event stays in the record either way.
+        temp_toast_enabled = not connector._app_config.get("clinicalMode", False)
         now_mono = time.monotonic()
 
         low_light_rt = getattr(batch, "low_light_rt", None)
@@ -508,14 +563,34 @@ class _LivePlotSink:
                         )
                         connector.captureLog.emit(msg)
                         logger.warning(msg)
+                        # captureLog only reaches the app log (its QML
+                        # terminus is console.log), so the operator sees
+                        # nothing on screen without this. notify() is safe
+                        # from this runner thread — it emits a signal that
+                        # is delivered queued onto the GUI thread, same as
+                        # _on_camera_dropout_recovered below.
+                        if temp_toast_enabled:
+                            connector.notify(
+                                f"Camera {side.upper()} {cam_id + 1} temperature "
+                                f"{temp_c:.1f}°C — above {threshold:.0f}°C threshold",
+                                type_="warning",
+                                duration_ms=5000,
+                                tag=f"temp_{side}_{cam_id}",
+                            )
 
-                # Skip NaN samples for the plot — Qt would otherwise render
-                # them as a spike from baseline to wherever NaN lands in the
-                # y-mapping. Common causes: warmup before the first dark
-                # observation, and unlit frames (the dark stage suppresses
-                # realtime emission — see low_light_rt above).
+                # Non-finite BFI/BVI: row-addressed LIGHT rows are appended
+                # anyway (issue #418) — an unlit (covered / off-target)
+                # camera must keep advancing its buffers and the source's
+                # liveEdge so the time axis scrolls through a contact loss;
+                # PlotCell breaks the trace at NaN so the run renders as a
+                # blank gap. Dark rows keep the finite gate (a NaN append at
+                # every scheduled dark would notch the trace ~each 15 s),
+                # and legacy fan-out batches keep it too — without
+                # side_ids/cam_ids a finite BFI is the only evidence this
+                # camera actually produced the row.
                 if not (math.isfinite(bfi) and math.isfinite(bvi)):
-                    continue
+                    if is_dark or not row_addressed:
+                        continue
 
                 mean_for_source: Optional[float] = None
                 contrast_for_source: Optional[float] = None
@@ -870,6 +945,9 @@ class MotionConnector(QObject):
 
     # Real-time plot viewer source — see data_sources.py.
     currentScanSourceChanged = pyqtSignal()
+    # No device at the startup watchdog → offer the bundled sample scan.
+    # Research builds only; see _maybe_offer_sample_scan.
+    sampleScanOfferRequested = pyqtSignal()
     liveSourceAvailableChanged = pyqtSignal()
     # History → "View in plot": fires on the GUI thread when an async
     # loadPastScan completes. (session_label, ok). HistoryModal uses it
@@ -929,6 +1007,10 @@ class MotionConnector(QObject):
     # ``False`` edge to clear an entry from the live modal.
     contactQualityIssueStateChanged = pyqtSignal(str, str, str, float, bool)
     contactQualityScanInProgress = pyqtSignal(bool)
+    # Runner thread → main thread marshal for live CQ transitions from the
+    # SDK's ContactQualityMonitor. Same pattern as _cq_result_signal; QML
+    # must never be touched from the pipeline worker thread.
+    _cqTransitionSignal = pyqtSignal(str, int, str, float, bool)
     cameraDropoutDetected = pyqtSignal(str, int, str)  # side ("left"/"right"), cam_id (0-7), elapsed HH:MM:SS
     # Frames resumed for a camera previously flagged Connection Lost — the
     # watchdog was re-armed and display resumed. Mirror of cameraDropoutDetected.
@@ -988,9 +1070,13 @@ class MotionConnector(QObject):
         self._support_email = cfg.get("support_email", "support@openwater.health")
         self._bug_report_smtp = cfg.get("bug_report_smtp")
 
+        # Incremental app-log reader behind readAppLog() (engineering
+        # Logs window). Created lazily on the first poll.
+        self._app_log_tail: log_tail.LogTail | None = None
+
         # Connection watchdog (E-104/E-106): one-shot check armed at startup
         # that flags expected devices that never enumerated. 0 disables it.
-        self._connection_timeout_sec = float(cfg.get("connectionTimeoutSec", 30))
+        self._connection_timeout_sec = float(cfg.get("connectionTimeoutSec", 12))
         self._require_console = bool(cfg.get("requireConsole", True))
         self._min_sensors = int(cfg.get("minSensors", 1))
 
@@ -1027,9 +1113,17 @@ class MotionConnector(QObject):
         self._camera_last_seen: dict[tuple[str, int], float] = {}
         self._camera_last_temp: dict[tuple[str, int], float] = {}
         self._camera_dropped: set[tuple[str, int]] = set()
-        # One-shot guard for the all-camera stall abort (issue #248) —
-        # set when E-303 fires, cleared at the next startCapture.
-        self._scan_stall_abort_fired = False
+        # Shared one-shot guard for a scan-ending abort modal — set when the
+        # all-camera stall fires E-303 (issue #248) OR a participating device
+        # is unplugged mid-scan and fires E-304 (issue #387). Whichever fires
+        # first wins so the two can't stack two modals. Cleared at the next
+        # startCapture.
+        self._scan_abort_notified = False
+        # Sides participating in the CURRENT scan — {"console"} plus any
+        # sensor with a non-zero camera mask at scan start. Snapshotted in
+        # startCapture; consulted by the disconnect handler so unplugging an
+        # idle / masked-out sensor doesn't abort a good scan (issue #387).
+        self._capture_active_sides: set[str] = set()
 
         # NaN-gap tracker — replaced with a fresh instance at each scan
         # start. Kept on the instance for debugging/introspection only;
@@ -1051,6 +1145,15 @@ class MotionConnector(QObject):
         self._error_led_timer.setInterval(_ERROR_LED_BLINK_MS)
         self._error_led_timer.timeout.connect(self._on_error_led_tick)
         self._error_led_on = False  # True while the blue half-period is lit
+        # Critical-error modal coordination (issue #387). While a critical
+        # modal is on screen, the end-of-scan notes modal must not pop under
+        # it (it opens seconds after an abort, once the scan unwinds, and
+        # would steal keyboard focus behind the error modal). _raise_critical
+        # sets _critical_modal_active; _emit_or_defer_scan_notes defers the
+        # open when it is set; criticalErrorsDismissed clears it and flushes
+        # any deferred open so the notes modal appears once the error is gone.
+        self._critical_modal_active = False
+        self._scan_notes_pending = False
         self._plot_t0: float = 0.0  # set at scan start; scan-start monotonic anchor
 
         # Trigger-ON clock (issue #201) — the single scan-time source of
@@ -1156,7 +1259,7 @@ class MotionConnector(QObject):
         # doesn't match the latest request is stale and dropped.
         self._past_scan_load_seq = 0
 
-        self._tec_voltage_default = load_tec_params(config_dir)
+        self._tec_voltage_params = load_tec_voltage_params(config_dir)
         self._console_mutex = QRecursiveMutex()
 
         ft_mean     = cfg.get("ft_min_mean_per_camera")
@@ -1275,8 +1378,12 @@ class MotionConnector(QObject):
         # once the Qt event loop runs. main.py starts device monitoring with
         # wait=False (issue #223 — no blocking wait before app.exec()), so
         # already-attached devices enumerate concurrently with this timer;
-        # the default 30s timeout comfortably covers normal enumeration time
-        # (console handshake is ~5s normally).
+        # the default 12s is a deliberate compromise — it also gates the
+        # research-build sample-dataset offer, so it can't be generous, but
+        # it leaves ~7s of headroom over a normal ~5s console handshake:
+        # short enough that a hardware-free user isn't left staring at an
+        # empty scan page, long enough that a normally-enumerating console
+        # won't trip a false E-104/E-106 and a spurious sample-dataset offer.
         self._arm_connection_watchdog()
 
     def set_ft_thresholds(
@@ -1548,12 +1655,83 @@ class MotionConnector(QObject):
                     "(E-106: %d of %d)", n_sensors, self._min_sensors)
                 msg = ("Sensor not detected. Check the sensor USB cable and "
                        "power, then reconnect.")
-            # Sticky, single (tagged) yellow toast — the user must act, but it
-            # never blocks the UI like the critical modal.
-            self.notify(msg, "warning", duration_ms=0, dismissible=True,
+            # Single (tagged) yellow toast — never blocks the UI like the
+            # critical modal. Auto-dismisses after 10 s so it doesn't nag while
+            # the user explores the no-device sample scan (#314); the user can
+            # still dismiss it early via the ✕.
+            self.notify(msg, "warning", duration_ms=10000, dismissible=True,
                         tag="connection-watchdog")
+            self._maybe_offer_sample_scan()
         except Exception:
             logger.exception("connection watchdog check failed")
+
+    def _maybe_offer_sample_scan(self) -> None:
+        """Offer the bundled sample scan when the watchdog found nothing.
+
+        Three gates, all required:
+          * research build — a clinical user must never be shown fabricated
+            traces, not even behind a prompt;
+          * no device at all (`_any_device_connected`, not merely
+            `console_missing`) — a console-less rig with a live sensor is a
+            real session, not a demo;
+          * nothing already bound to the viewer.
+
+        Emits only. Nothing loads until the user accepts the dialog, which
+        calls `loadSampleScan`. One-shot, because the watchdog is: a user
+        who declines gets no second offer this launch.
+
+        Every exit logs its reason. The offer is a once-per-launch event
+        with three independent gates, so a silent return leaves no way to
+        tell "correctly suppressed" from "broken" after the fact. The
+        sample file's availability is also probed and logged HERE rather
+        than only in `_load_sample_scan`, because a user who declines the
+        dialog never reaches the loader — without this, a build shipping
+        without the CSV would look identical in the log to a healthy one.
+        """
+        if bool(self._app_config.get("clinicalMode", False)):
+            logger.info("[Plot] sample scan offer suppressed — clinical build")
+            return
+        if self._any_device_connected():
+            logger.info(
+                "[Plot] sample scan offer suppressed — a device is connected "
+                "(console=%s left=%s right=%s)",
+                self._consoleConnected, self._leftSensorConnected,
+                self._rightSensorConnected)
+            return
+        if self._current_scan_source is not None:
+            logger.info(
+                "[Plot] sample scan offer suppressed — viewer already bound "
+                "to %s", type(self._current_scan_source).__name__)
+            return
+        self._log_sample_scan_availability()
+        logger.info("[Plot] no device at watchdog — offering sample scan")
+        self.sampleScanOfferRequested.emit()
+
+    @staticmethod
+    def _sample_scan_path() -> Path:
+        """Resolved location of the bundled sample scan.
+
+        Note `resource_path` returns its under-base candidate even when
+        nothing exists there, so this path is a *guess* until stat'd — see
+        `_log_sample_scan_availability`."""
+        return Path(resource_path("resources", "sample_scan.csv"))
+
+    def _log_sample_scan_availability(self) -> None:
+        """Record whether the bundled sample scan is actually on disk.
+
+        Logged at WARNING when it isn't: a missing sample in a research
+        build is a packaging fault (openwater.spec drops the `datas` entry
+        when the CSV is absent at build time), and the resolved absolute
+        path is the only clue to where the frozen app searched."""
+        path = self._sample_scan_path()
+        try:
+            size = path.stat().st_size
+        except OSError as exc:
+            logger.warning(
+                "[Plot] sample scan unavailable — cannot stat %s (%s)",
+                path, exc)
+            return
+        logger.info("[Plot] sample scan available: %s (%d bytes)", path, size)
 
     @staticmethod
     def _i2c_missing_devices(health: dict) -> str:
@@ -1864,11 +2042,21 @@ class MotionConnector(QObject):
                 # exception and terminates the app process.
                 try:
                     self._interface.log_console_info()
-                    if self._interface.console.tec_voltage(self._tec_voltage_default):
-                        logger.info(f"Console TEC voltage set to {self._tec_voltage_default}V")
+                    # EVT2 consoles (board-ID strap 1) need +1.16 V on the
+                    # TEC DAC to hold the lasers at 25 C; DVT and beyond use
+                    # TEC_VOLTAGE_DEFAULT from tec_params.json (issue #269).
+                    tec_voltage, tec_reason = select_tec_voltage(
+                        self._interface.console, self._tec_voltage_params
+                    )
+                    if self._interface.console.tec_voltage(tec_voltage):
+                        logger.info(
+                            f"Console TEC voltage set to {tec_voltage}V "
+                            f"({tec_reason})"
+                        )
                     else:
                         logger.error(
-                            f"Failed to set console TEC voltage to {self._tec_voltage_default}V"
+                            f"Failed to set console TEC voltage to "
+                            f"{tec_voltage}V ({tec_reason})"
                         )
                     if self._interface.console.set_fan_speed(fan_speed=100):
                         logger.info("Console fan speed set to 100%")
@@ -2001,6 +2189,14 @@ class MotionConnector(QObject):
                 self.configFinished.emit(
                     False, f"Device disconnected during sensor configuration ({name})"
                 )
+            # A device dropped off USB (issue #387). If it's a device taking
+            # part in a running scan, raise the E-304 critical modal and abort;
+            # otherwise (idle, or a non-participating device) show a low-key
+            # disconnect toast. The SDK's own mid-scan disconnect subscription
+            # is already tearing a running scan down; the E-304 modal is the
+            # operator-facing notice the app would otherwise omit (a real
+            # unplug rarely trips the E-303 stall watchdog).
+            self._surface_disconnect(name)
         # CONNECTING / DISCONNECTING are intermediate; UI doesn't need to
         # fire a connect/disconnect signal for those, and emitting
         # connectionStatusChanged on every intermediate transition would
@@ -2048,12 +2244,22 @@ class MotionConnector(QObject):
     def _devices_for_kind(kind: FirmwareKind) -> list[str]:
         return ["console"] if kind == FirmwareKind.CONSOLE else ["left", "right"]
 
+    def _beta_enabled(self) -> bool:
+        """Prerelease (beta) channel is active only for a Research build with
+        engineering mode unlocked and the beta toggle on. Clinical never opts
+        in; disabling engineering mode drops back to stable. Shared by the
+        firmware updater and the app self-updater (#386)."""
+        return (not self._app_config.get("clinicalMode", False)
+                and self._app_config.get("engineeringMode", False)
+                and self._app_config.get("downloadBetaUpdates", False))
+
     def _maybe_check_firmware_update(self, name: str) -> None:
-        """If engineeringMode, ensure this device's firmware-update availability
-        is computed — reusing a cached 'latest' for the kind, or kicking one
-        background GitHub check per kind per session."""
-        if not self._app_config.get("engineeringMode", False):
-            return
+        """In a Research build, ensure this device's firmware-update
+        availability is computed — reusing a cached 'latest' for the kind, or
+        kicking one background GitHub check per kind per session. Clinical
+        builds never check, even with engineering mode unlocked (#386)."""
+        if self._app_config.get("clinicalMode", False):
+            return   # firmware updates are disabled in clinical builds (#386)
         if name not in self._firmware_versions or not self._firmware_versions[name]:
             return
         kind = self._kind_for_device(name)
@@ -2072,7 +2278,7 @@ class MotionConnector(QObject):
 
     def _firmware_check_worker(self, kind: FirmwareKind, generation: int | None = None) -> None:
         try:
-            beta = self._app_config.get("downloadBetaFirmware", False)
+            beta = self._beta_enabled()
             info = check_latest(kind, include_prerelease=beta)
         except Exception:                           # defensive; check_latest is fail-soft
             info = None
@@ -2095,7 +2301,7 @@ class MotionConnector(QObject):
         kind = self._kind_for_device(name)
         installed = self._firmware_versions.get(name, "")
         latest = self._firmware_latest_by_kind.get(kind.value, "")
-        beta = self._app_config.get("downloadBetaFirmware", False)
+        beta = self._beta_enabled()
         avail = (bool(installed) and bool(latest)
                  and is_update_available(installed, latest, prerelease=beta))
         self._firmware_latest[name] = latest
@@ -2108,7 +2314,7 @@ class MotionConnector(QObject):
 
     def _refresh_firmware_update_check(self) -> None:
         """Invalidate the firmware-latest caches and re-run detection for every
-        connected device — called when downloadBetaFirmware toggles so the
+        connected device — called when downloadBetaUpdates toggles so the
         banner/Settings card reflect the new release pool immediately."""
         self._firmware_latest_by_kind.clear()
         self._firmware_checking_kinds.clear()
@@ -2121,14 +2327,31 @@ class MotionConnector(QObject):
             if self._firmware_versions.get(name):
                 self._maybe_check_firmware_update(name)
 
+    def _refresh_update_checks(self) -> None:
+        """Re-evaluate BOTH updaters after a change to the beta channel or
+        engineering mode. Firmware re-detects for connected devices; the app
+        self-updater re-checks — but only in a Research build, so a Clinical
+        build makes no outbound GitHub call (#96, #386). Also withdraws a stale
+        beta offer: the re-check runs on the now-current (post-change) channel,
+        and both banners drop the old offer if it no longer qualifies."""
+        self._refresh_firmware_update_check()
+        if not self._app_config.get("clinicalMode", False):
+            # Withdraw any currently-shown app-update offer synchronously (it may
+            # be a now-ineligible beta), mirroring the firmware side; the
+            # re-check re-offers only if a valid update still exists, so a failed
+            # re-check leaves the stale offer withdrawn rather than clickable.
+            self.updateNotAvailable.emit()
+            self.checkForUpdates()
+
     @pyqtSlot(str, result=bool)
     def startFirmwareUpdate(self, device_key: str) -> bool:
         """Download the latest firmware for device_key and flash it over DFU.
-        engineeringMode-only; refused during a scan or while another update runs."""
+        Research-only (blocked in clinical builds); refused during a scan or
+        while another update runs (#386)."""
         if device_key not in ("console", "left", "right"):
             return False
-        if not self._app_config.get("engineeringMode", False):
-            return False
+        if self._app_config.get("clinicalMode", False):
+            return False   # firmware updates are disabled in clinical builds (#386)
         if self._state == RUNNING or self._running:
             self.firmwareUpdateFinished.emit(
                 device_key, False, "Cannot update firmware during a scan.")
@@ -2156,7 +2379,7 @@ class MotionConnector(QObject):
             kind = self._kind_for_device(device_key)
             self.firmwareUpdateProgress.emit(
                 device_key, "check", -1, "Checking latest release…")
-            beta = self._app_config.get("downloadBetaFirmware", False)
+            beta = self._beta_enabled()
             info = check_latest(kind, include_prerelease=beta)
             if info is None:
                 raise RuntimeError("Could not reach GitHub to fetch firmware.")
@@ -2695,6 +2918,39 @@ class MotionConnector(QObject):
             logger.warning("auditLogEntries failed", exc_info=True)
             return []
 
+    @pyqtSlot("QVariantMap", result="QVariantList")
+    def filteredAuditLogEntries(self, filters):
+        """Audit-log rows (newest first) matching the Logs modal's filter
+        bar (#226). ``filters`` keys, all optional: ``eventType`` (exact
+        event type), ``dateFrom`` / ``dateTo`` (``YYYY-MM-DD``, local,
+        inclusive whole days), ``text`` (case-insensitive substring
+        across event type + details), ``limit`` (int, default 500).
+        Empty/invalid values are ignored. Pure read — does not itself
+        log, so refreshing never double-logs."""
+        try:
+            from audit_log import parse_date_bound
+            f = dict(filters or {})
+            return self._audit.query(
+                limit=int(f.get("limit") or 500),
+                event_type=str(f.get("eventType") or "") or None,
+                since_epoch=parse_date_bound(f.get("dateFrom")),
+                until_epoch=parse_date_bound(f.get("dateTo"), end=True),
+                contains=str(f.get("text") or "") or None,
+            )
+        except Exception:
+            logger.warning("filteredAuditLogEntries failed", exc_info=True)
+            return []
+
+    @pyqtSlot(result="QVariantList")
+    def auditEventTypes(self):
+        """Distinct event types present in the audit log (sorted), for
+        the Logs modal's filter dropdown (#226)."""
+        try:
+            return self._audit.distinct_event_types()
+        except Exception:
+            logger.warning("auditEventTypes failed", exc_info=True)
+            return []
+
     @pyqtSlot()
     def recordAuditLogViewed(self):
         """Record that the audit log was opened. Called once from
@@ -2814,6 +3070,37 @@ class MotionConnector(QObject):
                 "could not reveal %s in file explorer", path, exc_info=True
             )
 
+    # ── Engineering log viewer (LogViewerWindow.qml) ─────────────────────
+    @pyqtSlot(result=str)
+    def appLogPath(self) -> str:
+        """Absolute path of this launch's app log file, or ''.
+
+        Prefers the exact path main.py handed in (log_path); falls back
+        to the newest logs/open-motion-*.log under the data root for
+        callers that construct the connector without one (tests).
+        """
+        if self._log_path and os.path.isfile(self._log_path):
+            return self._log_path
+        return log_tail.latest_log_path(
+            os.path.join(self._directory, app_paths.LOGS_DIRNAME))
+
+    @pyqtSlot(result=str)
+    def readAppLog(self) -> str:
+        """New app-log text since the last call (see utils/log_tail.py).
+
+        Bounded, shared-read, opens the file per call — safe for the
+        Logs window's GUI-thread QTimer poll. The first call returns
+        the tail of the file; '' means nothing new (or no log file
+        yet). Re-resolves the path each call so the viewer recovers if
+        the log only appears after the connector was constructed.
+        """
+        path = self.appLogPath()
+        if not path:
+            return ""
+        if self._app_log_tail is None or self._app_log_tail.path != path:
+            self._app_log_tail = log_tail.LogTail(path)
+        return self._app_log_tail.read_new()
+
     @pyqtProperty(str, notify=directoryChanged)
     def directory(self):
         return self._directory
@@ -2834,8 +3121,8 @@ class MotionConnector(QObject):
     def _data_root(self) -> str:
         """Where scan files, calibrations, debug-bundles, and
         the scan DB live: self._directory/data. A sibling of the app-wide
-        logs/ folder (main.py's concern only — the connector never touches
-        it)."""
+        logs/ folder (written by main.py only; the connector reads it for
+        the engineering log viewer — see appLogPath)."""
         return os.path.join(self._directory, app_paths.DATA_DIRNAME)
 
     # ── App config — generic read/write API ──────────────────────────────────
@@ -2876,8 +3163,8 @@ class MotionConnector(QObject):
         if old != value:
             self._audit.log("settings_changed",
                             {"changes": {key: {"old": old, "new": value}}})
-        if key == "downloadBetaFirmware" and old != value:
-            self._refresh_firmware_update_check()
+        if old != value and key in ("downloadBetaUpdates", "engineeringMode"):
+            self._refresh_update_checks()
 
     @pyqtSlot('QVariantMap')
     def saveConfigs(self, configs: dict):
@@ -2893,8 +3180,8 @@ class MotionConnector(QObject):
         logger.debug(f"[Connector] Config saved: {sorted(configs.keys())}")
         if changes:
             self._audit.log("settings_changed", {"changes": changes})
-        if "downloadBetaFirmware" in changes:
-            self._refresh_firmware_update_check()
+        if any(k in changes for k in ("downloadBetaUpdates", "engineeringMode")):
+            self._refresh_update_checks()
 
     # Sensor debug-flag config keys surfaced as live Settings → Engineering
     # toggles, mapped to the runtime cache attribute that
@@ -3068,6 +3355,98 @@ class MotionConnector(QObject):
             return
         self._set_current_scan_source(self._live_scan_source)
         logger.info("[Plot] viewer switched back to live source")
+
+    def _any_device_connected(self) -> bool:
+        """True when the console OR either sensor is currently connected.
+
+        A lone sensor (no console) still counts as a device, so this gates
+        on the raw connection flags rather than the DISCONNECTED FSM state
+        (which reads DISCONNECTED for a single sensor with no console)."""
+        return bool(self._consoleConnected
+                    or self._leftSensorConnected
+                    or self._rightSensorConnected)
+
+    @pyqtSlot()
+    def loadSampleScan(self) -> None:
+        """Load the bundled sample scan into the replay viewer (#314).
+
+        Called from SampleScanOfferModal when the user accepts the offer
+        the startup watchdog raised — never automatically, and never in a
+        clinical build (the connector doesn't emit the offer there). The
+        sample is never written anywhere, so real scan data is never
+        polluted; once the user runs a scan, startCapture's fresh
+        LiveScanSource retires it.
+
+        Guarded so it can't clobber a source that got bound between the
+        offer and the user's click.
+        """
+        if self._current_scan_source is not None:
+            logger.info(
+                "[Plot] sample scan request ignored — viewer already bound "
+                "to %s", type(self._current_scan_source).__name__)
+            return
+        self._load_sample_scan(str(self._sample_scan_path()))
+
+    def _load_sample_scan(self, csv_path: str) -> None:
+        """Parse a scan-export CSV and bind it to the viewer as a DB-free
+        PastScanSource. Fail-soft: a missing/unreadable/empty CSV logs a
+        warning and leaves the viewer untouched (never raises — a bad
+        sample file must not break boot). Split from the slot so unit tests
+        can drive it with an arbitrary path.
+
+        Every failure exit names the resolved path and distinguishes WHY.
+        The three causes need different fixes — file absent is a packaging
+        fault, unreadable is a permissions/IO fault, parsed-but-empty is a
+        bad dataset — and the user-visible symptom is identical in all
+        three (an empty viewer), so the log is the only place they can be
+        told apart."""
+        # Stat first: the loader below is fail-soft on a missing file
+        # (`_load_corrected_csv_into` swallows OSError), which would
+        # otherwise land a packaging fault in the generic empty-buffers
+        # branch and read as a bad dataset.
+        try:
+            size = os.stat(csv_path).st_size
+        except OSError as exc:
+            logger.warning(
+                "[Plot] sample scan unavailable — cannot read %s (%s)",
+                csv_path, exc)
+            return
+        if size == 0:
+            logger.warning(
+                "[Plot] sample scan unavailable — file is empty (0 bytes): %s",
+                csv_path)
+            return
+        try:
+            buffers = load_csv_scan_buffers(csv_path)
+        except Exception:
+            logger.warning(
+                "[Plot] sample scan load failed: %s", csv_path, exc_info=True)
+            return
+        if buffers_are_empty(buffers):
+            logger.warning(
+                "[Plot] sample scan unavailable — %s (%d bytes) parsed but "
+                "held no usable samples; expected a per-cam scan-export CSV "
+                "with bfi_l1..contrast_r8 columns", csv_path, size)
+            return
+        try:
+            sample = PastScanSource(
+                scan_db=None,
+                session_id=-1,
+                parent=self,
+                preloaded_buffers=buffers,
+                user_label="Sample scan",
+                date_time="",
+            )
+        except Exception:
+            logger.warning(
+                "[Plot] sample scan source construction failed",
+                exc_info=True)
+            return
+        self._set_current_scan_source(sample)
+        n_samples = sum(b.n for b in sample.buffers.values())
+        logger.info(
+            "[Plot] loaded sample scan: buffers=%d samples=%d from %s",
+            len(sample.buffers), n_samples, csv_path)
 
     @pyqtSlot(int, str)
     def loadPastScan(self, session_id: int, session_label: str) -> None:
@@ -3585,11 +3964,22 @@ class MotionConnector(QObject):
         # exercise the DB lazy-load quickly (e.g. 60 → eviction after 1 min).
         _live_cache_sec = self._app_config.get("liveCacheMaxSeconds", 1800)
         _live_cache_samples = max(2, int(float(_live_cache_sec) * 40))
+        # BVI display low-pass (issue #228): config-only — the number is
+        # the whole contract (missing/invalid → 20 Hz, <= 0 → off).
+        # Applied at live ingest only; scans.db / CSVs / replay stay raw.
+        _bvi_lpf_cutoff = resolve_bvi_lpf_cutoff(
+            self._app_config.get("bviLowPassCutoffHz"))
+        logger.info(
+            "BVI display low-pass: %s",
+            f"{_bvi_lpf_cutoff:g} Hz cutoff" if _bvi_lpf_cutoff > 0.0
+            else "disabled (bviLowPassCutoffHz <= 0)",
+        )
         live_source = LiveScanSource(
             plot_t0=plot_t0,
             parent=self,
             scan_db_path=getattr(self._interface, "scan_db_path", None),
             cache_max_samples=_live_cache_samples,
+            bvi_lpf_cutoff_hz=_bvi_lpf_cutoff,
         )
         # Track the live source separately so the user can navigate
         # to a past scan and return; emit so QML rebinds the
@@ -3610,7 +4000,15 @@ class MotionConnector(QObject):
         self._camera_last_seen = {}
         self._camera_last_temp = {}
         self._camera_dropped = set()
-        self._scan_stall_abort_fired = False
+        self._scan_abort_notified = False
+        # Snapshot the devices participating in THIS scan for the mid-scan
+        # disconnect abort (issue #387): the console always participates;
+        # a sensor participates only when its gated camera mask is non-zero.
+        self._capture_active_sides = (
+            {"console"}
+            | ({"left"} if left_camera_mask else set())
+            | ({"right"} if right_camera_mask else set())
+        )
         self._dropout_timer.start()
 
         # NaN-gap tracker — fresh per scan (same lifecycle as the watchdog).
@@ -3739,11 +4137,79 @@ class MotionConnector(QObject):
                 "outcome": _outcome_kind,
             })
             self.captureFinished.emit(True, "", "", "")
-            self.scanNotesReady.emit()
+            # Open the notes modal now, UNLESS a critical-error modal is on
+            # screen (e.g. an E-304 device-disconnect abort raised it seconds
+            # ago): defer the open until the error is dismissed so the error
+            # modal stays on top and doesn't lose focus to the notes field
+            # behind it (issue #387).
+            self._emit_or_defer_scan_notes()
 
-        # Issue #43: telemetry and raw CSVs are engineering diagnostics —
-        # clinical users must not get them. Default False (fail closed).
+        # Issue #43: telemetry CSVs are engineering diagnostics — clinical
+        # users must not get them. Default False (fail closed). Raw
+        # histogram CSVs are research data (#234): allowed whenever the
+        # build is not clinical (clinicalMode false) or engineeringMode is
+        # unlocked — never on a plain clinical build.
         engineering_mode = self._app_config.get("engineeringMode", False)
+        raw_csv_allowed = (
+            not self._app_config.get("clinicalMode", False)
+            or engineering_mode
+        )
+
+        # Contact-quality config for the live monitor sink below (issue
+        # #364). Nothing in Settings writes these keys today, so the only
+        # way to hit a bad value is a hand-edited config — but a malformed
+        # one (wrong type, a null/non-numeric element, a null scalar) must
+        # degrade to the shipped defaults rather than raise on the clinical
+        # scan path, before the SDK's own non-critical/safe-consume
+        # protections for this sink ever get a chance to apply.
+        try:
+            _cq_thresholds = CQThresholds.from_sequences(
+                self._app_config.get("cq_dark_threshold_per_camera")
+                or [_CQ_DEFAULT_DARK_THRESHOLD_DN] * 8,
+                self._app_config.get("cq_light_threshold_per_camera")
+                or [_CQ_DEFAULT_LIGHT_THRESHOLD_DN] * 8,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Invalid cq_dark_threshold_per_camera / "
+                "cq_light_threshold_per_camera config (%s); falling back "
+                "to default CQ thresholds", exc,
+            )
+            _cq_thresholds = CQThresholds.from_sequences(
+                [_CQ_DEFAULT_DARK_THRESHOLD_DN] * 8,
+                [_CQ_DEFAULT_LIGHT_THRESHOLD_DN] * 8,
+            )
+
+        def _cq_int_or(key, default):
+            """int(app_config[key]) with a fallback for a missing/null
+            config key (value is None — cfg.get(key, default) only
+            substitutes default when the key is *absent*, not when it's
+            present as JSON null) and for a present-but-malformed one
+            (non-numeric string, wrong type) alike. Checking `is not None`
+            rather than `value or default` also means an explicit 0
+            converts to 0, not default — ContactQualityMonitor's own
+            max(1, int(...)) clamp is what turns a deliberate 0 into "no
+            debounce", not this fallback.
+            """
+            value = self._app_config.get(key)
+            if value is None:
+                return default
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid %s config value %r; using default %s",
+                    key, value, default,
+                )
+                return default
+
+        _cq_rolling_window = _cq_int_or(
+            "cq_rolling_avg_window", _CQ_DEFAULT_ROLLING_WINDOW)
+        # Asymmetric debounce (#364): RAISE the warning fast, CLEAR it slow.
+        _cq_light_activate = _cq_int_or(
+            "cq_live_activate_frames", _CQ_DEFAULT_LIVE_ACTIVATE_FRAMES)
+        _cq_light_clear = _cq_int_or(
+            "cq_live_clear_frames", _CQ_DEFAULT_LIVE_CLEAR_FRAMES)
 
         req = ScanRequest(
             subject_id=subject_id,
@@ -3765,13 +4231,14 @@ class MotionConnector(QObject):
             write_telemetry_csv=engineering_mode,
             # Raw CSV duration forwarded to the pipeline's Tee("raw") gate
             # via raw_save_max_duration_s. None means unbounded (write entire
-            # scan); 0 omits raw tee entirely. The writeRawCsv toggle lives
-            # in the engineering-only Settings card, so its persisted value is
-            # additionally gated on engineeringMode (#43) — flipping engineering
-            # mode off must stop raw output even if the toggle was left on.
+            # scan); 0 omits raw tee entirely. The persisted writeRawCsv
+            # toggle is additionally gated on the mode flags (#234: research
+            # users get raw CSVs) so a Clinical build never writes raw CSVs
+            # even if a prior research/engineering session left the toggle
+            # on (#43 invariant).
             raw_save_max_duration_s=(
                 self._raw_csv_duration_sec
-                if (engineering_mode and self._write_raw_csv) else 0
+                if (raw_csv_allowed and self._write_raw_csv) else 0
             ),
             sinks=[
                 _LivePlotSink(connector=self, plot_t0=plot_t0, live_source=live_source,
@@ -3779,6 +4246,19 @@ class MotionConnector(QObject):
                 _TriggerStateSink(connector=self),
                 outcome_sink,
                 _CompletionSink(connector=self, on_complete_cb=_on_pipeline_complete),
+                # Live mid-scan contact-quality warnings (issue #364). This
+                # is the sink that was never written when the app's
+                # callbacks were ported to sink classes in 2026-05 — the
+                # QML modal and both Qt signals have been waiting for it
+                # since. Not `critical`: a contact fault must never abort a
+                # clinical scan in progress.
+                ContactQualityMonitor(
+                    thresholds=_cq_thresholds,
+                    on_transition=self._on_cq_transition,
+                    rolling_window=_cq_rolling_window,
+                    light_activate_debounce=_cq_light_activate,
+                    light_clear_debounce=_cq_light_clear,
+                ),
             ],
             # Async backstop (#213): if the worker aborts after start_scan
             # returned True (e.g. a critical sink dies because the scan DB
@@ -3796,6 +4276,19 @@ class MotionConnector(QObject):
                 subject_id, duration_sec, left_camera_mask, right_camera_mask,
                 "off" if disable_laser else "on",
             )
+            if self._sensor_debug_logging:
+                # DEBUG_FLAG_USB_PRINTF is set, so this scan carries an
+                # elevated camera-dropout risk on firmware without
+                # sensor-fw#115: the firmware's queue-full diagnostic is
+                # transmitted over COMM, and if the host stops draining COMM
+                # that send busy-waits the firmware main loop, starving the
+                # 25 ms camera DMA re-arm. Logged at WARNING so a scan taken
+                # in this state is identifiable after the fact.
+                logger.warning(
+                    "Scan started with sensor debug logging ENABLED "
+                    "(DEBUG_FLAG_USB_PRINTF) — elevated camera-dropout risk; "
+                    "not recommended for clinical acquisition"
+                )
             # Bind the live source's DB tail to THIS scan's session row by its
             # exact label (set synchronously inside start_scan), so a later
             # pan-into-past resolves the right session instead of guessing the
@@ -4454,6 +4947,48 @@ class MotionConnector(QObject):
         err_msg = "" if ok else "Contact quality check failed"
         self.contactQualityCheckFinished.emit(ok, err_msg, warning_list)
 
+    def _on_cq_transition(self, side, cam_id, reason, value, active):
+        """Runner-thread callback from the SDK's ContactQualityMonitor.
+
+        Does nothing but hop to the main thread — see the cross-thread
+        gotcha in CLAUDE.md. Never raises: an exception escaping a sink's
+        consume() aborts that batch mid-flight and the loss is invisible,
+        which is exactly the regression this feature exists to fix (#364).
+        """
+        try:
+            self._cqTransitionSignal.emit(
+                str(side), int(cam_id), str(reason), float(value), bool(active)
+            )
+        except Exception as exc:
+            logger.warning("contact-quality transition marshal failed: %s", exc)
+
+    @pyqtSlot(str, int, str, float, bool)
+    def _on_cq_transition_main(self, side, cam_id, reason, value, active):
+        """Main thread: adapt an SDK CQ transition to the modal's signals.
+
+        Mirrors the deleted _on_cq_warning closure. contactQualityWarning
+        fires on activation only; contactQualityIssueStateChanged fires on
+        every edge so QML can clear the entry.
+        """
+        label = self._camera_label(side, cam_id)
+        # The modal knows two type keys. Defensive, not a live path today:
+        # the SDK's ContactQualityMonitor skips non-finite readings before
+        # on_transition ever fires, so it does not currently emit
+        # "no_signal". Collapsing it to poor_contact here costs nothing and
+        # keeps live and preflight wording identical — matching
+        # _on_cq_result_ready's preflight mapping — if that contract ever
+        # changes.
+        type_key = "poor_contact" if reason == "no_signal" else reason
+        type_text = self._warning_text(type_key)
+        try:
+            if active:
+                self.contactQualityWarning.emit(label, type_key, type_text, value)
+            self.contactQualityIssueStateChanged.emit(
+                label, type_key, type_text, value, active
+            )
+        except Exception as exc:
+            logger.warning("contact-quality signal emit failed: %s", exc)
+
     @pyqtSlot()
     def _on_dropout_check(self):
         """1 Hz watchdog: emit cameraDropoutDetected for any camera silent > threshold."""
@@ -4515,7 +5050,7 @@ class MotionConnector(QObject):
         # is NOT fail-soft: if no camera has delivered a frame for
         # scanDataStallTimeoutSec the scan is dead air — abort it and
         # tell the user instead of counting down to a hollow "complete".
-        if not self._scan_stall_abort_fired:
+        if not self._scan_abort_notified:
             stalled_s = _scan_data_stall_decision(
                 now,
                 self._trigger_on_mono,
@@ -4534,7 +5069,7 @@ class MotionConnector(QObject):
         data files and emits captureFinished, returning the QML scan flow
         (and the state machine) to idle exactly like a user Stop.
         """
-        self._scan_stall_abort_fired = True
+        self._scan_abort_notified = True
         elapsed_str = self._scan_elapsed_str()
         msg = (
             f"[{elapsed_str}] No data from any camera for "
@@ -4552,6 +5087,75 @@ class MotionConnector(QObject):
             ),
         )
         self.stopCapture()
+
+    def _abort_scan_device_disconnect(self, name: str) -> None:
+        """Abort the running scan because a participating device was
+        unplugged mid-scan (issue #387). Runs on the main thread from the
+        connection handler. Twin of _abort_scan_data_stall: it shares the
+        one-shot guard (so a disconnect + a stall — or two devices dropping
+        — can't stack two modals), writes a capture-log line, raises the
+        E-304 critical modal, then stopCapture(). The SDK is already tearing
+        the scan down via its own mid-scan disconnect subscription; the
+        stopCapture() here cancels it app-side too and, by marking the scan
+        canceled, suppresses the redundant end-of-scan outcome toast — the
+        modal is the notification.
+        """
+        if self._scan_abort_notified:
+            return
+        self._scan_abort_notified = True
+        elapsed_str = self._scan_elapsed_str()
+        msg = (
+            f"[{elapsed_str}] {name} disconnected during the scan — "
+            f"stopping the scan; data captured before the disconnection "
+            f"is saved."
+        )
+        logger.error(msg)
+        self.captureLog.emit(msg)
+        self._raise_critical(
+            "E-304",
+            detail=f"{name} disconnected mid-scan (scan elapsed {elapsed_str})",
+        )
+        self.stopCapture()
+
+    def _surface_disconnect(self, name: str) -> None:
+        """Surface a device dropping off USB (issue #387). If the drop aborts a
+        running scan (a participating device lost mid-scan), raise the E-304
+        modal; otherwise show a low-key toast (an idle disconnect, or a
+        non-participating device). Exactly one notification per event."""
+        if _should_abort_on_disconnect(
+            name, self._capture_running, self._capture_active_sides
+        ):
+            self._abort_scan_device_disconnect(name)
+        else:
+            self.notify(
+                _disconnect_toast_text(name),
+                type_="warning",
+                duration_ms=6000,
+                tag=f"disconnect_{name}",
+            )
+
+    def _emit_or_defer_scan_notes(self) -> None:
+        """Open the end-of-scan notes modal, or defer it if a critical-error
+        modal is currently on screen (issue #387).
+
+        On an E-304 device-disconnect abort (and E-303 / E-202) the critical
+        modal is raised, then the scan unwinds for a second or two before
+        this completion handler runs. The notes modal opening now would pop
+        UNDER the error modal and steal keyboard focus. Deferring holds the
+        open until criticalErrorsDismissed() flushes it, so the error modal
+        stays on top and only one modal is on screen at a time.
+
+        Called from the pipeline completion handler (worker thread). The
+        re-check after setting the pending flag closes the tiny race where
+        the modal is dismissed between the check and the set.
+        """
+        if not self._critical_modal_active:
+            self.scanNotesReady.emit()
+            return
+        self._scan_notes_pending = True
+        if not self._critical_modal_active:
+            self._scan_notes_pending = False
+            self.scanNotesReady.emit()
 
     def _on_camera_dropout_recovered(self, side: str, cam_id: int) -> None:
         """Frames resumed for a camera the watchdog had flagged Connection
@@ -5003,6 +5607,9 @@ class MotionConnector(QObject):
                          f" ({detail})" if detail else "")
             self.criticalErrorRaised.emit(
                 code, err.title, err.message, err.suggested_action, detail)
+            # A critical modal is now on screen; hold back the end-of-scan
+            # notes modal until it is dismissed (issue #387).
+            self._critical_modal_active = True
             self._errorLedBlinkRequested.emit()
         except Exception:
             logger.exception("Failed to raise critical error %s", code)
@@ -5048,9 +5655,17 @@ class MotionConnector(QObject):
     @pyqtSlot()
     def criticalErrorsDismissed(self):
         """Called from CriticalErrorModal when the last queued error is
-        dismissed: stop the error blink and restore the idle green LED
-        (issue #257). No-op if the blink never started (e.g. the console
-        was never reachable)."""
+        dismissed: release the notes modal deferred behind it (issue #387),
+        then stop the error blink and restore the idle green LED (issue
+        #257)."""
+        # The error modal is gone — open the notes modal if a scan finished
+        # behind it (E-304 device disconnect, or E-303 / E-202). Must run
+        # before the LED early-return below, which returns when no blink was
+        # ever started (e.g. the console itself was the disconnected device).
+        self._critical_modal_active = False
+        if self._scan_notes_pending:
+            self._scan_notes_pending = False
+            self.scanNotesReady.emit()
         if not self._error_led_timer.isActive() and not self._error_led_on:
             return
         self._error_led_timer.stop()
@@ -5148,6 +5763,8 @@ class MotionConnector(QObject):
         self._testScanCompleteSignal.connect(self._on_test_scan_complete)
         # Worker → Qt main thread for the CQ workflow result.
         self._cq_result_signal.connect(self._on_cq_result_ready)
+        # Runner thread → Qt main thread for live contact-quality transitions.
+        self._cqTransitionSignal.connect(self._on_cq_transition_main)
         # Worker → Qt main thread for async past-scan loads (issue #152).
         self._pastScanBuffersReady.connect(self._on_past_scan_buffers_ready)
         # Auto-queued: emitted on the pipeline worker thread, runs the toast
@@ -5526,23 +6143,42 @@ class MotionConnector(QObject):
         t.start()
 
     def _check_for_updates_worker(self):
+        if self._app_config.get("clinicalMode", False):
+            return   # clinical builds never check for app updates (#96, #386)
         import urllib.request
         from version import get_version
 
         # ``updateRepo`` points the check at a staging/mirror repo; the broader
-        # ``updateApiUrl`` fully overrides the releases-latest endpoint (used by
+        # ``updateApiUrl`` fully overrides the single-release endpoint (used by
         # the local fake-releases server for offline end-to-end update testing).
-        # Both absent => the production GitHub repo.
+        # Both absent => the production GitHub repo. On the beta channel we hit
+        # the /releases LIST endpoint and pick the newest published (incl.
+        # prerelease); otherwise the stable /releases/latest single object (#386).
         repo = self._app_config.get("updateRepo") or self._GITHUB_REPO
-        api_url = self._app_config.get("updateApiUrl") or (
-            f"https://api.github.com/repos/{repo}/releases/latest"
-        )
+        beta = self._beta_enabled()
+        override = self._app_config.get("updateApiUrl")
+        if override:
+            api_url = override.replace("/releases/latest", "/releases") if beta else override
+        else:
+            base = f"https://api.github.com/repos/{repo}/releases"
+            api_url = base if beta else base + "/latest"
         try:
-            req = urllib.request.Request(api_url, headers={"Accept": "application/vnd.github+json"})
+            req = urllib.request.Request(
+                api_url, headers={"Accept": "application/vnd.github+json"})
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode())
 
-            remote_tag = data.get("tag_name", "").lstrip("v")
+            # Select by RESPONSE SHAPE, not the beta flag: the beta channel hits
+            # the /releases LIST endpoint (newest-first) -> pick newest non-draft;
+            # stable /releases/latest returns one object. An updateApiUrl override
+            # may return a single object even on beta, so handle both (#386).
+            release = (_select_release(data, include_prerelease=True)
+                       if isinstance(data, list) else data)
+            if not release:
+                self.updateNotAvailable.emit()
+                return
+
+            remote_tag = release.get("tag_name", "").lstrip("v")
             if not remote_tag:
                 self.updateCheckFailed.emit("Could not determine latest release tag.")
                 return
@@ -5550,33 +6186,28 @@ class MotionConnector(QObject):
             # Find the Setup bundle matching this build's variant.
             # clinicalMode True = clinical build; False = Research/full build.
             is_research = not bool(self._app_config.get("clinicalMode", False))
-            download_url = _select_update_asset(data.get("assets", []), is_research)
+            download_url = _select_update_asset(release.get("assets", []), is_research)
 
-            local_version = get_version()
-            # Strip local metadata for comparison (e.g. "+3.gabc1234.dirty")
-            local_base = local_version.split("+")[0]
+            # Strip local metadata for comparison (e.g. "+3.gabc1234.dirty").
+            local_base = get_version().split("+")[0]
 
             if not self._version_newer(remote_tag, local_base):
-                logger.info(f"App is up to date ({local_base} >= {remote_tag})")
+                logger.info("App is up to date (%s >= %s)", local_base, remote_tag)
                 self.updateNotAvailable.emit()
             elif not _is_bundle_url(download_url):
                 # Newer release exists but has no matching installer asset
                 # (e.g. assets still uploading) -- don't offer an in-place
                 # update we can't actually perform.
                 logger.warning(
-                    "Update %s available but no installer asset found",
-                    remote_tag,
-                )
+                    "Update %s available but no installer asset found", remote_tag)
                 self.updateNotAvailable.emit()
             else:
                 logger.info(
-                    "Update available: %s (current: %s)",
-                    remote_tag, local_base,
-                )
+                    "Update available: %s (current: %s)", remote_tag, local_base)
                 self.updateAvailable.emit(remote_tag, download_url)
 
         except Exception as e:
-            logger.warning(f"Update check failed: {e}")
+            logger.warning("Update check failed: %s", e)
             self.updateCheckFailed.emit(str(e))
 
     @staticmethod
@@ -5606,9 +6237,20 @@ class MotionConnector(QObject):
 
         if r_parts != l_parts:
             return r_parts > l_parts
-        # Same base version: non-pre > pre
+        # Same numeric base.
         if l_pre and not r_pre:
-            return True
+            return True   # local prerelease, remote full -> remote is newer
+        if r_pre and l_pre:
+            # Both prereleases of the same base (rc.1 -> rc.2, dev.0 -> dev.1,
+            # dev -> rc): order by PEP 440 prerelease precedence. Only the beta
+            # channel ever compares pre-vs-pre (#386). packaging parses the
+            # project's rc.N/dev.N tags; if it can't, keep the old not-newer
+            # behavior so a weird tag never triggers a spurious "update".
+            try:
+                from packaging.version import Version
+                return Version(remote) > Version(local)
+            except Exception:
+                return False
         return False
 
     @pyqtSlot(str)
@@ -5624,6 +6266,8 @@ class MotionConnector(QObject):
         Guarded against re-entry so repeated clicks can't spawn racing
         download threads against the same file.
         """
+        if self._app_config.get("clinicalMode", False):
+            return   # clinical builds never install app updates (#96, #386)
         if getattr(self, "_update_in_progress", False):
             logger.info("Update already in progress; ignoring repeat request")
             return

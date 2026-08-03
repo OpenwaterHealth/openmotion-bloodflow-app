@@ -21,6 +21,14 @@ _INT_KEYS = (
     "leftMask", "rightMask", "clinicalModeLeftMask", "clinicalModeRightMask"
 )
 
+# Build-time-only keys (#233): decided per artifact by the build system
+# (scripts/build_common.ps1) or a dev env override (OPENMOTION_CLINICAL /
+# OPENMOTION_PORTABLE) — never by the operator at runtime. They are
+# neither read from nor written to the writable overrides file, so a
+# stray app_config.local.json (e.g. left behind by a pre-1.5 build) can't
+# flip a Research install into Clinical or change the storage layout.
+_BUILD_TIME_KEYS = ("clinicalMode", "portableMode")
+
 
 def _coerce_ints(cfg: dict) -> dict:
     for key in _INT_KEYS:
@@ -68,7 +76,10 @@ def load_app_config(defaults: dict):
     overrides = load_overrides(portable)
     merged = {
         **baseline,
-        **{k: v for k, v in overrides.items() if k in baseline},
+        **{
+            k: v for k, v in overrides.items()
+            if k in baseline and k not in _BUILD_TIME_KEYS
+        },
     }
     return baseline, _coerce_ints(merged)
 
@@ -81,7 +92,10 @@ def save_overrides(current: dict, baseline: dict) -> None:
     of the operator's settings on the next load.
     """
     diff = _coerce_ints(
-        {k: v for k, v in current.items() if baseline.get(k) != v}
+        {
+            k: v for k, v in current.items()
+            if baseline.get(k) != v and k not in _BUILD_TIME_KEYS
+        }
     )
     path = app_paths.local_config_path(bool(baseline.get("portableMode", False)))
     tmp = path.with_name(path.name + ".tmp")

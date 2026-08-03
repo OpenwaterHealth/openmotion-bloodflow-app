@@ -9,23 +9,62 @@ from PyInstaller.building.build_main import Analysis, PYZ, EXE, COLLECT
 
 APP_NAME = "Open-Motion"
 ENTRY = "main.py"
-ICON_FILE = os.path.abspath("assets/images/favicon.ico")
+
+# Anchor to the spec's own directory rather than the build-time CWD:
+# os.path.abspath("assets/...") silently resolved against wherever PyInstaller
+# happened to be invoked from, so a build launched from another directory got a
+# nonexistent icon path.
+ICON_FILE = os.path.join(SPECPATH, "assets", "images", "favicon.ico")
+if not os.path.exists(ICON_FILE):
+    raise SystemExit(f"[spec] FATAL: app icon missing: {ICON_FILE}")
 
 datas = []
 hidden = []
 binaries = []
 
-# --- your existing resource folders (keep what you already had) ---
+# --- resource folders ---
+# These are hard failures, not silent skips. The source paths below are still
+# CWD-relative, so skipping a missing one would quietly produce a build with no
+# QML and no assets at all — strictly worse than the wrong-CWD icon bug that
+# motivated anchoring ICON_FILE above.
 for item in ("main.qml",):
-    if os.path.exists(item):
-        datas.append((item, "."))
-for folder in ("pages", "components", "assets", "models", "config", "models", "processing"):
+    if not os.path.exists(item):
+        raise SystemExit(
+            f"[spec] FATAL: {item!r} not found in {os.getcwd()} — "
+            f"run PyInstaller from the repo root ({SPECPATH})."
+        )
+    datas.append((item, "."))
+for folder in ("pages", "components", "assets", "config", "processing"):
+    if not os.path.isdir(folder):
+        raise SystemExit(
+            f"[spec] FATAL: required resource folder {folder!r} not found in "
+            f"{os.getcwd()} — run PyInstaller from the repo root ({SPECPATH})."
+        )
+    datas.append((folder, folder))
+for folder in ("models",):  # optional
     if os.path.isdir(folder):
         datas.append((folder, folder))
 
-# Ensure the icon is explicitly included
-if os.path.exists(ICON_FILE):
-    datas.append((ICON_FILE, "assets/images"))
+# Bundle the replay sample scan (#314) — loaded into the viewer when no
+# device is connected at boot. Located at runtime via
+# utils.resource_path.resource_path("resources", "sample_scan.csv").
+_SAMPLE_SCAN = os.path.join("resources", "sample_scan.csv")
+if os.path.exists(_SAMPLE_SCAN):
+    datas.append((_SAMPLE_SCAN, "resources"))
+else:
+    # Optional, so not fatal — but never silent. Dropping it here is how the
+    # runtime file goes missing, and the app can only report the absence
+    # after the fact (a warning in the boot log, no sample in the viewer).
+    print(
+        f"[spec] WARNING: {_SAMPLE_SCAN!r} not found in {os.getcwd()} — the "
+        "build will ship without a replay sample scan; research builds will "
+        "log 'sample scan unavailable' and the offer dialog will do nothing."
+    )
+
+# Ensure the icon is explicitly included (also reachable via the `assets` tree
+# above; the runtime class-icon hardening in utils/win_taskbar_icon.py loads it
+# from disk, so a missing copy would be a silent downgrade).
+datas.append((ICON_FILE, "assets/images"))
 
 # --- PyQt6 (keep as before) ---
 qt_datas, qt_bins, qt_hidden = collect_all("PyQt6")
@@ -66,6 +105,65 @@ hidden += [
     "crcmod",
     "base58",
 ]
+
+# --- scan-DB encryption stack (clinical builds) ---
+# Belt-and-braces, NOT a fix for a known break: a frozen build was verified to
+# pick these up already, because PyInstaller's bytecode scan finds the lazy
+# `import sqlcipher3` / `import keyring` inside omotion.db_open/db_key, and
+# PyInstaller ships its own keyring hook for the entry-point-discovered
+# backends. Listing them explicitly means a refactor of those import sites (or
+# a hook change) cannot silently produce a clinical build that crashes on the
+# first scan or, worse, cannot open its own encrypted database.
+hidden += [
+    "sqlcipher3",
+    "sqlcipher3.dbapi2",
+    "keyring",
+    "keyring.backends",
+    "keyring.backends.Windows",          # WinVaultKeyring - found via entry points
+    "win32ctypes.core",                  # backs the Windows keyring backend
+    "win32ctypes.pywin32.win32cred",
+    "win32ctypes.pywin32.pywintypes",
+]
+try:
+    # sqlcipher3 is a single native extension with OpenSSL statically linked,
+    # so there are no side-car DLLs to chase - collect_all still future-proofs
+    # against that changing.
+    _sc_datas, _sc_bins, _sc_hidden = collect_all("sqlcipher3")
+    datas += _sc_datas
+    binaries += _sc_bins
+    hidden += _sc_hidden
+except Exception:
+    pass
+
+# Fail the BUILD, not the field, when a clinical package is missing its crypto.
+# PyInstaller can only bundle what is installed in the build environment, so an
+# env without these silently produces a clinical app that dies with
+# ModuleNotFoundError on first launch. build_and_zip.ps1 does not install
+# requirements.txt, so a local build inherits whatever happens to be in the
+# conda env - which is exactly how this shipped broken once. Research builds do
+# not need them, so only gate on clinicalMode.
+import json as _json
+try:
+    with open(os.path.join(os.path.dirname(os.path.abspath(SPEC)), "config",
+                           "app_config.json"), encoding="utf-8") as _f:
+        _is_clinical = bool(_json.load(_f).get("clinicalMode", False))
+except Exception:
+    _is_clinical = False
+if _is_clinical:
+    _missing = []
+    for _mod in ("keyring", "sqlcipher3"):
+        try:
+            __import__(_mod)
+        except ImportError:
+            _missing.append(_mod)
+    if _missing:
+        raise SystemExit(
+            "\n*** BUILD ABORTED: clinicalMode=true but these encryption packages "
+            f"are not installed in the build environment: {', '.join(_missing)}.\n"
+            "    PyInstaller cannot bundle what is not installed, so this build "
+            "would produce a clinical app that fails on first launch.\n"
+            "    Fix:  pip install -r requirements.txt\n"
+        )
 
 # Optional: if you also have a separate 'libusb' wheel installed, this won't hurt
 try:
@@ -126,6 +224,25 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
+# ---------- Qt window-class icon (issue #223) ----------
+# Qt sets the Win32 *window-class* icon with LoadImage(hInst, L"IDI_ICON1", ...)
+# and falls back to the generic IDI_APPLICATION when that name isn't found.
+# PyInstaller publishes the icon group under the *integer* id 1, which a name
+# lookup never matches — so the class icon is generic in every PyInstaller+Qt
+# build. The shell falls back to the class icon whenever its WM_GETICON probe
+# of a freshly shown window times out (SMTO_ABORTIFHUNG), which is why the
+# generic taskbar icon showed up intermittently and only on slower machines.
+#
+# The hook makes PyInstaller publish a second, *named* group alongside its own.
+# It must be installed before EXE() runs: EXE.assemble() embeds resources
+# before appending the PKG archive and before fixing up the PE checksum, and
+# rewriting resources after that point truncates the appended archive and
+# produces an exe that cannot start.
+if sys.platform == "win32":
+    sys.path.insert(0, os.path.join(SPECPATH, "scripts"))
+    from win_icon_resource import install_pyinstaller_hook, has_named_group_icon
+    install_pyinstaller_hook()
+
 exe_gui = EXE(
     pyz, a.scripts, [],
     exclude_binaries=True,
@@ -135,18 +252,22 @@ exe_gui = EXE(
     upx=False   # safer for DLLs on Windows
 )
 
-exe_cli = EXE(
-    pyz, a.scripts, [],
-    exclude_binaries=True,
-    name=f"{APP_NAME}_console",
-    console=True,
-    icon=ICON_FILE,
-    upx=False
-)
-
 coll = COLLECT(
-    exe_gui, exe_cli,
+    exe_gui,
     a.binaries, a.zipfiles, a.datas,
     strip=False, upx=False, upx_exclude=[],
     name=APP_NAME
 )
+
+# Verify on the artifact that actually ships. This also catches a warm build/
+# tree: PyInstaller's EXE cache compares the icon *path*, not its contents, so
+# a cached exe can silently carry stale resources — fail loudly instead.
+if sys.platform == "win32":
+    _dist_exe = os.path.join(DISTPATH, APP_NAME, APP_NAME + ".exe")
+    if not has_named_group_icon(_dist_exe):
+        raise SystemExit(
+            f"[spec] FATAL: {_dist_exe} has no 'IDI_ICON1' icon resource — Qt "
+            f"would register its window classes with the generic Windows icon "
+            f"(#223). Rebuild with --clean."
+        )
+    print(f"[spec] verified 'IDI_ICON1' window-class icon in {_dist_exe}")

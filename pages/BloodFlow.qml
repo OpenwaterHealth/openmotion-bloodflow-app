@@ -31,8 +31,9 @@ Rectangle {
     // app tears down.
     readonly property alias modalManager: modalManager
 
-    // FDA mode (read from app config). Forces Far camera pattern + free run,
-    // hides scan-settings button, and swaps in the FDA plot view.
+    // Clinical mode (read from app config). Forces Far camera pattern +
+    // free run, hides scan-settings button, and swaps in the clinical
+    // plot view.
     property bool clinicalMode: MotionInterface.appConfig.clinicalMode === true
     // In clinical mode, Start first runs a contact-quality preflight check.
     property bool clinicalStartPending: false
@@ -56,7 +57,7 @@ Rectangle {
 
     // Duration from scan time modal
     property bool freeRun: clinicalMode
-    property int durationSec: clinicalMode ? 43200 : 3600  // 12h in FDA mode, 1h default
+    property int durationSec: clinicalMode ? 43200 : 3600  // 12h in clinical mode, 1h default
 
     onClinicalModeChanged: {
         if (clinicalMode) {
@@ -267,6 +268,9 @@ Rectangle {
         onNotesClicked:    modalManager.toggle(notesModal)
         onHistoryClicked:  modalManager.toggle(historyModal)
         onSettingsClicked: modalManager.toggle(settingsModal)
+        // App-log viewer is a separate Window, not a ModalManager modal —
+        // clicking Logs just shows/raises it (close via its title bar).
+        onLogsClicked:     logViewerWindow.open()
     }
 
     // Allow external callers (firmware banner) to open the Settings overlay.
@@ -280,7 +284,8 @@ Rectangle {
     ModalManager {
         id: modalManager
         modals: [scanSettingsModal, notesModal, historyModal,
-                 settingsModal, contactQualityModal, logsModal]
+                 settingsModal, contactQualityModal, logsModal,
+                 sampleScanOfferModal]
     }
 
     // Data viewer — fills remaining space to the right of ButtonPanel.
@@ -348,6 +353,12 @@ Rectangle {
         id: notesModal
     }
 
+    // No-device offer to open the bundled sample scan. Raised by the
+    // connector's startup watchdog; research builds only.
+    SampleScanOfferModal {
+        id: sampleScanOfferModal
+    }
+
     // Spacebar during an active scan pops the Notes modal with a fresh
     // newline + [elapsed / wall-clock] timestamp, cursor ready to type.
     // Gated so it only fires mid-scan and never over another modal; once
@@ -375,6 +386,13 @@ Rectangle {
     Connections {
         target: MotionInterface
         function onScanNotesReady() { notesModal.open() }
+        // Startup watchdog found no device (research builds only). Don't
+        // stomp a modal the user opened during the 12 s window. The
+        // watchdog is one-shot, so an offer dropped here is not retried
+        // this launch (relaunch to be offered again).
+        function onSampleScanOfferRequested() {
+            if (!modalManager.current) sampleScanOfferModal.open()
+        }
         // Snap the header counter to the authoritative value on every
         // trigger edge. The OFF edge matters most: it carries the SDK
         // timestamp correction, so the final displayed value lands on
@@ -405,6 +423,12 @@ Rectangle {
 
     LogsModal {
         id: logsModal
+    }
+
+    // Engineering live app-log viewer (icon-bar Logs button) — a separate
+    // non-modal Window, distinct from the audit-log LogsModal above.
+    LogViewerWindow {
+        id: logViewerWindow
     }
 
     ContactQualityModal {
@@ -507,20 +531,19 @@ Rectangle {
     // ===== SCAN RUNNER (check mode) =====
     // Shares flash + trigger/laser plumbing with scanRunner; final stage is
     // the contact-quality check instead of capture. Always flashes 0xFF so
-    // every physically-present camera participates (lets the live CQ view
-    // show a dot for every camera) — absent cameras are skipped by the
-    // configure workflow. The pass/fail *evaluation* is narrower: only the
-    // user's currently configured scan mask (evalLeftMask/evalRightMask)
-    // is required to pass — a camera set to "None" in scan settings is
-    // flashed/shown but never blocks the check.
+    // every physically-present camera participates — absent cameras are
+    // skipped by the configure workflow. Every physically-present camera is
+    // also EVALUATED and gates pass/fail (issue #420, reversing #277's
+    // scan-mask narrowing): the preflight is a whole-module seating check,
+    // so an unmeasured camera must never render as good contact. Known
+    // trade-off, accepted: a dead camera fails every preflight even when
+    // it's excluded from the scan mask.
     ScanRunner {
         id: qualityCheckRunner
         mode: "check"
         connector: MotionInterface
         leftMask: MotionInterface.leftSensorConnected  ? 0xFF : 0x00
         rightMask: MotionInterface.rightSensorConnected ? 0xFF : 0x00
-        evalLeftMask: bloodFlow.leftMask
-        evalRightMask: bloodFlow.rightMask
         laserOn: true
         laserPower: 50
         // See note on the scanRunner triggerConfig above — same here.

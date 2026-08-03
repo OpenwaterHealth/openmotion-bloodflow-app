@@ -51,7 +51,7 @@ Rectangle {
             viewer._kbReset()
             event.accepted = true
         } else if (event.key === Qt.Key_Home) {
-            viewer.setWindow(0, viewer.windowSeconds)
+            viewer.setWindow(0, viewer.windowSeconds, "keyboard")
             event.accepted = true
         } else if (event.key === Qt.Key_End) {
             viewer._kbEnd()
@@ -288,7 +288,7 @@ Rectangle {
     readonly property real _minWindowSeconds: 0.5
     readonly property real _maxWindowSeconds: 600.0
 
-    function _ensureFrozen() {
+    function _ensureFrozen(cause) {
         // Capture the currently-visible window start so pan/zoom from
         // followLive transitions smoothly (no visual jump). After this
         // the caller mutates windowStartT/windowSeconds freely.
@@ -297,12 +297,16 @@ Rectangle {
             // than re-reading source.liveEdge — avoids a one-frame jump
             // at the moment of pan/zoom on a fast source.
             viewer.windowStartT = Math.max(0, viewer.liveEdgeSnapshot - viewer.windowSeconds)
+            // One line per live→paused edge — the recovery already logs
+            // as "[Plot] back-to-live" — so a debug bundle can show WHEN
+            // the view stopped following live and what input did it.
+            console.info("[Plot] live-follow paused (" + (cause || "pan/zoom") + ")")
         }
         viewer.followLive = false
     }
 
-    function setWindow(startT, seconds) {
-        _ensureFrozen()
+    function setWindow(startT, seconds, cause) {
+        _ensureFrozen(cause)
         viewer.windowSeconds = Math.max(_minWindowSeconds, Math.min(_maxWindowSeconds, seconds))
         // Cap startT so the window can't extend past the live edge —
         // otherwise the scrubber inset slides off into empty future
@@ -325,17 +329,17 @@ Rectangle {
     readonly property real _defaultWindowSeconds: 15
 
     function _kbPan(seconds) {
-        _ensureFrozen()
-        setWindow(viewer.windowStartT + seconds, viewer.windowSeconds)
+        _ensureFrozen("keyboard")
+        setWindow(viewer.windowStartT + seconds, viewer.windowSeconds, "keyboard")
     }
 
     function _kbZoom(factor) {
-        _ensureFrozen()
+        _ensureFrozen("keyboard")
         // Zoom around the center of the currently-visible window so the
         // operator's mental anchor stays put on the screen.
         var center = viewer.windowStartT + viewer.windowSeconds / 2
         var newSec = viewer.windowSeconds * factor
-        setWindow(center - newSec / 2, newSec)
+        setWindow(center - newSec / 2, newSec, "keyboard")
     }
 
     function _kbEnd() {
@@ -347,7 +351,8 @@ Rectangle {
         } else {
             setWindow(
                 Math.max(0, viewer.liveEdgeSnapshot - viewer.windowSeconds),
-                viewer.windowSeconds
+                viewer.windowSeconds,
+                "keyboard"
             )
         }
     }
@@ -850,7 +855,7 @@ Rectangle {
             followLive: viewer.followLive
 
             onPanRequested: function(startT) {
-                viewer.setWindow(startT, viewer.windowSeconds)
+                viewer.setWindow(startT, viewer.windowSeconds, "scrubber")
                 console.info("[Plot] scrubber pan → " + startT.toFixed(2) + " s")
             }
         }
@@ -1190,9 +1195,9 @@ Rectangle {
             height: 36
             radius: 18
             color: settingsPopup.opened
-                   ? Qt.rgba(0.29, 0.56, 0.89, 0.85)
+                   ? Qt.alpha(AppTheme.accentInteractive, 0.85)
                    : AppTheme.overlayBg
-            border.color: settingsPopup.opened ? "#4A90E2" : AppTheme.borderSubtle
+            border.color: settingsPopup.opened ? AppTheme.accentInteractive : AppTheme.borderSubtle
             border.width: 1
 
             Text {
@@ -1231,7 +1236,7 @@ Rectangle {
                 }
 
                 // Mini Switch styled to match SettingsModal's PillSwitch —
-                // blue-background pill with white thumb when on, dark
+                // accent-background pill with white thumb when on, plain
                 // background when off. Animated thumb glide on toggle.
                 component PopupPillSwitch: Switch {
                     id: psCtrl
@@ -1240,8 +1245,8 @@ Rectangle {
                         x:      psCtrl.leftPadding
                         y:      (psCtrl.height - height) / 2
                         width:  44; height: 24; radius: 12
-                        color:  psCtrl.checked ? AppTheme.accentBlue : AppTheme.bgInput
-                        border.color: psCtrl.checked ? AppTheme.accentBlue : AppTheme.borderSoft
+                        color:  psCtrl.checked ? AppTheme.accentInteractive : AppTheme.bgInput
+                        border.color: psCtrl.checked ? AppTheme.accentInteractive : AppTheme.borderSoft
                         border.width: 1
                         Behavior on color { ColorAnimation { duration: 120 } }
 

@@ -29,12 +29,13 @@ Item {
     property bool   showBfiBvi:        true
     property bool   autoScale:         false
     property bool   autoScalePerPlot:  false
-    property bool   clinicalMode:       false
+    // Live binding to the clinicalMode config flag. Read-only on purpose:
+    // clinical selection is build-time/env-only (#233), so the modal never
+    // edits or persists it.
+    readonly property bool clinicalMode: MotionInterface.appConfig.clinicalMode === true
     property int    plotWindowSec:     15
     property color  bfiColor:          "#E74C3C"
     property color  bviColor:          "#3498DB"
-    property bool   bviLowPassEnabled:  false
-    property real   bviLowPassCutoffHz: 40.0
     property real   bfiMin:      0.0
     property real   bfiMax:      10.0
     property real   bviMin:      0.0
@@ -57,12 +58,13 @@ Item {
     property string appUpdateProgressText: "Update"
 
     // ── Theme tokens (aliased from AppTheme) ──────────────────────────────
-    readonly property color colBgPanel:    AppTheme.bgContainer
+    readonly property color colBgPanel:    AppTheme.sheetBg
     readonly property color colBgCard:     AppTheme.bgCard
+    readonly property color colMenuBg:     AppTheme.menuBg
     readonly property color colBgInput:    AppTheme.bgInput
     readonly property color colBorder:     AppTheme.borderStrong
     readonly property color colBorderSoft: AppTheme.borderSoft
-    readonly property color colAccent:     AppTheme.accentBlue
+    readonly property color colAccent:     AppTheme.accentInteractive
     readonly property color colTextPri:    AppTheme.textPrimary
     readonly property color colTextSec:    AppTheme.textSecondary
     readonly property color colTextMuted:  AppTheme.textTertiary
@@ -98,26 +100,27 @@ Item {
         var cfg = MotionInterface.appConfig
         defaultLeftMaskIndex  = maskToIndex(cfg.leftMask  !== undefined ? cfg.leftMask  : 0x99)
         defaultRightMaskIndex = maskToIndex(cfg.rightMask !== undefined ? cfg.rightMask : 0x99)
-        clinicalMode        = cfg.clinicalMode        !== undefined ? cfg.clinicalMode        : false
         showBfiBvi         = clinicalMode ? true : (cfg.showBfiBvi !== undefined ? cfg.showBfiBvi : true)
         autoScale          = cfg.autoScale          !== undefined ? cfg.autoScale          : false
         autoScalePerPlot   = autoScale
         plotWindowSec      = cfg.plotWindowSec      !== undefined ? cfg.plotWindowSec      : 15
         bfiColor           = cfg.bfiColor           !== undefined ? cfg.bfiColor           : "#E74C3C"
         bviColor           = cfg.bviColor           !== undefined ? cfg.bviColor           : "#3498DB"
-        bviLowPassEnabled  = cfg.bviLowPassEnabled  !== undefined ? cfg.bviLowPassEnabled  : false
-        bviLowPassCutoffHz = cfg.bviLowPassCutoffHz !== undefined ? cfg.bviLowPassCutoffHz : 40.0
-        bfiMin       = cfg.bfiMin       !== undefined ? cfg.bfiMin       : 0.0
-        bfiMax       = cfg.bfiMax       !== undefined ? cfg.bfiMax       : 10.0
-        bviMin       = cfg.bviMin       !== undefined ? cfg.bviMin       : 0.0
-        bviMax       = cfg.bviMax       !== undefined ? cfg.bviMax       : 10.0
-        meanMin      = cfg.meanMin      !== undefined ? cfg.meanMin      : 0.0
-        meanMax      = cfg.meanMax      !== undefined ? cfg.meanMax      : 500.0
-        contrastMin  = cfg.contrastMin  !== undefined ? cfg.contrastMin  : 0.0
-        contrastMax  = cfg.contrastMax  !== undefined ? cfg.contrastMax  : 1.0
+        // Persisted bounds are untrusted (#229) — sanitizeBoundPair
+        // supplies the per-metric defaults for missing/garbage values
+        // and re-clamps anything a hand-edited config smuggled in.
+        var b = sanitizeBoundPair("bfi", cfg.bfiMin, cfg.bfiMax)
+        bfiMin = b.min; bfiMax = b.max
+        b = sanitizeBoundPair("bvi", cfg.bviMin, cfg.bviMax)
+        bviMin = b.min; bviMax = b.max
+        b = sanitizeBoundPair("mean", cfg.meanMin, cfg.meanMax)
+        meanMin = b.min; meanMax = b.max
+        b = sanitizeBoundPair("contrast", cfg.contrastMin, cfg.contrastMax)
+        contrastMin = b.min; contrastMax = b.max
         writeRawCsv       = cfg.writeRawCsv       !== undefined ? cfg.writeRawCsv       : false
         rawCsvDurationSec = cfg.rawCsvDurationSec !== undefined ? cfg.rawCsvDurationSec : null
-        if (darkModeSwitch) darkModeSwitch.checked = cfg.darkMode !== false
+        // Theme selector (themeCombo) binds its currentIndex directly to
+        // appConfig.darkMode/liquidGlass, so no manual sync is needed here.
     }
 
     Component.onCompleted: _loadFromConfig()
@@ -148,12 +151,12 @@ Item {
             "showBfiBvi":         showBfiBvi,
             "autoScale":          autoScale,
             "autoScalePerPlot":   autoScalePerPlot,
-            "clinicalMode":        clinicalMode,
+            // clinicalMode is deliberately NOT saved here (#233): the
+            // Clinical/Research split is build-time/env-only and the
+            // config store refuses to persist it as a runtime override.
             "plotWindowSec":      plotWindowSec,
             "bfiColor":           "" + bfiColor,
             "bviColor":           "" + bviColor,
-            "bviLowPassEnabled":  bviLowPassEnabled,
-            "bviLowPassCutoffHz": bviLowPassCutoffHz,
             "bfiMin":      bfiMin,
             "bfiMax":      bfiMax,
             "bviMin":      bviMin,
@@ -195,8 +198,12 @@ Item {
 
     // ── Reusable building blocks ────────────────────────────────────────────
     component SectionCard: Rectangle {
+        id: sectionCard
         property string title: ""
         default property alias contentItem: cardContent.data
+        // Optional item(s) right-aligned on the title row — e.g. the
+        // About card's Send Debug Logs button (#227).
+        property alias headerItem: headerSlot.data
         Layout.fillWidth: true
         Layout.leftMargin: 20
         Layout.rightMargin: 20
@@ -212,12 +219,19 @@ Item {
             anchors.margins: 18
             spacing: 14
 
-            Text {
-                text:           parent.parent.title
-                color:          root.colTextPri
-                font.pixelSize: 15
-                font.weight:    Font.DemiBold
-                font.letterSpacing: 0.3
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                Text {
+                    text:           sectionCard.title
+                    color:          root.colTextPri
+                    font.pixelSize: 15
+                    font.weight:    Font.DemiBold
+                    font.letterSpacing: 0.3
+                }
+                Item { Layout.fillWidth: true }
+                RowLayout { id: headerSlot; spacing: 8 }
             }
 
             Rectangle { Layout.fillWidth: true; height: 1; color: root.colBorderSoft }
@@ -281,7 +295,9 @@ Item {
                 ScrollIndicator.vertical: ScrollIndicator {}
             }
             background: Rectangle {
-                color: root.colBgCard
+                // menuBg, not bgCard — an open dropdown has to be readable
+                // over the Liquid Glass ambient (#398).
+                color: root.colMenuBg
                 radius: 4
                 border.color: root.colBorderSoft
                 border.width: 1
@@ -334,6 +350,61 @@ Item {
     function _roundTo(v, decimals) {
         var f = Math.pow(10, decimals)
         return Math.round(v * f) / f
+    }
+
+    // ── Manual plot-bound clamping (issue #229) ─────────────────────────
+    // Sane entry windows per metric. `decimals` matches the field's
+    // display precision; one display unit (10^-decimals) doubles as the
+    // enforced minimum min→max gap, so min < max always holds strictly
+    // (PlotCell._drawTrace divides by max - min).
+    //   bfi/bvi:  pipeline emits (1 - norm) * 10 — display range 0–10
+    //             (matches the bfiClampLow/High display clamps).
+    //   mean:     10-bit pixel data (1024 histogram bins) — 0–1024.
+    //   contrast: speckle contrast — 0.00–1.00.
+    readonly property var _boundPolicy: ({
+        "bfi":      { lo: 0, hi: 10,   decimals: 1, defMin: 0.0, defMax: 10.0 },
+        "bvi":      { lo: 0, hi: 10,   decimals: 1, defMin: 0.0, defMax: 10.0 },
+        "mean":     { lo: 0, hi: 1024, decimals: 0, defMin: 0.0, defMax: 500.0 },
+        "contrast": { lo: 0, hi: 1,    decimals: 2, defMin: 0.0, defMax: 1.0 }
+    })
+
+    // Coerce one edited bound: clamp into the metric's window, then keep
+    // it one display-step clear of the opposing bound (`other`) so the
+    // pair can never invert or collapse. Returns the value rounded to the
+    // field's precision; callers re-display it so the correction is
+    // visible to the user.
+    function clampBound(metric, which, value, other) {
+        var p = _boundPolicy[metric]
+        var v = Number(value)
+        if (p === undefined) return v
+        if (!isFinite(v)) return which === "min" ? p.defMin : p.defMax
+        var step = Math.pow(10, -p.decimals)
+        if (which === "min") {
+            v = Math.min(Math.max(v, p.lo), p.hi - step)
+            if (isFinite(other) && v > other - step) v = other - step
+        } else {
+            v = Math.min(Math.max(v, p.lo + step), p.hi)
+            if (isFinite(other) && v < other + step) v = other + step
+        }
+        return _roundTo(v, p.decimals)
+    }
+
+    // Sanitize a persisted min/max pair — config values are untrusted
+    // (hand-edited or pre-#229 files can carry anything). Non-numeric or
+    // missing → metric defaults; out-of-window → clamped; a pair still
+    // inverted (or collapsed) after clamping → defaults.
+    function sanitizeBoundPair(metric, minValue, maxValue) {
+        var mn = Number(minValue)
+        var mx = Number(maxValue)
+        var p = _boundPolicy[metric]
+        if (p === undefined) return { min: mn, max: mx }
+        var step = Math.pow(10, -p.decimals)
+        if (!isFinite(mn)) mn = p.defMin
+        if (!isFinite(mx)) mx = p.defMax
+        mn = _roundTo(Math.min(Math.max(mn, p.lo), p.hi - step), p.decimals)
+        mx = _roundTo(Math.min(Math.max(mx, p.lo + step), p.hi), p.decimals)
+        if (mn >= mx) { mn = p.defMin; mx = p.defMax }
+        return { min: mn, max: mx }
     }
 
     component PillSwitch: Switch {
@@ -548,6 +619,72 @@ Item {
                             onAccepted: dataPathField.text = selectedFolder.toString().replace("file:///", "")
                         }
                     }
+
+                    // ── Raw histogram CSVs (research + engineering, #234) ────
+                    // Research data — moved out of the Engineering card so
+                    // Research (non-clinical) users get them without the
+                    // engineering unlock; the engineering unlock also shows
+                    // them on a clinical build. The connector re-checks the
+                    // flags at scan start, so a plain Clinical build never
+                    // writes raw CSVs even if a stale config left the
+                    // toggle on (#43).
+                    FieldRow {
+                        visible: !root.clinicalMode
+                                 || MotionInterface.appConfig.engineeringMode === true
+                        label: "Save raw CSV"
+                        PillSwitch {
+                            // objectName for the unit suite; Accessible.name
+                            // for the Windows a11y (UIA) tree — plain QML
+                            // Text labels don't surface there, and the HIL
+                            // suite (test_raw_csv_save.py) locates the
+                            // toggle by this name.
+                            objectName: "saveRawCsvSwitch"
+                            Accessible.name: "Save raw CSV"
+                            checked: root.writeRawCsv
+                            onCheckedChanged: root.writeRawCsv = checked
+                        }
+                        Text {
+                            text: root.writeRawCsv ? "On" : "Off"
+                            color: root.writeRawCsv ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    FieldRow {
+                        visible: !root.clinicalMode
+                                 || MotionInterface.appConfig.engineeringMode === true
+                        label: "Raw CSV duration"
+                        opacity: root.writeRawCsv ? 1.0 : 0.4
+                        TextField {
+                            id: rawCsvDurationField
+                            objectName: "rawCsvDurationField"
+                            Accessible.name: "Raw CSV duration"
+                            Layout.preferredWidth: 80
+                            Layout.preferredHeight: 32
+                            enabled: root.writeRawCsv
+                            text: root.rawCsvDurationSec !== null && root.rawCsvDurationSec !== undefined
+                                  ? root.rawCsvDurationSec.toString() : ""
+                            placeholderText: ""
+                            inputMethodHints: Qt.ImhDigitsOnly
+                            color: root.colTextPri
+                            background: Rectangle {
+                                color: root.colBgInput
+                                border.color: rawCsvDurationField.activeFocus ? root.colAccent : root.colBorderSoft
+                                radius: 4
+                            }
+                            onEditingFinished: {
+                                var v = parseInt(text, 10)
+                                root.rawCsvDurationSec = (text === "" || isNaN(v) || v <= 0) ? null : v
+                            }
+                        }
+                        Text {
+                            text: "seconds  (blank = full scan)"
+                            color: root.colTextMuted
+                            font.pixelSize: 11
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
                 }
 
                 // ── Realtime Plot Display ────────────────────────────────────
@@ -605,21 +742,6 @@ Item {
                         Text {
                             text: root.autoScale ? "On" : "Off"
                             color: root.autoScale ? root.colAccent : root.colTextMuted
-                            font.pixelSize: 12
-                        }
-                        Item { Layout.fillWidth: true }
-                    }
-
-                    FieldRow {
-                        visible: !root.clinicalMode
-                        label: "BVI low-pass filter"
-                        PillSwitch {
-                            checked: root.bviLowPassEnabled
-                            onCheckedChanged: root.bviLowPassEnabled = checked
-                        }
-                        Text {
-                            text: root.bviLowPassCutoffHz.toFixed(0) + " Hz cutoff"
-                            color: root.colTextMuted
                             font.pixelSize: 12
                         }
                         Item { Layout.fillWidth: true }
@@ -689,31 +811,35 @@ Item {
 
                         Text { text: "BFI"; color: AppTheme.readableInk(root.bfiColor); font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
+                            objectName: "bfiMinField"
                             Layout.preferredWidth: 90
                             decimals: 1
                             text: root.bfiMin.toFixed(1)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bfiMin = root._roundTo(v, 1); text = root.bfiMin.toFixed(1) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bfiMin = root.clampBound("bfi", "min", v, root.bfiMax); text = root.bfiMin.toFixed(1) }
                         }
                         StyledNumberField {
+                            objectName: "bfiMaxField"
                             Layout.preferredWidth: 90
                             decimals: 1
                             text: root.bfiMax.toFixed(1)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bfiMax = root._roundTo(v, 1); text = root.bfiMax.toFixed(1) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bfiMax = root.clampBound("bfi", "max", v, root.bfiMin); text = root.bfiMax.toFixed(1) }
                         }
                         Item { Layout.fillWidth: true }
 
                         Text { text: "BVI"; color: AppTheme.readableInk(root.bviColor); font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
+                            objectName: "bviMinField"
                             Layout.preferredWidth: 90
                             decimals: 1
                             text: root.bviMin.toFixed(1)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bviMin = root._roundTo(v, 1); text = root.bviMin.toFixed(1) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bviMin = root.clampBound("bvi", "min", v, root.bviMax); text = root.bviMin.toFixed(1) }
                         }
                         StyledNumberField {
+                            objectName: "bviMaxField"
                             Layout.preferredWidth: 90
                             decimals: 1
                             text: root.bviMax.toFixed(1)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bviMax = root._roundTo(v, 1); text = root.bviMax.toFixed(1) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.bviMax = root.clampBound("bvi", "max", v, root.bviMin); text = root.bviMax.toFixed(1) }
                         }
                         Item { Layout.fillWidth: true }
 
@@ -723,35 +849,39 @@ Item {
                         // children, so the grid reflows to just BFI / BVI.
                         Text { visible: !root.clinicalMode; text: "Mean"; color: "#2ECC71"; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
+                            objectName: "meanMinField"
                             visible: !root.clinicalMode
                             Layout.preferredWidth: 90
                             decimals: 0
                             text: root.meanMin.toFixed(0)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.meanMin = Math.round(v); text = root.meanMin.toFixed(0) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.meanMin = root.clampBound("mean", "min", v, root.meanMax); text = root.meanMin.toFixed(0) }
                         }
                         StyledNumberField {
+                            objectName: "meanMaxField"
                             visible: !root.clinicalMode
                             Layout.preferredWidth: 90
                             decimals: 0
                             text: root.meanMax.toFixed(0)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.meanMax = Math.round(v); text = root.meanMax.toFixed(0) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.meanMax = root.clampBound("mean", "max", v, root.meanMin); text = root.meanMax.toFixed(0) }
                         }
                         Item { visible: !root.clinicalMode; Layout.fillWidth: true }
 
                         Text { visible: !root.clinicalMode; text: "Contrast"; color: "#9B59B6"; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 80 }
                         StyledNumberField {
+                            objectName: "contrastMinField"
                             visible: !root.clinicalMode
                             Layout.preferredWidth: 90
                             decimals: 2
                             text: root.contrastMin.toFixed(2)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.contrastMin = root._roundTo(v, 2); text = root.contrastMin.toFixed(2) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.contrastMin = root.clampBound("contrast", "min", v, root.contrastMax); text = root.contrastMin.toFixed(2) }
                         }
                         StyledNumberField {
+                            objectName: "contrastMaxField"
                             visible: !root.clinicalMode
                             Layout.preferredWidth: 90
                             decimals: 2
                             text: root.contrastMax.toFixed(2)
-                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.contrastMax = root._roundTo(v, 2); text = root.contrastMax.toFixed(2) }
+                            onEditingFinished: { var v = parseFloat(text); if (!isNaN(v)) root.contrastMax = root.clampBound("contrast", "max", v, root.contrastMin); text = root.contrastMax.toFixed(2) }
                         }
                         Item { visible: !root.clinicalMode; Layout.fillWidth: true }
                     }
@@ -764,12 +894,27 @@ Item {
                         width: parent.width
                         spacing: 0
                         FieldRow {
-                            label: "Dark Mode"
-                            PillSwitch {
-                                id: darkModeSwitch
-                                checked: MotionInterface.appConfig.darkMode !== false
-                                onToggled: {
-                                    MotionInterface.setConfig("darkMode", checked)
+                            label: "Theme"
+                            // Single selector over the two underlying booleans
+                            // (darkMode, liquidGlass). Liquid Glass is the
+                            // dark-based glass — the two solid themes are Dark
+                            // and Light (the warm-paper palette, #369). Written
+                            // atomically via saveConfigs so it's one persist +
+                            // one appConfigChanged + one audit entry.
+                            StyledCombo {
+                                id: themeCombo
+                                Layout.preferredWidth: 150
+                                model: ["Dark Mode", "Light Mode", "Liquid Glass"]
+                                currentIndex: MotionInterface.appConfig.liquidGlass === true
+                                              ? 2
+                                              : (MotionInterface.appConfig.darkMode !== false ? 0 : 1)
+                                onActivated: function(index) {
+                                    if (index === 0)
+                                        MotionInterface.saveConfigs({ "darkMode": true,  "liquidGlass": false })
+                                    else if (index === 1)
+                                        MotionInterface.saveConfigs({ "darkMode": false, "liquidGlass": false })
+                                    else
+                                        MotionInterface.saveConfigs({ "darkMode": true,  "liquidGlass": true })
                                 }
                             }
                         }
@@ -777,6 +922,8 @@ Item {
                 }
 
                 // ── Audit Log ────────────────────────────────────────────────
+                // Clinical record only — debug/diagnostic tooling lives in
+                // the Support section below (#227).
                 SectionCard {
                     title: "Audit Log"
 
@@ -787,20 +934,12 @@ Item {
                             Layout.preferredWidth: 130
                             onClicked: logsPasswordModal.open()
                         }
-                        ActionButton {
-                            text: "Send Debug Logs"
-                            Layout.preferredWidth: 150
-                            // Direct action — zips the last 48h of app logs,
-                            // reveals the file, and toasts the support address.
-                            onClicked: MotionInterface.prepareDebugLogBundle()
-                        }
                         Item { Layout.fillWidth: true }
                     }
                     Text {
                         text: "Password-protected, machine-readable record of system "
                               + "events for auditors. Open the viewer to browse entries "
-                              + "or export them as CSV. Send Debug Logs zips the last "
-                              + "48 hours of app logs to email to support@openwater.cc."
+                              + "or export them as CSV."
                         color: root.colTextMuted
                         font.pixelSize: 11
                         wrapMode: Text.WordWrap
@@ -871,6 +1010,29 @@ Item {
                         Item { Layout.fillWidth: true }
                     }
 
+                    // Sensor debug log sets DEBUG_FLAG_USB_PRINTF on both
+                    // sensors. On firmware without sensor-fw#115, the
+                    // firmware's own "HISTO enqueue fail: queue full" message
+                    // has to be transmitted over the COMM endpoint; if the
+                    // host stops draining COMM the send busy-waits the
+                    // firmware main loop for up to 500 ms, which starves the
+                    // 25 ms camera DMA re-arm and kills the camera for the
+                    // rest of the session. Bench: 6/6 scans lost a camera with
+                    // this on, 0/6 with it off, under the same induced stall.
+                    // Shown only when enabled — this is a live hazard, not a
+                    // general note about the setting.
+                    Text {
+                        visible: MotionInterface.appConfig.sensorDebugLogging === true
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 4
+                        Layout.bottomMargin: 6
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: 11
+                        color: AppTheme.accentYellow
+                        text: qsTr("Raises camera-dropout risk during acquisition. "
+                                   + "Turn off before clinical scans.")
+                    }
+
                     // Console USB-printf debug log — persisted to config AND
                     // pushed live to a connected console via
                     // setConsoleDebugLogging. Re-applied on connect (RAM-only
@@ -886,51 +1048,6 @@ Item {
                             text: MotionInterface.appConfig.consoleDebugLogging === true ? "On" : "Off"
                             color: MotionInterface.appConfig.consoleDebugLogging === true ? root.colAccent : root.colTextMuted
                             font.pixelSize: 12
-                        }
-                        Item { Layout.fillWidth: true }
-                    }
-
-                    FieldRow {
-                        label: "Save raw CSV"
-                        PillSwitch {
-                            checked: root.writeRawCsv
-                            onCheckedChanged: root.writeRawCsv = checked
-                        }
-                        Text {
-                            text: root.writeRawCsv ? "On" : "Off"
-                            color: root.writeRawCsv ? root.colAccent : root.colTextMuted
-                            font.pixelSize: 12
-                        }
-                        Item { Layout.fillWidth: true }
-                    }
-
-                    FieldRow {
-                        label: "Raw CSV duration"
-                        opacity: root.writeRawCsv ? 1.0 : 0.4
-                        TextField {
-                            id: rawCsvDurationField
-                            Layout.preferredWidth: 80
-                            Layout.preferredHeight: 32
-                            enabled: root.writeRawCsv
-                            text: root.rawCsvDurationSec !== null && root.rawCsvDurationSec !== undefined
-                                  ? root.rawCsvDurationSec.toString() : ""
-                            placeholderText: ""
-                            inputMethodHints: Qt.ImhDigitsOnly
-                            color: root.colTextPri
-                            background: Rectangle {
-                                color: root.colBgInput
-                                border.color: rawCsvDurationField.activeFocus ? root.colAccent : root.colBorderSoft
-                                radius: 4
-                            }
-                            onEditingFinished: {
-                                var v = parseInt(text, 10)
-                                root.rawCsvDurationSec = (text === "" || isNaN(v) || v <= 0) ? null : v
-                            }
-                        }
-                        Text {
-                            text: "seconds  (blank = full scan)"
-                            color: root.colTextMuted
-                            font.pixelSize: 11
                         }
                         Item { Layout.fillWidth: true }
                     }
@@ -1130,7 +1247,7 @@ Item {
                             hoverColor: "#C0392B"
                             onClicked: {
                                 MotionInterface.setConfig("engineeringMode", false)
-                                MotionInterface.notify("Engineering mode disabled.", "info", 3000, false, "dev-mode")
+                                MotionInterface.notify("Engineering mode disabled.", "info", 3000, false, "engineering-mode")
                             }
                         }
                         Item { Layout.fillWidth: true }
@@ -1141,6 +1258,21 @@ Item {
                 SectionCard {
                     title: "About"
 
+                    // Debug-log bundle for support, top-right of the About
+                    // (firmware info) card per #227 — deliberately away from
+                    // the Audit Log section: the audit log is the clinical
+                    // record, the debug bundle is engineering diagnostics.
+                    // Visible in ALL modes — it is the designated support
+                    // path for clinical sites and the bundle contains no
+                    // scan or patient data.
+                    headerItem: ActionButton {
+                        text: "Send Debug Logs"
+                        Layout.preferredWidth: 150
+                        // Direct action — zips the last 48h of app logs,
+                        // reveals the file, and toasts the support address.
+                        onClicked: MotionInterface.prepareDebugLogBundle()
+                    }
+
                     // Small pill button reused for the Application row and
                     // each device firmware row.
                     component UpdateChip: Rectangle {
@@ -1149,7 +1281,7 @@ Item {
                         property string label: "Update"
                         property bool chipEnabled: true
                         width: chipText.implicitWidth + 18; height: 24; radius: 4
-                        color: chipArea.containsMouse ? Qt.lighter(AppTheme.accentBlue, 1.1) : AppTheme.accentBlue
+                        color: chipArea.containsMouse ? Qt.lighter(AppTheme.accentInteractive, 1.1) : AppTheme.accentInteractive
                         opacity: chipEnabled ? 1.0 : 0.6
                         Text {
                             id: chipText
@@ -1254,13 +1386,15 @@ Item {
                         }
                         Item { Layout.fillWidth: true }
                         Text {
-                            visible: connected && !updateAvailable
+                            // Clinical never runs the firmware check, so it must
+                            // not claim "Up to date" — show the version only (#386).
+                            visible: !root.clinicalMode && connected && !updateAvailable
                             text: "Up to date"
                             color: AppTheme.statusGreen
                             font.pixelSize: 12
                         }
                         UpdateChip {
-                            visible: connected && updateAvailable
+                            visible: !root.clinicalMode && connected && updateAvailable
                             onChipClicked: fwConfirm.openFor(label, dev)
                         }
                     }
@@ -1308,11 +1442,11 @@ Item {
                         }
                     }
 
-                    // Beta firmware: when on, the autoupdater targets the
+                    // Beta Updates: when on (engineering mode only), BOTH the
+                    // app self-updater and the device firmware check target the
                     // most-recently-published release (incl. dev/rc), not just
-                    // full releases. Plain config flag — the connector re-runs
-                    // the firmware check when it toggles (setConfig hook).
-                    // Engineering (engineering mode) only.
+                    // full releases. The connector re-checks on toggle and when
+                    // engineering mode changes (_refresh_update_checks). (#386)
                     Rectangle {
                         Layout.fillWidth: true; height: 1; color: root.colBorderSoft
                         visible: MotionInterface.appConfig.engineeringMode === true
@@ -1321,12 +1455,12 @@ Item {
                         label: "Beta Updates"
                         visible: MotionInterface.appConfig.engineeringMode === true
                         PillSwitch {
-                            checked: MotionInterface.appConfig.downloadBetaFirmware === true
-                            onToggled: MotionInterface.setConfig("downloadBetaFirmware", checked)
+                            checked: MotionInterface.appConfig.downloadBetaUpdates === true
+                            onToggled: MotionInterface.setConfig("downloadBetaUpdates", checked)
                         }
                         Text {
-                            text: MotionInterface.appConfig.downloadBetaFirmware === true ? "On" : "Off"
-                            color: MotionInterface.appConfig.downloadBetaFirmware === true ? root.colAccent : root.colTextMuted
+                            text: MotionInterface.appConfig.downloadBetaUpdates === true ? "On" : "Off"
+                            color: MotionInterface.appConfig.downloadBetaUpdates === true ? root.colAccent : root.colTextMuted
                             font.pixelSize: 12
                         }
                         Item { Layout.fillWidth: true }

@@ -23,16 +23,6 @@ QtObject {
     property int leftMask: 0x5A
     property int rightMask: 0x5A
 
-    // "check" mode only: the mask actually evaluated for contact-quality
-    // pass/fail. Defaults to leftMask/rightMask (the flash mask) so
-    // existing callers are unaffected; a caller that flashes every
-    // physically-present camera (leftMask/rightMask = 0xFF) but only
-    // wants to require contact on the user's *configured* scan cameras
-    // sets these explicitly — a camera the user set to "None" then never
-    // needs to pass contact quality.
-    property int evalLeftMask: leftMask
-    property int evalRightMask: rightMask
-
     property int durationSec: 60
     property string subjectId: ""
     property bool disableLaser: false
@@ -181,8 +171,8 @@ QtObject {
 
     property ContactQualityCheckTask checkTask: ContactQualityCheckTask {
         connector: runner.connector
-        leftCameraMask: runner.evalLeftMask
-        rightCameraMask: runner.evalRightMask
+        leftCameraMask: runner.leftMask
+        rightCameraMask: runner.rightMask
 
         onStarted: {
             runner._stage = "check"

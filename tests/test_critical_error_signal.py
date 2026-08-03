@@ -117,6 +117,19 @@ def _notifs(conn):
     return out
 
 
+def test_connector_connection_timeout_defaults_to_twelve_seconds(tmp_path):
+    """Guards the fallback at motion_connector.py's
+    `cfg.get("connectionTimeoutSec", 12)`: this applies whenever a caller
+    constructs MotionConnector with a partial config dict that omits the
+    key — including `_connector()` here, whose default app_config doesn't
+    set it. Every other watchdog test calls `_check_connection_watchdog()`
+    directly and never reads `_connection_timeout_sec`, so a regression of
+    this fallback back to 30 would pass all of them silently."""
+    conn = _connector(tmp_path)
+
+    assert conn._connection_timeout_sec == 12
+
+
 def test_watchdog_all_connected_no_notification(tmp_path):
     conn = _connector(tmp_path, connected=(True, True, True))
     notifs = _notifs(conn)
@@ -171,6 +184,20 @@ def test_watchdog_sensor_only_missing_warns(tmp_path):
     assert len(notifs) == 1
     assert notifs[0]["type"] == "warning"
     assert "Sensor" in notifs[0]["text"]
+
+
+def test_watchdog_toast_auto_dismisses_after_10s(tmp_path):
+    """The connection warning auto-dismisses after 10 s (#314) rather than
+    staying sticky, so it doesn't nag while the user explores the no-device
+    sample scan. Still user-dismissible via the close button."""
+    conn = _connector(tmp_path, connected=(False, False, False))
+    notifs = _notifs(conn)
+
+    conn._check_connection_watchdog()
+
+    assert len(notifs) == 1
+    assert notifs[0]["durationMs"] == 10000
+    assert notifs[0]["dismissible"] is True
 
 
 def test_watchdog_respects_min_sensors_config(tmp_path):

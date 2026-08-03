@@ -1,11 +1,15 @@
-"""Issue #43 (regression): telemetry / raw CSV output must be gated on
-engineeringMode.
+"""Issue #43 / #234: per-scan CSV outputs are gated on the mode flags.
 
 The SDK's ``ScanRequest`` defaults ``write_telemetry_csv=True``, so the
-connector must explicitly pass ``engineeringMode`` (default False — fail
-closed for clinical use) when building the main scan request. The raw
-histogram CSV tee is a engineering-only Settings toggle, so its persisted
-``writeRawCsv`` value must additionally be gated on engineeringMode.
+connector must explicitly gate it when building the main scan request:
+
+- Telemetry CSV: ``engineeringMode`` only (default False — fail closed
+  for clinical use; issue #43).
+- Raw histogram CSV tee: allowed when NOT ``clinicalMode``, or when
+  ``engineeringMode`` is unlocked (#234 — research users get raw CSVs).
+  The persisted ``writeRawCsv`` toggle is additionally gated on those
+  flags, so a plain Clinical build never writes raw CSVs even if a prior
+  research / engineering session left the toggle enabled (#43 invariant).
 
 These tests mock the hardware seam (``interface.start_scan``) and assert
 on the captured ``ScanRequest`` — no hardware, no app launch.
@@ -54,30 +58,48 @@ def _captured_request(connector):
 
 
 def test_clinical_mode_disables_telemetry_and_raw_csv(tmp_path):
-    """engineeringMode=False → no telemetry CSV, no raw CSV tee — even if a
-    prior engineering session left writeRawCsv enabled in the config."""
+    """Clinical mode → no telemetry CSV, no raw CSV tee — even if a prior
+    research/engineering session left writeRawCsv enabled (#43)."""
     connector = _make_connector(
         tmp_path,
-        {"engineeringMode": False, "writeRawCsv": True},
+        {"clinicalMode": True, "engineeringMode": False,
+         "writeRawCsv": True, "rawCsvDurationSec": 60},
     )
     req = _captured_request(connector)
     assert req.write_telemetry_csv is False
     assert req.raw_save_max_duration_s == 0
 
 
-def test_missing_developer_mode_key_fails_closed(tmp_path):
-    """No engineeringMode key at all → same as clinical mode (fail closed)."""
+def test_research_mode_enables_raw_csv_but_not_telemetry(tmp_path):
+    """Research build (clinicalMode=False, #234) → raw CSV tee available;
+    telemetry CSV stays an engineering-only diagnostic."""
+    connector = _make_connector(
+        tmp_path,
+        {"clinicalMode": False, "engineeringMode": False,
+         "writeRawCsv": True, "rawCsvDurationSec": 60},
+    )
+    req = _captured_request(connector)
+    assert req.write_telemetry_csv is False
+    assert req.raw_save_max_duration_s == 60.0
+
+
+def test_missing_engineering_mode_key_fails_closed_for_telemetry(tmp_path):
+    """No engineeringMode key at all → no telemetry CSV (fail closed).
+    A missing clinicalMode key defaults False (main.py's baseline default
+    is the Research distribution; shipped Clinical artifacts always bake
+    clinicalMode=true), so the raw tee follows the writeRawCsv toggle."""
     connector = _make_connector(tmp_path, {"writeRawCsv": True})
     req = _captured_request(connector)
     assert req.write_telemetry_csv is False
-    assert req.raw_save_max_duration_s == 0
+    assert req.raw_save_max_duration_s is None  # unbounded — whole scan
 
 
-def test_developer_mode_enables_telemetry_and_raw_csv(tmp_path):
+def test_engineering_mode_enables_telemetry_and_raw_csv(tmp_path):
     """engineeringMode=True restores both engineering outputs."""
     connector = _make_connector(
         tmp_path,
         {
+            "clinicalMode": False,
             "engineeringMode": True,
             "writeRawCsv": True,
             "rawCsvDurationSec": 60,
@@ -88,20 +110,35 @@ def test_developer_mode_enables_telemetry_and_raw_csv(tmp_path):
     assert req.raw_save_max_duration_s == 60.0
 
 
-def test_developer_mode_respects_raw_csv_toggle_off(tmp_path):
-    """engineeringMode=True but writeRawCsv off → raw tee still omitted."""
+def test_engineering_unlock_on_clinical_build_restores_outputs(tmp_path):
+    """clinicalMode=True + engineeringMode=True → both outputs. The
+    unlock (EngineeringUnlockModal) exists precisely so technicians can
+    pull diagnostics from a clinical unit."""
     connector = _make_connector(
         tmp_path,
-        {"engineeringMode": True, "writeRawCsv": False},
+        {"clinicalMode": True, "engineeringMode": True,
+         "writeRawCsv": True, "rawCsvDurationSec": 60},
     )
     req = _captured_request(connector)
     assert req.write_telemetry_csv is True
+    assert req.raw_save_max_duration_s == 60.0
+
+
+def test_research_mode_respects_raw_csv_toggle_off(tmp_path):
+    """Research mode but writeRawCsv off → raw tee still omitted."""
+    connector = _make_connector(
+        tmp_path,
+        {"clinicalMode": False, "engineeringMode": False,
+         "writeRawCsv": False},
+    )
+    req = _captured_request(connector)
     assert req.raw_save_max_duration_s == 0
 
 
 def test_write_raw_csv_defaults_false(tmp_path):
     """writeRawCsv missing from config → fail closed (no raw output)."""
-    connector = _make_connector(tmp_path, {"engineeringMode": True})
+    connector = _make_connector(
+        tmp_path, {"clinicalMode": False, "engineeringMode": False})
     assert connector._write_raw_csv is False
     req = _captured_request(connector)
     assert req.raw_save_max_duration_s == 0

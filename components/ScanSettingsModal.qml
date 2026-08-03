@@ -47,6 +47,21 @@ Item {
         ListElement { name: "All";       maskHex: "0xFF" }
     }
 
+    // Mask-selector width (#315): midpoint between the content-fit width
+    // (widest pattern name at the ComboBox font plus fixed chrome — 10px
+    // contentItem leftPadding + ~10px indicator glyph + its 10px right
+    // inset + 10px text/indicator gap; ~98px with Segoe UI) and the
+    // pre-#315 150px, per hand-test feedback that pure content-fit read
+    // too cramped (~124px result). Capped at 150 so an exotic fallback
+    // font can't make it wider than it ever was.
+    FontMetrics { id: maskSelectorMetrics; font.pixelSize: 13 }
+    readonly property int maskSelectorWidth: {
+        var w = 0
+        for (var i = 0; i < sensorPatterns.count; i++)
+            w = Math.max(w, maskSelectorMetrics.advanceWidth(sensorPatterns.get(i).name))
+        return Math.min(150, Math.round((Math.ceil(w) + 40 + 150) / 2))
+    }
+
     function maskFromArray(arr) {
         if (!arr || arr.length !== 8) return 0
         const bitMap = [7, 6, 5, 4, 3, 2, 1, 0]
@@ -156,7 +171,7 @@ Item {
         width: Math.min(parent.width - root.iconBarInset - 40, 520)
         height: Math.min(parent.height - 60, 640)
         radius: 14
-        color: AppTheme.bgContainer
+        color: AppTheme.sheetBg
         border.color: AppTheme.borderSubtle
         border.width: 2
         // Center within [iconBarInset, parent.width] so the card clears the
@@ -240,7 +255,7 @@ Item {
                     color: AppTheme.textPrimary
                     background: Rectangle {
                         color: AppTheme.bgInput; radius: 4
-                        border.color: userLabelField.activeFocus ? AppTheme.accentBlue : AppTheme.borderSubtle
+                        border.color: userLabelField.activeFocus ? AppTheme.accentInteractive : AppTheme.borderSubtle
                         border.width: 1
                     }
                     onEditingFinished: {
@@ -282,7 +297,11 @@ Item {
 
                     ComboBox {
                         id: leftSelector
-                        Layout.preferredWidth: 150
+                        // Content-fit (#315) — and pin it: nested-layout
+                        // children can inherit fillWidth, which would
+                        // stretch the box back out to the column width.
+                        Layout.fillWidth: false
+                        Layout.preferredWidth: root.maskSelectorWidth
                         Layout.preferredHeight: 32
                         Layout.alignment: Qt.AlignHCenter
                         model: sensorPatterns
@@ -300,13 +319,14 @@ Item {
                         delegate: ItemDelegate {
                             width: leftSelector.width; height: 32
                             contentItem: Text { text: model.name; font.pixelSize: 13; color: AppTheme.textPrimary; verticalAlignment: Text.AlignVCenter; leftPadding: 8 }
-                            background: Rectangle { color: highlighted ? AppTheme.accentBlue : "transparent" }
+                            background: Rectangle { color: highlighted ? AppTheme.accentInteractive : "transparent" }
                             highlighted: leftSelector.highlightedIndex === index
                         }
                         popup: Popup {
                             y: leftSelector.height; width: leftSelector.width; implicitHeight: contentItem.implicitHeight + 2; padding: 1
                             contentItem: ListView { clip: true; implicitHeight: contentHeight; model: leftSelector.delegateModel; ScrollIndicator.vertical: ScrollIndicator {} }
-                            background: Rectangle { color: AppTheme.bgCard; radius: 4; border.color: AppTheme.borderSubtle; border.width: 1 }
+                            // menuBg — readable over the glass ambient (#398).
+                            background: Rectangle { color: AppTheme.menuBg; radius: 4; border.color: AppTheme.borderSubtle; border.width: 1 }
                         }
                         Component.onCompleted: {
                             var defMask = MotionInterface.appConfig.leftMask !== undefined
@@ -332,7 +352,9 @@ Item {
 
                     ComboBox {
                         id: rightSelector
-                        Layout.preferredWidth: 150
+                        // Content-fit (#315) — see leftSelector.
+                        Layout.fillWidth: false
+                        Layout.preferredWidth: root.maskSelectorWidth
                         Layout.preferredHeight: 32
                         Layout.alignment: Qt.AlignHCenter
                         model: sensorPatterns
@@ -350,13 +372,14 @@ Item {
                         delegate: ItemDelegate {
                             width: rightSelector.width; height: 32
                             contentItem: Text { text: model.name; font.pixelSize: 13; color: AppTheme.textPrimary; verticalAlignment: Text.AlignVCenter; leftPadding: 8 }
-                            background: Rectangle { color: highlighted ? AppTheme.accentBlue : "transparent" }
+                            background: Rectangle { color: highlighted ? AppTheme.accentInteractive : "transparent" }
                             highlighted: rightSelector.highlightedIndex === index
                         }
                         popup: Popup {
                             y: rightSelector.height; width: rightSelector.width; implicitHeight: contentItem.implicitHeight + 2; padding: 1
                             contentItem: ListView { clip: true; implicitHeight: contentHeight; model: rightSelector.delegateModel; ScrollIndicator.vertical: ScrollIndicator {} }
-                            background: Rectangle { color: AppTheme.bgCard; radius: 4; border.color: AppTheme.borderSubtle; border.width: 1 }
+                            // menuBg — readable over the glass ambient (#398).
+                            background: Rectangle { color: AppTheme.menuBg; radius: 4; border.color: AppTheme.borderSubtle; border.width: 1 }
                         }
                         Component.onCompleted: {
                             var defMask = MotionInterface.appConfig.rightMask !== undefined
@@ -385,7 +408,7 @@ Item {
 
                 Text {
                     text: "Timed"
-                    color: !root.freeRun ? AppTheme.accentBlue : AppTheme.textSecondary
+                    color: !root.freeRun ? AppTheme.accentInteractive : AppTheme.textSecondary
                     font.pixelSize: 14
                     font.weight: !root.freeRun ? Font.Bold : Font.Normal
                 }
@@ -397,8 +420,8 @@ Item {
                     indicator: Rectangle {
                         x: modeSwitch.leftPadding; y: (modeSwitch.height - height) / 2
                         width: 44; height: 24; radius: 12
-                        color: modeSwitch.checked ? AppTheme.accentBlue : AppTheme.bgInput
-                        border.color: modeSwitch.checked ? AppTheme.accentBlue : AppTheme.borderSubtle; border.width: 1
+                        color: modeSwitch.checked ? AppTheme.accentInteractive : AppTheme.bgInput
+                        border.color: modeSwitch.checked ? AppTheme.accentInteractive : AppTheme.borderSubtle; border.width: 1
                         Behavior on color { ColorAnimation { duration: 120 } }
                         Rectangle {
                             x: modeSwitch.checked ? parent.width - width - 3 : 3
@@ -410,7 +433,7 @@ Item {
 
                 Text {
                     text: "Continuous"
-                    color: root.freeRun ? AppTheme.accentBlue : AppTheme.textSecondary
+                    color: root.freeRun ? AppTheme.accentInteractive : AppTheme.textSecondary
                     font.pixelSize: 14
                     font.weight: root.freeRun ? Font.Bold : Font.Normal
                 }

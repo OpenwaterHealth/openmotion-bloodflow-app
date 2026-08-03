@@ -27,7 +27,7 @@ Rectangle {
     property bool updating: false
     property string statusText: "Update"
 
-    color: AppTheme.accentBlue
+    color: AppTheme.accentInteractive
     radius: 0
 
     Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutQuad } }
@@ -62,7 +62,7 @@ Rectangle {
                 id: downloadBtn
                 anchors.centerIn: parent
                 text: banner.updating ? banner.statusText : "Update"
-                color: AppTheme.accentBlue
+                color: AppTheme.accentInteractive
                 font.pixelSize: 12
                 font.weight: Font.DemiBold
             }
@@ -119,6 +119,12 @@ Rectangle {
             banner.latestVersion = version
             banner.downloadUrl = url
             banner.shown = true
+        }
+        // Withdraw a stale offer: a re-check (e.g. after engineering mode is
+        // turned off, dropping beta back to stable) that finds nothing hides
+        // the banner. The initial up-to-date launch is a no-op — never shown.
+        function onUpdateNotAvailable() {
+            banner.shown = false
         }
         // Reflect download/install progress on the button.
         function onUpdateProgress(message) {

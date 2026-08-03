@@ -55,3 +55,17 @@ def test_inline_pre_suffix():
 def test_rc_suffix_counts_as_prerelease():
     assert newer("1.5.8", "1.5.8-rc.2") is True
     assert newer("1.5.8-rc.2", "1.5.8") is False
+
+
+def test_newer_prerelease_of_same_base():
+    # Beta channel (#386): a newer rc/dev of the SAME numeric base must be
+    # offered, or the app self-updater never advances rc.1 -> rc.2.
+    assert newer("1.5.8-rc.2", "1.5.8-rc.1") is True
+    assert newer("1.5.8-dev.1", "1.5.8-dev.0") is True
+    assert newer("1.5.8-rc.1", "1.5.8-dev.0") is True   # rc outranks dev
+
+
+def test_not_newer_same_or_older_prerelease():
+    assert newer("1.5.8-rc.1", "1.5.8-rc.2") is False
+    assert newer("1.5.8-rc.1", "1.5.8-rc.1") is False
+    assert newer("1.5.8-dev.0", "1.5.8-rc.1") is False  # dev below rc

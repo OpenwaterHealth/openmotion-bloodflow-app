@@ -153,13 +153,17 @@ Item {
         ctx.beginPath()
         ctx.lineWidth = 1.5
         ctx.strokeStyle = color
+        // Pen-up at non-finite samples: a NaN run (unlit camera during a
+        // contact loss) must render as a blank gap, not a straight line
+        // bridging the last point before the gap to the first one after.
+        var penDown = false
         for (var i = 0; i < pts.length; i++) {
             var t = pts[i][0]
             var v = pts[i][1]
-            if (!isFinite(v)) continue
+            if (!isFinite(v)) { penDown = false; continue }
             var x = ((t - tLo) / dt) * w
             var y = h - ((v - yMinVal) / dy) * h
-            if (i === 0) ctx.moveTo(x, y)
+            if (!penDown) { ctx.moveTo(x, y); penDown = true }
             else ctx.lineTo(x, y)
         }
         ctx.stroke()
@@ -424,7 +428,8 @@ Item {
                 var dt = (dx / cell.width) * cell.windowSeconds
                 cell.panZoomTarget.setWindow(
                     panZoomArea._dragStartWindowStartT - dt,
-                    cell.windowSeconds
+                    cell.windowSeconds,
+                    "drag-pan"
                 )
             } else {
                 // Hover: broadcast cursor time to the viewer.
@@ -455,7 +460,7 @@ Item {
             var anchorT = tLoNow + ratio * cell.windowSeconds
             var newSec = cell.windowSeconds * factor
             var newStart = anchorT - ratio * newSec
-            cell.panZoomTarget.setWindow(newStart, newSec)
+            cell.panZoomTarget.setWindow(newStart, newSec, "wheel-zoom")
             wheel.accepted = true
         }
     }
@@ -494,7 +499,8 @@ Item {
                           + pinchZoom._anchorRatio * pinchZoom._baseWindowSeconds
             cell.panZoomTarget.setWindow(
                 anchorT - pinchZoom._anchorRatio * newSec,
-                newSec
+                newSec,
+                "pinch-zoom"
             )
         }
     }
