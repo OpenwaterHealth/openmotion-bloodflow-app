@@ -40,16 +40,30 @@ def writable_root(portable: bool = False) -> Path:
         return root
 
     if getattr(sys, "frozen", False):
-        if portable:
+        if sys.platform == "darwin":
+            # macOS has no %PROGRAMDATA% (the literal r"C:\ProgramData" default
+            # got taken at face value, creating a directory actually *named*
+            # that), and the portable layout can't apply either: writing inside
+            # Open-Motion.app invalidates its code signature. Both variants use
+            # the standard per-user data location.
+            root = Path.home() / "Library" / "Application Support" / _APP_DIRNAME
+        elif portable:
             root = Path(sys.executable).resolve().parent
         else:
             base = os.environ.get("PROGRAMDATA", r"C:\ProgramData")
             root = Path(base) / _APP_DIRNAME
     else:
         root = Path.cwd()
-    root.mkdir(parents=True, exist_ok=True)
 
-    if not os.access(root, os.W_OK):
+    # A read-only parent (Finder launches the app with cwd="/") makes mkdir
+    # itself raise, before the os.access check below could ever redirect us.
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        writable = os.access(root, os.W_OK)
+    except OSError:
+        writable = False
+
+    if not writable:
         root = Path.home() / "Documents" / "Open-Motion"
         root.mkdir(parents=True, exist_ok=True)
     return root

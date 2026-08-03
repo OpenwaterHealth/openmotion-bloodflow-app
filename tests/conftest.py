@@ -27,10 +27,21 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-import pyautogui
 import psutil
-import pygetwindow as gw
-from pywinauto import Desktop as UiaDesktop
+
+# The GUI-automation stack drives the HIL suite only, and pywinauto is
+# Windows-only — importing it unconditionally made conftest unimportable on
+# macOS, which took the platform-independent `unit` tests down with it. Import
+# them optionally; every consumer lives inside a HIL fixture or helper, which
+# a `unit`-marked run never reaches.
+try:
+    import pyautogui
+    import pygetwindow as gw
+    from pywinauto import Desktop as UiaDesktop
+except ImportError:  # non-Windows dev machine — HIL tests can't run here anyway
+    pyautogui = None
+    gw = None
+    UiaDesktop = None
 
 
 # ─────────────────────────────────────────────
@@ -54,8 +65,9 @@ def _qcoreapplication():
 # ─────────────────────────────────────────────
 # pyautogui defaults
 # ─────────────────────────────────────────────
-pyautogui.FAILSAFE = True
-pyautogui.PAUSE = 0.5
+if pyautogui is not None:
+    pyautogui.FAILSAFE = True
+    pyautogui.PAUSE = 0.5
 
 # ─────────────────────────────────────────────
 # Constants
