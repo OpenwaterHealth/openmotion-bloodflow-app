@@ -473,6 +473,11 @@ class _LivePlotSink:
         n = batch.bfi_live.shape[0]
         connector = self._connector
         threshold = connector._camera_temp_alert_threshold_c
+        # Over-temp toast is Research-only: a clinical operator has no action
+        # to take on a chip-temperature reading and shouldn't get a mid-scan
+        # popup for one. Clinical builds still get the capture-log + app-log
+        # line below, so the event stays in the record either way.
+        temp_toast_enabled = not connector._app_config.get("clinicalMode", False)
         now_mono = time.monotonic()
 
         low_light_rt = getattr(batch, "low_light_rt", None)
@@ -558,6 +563,20 @@ class _LivePlotSink:
                         )
                         connector.captureLog.emit(msg)
                         logger.warning(msg)
+                        # captureLog only reaches the app log (its QML
+                        # terminus is console.log), so the operator sees
+                        # nothing on screen without this. notify() is safe
+                        # from this runner thread — it emits a signal that
+                        # is delivered queued onto the GUI thread, same as
+                        # _on_camera_dropout_recovered below.
+                        if temp_toast_enabled:
+                            connector.notify(
+                                f"Camera {side.upper()} {cam_id + 1} temperature "
+                                f"{temp_c:.1f}°C — above {threshold:.0f}°C threshold",
+                                type_="warning",
+                                duration_ms=5000,
+                                tag=f"temp_{side}_{cam_id}",
+                            )
 
                 # Non-finite BFI/BVI: row-addressed LIGHT rows are appended
                 # anyway (issue #418) — an unlit (covered / off-target)
