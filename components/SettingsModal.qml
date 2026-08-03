@@ -422,7 +422,17 @@ Item {
             Rectangle {
                 x:      pillCtrl.checked ? parent.width - width - 3 : 3
                 y:      3; width: 18; height: 18; radius: AppTheme.r(9)
-                color:  "#FFFFFF"
+                // A hardcoded white knob disappears whenever the track under
+                // it is light — Metro and Windows Classic fill inputs with
+                // pure white, and the shipped light theme's #FDFCF8 is barely
+                // better. Pick the knob against its own track so the control
+                // keeps its affordance in every theme.
+                color: {
+                    var t = Qt.color(pillCtrl.checked ? root.colAccent
+                                                      : root.colBgInput)
+                    var lum = 0.299 * t.r + 0.587 * t.g + 0.114 * t.b
+                    return lum > 0.65 ? AppTheme.textSecondary : "#FFFFFF"
+                }
                 Behavior on x { NumberAnimation { duration: 120 } }
             }
         }

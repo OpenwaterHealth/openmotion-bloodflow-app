@@ -1253,7 +1253,14 @@ Rectangle {
                         Rectangle {
                             x:      psCtrl.checked ? parent.width - width - 3 : 3
                             y:      3; width: 18; height: 18; radius: AppTheme.r(9)
-                            color:  "#FFFFFF"
+                            // Same reasoning as SettingsModal's PillSwitch: a
+                            // white knob vanishes on a light track.
+                            color: {
+                                var t = Qt.color(psCtrl.checked ? AppTheme.accentInteractive
+                                                                : AppTheme.bgInput)
+                                var lum = 0.299 * t.r + 0.587 * t.g + 0.114 * t.b
+                                return lum > 0.65 ? AppTheme.textSecondary : "#FFFFFF"
+                            }
                             Behavior on x { NumberAnimation { duration: 120 } }
                         }
                     }

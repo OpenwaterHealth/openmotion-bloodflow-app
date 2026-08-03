@@ -24,7 +24,42 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
-def _install_grab(delay_ms: int, out_path: Path, settle_ms: int = 900) -> None:
+def _find_modal(root, label: str):
+    """Depth-first search the QQuickItem tree for a modal by its `label`.
+
+    Every modal in components/ declares `readonly property string label`, so
+    that is a stabler handle than an objectName nothing sets.
+    """
+    pending = [root]
+    while pending:
+        item = pending.pop()
+        try:
+            if item.property("label") == label:
+                return item
+        except (AttributeError, RuntimeError):
+            pass
+        try:
+            pending.extend(item.childItems())
+        except (AttributeError, RuntimeError):
+            pass
+    return None
+
+
+def _open_modal(win, label: str) -> bool:
+    from PyQt6.QtCore import QMetaObject
+    item = _find_modal(win.contentItem(), label)
+    if item is None:
+        print(f"CAPTURE-WARN: no modal labelled {label!r} found", file=sys.stderr)
+        return False
+    # QML-declared open() does the config load a bare visible=true skips, so
+    # prefer it and fall back only if the invoke fails.
+    if not QMetaObject.invokeMethod(item, "open"):
+        item.setProperty("visible", True)
+    return True
+
+
+def _install_grab(delay_ms: int, out_path: Path, settle_ms: int = 900,
+                  modal: str | None = None) -> None:
     """Arm a one-shot grab on the event loop, then quit."""
     from PyQt6.QtCore import QTimer
     from PyQt6.QtGui import QGuiApplication
@@ -44,6 +79,13 @@ def _install_grab(delay_ms: int, out_path: Path, settle_ms: int = 900) -> None:
             from PyQt6 import sip
             from PyQt6.QtQuick import QQuickWindow
             win = sip.cast(win, QQuickWindow)
+        if modal and not _grab.opened:
+            # Open, then come back a beat later so the modal has laid out and
+            # painted before readback.
+            _grab.opened = True
+            _open_modal(win, modal)
+            QTimer.singleShot(1200, _grab)
+            return
         image = win.grabWindow()
         if image.isNull():
             print("CAPTURE-FAIL: grabWindow returned a null image", file=sys.stderr)
@@ -56,6 +98,8 @@ def _install_grab(delay_ms: int, out_path: Path, settle_ms: int = 900) -> None:
             return
         print(f"CAPTURE-OK: {out_path} {image.width()}x{image.height()}")
         QGuiApplication.instance().exit(0)
+
+    _grab.opened = False
 
     def _bail() -> None:
         print("CAPTURE-FAIL: watchdog expired, app never became grabbable",
@@ -88,6 +132,8 @@ def main() -> int:
     parser.add_argument("--light", action="store_true", help="force light mode")
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--delay-ms", type=int, default=6000)
+    parser.add_argument("--modal", help="open a modal by its QML `label` "
+                                        "before capturing, e.g. Settings")
     args = parser.parse_args()
 
     if args.theme:
@@ -99,7 +145,7 @@ def main() -> int:
     # Research variant: clinical hides most of the chrome worth looking at.
     os.environ.setdefault("OPENMOTION_CLINICAL", "0")
 
-    _install_grab(args.delay_ms, args.out.resolve())
+    _install_grab(args.delay_ms, args.out.resolve(), modal=args.modal)
 
     sys.path.insert(0, str(PROJECT_ROOT))
     os.chdir(PROJECT_ROOT)
