@@ -120,6 +120,13 @@ Item {
                         font.pixelSize: 11
                         font.weight: Font.DemiBold
                         horizontalAlignment: Text.AlignHCenter
+                        // preferredWidth 0 so the four columns split the
+                        // row evenly. With fillWidth alone the leftover
+                        // space is distributed *on top of* each label's
+                        // implicit width, so "Contrast" would claim a wider
+                        // column than "BFI" and the header would sit out of
+                        // line with the data rows below.
+                        Layout.preferredWidth: 0
                         Layout.fillWidth: true
                     }
                 }
@@ -174,6 +181,8 @@ Item {
                         ColumnLayout {
                             id: cell
                             required property var modelData
+                            // Matches the header's even split — see there.
+                            Layout.preferredWidth: 0
                             Layout.fillWidth: true
                             spacing: 0
                             Text {
