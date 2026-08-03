@@ -82,6 +82,19 @@ Item {
         )
     }
 
+    // #426 — raised by the connector when a FAILED calibration is eligible
+    // for manual override (light-derived metrics missed, ambient-dark OK).
+    CalibrationOverrideModal {
+        id: calibrationOverrideModal
+    }
+
+    Connections {
+        target: MotionInterface
+        function onCalibrationOverrideRequested() {
+            calibrationOverrideModal.open()
+        }
+    }
+
     // Emitted when the user enters the correct password for the audit log.
     // BloodFlow.qml opens the (ModalManager-governed) LogsModal in response.
     signal logsRequested()
@@ -1071,8 +1084,26 @@ Item {
                         StyledCombo {
                             id: calibrationTargetCombo
                             Layout.preferredWidth: 130
-                            model: ["Both", "Left", "Right"]
-                            currentIndex: 0
+                            // #362 — only offer targets whose sensor is
+                            // actually connected. Picking a disconnected
+                            // side used to be possible; Calibrate then
+                            // refused via a captureLog line the operator
+                            // never sees from inside Settings, so the app
+                            // looked like it did nothing at all.
+                            readonly property var connectedTargets: {
+                                var l = MotionInterface.leftSensorConnected
+                                var r = MotionInterface.rightSensorConnected
+                                if (l && r) return ["Both", "Left", "Right"]
+                                if (l)      return ["Left"]
+                                if (r)      return ["Right"]
+                                return []
+                            }
+                            model: connectedTargets
+                            // A sensor unplugged mid-session shrinks the
+                            // model; re-pin to the first entry so the combo
+                            // can't keep displaying a target that is gone.
+                            onConnectedTargetsChanged: currentIndex =
+                                connectedTargets.length > 0 ? 0 : -1
                             enabled: !MotionInterface.calibrationRunning
                                   && !MotionInterface.testScanRunning
                         }
@@ -1095,7 +1126,10 @@ Item {
                             text: "Calibrate"
                             Layout.preferredWidth: 130
                             Layout.preferredHeight: 34
+                            // #362 — nothing to calibrate when no sensor is
+                            // connected, so the combo is empty.
                             enabled: MotionInterface.consoleConnected
+                                  && calibrationTargetCombo.count > 0
                                   && !MotionInterface.calibrationRunning
                                   && !MotionInterface.testScanRunning
                             onClicked: calibrationPasswordModal.open()
@@ -1121,13 +1155,16 @@ Item {
                             border.color: root.colBorderSoft
                             color: {
                                 switch (MotionInterface.calibrationStatus) {
-                                case "running":   return "#2196F3"
-                                case "passed":    return "#4CAF50"
-                                case "failed":    return "#F44336"
-                                case "canceled":  return "#9E9E9E"
-                                case "timed_out": return "#FF9800"
-                                case "error":     return "#F44336"
-                                default:          return "#9E9E9E"
+                                case "running":    return "#2196F3"
+                                case "passed":     return "#4CAF50"
+                                case "failed":     return "#F44336"
+                                case "canceled":   return "#9E9E9E"
+                                case "timed_out":  return "#FF9800"
+                                case "error":      return "#F44336"
+                                // #426 — accepted below threshold: amber,
+                                // deliberately not the green of a real pass.
+                                case "overridden": return "#FF9800"
+                                default:           return "#9E9E9E"
                                 }
                             }
                         }
@@ -1174,6 +1211,11 @@ Item {
                                     return r2
                                         ? "Calibration Error — " + r2
                                         : "Calibration Error"
+                                case "overridden":
+                                    var r3 = MotionInterface.calibrationFailureReason
+                                    return r3
+                                        ? "Calibration Accepted (Below Threshold) — " + r3
+                                        : "Calibration Accepted (Below Threshold)"
                                 default:        return ""
                                 }
                             }
@@ -1196,6 +1238,7 @@ Item {
                             Layout.preferredWidth: 130
                             Layout.preferredHeight: 34
                             enabled: MotionInterface.consoleConnected
+                                  && calibrationTargetCombo.count > 0
                                   && !MotionInterface.calibrationRunning
                                   && !MotionInterface.testScanRunning
                             onClicked: MotionInterface.runTestScan(

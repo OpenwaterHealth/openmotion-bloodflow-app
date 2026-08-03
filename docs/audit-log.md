@@ -64,6 +64,9 @@ plus a small JSON `details` payload. The app records the following events:
 | `scan_ended` | A scan finishes or is stopped. | `label`, `session_label`, `duration_s`, `outcome` |
 | `calibration_started` | A calibration begins. | `target` (`both`/`left`/`right`) |
 | `calibration_ended` | A calibration finishes. | `target`, `outcome` (`passed`/`failed`/`canceled`/`timed_out`/`error`), `reason` |
+| `calibration_override_accepted` | A below-threshold calibration was manually accepted and written to the console. | `target`, `cameras_below_threshold` |
+| `calibration_override_declined` | A below-threshold calibration was discarded; the console kept its previous values. | `target` |
+| `calibration_override_failed` | An accepted override could not be written to the console. | `target`, `error` |
 | `settings_changed` | A setting is changed and saved. | `changes` — only the keys that actually changed, each as `{ "old": …, "new": … }` |
 | `scan_viewed` | A past scan is opened in the viewer. | `label` |
 | `scan_deleted` | One or more scans are deleted. | `session_ids`, `count` |

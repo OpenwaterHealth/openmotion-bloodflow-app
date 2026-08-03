@@ -904,6 +904,93 @@ def _format_threshold_breakdown(rows, tests) -> str:
     return breakdown
 
 
+def _override_eligible(rows) -> bool:
+    """Whether a FAILED calibration may be offered for manual override (#426).
+
+    A dim laser drags mean — and the contrast/BFI/BVI values derived from
+    it — below their bars, so any of those may be overridden. The
+    ambient-dark test is the one exception: a dark FAIL means room light is
+    leaking into the measurement, which is a data-integrity fault rather
+    than a weak laser, and no operator judgement makes that data valid.
+    """
+    if not rows:
+        return False
+    return not any(r.dark_test == "FAIL" for r in rows)
+
+
+def _fmt_measure(value, fmt="{:.2f}") -> str:
+    """Format a measured value for the override table; NaN renders '--'."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "--"
+    if v != v:  # NaN
+        return "--"
+    return fmt.format(v)
+
+
+def _limit_at(seq, cam_id):
+    """Per-camera threshold lookup tolerant of short/absent arrays."""
+    if seq is None:
+        return None
+    try:
+        return float(seq[cam_id])
+    except (IndexError, TypeError, ValueError):
+        return None
+
+
+def _fmt_limit(min_seq, max_seq, cam_id, fmt="{:.2f}") -> str:
+    """Render the accept band for one camera: '≥ 40.00', '≤ 3.00',
+    '0.00–0.50', or '--' when the metric is unbounded."""
+    lo = _limit_at(min_seq, cam_id)
+    hi = _limit_at(max_seq, cam_id)
+    if lo is not None and hi is not None:
+        return f"{fmt.format(lo)}–{fmt.format(hi)}"
+    if lo is not None:
+        return f"≥ {fmt.format(lo)}"
+    if hi is not None:
+        return f"≤ {fmt.format(hi)}"
+    return "--"
+
+
+def _build_override_rows(rows, thresholds) -> list[dict]:
+    """Per-camera measured-vs-threshold table backing the override modal.
+
+    Flat string cells (plus per-metric ``*Fail`` booleans) so QML can bind
+    them directly without reformatting numbers in JavaScript. ``thresholds``
+    may be None — limits then render as '--' and only the SDK's own PASS/FAIL
+    verdicts drive the highlighting.
+    """
+    t = thresholds
+    out = []
+    for r in rows:
+        cam_id = r.cam_id
+        out.append({
+            "cam": cam_id + 1,
+            "side": "L" if r.side == "left" else "R",
+            "mean": _fmt_measure(r.mean),
+            "meanLimit": _fmt_limit(
+                getattr(t, "min_mean_per_camera", None), None, cam_id),
+            "meanFail": r.mean_test == "FAIL",
+            "contrast": _fmt_measure(r.avg_contrast, "{:.4f}"),
+            "contrastLimit": _fmt_limit(
+                getattr(t, "min_contrast_per_camera", None), None, cam_id,
+                "{:.4f}"),
+            "contrastFail": r.contrast_test == "FAIL",
+            "bfi": _fmt_measure(r.bfi, "{:.3f}"),
+            "bfiLimit": _fmt_limit(
+                getattr(t, "min_bfi_per_camera", None),
+                getattr(t, "max_bfi_per_camera", None), cam_id, "{:.3f}"),
+            "bfiFail": r.bfi_test == "FAIL",
+            "bvi": _fmt_measure(r.bvi, "{:.3f}"),
+            "bviLimit": _fmt_limit(
+                getattr(t, "min_bvi_per_camera", None),
+                getattr(t, "max_bvi_per_camera", None), cam_id, "{:.3f}"),
+            "bviFail": r.bvi_test == "FAIL",
+        })
+    return out
+
+
 class MotionConnector(QObject):
     # Ensure signals are correctly defined
     signalConnected = pyqtSignal(str, str)  # (descriptor, port)
@@ -985,8 +1072,11 @@ class MotionConnector(QObject):
     captureFinished = pyqtSignal(bool, str, str, str)  # ok, error, leftPath, rightPath
 
     # Calibration procedure signals
-    calibrationStateChanged = pyqtSignal()  # any of running/passed/failed/canceled/timed_out/error/idle
+    calibrationStateChanged = pyqtSignal()  # any of running/passed/failed/canceled/timed_out/error/overridden/idle
     _calibrationCompleteSignal = pyqtSignal(object)  # private worker→main marshalling
+    # #426 — a FAILED-but-overridable calibration is waiting on the operator.
+    # SettingsModal raises CalibrationOverrideModal in response.
+    calibrationOverrideRequested = pyqtSignal()
     testScanStateChanged = pyqtSignal()                # any of running/passed/failed/canceled/timed_out/error/idle
     _testScanCompleteSignal = pyqtSignal(object)       # private worker→main marshalling
     scanNotesChanged = pyqtSignal()
@@ -1287,9 +1377,17 @@ class MotionConnector(QObject):
         self._test_scan_duration_sec = int(
             cfg.get("test_scan_duration_sec", 5)
         )
-        self._calibration_status = ""  # "", "running", "passed", "failed", "canceled", "timed_out", "error"
+        # "", "running", "passed", "failed", "canceled", "timed_out",
+        # "error", "overridden" (#426 — accepted below threshold)
+        self._calibration_status = ""
         self._calibration_failure_reason = ""  # populated only on FAIL in dev mode
         self._calibration_target = None  # last runCalibration() target
+        # #426 — a FAILED run parked awaiting the operator's accept/discard.
+        # Holds the computed Calibration so Accept can write it back even
+        # after the SDK rolled the console to the previous values.
+        self._pending_override_cal = None
+        self._pending_override_rows: list[dict] = []
+        self._calibration_thresholds = None  # last request's thresholds
         self._test_scan_status = ""              # "", "running", "passed", "failed", "canceled", "timed_out", "error"
         self._test_scan_failure_reason = ""
         self._test_scan_rows: list[dict] = []
@@ -1968,6 +2066,15 @@ class MotionConnector(QObject):
     @pyqtProperty(int, notify=calibrationStateChanged)
     def maxCalibrationTimeSec(self) -> int:
         return self._max_calibration_time_sec
+
+    # #426 — per-camera measured-vs-threshold table for the override modal.
+    @pyqtProperty('QVariantList', notify=calibrationStateChanged)
+    def calibrationOverrideRows(self) -> list:
+        return self._pending_override_rows
+
+    @pyqtProperty(bool, notify=calibrationStateChanged)
+    def calibrationOverridePending(self) -> bool:
+        return self._pending_override_cal is not None
 
     @pyqtProperty(bool, notify=testScanStateChanged)
     def testScanRunning(self) -> bool:
@@ -5805,12 +5912,22 @@ class MotionConnector(QObject):
         left_mask  = 0xFF if (want_left  and self._leftSensorConnected)  else 0x00
         right_mask = 0xFF if (want_right and self._rightSensorConnected) else 0x00
         if (left_mask | right_mask) == 0:
+            # #362 — the dropdown now filters disconnected targets, but keep
+            # the guard for programmatic callers and races (sensor unplugged
+            # between selection and click). Surface it in the persistent
+            # status label too: a captureLog line alone is invisible to an
+            # operator sitting in the Settings overlay, which is exactly why
+            # #362 read as "no action is performed".
             if target == "left" and not self._leftSensorConnected:
-                self.captureLog.emit("⚠️ Cannot calibrate: left sensor not connected.")
+                reason = "left sensor not connected"
             elif target == "right" and not self._rightSensorConnected:
-                self.captureLog.emit("⚠️ Cannot calibrate: right sensor not connected.")
+                reason = "right sensor not connected"
             else:
-                self.captureLog.emit("⚠️ Cannot calibrate: no sensors connected.")
+                reason = "no sensors connected"
+            self.captureLog.emit(f"⚠️ Cannot calibrate: {reason}.")
+            self._calibration_status = "error"
+            self._calibration_failure_reason = reason
+            self.calibrationStateChanged.emit()
             return
 
         thresholds = CalibrationThresholds(
@@ -5831,6 +5948,9 @@ class MotionConnector(QObject):
                 if self._ft_max_dark_per_camera is not None else None
             ),
         )
+        # Retained so the override modal (#426) can show each measured
+        # value against the bar it missed.
+        self._calibration_thresholds = thresholds
         output_dir = os.path.join(self._data_root, "calibrations")
         os.makedirs(output_dir, exist_ok=True)
         # CalibrationWorkflow resolves the trigger config to the
@@ -5851,6 +5971,9 @@ class MotionConnector(QObject):
 
         self._calibration_status = "running"
         self._calibration_target = target
+        # Starting a new run retires any un-answered override prompt from
+        # the previous one (#426) — the modal closes itself off this.
+        self._clear_pending_override()
         self.calibrationStateChanged.emit()
         self.captureLog.emit("Calibration: starting…")
         self._calibration_t0 = time.monotonic()
@@ -5924,12 +6047,19 @@ class MotionConnector(QObject):
         left_mask  = 0xFF if (want_left  and self._leftSensorConnected)  else 0x00
         right_mask = 0xFF if (want_right and self._rightSensorConnected) else 0x00
         if (left_mask | right_mask) == 0:
+            # #362 — same visibility fix as runCalibration: the Test row's
+            # status lives in the results window, so park the reason there
+            # instead of only in the transient capture log.
             if target == "left" and not self._leftSensorConnected:
-                self.captureLog.emit("⚠️ Cannot run Test scan: left sensor not connected.")
+                reason = "left sensor not connected"
             elif target == "right" and not self._rightSensorConnected:
-                self.captureLog.emit("⚠️ Cannot run Test scan: right sensor not connected.")
+                reason = "right sensor not connected"
             else:
-                self.captureLog.emit("⚠️ Cannot run Test scan: no sensors connected.")
+                reason = "no sensors connected"
+            self.captureLog.emit(f"⚠️ Cannot run Test scan: {reason}.")
+            self._test_scan_status = "error"
+            self._test_scan_failure_reason = reason
+            self.testScanStateChanged.emit()
             return
 
         thresholds = CalibrationThresholds(
@@ -6072,6 +6202,8 @@ class MotionConnector(QObject):
     def _on_calibration_complete(self, result):
         """Runs on the Qt main thread (queued from worker via signal)."""
         self._calibration_failure_reason = ""  # reset each run
+        self._clear_pending_override()
+        offer_override = False
         outcome = _result_outcome(result)
         self._calibration_status = outcome
         if outcome == "passed":
@@ -6099,6 +6231,16 @@ class MotionConnector(QObject):
                     "unvalidated calibration."
                 )
             self.captureLog.emit(f"❌ Calibration: FAIL  (CSV: {result.csv_path})")
+            # #426 — a dim laser fails on light-derived metrics but its
+            # calibration is still usable. Park the computed values and let
+            # the operator decide against the actual numbers. Ambient-dark
+            # failures are never offered (see _override_eligible).
+            cal = getattr(result, "calibration", None)
+            if cal is not None and _override_eligible(result.rows):
+                self._pending_override_cal = cal
+                self._pending_override_rows = _build_override_rows(
+                    result.rows, self._calibration_thresholds)
+                offer_override = True
         else:
             # canceled / timed_out / error — surface the SDK's reason in the
             # persistent status label, not just this transient log line.
@@ -6125,6 +6267,94 @@ class MotionConnector(QObject):
             "target": self._calibration_target,
             "outcome": self._calibration_status,
             "reason": self._calibration_failure_reason or None,
+        })
+        self.calibrationStateChanged.emit()
+        # Emitted after the state change so the modal reads settled
+        # properties (rows, status) when it opens.
+        if offer_override:
+            self.calibrationOverrideRequested.emit()
+
+    def _clear_pending_override(self) -> None:
+        self._pending_override_cal = None
+        self._pending_override_rows = []
+
+    @pyqtSlot()
+    def acceptCalibrationOverride(self):
+        """Keep a below-threshold calibration (#426).
+
+        Writes the run's computed calibration to the console EEPROM. This
+        is an explicit write rather than a "suppress the rollback" flag on
+        purpose: the SDK's rollback already ran inside the worker before
+        this result reached the GUI, and writing unconditionally is
+        correct whether or not that rollback happened (i.e. it works
+        against both pre- and post-outcome SDKs).
+        """
+        cal = self._pending_override_cal
+        if cal is None:
+            return
+        rows = self._pending_override_rows
+        self._clear_pending_override()
+        try:
+            self._interface.write_calibration(
+                cal.c_min, cal.c_max, cal.i_min, cal.i_max,
+            )
+        except Exception as e:
+            logger.exception("Calibration override: EEPROM write failed.")
+            self._calibration_status = "failed"
+            self._calibration_failure_reason = (
+                f"override write failed: {e} — the console kept its "
+                "previous calibration"
+            )
+            self.captureLog.emit(
+                f"❌ Could not write the overridden calibration: {e}"
+            )
+            self._audit.log("calibration_override_failed", {
+                "target": self._calibration_target,
+                "error": str(e),
+            })
+            self.calibrationStateChanged.emit()
+            return
+
+        # Deliberately NOT "passed": the run did not meet its thresholds and
+        # the label must keep saying so (#412's premise).
+        self._calibration_status = "overridden"
+        failing = [
+            f"{r['side']}{r['cam']}" for r in rows
+            if r["meanFail"] or r["contrastFail"]
+            or r["bfiFail"] or r["bviFail"]
+        ]
+        self._calibration_failure_reason = (
+            "accepted below threshold: " + ", ".join(failing)
+            if failing else "accepted below threshold"
+        )
+        logger.warning(
+            "Calibration override ACCEPTED — below-threshold calibration "
+            "written to console. Cameras below threshold: %s",
+            ", ".join(failing) or "(none)",
+        )
+        self.captureLog.emit(
+            "⚠️ Calibration accepted below threshold and written to the "
+            "console."
+        )
+        self._audit.log("calibration_override_accepted", {
+            "target": self._calibration_target,
+            "cameras_below_threshold": failing,
+        })
+        self.calibrationStateChanged.emit()
+
+    @pyqtSlot()
+    def dismissCalibrationOverride(self):
+        """Discard the below-threshold calibration (#426) — the console
+        keeps whatever it had, and the status stays FAILED."""
+        if self._pending_override_cal is None:
+            return
+        self._clear_pending_override()
+        self.captureLog.emit(
+            "Calibration discarded — the console kept its previous "
+            "calibration."
+        )
+        self._audit.log("calibration_override_declined", {
+            "target": self._calibration_target,
         })
         self.calibrationStateChanged.emit()
 
