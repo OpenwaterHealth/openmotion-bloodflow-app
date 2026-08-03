@@ -226,6 +226,23 @@ def _load_app_config() -> dict:
         baseline["clinicalMode"] = clinical
         merged["clinicalMode"] = clinical
 
+    # macOS is a research-only platform: it is never validated or shipped for
+    # clinical use. This has to win over the bundled config AND the env
+    # override, because clinicalMode drives require_encrypted_db (see the
+    # MotionInterface construction below), and the SDK refuses the scan-db
+    # keystore on macOS outright — so a "clinical" macOS session cannot start
+    # at all, it can only fail later and less clearly. Forcing it here is what
+    # makes the DMG a coherent research build rather than a broken clinical
+    # one. build_macos.sh bundles config/ wholesale and has no variant flip of
+    # its own (unlike scripts/build_common.ps1), so this is the only gate.
+    if sys.platform == "darwin" and (baseline.get("clinicalMode") or merged.get("clinicalMode")):
+        logger.warning(
+            "clinicalMode requested on macOS — forcing Research. macOS builds "
+            "are research-only and are not validated for clinical use."
+        )
+        baseline["clinicalMode"] = False
+        merged["clinicalMode"] = False
+
     _APP_CONFIG_BASELINE.clear()
     _APP_CONFIG_BASELINE.update(baseline)
     logger.info(
