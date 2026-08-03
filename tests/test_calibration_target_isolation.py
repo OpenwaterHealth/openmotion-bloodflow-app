@@ -31,13 +31,17 @@ Procedure (one method, three iterations):
 
 Skip / fail behavior
 --------------------
-- ``Calibration Aborted`` (e.g., no phantom on the bench) → skip the
-  iteration with a clear message; nothing was written, so isolation
-  isn't observable.
-- ``Calibration Failed`` is still a valid datapoint: the EEPROM write
-  in phase 3 of ``CalibrationWorkflow`` (write_calibration) precedes
-  the validation phase, so the JSON has been updated regardless of the
-  Pass/Fail verdict.
+- ``Calibration Canceled``, ``Calibration Timed Out``, or
+  ``Calibration Error`` → skip the iteration with a clear message.
+  The EEPROM may have been written and then rolled back (SDK
+  rollback, app#412), or never written at all — either way it is
+  unchanged, so isolation isn't observable.
+- ``Calibration Failed`` now means the EEPROM was ROLLED BACK to its
+  pre-run values (SDK rollback, app#412): the dump should be
+  byte-identical to the previous iteration's baseline on BOTH sides.
+  Still a valid datapoint for isolation (nothing may change), but the
+  written-side parse_calibration check validates restored values, not
+  fresh ones.
 - ``Calibration Passed`` is the happy path.
 """
 
@@ -93,8 +97,16 @@ _TERMINAL_WAIT_SEC = 180
 
 _TERMINAL_TEXTS = (
     "Calibration Passed",
-    "Calibration Failed",
-    "Calibration Aborted",
+    "Calibration Failed",      # may carry " — <breakdown>"
+    "Calibration Canceled",
+    "Calibration Timed Out",   # may carry " — <reason>"
+    "Calibration Error",       # may carry " — <reason>"
+    # #426. Unreachable unattended — it takes a click in the override modal
+    # — but listed so this table stays the full status vocabulary. A FAILED
+    # iteration here parks an override prompt; it never blocks the next
+    # iteration because starting a run retires the pending offer and the
+    # modal closes itself off calibrationOverridePending.
+    "Calibration Accepted (Below Threshold)",
 )
 _RUNNING_PREFIX = "Calibrating..."
 
@@ -382,7 +394,7 @@ def _read_calibration_status_text() -> str:
                 continue
             if not text:
                 continue
-            if text.startswith(_RUNNING_PREFIX) or text in _TERMINAL_TEXTS:
+            if text.startswith(_RUNNING_PREFIX) or text.startswith(_TERMINAL_TEXTS):
                 return text
     except (RuntimeError, findwindows.ElementNotFoundError):
         pass
@@ -397,7 +409,7 @@ def _poll_for_terminal_state(timeout_sec: int) -> str:
         text = _read_calibration_status_text()
         if text:
             last_seen = text
-            if text in _TERMINAL_TEXTS:
+            if text.startswith(_TERMINAL_TEXTS):
                 return text
         now = time.monotonic()
         if now - last_log_at > 5.0:
@@ -557,13 +569,18 @@ def test_calibration_target_isolation(app, tmp_path):
         finally:
             _close_settings()
 
-        if final == "Calibration Aborted":
+        if final.startswith((
+            "Calibration Canceled",
+            "Calibration Timed Out",
+            "Calibration Error",
+        )):
             pytest.skip(
-                f"[{label}] calibration aborted — likely no phantom on "
-                f"the bench. Skipping isolation check (no EEPROM write "
-                f"happened)."
+                f"[{label}] calibration did not pass ({final!r}) — likely "
+                f"no phantom on the bench. Skipping isolation check "
+                f"(EEPROM unchanged: either never written, or written "
+                f"and rolled back)."
             )
-        assert final in _TERMINAL_TEXTS, (
+        assert final.startswith(_TERMINAL_TEXTS), (
             f"[{label}] calibration did not reach a terminal state within "
             f"{_TERMINAL_WAIT_SEC} s. Last observed text: {final!r}."
         )
