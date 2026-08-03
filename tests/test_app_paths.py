@@ -56,6 +56,18 @@ def test_frozen_portable_uses_exe_folder(tmp_path, monkeypatch):
     assert root == exe_dir
 
 
+def _fake_home(monkeypatch, home):
+    """Point Path.home() at a temp dir, portably.
+
+    Setting $HOME is not enough: on Windows Path.home() resolves via
+    %USERPROFILE%, so a HOME-only stub leaks these darwin-simulating tests out
+    into the developer's real home directory (and then fails there). Patching
+    the method itself is what actually holds on every platform the suite is
+    collected on.
+    """
+    monkeypatch.setattr(app_paths.Path, "home", classmethod(lambda cls: home))
+
+
 @pytest.mark.unit
 def test_frozen_macos_uses_application_support(tmp_path, monkeypatch):
     """A frozen macOS build has no %PROGRAMDATA%; it must land in the standard
@@ -64,7 +76,7 @@ def test_frozen_macos_uses_application_support(tmp_path, monkeypatch):
     monkeypatch.delenv("PROGRAMDATA", raising=False)
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _fake_home(monkeypatch, tmp_path)
 
     root = app_paths.writable_root(portable=False)
 
@@ -77,15 +89,21 @@ def test_frozen_macos_never_yields_a_windows_path(tmp_path, monkeypatch):
     """Regression: PROGRAMDATA is unset off Windows, and the r'C:\\ProgramData'
     default was taken literally — creating a directory actually named
     'C:\\ProgramData' relative to the cwd (inside the .app bundle, or a hard
-    failure when Finder launches with cwd='/')."""
+    failure when Finder launches with cwd='/').
+
+    Asserted as "no ProgramData component" rather than "no 'C:' substring",
+    because tmp_path is itself a C:\\... path when the suite runs on Windows.
+    """
     monkeypatch.delenv("OPENWATER_DATA_ROOT", raising=False)
     monkeypatch.delenv("PROGRAMDATA", raising=False)
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _fake_home(monkeypatch, tmp_path)
 
     for portable in (True, False):
-        assert "C:" not in str(app_paths.writable_root(portable=portable))
+        root = app_paths.writable_root(portable=portable)
+        assert "ProgramData" not in str(root)
+        assert root == tmp_path / "Library" / "Application Support" / "Openwater"
 
 
 @pytest.mark.unit
@@ -95,7 +113,7 @@ def test_frozen_macos_portable_stays_outside_the_app_bundle(tmp_path, monkeypatc
     monkeypatch.delenv("OPENWATER_DATA_ROOT", raising=False)
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _fake_home(monkeypatch, tmp_path)
     bundle = tmp_path / "Open-Motion.app" / "Contents" / "MacOS"
     bundle.mkdir(parents=True)
     monkeypatch.setattr(sys, "executable", str(bundle / "Open-Motion"), raising=False)
@@ -112,7 +130,7 @@ def test_falls_back_to_documents_when_root_mkdir_denied(tmp_path, monkeypatch):
     os.access check is ever reached."""
     monkeypatch.delenv("OPENWATER_DATA_ROOT", raising=False)
     monkeypatch.setattr(sys, "frozen", False, raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _fake_home(monkeypatch, tmp_path)
     denied = tmp_path / "readonly_cwd"
     denied.mkdir()
     monkeypatch.chdir(denied)
