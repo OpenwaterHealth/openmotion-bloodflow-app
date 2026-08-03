@@ -1,7 +1,13 @@
-"""Unit tests for the below-threshold calibration override (#426) and the
+"""Unit tests for the calibration pre-write gate (#426) and the
 disconnected-target guards (#362). No hardware — mirrors the fixture
-pattern in test_calibration_outcome_mapping.py."""
+pattern in test_calibration_outcome_mapping.py.
+
+The gate handler deliberately blocks the SDK's worker thread until the
+operator answers, so the tests here answer from a separate thread the way
+the GUI would.
+"""
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -38,132 +44,137 @@ def _row(cam_id=0, side="left", mean=32.0, contrast=0.08, bfi=0.4, bvi=1.1,
     )
 
 
-def _cal():
-    return SimpleNamespace(c_min=[[0]], c_max=[[1]], i_min=[[2]], i_max=[[3]],
-                           source="console")
+def _answer_from_another_thread(connector, approve, delay=0.05):
+    """Answer the gate the way the GUI thread would — from off the worker
+    thread that is blocked inside _on_calibration_gate."""
+    def _run():
+        # Wait until the handler has actually parked before answering,
+        # otherwise the test races the Event.
+        for _ in range(200):
+            if connector.calibrationOverridePending:
+                break
+            threading.Event().wait(0.005)
+        if approve:
+            connector.acceptCalibrationOverride()
+        else:
+            connector.dismissCalibrationOverride()
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return t
 
 
-def _failed(rows, calibration=None, **kw):
+# ── the gate itself ───────────────────────────────────────────────────────
+
+def test_gate_returns_true_when_operator_approves(connector):
+    spy = []
+    connector.calibrationOverrideRequested.connect(lambda: spy.append(1))
+    _answer_from_another_thread(connector, approve=True)
+
+    answer = connector._on_calibration_gate([_row()])
+
+    assert answer is True
+    assert spy == [1], "modal was never raised"
+    assert connector.calibrationOverridePending is False
+
+
+def test_gate_returns_false_when_operator_declines(connector):
+    _answer_from_another_thread(connector, approve=False)
+    assert connector._on_calibration_gate([_row()]) is False
+    assert connector.calibrationOverridePending is False
+
+
+def test_gate_declines_when_nobody_answers(connector, monkeypatch):
+    """An unattended run must not park a worker thread forever — and the
+    safe default is to leave the console alone."""
+    monkeypatch.setattr(connector, "_GATE_ANSWER_TIMEOUT_SEC", 0.1)
+    assert connector._on_calibration_gate([_row()]) is False
+
+
+def test_cancel_releases_a_blocked_gate(connector):
+    """cancel_calibration only sets the SDK's stop event, which a worker
+    parked on the gate cannot observe — Cancel must unblock it directly."""
+    connector._calibration_status = "running"
+
+    def _cancel_soon():
+        for _ in range(200):
+            if connector.calibrationOverridePending:
+                break
+            threading.Event().wait(0.005)
+        connector.cancelCalibration()
+    threading.Thread(target=_cancel_soon, daemon=True).start()
+
+    assert connector._on_calibration_gate([_row()]) is False
+    connector._interface.cancel_calibration.assert_called_once()
+
+
+def test_gate_writes_nothing_itself(connector):
+    """The whole point of the gate: the console is untouched while the
+    question is open, and the app never writes — the SDK does, after."""
+    _answer_from_another_thread(connector, approve=True)
+    connector._on_calibration_gate([_row()])
+    connector._interface.write_calibration.assert_not_called()
+
+
+def test_answering_when_no_gate_is_open_is_a_no_op(connector):
+    connector.acceptCalibrationOverride()
+    connector.dismissCalibrationOverride()
+    assert connector.calibrationOverridePending is False
+
+
+def test_gate_handler_is_passed_to_the_sdk(connector):
+    connector._consoleConnected = True
+    connector._leftSensorConnected = True
+    connector._rightSensorConnected = True
+
+    connector.runCalibration("both")
+
+    kwargs = connector._interface.start_calibration.call_args.kwargs
+    assert kwargs["on_confirm_fn"] == connector._on_calibration_gate
+
+
+# ── result mapping ────────────────────────────────────────────────────────
+
+def _failed(rows, **kw):
     base = dict(ok=True, passed=False, canceled=False, error="",
                 csv_path="c.csv", json_path="c.json", rows=rows,
-                outcome="failed", calibration=calibration)
+                outcome="failed", calibration=None,
+                consented_below_threshold=False)
     base.update(kw)
     return SimpleNamespace(**base)
 
 
-# ── eligibility ───────────────────────────────────────────────────────────
-
-def test_low_mean_failure_offers_override(connector):
-    spy = []
-    connector.calibrationOverrideRequested.connect(lambda: spy.append(1))
-    connector._on_calibration_complete(_failed([_row()], _cal()))
-    assert connector._calibration_status == "failed"
-    assert connector.calibrationOverridePending is True
-    assert spy == [1]
-
-
-def test_ambient_dark_failure_blocks_override(connector):
-    """A dark FAIL is room light leaking in, not a dim laser — never
-    overridable, even when the mean is also low."""
-    spy = []
-    connector.calibrationOverrideRequested.connect(lambda: spy.append(1))
+def test_consented_run_reports_overridden_not_failed(connector):
+    """A consented write really is on the console — a bare "Failed" would
+    read as though nothing was kept."""
     connector._on_calibration_complete(
-        _failed([_row(dark_test="FAIL")], _cal()))
-    assert connector._calibration_status == "failed"
-    assert connector.calibrationOverridePending is False
-    assert spy == []
-
-
-def test_one_dark_failure_among_many_blocks_override(connector):
-    rows = [_row(cam_id=0), _row(cam_id=1), _row(cam_id=2, dark_test="FAIL")]
-    connector._on_calibration_complete(_failed(rows, _cal()))
-    assert connector.calibrationOverridePending is False
-
-
-def test_contrast_bfi_bvi_failures_are_overridable(connector):
-    """Scope decision on #426: any failing test except ambient-dark. A dim
-    laser drags the light-derived metrics down along with mean."""
-    rows = [_row(mean_test="PASS", contrast_test="FAIL",
-                 bfi_test="FAIL", bvi_test="FAIL")]
-    connector._on_calibration_complete(_failed(rows, _cal()))
-    assert connector.calibrationOverridePending is True
-
-
-def test_no_calibration_object_means_no_offer(connector):
-    """Nothing to write back, so nothing to offer."""
-    connector._on_calibration_complete(_failed([_row()], None))
-    assert connector.calibrationOverridePending is False
-
-
-def test_passed_run_offers_nothing(connector):
-    connector._on_calibration_complete(
-        _failed([_row(mean_test="PASS")], _cal(), passed=True,
-                outcome="passed"))
-    assert connector._calibration_status == "passed"
-    assert connector.calibrationOverridePending is False
-
-
-def test_canceled_run_offers_nothing(connector):
-    connector._on_calibration_complete(
-        _failed([_row()], _cal(), ok=False, canceled=True,
-                outcome="canceled", error="canceled"))
-    assert connector.calibrationOverridePending is False
-
-
-# ── accept / discard ──────────────────────────────────────────────────────
-
-def test_accept_writes_calibration_and_marks_overridden(connector):
-    cal = _cal()
-    connector._on_calibration_complete(_failed([_row()], cal))
-    connector.acceptCalibrationOverride()
-
-    connector._interface.write_calibration.assert_called_once_with(
-        cal.c_min, cal.c_max, cal.i_min, cal.i_max)
-    # Never "passed" — the run did not meet its thresholds (#412's premise).
+        _failed([_row()], consented_below_threshold=True))
     assert connector._calibration_status == "overridden"
-    assert "below threshold" in connector.calibrationFailureReason
-    assert "L1" in connector.calibrationFailureReason
-    assert connector.calibrationOverridePending is False
 
 
-def test_accept_write_failure_keeps_failed_and_says_so(connector):
-    connector._interface.write_calibration.side_effect = RuntimeError("usb")
-    connector._on_calibration_complete(_failed([_row()], _cal()))
-    connector.acceptCalibrationOverride()
-
+def test_unconsented_failure_stays_failed(connector):
+    connector._on_calibration_complete(_failed([_row()]))
     assert connector._calibration_status == "failed"
-    assert "override write failed" in connector.calibrationFailureReason
-    assert "previous calibration" in connector.calibrationFailureReason
-    assert connector.calibrationOverridePending is False
 
 
-def test_discard_leaves_console_untouched(connector):
-    connector._on_calibration_complete(_failed([_row()], _cal()))
-    connector.dismissCalibrationOverride()
-
-    connector._interface.write_calibration.assert_not_called()
-    assert connector._calibration_status == "failed"
-    assert connector.calibrationOverridePending is False
-
-
-def test_accept_is_idempotent_with_nothing_pending(connector):
-    connector.acceptCalibrationOverride()
-    connector.dismissCalibrationOverride()
-    connector._interface.write_calibration.assert_not_called()
+def test_declined_gate_surfaces_as_canceled_with_reason(connector):
+    """The SDK reports a declined gate as a cancel carrying the reason."""
+    connector._on_calibration_complete(_failed(
+        [_row()], ok=False, canceled=True, outcome="canceled",
+        error="declined at pre-write gate: calibration scan below "
+              "threshold on L1"))
+    assert connector._calibration_status == "canceled"
+    assert "pre-write gate" in connector.calibrationFailureReason
 
 
-def test_new_result_clears_a_stale_pending_override(connector):
-    connector._on_calibration_complete(_failed([_row()], _cal()))
-    assert connector.calibrationOverridePending is True
+def test_passed_run_is_untouched_by_the_gate_mapping(connector):
     connector._on_calibration_complete(
-        _failed([_row(mean_test="PASS")], _cal(), passed=True,
-                outcome="passed"))
-    assert connector.calibrationOverridePending is False
+        _failed([_row(mean_test="PASS")], passed=True, outcome="passed"))
+    assert connector._calibration_status == "passed"
 
 
-# ── override table formatting ─────────────────────────────────────────────
+# ── gate table formatting ─────────────────────────────────────────────────
 
-def test_override_rows_pair_measurements_with_their_limits(connector):
+def test_gate_rows_pair_measurements_with_their_limits(connector):
     from omotion import CalibrationThresholds
     connector._calibration_thresholds = CalibrationThresholds(
         min_mean_per_camera=[40.0] * 8,
@@ -174,8 +185,9 @@ def test_override_rows_pair_measurements_with_their_limits(connector):
         max_bvi_per_camera=None,
         max_dark_per_camera=[3.0] * 8,
     )
-    connector._on_calibration_complete(
-        _failed([_row(cam_id=1, side="right", mean=32.4)], _cal()))
+    _answer_from_another_thread(connector, approve=False)
+    connector._on_calibration_gate(
+        [_row(cam_id=1, side="right", mean=32.4)])
 
     row = connector.calibrationOverrideRows[0]
     assert row["cam"] == 2 and row["side"] == "R"
@@ -188,10 +200,10 @@ def test_override_rows_pair_measurements_with_their_limits(connector):
     assert row["bviLimit"] == "≥ 0.000"
 
 
-def test_override_rows_render_nan_and_missing_limits(connector):
+def test_gate_rows_render_nan_and_missing_limits(connector):
     connector._calibration_thresholds = None
-    connector._on_calibration_complete(
-        _failed([_row(mean=float("nan"))], _cal()))
+    _answer_from_another_thread(connector, approve=False)
+    connector._on_calibration_gate([_row(mean=float("nan"))])
     row = connector.calibrationOverrideRows[0]
     assert row["mean"] == "--"
     assert row["meanLimit"] == "--"

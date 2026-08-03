@@ -3,16 +3,21 @@ import QtQuick.Controls 6.0
 import QtQuick.Layouts 6.0
 import OpenMotion 1.0
 
-// Issue #426 — offered when a calibration FAILS on light-derived metrics
-// (mean / contrast / BFI / BVI) but not on the ambient-dark test. Some
-// units simply ship with a dim laser; their calibration is still usable,
-// and permanently lowering ft_min_mean_per_camera would drop the bar for
-// every system instead of this one run.
+// Issue #426 — the calibration pre-write gate. Raised between the
+// calibration scan and the console EEPROM write, when the scan's own
+// means/contrast miss threshold. Some units simply ship with a dim laser;
+// their calibration is still usable, and permanently lowering
+// ft_min_mean_per_camera would drop the bar for every system rather than
+// this one run.
+//
+// Nothing has been written to the console when this appears, and nothing
+// will be unless the operator approves — the SDK worker is blocked on the
+// answer. Declining leaves the existing calibration exactly as it was.
+// Approving resumes the normal sequence: write, validation scan, verdict.
 //
 // The decision is deliberately made against the measured numbers rather
 // than a bare yes/no prompt, so the operator can see how far below the bar
-// each camera actually is. Discard is the default action; Accept writes
-// the computed calibration to the console EEPROM.
+// each camera actually is.
 //
 // Nested inside SettingsModal like PasswordPromptModal — the Calibrate
 // flow lives there, and SettingsModal is itself the ModalManager entry.
@@ -86,17 +91,19 @@ Item {
             spacing: 14
 
             Text {
-                text: "Calibration Below Threshold"
+                text: "Calibration Scan Below Threshold"
                 color: AppTheme.textPrimary
                 font.pixelSize: 18
                 font.weight: Font.DemiBold
             }
 
             Text {
-                text: "This calibration did not meet its thresholds. If the "
-                    + "laser on this unit is simply dim, the values below "
-                    + "are still usable — accepting writes them to the "
-                    + "console. Discarding keeps the previous calibration."
+                text: "Nothing has been written to the console yet. The "
+                    + "calibration scan's image means or contrast are below "
+                    + "threshold on the cameras marked below. If this "
+                    + "unit's laser is simply dim, the calibration is still "
+                    + "usable — approving overwrites the console "
+                    + "calibration and then runs the validation scan."
                 color: AppTheme.textSecondary
                 font.pixelSize: 13
                 wrapMode: Text.WordWrap
@@ -214,9 +221,11 @@ Item {
             }
 
             Text {
-                text: "Accepting is recorded in the audit log, and the "
-                    + "status will read \"Accepted (Below Threshold)\" "
-                    + "rather than Passed."
+                text: "Approving is recorded in the audit log. The run will "
+                    + "still report its honest verdict — expect the image "
+                    + "means to fail again in validation — and the status "
+                    + "will read \"Accepted (Below Threshold)\" rather than "
+                    + "Passed."
                 color: AppTheme.textSecondary
                 font.pixelSize: 11
                 wrapMode: Text.WordWrap
@@ -228,9 +237,9 @@ Item {
                 spacing: 12
                 Item { Layout.fillWidth: true }
 
-                // Default action — matches today's behavior.
+                // Default action — leaves the console untouched.
                 Button {
-                    text: "Discard"
+                    text: "Don't Overwrite"
                     Layout.preferredHeight: 32
                     onClicked: root._discard()
                     contentItem: Text {
@@ -247,7 +256,7 @@ Item {
                 }
 
                 Button {
-                    text: "Accept Anyway"
+                    text: "Overwrite Anyway"
                     Layout.preferredHeight: 32
                     onClicked: root._accept()
                     contentItem: Text {

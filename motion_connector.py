@@ -904,20 +904,6 @@ def _format_threshold_breakdown(rows, tests) -> str:
     return breakdown
 
 
-def _override_eligible(rows) -> bool:
-    """Whether a FAILED calibration may be offered for manual override (#426).
-
-    A dim laser drags mean — and the contrast/BFI/BVI values derived from
-    it — below their bars, so any of those may be overridden. The
-    ambient-dark test is the one exception: a dark FAIL means room light is
-    leaking into the measurement, which is a data-integrity fault rather
-    than a weak laser, and no operator judgement makes that data valid.
-    """
-    if not rows:
-        return False
-    return not any(r.dark_test == "FAIL" for r in rows)
-
-
 def _fmt_measure(value, fmt="{:.2f}") -> str:
     """Format a measured value for the override table; NaN renders '--'."""
     try:
@@ -1382,11 +1368,14 @@ class MotionConnector(QObject):
         self._calibration_status = ""
         self._calibration_failure_reason = ""  # populated only on FAIL in dev mode
         self._calibration_target = None  # last runCalibration() target
-        # #426 — a FAILED run parked awaiting the operator's accept/discard.
-        # Holds the computed Calibration so Accept can write it back even
-        # after the SDK rolled the console to the previous values.
-        self._pending_override_cal = None
-        self._pending_override_rows: list[dict] = []
+        # #426 — the pre-write gate. The SDK pauses its worker between the
+        # calibration scan and the EEPROM write when scan means/contrast
+        # miss threshold, and asks whether to write anyway. These carry the
+        # question to the GUI thread and the answer back.
+        self._gate_pending = False
+        self._gate_rows: list[dict] = []
+        self._gate_answer = False
+        self._gate_event = threading.Event()
         self._calibration_thresholds = None  # last request's thresholds
         self._test_scan_status = ""              # "", "running", "passed", "failed", "canceled", "timed_out", "error"
         self._test_scan_failure_reason = ""
@@ -2067,14 +2056,14 @@ class MotionConnector(QObject):
     def maxCalibrationTimeSec(self) -> int:
         return self._max_calibration_time_sec
 
-    # #426 — per-camera measured-vs-threshold table for the override modal.
+    # #426 — per-camera measured-vs-threshold table for the gate modal.
     @pyqtProperty('QVariantList', notify=calibrationStateChanged)
     def calibrationOverrideRows(self) -> list:
-        return self._pending_override_rows
+        return self._gate_rows
 
     @pyqtProperty(bool, notify=calibrationStateChanged)
     def calibrationOverridePending(self) -> bool:
-        return self._pending_override_cal is not None
+        return self._gate_pending
 
     @pyqtProperty(bool, notify=testScanStateChanged)
     def testScanRunning(self) -> bool:
@@ -5988,6 +5977,10 @@ class MotionConnector(QObject):
             req,
             on_log_fn=lambda msg: self.captureLog.emit(msg),
             on_complete_fn=self._calibrationCompleteSignal.emit,
+            # Pre-write gate (#426): the SDK calls this on its worker
+            # thread if the calibration scan's means/contrast miss
+            # threshold, and writes nothing unless it returns True.
+            on_confirm_fn=self._on_calibration_gate,
         )
         if not started:
             self._calibration_status = ""
@@ -6004,6 +5997,10 @@ class MotionConnector(QObject):
                 and self._test_scan_status != "running"):
             return
         self.captureLog.emit("Canceling…")
+        # Release the pre-write gate first if it's holding the worker —
+        # cancel_calibration only sets the stop event, which the worker
+        # can't observe while it's blocked waiting for an answer (#426).
+        self._answer_gate(False)
         self._interface.cancel_calibration(join_timeout=0)
 
     @pyqtSlot()
@@ -6203,7 +6200,6 @@ class MotionConnector(QObject):
         """Runs on the Qt main thread (queued from worker via signal)."""
         self._calibration_failure_reason = ""  # reset each run
         self._clear_pending_override()
-        offer_override = False
         outcome = _result_outcome(result)
         self._calibration_status = outcome
         if outcome == "passed":
@@ -6231,16 +6227,13 @@ class MotionConnector(QObject):
                     "unvalidated calibration."
                 )
             self.captureLog.emit(f"❌ Calibration: FAIL  (CSV: {result.csv_path})")
-            # #426 — a dim laser fails on light-derived metrics but its
-            # calibration is still usable. Park the computed values and let
-            # the operator decide against the actual numbers. Ambient-dark
-            # failures are never offered (see _override_eligible).
-            cal = getattr(result, "calibration", None)
-            if cal is not None and _override_eligible(result.rows):
-                self._pending_override_cal = cal
-                self._pending_override_rows = _build_override_rows(
-                    result.rows, self._calibration_thresholds)
-                offer_override = True
+            # #426 — when the operator authorised this write at the
+            # pre-write gate, the FAIL is expected (a dim unit fails on
+            # means by definition) and the calibration is deliberately on
+            # the console. Say that, rather than a bare "Failed" that reads
+            # as though nothing was kept.
+            if getattr(result, "consented_below_threshold", False):
+                self._calibration_status = "overridden"
         else:
             # canceled / timed_out / error — surface the SDK's reason in the
             # persistent status label, not just this transient log line.
@@ -6269,94 +6262,102 @@ class MotionConnector(QObject):
             "reason": self._calibration_failure_reason or None,
         })
         self.calibrationStateChanged.emit()
-        # Emitted after the state change so the modal reads settled
-        # properties (rows, status) when it opens.
-        if offer_override:
-            self.calibrationOverrideRequested.emit()
 
     def _clear_pending_override(self) -> None:
-        self._pending_override_cal = None
-        self._pending_override_rows = []
+        self._gate_pending = False
+        self._gate_rows = []
+
+    # ── Pre-write gate (#426) ────────────────────────────────────────────
+
+    #: Upper bound on how long the SDK worker sits blocked waiting for the
+    #: operator. The SDK pauses its watchdog across the prompt (so think
+    #: time isn't a bogus timeout) and therefore cannot rescue a prompt
+    #: nobody answers — bounding it here is what stops an unattended run
+    #: from parking a worker thread forever.
+    _GATE_ANSWER_TIMEOUT_SEC = 300.0
+
+    def _on_calibration_gate(self, rows) -> bool:
+        """Ask whether to write a below-threshold calibration.
+
+        **Runs on the SDK's calibration worker thread and blocks it** until
+        the operator answers — that is the contract the SDK's on_confirm_fn
+        expects, and it's what lets the write stay un-issued while the
+        question is open. Nothing here touches the GUI thread directly: the
+        rows are stashed, a queued signal raises the modal, and this waits
+        on an Event that the accept/discard slots set.
+        """
+        self._gate_rows = _build_override_rows(
+            rows, self._calibration_thresholds)
+        self._gate_answer = False
+        self._gate_event.clear()
+        self._gate_pending = True
+        # Queued — we are on a worker thread; QML must not be touched here.
+        self.calibrationStateChanged.emit()
+        self.calibrationOverrideRequested.emit()
+
+        if not self._gate_event.wait(self._GATE_ANSWER_TIMEOUT_SEC):
+            logger.warning(
+                "Calibration gate: no answer within %.0fs — declining and "
+                "leaving the console calibration untouched.",
+                self._GATE_ANSWER_TIMEOUT_SEC,
+            )
+            self._gate_answer = False
+
+        answer = self._gate_answer
+        self._gate_pending = False
+        self.calibrationStateChanged.emit()
+
+        failing = [
+            f"{r['side']}{r['cam']}" for r in self._gate_rows
+            if r["meanFail"] or r["contrastFail"]
+        ]
+        if answer:
+            logger.warning(
+                "Calibration gate: operator AUTHORISED writing a "
+                "below-threshold calibration. Cameras below: %s",
+                ", ".join(failing) or "(none)",
+            )
+            self.captureLog.emit(
+                "⚠️ Proceeding with a below-threshold calibration by "
+                "operator approval."
+            )
+            self._audit.log("calibration_override_accepted", {
+                "target": self._calibration_target,
+                "cameras_below_threshold": failing,
+            })
+        else:
+            self.captureLog.emit(
+                "Calibration declined — the console keeps its existing "
+                "calibration."
+            )
+            self._audit.log("calibration_override_declined", {
+                "target": self._calibration_target,
+                "cameras_below_threshold": failing,
+            })
+        return answer
+
+    def _answer_gate(self, approved: bool) -> None:
+        if not self._gate_pending:
+            return
+        self._gate_answer = approved
+        self._gate_event.set()
 
     @pyqtSlot()
     def acceptCalibrationOverride(self):
-        """Keep a below-threshold calibration (#426).
+        """Authorise writing the below-threshold calibration (#426).
 
-        Writes the run's computed calibration to the console EEPROM. This
-        is an explicit write rather than a "suppress the rollback" flag on
-        purpose: the SDK's rollback already ran inside the worker before
-        this result reached the GUI, and writing unconditionally is
-        correct whether or not that rollback happened (i.e. it works
-        against both pre- and post-outcome SDKs).
+        Nothing is written here — this only unblocks the SDK worker, which
+        then performs the write and runs the validation scan as usual. The
+        console has not been touched at this point, which is the whole
+        point of the gate.
         """
-        cal = self._pending_override_cal
-        if cal is None:
-            return
-        rows = self._pending_override_rows
-        self._clear_pending_override()
-        try:
-            self._interface.write_calibration(
-                cal.c_min, cal.c_max, cal.i_min, cal.i_max,
-            )
-        except Exception as e:
-            logger.exception("Calibration override: EEPROM write failed.")
-            self._calibration_status = "failed"
-            self._calibration_failure_reason = (
-                f"override write failed: {e} — the console kept its "
-                "previous calibration"
-            )
-            self.captureLog.emit(
-                f"❌ Could not write the overridden calibration: {e}"
-            )
-            self._audit.log("calibration_override_failed", {
-                "target": self._calibration_target,
-                "error": str(e),
-            })
-            self.calibrationStateChanged.emit()
-            return
-
-        # Deliberately NOT "passed": the run did not meet its thresholds and
-        # the label must keep saying so (#412's premise).
-        self._calibration_status = "overridden"
-        failing = [
-            f"{r['side']}{r['cam']}" for r in rows
-            if r["meanFail"] or r["contrastFail"]
-            or r["bfiFail"] or r["bviFail"]
-        ]
-        self._calibration_failure_reason = (
-            "accepted below threshold: " + ", ".join(failing)
-            if failing else "accepted below threshold"
-        )
-        logger.warning(
-            "Calibration override ACCEPTED — below-threshold calibration "
-            "written to console. Cameras below threshold: %s",
-            ", ".join(failing) or "(none)",
-        )
-        self.captureLog.emit(
-            "⚠️ Calibration accepted below threshold and written to the "
-            "console."
-        )
-        self._audit.log("calibration_override_accepted", {
-            "target": self._calibration_target,
-            "cameras_below_threshold": failing,
-        })
-        self.calibrationStateChanged.emit()
+        self._answer_gate(True)
 
     @pyqtSlot()
     def dismissCalibrationOverride(self):
-        """Discard the below-threshold calibration (#426) — the console
-        keeps whatever it had, and the status stays FAILED."""
-        if self._pending_override_cal is None:
-            return
-        self._clear_pending_override()
-        self.captureLog.emit(
-            "Calibration discarded — the console kept its previous "
-            "calibration."
-        )
-        self._audit.log("calibration_override_declined", {
-            "target": self._calibration_target,
-        })
-        self.calibrationStateChanged.emit()
+        """Decline the write (#426) — the SDK aborts the run and the
+        console keeps the calibration it already had."""
+        self._answer_gate(False)
 
     @property
     def interface(self):
