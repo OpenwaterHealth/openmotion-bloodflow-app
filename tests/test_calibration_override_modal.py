@@ -93,6 +93,10 @@ class _StubMotionInterface(QObject):
         self.dismissed += 1
         self._pending = False
 
+    @pyqtSlot(str, result=bool)
+    def checkEngineeringPassword(self, pw):
+        return pw == "correcthorse"
+
 
 @contextlib.contextmanager
 def _basic_controls_style():
@@ -218,3 +222,65 @@ def test_modal_stays_open_while_the_override_is_still_pending(modal):
     obj.open()
     stub.calibrationStateChanged.emit()
     assert obj.property("visible") is True
+
+
+# ── password gate on the destructive answer ───────────────────────────────
+
+def _password_modal(obj):
+    from PyQt6.QtCore import QObject
+    pw = obj.findChild(QObject, "overwritePasswordModal")
+    assert pw is not None, "overwrite password gate is missing"
+    return pw
+
+
+def test_overwrite_is_password_gated(modal):
+    """Overwriting the console must not be one click away from a screen
+    that just told the operator the scan is bad."""
+    obj, stub = modal
+    obj.open()
+    pw = _password_modal(obj)
+
+    # Opening the prompt alone authorises nothing.
+    pw.open()
+    assert pw.property("visible") is True
+    assert stub.accepted == 0
+
+
+def test_correct_password_authorises_the_overwrite(modal):
+    obj, stub = modal
+    obj.open()
+    pw = _password_modal(obj)
+    pw.open()
+
+    pw.accepted.emit()      # what PasswordPromptModal emits on a match
+
+    assert stub.accepted == 1
+    assert obj.property("visible") is False
+
+
+def test_password_prompt_starts_hidden_and_resets_between_openings(modal):
+    """A prompt left open from a previous gate must not be showing when
+    the next one is raised."""
+    obj, _ = modal
+    pw = _password_modal(obj)
+    assert pw.property("visible") is False
+
+    # Parent first: `visible` is effective visibility, so the child reads
+    # False while the gate modal itself is hidden regardless of its own
+    # flag.
+    obj.open()
+    pw.open()
+    assert pw.property("visible") is True
+
+    # Re-raising the gate must clear a prompt left over from last time.
+    obj.open()
+    assert pw.property("visible") is False
+
+
+def test_declining_needs_no_password(modal):
+    """Leaving the console alone is the safe direction — don't gate it."""
+    obj, stub = modal
+    obj.open()
+    obj._discard()
+    assert stub.dismissed == 1
+    assert _password_modal(obj).property("visible") is False

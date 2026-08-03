@@ -31,7 +31,26 @@ Item {
     // under the left icon bar on a narrow window.
     readonly property int iconBarInset: 104
 
-    function open() { root.visible = true }
+    function open() {
+        overwritePasswordModal.close()
+        root.visible = true
+    }
+
+    // Password gate on the destructive answer. Calibrate is already
+    // password-gated at the start of the run, but this is the point where
+    // the console calibration is actually about to be overwritten — and
+    // the operator arrives here having just been told the scan is bad, so
+    // it should take more than one more click. Declining needs no
+    // password: leaving the console alone is the safe direction.
+    PasswordPromptModal {
+        id: overwritePasswordModal
+        objectName: "overwritePasswordModal"
+        title: "Overwrite Calibration"
+        description: "Enter the password to overwrite the console "
+                   + "calibration with this below-threshold result."
+        confirmLabel: "Overwrite"
+        onAccepted: root._accept()
+    }
 
     // The connector clears the pending override when a new run starts or
     // when accept/discard lands. Follow that so a stale prompt can never
@@ -258,7 +277,7 @@ Item {
                 Button {
                     text: "Overwrite Anyway"
                     Layout.preferredHeight: 32
-                    onClicked: root._accept()
+                    onClicked: overwritePasswordModal.open()
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 13
                         color: "#FFFFFF"
