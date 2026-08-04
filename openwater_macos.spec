@@ -20,6 +20,28 @@ for folder in ("pages", "components", "assets", "models", "config"):
     if os.path.isdir(folder):
         datas.append((folder, folder))
 
+# Bundle the replay sample scan (#314) — loaded into the viewer when no device
+# is connected at boot. Located at runtime via
+# utils.resource_path.resource_path("resources", "sample_scan.csv").
+#
+# A targeted file entry rather than adding "resources" to the folder loop
+# above: that directory also holds the Windows DFU driver payload
+# (OpenMotionDriver-x64.zip), which is dead weight inside a .app.
+_SAMPLE_SCAN = os.path.join("resources", "sample_scan.csv")
+if os.path.exists(_SAMPLE_SCAN):
+    datas.append((_SAMPLE_SCAN, "resources"))
+else:
+    # Optional, so not fatal — but never silent. Dropping it here is how the
+    # runtime file goes missing, and the app can only report the absence after
+    # the fact (a warning in the boot log, no sample in the viewer). macOS is
+    # research-only (see the darwin clamp in main.py), so the offer dialog is
+    # always reachable there and a missing file is always user-visible.
+    print(
+        f"[spec] WARNING: {_SAMPLE_SCAN!r} not found in {os.getcwd()} — the "
+        "build will ship without a replay sample scan; the no-device offer "
+        "dialog will appear and then do nothing."
+    )
+
 # Ensure icon is bundled
 if os.path.exists(ICNS_FILE):
     datas.append((ICNS_FILE, "."))
@@ -95,8 +117,10 @@ app = BUNDLE(
     bundle_identifier="com.openwaterhealth.bloodflow",
     info_plist={
         "CFBundleDisplayName": APP_NAME,
-        "CFBundleShortVersionString": os.popen("python version.py 2>/dev/null").read().strip() or "0.0.0",
-        "CFBundleVersion": os.popen("python version.py 2>/dev/null").read().strip() or "0.0.0",
+        "CFBundleShortVersionString": os.environ.get("OPENMOTION_VERSION")
+            or os.popen("python version.py 2>/dev/null").read().strip() or "0.0.0",
+        "CFBundleVersion": os.environ.get("OPENMOTION_VERSION")
+            or os.popen("python version.py 2>/dev/null").read().strip() or "0.0.0",
         "NSHighResolutionCapable": True,
         "LSMinimumSystemVersion": "12.0",
         "NSPrincipalClass": "NSApplication",
