@@ -129,6 +129,19 @@ Item {
                 }
             }
 
+            // Session notes ride along into scans.db and CSV exports, so
+            // remind the operator not to make this a PHI sink. Shown in
+            // every build variant — research exports leave the app too.
+            Text {
+                text: "Do not enter any patient identifiable information in these notes."
+                color: AppTheme.textSecondary
+                font.pixelSize: 12
+                font.italic: true
+                wrapMode: Text.Wrap
+                horizontalAlignment: Text.AlignHCenter
+                Layout.fillWidth: true
+            }
+
         }
 
         Keys.onReleased: function(event) {
