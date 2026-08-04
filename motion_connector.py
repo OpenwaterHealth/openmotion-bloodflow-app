@@ -572,7 +572,8 @@ class _LivePlotSink:
                         if temp_toast_enabled:
                             connector.notify(
                                 f"Camera {side.upper()} {cam_id + 1} temperature "
-                                f"{temp_c:.1f}°C — above {threshold:.0f}°C threshold",
+                                f"{temp_c:.1f}°C — above {threshold:.0f}°C threshold. "
+                                f"Check the airflow around the sensor module.",
                                 type_="warning",
                                 duration_ms=5000,
                                 tag=f"temp_{side}_{cam_id}",
