@@ -30,6 +30,42 @@ python -m PyInstaller -y openwater.spec # package .exe → dist/Open-Motion/
 - No `pyproject.toml`; pure `requirements.txt`.
 - QML does **not** hot-reload — restart the app to pick up `.qml` changes.
 
+### macOS (.app + DMG)
+
+```bash
+brew install libusb                  # PyUSB backend; bundled from /opt/homebrew/lib
+pip install --upgrade "pyinstaller>=6.13"
+./build_macos.sh                     # → dist/Open-Motion.app + dist/Open-Motion-<ver>-macOS.dmg
+```
+
+CI builds it too: the `build-macos` job in `release-build.yml` (macos-15, Apple
+Silicon) attaches the DMG to the **same** GitHub Release as the Windows
+artifacts, so every tagged release carries one.
+
+- **`openwater_macos.spec` is generated, not authored.** `build_macos.sh` rewrites
+  it from an inline heredoc on every run. Edit the heredoc — a change made only
+  to the tracked `.spec` is silently discarded on the next build, and the tracked
+  copy has drifted from the heredoc before.
+- **The two specs are maintained separately and have diverged.** `openwater.spec`
+  and the macOS heredoc bundle different resource sets; a resource added to one
+  and not the other goes missing in that platform's build with no error at build
+  time (issue #432 — the replay sample scan). Add bundled resources to **both**.
+- **macOS is research-only.** `main.py` forces `clinicalMode` off on darwin,
+  overriding both the bundled config and `OPENMOTION_CLINICAL=1` — `clinicalMode`
+  drives `require_encrypted_db`, and the SDK refuses the scan-db keystore on
+  macOS, so a "clinical" macOS session cannot start at all.
+- **`portableMode` does not apply.** Both variants write to
+  `~/Library/Application Support/Openwater` (`utils/app_paths.py`); writing inside
+  `Open-Motion.app` would invalidate its code signature. That is where `logs/` and
+  `data/` live on a Mac.
+- **PyInstaller 6.11.1 (the `requirements.txt` pin) does not work here** — it
+  creates Qt framework symlinks twice and dies with `FileExistsError` on
+  `Versions/Current/*`. CI overrides the pin for the macOS job only.
+- **Ad-hoc signed, not notarized** (`codesign --sign -`). A *downloaded* DMG is
+  quarantined by Gatekeeper: first launch needs right-click → Open, or
+  `xattr -dr com.apple.quarantine /Applications/Open-Motion.app`. The `xattr -cr`
+  in the build script only cleans the build machine's copy.
+
 ## Layout
 
 | Path | What lives here |
@@ -82,8 +118,8 @@ Debug flags that are still useful when hardware **is** attached (`config/app_con
 | Flag | Default | Purpose |
 |---|---|---|
 | `engineeringMode` | `false` | Engineering UI + diagnostics: debug telemetry, per-camera CQ dots, test buttons, Force Dismiss in the CQ modal footer, firmware-update banner, profiling HUD. Also gates the per-scan telemetry CSV (issue #43 — clinical users must not get it; raw CSVs are gated `!clinicalMode \|\| engineeringMode` since #234). Unlockable at runtime via `EngineeringUnlockModal`. |
-| `clinicalMode` | `true` (repo config) | Clinical build variant: hide settings, large BFI/BVI panels. `main.py` baseline default is `false` (= Research distribution; window title "Open-Motion Research"). The build flips it per artifact variant (`scripts/build_common.ps1`); env override `OPENMOTION_CLINICAL=1/0` beats both. Build-time only (#233): no Settings toggle, and `config_store` neither loads nor persists it as a runtime override. |
-| `portableMode` | `false` | Build-time flag: `true` keeps all writable state (config overrides, logs, scan data/db) next to the exe (old un-installed layout); `false` scatters it to `%PROGRAMDATA%\Openwater`. Portable zips ship `true`, installers force `false` — see `Set-PortableMode` (`scripts/build_common.ps1`) and `utils/app_paths.py:writable_root`. Env override `OPENMOTION_PORTABLE=1` for dev testing. |
+| `clinicalMode` | `true` (repo config) | Clinical build variant: hide settings, large BFI/BVI panels. `main.py` baseline default is `false` (= Research distribution; window title "Open-Motion Research"). The build flips it per artifact variant (`scripts/build_common.ps1`); env override `OPENMOTION_CLINICAL=1/0` beats both. Build-time only (#233): no Settings toggle, and `config_store` neither loads nor persists it as a runtime override. **On macOS it is forced `false`** and beats even the env var (#430) — see the macOS build notes above. |
+| `portableMode` | `false` | Build-time flag: `true` keeps all writable state (config overrides, logs, scan data/db) next to the exe (old un-installed layout); `false` scatters it to `%PROGRAMDATA%\Openwater`. Portable zips ship `true`, installers force `false` — see `Set-PortableMode` (`scripts/build_common.ps1`) and `utils/app_paths.py:writable_root`. Env override `OPENMOTION_PORTABLE=1` for dev testing. **Ignored on macOS** (#428): both variants use `~/Library/Application Support/Openwater`. |
 | `forceLaserFail` | `false` | Debug: simulate a laser safety trip. |
 | `cameraFakeData` | `false` | **Broken — do not use.** Was meant to request firmware fake histograms; see "Working without hardware". |
 | `histoThrottle` | `false` | Drop histograms to reduce log spam. |
@@ -100,7 +136,7 @@ Debug flags that are still useful when hardware **is** attached (`config/app_con
 | `bviLowPassCutoffHz` | `20.0` | 1-pole IIR low-pass on the **displayed** BVI stream only (live PlotViewer traces + clinical side averages, applied at `LiveScanSource` ingest); `scans.db`, CSVs, DB-tail history, and replay stay raw. Config-only, no Settings UI — the switch and `bviLowPassEnabled` were removed (#228); the number is the whole contract: missing/invalid → 20, `<= 0` disables. alpha = dt/(RC+dt) at nominal 40 Hz (≈ 0.76 at 20 Hz). |
 | `writeRawCsv` | `false` | Opt-in raw histogram CSVs (`{scan_id}_(left\|right)_mask*_raw.csv`). Settings → Data Output toggle, shown when `!clinicalMode \|\| engineeringMode` (#234 — research users get raw CSVs); the same flag gate is re-checked at scan start, so a plain clinical build never writes raw output even if the toggle was left on (#43). `rawCsvDurationSec` caps seconds written (`null` = whole scan). |
 | `writeCorrectedCsv` | `false` | Opt-in corrected per-cam CSV (`{scan_id}.csv`) — redundant now that per-cam BFI/BVI lands in `scans.db`. Config-only, no Settings UI. |
-| `dataDirectory` | `null` | Single output root — `logs/` and `data/` (`scans.db`, calibrations) live under it. `null` = `app_paths.writable_root()`: cwd for dev runs, exe-adjacent or `%PROGRAMDATA%\Openwater` per `portableMode` when frozen. |
+| `dataDirectory` | `null` | Single output root — `logs/` and `data/` (`scans.db`, calibrations) live under it. `null` = `app_paths.writable_root()`: cwd for dev runs; when frozen, exe-adjacent or `%PROGRAMDATA%\Openwater` per `portableMode` on Windows, `~/Library/Application Support/Openwater` on macOS. |
 
 ## Reading the app log
 
@@ -125,7 +161,7 @@ Get-ChildItem C:\Users\ethan\Projects\openmotion-bloodflow-app\logs\open-motion-
   Get-Content | Select-String -Pattern "Calibration phase|procedure complete|samples captured"
 ```
 
-The `dataDirectory` config key controls the root (defaults to cwd if unset — falls back to `~/Documents/Open-Motion` on macOS). When unset on a frozen build, the default instead follows `portableMode`: next to the exe (portable zip) or `%PROGRAMDATA%\Openwater` (installer). Two fixed children live under that root:
+The `dataDirectory` config key controls the root (defaults to cwd if unset). When unset on a frozen build, the default is `~/Library/Application Support/Openwater` on macOS, and on Windows follows `portableMode`: next to the exe (portable zip) or `%PROGRAMDATA%\Openwater` (installer). Any of those falling through to an unwritable location lands on `~/Documents/Open-Motion` as a last resort. Two fixed children live under that root:
 - `logs/` — app log files (one per launch)
 - `data/` — everything else. **Scan output is DB-only by default**: everything lands in `scans.db` (per-cam BFI/BVI, sessions, notes in `sessions.session_notes`); no per-scan CSVs are written unless opted in. User-facing CSVs are export-time artifacts: History → Export CSV (`exportScanCsv`). The opt-in per-scan CSVs land directly in `data/`: telemetry CSV (`{scan_id}_{subject}_telemetry.csv`, gated on `engineeringMode` — issue #43), raw histogram CSVs (`(!clinicalMode \|\| engineeringMode) && writeRawCsv`, #234), corrected per-cam CSV (`writeCorrectedCsv`). `data/calibrations/` holds saved calibration JSONs plus the SDK's per-camera PASS/FAIL CSVs (`calibration-<ts>.csv` / `test-<ts>.csv`); `data/debug-bundles/` holds "Send Debug Logs" zips; `data/updates/` holds in-app-updater downloads. `*_notes.txt` files are legacy read-only fallbacks. (`data/ft-test-csvs/` was a legacy per-scan factory-test export — dead since May 2026 and retired; the Test/Calibrate flows' CSVs are its superset.)
 
