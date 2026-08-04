@@ -129,11 +129,10 @@ Item {
                 }
             }
 
-            // Clinical builds only: session notes ride along into scans.db
-            // and CSV exports, so remind the operator not to make this a
-            // PHI sink. Research builds don't get the line.
+            // Session notes ride along into scans.db and CSV exports, so
+            // remind the operator not to make this a PHI sink. Shown in
+            // every build variant — research exports leave the app too.
             Text {
-                visible: MotionInterface.appConfig.clinicalMode === true
                 text: "Do not enter any patient identifiable information in these notes."
                 color: AppTheme.textSecondary
                 font.pixelSize: 12
