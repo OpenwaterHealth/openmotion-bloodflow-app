@@ -296,6 +296,8 @@ def test_over_temp_fires_a_toast_not_just_a_log_line():
     assert toast["durationMs"] == 5000   # auto-dismiss, not sticky
     assert "LEFT 3" in toast["text"]
     assert "112.0" in toast["text"]
+    # The operator needs an action, not just a number.
+    assert "airflow" in toast["text"]
     # The log line is unchanged — the toast is additive.
     assert len(conn.captureLog.calls) == 1
 
