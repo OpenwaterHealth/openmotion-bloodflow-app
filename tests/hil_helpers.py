@@ -732,11 +732,11 @@ def _calibrate_panel_buttons() -> dict[str, tuple[int, int]]:
     # UI test scripts use directly via click_sidebar(), so the
     # calibration cache and the direct-click path agree on positions.
     #
-    # Reduced mode hides Scan\nSettings + Check and slides Notes up
+    # Clinical mode hides Scan\nSettings + Check and slides Notes up
     # into the former Scan Settings slot — pick the right Notes coord
-    # based on the current ``reducedMode`` config value, matching how
+    # based on the current ``clinicalMode`` config value, matching how
     # ``panel_button_screen_pos`` handles the same case.
-    reduced = bool(read_app_config_value("reducedMode", False))
+    reduced = bool(read_app_config_value("clinicalMode", False))
     notes_pos = SIDEBAR_NOTES_REDUCED if reduced else SIDEBAR_NOTES
     label_to_sidebar = {
         "Start":          SIDEBAR_START,
