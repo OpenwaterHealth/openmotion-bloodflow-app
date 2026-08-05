@@ -38,6 +38,7 @@ from hil_helpers import (
     RE_DISCONNECTED,
     click_panel,
     find_app_log,
+    is_app_alive,
     log_size,
     wait_for_pattern,
 )
@@ -52,8 +53,10 @@ DISCONNECT_TIMEOUT = 15
 SCAN_RUNUP_SEC     = 8    # let scan get past handshake before yanking power
 SETTLE_AFTER_SCAN  = 8    # let app return to idle after mid-scan disconnect
 RAPID_TOGGLE_COUNT = 5
-RAPID_TOGGLE_HOLD  = 2.0  # seconds held in each off/on phase; faster trips the
+RAPID_TOGGLE_HOLD  = 5.0  # seconds held in each off/on phase; faster trips the
                           # Shelly relay's own duty-cycle limits, not the app.
+SLOW_TOGGLE_EXTRA  = 25.0  # extra wait after each ON for app to reconnect
+                          # (used by test_05_toggle_with_reconnect_wait)
 
 
 # ─────────────────────────────────────────────
@@ -186,7 +189,12 @@ class TestConnectionRedesign:
         time.sleep(SLEEP)
 
     def test_04_rapid_toggle(self, outlet, app):
-        """Many fast on/off toggles → app stays sane and ends up connected."""
+        """Many fast on/off toggles → app stays sane and ends up connected.
+
+        Asserts the app window survives every toggle. If the app crashes
+        during the loop we fail loudly with the toggle count, instead of
+        hanging in the post-loop log-tail verification.
+        """
         log.info(f"Rapid toggle x{RAPID_TOGGLE_COUNT}")
         for i in range(RAPID_TOGGLE_COUNT):
             outlet.off()
@@ -194,6 +202,11 @@ class TestConnectionRedesign:
             outlet.on()
             time.sleep(RAPID_TOGGLE_HOLD)
             log.info(f"  toggle {i + 1}/{RAPID_TOGGLE_COUNT}")
+            assert is_app_alive(), (
+                f"BUG: App crashed/closed after {i + 1}/{RAPID_TOGGLE_COUNT} "
+                f"rapid power toggles (RAPID_TOGGLE_HOLD={RAPID_TOGGLE_HOLD}s). "
+                f"Application window is no longer present."
+            )
 
         # Let the dust settle, then verify the app can still complete a
         # full disconnect-reconnect cycle from this state.
@@ -211,3 +224,44 @@ class TestConnectionRedesign:
         _wait_disconnected(log_path, offset)
         offset_after_disc = log_size(log_path)
         _wait_connected(log_path, offset_after_disc)
+
+    def test_05_toggle_with_reconnect_wait(self, outlet, app):
+        """Same as test_04 but wait an extra 5s after each ON for the app
+        to log a CONNECTED transition. Verifies the app fully recovers
+        between every toggle, not just at the end of the loop.
+        """
+        log_path = find_app_log()
+        assert log_path, (
+            "could not locate the bloodflow app log under any of the "
+            "search roots in utils.find_app_log — verify the app is "
+            "actually launched and writing to app-logs/."
+        )
+
+        log.info(
+            f"Toggle x{RAPID_TOGGLE_COUNT} with "
+            f"+{SLOW_TOGGLE_EXTRA}s reconnect wait per cycle"
+        )
+        for i in range(RAPID_TOGGLE_COUNT):
+            offset = log_size(log_path)
+
+            outlet.off()
+            time.sleep(RAPID_TOGGLE_HOLD)
+            outlet.on()
+            time.sleep(RAPID_TOGGLE_HOLD)
+
+            # Wait the extra 5s for the app to reconnect, while tailing
+            # the log for the CONNECTED transition emitted by the SDK.
+            line = wait_for_pattern(
+                RE_CONNECTED, log_path, offset, SLOW_TOGGLE_EXTRA
+            )
+            assert line, (
+                f"toggle {i + 1}/{RAPID_TOGGLE_COUNT}: "
+                f"app did NOT reconnect within "
+                f"{RAPID_TOGGLE_HOLD * 2 + SLOW_TOGGLE_EXTRA}s of the toggle"
+            )
+            log.info(f"  toggle {i + 1}/{RAPID_TOGGLE_COUNT}: connected ({line})")
+
+            assert is_app_alive(), (
+                f"BUG: App crashed/closed after {i + 1}/{RAPID_TOGGLE_COUNT} "
+                f"slow power toggles. Application window is no longer present."
+            )

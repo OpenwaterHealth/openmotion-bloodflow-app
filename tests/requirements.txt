@@ -1,0 +1,27 @@
+# Test dependencies for the OpenMotion BloodFlow app HIL test suite.
+#
+# Install with:
+#   pip install -r tests/requirements.txt
+#
+# Targets Python 3.10+. Versions left unpinned so a fresh checkout picks
+# up the latest stable releases; pin them in CI if reproducibility matters.
+
+# Test framework
+pytest
+
+# HTTP client — used by tests/shelly.py to drive the Shelly outlet
+requests
+
+# Process introspection — checking if the app is already running
+psutil
+
+# UI automation
+pyautogui          # mouse / keyboard input
+pygetwindow        # top-level window enumeration
+pywinauto          # UI Automation tree walking
+
+# Required by motion_connector.py (imported indirectly by test_dropped_camera_gate.py)
+PyQt6
+base58
+numpy
+pandas

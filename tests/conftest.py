@@ -13,6 +13,8 @@ Provides:
 
 import atexit
 import getpass
+import importlib
+import inspect
 import json
 import platform
 import socket
@@ -72,7 +74,7 @@ if pyautogui is not None:
 # ─────────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────────
-APP_KEYWORDS = ["openmotion", "bloodflow", "openwater"]
+APP_KEYWORDS = ["openmotion", "open-motion", "bloodflow", "openwater"]
 SLEEP = 2  # seconds to wait after most UI actions
 
 LOG_DIR = Path(__file__).parent / "test_logs"
@@ -127,7 +129,14 @@ _class_failures = {}
 
 
 def pytest_runtest_makereport(item, call):
-    if call.when == "call" and call.excinfo is not None:
+    # A deliberate pytest.skip() inside a test (e.g. "this bench has no
+    # left sensor") is not a failure — it must not xfail the rest of an
+    # incremental class.
+    if (
+        call.when == "call"
+        and call.excinfo is not None
+        and not call.excinfo.errisinstance(pytest.skip.Exception)
+    ):
         cls = item.cls
         if cls is not None:
             _class_failures.setdefault(cls.__name__, item.name)
@@ -326,10 +335,12 @@ def _find_exe() -> str:
 # Window helpers
 # ─────────────────────────────────────────────
 # Process names accepted as the bloodflow app. ``Open-Motion.exe`` is
-# the packaged build; ``python.exe`` / ``pythonw.exe`` covers the
+# the packaged build and ``Open-Motion_console.exe`` the console build
+# shipped alongside it; ``python.exe`` / ``pythonw.exe`` covers the
 # from-source mode (verified by also checking ``main.py`` in the
 # command line, since plenty of other things run under python.exe).
-_APP_PROCESS_NAMES = ("open-motion.exe", "python.exe", "pythonw.exe")
+_APP_PROCESS_NAMES = ("open-motion.exe", "open-motion_console.exe",
+                      "python.exe", "pythonw.exe")
 
 
 def _window_process_name(w) -> str | None:
@@ -373,7 +384,9 @@ def _is_bloodflow_window(w) -> bool:
         # rather than locking out tests on systems where the Win32
         # call is unavailable (CI containers etc).
         return any(k in title.lower() for k in APP_KEYWORDS)
-    if proc_name not in _APP_PROCESS_NAMES:
+    # Accept every packaged variant: the windowed OpenWaterApp.exe and the
+    # OpenWaterApp_console.exe console build shipped alongside it (1.2.x+).
+    if not (proc_name.startswith("openwaterapp") or proc_name in _APP_PROCESS_NAMES):
         return False
     if proc_name in ("python.exe", "pythonw.exe"):
         # In from-source mode several python.exe windows can co-exist
@@ -720,7 +733,10 @@ def app():
                     ensure_visible()
                     return True
             else:
-                if "openwater" in name:
+                # "openwater" covers the old ≤1.3.x OpenWaterApp.exe;
+                # "open-motion" covers the renamed builds, console
+                # variant included.
+                if "openwater" in name or "open-motion" in name:
                     log.info("App already running.")
                     time.sleep(SLEEP)
                     ensure_visible()
@@ -933,33 +949,173 @@ def _isolate_writable_root(request, tmp_path, monkeypatch):
 # (commits ba05bd0 + e3a017a in tests/test_clinicalmode.py).
 
 _REPORT_SESSION_START: datetime | None = None
+# Resolved at session start so we don't depend on the app process
+# still being alive when the atexit-registered _write_hil_report runs
+# (test cleanup or a crash may have killed it by then).
+_REPORT_APP_VERSION: str | None = None
+
+
+def _running_app_exe_path() -> str:
+    """Find the .exe path of the bloodflow process that's currently running.
+
+    Returns the path of the FIRST live process whose name matches
+    one of the bloodflow executable names. Falls back to '' if no
+    matching process is alive.
+
+    This is the source of truth for "which app is being tested" —
+    much more reliable than ``_find_exe()`` (which picks the newest
+    installed .exe by mtime, possibly a different install).
+    """
+    # Old (≤1.3.x) and new (Open-Motion rename on next) packaged exe names.
+    target_names = {"openwaterapp.exe", "openwaterapp_console.exe",
+                    "open-motion.exe", "open-motion_console.exe"}
+    try:
+        for proc in psutil.process_iter(["name", "exe"]):
+            try:
+                name = (proc.info.get("name") or "").lower()
+                if name in target_names:
+                    exe = proc.info.get("exe") or ""
+                    if exe and os.path.exists(exe):
+                        return exe
+            except Exception:
+                continue
+    except Exception as e:
+        log.warning(f"  _running_app_exe_path failed: {e}")
+    return ""
+
+
+def _resolve_app_version() -> str:
+    """Resolve the version of the *running* bloodflow app.
+
+    Priority — match the version of what's actually being tested,
+    NOT the source tree's git state:
+
+      0. **Find the .exe path of the currently-running OpenWaterApp
+         process** via psutil. This guarantees the version we report
+         is for the app actually under test, not the newest install
+         on disk (which is what ``_find_exe()`` would pick).
+         Falls back to ``_find_exe()`` if no process is alive (e.g.
+         resolver called before the ``app`` fixture launches it).
+      1. Embedded ``ProductVersion`` / ``FileVersion`` from the .exe
+         metadata.
+      2. Walk UP from the .exe through parent / grandparent folders
+         looking for a name that contains a version pattern. Install
+         layouts vary:
+           ``…\\OpenWaterApp-1.0.2-pre-0-g8027c14\\OpenWaterApp.exe``
+                                ^ version in parent
+           ``…\\OpenMotion-Bloodflow-1.2.0-dev.1_RUO\\OpenWaterApp\\OpenWaterApp.exe``
+                                ^ version in grandparent (with _RUO suffix)
+      3. ``version.get_version()`` from the source tree — git-describe
+         based; used only when no .exe is discoverable.
+      4. ``$OPENWATER_VERSION`` env override.
+      5. ``"unknown"``.
+    """
+    import re
+
+    version_re = re.compile(r"^\d+(\.\d+)+")
+    folder_version_re = re.compile(
+        r"\d+\.\d+(?:\.\d+)*(?:[-_+][A-Za-z0-9._+-]*)?"
+    )
+
+    # 0. Prefer the path of the actually-running process.
+    exe_path = _running_app_exe_path()
+    if exe_path:
+        log.info(f"  resolving version from running process: {exe_path}")
+    else:
+        log.info("  no running OpenWaterApp process — falling back to _find_exe()")
+        try:
+            exe_path = _find_exe()
+        except Exception as e:
+            log.warning(f"  _find_exe() failed: {e}")
+            exe_path = ""
+
+    # 1. .exe ProductVersion / FileVersion metadata.
+    try:
+        if exe_path:
+            ps_cmd = (
+                f"$v = (Get-Item '{exe_path}').VersionInfo; "
+                "Write-Output $v.FileVersion; "
+                "Write-Output $v.ProductVersion; "
+                "Write-Output $v.FileVersionRaw; "
+                "Write-Output $v.ProductVersionRaw"
+            )
+            try:
+                result = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", ps_cmd],
+                    capture_output=True, text=True, timeout=10,
+                )
+                candidates = [ln.strip() for ln in (result.stdout or "").splitlines()
+                              if ln.strip()]
+                log.info(f"  app version metadata candidates: {candidates}")
+                for c in candidates:
+                    if version_re.match(c):
+                        log.info(f"  resolved app version (from .exe): {c}")
+                        return c
+            except Exception as e:
+                log.warning(f"  PowerShell VersionInfo read failed: {e}")
+
+            # 2. Walk up from the .exe — first ancestor folder whose
+            #    name contains a version-shaped substring wins.
+            for ancestor in Path(exe_path).parents:
+                folder_name = ancestor.name
+                # Don't walk past the user's home directory layout.
+                if folder_name.lower() in ("users", "documents", "openmotion", ""):
+                    if folder_name.lower() in ("users", ""):
+                        break
+                    # OpenMotion / Documents themselves don't have a
+                    # version in them but their CHILDREN do — keep
+                    # going, just don't try to match this folder.
+                    continue
+                m = folder_version_re.search(folder_name)
+                if m:
+                    version = m.group(0)
+                    log.info(
+                        f"  resolved app version (from path '{folder_name}'): "
+                        f"{version}"
+                    )
+                    return version
+
+            # Final fallback: the immediate parent folder name, even
+            # without a version pattern — at least it tells you which
+            # install was picked.
+            parent_name = Path(exe_path).parent.name
+            log.info(f"  resolved app version (parent folder): {parent_name}")
+            return parent_name
+    except Exception as e:
+        log.warning(f"  _resolve_app_version: .exe path resolution failed: {e}")
+
+    # 3. No .exe discoverable — running from source. Use git describe.
+    try:
+        repo_root = Path(__file__).resolve().parent.parent
+        if str(repo_root) not in sys.path:
+            sys.path.insert(0, str(repo_root))
+        import version as _project_version    # noqa: PLC0415
+        v = (_project_version.get_version() or "").strip()
+        if v:
+            log.info(f"  resolved app version (from source git describe): {v}")
+            return v
+    except Exception as e:
+        log.warning(f"  version.get_version() unavailable: {e}")
+
+    # 4. Env override / 5. unknown.
+    return os.environ.get("OPENWATER_VERSION", "unknown")
 
 
 def _report_get_app_version() -> str:
-    """Best-effort guess at the bundled bloodflow build version.
+    """Return the version of the running bloodflow app.
 
-    Reads it from the running Open-Motion.exe path (the build script
-    lays the version into the parent-directory name). Falls back to
-    ``$OPENWATER_VERSION`` if no app process is detected.
+    Resolves on each call so we always pick up the currently-running
+    process's path via ``_running_app_exe_path``. Once a live answer
+    has been resolved we cache it so a later call (after the app may
+    have been killed by test cleanup) still has the right value.
     """
-    try:
-        for proc_name in ("Open-Motion.exe",):
-            try:
-                result = subprocess.run(
-                    ["wmic", "process", "where", f"name='{proc_name}'",
-                     "get", "ExecutablePath", "/value"],
-                    capture_output=True, text=True, timeout=5,
-                )
-                for line in result.stdout.splitlines():
-                    if "ExecutablePath=" in line:
-                        path = line.split("=", 1)[1].strip()
-                        if path:
-                            return Path(path).parent.name
-            except Exception:
-                continue
-    except Exception:
-        pass
-    return os.environ.get("OPENWATER_VERSION", "unknown")
+    global _REPORT_APP_VERSION
+    v = _resolve_app_version()
+    if v and v != "unknown":
+        _REPORT_APP_VERSION = v
+    # If the live resolve failed, fall back to the last good cached
+    # value (e.g. the app died during cleanup, but it was alive earlier).
+    return v if (v and v != "unknown") else (_REPORT_APP_VERSION or "unknown")
 
 
 def _report_get_environment() -> dict:
@@ -972,6 +1128,70 @@ def _report_get_environment() -> dict:
         "python_version": sys.version.split()[0],
         "app_version":    _report_get_app_version(),
     }
+
+
+def _first_doc_or_inline_comment(obj, def_keyword: str) -> str:
+    """Return a one-line description of ``obj`` (a class or function).
+
+    Prefers the first non-empty line of the object's docstring; if there
+    is none, falls back to a trailing inline comment on the object's
+    ``class``/``def`` line, e.g. ``def test_foo(self):  # what it does``.
+    Returns "" when neither is available.
+    """
+    doc = inspect.getdoc(obj)
+    if doc:
+        for line in doc.splitlines():
+            line = line.strip()
+            if line:
+                return line
+    # Fall back to a trailing inline comment on the definition line,
+    # skipping any decorator lines that precede it.
+    for src_line in inspect.getsourcelines(obj)[0]:
+        stripped = src_line.lstrip()
+        if stripped.startswith(def_keyword):
+            if "#" in src_line:
+                comment = src_line.split("#", 1)[1].strip()
+                if comment:
+                    return comment
+            break
+    return ""
+
+
+def _resolve_test_description(module_name: str, class_name: str,
+                             test_name: str) -> str:
+    """Return a one-line description of a single test.
+
+    Resolves the test method by ``module_name``/``class_name``/``test_name``
+    (preferring an already-imported module in ``sys.modules`` so we don't
+    re-run import side effects, falling back to ``importlib``) and returns
+    its docstring's first line — or a trailing inline comment on the ``def``
+    line. If the method has neither, falls back to the enclosing class's
+    docstring/inline comment so the report still says something useful.
+    Returns "" when nothing can be resolved, so the report degrades
+    gracefully.
+    """
+    if not module_name or not test_name:
+        return ""
+    # Strip any parametrize id, e.g. ``test_scan_auto_stop[loop-1]``.
+    method_name = test_name.split("[", 1)[0]
+    try:
+        module = sys.modules.get(module_name)
+        if module is None:
+            module = importlib.import_module(module_name)
+        cls = getattr(module, class_name, None) if class_name else None
+        container = cls if cls is not None else module
+        method = getattr(container, method_name, None)
+        if method is not None:
+            desc = _first_doc_or_inline_comment(method, "def ")
+            if desc:
+                return desc
+        # No per-test description — fall back to the class-level one.
+        if cls is not None:
+            return _first_doc_or_inline_comment(cls, "class ")
+    except Exception as e:
+        log.warning(f"  test description lookup failed for "
+                    f"{module_name}.{class_name}.{test_name}: {e}")
+    return ""
 
 
 def _parse_junit_xml(xml_path: Path) -> list[dict]:
@@ -1042,6 +1262,28 @@ def _write_hil_report() -> None:
     log_dir.mkdir(exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+    # Which test scripts ran this session (sorted, deduplicated).
+    test_modules = sorted({r["test_module"] for r in results if r["test_module"]})
+    # Filename slug: single script → that script's name; multiple → a
+    # generic 'suite_<N>scripts' tag so the file name stays readable.
+    if len(test_modules) == 1:
+        module_slug = test_modules[0]
+    elif len(test_modules) > 1:
+        module_slug = f"suite_{len(test_modules)}scripts"
+    else:
+        module_slug = "unknown"
+
+    # One-line description per unique test, taken from the test's docstring
+    # (or a trailing inline comment). Keyed by test id, first-seen order so
+    # the report reads in run order.
+    tests: dict[str, str] = {}
+    for r in results:
+        tid = r["test_id"]
+        if tid and tid not in tests:
+            tests[tid] = _resolve_test_description(
+                r["test_module"], r["test_class"], tid
+            )
+
     env = _report_get_environment()
     duration = (
         (datetime.now() - _REPORT_SESSION_START).total_seconds()
@@ -1060,6 +1302,8 @@ def _write_hil_report() -> None:
         "report_title": "Open-Motion — HIL Test Session Report",
         "purpose":      "Verification & validation evidence for the HIL "
                         "test suite.",
+        "test_scripts":  test_modules,
+        "tests":         tests,
         "session_start": _REPORT_SESSION_START.isoformat(timespec="seconds")
                          if _REPORT_SESSION_START else "",
         "session_end":   datetime.now().isoformat(timespec="seconds"),
@@ -1068,7 +1312,7 @@ def _write_hil_report() -> None:
         "summary":       summary,
         "test_results":  results,
     }
-    json_path = log_dir / f"HIL_Report_{ts}.json"
+    json_path = log_dir / f"HIL_Report_{module_slug}_{ts}.json"
     json_path.write_text(json.dumps(report_data, indent=2), encoding="utf-8")
 
     # ── Markdown ──
@@ -1076,6 +1320,26 @@ def _write_hil_report() -> None:
         f"# {report_data['report_title']}",
         "",
         f"**Purpose:** {report_data['purpose']}",
+        "",
+        "## Test Scripts",
+        "",
+    ]
+    if test_modules:
+        for mod in test_modules:
+            lines.append(f"- `{mod}.py`")
+    else:
+        lines.append("- _n/a_")
+    lines += [
+        "",
+        "## Tests",
+        "",
+    ]
+    if tests:
+        for tid, desc in tests.items():
+            lines.append(f"- `{tid}` — {desc or '_no description_'}")
+    else:
+        lines.append("- _n/a_")
+    lines += [
         "",
         "## Session",
         "",
@@ -1140,7 +1404,7 @@ def _write_hil_report() -> None:
         f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}_",
         "",
     ]
-    md_path = log_dir / f"HIL_Report_{ts}.md"
+    md_path = log_dir / f"HIL_Report_{module_slug}_{ts}.md"
     md_path.write_text("\n".join(lines), encoding="utf-8")
 
     log.info("HIL report written:")
@@ -1150,10 +1414,18 @@ def _write_hil_report() -> None:
 
 @pytest.fixture(scope="session", autouse=True)
 def _hil_report_session():
-    """Capture session start time and arm the atexit-registered writer.
+    """Capture session start time + app version, and arm the atexit-
+    registered report writer.
 
     Autouse + session-scope so it runs once for every pytest invocation
     that touches this conftest, with no per-test setup/teardown.
+
+    Version resolution happens lazily in ``_write_hil_report`` (NOT
+    at session start) because this fixture runs BEFORE the ``app``
+    fixture launches the bloodflow app — querying ``psutil`` at
+    session start would never find a running process, defeating the
+    "use the actually-running app's path" priority. The lazy resolver
+    runs at atexit, when the app is most likely still alive.
     """
     global _REPORT_SESSION_START
     _REPORT_SESSION_START = datetime.now()
