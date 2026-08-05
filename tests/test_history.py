@@ -16,6 +16,7 @@ import pytest
 from conftest import (
     SLEEP,
     click_by_name,
+    click_sidebar,
     ensure_visible,
     log,
     read_combobox_values,
@@ -24,6 +25,9 @@ from conftest import (
 )
 from hil_helpers import (
     SENSOR_OPTIONS,
+    SIDEBAR_HISTORY,
+    SIDEBAR_SCAN_SETTINGS,
+    SIDEBAR_START,
     click_element_center,
     click_panel,
 )
@@ -52,42 +56,69 @@ _SEED_MAX_WAIT_SEC = 240
 # ─────────────────────────────────────────────
 # Seed-scan helpers (mirrors the abbreviated auto-stop-bug test)
 # ─────────────────────────────────────────────
-def _wait_for_combobox(idx: int, timeout: int = 15):
+def _wait_for_combobox(idx: int, timeout: int = 30):
     """Poll UIA up to ``timeout`` seconds for at least ``idx + 1``
-    ComboBoxes to appear in the window. Self-hosted runner sometimes
-    needs several seconds before Qt exposes modal contents through
-    the accessibility bridge, especially on the first modal of the
-    session.
+    ComboBoxes to appear in the window.
 
-    Returns the ComboBox element on success, or None on timeout.
+    Tries multiple control types because QML ComboBoxes are sometimes
+    exposed as 'ComboBox' and sometimes as 'Custom' depending on the
+    Qt accessibility bridge state. Self-hosted runner sometimes needs
+    several seconds before Qt exposes modal contents through the bridge,
+    especially on the first modal of the session.
+
+    Returns the ComboBox-like element on success, or None on timeout.
     """
     deadline = time.time() + timeout
     last_count = -1
+    # ComboBox first (canonical), then Custom (fallback for QML), then Pane.
+    control_types = ["ComboBox", "Custom", "Pane"]
     while time.time() < deadline:
         ensure_visible()
-        try:
-            cbs = uia_window().descendants(control_type="ComboBox")
-        except Exception:
-            cbs = []
-        if len(cbs) > idx:
-            return cbs[idx]
-        if len(cbs) != last_count:
-            log.info(
-                f"  waiting for ComboBox[{idx}]... "
-                f"currently {len(cbs)} visible"
-            )
-            last_count = len(cbs)
+        for ctype in control_types:
+            try:
+                elems = uia_window().descendants(control_type=ctype)
+            except Exception:
+                continue
+            if ctype == "ComboBox":
+                if len(elems) > idx:
+                    return elems[idx]
+                if len(elems) != last_count:
+                    log.info(
+                        f"  waiting for ComboBox[{idx}]... "
+                        f"currently {len(elems)} visible (ctype=ComboBox)"
+                    )
+                    last_count = len(elems)
+            else:
+                # For Custom/Pane fallback, narrow to small elements that look
+                # like dropdowns (height < 80px, width 80–400px) to avoid
+                # picking up the modal background or other large containers.
+                candidates = []
+                for e in elems:
+                    try:
+                        r = e.rectangle()
+                        h = r.bottom - r.top
+                        w = r.right - r.left
+                        if 20 < h < 80 and 80 < w < 400:
+                            candidates.append(e)
+                    except Exception:
+                        continue
+                if len(candidates) > idx:
+                    log.info(
+                        f"  found ComboBox[{idx}] via fallback ctype={ctype} "
+                        f"(filtered {len(candidates)} candidates)"
+                    )
+                    return candidates[idx]
         time.sleep(0.5)
     return None
 
 
 def _click_combobox_by_index(idx: int) -> None:
     ensure_visible()
-    elem = _wait_for_combobox(idx, timeout=15)
+    elem = _wait_for_combobox(idx, timeout=30)
     if elem is None:
         pytest.skip(
             f"Scan Settings modal didn't expose ComboBox[{idx}] within "
-            f"15 s — Qt accessibility bridge may not be reflecting "
+            f"30 s — Qt accessibility bridge may not be reflecting "
             f"modal contents on this runner. Skipping the seed scan; "
             f"test_history.test_02_latest_scan_listed will fall back "
             f"to its original 'no scans found' assertion."
@@ -185,9 +216,20 @@ def _seed_with_short_scan(app):
     a scan already exists in History (e.g. from a prior session on
     the same runner), the seed is skipped.
     """
+    # Use direct relative-coordinate clicks (click_sidebar) instead of
+    # click_panel: the latter's UIA-driven calibration was producing
+    # stale screen coordinates (e.g. (106, 1109)) that landed off the
+    # sidebar buttons. The relative-coord approach is what the other
+    # UI test scripts (test_reducedmode, test_scan_auto_stop_bug) use
+    # successfully.
+
     # Quick check: if History already has data, skip the seed.
+    # Note: HistoryModal has no Keys handler, so Escape does NOT close it.
+    # Click the History sidebar button again to TOGGLE it closed (per the
+    # BloodFlow.qml onHistoryClicked: 'closeAll + open if it was closed'
+    # behavior referenced in _ensure_history_open below).
     try:
-        click_panel("History")
+        click_sidebar(*SIDEBAR_HISTORY, "History (seed probe)")
         time.sleep(SLEEP)
         # A populated table shows the column header; an empty one shows
         # "No scans yet." Either way the modal is open here.
@@ -197,14 +239,12 @@ def _seed_with_short_scan(app):
         )
         if has_data:
             log.info("Skipping seed scan — History already has entries")
-            require_focus()
-            pyautogui.press("escape")
+            click_sidebar(*SIDEBAR_HISTORY, "History (toggle closed)")
             time.sleep(SLEEP)
             yield
             return
         # Close the empty History modal before configuring a scan.
-        require_focus()
-        pyautogui.press("escape")
+        click_sidebar(*SIDEBAR_HISTORY, "History (toggle closed)")
         time.sleep(SLEEP)
     except Exception as e:
         log.warning(f"  pre-seed History probe failed: {e}")
@@ -213,7 +253,7 @@ def _seed_with_short_scan(app):
         f"Seeding History with a {_SEED_SCAN_DURATION_SEC}s "
         f"{_SEED_SENSOR_OPTION}/{_SEED_SENSOR_OPTION} scan..."
     )
-    click_panel("Scan\nSettings")
+    click_sidebar(*SIDEBAR_SCAN_SETTINGS, "Scan Settings")
     time.sleep(SLEEP)
     _select_sensor(0, "Left",  _SEED_SENSOR_OPTION)
     _select_sensor(1, "Right", _SEED_SENSOR_OPTION)
@@ -222,7 +262,7 @@ def _seed_with_short_scan(app):
     pyautogui.press("escape")  # close Scan Settings
     time.sleep(SLEEP)
 
-    click_panel("Start")
+    click_sidebar(*SIDEBAR_START, "Start scan")
     log.info(
         f"  seed scan started — waiting up to {_SEED_MAX_WAIT_SEC}s "
         f"for completion"
