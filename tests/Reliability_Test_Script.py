@@ -41,7 +41,7 @@ pytestmark = pytest.mark.release
 
 
 # ─── Configuration ──────────────────────────────────────────────────
-CYCLE_COUNT          = 60       # number of (5-scan + power-cycle) cycles
+CYCLE_COUNT          = 724       # number of (5-scan + power-cycle) cycles
 SCANS_PER_CYCLE      = 5
 SCAN_DURATION_MIN    = 10
 QUALITY_CHECK_TIMEOUT = 180     # max wait for "Good signal quality" modal
