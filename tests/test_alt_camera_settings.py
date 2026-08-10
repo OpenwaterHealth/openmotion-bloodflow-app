@@ -16,9 +16,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from motion_config import (
-    ALT_DARK_SKIP_DELAY_US,
     DARK_RATE_LOWER_LIMIT_US,
-    DARK_SKIP_BASELINE_US,
+    DARK_SKIP_DELAY_US,
+    DEFAULT_TRIGGER_OVERRIDES,
     FW_DEFAULT_CAMERA_SETTINGS,
     apply_camera_settings,
     camera_settings_from_config,
@@ -421,62 +421,65 @@ class TestConnectorTaPulseWidth:
         write.assert_not_called()
 
 
-# ── Dark-frame skip delay (fixed 2400 µs at high exposure, #449) ─────────────
+# ── Dark-frame skip delay (pinned 2400 µs, every build — #449) ───────────────
 
 class TestDarkSkipConstant:
-    def test_fixed_skip_clears_the_whole_exposure_dropdown(self):
+    def test_pinned_skip_clears_the_whole_exposure_dropdown(self):
         # Max dropdown exposure is 2196 us; the displaced pulse starts at
         # delay(100) + skip and must clear it.
-        assert 100 + ALT_DARK_SKIP_DELAY_US >= 2196
+        assert 100 + DARK_SKIP_DELAY_US >= 2196
 
-    def test_fixed_skip_stays_above_the_rate_ll_floor(self):
+    def test_pinned_skip_stays_above_the_rate_ll_floor(self):
         # Post-dark inter-pulse gap = period - skip must exceed RATE_LL or the
-        # rate interlock latches (40 Hz timebase these experiments run at).
+        # rate interlock latches (40 Hz timebase).
         period_us = 1_000_000.0 / 40
-        assert period_us - ALT_DARK_SKIP_DELAY_US >= DARK_RATE_LOWER_LIMIT_US
+        assert period_us - DARK_SKIP_DELAY_US >= DARK_RATE_LOWER_LIMIT_US
 
-    def test_fixed_skip_is_above_baseline(self):
-        assert ALT_DARK_SKIP_DELAY_US > DARK_SKIP_BASELINE_US
+    def test_override_dict_pins_exactly_the_skip_key(self):
+        assert DEFAULT_TRIGGER_OVERRIDES == {
+            "LaserPulseSkipDelayUsec": DARK_SKIP_DELAY_US}
 
 
-class TestConnectorDarkSkip:
+class TestDarkSkipWiring:
+    """The pin rides MotionInterface's default_trigger_config (main.py) so
+    the SDK's own trigger re-send at scan start carries it too — a
+    connector-side patch after resolve is exactly what ScanWorkflow
+    silently reverted (how the 2026-08-10 dark contamination shipped)."""
+
+    def test_sdk_merge_resolves_to_the_pinned_skip(self):
+        # The real merge the MotionInterface constructor performs.
+        from omotion.config import merge_trigger_config
+        resolved = merge_trigger_config(DEFAULT_TRIGGER_OVERRIDES)
+        assert resolved["LaserPulseSkipDelayUsec"] == DARK_SKIP_DELAY_US
+
     def _trigger_setup(self, tmp_path, app_config):
+        # Interface stub mirrors main.py's wiring: the override is part of
+        # the resolved default, not patched in by the connector.
         from omotion.config import DEFAULT_TRIGGER_CONFIG
         c = _connector(tmp_path, app_config)
         c._interface.resolve_trigger_config.side_effect = (
-            lambda d: {**DEFAULT_TRIGGER_CONFIG, **d})
+            lambda d: {**DEFAULT_TRIGGER_CONFIG,
+                       **DEFAULT_TRIGGER_OVERRIDES, **d})
         sent = {}
         c._interface.console.set_trigger_json.side_effect = (
             lambda data=None: (sent.clear(), sent.update(data), dict(data))[-1])
         return c, sent
 
-    def test_feature_on_pins_the_fixed_skip(self, tmp_path):
-        c, sent = self._trigger_setup(tmp_path, {
-            "altCameraSettingsEnabled": True,
-            "altCameraExposureUs": 2097,
-            "altCameraGains": FW_GAINS,
-        })
+    def test_every_trigger_push_carries_the_pinned_skip(self, tmp_path):
+        c, sent = self._trigger_setup(tmp_path, {})
         c.setTrigger(json.dumps({"TriggerStatus": 2}))
-        assert sent["LaserPulseSkipDelayUsec"] == ALT_DARK_SKIP_DELAY_US
+        assert sent["LaserPulseSkipDelayUsec"] == DARK_SKIP_DELAY_US
 
-    def test_camera_settings_off_leaves_skip_baseline(self, tmp_path):
+    def test_clinical_build_carries_it_too(self, tmp_path):
+        # Deliberately unconditional: the SDK's 1800 default was an
+        # uncalibrated guess, not a clinical value anyone tuned — nothing
+        # anywhere preserves it.
         c, sent = self._trigger_setup(tmp_path, {
-            "altCameraSettingsEnabled": False,
-            "altCameraExposureUs": 2097,
-        })
-        c.setTrigger(json.dumps({"TriggerStatus": 2}))
-        assert sent["LaserPulseSkipDelayUsec"] == DARK_SKIP_BASELINE_US
-
-    def test_plain_clinical_build_leaves_skip_baseline(self, tmp_path):
-        c, sent = self._trigger_setup(tmp_path, {
-            "altCameraSettingsEnabled": True,
-            "altCameraExposureUs": 2097,
-            "altCameraGains": FW_GAINS,
             "clinicalMode": True,
             "engineeringMode": False,
         })
         c.setTrigger(json.dumps({"TriggerStatus": 2}))
-        assert sent["LaserPulseSkipDelayUsec"] == DARK_SKIP_BASELINE_US
+        assert sent["LaserPulseSkipDelayUsec"] == DARK_SKIP_DELAY_US
 
 
 # ── QML bridge (2026-08-10 crash regression) ─────────────────────────────────
