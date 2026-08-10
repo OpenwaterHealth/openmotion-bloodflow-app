@@ -324,8 +324,9 @@ def _find_item(root, object_name):
 def test_alt_camera_controls_gate_on_enable_toggle(modal_factory):
     """#446: the exposure + gain dropdowns stay greyed out until the
     'Enable Alternative camera settings?' toggle is on, and the exposure
-    list holds exactly the 234 valid 9 µs-row values (11–244 rows) with
-    the firmware default (648 µs = 72 rows) preselected."""
+    list holds the ~100 µs-spaced usability subset of valid 9 µs-row
+    values (22 targets snapped to whole rows + the 648 µs firmware
+    default = 23 entries) with the default preselected."""
     stub = modal_factory.stub
     stub.setFlags(clinical=False, engineering=True)
     stub.setAltCameraEnabled(False)
@@ -333,8 +334,8 @@ def test_alt_camera_controls_gate_on_enable_toggle(modal_factory):
 
     exposure = _find_item(modal, "altCameraExposureCombo")
     assert exposure is not None
-    assert exposure.property("count") == 234
-    assert exposure.property("displayText") == "648 µs"
+    assert exposure.property("count") == 23
+    assert exposure.property("displayText") == "648 µs (default)"
     assert exposure.property("enabled") is False
     for cam in (1, 8):
         gain = _find_item(modal, f"altCameraGainCombo{cam}")

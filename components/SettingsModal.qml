@@ -1340,18 +1340,41 @@ Item {
                             enabled: MotionInterface.appConfig.altCameraSettingsEnabled === true
                             // Only VALID exposures: the sensor's coarse
                             // exposure register counts whole 9 µs rows
-                            // (HTS 432 px / 48 MHz — see motion_config.py),
-                            // rows 11–244 ≈ 100–2200 µs.
+                            // (HTS 432 px / 48 MHz — see motion_config.py).
+                            // The dropdown offers a ~100 µs-spaced subset
+                            // (each target snapped to the nearest whole
+                            // row) plus the 648 µs firmware default; a
+                            // hand-edited config may hold any valid row
+                            // multiple — the connector validates against
+                            // the full row grid, not this list.
                             readonly property var exposureValues: {
-                                var v = []
-                                for (var r = 11; r <= 244; r++) v.push(r * 9)
+                                var v = [648]
+                                for (var n = 1; n <= 22; n++) {
+                                    var us = Math.round(n * 100 / 9) * 9
+                                    if (v.indexOf(us) === -1) v.push(us)
+                                }
+                                v.sort(function(a, b) { return a - b })
                                 return v
                             }
-                            model: exposureValues.map(function(us) { return us + " µs" })
+                            model: exposureValues.map(function(us) {
+                                return us + " µs" + (us === 648 ? " (default)" : "")
+                            })
+                            // Nearest entry to the configured value, so a
+                            // config value off this list (hand-edit, or
+                            // saved by an older build's finer list) still
+                            // shows something close rather than resetting
+                            // the display to the default.
                             currentIndex: {
-                                var idx = exposureValues.indexOf(
-                                    MotionInterface.appConfig.altCameraExposureUs)
-                                return idx >= 0 ? idx : exposureValues.indexOf(648)
+                                var us = MotionInterface.appConfig.altCameraExposureUs
+                                var best = exposureValues.indexOf(648)
+                                if (typeof us === "number" && isFinite(us)) {
+                                    var bestD = Infinity
+                                    for (var i = 0; i < exposureValues.length; i++) {
+                                        var d = Math.abs(exposureValues[i] - us)
+                                        if (d < bestD) { bestD = d; best = i }
+                                    }
+                                }
+                                return best
                             }
                             onActivated: MotionInterface.setConfig(
                                 "altCameraExposureUs", exposureValues[currentIndex])
@@ -1361,18 +1384,19 @@ Item {
 
                     // Per-position analog gain (cameras 1–8); one set applied
                     // to both sensor modules, like the firmware's own ladder.
-                    // Serpentine arrangement matching the sensor diagram in
-                    // ContactQualityModal: cameras run 1→4 down one column
-                    // and 5→8 back up the other, so the physical row pairs
-                    // are (1,8) (2,7) (3,6) (4,5) — which is also exactly
-                    // the symmetry of the firmware gain ladder.
+                    // Horizontal serpentine matching the sensor diagram in
+                    // ContactQualityModal (transposed): cameras run 1→4
+                    // across the top row and 5→8 back along the bottom, so
+                    // the column pairs are (1,8) (2,7) (3,6) (4,5) — which
+                    // is also exactly the symmetry of the firmware gain
+                    // ladder.
                     GridLayout {
                         Layout.fillWidth: true
-                        columns: 2
-                        columnSpacing: 28
+                        columns: 4
+                        columnSpacing: 14
                         rowSpacing: 8
                         Repeater {
-                            model: [1, 8, 2, 7, 3, 6, 4, 5]
+                            model: [1, 2, 3, 4, 8, 7, 6, 5]
                             delegate: ColumnLayout {
                                 id: gainCell
                                 // modelData = 1-based camera number; gains
