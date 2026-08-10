@@ -374,8 +374,7 @@ Item {
                             CameraDot { side: "left"; camIndex1: 5; modal: root; size: parent.cs }
 
                             Item {}
-                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
-                                color: "#FFD700"; border.color: "black"; border.width: 1 }
+                            LaserDot { size: parent.cs }
                             Item {}
                         }
                     }
@@ -420,8 +419,7 @@ Item {
                             CameraDot { side: "right"; camIndex1: 5; modal: root; size: parent.cs }
 
                             Item {}
-                            Rectangle { width: parent.cs; height: parent.cs; radius: parent.cs/2
-                                color: "#FFD700"; border.color: "black"; border.width: 1 }
+                            LaserDot { size: parent.cs }
                             Item {}
                         }
                     }

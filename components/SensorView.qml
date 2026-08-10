@@ -109,11 +109,7 @@ Rectangle {
 
             // Row 5 - Laser
             Item {}
-            Rectangle {
-                width: circleSize; height: circleSize; radius: circleSize/2
-                color: "#FFD700"  // Yellow laser
-                border.color: "black"; border.width: 1
-            }
+            LaserDot { size: circleSize }
             Item {}
         }
 
