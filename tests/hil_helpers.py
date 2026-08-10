@@ -16,8 +16,9 @@ Three categories so far:
   - **Modal handling**: ``dismiss_signal_quality_modal``, ``visible_modals``.
 
 ``SENSOR_OPTIONS`` is the canonical sensor-dropdown ordering used by both
-the scan-settings and scan-auto-stop tests; keep it in sync with the QML
-``SensorComboBox`` model if that list ever changes.
+the scan-settings and scan-auto-stop tests; keep it in sync with the
+``sensorPatterns`` model in ``components/ScanSettingsModal.qml`` if that
+list ever changes.
 """
 
 from __future__ import annotations
@@ -52,10 +53,12 @@ RE_CONNECTED    = re.compile(r"state \S+ -> CONNECTED")
 RE_DISCONNECTED = re.compile(r"state \S+ -> DISCONNECTED")
 
 # Sensor dropdown options in the order they appear in the QML model. Keep
-# this in sync with ``components/SensorComboBox.qml`` if the list changes.
+# this in sync with the ``sensorPatterns`` model in
+# ``components/ScanSettingsModal.qml`` if the list changes. "Custom" must
+# stay last (it doubles as the modal's customPatternIndex).
 SENSOR_OPTIONS = [
     "None", "Near", "Middle", "Far", "Outer",
-    "Left", "Right", "Third Row", "All",
+    "Left", "Right", "Third Row", "All", "Custom",
 ]
 
 # Sidebar (panel) button positions as fractions of the app window
