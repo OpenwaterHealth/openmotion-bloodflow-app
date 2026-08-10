@@ -20,6 +20,7 @@ from motion_config import (
     apply_camera_settings,
     camera_settings_from_config,
     laser_pulse_width_from_config,
+    ta_pulse_width_write,
 )
 from motion_connector import MotionConnector
 
@@ -325,6 +326,96 @@ class TestAltLaserPulseWidth:
         })
         c.setTrigger(json.dumps({"TriggerStatus": 2}))
         assert sent["LaserPulseWidthUsec"] == 300
+
+
+# ── TA_PULSE_WIDTH register write (the ACTUAL optical pulse, #449) ───────────
+
+class TestTaPulseWidthWrite:
+    def test_alternative_width_encodes_ticks_little_endian(self):
+        kwargs, ticks = ta_pulse_width_write(800)
+        assert ticks == 2500  # 800 µs / 0.32 µs per tick
+        assert kwargs["data"] == bytearray((2500).to_bytes(3, "little"))
+        # TA driver location per fpga_model.json.
+        assert kwargs["mux_index"] == 1
+        assert kwargs["channel"] == 4
+        assert kwargs["device_addr"] == 0x41
+        assert kwargs["reg_addr"] == 0
+
+    def test_ticks_track_the_032us_scale(self):
+        for us in (100, 500, 1000, 2200):
+            _, ticks = ta_pulse_width_write(us)
+            assert abs(ticks - us / 0.32) <= 1
+
+    def test_baseline_matches_bundled_laser_params(self):
+        """None → the laser_params.json TA_PULSE_WIDTH bytes (the restore
+        value): [27, 6, 0] LE = 1563 ticks ≈ 500.2 µs — the deployed value
+        that measures as the ~494 µs optical pulse."""
+        kwargs, ticks = ta_pulse_width_write(None)
+        assert kwargs["data"] == bytearray([27, 6, 0])
+        assert ticks == 1563
+
+
+class TestConnectorTaPulseWidth:
+    def _ta_setup(self, tmp_path, app_config, write_ok=True):
+        c = _connector(tmp_path, app_config)
+        c._interface.console.write_i2c_packet = MagicMock(return_value=write_ok)
+        return c, c._interface.console.write_i2c_packet
+
+    def test_disabled_and_clean_writes_nothing(self, tmp_path):
+        c, write = self._ta_setup(tmp_path, {})
+        c._apply_alt_ta_pulse_width()
+        write.assert_not_called()
+
+    def test_enabled_writes_ticks_and_sets_dirty(self, tmp_path):
+        c, write = self._ta_setup(tmp_path, {
+            "altLaserPulseWidthEnabled": True,
+            "altLaserPulseWidthUsec": 800,
+        })
+        c._apply_alt_ta_pulse_width()
+        write.assert_called_once()
+        kwargs = write.call_args.kwargs
+        assert kwargs["channel"] == 4
+        assert kwargs["data"] == bytearray((2500).to_bytes(3, "little"))
+        assert c._app_config["altLaserPulseWidthDirty"] is True
+
+    def test_disable_after_enable_restores_baseline_once(self, tmp_path):
+        c, write = self._ta_setup(tmp_path, {
+            "altLaserPulseWidthEnabled": False,
+            "altLaserPulseWidthDirty": True,
+        })
+        c._apply_alt_ta_pulse_width()
+        write.assert_called_once()
+        assert write.call_args.kwargs["data"] == bytearray([27, 6, 0])
+        assert c._app_config["altLaserPulseWidthDirty"] is False
+        write.reset_mock()
+        c._apply_alt_ta_pulse_width()  # second scan: nothing left to restore
+        write.assert_not_called()
+
+    def test_failed_restore_keeps_dirty_for_retry(self, tmp_path):
+        c, write = self._ta_setup(tmp_path, {
+            "altLaserPulseWidthEnabled": False,
+            "altLaserPulseWidthDirty": True,
+        }, write_ok=False)
+        c._apply_alt_ta_pulse_width()
+        assert c._app_config["altLaserPulseWidthDirty"] is True
+
+    def test_invalid_width_writes_nothing(self, tmp_path):
+        c, write = self._ta_setup(tmp_path, {
+            "altLaserPulseWidthEnabled": True,
+            "altLaserPulseWidthUsec": 2300,
+        })
+        c._apply_alt_ta_pulse_width()
+        write.assert_not_called()
+
+    def test_plain_clinical_build_writes_nothing(self, tmp_path):
+        c, write = self._ta_setup(tmp_path, {
+            "altLaserPulseWidthEnabled": True,
+            "altLaserPulseWidthUsec": 800,
+            "clinicalMode": True,
+            "engineeringMode": False,
+        })
+        c._apply_alt_ta_pulse_width()
+        write.assert_not_called()
 
 
 # ── QML bridge (2026-08-10 crash regression) ─────────────────────────────────

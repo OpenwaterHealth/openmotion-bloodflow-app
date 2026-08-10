@@ -49,6 +49,7 @@ from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
 from omotion.contact_quality import CQThresholds, ContactQualityMonitor
 from motion_config import (
     FW_DEFAULT_CAMERA_SETTINGS,
+    TA_PULSE_TICK_US,
     TEC_TRIP_MAX_C,
     TEC_TRIP_MIN_C,
     TecTripOutcome,
@@ -58,6 +59,7 @@ from motion_config import (
     laser_pulse_width_from_config,
     load_tec_voltage_params,
     select_tec_voltage,
+    ta_pulse_width_write,
 )
 import error_codes
 import bug_report
@@ -4100,10 +4102,78 @@ class MotionConnector(QObject):
         # unmissable in any log this scan appears in.
         logger.warning(
             "ALT LASER PULSE WIDTH ACTIVE (experiments only): %s -> %d µs "
-            "(optical pulse is driver-shaped at ~494 µs; stock safety "
-            "interlock latches above ~1000 µs)", old, width,
+            "(stock safety interlock latches above ~1000 µs)", old, width,
         )
         return trigger_data
+
+    def _apply_alt_ta_pulse_width(self):
+        """Write the TA driver FPGA's pulse_width register (#449).
+
+        This register — not the trigger config — shapes the optical
+        pulse: the TA driver edge-detects the console's laser trigger and
+        times the drive itself (driver_control.v), which is why
+        LaserPulseWidthUsec alone changed nothing on the bench
+        (2026-08-10: 500/700/1100 µs gates → identical means). The
+        setTrigger override stays purely so the console's echoed config
+        records the commanded width alongside the scan.
+
+        Same persistence shape as the camera registers: the TA FPGA holds
+        the value until console power-off or the next apply_laser_power
+        (console connect re-applies laser_params.json), so disabling the
+        toggle restores the laser_params baseline once via the persisted
+        ``altLaserPulseWidthDirty`` flag. Runs at scan start with the
+        trigger off. Fail-soft: a failed write logs and the scan
+        proceeds; a failed restore keeps the dirty flag for retry.
+        """
+        enabled = self._app_config.get("altLaserPulseWidthEnabled") is True
+        dirty = self._app_config.get("altLaserPulseWidthDirty") is True
+        if not enabled and not dirty:
+            return
+        if (self._app_config.get("clinicalMode", False)
+                and not self._app_config.get("engineeringMode", False)):
+            return  # same fail-closed gate as the trigger override
+        console = getattr(self._interface, "console", None)
+        if console is None:
+            return
+
+        if enabled:
+            width, reason = laser_pulse_width_from_config(
+                self._app_config.get("altLaserPulseWidthUsec"))
+            if width is None:
+                logger.warning(
+                    "Alternative laser pulse width enabled but invalid "
+                    "(%s); NOT writing TA_PULSE_WIDTH for this scan", reason
+                )
+                return
+            write_kwargs, ticks = ta_pulse_width_write(width)
+            label = f"{width} µs = {ticks} ticks (alternative)"
+        else:
+            write_kwargs, ticks = ta_pulse_width_write(None)
+            label = (f"{ticks * TA_PULSE_TICK_US:.1f} µs = {ticks} ticks "
+                     f"(laser_params baseline restore)")
+
+        try:
+            ok = console.write_i2c_packet(**write_kwargs) is not False
+        except Exception as e:
+            logger.warning("TA_PULSE_WIDTH write raised: %s", e)
+            ok = False
+        if ok:
+            # WARNING on purpose — this changes actual laser emission.
+            logger.warning("TA_PULSE_WIDTH WRITTEN: %s", label)
+        else:
+            logger.warning(
+                "TA_PULSE_WIDTH write FAILED (%s); laser drive keeps its "
+                "previous pulse width", label,
+            )
+
+        new_dirty = dirty
+        if enabled and ok:
+            new_dirty = True
+        elif not enabled and ok:
+            new_dirty = False
+        if new_dirty != dirty:
+            self._app_config["altLaserPulseWidthDirty"] = new_dirty
+            self._save_app_config()
 
     # --- CONSOLE COMMUNICATION METHODS ---
     @pyqtSlot()
@@ -4464,6 +4534,11 @@ class MotionConnector(QObject):
         # every time — or restore firmware defaults on the first scan after
         # the toggle was turned off. No-op when disabled and clean.
         self._apply_alt_camera_settings(left_camera_mask, right_camera_mask)
+
+        # #449: the TA driver FPGA times the optical pulse itself, so the
+        # alternative pulse width must be written to its pulse_width
+        # register — the setTrigger gate override alone is record-keeping.
+        self._apply_alt_ta_pulse_width()
 
         req = ScanRequest(
             subject_id=subject_id,

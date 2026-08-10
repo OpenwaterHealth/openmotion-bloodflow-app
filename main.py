@@ -145,6 +145,10 @@ def _load_app_config() -> dict:
         # Ignored on a plain clinical build.
         "altLaserPulseWidthEnabled": False,
         "altLaserPulseWidthUsec": 500,
+        # Internal (no UI): true while the TA driver's pulse_width register
+        # may hold an alternative value, so the first scan after disabling
+        # restores the laser_params.json baseline.
+        "altLaserPulseWidthDirty": False,
         "showBfiBvi": True,
         "bfiMin": 0.0,
         "bfiMax": 10.0,

@@ -251,6 +251,64 @@ LASER_PULSE_WIDTH_MIN_US = 100
 LASER_PULSE_WIDTH_MAX_US = 2200
 DEFAULT_LASER_PULSE_WIDTH_US = 500
 
+# The register that ACTUALLY shapes the optical pulse. The TA driver FPGA
+# edge-detects the console's laser trigger and times the drive pulse itself
+# (openmotion-ta-fpga driver_control.v: `pulse_count > pulse_width-55`), so
+# the trigger config's LaserPulseWidthUsec is only a start edge — bench-
+# proven 2026-08-10: 500/700/1100 µs gates → identical image means. The
+# pulse_width register is 24-bit at I2C 0x41, mux 1 ch 4, offset 0,
+# little-endian, 0.32 µs/tick (fpga_model.json "TA_PULSE_WIDTH");
+# laser_params.json ships [27, 6, 0] = 1563 ticks ≈ 500.2 µs, which is the
+# measured ~494 µs optical pulse. The seed stage runs CW (no width
+# register), so the TA drive width alone bounds emission.
+TA_PULSE_TICK_US = 0.32
+TA_PULSE_WIDTH_BASELINE_TICKS = 1563
+
+
+def ta_pulse_width_write(width_us=None):
+    """Build the I2C write that programs the TA driver's pulse_width.
+
+    ``width_us=None`` means "the laser_params.json baseline" (restore path).
+    Returns ``(write_kwargs, ticks)`` where ``write_kwargs`` feed
+    ``console.write_i2c_packet``. Never raises: the register location and
+    baseline resolve from the SDK's bundled fpga_model/laser_params when
+    available and fall back to the constants above (same data, hardcoded)
+    so a missing/renamed SDK entry can't break scan start.
+    """
+    entry = None
+    try:
+        from omotion.laser import FpgaMap
+        entry = FpgaMap().get_entry_by_friendly_name("TA_PULSE_WIDTH")
+    except Exception:
+        entry = None
+
+    if width_us is None:
+        data = None
+        try:
+            from omotion.laser import load_laser_params
+            for param in load_laser_params():
+                if param.get("friendlyName") == "TA_PULSE_WIDTH":
+                    data = bytearray(param["dataToSend"])
+                    break
+        except Exception:
+            data = None
+        if data is None:
+            data = bytearray(
+                TA_PULSE_WIDTH_BASELINE_TICKS.to_bytes(3, "little"))
+        ticks = int.from_bytes(bytes(data), "little")
+    else:
+        ticks = max(1, int(round(float(width_us) / TA_PULSE_TICK_US)))
+        data = bytearray(ticks.to_bytes(3, "little"))
+
+    write_kwargs = {
+        "mux_index": entry["mux_idx"] if entry else 1,
+        "channel": entry["channel"] if entry else 4,
+        "device_addr": entry["i2c_addr"] if entry else 0x41,
+        "reg_addr": entry["start_address"] if entry else 0,
+        "data": data,
+    }
+    return write_kwargs, ticks
+
 
 @dataclasses.dataclass(frozen=True)
 class CameraSettings:

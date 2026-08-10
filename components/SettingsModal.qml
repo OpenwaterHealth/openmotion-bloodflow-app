@@ -1470,13 +1470,16 @@ Item {
                         font.pixelSize: 11
                         color: AppTheme.accentYellow
                         text: qsTr("Experiments only — never for clinical scans. "
-                                   + "Applied to the trigger config at every scan "
-                                   + "setup while enabled. The stock safety "
-                                   + "interlock trips and latches above 1000 µs "
-                                   + "unless the safety config is adjusted first; "
-                                   + "the optical pulse is driver-shaped at "
-                                   + "~494 µs, so longer gates mostly add dark-"
-                                   + "current integration.")
+                                   + "Writes the TA driver's pulse-width register "
+                                   + "(the actual optical pulse) plus the trigger "
+                                   + "config at every scan start while enabled; "
+                                   + "turning it off restores the standard "
+                                   + "500 µs at the next scan start. The stock "
+                                   + "safety interlock trips and latches above "
+                                   + "1000 µs unless the safety config is "
+                                   + "adjusted first. Make sure the camera "
+                                   + "exposure covers the pulse (delay 100 µs "
+                                   + "+ width).")
                     }
 
                     FieldRow {
