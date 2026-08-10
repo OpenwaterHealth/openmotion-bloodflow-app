@@ -1361,19 +1361,24 @@ Item {
 
                     // Per-position analog gain (cameras 1–8); one set applied
                     // to both sensor modules, like the firmware's own ladder.
+                    // Serpentine arrangement matching the sensor diagram in
+                    // ContactQualityModal: cameras run 1→4 down one column
+                    // and 5→8 back up the other, so the physical row pairs
+                    // are (1,8) (2,7) (3,6) (4,5) — which is also exactly
+                    // the symmetry of the firmware gain ladder.
                     GridLayout {
                         Layout.fillWidth: true
-                        columns: 4
-                        columnSpacing: 14
+                        columns: 2
+                        columnSpacing: 28
                         rowSpacing: 8
                         Repeater {
-                            model: 8
+                            model: [1, 8, 2, 7, 3, 6, 4, 5]
                             delegate: ColumnLayout {
                                 id: gainCell
-                                // Repeater-injected context property; array
-                                // position == camera number - 1 (same
+                                // modelData = 1-based camera number; gains
+                                // array position == camera number - 1 (same
                                 // convention as the ft_*_per_camera arrays).
-                                readonly property int camIdx: index
+                                readonly property int camIdx: modelData - 1
                                 spacing: 2
                                 Text {
                                     text: "Camera " + (gainCell.camIdx + 1) + " gain"

@@ -10,6 +10,7 @@ from PyQt6.QtCore import (
     QMetaObject,
     Qt,
 )
+from PyQt6.QtQml import QJSValue
 from pathlib import Path
 from typing import NamedTuple, Optional
 import itertools
@@ -3255,6 +3256,12 @@ class MotionConnector(QObject):
     @pyqtSlot(str, 'QVariant')
     def setConfig(self, key: str, value):
         """Update a single config key, persist to disk, and notify QML."""
+        # QML arrays/objects reach 'QVariant' slots as QJSValue, which is
+        # not JSON-serializable — the first array-valued key (#446's
+        # altCameraGains) crashed the app inside save_overrides. Unwrap to
+        # plain Python at the bridge, once, for every caller.
+        if isinstance(value, QJSValue):
+            value = value.toVariant()
         old = self._app_config.get(key)
         self._app_config[key] = value
         self._save_app_config()
@@ -3269,6 +3276,12 @@ class MotionConnector(QObject):
     @pyqtSlot('QVariantMap')
     def saveConfigs(self, configs: dict):
         """Update multiple config keys at once, persist to disk, and notify QML."""
+        # Same QJSValue unwrap as setConfig — a QVariantMap converts its
+        # top level, but array/object VALUES still arrive as QJSValue.
+        configs = {
+            k: (v.toVariant() if isinstance(v, QJSValue) else v)
+            for k, v in configs.items()
+        }
         changes = {}
         for k, v in configs.items():
             old = self._app_config.get(k)

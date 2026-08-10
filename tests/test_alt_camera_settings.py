@@ -225,3 +225,40 @@ class TestConnectorApply:
         c._interface.left = FakeSensor(fail_regs={0x3502})
         c._apply_alt_camera_settings(0x01, 0x00)
         assert c._app_config["altCameraSettingsDirty"] is True
+
+
+# ── QML bridge (2026-08-10 crash regression) ─────────────────────────────────
+
+class TestQmlBridge:
+    def test_qjsvalue_gains_array_unwrapped_and_persistable(self, tmp_path):
+        """A QML JS array reaches setConfig as a QJSValue (not a list);
+        unwrapped it must store as a plain list that json can dump (the
+        crash path was save_overrides -> json.dump) and that the
+        scan-start validation accepts."""
+        import json as _json
+
+        from PyQt6.QtCore import QCoreApplication
+        from PyQt6.QtQml import QJSEngine
+
+        if QCoreApplication.instance() is None:
+            # Keep a module-level ref so the app object outlives the test.
+            global _qt_app
+            _qt_app = QCoreApplication([])
+
+        c = _connector(tmp_path, {
+            "altCameraSettingsEnabled": True,
+            "altCameraExposureUs": 747,
+        })
+        engine = QJSEngine()
+        arr = engine.newArray(8)
+        for i, g in enumerate([16, 4, 2, 1, 1, 2, 4, 8]):
+            arr.setProperty(i, g)
+
+        c.setConfig("altCameraGains", arr)
+
+        stored = c._app_config["altCameraGains"]
+        assert isinstance(stored, list)
+        _json.dumps(stored)  # must not raise
+        settings, reason = camera_settings_from_config(747, stored)
+        assert reason == ""
+        assert settings.gains == (16, 4, 2, 1, 1, 2, 4, 8)
