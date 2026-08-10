@@ -124,6 +124,19 @@ def _load_app_config() -> dict:
         "rightMask": 0x66,
         "uncorrectedOnly": False,
         "engineeringMode": False,
+        # Alternative camera settings (#446, Settings → Engineering →
+        # Camera settings). When enabled, exposure + per-camera analog gain
+        # are written via the SDK to every scanned camera just before each
+        # scan starts. Defaults mirror what the sensor firmware itself
+        # programs (X02C1B_Sensor_Config.h: 72 rows × 9 µs = 648 µs;
+        # X02C1B_configure_sensor per-position gain ladder). Valid exposures
+        # are whole 9 µs rows in 99–2196 µs; valid gains 1/2/4/8/16.
+        "altCameraSettingsEnabled": False,
+        "altCameraExposureUs": 648,
+        "altCameraGains": [16, 4, 2, 1, 1, 2, 4, 16],
+        # Internal (no UI): true while camera registers may hold alternative
+        # values, so the first scan after disabling restores fw defaults.
+        "altCameraSettingsDirty": False,
         "showBfiBvi": True,
         "bfiMin": 0.0,
         "bfiMax": 10.0,

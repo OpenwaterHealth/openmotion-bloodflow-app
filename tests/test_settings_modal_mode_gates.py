@@ -84,12 +84,18 @@ class _StubMotionInterface(QObject):
         self._engineering = bool(engineering)
         self.appConfigChanged.emit()
 
+    def setAltCameraEnabled(self, enabled: bool):
+        self._alt_camera_enabled = bool(enabled)
+        self.appConfigChanged.emit()
+
     @pyqtProperty("QVariantMap", notify=appConfigChanged)
     def appConfig(self):
         return {
             "engineeringMode": self._engineering,
             "clinicalMode": self._clinical,
             "darkMode": True,
+            "altCameraSettingsEnabled": getattr(
+                self, "_alt_camera_enabled", False),
         }
 
     # ── open()/close() dependencies ──────────────────────────────────
@@ -297,6 +303,49 @@ def test_engineering_card_follows_engineering_flag(modal_factory):
     # Live flip — the same path the runtime unlock/disable exercises.
     modal_factory.stub.setFlags(clinical=False, engineering=False)
     assert _card_visible(modal, "Engineering") is False
+
+
+def _find_item(root, object_name):
+    """Find a named QQuickItem by walking the VISUAL tree.
+
+    findChild() only traverses QObject parentage, which misses
+    Repeater-created delegates (their parent is the visual container,
+    not the component root) — e.g. the per-camera gain combos (#446).
+    """
+    if root.objectName() == object_name:
+        return root
+    for child in root.childItems():
+        found = _find_item(child, object_name)
+        if found is not None:
+            return found
+    return None
+
+
+def test_alt_camera_controls_gate_on_enable_toggle(modal_factory):
+    """#446: the exposure + gain dropdowns stay greyed out until the
+    'Enable Alternative camera settings?' toggle is on, and the exposure
+    list holds exactly the 234 valid 9 µs-row values (11–244 rows) with
+    the firmware default (648 µs = 72 rows) preselected."""
+    stub = modal_factory.stub
+    stub.setFlags(clinical=False, engineering=True)
+    stub.setAltCameraEnabled(False)
+    modal = modal_factory()
+
+    exposure = _find_item(modal, "altCameraExposureCombo")
+    assert exposure is not None
+    assert exposure.property("count") == 234
+    assert exposure.property("displayText") == "648 µs"
+    assert exposure.property("enabled") is False
+    for cam in (1, 8):
+        gain = _find_item(modal, f"altCameraGainCombo{cam}")
+        assert gain is not None, f"gain combo {cam} not instantiated"
+        assert gain.property("count") == 5
+        assert gain.property("enabled") is False
+
+    stub.setAltCameraEnabled(True)
+    assert exposure.property("enabled") is True
+    assert _find_item(
+        modal, "altCameraGainCombo8").property("enabled") is True
 
 
 def test_close_never_persists_clinical_mode(modal_factory):

@@ -47,9 +47,12 @@ from omotion.MotionProcessing import process_bin_file
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
 from omotion.contact_quality import CQThresholds, ContactQualityMonitor
 from motion_config import (
+    FW_DEFAULT_CAMERA_SETTINGS,
     TEC_TRIP_MAX_C,
     TEC_TRIP_MIN_C,
     TecTripOutcome,
+    apply_camera_settings,
+    camera_settings_from_config,
     ensure_tec_trip,
     load_tec_voltage_params,
     select_tec_voltage,
@@ -3954,6 +3957,92 @@ class MotionConnector(QObject):
         suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
         return f"ow{suffix}"
 
+    def _apply_alt_camera_settings(self, left_mask: int, right_mask: int):
+        """Write the Engineering-mode alternative camera settings (#446).
+
+        Runs just before every scan start, after the scan flow's
+        configure/CQ/trigger-config steps — so the writes land on
+        configured, idle cameras and are re-asserted every scan (a camera
+        power-cycle between scans silently reverts registers to firmware
+        defaults; OW_CAMERA_SET_CONFIG skips already-configured cameras,
+        so nothing else rewrites them mid-session).
+
+        Camera registers persist until the camera loses power, so turning
+        the toggle OFF must actively restore the firmware defaults: the
+        persisted ``altCameraSettingsDirty`` flag makes the first scan
+        after disabling write the firmware values back once (redundant but
+        harmless if the cameras were really power-cycled meanwhile).
+
+        Fail-soft throughout: a failed write logs and the scan proceeds —
+        this is an engineering lever, not a scan gate.
+        """
+        enabled = self._app_config.get("altCameraSettingsEnabled") is True
+        dirty = self._app_config.get("altCameraSettingsDirty") is True
+        if not enabled and not dirty:
+            return
+
+        if enabled:
+            settings, reason = camera_settings_from_config(
+                self._app_config.get("altCameraExposureUs"),
+                self._app_config.get("altCameraGains"),
+            )
+            if settings is None:
+                logger.warning(
+                    "Alternative camera settings enabled but invalid (%s); "
+                    "NOT writing camera registers for this scan", reason
+                )
+                return
+            label = "alternative"
+        else:
+            settings = FW_DEFAULT_CAMERA_SETTINGS
+            label = "firmware-default restore"
+
+        t0 = time.monotonic()
+        failures = []
+        wrote_any = False
+        for side, mask, connected in (
+            ("left", left_mask, self._leftSensorConnected),
+            ("right", right_mask, self._rightSensorConnected),
+        ):
+            if not connected or not mask:
+                continue
+            sensor = getattr(self._interface, side, None)
+            if sensor is None:
+                continue
+            wrote_any = True
+            failures.extend(
+                f"{side} {f}"
+                for f in apply_camera_settings(sensor, mask, settings)
+            )
+        logger.info(
+            "Camera settings (%s): exposure %d rows (%g us), gains %s -> "
+            "left=0x%02X right=0x%02X in %.0f ms",
+            label, settings.exposure_rows, settings.exposure_us,
+            list(settings.gains), left_mask, right_mask,
+            (time.monotonic() - t0) * 1000.0,
+        )
+        if failures:
+            logger.warning(
+                "Camera settings: %d register write(s) failed: %s",
+                len(failures), "; ".join(failures),
+            )
+
+        # Dirty bookkeeping, persisted so an app restart can't strand stale
+        # registers. Enabled + wrote → registers differ from firmware
+        # defaults. Restore pass with zero failures → clean (a module that
+        # wasn't connected lost camera power with its USB, which reset its
+        # registers anyway); any failure keeps dirty so the next scan
+        # retries the restore.
+        if enabled and wrote_any:
+            new_dirty = True
+        elif not enabled and not failures:
+            new_dirty = False
+        else:
+            new_dirty = dirty
+        if new_dirty != dirty:
+            self._app_config["altCameraSettingsDirty"] = new_dirty
+            self._save_app_config()
+
     # --- CONSOLE COMMUNICATION METHODS ---
     @pyqtSlot()
     def queryConsoleInfo(self):
@@ -4307,6 +4396,12 @@ class MotionConnector(QObject):
             "cq_live_activate_frames", _CQ_DEFAULT_LIVE_ACTIVATE_FRAMES)
         _cq_light_clear = _cq_int_or(
             "cq_live_clear_frames", _CQ_DEFAULT_LIVE_CLEAR_FRAMES)
+
+        # Engineering-mode alternative camera settings (#446): write exposure
+        # + per-camera analog gain via the SDK just before the scan starts,
+        # every time — or restore firmware defaults on the first scan after
+        # the toggle was turned off. No-op when disabled and clean.
+        self._apply_alt_camera_settings(left_camera_mask, right_camera_mask)
 
         req = ScanRequest(
             subject_id=subject_id,

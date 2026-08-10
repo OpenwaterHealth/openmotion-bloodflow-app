@@ -210,3 +210,128 @@ def ensure_tec_trip(console, temp_c) -> TecTripOutcome:
     if result is None:
         return TecTripOutcome.FAILED
     return TecTripOutcome.WROTE
+
+
+# --- Alternative camera settings (issue #446) ---------------------------------
+# OX02C1B register model (datasheet OX02C1S/OX02C1B a-CSP DS 1.0, table A-14;
+# exposure math per OmniVision's OX02C10_CalcSheet_HTS-VTS-EXP.xlsx):
+#
+# - Coarse exposure {0x3501,0x3502} is in whole rows; one row (Tline) =
+#   HTS / VT_PIXCLK. The deployed sensor-fw timing config
+#   (X02C1B_Sensor_Config.h: HTS 0x01B0 = 432 px, VT_PIXCLK 48 MHz) gives
+#   Tline = 9.0 us exactly — so the only VALID exposures are multiples of 9 us.
+# - Analog ("real") gain is {0x3508[4:0],0x3509[7:4]} / 16, so writing
+#   0x3508 = N with 0x3509 = 0 gives exactly N.0x. Digital gain (0x350A-C)
+#   is deliberately never touched and stays at the firmware's 1.000x.
+#
+# Firmware defaults mirrored here (what the sensor firmware itself programs,
+# and what app_config.json ships as the alternative-settings defaults):
+# exposure 72 rows = 648 us (X02C1B_SENSOR_CONFIG), analog gain by array
+# position 16/4/2/1/1/2/4/16 (X02C1B_configure_sensor's per-camera ladder).
+CAMERA_EXPOSURE_ROW_US = 9.0
+CAMERA_EXPOSURE_MIN_ROWS = 11    # 99 us  (~100 us)
+CAMERA_EXPOSURE_MAX_ROWS = 244   # 2196 us (~2200 us)
+CAMERA_GAIN_CHOICES = (1, 2, 4, 8, 16)
+
+FW_DEFAULT_EXPOSURE_US = 648
+FW_DEFAULT_CAMERA_GAINS = (16, 4, 2, 1, 1, 2, 4, 16)
+
+
+@dataclasses.dataclass(frozen=True)
+class CameraSettings:
+    """A validated exposure + per-position analog gain set for one module."""
+
+    exposure_rows: int      # coarse exposure register value (rows)
+    gains: tuple            # 8 analog gains, index = camera position 0..7
+
+    @property
+    def exposure_us(self) -> float:
+        return self.exposure_rows * CAMERA_EXPOSURE_ROW_US
+
+
+FW_DEFAULT_CAMERA_SETTINGS = CameraSettings(
+    exposure_rows=int(FW_DEFAULT_EXPOSURE_US / CAMERA_EXPOSURE_ROW_US),
+    gains=FW_DEFAULT_CAMERA_GAINS,
+)
+
+
+def camera_settings_from_config(exposure_us, gains):
+    """Validate config values into a CameraSettings.
+
+    Returns ``(settings, "")`` or ``(None, reason)``; never raises and never
+    logs (the caller owns logging). Fail direction is "don't write": a
+    malformed hand-edited config must not guess at laser-scan camera state.
+
+    ``exposure_us`` is snapped to the nearest whole row (so 650 from a
+    hand-edit still lands on the valid 648) but rejected outside the
+    [MIN_ROWS, MAX_ROWS] window. ``gains`` must be exactly 8 values, each an
+    integral number from CAMERA_GAIN_CHOICES (bools rejected).
+    """
+    try:
+        rows = round(float(exposure_us) / CAMERA_EXPOSURE_ROW_US)
+    except (TypeError, ValueError):
+        return None, f"exposure {exposure_us!r} is not a number"
+    if not (CAMERA_EXPOSURE_MIN_ROWS <= rows <= CAMERA_EXPOSURE_MAX_ROWS):
+        return None, (
+            f"exposure {exposure_us!r} us is outside the valid "
+            f"{CAMERA_EXPOSURE_MIN_ROWS * CAMERA_EXPOSURE_ROW_US:g}-"
+            f"{CAMERA_EXPOSURE_MAX_ROWS * CAMERA_EXPOSURE_ROW_US:g} us window"
+        )
+
+    if not isinstance(gains, (list, tuple)) or len(gains) != 8:
+        return None, f"gains {gains!r} is not an 8-element list"
+    clean = []
+    for i, g in enumerate(gains):
+        # bool is an int subclass; `true` in a hand-edited JSON must not
+        # become gain 1.
+        if isinstance(g, bool) or not isinstance(g, (int, float)) or g != int(g):
+            return None, f"camera {i + 1} gain {g!r} is not a valid gain"
+        if int(g) not in CAMERA_GAIN_CHOICES:
+            return None, (
+                f"camera {i + 1} gain {g!r} is not one of "
+                f"{list(CAMERA_GAIN_CHOICES)}"
+            )
+        clean.append(int(g))
+    return CameraSettings(exposure_rows=int(rows), gains=tuple(clean)), ""
+
+
+def apply_camera_settings(sensor, camera_mask: int, settings: CameraSettings):
+    """Write exposure + analog gain to every camera in ``camera_mask``.
+
+    Uses the SDK's I2C passthrough (mux switch + register writes) — the same
+    path the firmware's own configure uses, so values land exactly like the
+    firmware defaults do. Writes happen while the trigger is off; the
+    pipeline's warmup-frame discard absorbs the sensor's N+2-frame register
+    latch when streaming resumes.
+
+    Returns a list of failure strings (empty = all cameras written). Never
+    raises; a failed camera is recorded and the rest still get written.
+    """
+    from omotion.i2c_packet import I2C_Packet
+
+    failures = []
+    exp_hi = (settings.exposure_rows >> 8) & 0xFF
+    exp_lo = settings.exposure_rows & 0xFF
+    for cam_id in range(8):
+        if not (camera_mask & (1 << cam_id)):
+            continue
+        regs = (
+            (0x3501, exp_hi),                   # coarse exposure MSB (rows)
+            (0x3502, exp_lo),                   # coarse exposure LSB
+            (0x3508, settings.gains[cam_id]),   # real gain = code/16, MSB
+            (0x3509, 0x00),                     # real gain LSB (fractional)
+        )
+        try:
+            # Mux reads clear the selection, so always re-switch per camera.
+            sensor.switch_camera(cam_id)
+            for reg, value in regs:
+                ok = sensor.camera_i2c_write(
+                    I2C_Packet(
+                        device_address=0x36, register_address=reg, data=value
+                    )
+                )
+                if ok is False:
+                    failures.append(f"camera {cam_id + 1} reg 0x{reg:04X}")
+        except Exception as e:
+            failures.append(f"camera {cam_id + 1}: {e}")
+    return failures
