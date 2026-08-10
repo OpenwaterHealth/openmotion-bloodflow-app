@@ -16,12 +16,12 @@ from unittest.mock import MagicMock
 import pytest
 
 from motion_config import (
+    ALT_DARK_SKIP_DELAY_US,
     DARK_RATE_LOWER_LIMIT_US,
     DARK_SKIP_BASELINE_US,
     FW_DEFAULT_CAMERA_SETTINGS,
     apply_camera_settings,
     camera_settings_from_config,
-    dark_safe_skip_delay_us,
     laser_pulse_width_from_config,
     ta_pulse_width_write,
 )
@@ -421,48 +421,22 @@ class TestConnectorTaPulseWidth:
         write.assert_not_called()
 
 
-# ── Dark-frame skip-delay scaling (clean darks at high exposure, #449) ───────
+# ── Dark-frame skip delay (fixed 2400 µs at high exposure, #449) ─────────────
 
-class TestDarkSkipDelay:
-    def test_default_exposure_keeps_baseline(self):
-        # Stock ~648 us exposure: 1800 us skip already clears it.
-        skip, warn = dark_safe_skip_delay_us(648, pulse_delay_us=100, freq_hz=40)
-        assert skip == DARK_SKIP_BASELINE_US
-        assert warn is None
+class TestDarkSkipConstant:
+    def test_fixed_skip_clears_the_whole_exposure_dropdown(self):
+        # Max dropdown exposure is 2196 us; the displaced pulse starts at
+        # delay(100) + skip and must clear it.
+        assert 100 + ALT_DARK_SKIP_DELAY_US >= 2196
 
-    def test_moderate_high_exposure_never_below_baseline(self):
-        # 1098 us exposure (an earlier clean run) still needs no more than base.
-        skip, _ = dark_safe_skip_delay_us(1098, 100, 40)
-        assert skip == DARK_SKIP_BASELINE_US
-
-    def test_high_exposure_raises_skip_to_clear_the_window(self):
-        # 2097 us exposure (the contaminated run) → pulse start must exceed it.
-        skip, warn = dark_safe_skip_delay_us(2097, 100, 40)
-        assert warn is None
-        assert 100 + skip >= 2097          # displaced pulse clears the window
-        assert skip > DARK_SKIP_BASELINE_US
-
-    def test_max_ui_exposure_still_rate_ll_safe(self):
-        # Max dropdown exposure (2196 us): clears the window AND the post-dark
-        # gap (period - skip) stays above the RATE_LL floor — no latch.
-        skip, warn = dark_safe_skip_delay_us(2196, 100, 40)
-        assert warn is None
-        assert 100 + skip >= 2196
+    def test_fixed_skip_stays_above_the_rate_ll_floor(self):
+        # Post-dark inter-pulse gap = period - skip must exceed RATE_LL or the
+        # rate interlock latches (40 Hz timebase these experiments run at).
         period_us = 1_000_000.0 / 40
-        assert period_us - skip >= DARK_RATE_LOWER_LIMIT_US
+        assert period_us - ALT_DARK_SKIP_DELAY_US >= DARK_RATE_LOWER_LIMIT_US
 
-    def test_beyond_ceiling_clamps_and_warns(self):
-        # A hand-edited exposure past what RATE_LL allows: clamp + warn, never
-        # a skip that would trip the latch.
-        skip, warn = dark_safe_skip_delay_us(3000, 100, 40)
-        assert warn is not None
-        period_us = 1_000_000.0 / 40
-        assert period_us - skip >= DARK_RATE_LOWER_LIMIT_US
-
-    def test_non_40hz_keeps_baseline_with_warning(self):
-        skip, warn = dark_safe_skip_delay_us(2097, 100, 60)
-        assert skip == DARK_SKIP_BASELINE_US
-        assert warn is not None
+    def test_fixed_skip_is_above_baseline(self):
+        assert ALT_DARK_SKIP_DELAY_US > DARK_SKIP_BASELINE_US
 
 
 class TestConnectorDarkSkip:
@@ -476,24 +450,14 @@ class TestConnectorDarkSkip:
             lambda data=None: (sent.clear(), sent.update(data), dict(data))[-1])
         return c, sent
 
-    def test_default_exposure_leaves_skip_untouched(self, tmp_path):
-        c, sent = self._trigger_setup(tmp_path, {
-            "altCameraSettingsEnabled": True,
-            "altCameraExposureUs": 648,
-            "altCameraGains": FW_GAINS,
-        })
-        c.setTrigger(json.dumps({"TriggerStatus": 2}))
-        assert sent["LaserPulseSkipDelayUsec"] == DARK_SKIP_BASELINE_US
-
-    def test_high_exposure_scales_skip(self, tmp_path):
+    def test_feature_on_pins_the_fixed_skip(self, tmp_path):
         c, sent = self._trigger_setup(tmp_path, {
             "altCameraSettingsEnabled": True,
             "altCameraExposureUs": 2097,
             "altCameraGains": FW_GAINS,
         })
         c.setTrigger(json.dumps({"TriggerStatus": 2}))
-        assert sent["LaserPulseSkipDelayUsec"] > DARK_SKIP_BASELINE_US
-        assert 100 + sent["LaserPulseSkipDelayUsec"] >= 2097
+        assert sent["LaserPulseSkipDelayUsec"] == ALT_DARK_SKIP_DELAY_US
 
     def test_camera_settings_off_leaves_skip_baseline(self, tmp_path):
         c, sent = self._trigger_setup(tmp_path, {

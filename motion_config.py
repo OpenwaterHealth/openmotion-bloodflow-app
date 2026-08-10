@@ -264,7 +264,7 @@ DEFAULT_LASER_PULSE_WIDTH_US = 500
 TA_PULSE_TICK_US = 0.32
 TA_PULSE_WIDTH_BASELINE_TICKS = 1563
 
-# --- Dark-frame skip-delay scaling (clean darks at high exposure, #449) --------
+# --- Dark-frame skip delay (clean darks at high exposure, #449) ---------------
 # A scheduled dark frame isn't laser-off: the console firmware DISPLACES the
 # pulse later by LaserPulseSkipDelayUsec so it lands outside the exposure
 # window (console-fw trigger.c: long_lsync_arr = laserPulseDelayUsec +
@@ -277,60 +277,16 @@ TA_PULSE_WIDTH_BASELINE_TICKS = 1563
 # laser-off dark clean at 128 DN, scheduled darks 143-185 DN in proportion to
 # each camera's brightness).
 #
-# Fix: raise LaserPulseSkipDelayUsec so pulse_start (= delay + skip) clears the
-# exposure end. Hard ceiling = the still-armed RATE_LL laser-safety floor: a
-# dark frame shortens the following inter-pulse gap to (period - skip), and if
-# that drops below RATE_LL the safety FPGA trips and LATCHES until a console
-# power-cycle. So skip <= period - RATE_LL - margin.
+# When the alternative camera exposure is in use we just pin the skip to a
+# single fixed value that clears the whole exposure dropdown (max 2196 us →
+# pulse start 2500 us) in one shot. The bound is the still-armed RATE_LL
+# laser-safety floor: a dark frame shortens the following inter-pulse gap to
+# (period - skip), and if that drops below RATE_LL the safety FPGA trips and
+# LATCHES until a console power-cycle. At the 40 Hz timebase these experiments
+# run at: gap = 25000 - 2400 = 22600 us, 100 us above the 22500 us floor.
 DARK_RATE_LOWER_LIMIT_US = 22500      # EE/OPT_RATE_LL, deployed laser_params
 DARK_SKIP_BASELINE_US = 1800          # shipped LaserPulseSkipDelayUsec
-DARK_SKIP_CLEAR_MARGIN_US = 30        # push pulse start just past exposure end
-DARK_SKIP_RATE_MARGIN_US = 300        # keep clear of the RATE_LL trip
-DARK_SKIP_SUPPORTED_FREQ_HZ = 40.0    # scaling math assumes the 40 Hz timebase
-
-
-def dark_safe_skip_delay_us(exposure_us, pulse_delay_us=100, freq_hz=40.0):
-    """Smallest LaserPulseSkipDelayUsec that keeps scheduled dark frames clean.
-
-    Returns ``(skip_us, warning_or_None)``; never raises. ``skip_us`` is the
-    displacement that puts the dark-frame pulse start (delay + skip) just past
-    the exposure window, clamped to:
-      - never below the shipped 1800 us baseline, and
-      - never above the RATE_LL-safe ceiling (period - RATE_LL - margin), so it
-        can't trip the latching rate interlock.
-    If the exposure is so long that clearing it would breach the ceiling, the
-    skip is clamped to the ceiling and a warning string is returned (darks may
-    still be marginally contaminated — the operator should lower the exposure).
-    Only the 40 Hz timebase is supported; other rates return the baseline with
-    a warning (the 60 Hz path scales RATE_LL/skip separately in the SDK).
-    """
-    try:
-        exposure = float(exposure_us)
-        delay = float(pulse_delay_us)
-        freq = float(freq_hz)
-    except (TypeError, ValueError):
-        return DARK_SKIP_BASELINE_US, "non-numeric input; keeping baseline skip"
-
-    if abs(freq - DARK_SKIP_SUPPORTED_FREQ_HZ) > 1.0:
-        return (DARK_SKIP_BASELINE_US,
-                f"dark-skip scaling only supported at "
-                f"{DARK_SKIP_SUPPORTED_FREQ_HZ:g} Hz (got {freq:g}); "
-                f"keeping baseline skip")
-
-    period_us = 1_000_000.0 / freq
-    ceiling = period_us - DARK_RATE_LOWER_LIMIT_US - DARK_SKIP_RATE_MARGIN_US
-    needed = exposure - delay + DARK_SKIP_CLEAR_MARGIN_US
-
-    skip = max(DARK_SKIP_BASELINE_US, needed)
-    warning = None
-    if skip > ceiling:
-        warning = (
-            f"exposure {exposure:.0f} us needs skip {skip:.0f} us to clear the "
-            f"dark frame, but the RATE_LL floor caps it at {ceiling:.0f} us — "
-            f"dark frames may stay slightly contaminated; lower the exposure"
-        )
-        skip = ceiling
-    return int(round(skip)), warning
+ALT_DARK_SKIP_DELAY_US = 2400         # fixed skip when alt camera exposure is on
 
 
 def ta_pulse_width_write(width_us=None):

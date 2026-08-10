@@ -48,6 +48,7 @@ from omotion.MotionProcessing import process_bin_file
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
 from omotion.contact_quality import CQThresholds, ContactQualityMonitor
 from motion_config import (
+    ALT_DARK_SKIP_DELAY_US,
     DARK_SKIP_BASELINE_US,
     FW_DEFAULT_CAMERA_SETTINGS,
     TA_PULSE_TICK_US,
@@ -56,7 +57,6 @@ from motion_config import (
     TecTripOutcome,
     apply_camera_settings,
     camera_settings_from_config,
-    dark_safe_skip_delay_us,
     ensure_tec_trip,
     laser_pulse_width_from_config,
     load_tec_voltage_params,
@@ -4109,23 +4109,24 @@ class MotionConnector(QObject):
         return trigger_data
 
     def _apply_alt_dark_skip_delay(self, trigger_data: dict) -> dict:
-        """Scale LaserPulseSkipDelayUsec so scheduled dark frames stay clean
-        at the alternative camera exposure (#449).
+        """Pin LaserPulseSkipDelayUsec to a fixed value that keeps scheduled
+        dark frames laser-free across the whole alternative-exposure range
+        (#449).
 
         A scheduled dark frame displaces the laser pulse to start at
         ``LaserPulseDelayUsec + LaserPulseSkipDelayUsec``; the shipped 1800 µs
         clears the stock ~648 µs exposure but not the larger alternative
         exposures, so the displaced pulse leaks back into the integration
-        window and contaminates the dark reference. This raises the skip just
-        enough to clear the exposure, clamped below the latching RATE_LL floor.
+        window and contaminates the dark reference. A single fixed 2400 µs
+        skip (pulse start 2500 µs) clears the entire exposure dropdown (max
+        2196 µs) in one shot and still sits above the latching RATE_LL floor
+        (post-dark gap 25000 − 2400 = 22600 µs > 22500 µs).
 
-        Driven by the CAMERA exposure (not the laser toggle) — the
+        Driven by the CAMERA exposure feature (not the laser toggle) — the
         contamination is purely exposure-vs-skip; the laser pulse width is
-        irrelevant since only the pulse's START position matters. So this
-        gates on ``altCameraSettingsEnabled`` and no-ops when the exposure is
-        the firmware default. No restore path is needed (the trigger config
-        re-resolves from SDK defaults each push). Fail-closed on a plain
-        clinical build, same as the width override.
+        irrelevant since only the pulse's START position matters. Gated on
+        ``altCameraSettingsEnabled``; clinical fail-closed; no restore path
+        (the trigger config re-resolves from SDK defaults each push).
         """
         if self._app_config.get("altCameraSettingsEnabled") is not True:
             return trigger_data
@@ -4133,32 +4134,16 @@ class MotionConnector(QObject):
                 and not self._app_config.get("engineeringMode", False)):
             return trigger_data
 
-        settings, reason = camera_settings_from_config(
-            self._app_config.get("altCameraExposureUs"),
-            self._app_config.get("altCameraGains"),
-        )
-        if settings is None:
-            # Invalid exposure — the camera-settings path already logs and
-            # skips its own write; don't touch the dark-frame timing either.
+        current = trigger_data.get("LaserPulseSkipDelayUsec", DARK_SKIP_BASELINE_US)
+        if ALT_DARK_SKIP_DELAY_US == current:
             return trigger_data
 
-        freq = trigger_data.get("TriggerFrequencyHz", 40.0)
-        delay = trigger_data.get("LaserPulseDelayUsec", 100)
-        current = trigger_data.get("LaserPulseSkipDelayUsec", DARK_SKIP_BASELINE_US)
-
-        skip, warning = dark_safe_skip_delay_us(
-            settings.exposure_us, pulse_delay_us=delay, freq_hz=freq)
-        if warning:
-            logger.warning("Dark-frame skip scaling: %s", warning)
-        if skip <= current:
-            return trigger_data  # baseline already clears this exposure
-
         trigger_data = dict(trigger_data)
-        trigger_data["LaserPulseSkipDelayUsec"] = skip
+        trigger_data["LaserPulseSkipDelayUsec"] = ALT_DARK_SKIP_DELAY_US
         logger.warning(
-            "DARK-FRAME SKIP scaled for %g µs exposure: %s -> %d µs "
-            "(keeps scheduled darks laser-free; RATE_LL-safe)",
-            settings.exposure_us, current, skip,
+            "DARK-FRAME SKIP set to %d µs: %s -> %d µs (keeps scheduled darks "
+            "laser-free across the exposure range)",
+            ALT_DARK_SKIP_DELAY_US, current, ALT_DARK_SKIP_DELAY_US,
         )
         return trigger_data
 
