@@ -10,6 +10,7 @@ from PyQt6.QtCore import (
     QMetaObject,
     Qt,
 )
+from PyQt6.QtQml import QJSValue
 from pathlib import Path
 from typing import NamedTuple, Optional
 import itertools
@@ -47,12 +48,20 @@ from omotion.MotionProcessing import process_bin_file
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
 from omotion.contact_quality import CQThresholds, ContactQualityMonitor
 from motion_config import (
+    ALT_DARK_SKIP_DELAY_US,
+    DARK_SKIP_BASELINE_US,
+    FW_DEFAULT_CAMERA_SETTINGS,
+    TA_PULSE_TICK_US,
     TEC_TRIP_MAX_C,
     TEC_TRIP_MIN_C,
     TecTripOutcome,
+    apply_camera_settings,
+    camera_settings_from_config,
     ensure_tec_trip,
+    laser_pulse_width_from_config,
     load_tec_voltage_params,
     select_tec_voltage,
+    ta_pulse_width_write,
 )
 import error_codes
 import bug_report
@@ -3252,6 +3261,12 @@ class MotionConnector(QObject):
     @pyqtSlot(str, 'QVariant')
     def setConfig(self, key: str, value):
         """Update a single config key, persist to disk, and notify QML."""
+        # QML arrays/objects reach 'QVariant' slots as QJSValue, which is
+        # not JSON-serializable — the first array-valued key (#446's
+        # altCameraGains) crashed the app inside save_overrides. Unwrap to
+        # plain Python at the bridge, once, for every caller.
+        if isinstance(value, QJSValue):
+            value = value.toVariant()
         old = self._app_config.get(key)
         self._app_config[key] = value
         self._save_app_config()
@@ -3266,6 +3281,12 @@ class MotionConnector(QObject):
     @pyqtSlot('QVariantMap')
     def saveConfigs(self, configs: dict):
         """Update multiple config keys at once, persist to disk, and notify QML."""
+        # Same QJSValue unwrap as setConfig — a QVariantMap converts its
+        # top level, but array/object VALUES still arrive as QJSValue.
+        configs = {
+            k: (v.toVariant() if isinstance(v, QJSValue) else v)
+            for k, v in configs.items()
+        }
         changes = {}
         for k, v in configs.items():
             old = self._app_config.get(k)
@@ -3954,6 +3975,247 @@ class MotionConnector(QObject):
         suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
         return f"ow{suffix}"
 
+    def _apply_alt_camera_settings(self, left_mask: int, right_mask: int):
+        """Write the Engineering-mode alternative camera settings (#446).
+
+        Runs just before every scan start, after the scan flow's
+        configure/CQ/trigger-config steps — so the writes land on
+        configured, idle cameras and are re-asserted every scan (a camera
+        power-cycle between scans silently reverts registers to firmware
+        defaults; OW_CAMERA_SET_CONFIG skips already-configured cameras,
+        so nothing else rewrites them mid-session).
+
+        Camera registers persist until the camera loses power, so turning
+        the toggle OFF must actively restore the firmware defaults: the
+        persisted ``altCameraSettingsDirty`` flag makes the first scan
+        after disabling write the firmware values back once (redundant but
+        harmless if the cameras were really power-cycled meanwhile).
+
+        Fail-soft throughout: a failed write logs and the scan proceeds —
+        this is an engineering lever, not a scan gate.
+        """
+        enabled = self._app_config.get("altCameraSettingsEnabled") is True
+        dirty = self._app_config.get("altCameraSettingsDirty") is True
+        if not enabled and not dirty:
+            return
+
+        if enabled:
+            settings, reason = camera_settings_from_config(
+                self._app_config.get("altCameraExposureUs"),
+                self._app_config.get("altCameraGains"),
+            )
+            if settings is None:
+                logger.warning(
+                    "Alternative camera settings enabled but invalid (%s); "
+                    "NOT writing camera registers for this scan", reason
+                )
+                return
+            label = "alternative"
+        else:
+            settings = FW_DEFAULT_CAMERA_SETTINGS
+            label = "firmware-default restore"
+
+        t0 = time.monotonic()
+        failures = []
+        wrote_any = False
+        for side, mask, connected in (
+            ("left", left_mask, self._leftSensorConnected),
+            ("right", right_mask, self._rightSensorConnected),
+        ):
+            if not connected or not mask:
+                continue
+            sensor = getattr(self._interface, side, None)
+            if sensor is None:
+                continue
+            wrote_any = True
+            failures.extend(
+                f"{side} {f}"
+                for f in apply_camera_settings(sensor, mask, settings)
+            )
+        logger.info(
+            "Camera settings (%s): exposure %d rows (%g us), gains %s -> "
+            "left=0x%02X right=0x%02X in %.0f ms",
+            label, settings.exposure_rows, settings.exposure_us,
+            list(settings.gains), left_mask, right_mask,
+            (time.monotonic() - t0) * 1000.0,
+        )
+        if failures:
+            logger.warning(
+                "Camera settings: %d register write(s) failed: %s",
+                len(failures), "; ".join(failures),
+            )
+
+        # Dirty bookkeeping, persisted so an app restart can't strand stale
+        # registers. Enabled + wrote → registers differ from firmware
+        # defaults. Restore pass with zero failures → clean (a module that
+        # wasn't connected lost camera power with its USB, which reset its
+        # registers anyway); any failure keeps dirty so the next scan
+        # retries the restore.
+        if enabled and wrote_any:
+            new_dirty = True
+        elif not enabled and not failures:
+            new_dirty = False
+        else:
+            new_dirty = dirty
+        if new_dirty != dirty:
+            self._app_config["altCameraSettingsDirty"] = new_dirty
+            self._save_app_config()
+
+    def _apply_alt_laser_pulse_width(self, trigger_data: dict) -> dict:
+        """Engineering override: alternative laser pulse width (#449).
+
+        Replaces ``LaserPulseWidthUsec`` in the resolved trigger config
+        just before it is pushed to the console — every push, while
+        enabled. Experiments only; the operator is expected to have
+        adjusted the laser-safety config first (the stock PULSE_WIDTH_UL
+        interlock trips and LATCHES above ~1000 µs).
+
+        Unlike the camera-register overrides there is no restore path:
+        the scan flow re-resolves the full trigger config from the SDK
+        defaults on every push, so disabling the toggle is sufficient.
+
+        Fail-closed on a plain clinical build (#43/#234 pattern): a
+        hand-edited config key must never change laser emission for a
+        clinical user; the UI to enable this only exists behind the
+        engineering unlock anyway.
+        """
+        if self._app_config.get("altLaserPulseWidthEnabled") is not True:
+            return trigger_data
+        if (self._app_config.get("clinicalMode", False)
+                and not self._app_config.get("engineeringMode", False)):
+            logger.warning(
+                "altLaserPulseWidthEnabled is set but this is a clinical "
+                "build without engineering mode — ignoring the override"
+            )
+            return trigger_data
+        width, reason = laser_pulse_width_from_config(
+            self._app_config.get("altLaserPulseWidthUsec")
+        )
+        if width is None:
+            logger.warning(
+                "Alternative laser pulse width enabled but invalid (%s); "
+                "keeping the resolved trigger config", reason
+            )
+            return trigger_data
+        old = trigger_data.get("LaserPulseWidthUsec")
+        trigger_data = dict(trigger_data)
+        trigger_data["LaserPulseWidthUsec"] = width
+        # WARNING on purpose — an active laser-emission override must be
+        # unmissable in any log this scan appears in.
+        logger.warning(
+            "ALT LASER PULSE WIDTH ACTIVE (experiments only): %s -> %d µs "
+            "(stock safety interlock latches above ~1000 µs)", old, width,
+        )
+        return trigger_data
+
+    def _apply_alt_dark_skip_delay(self, trigger_data: dict) -> dict:
+        """Pin LaserPulseSkipDelayUsec to a fixed value that keeps scheduled
+        dark frames laser-free across the whole alternative-exposure range
+        (#449).
+
+        A scheduled dark frame displaces the laser pulse to start at
+        ``LaserPulseDelayUsec + LaserPulseSkipDelayUsec``; the shipped 1800 µs
+        clears the stock ~648 µs exposure but not the larger alternative
+        exposures, so the displaced pulse leaks back into the integration
+        window and contaminates the dark reference. A single fixed 2400 µs
+        skip (pulse start 2500 µs) clears the entire exposure dropdown (max
+        2196 µs) in one shot and still sits above the latching RATE_LL floor
+        (post-dark gap 25000 − 2400 = 22600 µs > 22500 µs).
+
+        Driven by the CAMERA exposure feature (not the laser toggle) — the
+        contamination is purely exposure-vs-skip; the laser pulse width is
+        irrelevant since only the pulse's START position matters. Gated on
+        ``altCameraSettingsEnabled``; clinical fail-closed; no restore path
+        (the trigger config re-resolves from SDK defaults each push).
+        """
+        if self._app_config.get("altCameraSettingsEnabled") is not True:
+            return trigger_data
+        if (self._app_config.get("clinicalMode", False)
+                and not self._app_config.get("engineeringMode", False)):
+            return trigger_data
+
+        current = trigger_data.get("LaserPulseSkipDelayUsec", DARK_SKIP_BASELINE_US)
+        if ALT_DARK_SKIP_DELAY_US == current:
+            return trigger_data
+
+        trigger_data = dict(trigger_data)
+        trigger_data["LaserPulseSkipDelayUsec"] = ALT_DARK_SKIP_DELAY_US
+        logger.warning(
+            "DARK-FRAME SKIP set to %d µs: %s -> %d µs (keeps scheduled darks "
+            "laser-free across the exposure range)",
+            ALT_DARK_SKIP_DELAY_US, current, ALT_DARK_SKIP_DELAY_US,
+        )
+        return trigger_data
+
+    def _apply_alt_ta_pulse_width(self):
+        """Write the TA driver FPGA's pulse_width register (#449).
+
+        This register — not the trigger config — shapes the optical
+        pulse: the TA driver edge-detects the console's laser trigger and
+        times the drive itself (driver_control.v), which is why
+        LaserPulseWidthUsec alone changed nothing on the bench
+        (2026-08-10: 500/700/1100 µs gates → identical means). The
+        setTrigger override stays purely so the console's echoed config
+        records the commanded width alongside the scan.
+
+        Same persistence shape as the camera registers: the TA FPGA holds
+        the value until console power-off or the next apply_laser_power
+        (console connect re-applies laser_params.json), so disabling the
+        toggle restores the laser_params baseline once via the persisted
+        ``altLaserPulseWidthDirty`` flag. Runs at scan start with the
+        trigger off. Fail-soft: a failed write logs and the scan
+        proceeds; a failed restore keeps the dirty flag for retry.
+        """
+        enabled = self._app_config.get("altLaserPulseWidthEnabled") is True
+        dirty = self._app_config.get("altLaserPulseWidthDirty") is True
+        if not enabled and not dirty:
+            return
+        if (self._app_config.get("clinicalMode", False)
+                and not self._app_config.get("engineeringMode", False)):
+            return  # same fail-closed gate as the trigger override
+        console = getattr(self._interface, "console", None)
+        if console is None:
+            return
+
+        if enabled:
+            width, reason = laser_pulse_width_from_config(
+                self._app_config.get("altLaserPulseWidthUsec"))
+            if width is None:
+                logger.warning(
+                    "Alternative laser pulse width enabled but invalid "
+                    "(%s); NOT writing TA_PULSE_WIDTH for this scan", reason
+                )
+                return
+            write_kwargs, ticks = ta_pulse_width_write(width)
+            label = f"{width} µs = {ticks} ticks (alternative)"
+        else:
+            write_kwargs, ticks = ta_pulse_width_write(None)
+            label = (f"{ticks * TA_PULSE_TICK_US:.1f} µs = {ticks} ticks "
+                     f"(laser_params baseline restore)")
+
+        try:
+            ok = console.write_i2c_packet(**write_kwargs) is not False
+        except Exception as e:
+            logger.warning("TA_PULSE_WIDTH write raised: %s", e)
+            ok = False
+        if ok:
+            # WARNING on purpose — this changes actual laser emission.
+            logger.warning("TA_PULSE_WIDTH WRITTEN: %s", label)
+        else:
+            logger.warning(
+                "TA_PULSE_WIDTH write FAILED (%s); laser drive keeps its "
+                "previous pulse width", label,
+            )
+
+        new_dirty = dirty
+        if enabled and ok:
+            new_dirty = True
+        elif not enabled and ok:
+            new_dirty = False
+        if new_dirty != dirty:
+            self._app_config["altLaserPulseWidthDirty"] = new_dirty
+            self._save_app_config()
+
     # --- CONSOLE COMMUNICATION METHODS ---
     @pyqtSlot()
     def queryConsoleInfo(self):
@@ -4307,6 +4569,17 @@ class MotionConnector(QObject):
             "cq_live_activate_frames", _CQ_DEFAULT_LIVE_ACTIVATE_FRAMES)
         _cq_light_clear = _cq_int_or(
             "cq_live_clear_frames", _CQ_DEFAULT_LIVE_CLEAR_FRAMES)
+
+        # Engineering-mode alternative camera settings (#446): write exposure
+        # + per-camera analog gain via the SDK just before the scan starts,
+        # every time — or restore firmware defaults on the first scan after
+        # the toggle was turned off. No-op when disabled and clean.
+        self._apply_alt_camera_settings(left_camera_mask, right_camera_mask)
+
+        # #449: the TA driver FPGA times the optical pulse itself, so the
+        # alternative pulse width must be written to its pulse_width
+        # register — the setTrigger gate override alone is record-keeping.
+        self._apply_alt_ta_pulse_width()
 
         req = ScanRequest(
             subject_id=subject_id,
@@ -4690,6 +4963,17 @@ class MotionConnector(QObject):
             # through to the SDK's resolved default rather than being
             # sent as missing keys.
             json_trigger_data = self._interface.resolve_trigger_config(
+                json_trigger_data
+            )
+
+            # Engineering override (#446 family): alternative laser pulse
+            # width, applied to every trigger push while enabled.
+            json_trigger_data = self._apply_alt_laser_pulse_width(
+                json_trigger_data
+            )
+            # And scale the dark-frame skip displacement so scheduled darks
+            # stay laser-free at the (possibly large) alternative exposure.
+            json_trigger_data = self._apply_alt_dark_skip_delay(
                 json_trigger_data
             )
 

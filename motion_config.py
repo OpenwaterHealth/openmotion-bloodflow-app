@@ -17,6 +17,7 @@ import dataclasses
 import enum
 import json
 import logging
+import math
 from pathlib import Path
 
 from utils.resource_path import resource_path
@@ -210,3 +211,250 @@ def ensure_tec_trip(console, temp_c) -> TecTripOutcome:
     if result is None:
         return TecTripOutcome.FAILED
     return TecTripOutcome.WROTE
+
+
+# --- Alternative camera settings (issue #446) ---------------------------------
+# OX02C1B register model (datasheet OX02C1S/OX02C1B a-CSP DS 1.0, table A-14;
+# exposure math per OmniVision's OX02C10_CalcSheet_HTS-VTS-EXP.xlsx):
+#
+# - Coarse exposure {0x3501,0x3502} is in whole rows; one row (Tline) =
+#   HTS / VT_PIXCLK. The deployed sensor-fw timing config
+#   (X02C1B_Sensor_Config.h: HTS 0x01B0 = 432 px, VT_PIXCLK 48 MHz) gives
+#   Tline = 9.0 us exactly — so the only VALID exposures are multiples of 9 us.
+# - Analog ("real") gain is {0x3508[4:0],0x3509[7:4]} / 16, so writing
+#   0x3508 = N with 0x3509 = 0 gives exactly N.0x. Digital gain (0x350A-C)
+#   is deliberately never touched and stays at the firmware's 1.000x.
+#
+# Firmware defaults mirrored here (what the sensor firmware itself programs,
+# and what app_config.json ships as the alternative-settings defaults):
+# exposure 72 rows = 648 us (X02C1B_SENSOR_CONFIG), analog gain by array
+# position 16/4/2/1/1/2/4/16 (X02C1B_configure_sensor's per-camera ladder).
+CAMERA_EXPOSURE_ROW_US = 9.0
+CAMERA_EXPOSURE_MIN_ROWS = 11    # 99 us  (~100 us)
+CAMERA_EXPOSURE_MAX_ROWS = 244   # 2196 us (~2200 us)
+CAMERA_GAIN_CHOICES = (1, 2, 4, 8, 16)
+
+FW_DEFAULT_EXPOSURE_US = 648
+FW_DEFAULT_CAMERA_GAINS = (16, 4, 2, 1, 1, 2, 4, 16)
+
+# --- Alternative laser pulse width (experiments only) -------------------------
+# The console trigger's LaserPulseWidthUsec gates the TA laser drive; the
+# SDK's DEFAULT_TRIGGER_CONFIG (omotion/config.py) ships 500 µs. Bench facts
+# (2026-07 drift campaign): the measured OPTICAL pulse is driver-shaped at
+# ~494 µs regardless of longer gates — shorter gates CLIP it. The stock
+# safety FPGA PULSE_WIDTH_UL interlock trips and LATCHES (until console
+# power-cycle) above ~1000 µs; the experimenter must adjust the safety
+# config before using wider gates. No restore path is needed here: the scan
+# flow re-resolves the full trigger config from SDK defaults before every
+# scan, so disabling the toggle is sufficient.
+LASER_PULSE_WIDTH_MIN_US = 100
+LASER_PULSE_WIDTH_MAX_US = 2200
+DEFAULT_LASER_PULSE_WIDTH_US = 500
+
+# The register that ACTUALLY shapes the optical pulse. The TA driver FPGA
+# edge-detects the console's laser trigger and times the drive pulse itself
+# (openmotion-ta-fpga driver_control.v: `pulse_count > pulse_width-55`), so
+# the trigger config's LaserPulseWidthUsec is only a start edge — bench-
+# proven 2026-08-10: 500/700/1100 µs gates → identical image means. The
+# pulse_width register is 24-bit at I2C 0x41, mux 1 ch 4, offset 0,
+# little-endian, 0.32 µs/tick (fpga_model.json "TA_PULSE_WIDTH");
+# laser_params.json ships [27, 6, 0] = 1563 ticks ≈ 500.2 µs, which is the
+# measured ~494 µs optical pulse. The seed stage runs CW (no width
+# register), so the TA drive width alone bounds emission.
+TA_PULSE_TICK_US = 0.32
+TA_PULSE_WIDTH_BASELINE_TICKS = 1563
+
+# --- Dark-frame skip delay (clean darks at high exposure, #449) ---------------
+# A scheduled dark frame isn't laser-off: the console firmware DISPLACES the
+# pulse later by LaserPulseSkipDelayUsec so it lands outside the exposure
+# window (console-fw trigger.c: long_lsync_arr = laserPulseDelayUsec +
+# laserPulseWidthUsec - 1 + LaserPulseSkipDelayUsec). The displaced pulse
+# therefore STARTS at laserPulseDelayUsec + LaserPulseSkipDelayUsec, width-
+# independent. The shipped 1800 us displacement (→ pulse start 1900 us) was
+# sized for the ~648 us stock exposure; once the alternative exposure exceeds
+# ~1900 us the displaced pulse re-enters the integration window and the "dark"
+# frame is contaminated by laser light (bench-confirmed 2026-08-10: terminal
+# laser-off dark clean at 128 DN, scheduled darks 143-185 DN in proportion to
+# each camera's brightness).
+#
+# When the alternative camera exposure is in use we just pin the skip to a
+# single fixed value that clears the whole exposure dropdown (max 2196 us →
+# pulse start 2500 us) in one shot. The bound is the still-armed RATE_LL
+# laser-safety floor: a dark frame shortens the following inter-pulse gap to
+# (period - skip), and if that drops below RATE_LL the safety FPGA trips and
+# LATCHES until a console power-cycle. At the 40 Hz timebase these experiments
+# run at: gap = 25000 - 2400 = 22600 us, 100 us above the 22500 us floor.
+DARK_RATE_LOWER_LIMIT_US = 22500      # EE/OPT_RATE_LL, deployed laser_params
+DARK_SKIP_BASELINE_US = 1800          # shipped LaserPulseSkipDelayUsec
+ALT_DARK_SKIP_DELAY_US = 2400         # fixed skip when alt camera exposure is on
+
+
+def ta_pulse_width_write(width_us=None):
+    """Build the I2C write that programs the TA driver's pulse_width.
+
+    ``width_us=None`` means "the laser_params.json baseline" (restore path).
+    Returns ``(write_kwargs, ticks)`` where ``write_kwargs`` feed
+    ``console.write_i2c_packet``. Never raises: the register location and
+    baseline resolve from the SDK's bundled fpga_model/laser_params when
+    available and fall back to the constants above (same data, hardcoded)
+    so a missing/renamed SDK entry can't break scan start.
+    """
+    entry = None
+    try:
+        from omotion.laser import FpgaMap
+        entry = FpgaMap().get_entry_by_friendly_name("TA_PULSE_WIDTH")
+    except Exception:
+        entry = None
+
+    if width_us is None:
+        data = None
+        try:
+            from omotion.laser import load_laser_params
+            for param in load_laser_params():
+                if param.get("friendlyName") == "TA_PULSE_WIDTH":
+                    data = bytearray(param["dataToSend"])
+                    break
+        except Exception:
+            data = None
+        if data is None:
+            data = bytearray(
+                TA_PULSE_WIDTH_BASELINE_TICKS.to_bytes(3, "little"))
+        ticks = int.from_bytes(bytes(data), "little")
+    else:
+        ticks = max(1, int(round(float(width_us) / TA_PULSE_TICK_US)))
+        data = bytearray(ticks.to_bytes(3, "little"))
+
+    write_kwargs = {
+        "mux_index": entry["mux_idx"] if entry else 1,
+        "channel": entry["channel"] if entry else 4,
+        "device_addr": entry["i2c_addr"] if entry else 0x41,
+        "reg_addr": entry["start_address"] if entry else 0,
+        "data": data,
+    }
+    return write_kwargs, ticks
+
+
+@dataclasses.dataclass(frozen=True)
+class CameraSettings:
+    """A validated exposure + per-position analog gain set for one module."""
+
+    exposure_rows: int      # coarse exposure register value (rows)
+    gains: tuple            # 8 analog gains, index = camera position 0..7
+
+    @property
+    def exposure_us(self) -> float:
+        return self.exposure_rows * CAMERA_EXPOSURE_ROW_US
+
+
+FW_DEFAULT_CAMERA_SETTINGS = CameraSettings(
+    exposure_rows=int(FW_DEFAULT_EXPOSURE_US / CAMERA_EXPOSURE_ROW_US),
+    gains=FW_DEFAULT_CAMERA_GAINS,
+)
+
+
+def camera_settings_from_config(exposure_us, gains):
+    """Validate config values into a CameraSettings.
+
+    Returns ``(settings, "")`` or ``(None, reason)``; never raises and never
+    logs (the caller owns logging). Fail direction is "don't write": a
+    malformed hand-edited config must not guess at laser-scan camera state.
+
+    ``exposure_us`` is snapped to the nearest whole row (so 650 from a
+    hand-edit still lands on the valid 648) but rejected outside the
+    [MIN_ROWS, MAX_ROWS] window. ``gains`` must be exactly 8 values, each an
+    integral number from CAMERA_GAIN_CHOICES (bools rejected).
+    """
+    try:
+        rows = round(float(exposure_us) / CAMERA_EXPOSURE_ROW_US)
+    except (TypeError, ValueError):
+        return None, f"exposure {exposure_us!r} is not a number"
+    if not (CAMERA_EXPOSURE_MIN_ROWS <= rows <= CAMERA_EXPOSURE_MAX_ROWS):
+        return None, (
+            f"exposure {exposure_us!r} us is outside the valid "
+            f"{CAMERA_EXPOSURE_MIN_ROWS * CAMERA_EXPOSURE_ROW_US:g}-"
+            f"{CAMERA_EXPOSURE_MAX_ROWS * CAMERA_EXPOSURE_ROW_US:g} us window"
+        )
+
+    if not isinstance(gains, (list, tuple)) or len(gains) != 8:
+        return None, f"gains {gains!r} is not an 8-element list"
+    clean = []
+    for i, g in enumerate(gains):
+        # bool is an int subclass; `true` in a hand-edited JSON must not
+        # become gain 1.
+        if isinstance(g, bool) or not isinstance(g, (int, float)) or g != int(g):
+            return None, f"camera {i + 1} gain {g!r} is not a valid gain"
+        if int(g) not in CAMERA_GAIN_CHOICES:
+            return None, (
+                f"camera {i + 1} gain {g!r} is not one of "
+                f"{list(CAMERA_GAIN_CHOICES)}"
+            )
+        clean.append(int(g))
+    return CameraSettings(exposure_rows=int(rows), gains=tuple(clean)), ""
+
+
+def laser_pulse_width_from_config(value):
+    """Validate the alternative laser pulse width (µs) from app config.
+
+    Returns ``(width, "")`` or ``(None, reason)``; never raises and never
+    logs. Any whole-µs value in [MIN, MAX] is valid — the console trigger
+    takes raw microseconds (no row quantization like camera exposure);
+    the UI dropdown's 100 µs steps are just a usability subset, so a
+    hand-edited in-between value (e.g. 750) still validates and applies.
+    """
+    if isinstance(value, bool):
+        return None, f"pulse width {value!r} is not a number"
+    try:
+        width = float(value)
+    except (TypeError, ValueError):
+        return None, f"pulse width {value!r} is not a number"
+    if not math.isfinite(width) or width != int(width):
+        return None, f"pulse width {value!r} is not a whole number of µs"
+    width = int(width)
+    if not (LASER_PULSE_WIDTH_MIN_US <= width <= LASER_PULSE_WIDTH_MAX_US):
+        return None, (
+            f"pulse width {value!r} µs is outside the valid "
+            f"{LASER_PULSE_WIDTH_MIN_US}-{LASER_PULSE_WIDTH_MAX_US} µs window"
+        )
+    return width, ""
+
+
+def apply_camera_settings(sensor, camera_mask: int, settings: CameraSettings):
+    """Write exposure + analog gain to every camera in ``camera_mask``.
+
+    Uses the SDK's I2C passthrough (mux switch + register writes) — the same
+    path the firmware's own configure uses, so values land exactly like the
+    firmware defaults do. Writes happen while the trigger is off; the
+    pipeline's warmup-frame discard absorbs the sensor's N+2-frame register
+    latch when streaming resumes.
+
+    Returns a list of failure strings (empty = all cameras written). Never
+    raises; a failed camera is recorded and the rest still get written.
+    """
+    from omotion.i2c_packet import I2C_Packet
+
+    failures = []
+    exp_hi = (settings.exposure_rows >> 8) & 0xFF
+    exp_lo = settings.exposure_rows & 0xFF
+    for cam_id in range(8):
+        if not (camera_mask & (1 << cam_id)):
+            continue
+        regs = (
+            (0x3501, exp_hi),                   # coarse exposure MSB (rows)
+            (0x3502, exp_lo),                   # coarse exposure LSB
+            (0x3508, settings.gains[cam_id]),   # real gain = code/16, MSB
+            (0x3509, 0x00),                     # real gain LSB (fractional)
+        )
+        try:
+            # Mux reads clear the selection, so always re-switch per camera.
+            sensor.switch_camera(cam_id)
+            for reg, value in regs:
+                ok = sensor.camera_i2c_write(
+                    I2C_Packet(
+                        device_address=0x36, register_address=reg, data=value
+                    )
+                )
+                if ok is False:
+                    failures.append(f"camera {cam_id + 1} reg 0x{reg:04X}")
+        except Exception as e:
+            failures.append(f"camera {cam_id + 1}: {e}")
+    return failures

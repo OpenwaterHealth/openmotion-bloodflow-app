@@ -124,6 +124,31 @@ def _load_app_config() -> dict:
         "rightMask": 0x66,
         "uncorrectedOnly": False,
         "engineeringMode": False,
+        # Alternative camera settings (#446, Settings → Engineering →
+        # Camera settings). When enabled, exposure + per-camera analog gain
+        # are written via the SDK to every scanned camera just before each
+        # scan starts. Defaults mirror what the sensor firmware itself
+        # programs (X02C1B_Sensor_Config.h: 72 rows × 9 µs = 648 µs;
+        # X02C1B_configure_sensor per-position gain ladder). Valid exposures
+        # are whole 9 µs rows in 99–2196 µs; valid gains 1/2/4/8/16.
+        "altCameraSettingsEnabled": False,
+        "altCameraExposureUs": 648,
+        "altCameraGains": [16, 4, 2, 1, 1, 2, 4, 16],
+        # Internal (no UI): true while camera registers may hold alternative
+        # values, so the first scan after disabling restores fw defaults.
+        "altCameraSettingsDirty": False,
+        # Alternative laser pulse width (#449) — experiments only, separate
+        # enable from the camera settings above. Overrides the trigger
+        # config's LaserPulseWidthUsec (SDK default 500 µs) on every push
+        # while enabled; valid 100–2200 whole µs (stock safety interlock
+        # latches above ~1000 µs — the operator disables it first).
+        # Ignored on a plain clinical build.
+        "altLaserPulseWidthEnabled": False,
+        "altLaserPulseWidthUsec": 500,
+        # Internal (no UI): true while the TA driver's pulse_width register
+        # may hold an alternative value, so the first scan after disabling
+        # restores the laser_params.json baseline.
+        "altLaserPulseWidthDirty": False,
         "showBfiBvi": True,
         "bfiMin": 0.0,
         "bfiMax": 10.0,
