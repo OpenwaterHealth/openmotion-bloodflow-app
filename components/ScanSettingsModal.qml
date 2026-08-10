@@ -45,7 +45,16 @@ Item {
         ListElement { name: "Right";     maskHex: "0xF0" }
         ListElement { name: "Third Row"; maskHex: "0x42" }
         ListElement { name: "All";       maskHex: "0xFF" }
+        // Custom (issue #445) must stay LAST — customPatternIndex below and
+        // the case numbering in applyPatternToSensor assume it, and the HIL
+        // tests' SENSOR_OPTIONS list mirrors this order. maskHex -1 never
+        // matches a real mask, so maskToPatternIndex can't auto-select it.
+        ListElement { name: "Custom";    maskHex: "-1" }
     }
+
+    // While Custom is selected the SensorView dots become checkboxes
+    // (SensorView.interactive) and clicks land in toggleCamera below.
+    readonly property int customPatternIndex: sensorPatterns.count - 1
 
     // Mask-selector width (#315): midpoint between the content-fit width
     // (widest pattern name at the ComboBox font plus fixed chrome — 10px
@@ -72,6 +81,16 @@ Item {
         return m
     }
 
+    // Inverse of maskFromArray — same bit mapping as BloodFlow.maskToArray.
+    function maskToArray(mask) {
+        const bitMap = [7, 6, 5, 4, 3, 2, 1, 0]
+        var arr = [false, false, false, false, false, false, false, false]
+        for (var i = 0; i < 8; i++) {
+            if (mask & (1 << bitMap[i])) arr[i] = true
+        }
+        return arr
+    }
+
     function maskToPatternIndex(mask) {
         for (var i = 0; i < sensorPatterns.count; i++) {
             if (parseInt(sensorPatterns.get(i).maskHex, 16) === mask) return i
@@ -91,6 +110,9 @@ Item {
             case 6: pattern = [true,true,true,true,false,false,false,false]; break
             case 7: pattern = [false,true,false,false,false,false,true,false]; break
             case 8: pattern = [true,true,true,true,true,true,true,true]; break
+            // Custom: keep whatever is currently shown as the starting
+            // point — the user edits it by clicking the dots directly.
+            case 9: return
             default: return
         }
         if (side === "left") {
@@ -99,6 +121,19 @@ Item {
         } else {
             rightSensorActive = pattern
             rightSensorView.sensorActive = pattern
+        }
+    }
+
+    // Dot clicked while in Custom mode — flip that camera's bit.
+    function toggleCamera(side, index) {
+        var arr = (side === "left" ? leftSensorActive : rightSensorActive).slice()
+        arr[index] = !arr[index]
+        if (side === "left") {
+            leftSensorActive = arr
+            leftSensorView.sensorActive = arr
+        } else {
+            rightSensorActive = arr
+            rightSensorView.sensorActive = arr
         }
     }
 
@@ -147,10 +182,14 @@ Item {
         rightSensorActive = rightArr
         leftSensorView.sensorActive = leftArr
         rightSensorView.sensorActive = rightArr
+        // A mask with no named pattern is a Custom selection (#445) —
+        // show it as such instead of leaving a stale pattern label.
+        // (Custom fires applyPatternToSensor as a no-op, so the arrays
+        // set above survive.)
         var li = maskToPatternIndex(maskFromArray(leftArr))
         var ri = maskToPatternIndex(maskFromArray(rightArr))
-        if (li >= 0) leftSelector.currentIndex = li
-        if (ri >= 0) rightSelector.currentIndex = ri
+        leftSelector.currentIndex = (li >= 0) ? li : customPatternIndex
+        rightSelector.currentIndex = (ri >= 0) ? ri : customPatternIndex
     }
 
     // Dimmed backdrop
@@ -293,6 +332,8 @@ Item {
                         sensorSide: "left"
                         connector: MotionInterface
                         showFanControl: MotionInterface.appConfig.engineeringMode ? true : false
+                        interactive: leftSelector.currentIndex === root.customPatternIndex
+                        onCameraToggled: function(index) { root.toggleCamera("left", index) }
                     }
 
                     ComboBox {
@@ -332,7 +373,15 @@ Item {
                             var defMask = MotionInterface.appConfig.leftMask !== undefined
                                           ? MotionInterface.appConfig.leftMask : 0x99
                             var idx = maskToPatternIndex(defMask)
-                            currentIndex = (idx >= 0) ? idx : 4
+                            if (idx >= 0) {
+                                currentIndex = idx
+                            } else {
+                                // Config default matches no named pattern —
+                                // it's a Custom mask; show its exact dots.
+                                currentIndex = root.customPatternIndex
+                                root.leftSensorActive = maskToArray(defMask)
+                                leftSensorView.sensorActive = root.leftSensorActive
+                            }
                         }
                     }
                 }
@@ -348,6 +397,8 @@ Item {
                         sensorSide: "right"
                         connector: MotionInterface
                         showFanControl: MotionInterface.appConfig.engineeringMode ? true : false
+                        interactive: rightSelector.currentIndex === root.customPatternIndex
+                        onCameraToggled: function(index) { root.toggleCamera("right", index) }
                     }
 
                     ComboBox {
@@ -385,7 +436,14 @@ Item {
                             var defMask = MotionInterface.appConfig.rightMask !== undefined
                                           ? MotionInterface.appConfig.rightMask : 0x99
                             var idx = maskToPatternIndex(defMask)
-                            currentIndex = (idx >= 0) ? idx : 0
+                            if (idx >= 0) {
+                                currentIndex = idx
+                            } else {
+                                // See leftSelector — custom config default.
+                                currentIndex = root.customPatternIndex
+                                root.rightSensorActive = maskToArray(defMask)
+                                rightSensorView.sensorActive = root.rightSensorActive
+                            }
                         }
                     }
                 }
