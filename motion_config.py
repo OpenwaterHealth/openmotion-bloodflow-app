@@ -17,6 +17,7 @@ import dataclasses
 import enum
 import json
 import logging
+import math
 from pathlib import Path
 
 from utils.resource_path import resource_path
@@ -236,6 +237,20 @@ CAMERA_GAIN_CHOICES = (1, 2, 4, 8, 16)
 FW_DEFAULT_EXPOSURE_US = 648
 FW_DEFAULT_CAMERA_GAINS = (16, 4, 2, 1, 1, 2, 4, 16)
 
+# --- Alternative laser pulse width (experiments only) -------------------------
+# The console trigger's LaserPulseWidthUsec gates the TA laser drive; the
+# SDK's DEFAULT_TRIGGER_CONFIG (omotion/config.py) ships 500 µs. Bench facts
+# (2026-07 drift campaign): the measured OPTICAL pulse is driver-shaped at
+# ~494 µs regardless of longer gates — shorter gates CLIP it. The stock
+# safety FPGA PULSE_WIDTH_UL interlock trips and LATCHES (until console
+# power-cycle) above ~1000 µs; the experimenter must adjust the safety
+# config before using wider gates. No restore path is needed here: the scan
+# flow re-resolves the full trigger config from SDK defaults before every
+# scan, so disabling the toggle is sufficient.
+LASER_PULSE_WIDTH_MIN_US = 100
+LASER_PULSE_WIDTH_MAX_US = 2200
+DEFAULT_LASER_PULSE_WIDTH_US = 500
+
 
 @dataclasses.dataclass(frozen=True)
 class CameraSettings:
@@ -293,6 +308,32 @@ def camera_settings_from_config(exposure_us, gains):
             )
         clean.append(int(g))
     return CameraSettings(exposure_rows=int(rows), gains=tuple(clean)), ""
+
+
+def laser_pulse_width_from_config(value):
+    """Validate the alternative laser pulse width (µs) from app config.
+
+    Returns ``(width, "")`` or ``(None, reason)``; never raises and never
+    logs. Any whole-µs value in [MIN, MAX] is valid — the console trigger
+    takes raw microseconds (no row quantization like camera exposure);
+    the UI dropdown's 100 µs steps are just a usability subset, so a
+    hand-edited in-between value (e.g. 750) still validates and applies.
+    """
+    if isinstance(value, bool):
+        return None, f"pulse width {value!r} is not a number"
+    try:
+        width = float(value)
+    except (TypeError, ValueError):
+        return None, f"pulse width {value!r} is not a number"
+    if not math.isfinite(width) or width != int(width):
+        return None, f"pulse width {value!r} is not a whole number of µs"
+    width = int(width)
+    if not (LASER_PULSE_WIDTH_MIN_US <= width <= LASER_PULSE_WIDTH_MAX_US):
+        return None, (
+            f"pulse width {value!r} µs is outside the valid "
+            f"{LASER_PULSE_WIDTH_MIN_US}-{LASER_PULSE_WIDTH_MAX_US} µs window"
+        )
+    return width, ""
 
 
 def apply_camera_settings(sensor, camera_mask: int, settings: CameraSettings):

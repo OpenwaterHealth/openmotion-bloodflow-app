@@ -9,6 +9,8 @@ camera loses power, so disabling the feature must actively restore firmware
 defaults on the next scan start (the persisted dirty flag).
 """
 
+import json
+
 from unittest.mock import MagicMock
 
 import pytest
@@ -17,6 +19,7 @@ from motion_config import (
     FW_DEFAULT_CAMERA_SETTINGS,
     apply_camera_settings,
     camera_settings_from_config,
+    laser_pulse_width_from_config,
 )
 from motion_connector import MotionConnector
 
@@ -225,6 +228,103 @@ class TestConnectorApply:
         c._interface.left = FakeSensor(fail_regs={0x3502})
         c._apply_alt_camera_settings(0x01, 0x00)
         assert c._app_config["altCameraSettingsDirty"] is True
+
+
+# ── Alternative laser pulse width (#449) ─────────────────────────────────────
+
+class TestLaserPulseWidthValidation:
+    @pytest.mark.parametrize("value,expected", [
+        (500, 500), (100, 100), (2200, 2200),
+        (750, 750),        # off the UI's 100 µs grid — still valid (hand-edit)
+        (500.0, 500),      # JSON round-trip float
+    ])
+    def test_valid(self, value, expected):
+        width, reason = laser_pulse_width_from_config(value)
+        assert reason == ""
+        assert width == expected
+
+    @pytest.mark.parametrize("bad", [
+        50, 2300, 0, -100, None, "abc", True, 750.5, float("nan"),
+    ])
+    def test_rejected(self, bad):
+        width, reason = laser_pulse_width_from_config(bad)
+        assert width is None and reason
+
+
+class TestAltLaserPulseWidth:
+    """The connector overrides LaserPulseWidthUsec in the resolved trigger
+    config on every setTrigger push while enabled — and only that key."""
+
+    def _trigger_setup(self, tmp_path, app_config):
+        from omotion.config import DEFAULT_TRIGGER_CONFIG
+        c = _connector(tmp_path, app_config)
+        c._interface.resolve_trigger_config.side_effect = (
+            lambda d: {**DEFAULT_TRIGGER_CONFIG, **d})
+        sent = {}
+
+        def _capture(data=None):
+            sent.clear()
+            sent.update(data)
+            return dict(data)
+
+        c._interface.console.set_trigger_json.side_effect = _capture
+        return c, sent
+
+    def test_disabled_passes_sdk_default_through(self, tmp_path):
+        c, sent = self._trigger_setup(tmp_path, {})
+        assert c.setTrigger(json.dumps({"TriggerStatus": 2})) is True
+        assert sent["LaserPulseWidthUsec"] == 500
+
+    def test_enabled_overrides_only_the_laser_width(self, tmp_path):
+        c, sent = self._trigger_setup(tmp_path, {
+            "altLaserPulseWidthEnabled": True,
+            "altLaserPulseWidthUsec": 1500,
+        })
+        assert c.setTrigger(json.dumps({"TriggerStatus": 2})) is True
+        assert sent["LaserPulseWidthUsec"] == 1500
+        # Everything else in the resolved config is untouched — notably the
+        # camera FSIN pulse width and the pulse delay.
+        assert sent["TriggerPulseWidthUsec"] == 500
+        assert sent["LaserPulseDelayUsec"] == 100
+        assert sent["TriggerStatus"] == 2
+
+    def test_hand_edited_off_grid_value_applies(self, tmp_path):
+        c, sent = self._trigger_setup(tmp_path, {
+            "altLaserPulseWidthEnabled": True,
+            "altLaserPulseWidthUsec": 750,
+        })
+        c.setTrigger(json.dumps({"TriggerStatus": 2}))
+        assert sent["LaserPulseWidthUsec"] == 750
+
+    def test_invalid_width_keeps_resolved_config(self, tmp_path):
+        c, sent = self._trigger_setup(tmp_path, {
+            "altLaserPulseWidthEnabled": True,
+            "altLaserPulseWidthUsec": 2300,
+        })
+        c.setTrigger(json.dumps({"TriggerStatus": 2}))
+        assert sent["LaserPulseWidthUsec"] == 500
+
+    def test_plain_clinical_build_ignores_override(self, tmp_path):
+        """#43/#234 fail-closed pattern: a hand-set config key must never
+        change laser emission for a clinical user."""
+        c, sent = self._trigger_setup(tmp_path, {
+            "altLaserPulseWidthEnabled": True,
+            "altLaserPulseWidthUsec": 1500,
+            "clinicalMode": True,
+            "engineeringMode": False,
+        })
+        c.setTrigger(json.dumps({"TriggerStatus": 2}))
+        assert sent["LaserPulseWidthUsec"] == 500
+
+    def test_engineering_unlock_allows_override_on_clinical(self, tmp_path):
+        c, sent = self._trigger_setup(tmp_path, {
+            "altLaserPulseWidthEnabled": True,
+            "altLaserPulseWidthUsec": 300,
+            "clinicalMode": True,
+            "engineeringMode": True,
+        })
+        c.setTrigger(json.dumps({"TriggerStatus": 2}))
+        assert sent["LaserPulseWidthUsec"] == 300
 
 
 # ── QML bridge (2026-08-10 crash regression) ─────────────────────────────────

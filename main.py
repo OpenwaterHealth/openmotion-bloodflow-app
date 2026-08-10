@@ -137,6 +137,14 @@ def _load_app_config() -> dict:
         # Internal (no UI): true while camera registers may hold alternative
         # values, so the first scan after disabling restores fw defaults.
         "altCameraSettingsDirty": False,
+        # Alternative laser pulse width (#449) — experiments only, separate
+        # enable from the camera settings above. Overrides the trigger
+        # config's LaserPulseWidthUsec (SDK default 500 µs) on every push
+        # while enabled; valid 100–2200 whole µs (stock safety interlock
+        # latches above ~1000 µs — the operator disables it first).
+        # Ignored on a plain clinical build.
+        "altLaserPulseWidthEnabled": False,
+        "altLaserPulseWidthUsec": 500,
         "showBfiBvi": True,
         "bfiMin": 0.0,
         "bfiMax": 10.0,

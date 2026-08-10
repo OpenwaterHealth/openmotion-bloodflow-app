@@ -88,6 +88,10 @@ class _StubMotionInterface(QObject):
         self._alt_camera_enabled = bool(enabled)
         self.appConfigChanged.emit()
 
+    def setAltLaserEnabled(self, enabled: bool):
+        self._alt_laser_enabled = bool(enabled)
+        self.appConfigChanged.emit()
+
     @pyqtProperty("QVariantMap", notify=appConfigChanged)
     def appConfig(self):
         return {
@@ -96,6 +100,8 @@ class _StubMotionInterface(QObject):
             "darkMode": True,
             "altCameraSettingsEnabled": getattr(
                 self, "_alt_camera_enabled", False),
+            "altLaserPulseWidthEnabled": getattr(
+                self, "_alt_laser_enabled", False),
         }
 
     # ── open()/close() dependencies ──────────────────────────────────
@@ -347,6 +353,27 @@ def test_alt_camera_controls_gate_on_enable_toggle(modal_factory):
     assert exposure.property("enabled") is True
     assert _find_item(
         modal, "altCameraGainCombo8").property("enabled") is True
+
+
+def test_alt_laser_pulse_width_gates_on_its_own_toggle(modal_factory):
+    """#449: the laser pulse-width dropdown gates on its OWN enable —
+    turning on the camera settings must never enable it (a camera
+    experiment must not silently change laser emission). List = 22
+    entries, 100–2200 µs in 100 µs steps, 500 µs default labeled."""
+    stub = modal_factory.stub
+    stub.setFlags(clinical=False, engineering=True)
+    stub.setAltCameraEnabled(True)
+    stub.setAltLaserEnabled(False)
+    modal = modal_factory()
+
+    combo = _find_item(modal, "altLaserPulseWidthCombo")
+    assert combo is not None
+    assert combo.property("count") == 22
+    assert combo.property("displayText") == "500 µs (default)"
+    assert combo.property("enabled") is False  # camera toggle ON, laser OFF
+
+    stub.setAltLaserEnabled(True)
+    assert combo.property("enabled") is True
 
 
 def test_close_never_persists_clinical_mode(modal_factory):

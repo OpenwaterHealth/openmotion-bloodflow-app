@@ -55,6 +55,7 @@ from motion_config import (
     apply_camera_settings,
     camera_settings_from_config,
     ensure_tec_trip,
+    laser_pulse_width_from_config,
     load_tec_voltage_params,
     select_tec_voltage,
 )
@@ -4056,6 +4057,54 @@ class MotionConnector(QObject):
             self._app_config["altCameraSettingsDirty"] = new_dirty
             self._save_app_config()
 
+    def _apply_alt_laser_pulse_width(self, trigger_data: dict) -> dict:
+        """Engineering override: alternative laser pulse width (#449).
+
+        Replaces ``LaserPulseWidthUsec`` in the resolved trigger config
+        just before it is pushed to the console — every push, while
+        enabled. Experiments only; the operator is expected to have
+        adjusted the laser-safety config first (the stock PULSE_WIDTH_UL
+        interlock trips and LATCHES above ~1000 µs).
+
+        Unlike the camera-register overrides there is no restore path:
+        the scan flow re-resolves the full trigger config from the SDK
+        defaults on every push, so disabling the toggle is sufficient.
+
+        Fail-closed on a plain clinical build (#43/#234 pattern): a
+        hand-edited config key must never change laser emission for a
+        clinical user; the UI to enable this only exists behind the
+        engineering unlock anyway.
+        """
+        if self._app_config.get("altLaserPulseWidthEnabled") is not True:
+            return trigger_data
+        if (self._app_config.get("clinicalMode", False)
+                and not self._app_config.get("engineeringMode", False)):
+            logger.warning(
+                "altLaserPulseWidthEnabled is set but this is a clinical "
+                "build without engineering mode — ignoring the override"
+            )
+            return trigger_data
+        width, reason = laser_pulse_width_from_config(
+            self._app_config.get("altLaserPulseWidthUsec")
+        )
+        if width is None:
+            logger.warning(
+                "Alternative laser pulse width enabled but invalid (%s); "
+                "keeping the resolved trigger config", reason
+            )
+            return trigger_data
+        old = trigger_data.get("LaserPulseWidthUsec")
+        trigger_data = dict(trigger_data)
+        trigger_data["LaserPulseWidthUsec"] = width
+        # WARNING on purpose — an active laser-emission override must be
+        # unmissable in any log this scan appears in.
+        logger.warning(
+            "ALT LASER PULSE WIDTH ACTIVE (experiments only): %s -> %d µs "
+            "(optical pulse is driver-shaped at ~494 µs; stock safety "
+            "interlock latches above ~1000 µs)", old, width,
+        )
+        return trigger_data
+
     # --- CONSOLE COMMUNICATION METHODS ---
     @pyqtSlot()
     def queryConsoleInfo(self):
@@ -4798,6 +4847,12 @@ class MotionConnector(QObject):
             # through to the SDK's resolved default rather than being
             # sent as missing keys.
             json_trigger_data = self._interface.resolve_trigger_config(
+                json_trigger_data
+            )
+
+            # Engineering override (#446 family): alternative laser pulse
+            # width, applied to every trigger push while enabled.
+            json_trigger_data = self._apply_alt_laser_pulse_width(
                 json_trigger_data
             )
 

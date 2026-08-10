@@ -132,6 +132,8 @@
     "altCameraSettingsEnabled": false,
     "altCameraExposureUs": 648,
     "altCameraGains": [16, 4, 2, 1, 1, 2, 4, 16],
+    "altLaserPulseWidthEnabled": false,
+    "altLaserPulseWidthUsec": 500,
     "downloadBetaUpdates": false,
     "forceLaserFail": false,
     "cameraFakeData": false,

@@ -1288,15 +1288,17 @@ Item {
                         }
                     }
 
-                    // ── Camera settings (issue #446) ─────────────────────
+                    // ── Camera & laser settings (issues #446 / #449) ─────
                     // Alternative exposure + per-camera analog gain, written
                     // via the SDK to every scanned camera just before each
                     // scan starts (never outside a scan). Digital gain is
                     // untouched (stays 1×). Defaults mirror the sensor
-                    // firmware's own config table.
+                    // firmware's own config table. Below them, a separately
+                    // gated laser pulse-width override rides the trigger
+                    // config (#449, experiments only).
                     Rectangle { Layout.fillWidth: true; height: 1; color: root.colBorderSoft }
                     Text {
-                        text: "Camera settings"
+                        text: "Camera & laser settings"
                         color: root.colTextPri
                         font.pixelSize: 13
                         font.weight: Font.DemiBold
@@ -1434,6 +1436,85 @@ Item {
                                 }
                             }
                         }
+                    }
+
+                    // ── Laser pulse width (#449) — separate enable from the
+                    // camera settings above, so camera experiments never
+                    // silently change laser emission. Overrides the trigger
+                    // config's LaserPulseWidthUsec on every push while
+                    // enabled; no restore needed (the trigger config is
+                    // re-resolved from SDK defaults on every push).
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Layout.topMargin: 4
+                        spacing: 12
+                        Text {
+                            text: "Enable Alternative laser pulse width?"
+                            color: root.colTextSec
+                            font.pixelSize: 13
+                        }
+                        PillSwitch {
+                            objectName: "altLaserPulseWidthSwitch"
+                            checked: MotionInterface.appConfig.altLaserPulseWidthEnabled === true
+                            onToggled: MotionInterface.setConfig("altLaserPulseWidthEnabled", checked)
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    // Live-hazard note, shown only while enabled (same
+                    // pattern as the sensor-debug-log warning above).
+                    Text {
+                        visible: MotionInterface.appConfig.altLaserPulseWidthEnabled === true
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: 11
+                        color: AppTheme.accentYellow
+                        text: qsTr("Experiments only — never for clinical scans. "
+                                   + "Applied to the trigger config at every scan "
+                                   + "setup while enabled. The stock safety "
+                                   + "interlock trips and latches above 1000 µs "
+                                   + "unless the safety config is adjusted first; "
+                                   + "the optical pulse is driver-shaped at "
+                                   + "~494 µs, so longer gates mostly add dark-"
+                                   + "current integration.")
+                    }
+
+                    FieldRow {
+                        label: "Laser pulse width"
+                        StyledCombo {
+                            objectName: "altLaserPulseWidthCombo"
+                            Layout.preferredWidth: 180
+                            maxPopupHeight: 320
+                            enabled: MotionInterface.appConfig.altLaserPulseWidthEnabled === true
+                            // 100 µs steps, 100–2200 µs. The console takes
+                            // raw whole-µs values (no quantization), so a
+                            // hand-edited altLaserPulseWidthUsec between
+                            // steps still validates and applies — the combo
+                            // then shows the nearest entry.
+                            readonly property var widthValues: {
+                                var v = []
+                                for (var n = 1; n <= 22; n++) v.push(n * 100)
+                                return v
+                            }
+                            model: widthValues.map(function(us) {
+                                return us + " µs" + (us === 500 ? " (default)" : "")
+                            })
+                            currentIndex: {
+                                var us = MotionInterface.appConfig.altLaserPulseWidthUsec
+                                var best = widthValues.indexOf(500)
+                                if (typeof us === "number" && isFinite(us)) {
+                                    var bestD = Infinity
+                                    for (var i = 0; i < widthValues.length; i++) {
+                                        var d = Math.abs(widthValues[i] - us)
+                                        if (d < bestD) { bestD = d; best = i }
+                                    }
+                                }
+                                return best
+                            }
+                            onActivated: MotionInterface.setConfig(
+                                "altLaserPulseWidthUsec", widthValues[currentIndex])
+                        }
+                        Item { Layout.fillWidth: true }
                     }
 
                     Rectangle { Layout.fillWidth: true; height: 1; color: root.colBorderSoft }
