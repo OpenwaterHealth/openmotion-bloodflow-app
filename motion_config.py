@@ -284,13 +284,21 @@ TA_PULSE_WIDTH_BASELINE_TICKS = 1563
 # reset), so anything patched in after resolution is silently reverted on the
 # push that actually matters — which is exactly how the contamination above
 # shipped despite setTrigger sending 2400. 2400 us (pulse start 2500 us)
-# clears the whole alternative-exposure dropdown (max 2196 us). The bound is
-# the still-armed RATE_LL laser-safety floor: a dark frame shortens the
-# following inter-pulse gap to (period - skip), and if that drops below
-# RATE_LL the safety FPGA trips and LATCHES until a console power-cycle. At
-# the 40 Hz timebase: gap = 25000 - 2400 = 22600 us, 100 us above the
-# 22500 us floor.
-DARK_RATE_LOWER_LIMIT_US = 22500      # EE/OPT_RATE_LL, deployed laser_params
+# clears the whole alternative-exposure dropdown (max 2196 us); bench-verified
+# 2026-08-10: darks clean at 2100 us exposure.
+#
+# HARD CONSOLE REQUIREMENT — RATE_LL: a dark frame shortens the following
+# inter-pulse gap to (period - skip) = 25000 - 2400 = 22600 us at 40 Hz, and
+# if that undercuts the console's EE/OPT_RATE_LL floor the safety FPGAs trip
+# and LATCH until a console power-cycle. RATE_LL is NOT the stock
+# laser_params.json 22500 — it lives per-console in the flash user config
+# (read the connect log's "Override EE/OPT_RATE_LL raw=" lines for ground
+# truth; raw x 0.32 = us). The bench console held 23125 us (raw 72266), which
+# tripped instantly, and was provisioned to 22000 us (raw 68750) on
+# 2026-08-10 — see HANDOFF-laser-safety-ceiling-override.md for the recipe.
+# Every console running this build MUST have RATE_LL <= the constant below or
+# its first scan latches the interlock.
+DARK_RATE_LOWER_LIMIT_US = 22000      # max console EE/OPT_RATE_LL this skip tolerates
 DARK_SKIP_BASELINE_US = 1800          # SDK DEFAULT_TRIGGER_CONFIG value (guess)
 DARK_SKIP_DELAY_US = 2400             # what the app runs, everywhere
 
