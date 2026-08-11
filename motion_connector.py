@@ -48,8 +48,6 @@ from omotion.MotionProcessing import process_bin_file
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
 from omotion.contact_quality import CQThresholds, ContactQualityMonitor
 from motion_config import (
-    ALT_DARK_SKIP_DELAY_US,
-    DARK_SKIP_BASELINE_US,
     FW_DEFAULT_CAMERA_SETTINGS,
     TA_PULSE_TICK_US,
     TEC_TRIP_MAX_C,
@@ -4108,45 +4106,6 @@ class MotionConnector(QObject):
         )
         return trigger_data
 
-    def _apply_alt_dark_skip_delay(self, trigger_data: dict) -> dict:
-        """Pin LaserPulseSkipDelayUsec to a fixed value that keeps scheduled
-        dark frames laser-free across the whole alternative-exposure range
-        (#449).
-
-        A scheduled dark frame displaces the laser pulse to start at
-        ``LaserPulseDelayUsec + LaserPulseSkipDelayUsec``; the shipped 1800 µs
-        clears the stock ~648 µs exposure but not the larger alternative
-        exposures, so the displaced pulse leaks back into the integration
-        window and contaminates the dark reference. A single fixed 2400 µs
-        skip (pulse start 2500 µs) clears the entire exposure dropdown (max
-        2196 µs) in one shot and still sits above the latching RATE_LL floor
-        (post-dark gap 25000 − 2400 = 22600 µs > 22500 µs).
-
-        Driven by the CAMERA exposure feature (not the laser toggle) — the
-        contamination is purely exposure-vs-skip; the laser pulse width is
-        irrelevant since only the pulse's START position matters. Gated on
-        ``altCameraSettingsEnabled``; clinical fail-closed; no restore path
-        (the trigger config re-resolves from SDK defaults each push).
-        """
-        if self._app_config.get("altCameraSettingsEnabled") is not True:
-            return trigger_data
-        if (self._app_config.get("clinicalMode", False)
-                and not self._app_config.get("engineeringMode", False)):
-            return trigger_data
-
-        current = trigger_data.get("LaserPulseSkipDelayUsec", DARK_SKIP_BASELINE_US)
-        if ALT_DARK_SKIP_DELAY_US == current:
-            return trigger_data
-
-        trigger_data = dict(trigger_data)
-        trigger_data["LaserPulseSkipDelayUsec"] = ALT_DARK_SKIP_DELAY_US
-        logger.warning(
-            "DARK-FRAME SKIP set to %d µs: %s -> %d µs (keeps scheduled darks "
-            "laser-free across the exposure range)",
-            ALT_DARK_SKIP_DELAY_US, current, ALT_DARK_SKIP_DELAY_US,
-        )
-        return trigger_data
-
     def _apply_alt_ta_pulse_width(self):
         """Write the TA driver FPGA's pulse_width register (#449).
 
@@ -4967,13 +4926,11 @@ class MotionConnector(QObject):
             )
 
             # Engineering override (#446 family): alternative laser pulse
-            # width, applied to every trigger push while enabled.
+            # width, applied to every trigger push while enabled. (The
+            # dark-frame skip needs no counterpart here — it lives in the
+            # interface's default_trigger_config (main.py, #449), so the
+            # resolve above already carries it.)
             json_trigger_data = self._apply_alt_laser_pulse_width(
-                json_trigger_data
-            )
-            # And scale the dark-frame skip displacement so scheduled darks
-            # stay laser-free at the (possibly large) alternative exposure.
-            json_trigger_data = self._apply_alt_dark_skip_delay(
                 json_trigger_data
             )
 

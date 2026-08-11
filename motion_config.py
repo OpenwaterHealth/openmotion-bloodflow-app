@@ -264,29 +264,47 @@ DEFAULT_LASER_PULSE_WIDTH_US = 500
 TA_PULSE_TICK_US = 0.32
 TA_PULSE_WIDTH_BASELINE_TICKS = 1563
 
-# --- Dark-frame skip delay (clean darks at high exposure, #449) ---------------
+# --- Dark-frame skip delay (clean darks at any exposure, #449) ----------------
 # A scheduled dark frame isn't laser-off: the console firmware DISPLACES the
 # pulse later by LaserPulseSkipDelayUsec so it lands outside the exposure
 # window (console-fw trigger.c: long_lsync_arr = laserPulseDelayUsec +
 # laserPulseWidthUsec - 1 + LaserPulseSkipDelayUsec). The displaced pulse
 # therefore STARTS at laserPulseDelayUsec + LaserPulseSkipDelayUsec, width-
-# independent. The shipped 1800 us displacement (→ pulse start 1900 us) was
-# sized for the ~648 us stock exposure; once the alternative exposure exceeds
-# ~1900 us the displaced pulse re-enters the integration window and the "dark"
-# frame is contaminated by laser light (bench-confirmed 2026-08-10: terminal
-# laser-off dark clean at 128 DN, scheduled darks 143-185 DN in proportion to
-# each camera's brightness).
+# independent. The SDK-default 1800 us displacement (→ pulse start 1900 us)
+# was an uncalibrated guess that happened to clear the ~648 us stock exposure;
+# any exposure past ~1800 us re-catches the displaced pulse and contaminates
+# the dark reference (bench 2026-08-10: terminal laser-off dark clean at
+# 128 DN, scheduled darks 143-185 DN in proportion to each camera's
+# brightness; contamination onset between 1700 and 1800 us exposure).
 #
-# When the alternative camera exposure is in use we just pin the skip to a
-# single fixed value that clears the whole exposure dropdown (max 2196 us →
-# pulse start 2500 us) in one shot. The bound is the still-armed RATE_LL
-# laser-safety floor: a dark frame shortens the following inter-pulse gap to
-# (period - skip), and if that drops below RATE_LL the safety FPGA trips and
-# LATCHES until a console power-cycle. At the 40 Hz timebase these experiments
-# run at: gap = 25000 - 2400 = 22600 us, 100 us above the 22500 us floor.
-DARK_RATE_LOWER_LIMIT_US = 22500      # EE/OPT_RATE_LL, deployed laser_params
-DARK_SKIP_BASELINE_US = 1800          # shipped LaserPulseSkipDelayUsec
-ALT_DARK_SKIP_DELAY_US = 2400         # fixed skip when alt camera exposure is on
+# The app pins the skip to 2400 us unconditionally — every build, every
+# trigger push. It rides MotionInterface's default_trigger_config (main.py),
+# NOT a connector-side patch after resolve: ScanWorkflow re-sends the
+# interface-resolved config immediately before start_trigger (fsync-counter
+# reset), so anything patched in after resolution is silently reverted on the
+# push that actually matters — which is exactly how the contamination above
+# shipped despite setTrigger sending 2400. 2400 us (pulse start 2500 us)
+# clears the whole alternative-exposure dropdown (max 2196 us); bench-verified
+# 2026-08-10: darks clean at 2100 us exposure.
+#
+# HARD CONSOLE REQUIREMENT — RATE_LL: a dark frame shortens the following
+# inter-pulse gap to (period - skip) = 25000 - 2400 = 22600 us at 40 Hz, and
+# if that undercuts the console's EE/OPT_RATE_LL floor the safety FPGAs trip
+# and LATCH until a console power-cycle. RATE_LL is NOT the stock
+# laser_params.json 22500 — it lives per-console in the flash user config
+# (read the connect log's "Override EE/OPT_RATE_LL raw=" lines for ground
+# truth; raw x 0.32 = us). The bench console held 23125 us (raw 72266), which
+# tripped instantly, and was provisioned to 22000 us (raw 68750) on
+# 2026-08-10 — see HANDOFF-laser-safety-ceiling-override.md for the recipe.
+# Every console running this build MUST have RATE_LL <= the constant below or
+# its first scan latches the interlock.
+DARK_RATE_LOWER_LIMIT_US = 22000      # max console EE/OPT_RATE_LL this skip tolerates
+DARK_SKIP_BASELINE_US = 1800          # SDK DEFAULT_TRIGGER_CONFIG value (guess)
+DARK_SKIP_DELAY_US = 2400             # what the app runs, everywhere
+
+# Merged onto the SDK's DEFAULT_TRIGGER_CONFIG at MotionInterface
+# construction, so every workflow's resolved trigger config carries it.
+DEFAULT_TRIGGER_OVERRIDES = {"LaserPulseSkipDelayUsec": DARK_SKIP_DELAY_US}
 
 
 def ta_pulse_width_write(width_us=None):
