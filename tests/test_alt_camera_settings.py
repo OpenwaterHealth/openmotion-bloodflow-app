@@ -239,6 +239,7 @@ class TestConnectorApply:
 class TestLaserPulseWidthValidation:
     @pytest.mark.parametrize("value,expected", [
         (500, 500), (100, 100), (2200, 2200),
+        (20, 20),          # short-pulse entry / hardware floor
         (750, 750),        # off the UI's 100 µs grid — still valid (hand-edit)
         (500.0, 500),      # JSON round-trip float
     ])
@@ -248,7 +249,7 @@ class TestLaserPulseWidthValidation:
         assert width == expected
 
     @pytest.mark.parametrize("bad", [
-        50, 2300, 0, -100, None, "abc", True, 750.5, float("nan"),
+        19, 2300, 0, -100, None, "abc", True, 750.5, float("nan"),
     ])
     def test_rejected(self, bad):
         width, reason = laser_pulse_width_from_config(bad)
@@ -348,6 +349,20 @@ class TestTaPulseWidthWrite:
         for us in (100, 500, 1000, 2200):
             _, ticks = ta_pulse_width_write(us)
             assert abs(ticks - us / 0.32) <= 1
+
+    def test_short_pulse_stays_above_the_driver_underflow(self):
+        """20 µs = 62 ticks, safely above the 55-tick compare underflow in
+        driver_control.v (`pulse_count > pulse_width - 55`), below which the
+        TA drive would never be cleared. The clamp is belt-and-braces: the
+        validator already floors the config at 20 µs."""
+        from motion_config import TA_PULSE_MIN_TICKS
+
+        _, ticks = ta_pulse_width_write(20)
+        assert ticks == 62
+        assert ticks > TA_PULSE_MIN_TICKS
+
+        _, clamped = ta_pulse_width_write(1)
+        assert clamped == TA_PULSE_MIN_TICKS
 
     def test_baseline_matches_bundled_laser_params(self):
         """None → the laser_params.json TA_PULSE_WIDTH bytes (the restore

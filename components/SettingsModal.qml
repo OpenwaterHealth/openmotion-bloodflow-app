@@ -1479,7 +1479,9 @@ Item {
                                    + "1000 µs unless the safety config is "
                                    + "adjusted first. Make sure the camera "
                                    + "exposure covers the pulse (delay 100 µs "
-                                   + "+ width).")
+                                   + "+ width). The driver emits ~17 µs less "
+                                   + "than commanded — negligible at 500 µs, "
+                                   + "but the 20 µs entry is a ~3 µs pulse.")
                     }
 
                     FieldRow {
@@ -1489,18 +1491,24 @@ Item {
                             Layout.preferredWidth: 180
                             maxPopupHeight: 320
                             enabled: MotionInterface.appConfig.altLaserPulseWidthEnabled === true
-                            // 100 µs steps, 100–2200 µs. The console takes
-                            // raw whole-µs values (no quantization), so a
-                            // hand-edited altLaserPulseWidthUsec between
-                            // steps still validates and applies — the combo
-                            // then shows the nearest entry.
+                            // 20 µs, then 100 µs steps to 2200 µs. The
+                            // console takes raw whole-µs values (no
+                            // quantization), so a hand-edited
+                            // altLaserPulseWidthUsec between steps still
+                            // validates and applies — the combo then shows
+                            // the nearest entry. 20 µs is the hardware
+                            // floor (motion_config.TA_PULSE_MIN_TICKS).
                             readonly property var widthValues: {
-                                var v = []
+                                var v = [20]
                                 for (var n = 1; n <= 22; n++) v.push(n * 100)
                                 return v
                             }
                             model: widthValues.map(function(us) {
-                                return us + " µs" + (us === 500 ? " (default)" : "")
+                                if (us === 500) return us + " µs (default)"
+                                // The TA driver truncates ~17 µs off the
+                                // commanded width, which only matters here.
+                                if (us === 20) return us + " µs (~3 µs emitted)"
+                                return us + " µs"
                             })
                             currentIndex: {
                                 var us = MotionInterface.appConfig.altLaserPulseWidthUsec
