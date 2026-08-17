@@ -281,43 +281,52 @@ TA_PULSE_WIDTH_BASELINE_TICKS = 1563
 TA_PULSE_TRUNCATION_TICKS = 55
 TA_PULSE_MIN_TICKS = TA_PULSE_TRUNCATION_TICKS
 
-# --- Dark-frame skip delay (clean darks at any exposure, #449) ----------------
+# --- Dark-frame skip delay (#449) ---------------------------------------------
 # A scheduled dark frame isn't laser-off: the console firmware DISPLACES the
 # pulse later by LaserPulseSkipDelayUsec so it lands outside the exposure
 # window (console-fw trigger.c: long_lsync_arr = laserPulseDelayUsec +
 # laserPulseWidthUsec - 1 + LaserPulseSkipDelayUsec). The displaced pulse
 # therefore STARTS at laserPulseDelayUsec + LaserPulseSkipDelayUsec, width-
-# independent. The SDK-default 1800 us displacement (→ pulse start 1900 us)
-# was an uncalibrated guess that happened to clear the ~648 us stock exposure;
-# any exposure past ~1800 us re-catches the displaced pulse and contaminates
-# the dark reference (bench 2026-08-10: terminal laser-off dark clean at
-# 128 DN, scheduled darks 143-185 DN in proportion to each camera's
-# brightness; contamination onset between 1700 and 1800 us exposure).
+# independent — so an exposure that reaches past that start re-catches the
+# pulse and contaminates the dark reference (bench 2026-08-10: terminal
+# laser-off dark clean at 128 DN, scheduled darks 143-185 DN in proportion to
+# each camera's brightness; contamination onset between 1700 and 1800 us
+# exposure at the 1800 us skip).
 #
-# The app pins the skip to 2400 us unconditionally — every build, every
-# trigger push. It rides MotionInterface's default_trigger_config (main.py),
-# NOT a connector-side patch after resolve: ScanWorkflow re-sends the
-# interface-resolved config immediately before start_trigger (fsync-counter
-# reset), so anything patched in after resolution is silently reverted on the
-# push that actually matters — which is exactly how the contamination above
-# shipped despite setTrigger sending 2400. 2400 us (pulse start 2500 us)
-# clears the whole alternative-exposure dropdown (max 2196 us); bench-verified
-# 2026-08-10: darks clean at 2100 us exposure.
+# The app runs the SDK's 1800 us default (pulse start 1900 us), pinned
+# explicitly so an SDK default change can't move it silently. It rides
+# MotionInterface's default_trigger_config (main.py), NOT a connector-side
+# patch after resolve: ScanWorkflow re-sends the interface-resolved config
+# immediately before start_trigger (fsync-counter reset), so anything patched
+# in after resolution is silently reverted on the push that actually matters.
 #
-# HARD CONSOLE REQUIREMENT — RATE_LL: a dark frame shortens the following
-# inter-pulse gap to (period - skip) = 25000 - 2400 = 22600 us at 40 Hz, and
-# if that undercuts the console's EE/OPT_RATE_LL floor the safety FPGAs trip
-# and LATCH until a console power-cycle. RATE_LL is NOT the stock
-# laser_params.json 22500 — it lives per-console in the flash user config
-# (read the connect log's "Override EE/OPT_RATE_LL raw=" lines for ground
-# truth; raw x 0.32 = us). The bench console held 23125 us (raw 72266), which
-# tripped instantly, and was provisioned to 22000 us (raw 68750) on
-# 2026-08-10 — see HANDOFF-laser-safety-ceiling-override.md for the recipe.
-# Every console running this build MUST have RATE_LL <= the constant below or
-# its first scan latches the interlock.
-DARK_RATE_LOWER_LIMIT_US = 22000      # max console EE/OPT_RATE_LL this skip tolerates
-DARK_SKIP_BASELINE_US = 1800          # SDK DEFAULT_TRIGGER_CONFIG value (guess)
-DARK_SKIP_DELAY_US = 2400             # what the app runs, everywhere
+# WHY NOT 2400 (reverted 2026-08-17): 2400 cleared the whole alternative-
+# exposure dropdown, but it shortens the post-dark inter-pulse gap to
+# 25000 - 2400 = 22600 us at 40 Hz, which undercuts the EE/OPT_RATE_LL floor
+# every stock console ships with (23125 us observed on real hardware, raw
+# 72266) — the safety FPGAs then trip RATE_LOWER_LIMIT_FAIL and LATCH until a
+# console power-cycle, i.e. no laser at all. Buying clean darks above 1700 us
+# exposure by requiring a fleet-wide safety-config change is the wrong trade:
+# the contamination only exists in engineering high-exposure runs (#446),
+# while the latch breaks every scan on every console. 1800 leaves a 23200 us
+# post-dark gap, which clears both the stock 22500 and the observed 23125.
+#
+# TO RUN A >1700 us EXPOSURE EXPERIMENT you must do BOTH, in this order:
+#   1. lower the console's EE/OPT_RATE_LL to <= 22600 us (raw <= 70625) —
+#      recipe in HANDOFF-laser-safety-ceiling-override.md — and power-cycle
+#      the console to clear any latched fault;
+#   2. set DARK_SKIP_DELAY_US below to DARK_SKIP_HIGH_EXPOSURE_US.
+# Doing 2 without 1 latches the interlock on the first dark frame.
+DARK_SKIP_DELAY_US = 1800             # what the app runs, everywhere
+DARK_SKIP_HIGH_EXPOSURE_US = 2400     # what a >1700 us exposure run needs
+# Longest exposure whose dark frames stay clean at DARK_SKIP_DELAY_US. Bench
+# onset was between 1700 and 1800 us; take the clean end.
+DARK_SKIP_CLEAN_EXPOSURE_MAX_US = 1700
+# Max console EE/OPT_RATE_LL the current skip tolerates: the post-dark gap is
+# (period - skip) = 25000 - 1800 at 40 Hz. Per-console flash config, NOT the
+# stock laser_params.json 22500 — read the connect log's
+# "Override EE/OPT_RATE_LL raw=" lines for ground truth (raw x 0.32 = us).
+DARK_RATE_LOWER_LIMIT_US = 23200
 
 # Merged onto the SDK's DEFAULT_TRIGGER_CONFIG at MotionInterface
 # construction, so every workflow's resolved trigger config carries it.
