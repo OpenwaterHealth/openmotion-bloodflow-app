@@ -247,7 +247,11 @@ FW_DEFAULT_CAMERA_GAINS = (16, 4, 2, 1, 1, 2, 4, 16)
 # config before using wider gates. No restore path is needed here: the scan
 # flow re-resolves the full trigger config from SDK defaults before every
 # scan, so disabling the toggle is sufficient.
-LASER_PULSE_WIDTH_MIN_US = 100
+# The 20 µs floor is a HARDWARE limit, not a UI choice — see
+# TA_PULSE_MIN_TICKS below: the TA driver's compare underflows below 55
+# ticks (17.6 µs) and leaves the drive latched on. 20 µs = 63 ticks keeps
+# 8 ticks of margin. Do NOT lower it without re-reading driver_control.v.
+LASER_PULSE_WIDTH_MIN_US = 20
 LASER_PULSE_WIDTH_MAX_US = 2200
 DEFAULT_LASER_PULSE_WIDTH_US = 500
 
@@ -263,6 +267,19 @@ DEFAULT_LASER_PULSE_WIDTH_US = 500
 # register), so the TA drive width alone bounds emission.
 TA_PULSE_TICK_US = 0.32
 TA_PULSE_WIDTH_BASELINE_TICKS = 1563
+
+# driver_control.v drops the drive at `pulse_count > pulse_width - 55`, so
+# the register is NOT the emitted width: the drive runs ~54 ticks
+# (~17.3 µs) SHORTER than commanded. Irrelevant at 500 µs (3%), dominant at
+# the short end — a commanded 20 µs is a ~3 µs optical pulse. Worse, that
+# compare is 24-bit unsigned: below 55 ticks `pulse_width - 55` wraps to
+# ~16.7M, the compare never fires, and nothing else in the state machine
+# clears `pulse` — the TA drive stays latched ON. So 55 ticks is a hard
+# floor for anything written to this register, enforced here as well as by
+# LASER_PULSE_WIDTH_MIN_US, because this is the write that reaches the
+# laser.
+TA_PULSE_TRUNCATION_TICKS = 55
+TA_PULSE_MIN_TICKS = TA_PULSE_TRUNCATION_TICKS
 
 # --- Dark-frame skip delay (#449) ---------------------------------------------
 # A scheduled dark frame isn't laser-off: the console firmware DISPLACES the
@@ -348,7 +365,8 @@ def ta_pulse_width_write(width_us=None):
                 TA_PULSE_WIDTH_BASELINE_TICKS.to_bytes(3, "little"))
         ticks = int.from_bytes(bytes(data), "little")
     else:
-        ticks = max(1, int(round(float(width_us) / TA_PULSE_TICK_US)))
+        ticks = max(TA_PULSE_MIN_TICKS,
+                    int(round(float(width_us) / TA_PULSE_TICK_US)))
         data = bytearray(ticks.to_bytes(3, "little"))
 
     write_kwargs = {

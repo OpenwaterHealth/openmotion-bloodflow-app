@@ -363,8 +363,9 @@ def test_alt_camera_controls_gate_on_enable_toggle(modal_factory):
 def test_alt_laser_pulse_width_gates_on_its_own_toggle(modal_factory):
     """#449: the laser pulse-width dropdown gates on its OWN enable —
     turning on the camera settings must never enable it (a camera
-    experiment must not silently change laser emission). List = 22
-    entries, 100–2200 µs in 100 µs steps, 500 µs default labeled."""
+    experiment must not silently change laser emission). List = 23
+    entries: the 20 µs short pulse plus 100–2200 µs in 100 µs steps,
+    500 µs default labeled."""
     stub = modal_factory.stub
     stub.setFlags(clinical=False, engineering=True)
     stub.setAltCameraEnabled(True)
@@ -373,7 +374,7 @@ def test_alt_laser_pulse_width_gates_on_its_own_toggle(modal_factory):
 
     combo = _find_item(modal, "altLaserPulseWidthCombo")
     assert combo is not None
-    assert combo.property("count") == 22
+    assert combo.property("count") == 23
     assert combo.property("displayText") == "500 µs (default)"
     assert combo.property("enabled") is False  # camera toggle ON, laser OFF
 
