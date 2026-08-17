@@ -17,9 +17,12 @@ import pytest
 
 from motion_config import (
     DARK_RATE_LOWER_LIMIT_US,
+    DARK_SKIP_CLEAN_EXPOSURE_MAX_US,
     DARK_SKIP_DELAY_US,
+    DARK_SKIP_HIGH_EXPOSURE_US,
     DEFAULT_TRIGGER_OVERRIDES,
     FW_DEFAULT_CAMERA_SETTINGS,
+    FW_DEFAULT_EXPOSURE_US,
     apply_camera_settings,
     camera_settings_from_config,
     laser_pulse_width_from_config,
@@ -421,19 +424,43 @@ class TestConnectorTaPulseWidth:
         write.assert_not_called()
 
 
-# ── Dark-frame skip delay (pinned 2400 µs, every build — #449) ───────────────
+# ── Dark-frame skip delay (pinned 1800 µs, every build — #449) ───────────────
 
 class TestDarkSkipConstant:
-    def test_pinned_skip_clears_the_whole_exposure_dropdown(self):
-        # Max dropdown exposure is 2196 us; the displaced pulse starts at
-        # delay(100) + skip and must clear it.
-        assert 100 + DARK_SKIP_DELAY_US >= 2196
+    """Reverted from 2400 to 1800 on 2026-08-17: 2400 bought clean darks at
+    engineering-only high exposures by requiring a fleet-wide safety-config
+    change, and a console that didn't get it latches its interlock on the
+    first dark frame — no laser at all. Clean darks up to 1700 us beat that."""
 
-    def test_pinned_skip_stays_above_the_rate_ll_floor(self):
-        # Post-dark inter-pulse gap = period - skip must exceed RATE_LL or the
-        # rate interlock latches (40 Hz timebase).
+    def test_pinned_skip_clears_stock_console_rate_ll(self):
+        # THE constraint that drove the revert: the post-dark inter-pulse gap
+        # (period - skip) must clear the console's RATE_LL floor or the safety
+        # FPGAs latch. Stock units ship 22500 us and real hardware has been
+        # observed at 23125 us — both must pass on an unprovisioned console.
         period_us = 1_000_000.0 / 40
-        assert period_us - DARK_SKIP_DELAY_US >= DARK_RATE_LOWER_LIMIT_US
+        gap_us = period_us - DARK_SKIP_DELAY_US
+        assert gap_us >= DARK_RATE_LOWER_LIMIT_US
+        assert gap_us >= 23125    # observed stock console (raw 72266)
+        assert gap_us >= 22500    # laser_params.json shipped default
+
+    def test_pinned_skip_keeps_the_default_exposure_dark_clean(self):
+        # The displaced pulse starts at delay(100) + skip; every exposure at
+        # or below the clean ceiling must end before it. 648 us (firmware
+        # default, and all a clinical build ever runs) has ~1250 us of room.
+        assert 100 + DARK_SKIP_DELAY_US > DARK_SKIP_CLEAN_EXPOSURE_MAX_US
+        assert 100 + DARK_SKIP_DELAY_US > FW_DEFAULT_EXPOSURE_US
+
+    def test_high_exposure_alternative_is_documented_and_needs_provisioning(self):
+        # The 2400 us escape hatch stays in the module as a named constant so
+        # the UI warning and the docs can point at it — but taking it REQUIRES
+        # dropping the console's RATE_LL below the gap it produces, which is
+        # under every stock floor. That precondition is the whole reason it
+        # isn't the default.
+        period_us = 1_000_000.0 / 40
+        assert DARK_SKIP_HIGH_EXPOSURE_US > DARK_SKIP_DELAY_US
+        assert 100 + DARK_SKIP_HIGH_EXPOSURE_US >= 2196   # clears the dropdown
+        assert period_us - DARK_SKIP_HIGH_EXPOSURE_US == 22600
+        assert period_us - DARK_SKIP_HIGH_EXPOSURE_US < 23125
 
     def test_override_dict_pins_exactly_the_skip_key(self):
         assert DEFAULT_TRIGGER_OVERRIDES == {

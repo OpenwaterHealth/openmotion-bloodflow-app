@@ -92,6 +92,10 @@ class _StubMotionInterface(QObject):
         self._alt_laser_enabled = bool(enabled)
         self.appConfigChanged.emit()
 
+    def setAltExposureUs(self, exposure_us: int):
+        self._alt_exposure_us = int(exposure_us)
+        self.appConfigChanged.emit()
+
     @pyqtProperty("QVariantMap", notify=appConfigChanged)
     def appConfig(self):
         return {
@@ -102,6 +106,7 @@ class _StubMotionInterface(QObject):
                 self, "_alt_camera_enabled", False),
             "altLaserPulseWidthEnabled": getattr(
                 self, "_alt_laser_enabled", False),
+            "altCameraExposureUs": getattr(self, "_alt_exposure_us", 648),
         }
 
     # ── open()/close() dependencies ──────────────────────────────────
@@ -374,6 +379,33 @@ def test_alt_laser_pulse_width_gates_on_its_own_toggle(modal_factory):
 
     stub.setAltLaserEnabled(True)
     assert combo.property("enabled") is True
+
+
+def test_dark_contamination_warning_follows_the_selected_exposure(modal_factory):
+    """#449: the app runs the 1800 µs dark skip (2400 latches the safety
+    interlock on stock consoles), so exposures past 1700 µs re-catch the
+    displaced dark pulse. The warning must fire on exactly those, and stay
+    out of the way at the firmware default."""
+    stub = modal_factory.stub
+    stub.setFlags(clinical=False, engineering=True)
+    stub.setAltCameraEnabled(True)
+    stub.setAltExposureUs(648)
+    modal = modal_factory()
+
+    name = "altExposureDarkContaminationWarning"
+    assert _control_visible(modal, name) is False   # fw default is clean
+
+    stub.setAltExposureUs(1701)                     # first row past the ceiling
+    assert _control_visible(modal, name) is True
+
+    stub.setAltExposureUs(2196)                     # top of the dropdown
+    assert _control_visible(modal, name) is True
+
+    stub.setAltExposureUs(1750)                     # off-grid hand-edit
+    assert _control_visible(modal, name) is True
+
+    stub.setAltCameraEnabled(False)                 # feature off ⇒ no warning
+    assert _control_visible(modal, name) is False
 
 
 def test_close_never_persists_clinical_mode(modal_factory):
