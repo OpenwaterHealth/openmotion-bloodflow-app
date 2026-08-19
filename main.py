@@ -162,6 +162,9 @@ def _load_app_config() -> dict:
         "dataDirectory": None,
         "writeRawCsv": True,
         "rawCsvDurationSec": None,
+        # Per-scan telemetry CSV — engineering-only (#43) AND opt-in via the
+        # Settings → Engineering switch (#471). Fail closed by default.
+        "writeTelemetryCsv": False,
         # Corrected per-cam CSV ({scan_id}.csv) is redundant now that
         # per-cam BFI/BVI lands in scans.db (the new viewer + past replay
         # read from there). Default off; set true to keep exporting it

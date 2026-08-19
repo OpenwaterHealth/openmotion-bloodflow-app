@@ -1284,6 +1284,10 @@ class MotionConnector(QObject):
         self._write_raw_csv               = bool(cfg.get("writeRawCsv", False))
         raw_csv                           = cfg.get("rawCsvDurationSec")
         self._raw_csv_duration_sec        = float(raw_csv) if raw_csv is not None else None
+        # Telemetry CSV is engineering-only (#43) and opt-in via Settings →
+        # Engineering → "Save telemetry CSV" (#471); default False so a
+        # config missing the key fails closed for clinical use.
+        self._write_telemetry_csv         = bool(cfg.get("writeTelemetryCsv", False))
         self._uncorrected_only            = bool(cfg.get("uncorrectedOnly", False))
 
         # Initialize CSV output directory to user's home directory
@@ -3388,6 +3392,15 @@ class MotionConnector(QObject):
         self.appConfigChanged.emit()
         logger.debug(f"[Connector] writeRawCsv set to {self._write_raw_csv}")
 
+    @pyqtSlot(bool)
+    def setWriteTelemetryCsv(self, enabled: bool) -> None:
+        """Update writeTelemetryCsv in both the runtime cache and persisted config."""
+        self._write_telemetry_csv = bool(enabled)
+        self._app_config["writeTelemetryCsv"] = self._write_telemetry_csv
+        self._save_app_config()
+        self.appConfigChanged.emit()
+        logger.debug(f"[Connector] writeTelemetryCsv set to {self._write_telemetry_csv}")
+
     @pyqtSlot('QVariant')
     def setRawCsvDurationSec(self, value) -> None:
         """Update rawCsvDurationSec in both the runtime cache and persisted config.
@@ -4604,7 +4617,10 @@ class MotionConnector(QObject):
             # to True, so the per-scan {scan_id}_{subject}_telemetry.csv
             # must be explicitly gated on engineeringMode here. The original
             # gate was dropped in the sink-refactor follow-up (93c2feb).
-            write_telemetry_csv=engineering_mode,
+            # #471 made it additionally opt-in: the persisted toggle is
+            # re-checked at scan start alongside the mode flag, so a stale
+            # writeTelemetryCsv=true never writes on a plain clinical build.
+            write_telemetry_csv=engineering_mode and self._write_telemetry_csv,
             # Raw CSV duration forwarded to the pipeline's Tee("raw") gate
             # via raw_save_max_duration_s. None means unbounded (write entire
             # scan); 0 omits raw tee entirely. The persisted writeRawCsv
