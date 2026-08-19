@@ -32,7 +32,7 @@ from PyQt6.QtCore import qInstallMessageHandler, QtMsgType, QUrl
 
 from motion_connector import MotionConnector
 from motion_config import DEFAULT_TRIGGER_OVERRIDES
-from omotion import MotionInterface
+from omotion import MotionInterface, factory_calibration_thresholds
 from utils.single_instance import check_single_instance, cleanup_single_instance
 from version import get_version
 from utils.resource_path import resource_path
@@ -73,6 +73,28 @@ def qt_message_handler(msg_type, context, message):
     qml_logger.log(log_level, "QML: %s", message)
 
 
+def _ft_factory_defaults() -> dict:
+    """ft_* code defaults = the SDK's factory acceptance thresholds.
+
+    These were zeros once: a zero min-mean/min-contrast can never fail
+    (both quantities are non-negative), which silently disabled the SDK's
+    calibration pre-write gate whenever a config lacked the ft_* keys — a
+    below-spec calibration then wrote the console EEPROM and displayed
+    PASSED (#473). Config files still override every key; only the
+    fallback changed.
+    """
+    f = factory_calibration_thresholds()
+    return {
+        "ft_min_mean_per_camera": f.min_mean_per_camera,
+        "ft_min_contrast_per_camera": f.min_contrast_per_camera,
+        "ft_min_bfi_per_camera": f.min_bfi_per_camera,
+        "ft_max_bfi_per_camera": f.max_bfi_per_camera,
+        "ft_min_bvi_per_camera": f.min_bvi_per_camera,
+        "ft_max_bvi_per_camera": f.max_bvi_per_camera,
+        "ft_max_dark_per_camera": f.max_dark_per_camera,
+    }
+
+
 def _load_app_config() -> dict:
     """Load application config from config/app_config.json. Returns defaults if missing or invalid."""
     defaults = {
@@ -110,13 +132,7 @@ def _load_app_config() -> dict:
         "powerOffUnusedCameras": False,
         "commVerbose": False,  # Enable cmd id and "." prints from MCU
         "verboseCommandHandling": False,  # Enable printf in MCU command handlers
-        "ft_min_mean_per_camera": [0] * 8,
-        "ft_min_contrast_per_camera": [0] * 8,
-        "ft_min_bfi_per_camera": [0.0] * 8,
-        "ft_max_bfi_per_camera": None,
-        "ft_min_bvi_per_camera": [0.0] * 8,
-        "ft_max_bvi_per_camera": None,
-        "ft_max_dark_per_camera": [3.0] * 8,
+        **_ft_factory_defaults(),
         "max_calibration_time_sec": 600,
         "calibration_scan_duration_sec": 15,
         "test_scan_duration_sec": 5,

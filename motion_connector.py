@@ -6178,6 +6178,46 @@ class MotionConnector(QObject):
         # on the GUI thread (same marshalling pattern as _pastScanBuffersReady).
         self._scanOutcomeWarningSignal.connect(self._on_scan_outcome_warning)
 
+    def _ft_thresholds(self):
+        """``CalibrationThresholds`` from the ft_* config values, falling
+        back per-field to the SDK's factory acceptance thresholds.
+
+        The fallback used to be ``[0.0]*8`` — bars that can never fail,
+        which turned the SDK's calibration pre-write gate, rollback, and
+        PASS verdict into no-ops (#473). The SDK now also refuses to start
+        a run whose gate cannot fail, so a config that somehow still zeroes
+        the thresholds surfaces as a loud refusal in the capture log
+        instead of a below-spec EEPROM write displayed as PASSED.
+        """
+        from omotion import CalibrationThresholds, factory_calibration_thresholds
+
+        f = factory_calibration_thresholds()
+        return CalibrationThresholds(
+            min_mean_per_camera=list(
+                self._ft_min_mean_per_camera or f.min_mean_per_camera),
+            min_contrast_per_camera=list(
+                self._ft_min_contrast_per_camera or f.min_contrast_per_camera),
+            min_bfi_per_camera=list(
+                self._ft_min_bfi_per_camera or f.min_bfi_per_camera),
+            min_bvi_per_camera=list(
+                self._ft_min_bvi_per_camera or f.min_bvi_per_camera),
+            max_bfi_per_camera=(
+                list(self._ft_max_bfi_per_camera)
+                if self._ft_max_bfi_per_camera is not None
+                else f.max_bfi_per_camera
+            ),
+            max_bvi_per_camera=(
+                list(self._ft_max_bvi_per_camera)
+                if self._ft_max_bvi_per_camera is not None
+                else f.max_bvi_per_camera
+            ),
+            max_dark_per_camera=(
+                list(self._ft_max_dark_per_camera)
+                if self._ft_max_dark_per_camera is not None
+                else f.max_dark_per_camera
+            ),
+        )
+
     @pyqtSlot()
     @pyqtSlot(str)
     def runCalibration(self, target: str = "both"):
@@ -6191,7 +6231,7 @@ class MotionConnector(QObject):
         Camera mask is still ``0xFF`` per side (every camera on the chosen
         sensor); the app config's leftMask/rightMask still don't apply.
         """
-        from omotion import CalibrationRequest, CalibrationThresholds
+        from omotion import CalibrationRequest
 
         if self._calibration_status == "running":
             return
@@ -6230,24 +6270,7 @@ class MotionConnector(QObject):
             self.calibrationStateChanged.emit()
             return
 
-        thresholds = CalibrationThresholds(
-            min_mean_per_camera=list(self._ft_min_mean_per_camera or [0.0]*8),
-            min_contrast_per_camera=list(self._ft_min_contrast_per_camera or [0.0]*8),
-            min_bfi_per_camera=list(self._ft_min_bfi_per_camera or [0.0]*8),
-            min_bvi_per_camera=list(self._ft_min_bvi_per_camera or [0.0]*8),
-            max_bfi_per_camera=(
-                list(self._ft_max_bfi_per_camera)
-                if self._ft_max_bfi_per_camera is not None else None
-            ),
-            max_bvi_per_camera=(
-                list(self._ft_max_bvi_per_camera)
-                if self._ft_max_bvi_per_camera is not None else None
-            ),
-            max_dark_per_camera=(
-                list(self._ft_max_dark_per_camera)
-                if self._ft_max_dark_per_camera is not None else None
-            ),
-        )
+        thresholds = self._ft_thresholds()
         # Retained so the override modal (#426) can show each measured
         # value against the bar it missed.
         self._calibration_thresholds = thresholds
@@ -6326,7 +6349,7 @@ class MotionConnector(QObject):
         ``"right"``, or ``"both"`` (default). Issue #117 — test stations
         with only one static phantom need to test one side at a time.
         """
-        from omotion import CalibrationRequest, CalibrationThresholds
+        from omotion import CalibrationRequest
 
         # Mutual exclusion with the Calibrate flow.
         if self._test_scan_status == "running":
@@ -6370,24 +6393,7 @@ class MotionConnector(QObject):
             self.testScanStateChanged.emit()
             return
 
-        thresholds = CalibrationThresholds(
-            min_mean_per_camera=list(self._ft_min_mean_per_camera or [0.0]*8),
-            min_contrast_per_camera=list(self._ft_min_contrast_per_camera or [0.0]*8),
-            min_bfi_per_camera=list(self._ft_min_bfi_per_camera or [0.0]*8),
-            min_bvi_per_camera=list(self._ft_min_bvi_per_camera or [0.0]*8),
-            max_bfi_per_camera=(
-                list(self._ft_max_bfi_per_camera)
-                if self._ft_max_bfi_per_camera is not None else None
-            ),
-            max_bvi_per_camera=(
-                list(self._ft_max_bvi_per_camera)
-                if self._ft_max_bvi_per_camera is not None else None
-            ),
-            max_dark_per_camera=(
-                list(self._ft_max_dark_per_camera)
-                if self._ft_max_dark_per_camera is not None else None
-            ),
-        )
+        thresholds = self._ft_thresholds()
         output_dir = os.path.join(self._data_root, "calibrations")
         os.makedirs(output_dir, exist_ok=True)
         req = CalibrationRequest(
