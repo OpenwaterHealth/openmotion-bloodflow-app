@@ -331,7 +331,6 @@ Item {
                         title: "Left Sensor"
                         sensorSide: "left"
                         connector: MotionInterface
-                        showFanControl: MotionInterface.appConfig.engineeringMode ? true : false
                         interactive: leftSelector.currentIndex === root.customPatternIndex
                         onCameraToggled: function(index) { root.toggleCamera("left", index) }
                     }
@@ -396,7 +395,6 @@ Item {
                         title: "Right Sensor"
                         sensorSide: "right"
                         connector: MotionInterface
-                        showFanControl: MotionInterface.appConfig.engineeringMode ? true : false
                         interactive: rightSelector.currentIndex === root.customPatternIndex
                         onCameraToggled: function(index) { root.toggleCamera("right", index) }
                     }
