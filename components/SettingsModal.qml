@@ -82,19 +82,6 @@ Item {
         )
     }
 
-    // #426 — raised by the connector when a FAILED calibration is eligible
-    // for manual override (light-derived metrics missed, ambient-dark OK).
-    CalibrationOverrideModal {
-        id: calibrationOverrideModal
-    }
-
-    Connections {
-        target: MotionInterface
-        function onCalibrationOverrideRequested() {
-            calibrationOverrideModal.open()
-        }
-    }
-
     // Emitted when the user enters the correct password for the audit log.
     // BloodFlow.qml opens the (ModalManager-governed) LogsModal in response.
     signal logsRequested()
@@ -1275,9 +1262,6 @@ Item {
                                 case "canceled":   return "#9E9E9E"
                                 case "timed_out":  return "#FF9800"
                                 case "error":      return "#F44336"
-                                // #426 — accepted below threshold: amber,
-                                // deliberately not the green of a real pass.
-                                case "overridden": return "#FF9800"
                                 default:           return "#9E9E9E"
                                 }
                             }
@@ -1325,11 +1309,6 @@ Item {
                                     return r2
                                         ? "Calibration Error — " + r2
                                         : "Calibration Error"
-                                case "overridden":
-                                    var r3 = MotionInterface.calibrationFailureReason
-                                    return r3
-                                        ? "Calibration Accepted (Below Threshold) — " + r3
-                                        : "Calibration Accepted (Below Threshold)"
                                 default:        return ""
                                 }
                             }

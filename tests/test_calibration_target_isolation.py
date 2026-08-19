@@ -101,12 +101,6 @@ _TERMINAL_TEXTS = (
     "Calibration Canceled",
     "Calibration Timed Out",   # may carry " — <reason>"
     "Calibration Error",       # may carry " — <reason>"
-    # #426. Unreachable unattended — it takes a click in the override modal
-    # — but listed so this table stays the full status vocabulary. A FAILED
-    # iteration here parks an override prompt; it never blocks the next
-    # iteration because starting a run retires the pending offer and the
-    # modal closes itself off calibrationOverridePending.
-    "Calibration Accepted (Below Threshold)",
 )
 _RUNNING_PREFIX = "Calibrating..."
 
