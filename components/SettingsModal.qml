@@ -1120,6 +1120,27 @@ Item {
                         Item { Layout.fillWidth: true }
                     }
 
+                    // Per-scan telemetry CSV (issue #471) — engineering-only
+                    // output (#43), now opt-in. Persisted immediately via
+                    // setWriteTelemetryCsv; the connector re-checks
+                    // engineeringMode && writeTelemetryCsv at scan start, so
+                    // a stale toggle never writes on a plain clinical build.
+                    FieldRow {
+                        label: "Save telemetry CSV"
+                        PillSwitch {
+                            objectName: "saveTelemetryCsvSwitch"
+                            Accessible.name: "Save telemetry CSV"
+                            checked: MotionInterface.appConfig.writeTelemetryCsv === true
+                            onToggled: MotionInterface.setWriteTelemetryCsv(checked)
+                        }
+                        Text {
+                            text: MotionInterface.appConfig.writeTelemetryCsv === true ? "On" : "Off"
+                            color: MotionInterface.appConfig.writeTelemetryCsv === true ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
                     // Laser-safety interlock test flag (issue #464) —
                     // persisted only; laser params are written once per
                     // console connect, so the change rides the next console

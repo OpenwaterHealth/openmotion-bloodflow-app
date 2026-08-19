@@ -77,6 +77,8 @@ class _StubMotionInterface(QObject):
         self._directory = "C:/tmp"
         self.saved_configs: list[dict] = []
         self.write_raw_csv_calls: list[bool] = []
+        self.write_telemetry_csv_calls: list[bool] = []
+        self._write_telemetry_csv = False
 
     # ── Mode flags (the gates under test) ────────────────────────────
     def setFlags(self, clinical: bool, engineering: bool):
@@ -107,6 +109,7 @@ class _StubMotionInterface(QObject):
             "altLaserPulseWidthEnabled": getattr(
                 self, "_alt_laser_enabled", False),
             "altCameraExposureUs": getattr(self, "_alt_exposure_us", 648),
+            "writeTelemetryCsv": self._write_telemetry_csv,
         }
 
     # ── open()/close() dependencies ──────────────────────────────────
@@ -125,6 +128,14 @@ class _StubMotionInterface(QObject):
     @pyqtSlot(bool)
     def setWriteRawCsv(self, enabled):
         self.write_raw_csv_calls.append(bool(enabled))
+
+    @pyqtSlot(bool)
+    def setWriteTelemetryCsv(self, enabled):
+        # Mimics the connector: persist-then-notify, so the switch's
+        # appConfig rebind sees the new value (#471).
+        self.write_telemetry_csv_calls.append(bool(enabled))
+        self._write_telemetry_csv = bool(enabled)
+        self.appConfigChanged.emit()
 
     @pyqtSlot("QVariant")
     def setRawCsvDurationSec(self, value):
@@ -407,6 +418,50 @@ def test_dark_contamination_warning_follows_the_selected_exposure(modal_factory)
 
     stub.setAltCameraEnabled(False)                 # feature off ⇒ no warning
     assert _control_visible(modal, name) is False
+
+
+def test_telemetry_csv_switch_gates_on_engineering_mode(modal_factory):
+    """#471: 'Save telemetry CSV' lives in the Engineering card — visible
+    only with the engineering unlock (clinical build included), never on
+    plain research/clinical sessions."""
+    stub = modal_factory.stub
+    stub.setFlags(clinical=False, engineering=True)
+    modal = modal_factory()
+    assert _control_visible(modal, "saveTelemetryCsvSwitch") is True
+
+    stub.setFlags(clinical=True, engineering=True)
+    assert _control_visible(modal, "saveTelemetryCsvSwitch") is True
+
+    stub.setFlags(clinical=False, engineering=False)
+    assert _control_visible(modal, "saveTelemetryCsvSwitch") is False
+
+    stub.setFlags(clinical=True, engineering=False)
+    assert _control_visible(modal, "saveTelemetryCsvSwitch") is False
+
+
+def test_telemetry_csv_switch_drives_connector_slot(modal_factory):
+    """#471: toggling the switch calls setWriteTelemetryCsv with the new
+    state — immediate-apply, no Save button involved."""
+    stub = modal_factory.stub
+    stub.setFlags(clinical=False, engineering=True)
+    stub._write_telemetry_csv = False
+    stub.write_telemetry_csv_calls.clear()
+    modal = modal_factory()
+
+    switch = modal.findChild(QObject, "saveTelemetryCsvSwitch")
+    assert switch is not None
+    assert switch.property("checked") is False
+
+    # click() (not toggle()) — only interactive toggles and click(), which
+    # routes through nextCheckState(), emit toggled(); the bare toggle()
+    # method flips checked silently and would never reach onToggled.
+    _invoke(switch, "click")
+    assert switch.property("checked") is True
+    assert stub.write_telemetry_csv_calls == [True]
+
+    _invoke(switch, "click")
+    assert switch.property("checked") is False
+    assert stub.write_telemetry_csv_calls == [True, False]
 
 
 def test_close_never_persists_clinical_mode(modal_factory):
