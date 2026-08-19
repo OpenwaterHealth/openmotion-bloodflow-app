@@ -7,9 +7,11 @@ import OpenMotion 1.0
 Window {
     id: testWin
     title: "Test Results"
-    width: 920
+    // Wide enough that the BFI/BVI columns (#469) fit without squeezing
+    // the Overall column out of view.
+    width: 1080
     height: 480
-    minimumWidth: 720
+    minimumWidth: 860
     minimumHeight: 360
     flags: Qt.Window
     modality: Qt.NonModal
@@ -34,7 +36,8 @@ Window {
         lines.push([
             "Side", "Cam", "LightMean", "MinMean", "MeanPF",
             "DarkMean", "MaxDark", "DarkPF",
-            "Contrast", "MinContrast", "ContrastPF", "Overall",
+            "Contrast", "MinContrast", "ContrastPF",
+            "BFI", "BFIPF", "BVI", "BVIPF", "Overall",
         ].join("\t"))
         for (var i = 0; i < testWin.rows.length; i++) {
             var r = testWin.rows[i]
@@ -49,6 +52,10 @@ Window {
                 _fmtNum(r.contrast, 5),
                 _fmtNum(r.min_contrast, 4),
                 r.contrast_pf,
+                _fmtNum(r.bfi, 3),
+                r.bfi_pf,
+                _fmtNum(r.bvi, 3),
+                r.bvi_pf,
                 r.overall,
             ].join("\t"))
         }
@@ -131,6 +138,8 @@ Window {
                 Text { Layout.preferredWidth: 90;  text: "Contrast";      color: AppTheme.textSecondary; font.bold: true; font.pixelSize: 12 }
                 Text { Layout.preferredWidth: 90;  text: "Min Contrast";  color: AppTheme.textSecondary; font.bold: true; font.pixelSize: 12 }
                 Text { Layout.preferredWidth: 80;  text: "Contrast PF";   color: AppTheme.textSecondary; font.bold: true; font.pixelSize: 12 }
+                Text { Layout.preferredWidth: 70;  text: "BFI";           color: AppTheme.textSecondary; font.bold: true; font.pixelSize: 12 }
+                Text { Layout.preferredWidth: 70;  text: "BVI";           color: AppTheme.textSecondary; font.bold: true; font.pixelSize: 12 }
                 Text { Layout.fillWidth: true;     text: "Overall";       color: AppTheme.textSecondary; font.bold: true; font.pixelSize: 12 }
             }
         }
@@ -149,6 +158,21 @@ Window {
                 // refresh on second-show, leaving rows bunched in a corner.
                 width: tableScroll.availableWidth
                 spacing: 0
+
+                // A terminal result with zero rows means no camera delivered
+                // a single sample (#469) — say so instead of showing a blank
+                // area under a bare FAIL/Error header.
+                Text {
+                    width: parent.width
+                    topPadding: 24
+                    horizontalAlignment: Text.AlignHCenter
+                    visible: !testWin.running && testWin.status !== ""
+                             && (!testWin.rows || testWin.rows.length === 0)
+                    text: "No per-camera data was captured."
+                    color: AppTheme.textSecondary
+                    font.pixelSize: 12
+                }
+
                 Repeater {
                     model: testWin.rows
                     delegate: Rectangle {
@@ -184,6 +208,11 @@ Window {
                             Text { Layout.preferredWidth: 90;  text: testWin._fmtNum(modelData.contrast, 5); color: AppTheme.textPrimary;  font.family: "Consolas"; font.pixelSize: 12 }
                             Text { Layout.preferredWidth: 90;  text: testWin._fmtNum(modelData.min_contrast, 4); color: AppTheme.textSecondary; font.family: "Consolas"; font.pixelSize: 12 }
                             Text { Layout.preferredWidth: 80;  text: modelData.contrast_pf; color: parent.parent._pfColor(modelData.contrast_pf); font.family: "Consolas"; font.bold: true; font.pixelSize: 12 }
+                            // BFI/BVI are diagnostic on a Test (#469): out-of-band
+                            // values render red but do not participate in Overall,
+                            // mirroring the SDK's mean+contrast+dark acceptance gate.
+                            Text { Layout.preferredWidth: 70;  text: testWin._fmtNum(modelData.bfi, 3); color: modelData.bfi_pf === "FAIL" ? parent.parent._failColor : AppTheme.textPrimary; font.family: "Consolas"; font.bold: modelData.bfi_pf === "FAIL"; font.pixelSize: 12 }
+                            Text { Layout.preferredWidth: 70;  text: testWin._fmtNum(modelData.bvi, 3); color: modelData.bvi_pf === "FAIL" ? parent.parent._failColor : AppTheme.textPrimary; font.family: "Consolas"; font.bold: modelData.bvi_pf === "FAIL"; font.pixelSize: 12 }
                             Text { Layout.fillWidth: true;     text: modelData.overall;    color: parent.parent._pfColor(modelData.overall);    font.family: "Consolas"; font.bold: true; font.pixelSize: 12 }
                         }
                     }

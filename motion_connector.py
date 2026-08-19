@@ -6368,7 +6368,14 @@ class MotionConnector(QObject):
                 f"✅ Test scan: PASS  (CSV: {result.csv_path})"
             )
         elif outcome == "failed":
-            if self._app_config.get("engineeringMode", False):
+            if not result.rows:
+                # FAILED with zero per-camera rows: no camera delivered a
+                # single corrected sample (SDK: passed = bool(rows) and …).
+                # Without a reason the window is an empty table under a
+                # bare "FAIL" header (#469). Not engineering-gated — this
+                # is a capture error, not threshold telemetry.
+                self._test_scan_failure_reason = "no camera data captured"
+            elif self._app_config.get("engineeringMode", False):
                 tests = (("mean", "mean_test"), ("contrast", "contrast_test"),
                          ("ambient", "dark_test"))
                 self._test_scan_failure_reason = _format_threshold_breakdown(
@@ -6425,6 +6432,13 @@ class MotionConnector(QObject):
                     else None
                 ),
                 "contrast_pf": r.contrast_test,
+                # Diagnostic only (#469): the SDK's Test acceptance gate is
+                # mean + contrast + dark (spec R5/R6), so the BFI/BVI
+                # verdicts color their cells but never flip "overall".
+                "bfi": r.bfi,
+                "bfi_pf": r.bfi_test,
+                "bvi": r.bvi,
+                "bvi_pf": r.bvi_test,
                 "overall": (
                     "PASS"
                     if r.mean_test == "PASS"

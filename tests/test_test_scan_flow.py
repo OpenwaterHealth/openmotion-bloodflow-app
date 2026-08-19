@@ -106,7 +106,63 @@ def test_on_test_scan_complete_passes_builds_rows(connector):
     assert row["light_mean"] == 120.0
     assert row["mean_pf"] == "PASS"
     assert row["dark_pf"] == "PASS"
+    assert row["bfi"] == 0.0
+    assert row["bfi_pf"] == "PASS"
+    assert row["bvi"] == 4.5
+    assert row["bvi_pf"] == "PASS"
     assert row["overall"] == "PASS"
+
+
+def test_bfi_bvi_are_diagnostic_only(connector):
+    """#469: BFI/BVI ride along in the rows for display, but the SDK's Test
+    acceptance gate is mean+contrast+dark — an out-of-band BFI/BVI must not
+    flip the row's Overall (which mirrors that gate)."""
+    from omotion.CalibrationWorkflow import (
+        CalibrationResultRow,
+        TestScanResult,
+    )
+
+    rows = [
+        CalibrationResultRow(
+            camera_index=0, side="left", cam_id=0,
+            mean=120.0, avg_contrast=0.30, bfi=1.058, bvi=-17.327,
+            dark=1.0, mean_test="PASS", contrast_test="PASS",
+            bfi_test="FAIL", bvi_test="FAIL", dark_test="PASS",
+            security_id="", hwid="",
+        ),
+    ]
+    res = TestScanResult(
+        ok=True, passed=True, canceled=False, error="",
+        csv_path="/tmp/x.csv", json_path="/tmp/x.json",
+        rows=rows, test_scan_left_path="", test_scan_right_path="",
+        started_timestamp="20260819_000000",
+    )
+    connector._on_test_scan_complete(res)
+    assert connector._test_scan_status == "passed"
+    row = connector._test_scan_rows[0]
+    assert row["bfi_pf"] == "FAIL"
+    assert row["bvi_pf"] == "FAIL"
+    assert row["overall"] == "PASS"
+
+
+def test_failed_with_no_rows_gets_a_reason(connector):
+    """#469: FAILED with zero rows (no camera delivered a sample) used to
+    render an empty table under a bare 'FAIL' header. The reason must be
+    set regardless of engineeringMode — it's a capture error, not
+    threshold telemetry."""
+    from omotion.CalibrationWorkflow import TestScanResult
+
+    assert connector._app_config.get("engineeringMode") is False
+    res = TestScanResult(
+        ok=True, passed=False, canceled=False, error="",
+        csv_path="/tmp/x.csv", json_path="/tmp/x.json",
+        rows=[], test_scan_left_path="", test_scan_right_path="",
+        started_timestamp="20260819_000000",
+    )
+    connector._on_test_scan_complete(res)
+    assert connector._test_scan_status == "failed"
+    assert connector._test_scan_rows == []
+    assert connector._test_scan_failure_reason == "no camera data captured"
 
 
 def test_on_test_scan_complete_dev_mode_failure_reason(connector):
