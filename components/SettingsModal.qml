@@ -998,6 +998,54 @@ Item {
                         Item { Layout.fillWidth: true }
                     }
 
+                    // Sensor-module fans (issue #463, FDA verification
+                    // testing) — ON/OFF via the sensor firmware's fan
+                    // command. State is seeded from the hardware at sensor
+                    // connect and cached (left/rightSensorFanOn). The
+                    // toggle re-binds checked afterwards so a failed
+                    // command snaps the switch back to the cached truth.
+                    FieldRow {
+                        label: "Left sensor fan"
+                        PillSwitch {
+                            objectName: "leftSensorFanSwitch"
+                            checked: MotionInterface.leftSensorFanOn
+                            enabled: MotionInterface.leftSensorConnected
+                            onToggled: {
+                                MotionInterface.setFanControl("left", checked)
+                                checked = Qt.binding(function() {
+                                    return MotionInterface.leftSensorFanOn
+                                })
+                            }
+                        }
+                        Text {
+                            text: MotionInterface.leftSensorFanOn ? "On" : "Off"
+                            color: MotionInterface.leftSensorFanOn ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    FieldRow {
+                        label: "Right sensor fan"
+                        PillSwitch {
+                            objectName: "rightSensorFanSwitch"
+                            checked: MotionInterface.rightSensorFanOn
+                            enabled: MotionInterface.rightSensorConnected
+                            onToggled: {
+                                MotionInterface.setFanControl("right", checked)
+                                checked = Qt.binding(function() {
+                                    return MotionInterface.rightSensorFanOn
+                                })
+                            }
+                        }
+                        Text {
+                            text: MotionInterface.rightSensorFanOn ? "On" : "Off"
+                            color: MotionInterface.rightSensorFanOn ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
                     // Sensor firmware debug flags — persisted to config AND
                     // pushed live to connected sensors via setSensorDebugFlag.
                     // onToggled (not onCheckedChanged) so the appConfig rebind
@@ -1070,6 +1118,44 @@ Item {
                             font.pixelSize: 12
                         }
                         Item { Layout.fillWidth: true }
+                    }
+
+                    // Laser-safety interlock test flag (issue #464) —
+                    // persisted only; laser params are written once per
+                    // console connect, so the change rides the next console
+                    // power-cycle/replug (which a tripped interlock needs
+                    // anyway to clear its latch). ON loads the fault param
+                    // set that trips the hardware interlock at the next
+                    // laser start.
+                    FieldRow {
+                        label: "Force laser fail"
+                        PillSwitch {
+                            objectName: "forceLaserFailSwitch"
+                            checked: MotionInterface.appConfig.forceLaserFail === true
+                            onToggled: MotionInterface.setForceLaserFail(checked)
+                        }
+                        Text {
+                            text: MotionInterface.appConfig.forceLaserFail === true ? "On" : "Off"
+                            color: MotionInterface.appConfig.forceLaserFail === true ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    // Shown only when armed — a live hazard note, like the
+                    // sensor-debug-log warning above.
+                    Text {
+                        visible: MotionInterface.appConfig.forceLaserFail === true
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 4
+                        Layout.bottomMargin: 6
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: 11
+                        color: AppTheme.accentYellow
+                        text: qsTr("Safety-trip laser params load at the next console "
+                                   + "connect; every laser start after that trips the "
+                                   + "interlock. Power-cycle the console after changing "
+                                   + "this, and turn it off before real scans.")
                     }
 
                     // ── Calibration / Test (moved here from the former

@@ -1111,6 +1111,9 @@ class MotionConnector(QObject):
     tecDacChanged = pyqtSignal()
     appConfigChanged = pyqtSignal()
     consoleFanChanged = pyqtSignal()
+    # Sensor-module fan state cache (issue #463) — notify for the
+    # left/rightSensorFanOn properties behind the Engineering switches.
+    sensorFanChanged = pyqtSignal()
     # Per-device firmware versions, refreshed on every (dis)connect by
     # _log_device_stats. Surfaced to Settings → System Information.
     firmwareVersionsChanged = pyqtSignal()
@@ -1932,6 +1935,19 @@ class MotionConnector(QObject):
         Engineering settings switch when the Settings modal opens."""
         return self._console_fan_on
 
+    @pyqtProperty(bool, notify=sensorFanChanged)
+    def leftSensorFanOn(self) -> bool:
+        """Cached left sensor-module fan state (issue #463). Seeded from
+        the hardware by the connect-time getFanControlStatus poll, updated
+        by setFanControl, and reset to unknown (shown Off) at disconnect.
+        Read by the Engineering settings switch."""
+        return bool(self._last_fan_status.get("left"))
+
+    @pyqtProperty(bool, notify=sensorFanChanged)
+    def rightSensorFanOn(self) -> bool:
+        """Right-side counterpart of leftSensorFanOn."""
+        return bool(self._last_fan_status.get("right"))
+
     @pyqtSlot(bool, result=bool)
     def setConsoleFan(self, on: bool) -> bool:
         """Drive the console fan to 100% (on) or 0% (off).
@@ -1992,6 +2008,35 @@ class MotionConnector(QObject):
                 logger.warning("Failed to set console debug logging")
         except Exception as e:  # noqa: BLE001 — slot must not raise
             logger.error("Error setting console debug logging: %s", e)
+
+    @pyqtSlot(bool)
+    def setForceLaserFail(self, enabled: bool) -> None:
+        """Toggle the forceLaserFail flag (Settings → Engineering, issue #464).
+
+        Persists the flag and updates the runtime cache that
+        ``set_laser_power_from_config`` reads. Deliberately NOT pushed live:
+        the laser param set is written once per console connect, so the
+        change takes effect at the next console power-cycle/replug — which
+        the interlock test needs anyway, since a tripped interlock stays
+        latched until a power-cycle, and that same power-cycle loads the new
+        param set. ON selects the SDK's ``laser_params_fault.json``, a set
+        engineered to trip the hardware laser-safety interlock at the next
+        laser start.
+        """
+        enabled = bool(enabled)
+        old = self._app_config.get("forceLaserFail")
+        self._force_laser_fail = enabled
+        self._app_config["forceLaserFail"] = enabled
+        self._save_app_config()
+        self.appConfigChanged.emit()
+        if old != enabled:
+            self._audit.log("settings_changed",
+                            {"changes": {"forceLaserFail":
+                                         {"old": old, "new": enabled}}})
+        logger.info(
+            "forceLaserFail set to %s — applies when laser params load at "
+            "the next console connect", enabled,
+        )
 
     @pyqtProperty(bool, notify=laserStateChanged)
     def laserOn(self):
@@ -2234,6 +2279,7 @@ class MotionConnector(QObject):
             elif is_now_lost:
                 self._leftSensorConnected = False
                 self._last_fan_status["left"] = None
+                self.sensorFanChanged.emit()
                 try:
                     if getattr(self._interface.left, "clear_id_cache", None):
                         self._interface.left.clear_id_cache()
@@ -2246,6 +2292,7 @@ class MotionConnector(QObject):
             elif is_now_lost:
                 self._rightSensorConnected = False
                 self._last_fan_status["right"] = None
+                self.sensorFanChanged.emit()
                 try:
                     if getattr(self._interface.right, "clear_id_cache", None):
                         self._interface.right.clear_id_cache()
@@ -5760,13 +5807,14 @@ class MotionConnector(QObject):
         Returns:
             bool: True if command was sent successfully, False otherwise
         """
+        side = sensor_side.lower()
         try:
-            if sensor_side.lower() == "left":
+            if side == "left":
                 if not self._leftSensorConnected:
                     logger.error("Left sensor not connected")
                     return False
                 result = self._interface.left.set_fan_control(fan_on)
-            elif sensor_side.lower() == "right":
+            elif side == "right":
                 if not self._rightSensorConnected:
                     logger.error("Right sensor not connected")
                     return False
@@ -5779,6 +5827,10 @@ class MotionConnector(QObject):
                 logger.info(
                     f"Fan control set to {'ON' if fan_on else 'OFF'} for {sensor_side} sensor"
                 )
+                # Keep the QML-facing cache truthful (issue #463) — the
+                # Engineering switches bind to left/rightSensorFanOn.
+                self._last_fan_status[side] = bool(fan_on)
+                self.sensorFanChanged.emit()
             else:
                 logger.error(f"Failed to set fan control for {sensor_side} sensor")
 
@@ -5813,6 +5865,7 @@ class MotionConnector(QObject):
             status = sensor.get_fan_control_status()
             if status != self._last_fan_status.get(side):
                 self._last_fan_status[side] = status
+                self.sensorFanChanged.emit()
                 logger.info(
                     f"Fan status for {sensor_side} sensor: {'ON' if status else 'OFF'}"
                 )
