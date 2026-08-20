@@ -1,5 +1,8 @@
 """History data-management connector slots — DB-only, no hardware."""
 
+import datetime
+import os
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -13,6 +16,13 @@ from data_sources import _CameraBuffer
 from omotion.ScanDatabase import ScanDatabase
 
 pytestmark = pytest.mark.unit
+
+
+def _local_display(ts):
+    utc_dt = datetime.datetime.strptime(ts, "%Y%m%d_%H%M%S").replace(
+        tzinfo=datetime.timezone.utc
+    )
+    return utc_dt.astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _connector(tmp_path, scan_db_path):
@@ -51,6 +61,25 @@ def _make_session(db_path, label, start, end, left_mask, right_mask,
     db.close()
     return sid
 
+
+def test_friendly_ts_converts_utc_to_local_time(monkeypatch):
+    if not hasattr(time, "tzset"):
+        pytest.skip("time.tzset is unavailable on this platform")
+
+    old_tz = os.environ.get("TZ")
+    try:
+        monkeypatch.setenv("TZ", "America/New_York")
+        time.tzset()
+
+        assert MotionConnector._friendly_ts(
+            "20260612_093100"
+        ) == "2026-06-12 05:31:00"
+    finally:
+        if old_tz is None:
+            monkeypatch.delenv("TZ", raising=False)
+        else:
+            monkeypatch.setenv("TZ", old_tz)
+        time.tzset()
 
 def test_config_name_known_and_unknown():
     assert _config_name(0x5A) == "Near"
@@ -100,7 +129,7 @@ def test_get_scan_sessions_rows_and_sort(tmp_path):
     assert top["durationSec"] == 15.0
     assert top["leftMask"] == 0x5A and top["rightMask"] == 0x66
     assert top["interrupted"] is False
-    assert top["dateTime"] == "2026-06-12 09:31:00"
+    assert top["dateTime"] == _local_display("20260612_093100")
 
 
 # ── Issue #335 — History duration must be the actual trigger-ON scan time ──
@@ -363,4 +392,4 @@ def test_load_past_scan_worker_emits_display_meta_from_session(tmp_path):
     assert captured, "worker did not emit _pastScanBuffersReady"
     display_meta = captured[-1][-1]
     assert display_meta["userLabel"] == "Patient A"
-    assert display_meta["dateTime"] == "2026-06-23 11:19:35"
+    assert display_meta["dateTime"] == _local_display("20260623_111935")

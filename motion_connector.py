@@ -2789,11 +2789,19 @@ class MotionConnector(QObject):
 
     @staticmethod
     def _friendly_ts(ts: str) -> str:
-        """'YYYYMMDD_HHMMSS' -> 'YYYY-MM-DD HH:MM:SS'; pass through."""
+        """Convert a UTC scan timestamp to local time for display."""
         if not ts or len(ts) != 15:
             return ts or "-"
-        return (f"{ts[0:4]}-{ts[4:6]}-{ts[6:8]} "
-                f"{ts[9:11]}:{ts[11:13]}:{ts[13:15]}")
+
+        try:
+            utc_dt = datetime.datetime.strptime(ts, "%Y%m%d_%H%M%S").replace(
+                tzinfo=datetime.timezone.utc
+            )
+        except ValueError:
+            return ts
+
+        local_dt = utc_dt.astimezone()
+        return local_dt.strftime("%Y-%m-%d %H:%M:%S")
 
     def _session_to_row(self, s: dict) -> dict:
         """Flatten one ScanDatabase session dict into the QVariantMap the
