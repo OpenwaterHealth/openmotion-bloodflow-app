@@ -1,9 +1,7 @@
 """History data-management connector slots — DB-only, no hardware."""
 
-import datetime
-import os
-import time
 from unittest.mock import MagicMock
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -16,13 +14,6 @@ from data_sources import _CameraBuffer
 from omotion.ScanDatabase import ScanDatabase
 
 pytestmark = pytest.mark.unit
-
-
-def _local_display(ts):
-    utc_dt = datetime.datetime.strptime(ts, "%Y%m%d_%H%M%S").replace(
-        tzinfo=datetime.timezone.utc
-    )
-    return utc_dt.astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _connector(tmp_path, scan_db_path):
@@ -62,24 +53,12 @@ def _make_session(db_path, label, start, end, left_mask, right_mask,
     return sid
 
 
-def test_friendly_ts_converts_utc_to_local_time(monkeypatch):
-    if not hasattr(time, "tzset"):
-        pytest.skip("time.tzset is unavailable on this platform")
+def test_friendly_ts_converts_utc_to_local_time():
+    eastern = ZoneInfo("America/New_York")
+    assert MotionConnector._friendly_ts(
+        "20260612_093100", tz=eastern
+    ) == "2026-06-12 05:31:00"
 
-    old_tz = os.environ.get("TZ")
-    try:
-        monkeypatch.setenv("TZ", "America/New_York")
-        time.tzset()
-
-        assert MotionConnector._friendly_ts(
-            "20260612_093100"
-        ) == "2026-06-12 05:31:00"
-    finally:
-        if old_tz is None:
-            monkeypatch.delenv("TZ", raising=False)
-        else:
-            monkeypatch.setenv("TZ", old_tz)
-        time.tzset()
 
 def test_config_name_known_and_unknown():
     assert _config_name(0x5A) == "Near"
@@ -116,11 +95,19 @@ def test_get_scan_sessions_skips_malformed_row_keeps_rest(tmp_path):
     assert "20260612_093000_boom" not in labels
 
 
-def test_get_scan_sessions_rows_and_sort(tmp_path):
+def test_get_scan_sessions_rows_and_sort(tmp_path, monkeypatch):
     db_path = str(tmp_path / "scans.db")
     _make_session(db_path, "20260612_092000_subjA", 100.0, 105.0, 0xC3, 0xC3)
     _make_session(db_path, "20260612_093100_subjB", 200.0, 215.0, 0x5A, 0x66)
     c = _connector(tmp_path, db_path)
+
+    real_friendly_ts = MotionConnector._friendly_ts
+    eastern = ZoneInfo("America/New_York")
+    monkeypatch.setattr(
+        MotionConnector,
+        "_friendly_ts",
+        staticmethod(lambda ts: real_friendly_ts(ts, tz=eastern)),
+    )
 
     rows = c.get_scan_sessions()
     assert [r["userLabel"] for r in rows] == ["subjB", "subjA"]  # newest first
@@ -129,7 +116,7 @@ def test_get_scan_sessions_rows_and_sort(tmp_path):
     assert top["durationSec"] == 15.0
     assert top["leftMask"] == 0x5A and top["rightMask"] == 0x66
     assert top["interrupted"] is False
-    assert top["dateTime"] == _local_display("20260612_093100")
+    assert top["dateTime"] == "2026-06-12 05:31:00"
 
 
 # ── Issue #335 — History duration must be the actual trigger-ON scan time ──
@@ -370,7 +357,7 @@ def test_load_past_scan_slot_missing_display_meta_leaves_label_blank(tmp_path):
     assert src.dateTime == ""
 
 
-def test_load_past_scan_worker_emits_display_meta_from_session(tmp_path):
+def test_load_past_scan_worker_emits_display_meta_from_session(tmp_path, monkeypatch):
     """The worker derives the badge's userLabel/dateTime from the same session
     row the History list renders (prefers session_meta.subject_id over the label
     suffix), so the badge can never disagree with the clicked row."""
@@ -383,6 +370,14 @@ def test_load_past_scan_worker_emits_display_meta_from_session(tmp_path):
     _insert_rows(db_path, sid, 3)
     c = _connector(tmp_path, db_path)
 
+    real_friendly_ts = MotionConnector._friendly_ts
+    eastern = ZoneInfo("America/New_York")
+    monkeypatch.setattr(
+        MotionConnector,
+        "_friendly_ts",
+        staticmethod(lambda ts: real_friendly_ts(ts, tz=eastern)),
+    )
+
     captured = []
     c._pastScanBuffersReady.connect(lambda *a: captured.append(a))
     c._load_past_scan_worker(
@@ -392,4 +387,5 @@ def test_load_past_scan_worker_emits_display_meta_from_session(tmp_path):
     assert captured, "worker did not emit _pastScanBuffersReady"
     display_meta = captured[-1][-1]
     assert display_meta["userLabel"] == "Patient A"
-    assert display_meta["dateTime"] == _local_display("20260623_111935")
+    assert display_meta["dateTime"] == "2026-06-23 07:19:35"
+
