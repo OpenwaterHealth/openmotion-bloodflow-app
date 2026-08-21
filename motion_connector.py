@@ -44,6 +44,11 @@ from omotion.config import (
     DEBUG_FLAG_SEND_DEFER,
     DEBUG_FLAG_HISTO_STALL,
 )
+
+try:
+    from omotion.config import DEBUG_FLAG_FID_CORRUPT
+except ImportError:  # SDK < 1.11.0 predates the constant (sdk#220)
+    DEBUG_FLAG_FID_CORRUPT = 0x800
 from omotion.MotionProcessing import process_bin_file
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
 from omotion.contact_quality import CQThresholds, ContactQualityMonitor
@@ -1184,6 +1189,7 @@ class MotionConnector(QObject):
         self._histo_throttle              = bool(cfg.get("histoThrottle", False))
         self._histo_cmp                   = bool(cfg.get("histoCmp", False))
         self._histo_stall_test           = bool(cfg.get("debugHistoStallTest", False))
+        self._fid_corrupt_test            = bool(cfg.get("debugFidCorruptTest", False))
         self._send_data_defer             = bool(cfg.get("deferHistoSend", False))
         self._comm_verbose                = bool(cfg.get("commVerbose", False))
         self._verbose_command_handling    = bool(cfg.get("verboseCommandHandling", False))
@@ -1438,6 +1444,8 @@ class MotionConnector(QObject):
             flags |= DEBUG_FLAG_SEND_DEFER
         if self._histo_stall_test:
             flags |= DEBUG_FLAG_HISTO_STALL
+        if self._fid_corrupt_test:
+            flags |= DEBUG_FLAG_FID_CORRUPT
         return flags
 
     def _apply_sensor_debug_flags(self) -> None:

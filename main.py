@@ -103,6 +103,12 @@ def _load_app_config() -> dict:
         # scan deterministically loses all camera data ~45 s in while USB
         # stays alive (sensor-fw#75) — the #248/#174 repro. Default off.
         "debugHistoStallTest": False,
+        # Bench lever: sets DEBUG_FLAG_FID_CORRUPT on both sensors so the
+        # firmware injects the etch-a-sketch frame_id corruption on command
+        # (sensor-fw#123 / sdk#220 repro). Config-only: the app re-pushes its
+        # debug-flag mask on every connect, which would wipe a flag armed
+        # out-of-band. Default off.
+        "debugFidCorruptTest": False,
         # In-app updater source overrides (default None => production GitHub
         # repo). updateRepo swaps the owner/repo; updateApiUrl fully overrides
         # the releases-latest endpoint (used by the local update-test server).
