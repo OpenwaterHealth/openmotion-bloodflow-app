@@ -27,6 +27,10 @@ from motion_config import (
     camera_settings_from_config,
     laser_pulse_width_from_config,
     ta_pulse_width_write,
+    ALT_PULSE_WIDTH_SAFETY_CEILING_US,
+    LASER_PULSE_WIDTH_MAX_US,
+    TA_PULSE_TRUNCATION_TICKS,
+    safety_pulse_width_ul_writes,
 )
 from motion_connector import MotionConnector
 
@@ -559,3 +563,185 @@ class TestQmlBridge:
         settings, reason = camera_settings_from_config(747, stored)
         assert reason == ""
         assert settings.gains == (16, 4, 2, 1, 1, 2, 4, 8)
+
+
+# ── Safety PULSE_WIDTH_UL ceiling (#483) ─────────────────────────────────────
+# The safety FPGAs latch E-202 when the ACTUAL pulse exceeds their
+# PULSE_WIDTH_UL (1000 µs stock, ~550 µs calibrated), so the alt-pulse-width
+# toggle raises both ceilings to the dropdown max at scan start — before the
+# TA pulse is widened — and restores them after the TA restore.
+
+CEILING_BYTES = bytes([219, 26, 0, 0])      # 2200 µs = 6875 ticks LE
+STOCK_BYTES = bytes([53, 12, 0, 0])         # laser_params.json 1000 µs
+
+
+class TestSafetyPulseWidthUlWrites:
+    def test_ceiling_targets_both_safety_fpgas(self):
+        writes = safety_pulse_width_ul_writes(ALT_PULSE_WIDTH_SAFETY_CEILING_US)
+        assert [w[0] for w in writes] == ["EE_PULSE_WIDTH_UL", "OPT_PULSE_WIDTH_UL"]
+        for (name, kwargs, ticks, source), channel in zip(writes, (6, 7)):
+            assert ticks == 6875  # 2200 µs / 0.32 µs per tick
+            assert kwargs["data"] == bytearray(CEILING_BYTES)
+            # Safety EE / OPT per fpga_model.json.
+            assert kwargs["mux_index"] == 1
+            assert kwargs["channel"] == channel
+            assert kwargs["device_addr"] == 0x41
+            assert kwargs["reg_addr"] == 0x04
+            assert "ceiling" in source
+
+    def test_ceiling_covers_the_whole_dropdown(self):
+        assert ALT_PULSE_WIDTH_SAFETY_CEILING_US == LASER_PULSE_WIDTH_MAX_US
+        _, top_ticks = ta_pulse_width_write(LASER_PULSE_WIDTH_MAX_US)
+        ceiling_ticks = safety_pulse_width_ul_writes(
+            ALT_PULSE_WIDTH_SAFETY_CEILING_US)[0][2]
+        # The TA drive runs ~54 ticks short of its register, so even the
+        # top dropdown entry measures under the ceiling.
+        assert top_ticks - TA_PULSE_TRUNCATION_TICKS < ceiling_ticks
+
+    def test_restore_without_user_config_is_the_stock_1000us(self):
+        for name, kwargs, ticks, source in safety_pulse_width_ul_writes(None):
+            assert kwargs["data"] == bytearray(STOCK_BYTES)
+            assert ticks == 3125
+            assert "laser_params" in source
+
+    def test_restore_prefers_the_console_user_config(self):
+        """A WI-15-calibrated console holds ~TA×1.1 in flash (µs); restoring
+        the stock 1000 µs there would leave it looser than calibrated."""
+        ee, opt = safety_pulse_width_ul_writes(
+            None, user_config={"EE_PULSE_WIDTH_UL": 550,
+                               "OPT_PULSE_WIDTH_UL": 525.0})
+        assert ee[2] == 1719  # 550 / 0.32, same rounding as the SDK override
+        assert ee[1]["data"] == bytearray((1719).to_bytes(4, "little"))
+        assert opt[2] == 1641
+        assert "user-config" in ee[3] and "user-config" in opt[3]
+
+    def test_restore_ignores_garbage_user_config_values(self):
+        writes = safety_pulse_width_ul_writes(
+            None, user_config={"EE_PULSE_WIDTH_UL": "abc",
+                               "OPT_PULSE_WIDTH_UL": True})
+        for name, kwargs, ticks, source in writes:
+            assert ticks == 3125
+            assert "laser_params" in source
+
+
+class TestConnectorSafetyCeiling:
+    def _setup(self, tmp_path, app_config, write_ok=True):
+        c = _connector(tmp_path, app_config)
+        c._interface.console.write_i2c_packet = MagicMock(return_value=write_ok)
+        c._interface.console.read_config = MagicMock(return_value=None)
+        return c, c._interface.console.write_i2c_packet
+
+    @staticmethod
+    def _calls(write):
+        return [(k.kwargs["channel"], bytes(k.kwargs["data"]))
+                for k in write.call_args_list]
+
+    def test_disabled_and_clean_writes_nothing(self, tmp_path):
+        c, write = self._setup(tmp_path, {})
+        assert c._apply_alt_safety_pulse_width_ul() is True
+        write.assert_not_called()
+
+    def test_enabled_raises_both_ceilings_before_the_ta_write(self, tmp_path):
+        c, write = self._setup(tmp_path, {
+            "altLaserPulseWidthEnabled": True,
+            "altLaserPulseWidthUsec": 2200,
+        })
+        c._apply_alt_laser_pulse_width_registers()
+        assert self._calls(write) == [
+            (6, CEILING_BYTES),
+            (7, CEILING_BYTES),
+            (4, (6875).to_bytes(3, "little")),
+        ]
+        assert c._app_config["altLaserSafetyCeilingDirty"] is True
+        assert c._app_config["altLaserPulseWidthDirty"] is True
+
+    def test_failed_raise_skips_the_ta_write(self, tmp_path):
+        """Widening the pulse above a ceiling that didn't move would latch
+        E-202 on the first pulse; the laser keeps its previous width."""
+        c, write = self._setup(tmp_path, {
+            "altLaserPulseWidthEnabled": True,
+            "altLaserPulseWidthUsec": 1500,
+        }, write_ok=False)
+        c._apply_alt_laser_pulse_width_registers()
+        assert [k.kwargs["channel"] for k in write.call_args_list] == [6, 7]
+        assert c._app_config.get("altLaserPulseWidthDirty") is not True
+
+    def test_partial_raise_failure_skips_ta_and_stays_dirty(self, tmp_path):
+        c, write = self._setup(tmp_path, {
+            "altLaserPulseWidthEnabled": True,
+            "altLaserPulseWidthUsec": 1500,
+        })
+        write.side_effect = [True, False]
+        c._apply_alt_laser_pulse_width_registers()
+        assert [k.kwargs["channel"] for k in write.call_args_list] == [6, 7]
+        assert c._app_config["altLaserSafetyCeilingDirty"] is True
+
+    def test_disable_restores_ta_first_then_ceilings_once(self, tmp_path):
+        c, write = self._setup(tmp_path, {
+            "altLaserPulseWidthEnabled": False,
+            "altLaserPulseWidthDirty": True,
+            "altLaserSafetyCeilingDirty": True,
+        })
+        c._apply_alt_laser_pulse_width_registers()
+        assert self._calls(write) == [
+            (4, bytes([27, 6, 0])),
+            (6, STOCK_BYTES),
+            (7, STOCK_BYTES),
+        ]
+        assert c._app_config["altLaserSafetyCeilingDirty"] is False
+        write.reset_mock()
+        c._apply_alt_laser_pulse_width_registers()  # nothing left to restore
+        write.assert_not_called()
+
+    def test_restore_uses_the_console_user_config_when_present(self, tmp_path):
+        from types import SimpleNamespace
+        c, write = self._setup(tmp_path, {
+            "altLaserPulseWidthEnabled": False,
+            "altLaserSafetyCeilingDirty": True,
+        })
+        c._interface.console.read_config = MagicMock(
+            return_value=SimpleNamespace(json_data={
+                "EE_PULSE_WIDTH_UL": 550, "OPT_PULSE_WIDTH_UL": 550}))
+        assert c._apply_alt_safety_pulse_width_ul() is True
+        assert self._calls(write) == [
+            (6, (1719).to_bytes(4, "little")),
+            (7, (1719).to_bytes(4, "little")),
+        ]
+
+    def test_failed_restore_keeps_dirty_for_retry(self, tmp_path):
+        c, write = self._setup(tmp_path, {
+            "altLaserPulseWidthEnabled": False,
+            "altLaserSafetyCeilingDirty": True,
+        }, write_ok=False)
+        assert c._apply_alt_safety_pulse_width_ul() is False
+        assert c._app_config["altLaserSafetyCeilingDirty"] is True
+
+    def test_force_laser_fail_armed_writes_nothing(self, tmp_path):
+        """forceLaserFail stages EE_PULSE_WIDTH_UL = 0 via apply_laser_power;
+        raising OR restoring here would neutralize that test (sdk#252)."""
+        c, write = self._setup(tmp_path, {
+            "altLaserPulseWidthEnabled": True,
+            "altLaserPulseWidthUsec": 1500,
+            "forceLaserFail": True,
+        })
+        assert c._apply_alt_safety_pulse_width_ul() is True
+        write.assert_not_called()
+
+        c2, write2 = self._setup(tmp_path, {
+            "altLaserPulseWidthEnabled": False,
+            "altLaserSafetyCeilingDirty": True,
+            "forceLaserFail": True,
+        })
+        c2._apply_alt_safety_pulse_width_ul()
+        write2.assert_not_called()
+        assert c2._app_config["altLaserSafetyCeilingDirty"] is True
+
+    def test_plain_clinical_build_writes_nothing(self, tmp_path):
+        c, write = self._setup(tmp_path, {
+            "altLaserPulseWidthEnabled": True,
+            "altLaserPulseWidthUsec": 1500,
+            "clinicalMode": True,
+            "engineeringMode": False,
+        })
+        c._apply_alt_laser_pulse_width_registers()
+        write.assert_not_called()

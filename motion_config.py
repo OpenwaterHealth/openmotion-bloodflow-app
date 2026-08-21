@@ -241,12 +241,15 @@ FW_DEFAULT_CAMERA_GAINS = (16, 4, 2, 1, 1, 2, 4, 16)
 # The console trigger's LaserPulseWidthUsec gates the TA laser drive; the
 # SDK's DEFAULT_TRIGGER_CONFIG (omotion/config.py) ships 500 µs. Bench facts
 # (2026-07 drift campaign): the measured OPTICAL pulse is driver-shaped at
-# ~494 µs regardless of longer gates — shorter gates CLIP it. The stock
-# safety FPGA PULSE_WIDTH_UL interlock trips and LATCHES (until console
-# power-cycle) above ~1000 µs; the experimenter must adjust the safety
-# config before using wider gates. No restore path is needed here: the scan
-# flow re-resolves the full trigger config from SDK defaults before every
-# scan, so disabling the toggle is sufficient.
+# ~494 µs regardless of longer gates — shorter gates CLIP it. The safety
+# FPGAs' PULSE_WIDTH_UL interlock trips and LATCHES (until console
+# power-cycle) above the unit's ceiling — 1000 µs stock, ~TA x 1.1 ≈ 550 µs
+# on a WI-00015-calibrated console — so while the toggle is on the app
+# raises both ceilings to ALT_PULSE_WIDTH_SAFETY_CEILING_US at scan start,
+# before widening the pulse (#483, safety_pulse_width_ul_writes below). No
+# restore path is needed for the trigger config itself: the scan flow
+# re-resolves it from SDK defaults before every scan, so disabling the
+# toggle is sufficient there.
 # The 20 µs floor is a HARDWARE limit, not a UI choice — see
 # TA_PULSE_MIN_TICKS below: the TA driver's compare underflows below 55
 # ticks (17.6 µs) and leaves the drive latched on. 20 µs = 63 ticks keeps
@@ -377,6 +380,122 @@ def ta_pulse_width_write(width_us=None):
         "data": data,
     }
     return write_kwargs, ticks
+
+
+# --- Alt-pulse-width safety ceiling (#483) ------------------------------------
+# The safety FPGAs (Safety EE = mux 1 ch 6, Safety OPT = mux 1 ch 7, I2C
+# 0x41) measure the ACTUAL laser pulse and trip + LATCH TA_shutdown (E-202,
+# console power-cycle to clear) when it exceeds their PULSE_WIDTH_UL register
+# (offset 0x04, 32-bit LE, 0.32 µs/tick — fpga_model.json "EE/OPT_PULSE_
+# WIDTH_UL"). Three writers set that register; on a live console they land in
+# this order:
+#   1. console-fw applies the flash user config at boot and on every config
+#      write (a WI-00015-calibrated unit holds ~TA_PULSE_WIDTH x 1.1 ≈ 550 µs);
+#   2. the SDK's apply_laser_power (once per console connect) writes the
+#      bundled laser_params.json stock [53, 12, 0, 0] = 3125 ticks = 1000 µs,
+#      then re-applies any flash override on top;
+#   3. this app, at scan start — after both of the above.
+# So an alternative pulse width above the unit's ceiling (anything > 1000 µs
+# on a research unit, > ~550 µs on a calibrated one) latches the interlock on
+# the first pulse unless the ceiling is raised first. While the toggle is on,
+# the connector writes ALT_PULSE_WIDTH_SAFETY_CEILING_US to BOTH registers
+# before the TA pulse_width write (raise before widening); on the first scan
+# after the toggle is turned off it restores them after the TA restore
+# (narrow before lowering) — to the flash value when the console has one,
+# else the stock 1000 µs. Decided on #449 (Brad 2026-08-17, Ethan
+# 2026-08-21): the shipped default stays 1000 µs; only the engineering
+# toggle ever raises the ceiling, and only for as long as it is on.
+ALT_PULSE_WIDTH_SAFETY_CEILING_US = LASER_PULSE_WIDTH_MAX_US  # 2200 µs = 6875 ticks
+SAFETY_PULSE_TICK_US = 0.32
+SAFETY_PULSE_WIDTH_UL_STOCK_TICKS = 3125  # laser_params.json [53, 12, 0, 0]
+SAFETY_PULSE_WIDTH_UL_BYTES = 4           # fpga_model.json data_size "32B"
+SAFETY_PULSE_WIDTH_UL_REGISTERS = (
+    # friendlyName, fallback channel (mux 1, I2C 0x41, offset 0x04)
+    ("EE_PULSE_WIDTH_UL", 6),
+    ("OPT_PULSE_WIDTH_UL", 7),
+)
+
+
+def safety_pulse_width_ul_writes(ceiling_us=None, user_config=None):
+    """Build the I2C writes that program both safety FPGAs' PULSE_WIDTH_UL.
+
+    ``ceiling_us`` is the limit to write (the alt-pulse-width raise path).
+    ``None`` means "the unit's baseline" (restore path): the console's flash
+    user-config value for that register when ``user_config`` (the
+    ``read_config().json_data`` dict) carries a numeric one — a calibrated
+    console must not be left looser than calibrated — else the
+    laser_params.json stock bytes.
+
+    Returns a list of ``(friendly_name, write_kwargs, ticks, source)`` in
+    EE, OPT order; ``write_kwargs`` feed ``console.write_i2c_packet`` and
+    ``source`` says where the value came from (for the log line). Never
+    raises: register locations and the stock baseline resolve from the
+    SDK's bundled fpga_model/laser_params when available and fall back to
+    the constants above (same data, hardcoded) so a missing/renamed SDK
+    entry can't break scan start.
+    """
+    names = tuple(name for name, _ in SAFETY_PULSE_WIDTH_UL_REGISTERS)
+    try:
+        from omotion.laser import FpgaMap
+        fpga_map = FpgaMap()
+    except Exception:
+        fpga_map = None
+
+    stock = {}
+    if ceiling_us is None:
+        try:
+            from omotion.laser import load_laser_params
+            for param in load_laser_params():
+                if param.get("friendlyName") in names:
+                    stock[param["friendlyName"]] = bytearray(param["dataToSend"])
+        except Exception:
+            stock = {}
+
+    writes = []
+    for name, fallback_channel in SAFETY_PULSE_WIDTH_UL_REGISTERS:
+        entry = None
+        if fpga_map is not None:
+            try:
+                entry = fpga_map.get_entry_by_friendly_name(name)
+            except Exception:
+                entry = None
+        num_bytes = SAFETY_PULSE_WIDTH_UL_BYTES
+        try:
+            if entry and entry.get("data_size"):
+                num_bytes = int(str(entry["data_size"]).rstrip("B")) // 8
+        except (TypeError, ValueError):
+            num_bytes = SAFETY_PULSE_WIDTH_UL_BYTES
+
+        if ceiling_us is not None:
+            ticks = int(round(float(ceiling_us) / SAFETY_PULSE_TICK_US))
+            source = "alternative pulse width ceiling"
+        else:
+            ticks, source = None, None
+            override = (user_config.get(name)
+                        if isinstance(user_config, dict) else None)
+            if override is not None and not isinstance(override, bool):
+                try:
+                    ticks = int(round(float(override) / SAFETY_PULSE_TICK_US))
+                    source = "console user-config restore"
+                except (TypeError, ValueError):
+                    ticks = None
+            if ticks is None:
+                data = stock.get(name)
+                ticks = (int.from_bytes(bytes(data), "little") if data
+                         else SAFETY_PULSE_WIDTH_UL_STOCK_TICKS)
+                source = "laser_params baseline restore"
+        ticks = max(0, min((1 << (8 * num_bytes)) - 1, ticks))
+        data = bytearray(ticks.to_bytes(num_bytes, "little"))
+
+        write_kwargs = {
+            "mux_index": entry["mux_idx"] if entry else 1,
+            "channel": entry["channel"] if entry else fallback_channel,
+            "device_addr": entry["i2c_addr"] if entry else 0x41,
+            "reg_addr": entry["start_address"] if entry else 0x04,
+            "data": data,
+        }
+        writes.append((name, write_kwargs, ticks, source))
+    return writes
 
 
 @dataclasses.dataclass(frozen=True)

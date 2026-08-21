@@ -60,6 +60,9 @@ from motion_config import (
     load_tec_voltage_params,
     select_tec_voltage,
     ta_pulse_width_write,
+    ALT_PULSE_WIDTH_SAFETY_CEILING_US,
+    SAFETY_PULSE_TICK_US,
+    safety_pulse_width_ul_writes,
 )
 import error_codes
 import bug_report
@@ -4029,9 +4032,10 @@ class MotionConnector(QObject):
 
         Replaces ``LaserPulseWidthUsec`` in the resolved trigger config
         just before it is pushed to the console — every push, while
-        enabled. Experiments only; the operator is expected to have
-        adjusted the laser-safety config first (the stock PULSE_WIDTH_UL
-        interlock trips and LATCHES above ~1000 µs).
+        enabled. Experiments only. The safety FPGAs' PULSE_WIDTH_UL
+        ceiling is raised to cover the whole width range at scan start
+        while this is enabled (#483, ``_apply_alt_safety_pulse_width_ul``),
+        so nobody edits the laser-safety config by hand for it any more.
 
         Unlike the camera-register overrides there is no restore path:
         the scan flow re-resolves the full trigger config from the SDK
@@ -4067,7 +4071,8 @@ class MotionConnector(QObject):
         # unmissable in any log this scan appears in.
         logger.warning(
             "ALT LASER PULSE WIDTH ACTIVE (experiments only): %s -> %d µs "
-            "(stock safety interlock latches above ~1000 µs)", old, width,
+            "(safety PULSE_WIDTH_UL ceiling %d µs while enabled)",
+            old, width, ALT_PULSE_WIDTH_SAFETY_CEILING_US,
         )
         return trigger_data
 
@@ -4139,6 +4144,120 @@ class MotionConnector(QObject):
         if new_dirty != dirty:
             self._app_config["altLaserPulseWidthDirty"] = new_dirty
             self._save_app_config()
+
+    def _apply_alt_safety_pulse_width_ul(self) -> bool:
+        """Raise / restore the safety FPGAs' pulse-width ceiling (#483).
+
+        The Safety EE / OPT FPGAs trip and LATCH the laser (E-202, console
+        power-cycle to clear) when the actual pulse exceeds their
+        PULSE_WIDTH_UL — 1000 µs stock, ~550 µs on a WI-15-calibrated
+        console — so an alternative pulse width above that cannot be
+        written safely without raising the ceiling first. While the
+        toggle is on this writes ALT_PULSE_WIDTH_SAFETY_CEILING_US
+        (2200 µs, the dropdown max) to both registers at every scan
+        start; on the first scan after the toggle is turned off it
+        restores the unit's baseline once — the flash user-config value
+        when the console has one, else the laser_params.json stock —
+        via the persisted ``altLaserSafetyCeilingDirty`` flag. Runs at
+        scan start with the trigger off.
+
+        Returns False only when a write this scan needed actually failed
+        (the caller then skips widening the TA pulse); gated no-ops
+        return True. Never writes while ``forceLaserFail`` is armed: that
+        test stages EE_PULSE_WIDTH_UL = 0 through apply_laser_power, and a
+        raise OR a restore here would neutralize it (the sdk#252 bug
+        class) — the dirty flag is carried until the flag is cleared.
+        Same clinical fail-closed gate as the TA write.
+        """
+        enabled = self._app_config.get("altLaserPulseWidthEnabled") is True
+        dirty = self._app_config.get("altLaserSafetyCeilingDirty") is True
+        if not enabled and not dirty:
+            return True
+        if (self._app_config.get("clinicalMode", False)
+                and not self._app_config.get("engineeringMode", False)):
+            return True  # same fail-closed gate as the trigger override
+        console = getattr(self._interface, "console", None)
+        if console is None:
+            return True
+        if self._force_laser_fail:
+            logger.warning(
+                "forceLaserFail is armed; leaving the safety PULSE_WIDTH_UL "
+                "registers alone (%s deferred)",
+                "ceiling raise" if enabled else "ceiling restore",
+            )
+            return True
+
+        if enabled:
+            writes = safety_pulse_width_ul_writes(
+                ALT_PULSE_WIDTH_SAFETY_CEILING_US)
+        else:
+            user_cfg = None
+            try:
+                cfg_obj = console.read_config()
+                json_data = getattr(cfg_obj, "json_data", None)
+                if isinstance(json_data, dict):
+                    user_cfg = json_data
+            except Exception as e:
+                logger.warning(
+                    "Could not read the console user config before the "
+                    "safety PULSE_WIDTH_UL restore (%s); restoring the "
+                    "laser_params baseline", e,
+                )
+            writes = safety_pulse_width_ul_writes(None, user_config=user_cfg)
+
+        failures = []
+        wrote_any = False
+        for name, write_kwargs, ticks, source in writes:
+            label = (f"{name} {ticks * SAFETY_PULSE_TICK_US:.0f} µs = "
+                     f"{ticks} ticks ({source})")
+            try:
+                ok = console.write_i2c_packet(**write_kwargs) is not False
+            except Exception as e:
+                logger.warning("%s write raised: %s", name, e)
+                ok = False
+            if ok:
+                wrote_any = True
+                # WARNING on purpose — this moves a laser-safety limit.
+                logger.warning("SAFETY PULSE_WIDTH_UL WRITTEN: %s", label)
+            else:
+                failures.append(label)
+                logger.warning(
+                    "SAFETY PULSE_WIDTH_UL write FAILED (%s); the register "
+                    "keeps its previous limit", label,
+                )
+
+        new_dirty = dirty
+        if enabled and wrote_any:
+            new_dirty = True
+        elif not enabled and not failures:
+            new_dirty = False
+        if new_dirty != dirty:
+            self._app_config["altLaserSafetyCeilingDirty"] = new_dirty
+            self._save_app_config()
+        return not failures
+
+    def _apply_alt_laser_pulse_width_registers(self):
+        """Scan-start orchestration for the alt-pulse-width register pair.
+
+        Order matters because the safety FPGAs act on the actual pulse:
+        raise the ceiling BEFORE widening the TA pulse, and narrow the
+        pulse BEFORE lowering the ceiling. If raising the ceiling fails,
+        the TA override is skipped for this scan — the laser keeps its
+        previous width rather than pulsing wider than the interlock
+        allows and latching the console.
+        """
+        if self._app_config.get("altLaserPulseWidthEnabled") is True:
+            if not self._apply_alt_safety_pulse_width_ul():
+                logger.warning(
+                    "NOT writing TA_PULSE_WIDTH this scan: the safety "
+                    "PULSE_WIDTH_UL ceiling could not be raised, so a wider "
+                    "pulse would latch the laser-safety interlock (E-202)"
+                )
+                return
+            self._apply_alt_ta_pulse_width()
+        else:
+            self._apply_alt_ta_pulse_width()
+            self._apply_alt_safety_pulse_width_ul()
 
     # --- CONSOLE COMMUNICATION METHODS ---
     @pyqtSlot()
@@ -4503,7 +4622,9 @@ class MotionConnector(QObject):
         # #449: the TA driver FPGA times the optical pulse itself, so the
         # alternative pulse width must be written to its pulse_width
         # register — the setTrigger gate override alone is record-keeping.
-        self._apply_alt_ta_pulse_width()
+        # #483: bracketed by the safety FPGAs' PULSE_WIDTH_UL ceiling —
+        # raised before the pulse is widened, restored after it's narrowed.
+        self._apply_alt_laser_pulse_width_registers()
 
         req = ScanRequest(
             subject_id=subject_id,
