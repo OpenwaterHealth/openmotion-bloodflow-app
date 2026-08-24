@@ -87,3 +87,21 @@ def test_portable_mode_is_build_time_only_too(tmp_path, monkeypatch):
     written = json.loads(
         (tmp_path / "app_config.local.json").read_text(encoding="utf-8"))
     assert written == {}
+
+
+@pytest.mark.unit
+def test_save_survives_unserializable_value(tmp_path, monkeypatch):
+    """#446 crash regression: a non-JSON value leaking into the config (a
+    QJSValue through the QML bridge) must lose the write, not the app —
+    save_overrides logs and returns, keeps the prior overrides intact, and
+    leaves no truncated .tmp behind."""
+    monkeypatch.setenv("OPENWATER_DATA_ROOT", str(tmp_path))
+    existing = tmp_path / "app_config.local.json"
+    existing.write_text(json.dumps({"engineeringMode": True}), encoding="utf-8")
+
+    config_store.save_overrides(
+        {**DEFAULTS, "altCameraGains": object()}, dict(DEFAULTS))  # no raise
+
+    assert json.loads(existing.read_text(encoding="utf-8")) == {
+        "engineeringMode": True}
+    assert not (tmp_path / "app_config.local.json.tmp").exists()

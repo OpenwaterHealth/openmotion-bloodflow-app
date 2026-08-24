@@ -259,6 +259,10 @@ Item {
 
     component StyledCombo: ComboBox {
         id: styledComboCtrl
+        // 0 = unbounded (historic behavior, fine for short models). Set on
+        // long models (e.g. the 234-entry exposure list) so the popup
+        // scrolls at a sane height instead of filling the window.
+        property int maxPopupHeight: 0
         Layout.preferredWidth: 180
         Layout.preferredHeight: 32
         font.pixelSize: 13
@@ -286,7 +290,10 @@ Item {
         popup: Popup {
             y: styledComboCtrl.height
             width: styledComboCtrl.width
-            implicitHeight: contentItem.implicitHeight + 2
+            implicitHeight: styledComboCtrl.maxPopupHeight > 0
+                ? Math.min(styledComboCtrl.maxPopupHeight,
+                           contentItem.implicitHeight + 2)
+                : contentItem.implicitHeight + 2
             padding: 1
             contentItem: ListView {
                 clip: true
@@ -978,6 +985,54 @@ Item {
                         Item { Layout.fillWidth: true }
                     }
 
+                    // Sensor-module fans (issue #463, FDA verification
+                    // testing) — ON/OFF via the sensor firmware's fan
+                    // command. State is seeded from the hardware at sensor
+                    // connect and cached (left/rightSensorFanOn). The
+                    // toggle re-binds checked afterwards so a failed
+                    // command snaps the switch back to the cached truth.
+                    FieldRow {
+                        label: "Left sensor fan"
+                        PillSwitch {
+                            objectName: "leftSensorFanSwitch"
+                            checked: MotionInterface.leftSensorFanOn
+                            enabled: MotionInterface.leftSensorConnected
+                            onToggled: {
+                                MotionInterface.setFanControl("left", checked)
+                                checked = Qt.binding(function() {
+                                    return MotionInterface.leftSensorFanOn
+                                })
+                            }
+                        }
+                        Text {
+                            text: MotionInterface.leftSensorFanOn ? "On" : "Off"
+                            color: MotionInterface.leftSensorFanOn ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    FieldRow {
+                        label: "Right sensor fan"
+                        PillSwitch {
+                            objectName: "rightSensorFanSwitch"
+                            checked: MotionInterface.rightSensorFanOn
+                            enabled: MotionInterface.rightSensorConnected
+                            onToggled: {
+                                MotionInterface.setFanControl("right", checked)
+                                checked = Qt.binding(function() {
+                                    return MotionInterface.rightSensorFanOn
+                                })
+                            }
+                        }
+                        Text {
+                            text: MotionInterface.rightSensorFanOn ? "On" : "Off"
+                            color: MotionInterface.rightSensorFanOn ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
                     // Sensor firmware debug flags — persisted to config AND
                     // pushed live to connected sensors via setSensorDebugFlag.
                     // onToggled (not onCheckedChanged) so the appConfig rebind
@@ -1052,6 +1107,65 @@ Item {
                         Item { Layout.fillWidth: true }
                     }
 
+                    // Per-scan telemetry CSV (issue #471) — engineering-only
+                    // output (#43), now opt-in. Persisted immediately via
+                    // setWriteTelemetryCsv; the connector re-checks
+                    // engineeringMode && writeTelemetryCsv at scan start, so
+                    // a stale toggle never writes on a plain clinical build.
+                    FieldRow {
+                        label: "Save telemetry CSV"
+                        PillSwitch {
+                            objectName: "saveTelemetryCsvSwitch"
+                            Accessible.name: "Save telemetry CSV"
+                            checked: MotionInterface.appConfig.writeTelemetryCsv === true
+                            onToggled: MotionInterface.setWriteTelemetryCsv(checked)
+                        }
+                        Text {
+                            text: MotionInterface.appConfig.writeTelemetryCsv === true ? "On" : "Off"
+                            color: MotionInterface.appConfig.writeTelemetryCsv === true ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    // Laser-safety interlock test flag (issue #464) —
+                    // persisted only; laser params are written once per
+                    // console connect, so the change rides the next console
+                    // power-cycle/replug (which a tripped interlock needs
+                    // anyway to clear its latch). ON loads the fault param
+                    // set that trips the hardware interlock at the next
+                    // laser start.
+                    FieldRow {
+                        label: "Force laser fail"
+                        PillSwitch {
+                            objectName: "forceLaserFailSwitch"
+                            checked: MotionInterface.appConfig.forceLaserFail === true
+                            onToggled: MotionInterface.setForceLaserFail(checked)
+                        }
+                        Text {
+                            text: MotionInterface.appConfig.forceLaserFail === true ? "On" : "Off"
+                            color: MotionInterface.appConfig.forceLaserFail === true ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    // Shown only when armed — a live hazard note, like the
+                    // sensor-debug-log warning above.
+                    Text {
+                        visible: MotionInterface.appConfig.forceLaserFail === true
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 4
+                        Layout.bottomMargin: 6
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: 11
+                        color: AppTheme.accentYellow
+                        text: qsTr("Safety-trip laser params load at the next console "
+                                   + "connect; every laser start after that trips the "
+                                   + "interlock. Power-cycle the console after changing "
+                                   + "this, and turn it off before real scans.")
+                    }
+
                     // ── Calibration / Test (moved here from the former
                     //    standalone Calibration card; now engineering-only) ──
                     Rectangle { Layout.fillWidth: true; height: 1; color: root.colBorderSoft }
@@ -1071,8 +1185,26 @@ Item {
                         StyledCombo {
                             id: calibrationTargetCombo
                             Layout.preferredWidth: 130
-                            model: ["Both", "Left", "Right"]
-                            currentIndex: 0
+                            // #362 — only offer targets whose sensor is
+                            // actually connected. Picking a disconnected
+                            // side used to be possible; Calibrate then
+                            // refused via a captureLog line the operator
+                            // never sees from inside Settings, so the app
+                            // looked like it did nothing at all.
+                            readonly property var connectedTargets: {
+                                var l = MotionInterface.leftSensorConnected
+                                var r = MotionInterface.rightSensorConnected
+                                if (l && r) return ["Both", "Left", "Right"]
+                                if (l)      return ["Left"]
+                                if (r)      return ["Right"]
+                                return []
+                            }
+                            model: connectedTargets
+                            // A sensor unplugged mid-session shrinks the
+                            // model; re-pin to the first entry so the combo
+                            // can't keep displaying a target that is gone.
+                            onConnectedTargetsChanged: currentIndex =
+                                connectedTargets.length > 0 ? 0 : -1
                             enabled: !MotionInterface.calibrationRunning
                                   && !MotionInterface.testScanRunning
                         }
@@ -1095,10 +1227,23 @@ Item {
                             text: "Calibrate"
                             Layout.preferredWidth: 130
                             Layout.preferredHeight: 34
+                            // #362 — nothing to calibrate when no sensor is
+                            // connected, so the combo is empty.
                             enabled: MotionInterface.consoleConnected
+                                  && calibrationTargetCombo.count > 0
                                   && !MotionInterface.calibrationRunning
                                   && !MotionInterface.testScanRunning
                             onClicked: calibrationPasswordModal.open()
+                        }
+
+                        ActionButton {
+                            text: "Cancel"
+                            Layout.preferredWidth: 90
+                            Layout.preferredHeight: 34
+                            visible: MotionInterface.calibrationRunning
+                                  || MotionInterface.testScanRunning
+                            hoverColor: "#C0392B"
+                            onClicked: MotionInterface.cancelCalibration()
                         }
 
                         Rectangle {
@@ -1111,11 +1256,13 @@ Item {
                             border.color: root.colBorderSoft
                             color: {
                                 switch (MotionInterface.calibrationStatus) {
-                                case "running": return "#2196F3"
-                                case "passed":  return "#4CAF50"
-                                case "failed":  return "#F44336"
-                                case "aborted": return "#FF9800"
-                                default:        return "#9E9E9E"
+                                case "running":    return "#2196F3"
+                                case "passed":     return "#4CAF50"
+                                case "failed":     return "#F44336"
+                                case "canceled":   return "#9E9E9E"
+                                case "timed_out":  return "#FF9800"
+                                case "error":      return "#F44336"
+                                default:           return "#9E9E9E"
                                 }
                             }
                         }
@@ -1151,7 +1298,17 @@ Item {
                                     return reason
                                         ? "Calibration Failed — " + reason
                                         : "Calibration Failed"
-                                case "aborted": return "Calibration Aborted"
+                                case "canceled":  return "Calibration Canceled"
+                                case "timed_out":
+                                    var r1 = MotionInterface.calibrationFailureReason
+                                    return r1
+                                        ? "Calibration Timed Out — " + r1
+                                        : "Calibration Timed Out"
+                                case "error":
+                                    var r2 = MotionInterface.calibrationFailureReason
+                                    return r2
+                                        ? "Calibration Error — " + r2
+                                        : "Calibration Error"
                                 default:        return ""
                                 }
                             }
@@ -1174,6 +1331,7 @@ Item {
                             Layout.preferredWidth: 130
                             Layout.preferredHeight: 34
                             enabled: MotionInterface.consoleConnected
+                                  && calibrationTargetCombo.count > 0
                                   && !MotionInterface.calibrationRunning
                                   && !MotionInterface.testScanRunning
                             onClicked: MotionInterface.runTestScan(
@@ -1207,13 +1365,287 @@ Item {
                         target: MotionInterface
                         function onTestScanStateChanged() {
                             var s = MotionInterface.testScanStatus
-                            if (s === "running" || s === "done"
-                                || s === "failed" || s === "aborted") {
+                            if (s === "running" || s === "passed" || s === "failed"
+                                || s === "canceled" || s === "timed_out" || s === "error") {
                                 testResultsWindow.show()
                                 testResultsWindow.raise()
                                 testResultsWindow.requestActivate()
                             }
                         }
+                    }
+
+                    // ── Camera & laser settings (issues #446 / #449) ─────
+                    // Alternative exposure + per-camera analog gain, written
+                    // via the SDK to every scanned camera just before each
+                    // scan starts (never outside a scan). Digital gain is
+                    // untouched (stays 1×). Defaults mirror the sensor
+                    // firmware's own config table. Below them, a separately
+                    // gated laser pulse-width override rides the trigger
+                    // config (#449, experiments only).
+                    Rectangle { Layout.fillWidth: true; height: 1; color: root.colBorderSoft }
+                    Text {
+                        text: "Camera & laser settings"
+                        color: root.colTextPri
+                        font.pixelSize: 13
+                        font.weight: Font.DemiBold
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 12
+                        Text {
+                            text: "Enable Alternative camera settings?"
+                            color: root.colTextSec
+                            font.pixelSize: 13
+                        }
+                        PillSwitch {
+                            objectName: "altCameraSettingsSwitch"
+                            checked: MotionInterface.appConfig.altCameraSettingsEnabled === true
+                            onToggled: MotionInterface.setConfig("altCameraSettingsEnabled", checked)
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: 11
+                        color: root.colTextMuted
+                        text: "While enabled, these are written to all scanned "
+                              + "cameras at every scan start. Turning it off "
+                              + "restores the firmware defaults at the next "
+                              + "scan start. Analog gain only — digital gain "
+                              + "stays 1×."
+                    }
+
+                    FieldRow {
+                        label: "Exposure"
+                        StyledCombo {
+                            id: altExposureCombo
+                            objectName: "altCameraExposureCombo"
+                            Layout.preferredWidth: 180
+                            maxPopupHeight: 320
+                            enabled: MotionInterface.appConfig.altCameraSettingsEnabled === true
+                            // Only VALID exposures: the sensor's coarse
+                            // exposure register counts whole 9 µs rows
+                            // (HTS 432 px / 48 MHz — see motion_config.py).
+                            // The dropdown offers a ~100 µs-spaced subset
+                            // (each target snapped to the nearest whole
+                            // row) plus the 648 µs firmware default; a
+                            // hand-edited config may hold any valid row
+                            // multiple — the connector validates against
+                            // the full row grid, not this list.
+                            readonly property var exposureValues: {
+                                var v = [648]
+                                for (var n = 1; n <= 22; n++) {
+                                    var us = Math.round(n * 100 / 9) * 9
+                                    if (v.indexOf(us) === -1) v.push(us)
+                                }
+                                v.sort(function(a, b) { return a - b })
+                                return v
+                            }
+                            model: exposureValues.map(function(us) {
+                                return us + " µs" + (us === 648 ? " (default)" : "")
+                            })
+                            // Nearest entry to the configured value, so a
+                            // config value off this list (hand-edit, or
+                            // saved by an older build's finer list) still
+                            // shows something close rather than resetting
+                            // the display to the default.
+                            currentIndex: {
+                                var us = MotionInterface.appConfig.altCameraExposureUs
+                                var best = exposureValues.indexOf(648)
+                                if (typeof us === "number" && isFinite(us)) {
+                                    var bestD = Infinity
+                                    for (var i = 0; i < exposureValues.length; i++) {
+                                        var d = Math.abs(exposureValues[i] - us)
+                                        if (d < bestD) { bestD = d; best = i }
+                                    }
+                                }
+                                return best
+                            }
+                            onActivated: MotionInterface.setConfig(
+                                "altCameraExposureUs", exposureValues[currentIndex])
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    // Dark-frame contamination warning (#449). The console
+                    // displaces the scheduled dark's laser pulse to start at
+                    // delay(100) + LaserPulseSkipDelayUsec = 1900 µs, so an
+                    // exposure reaching past that re-catches the pulse and
+                    // inflates the dark reference. The app runs the 1800 µs
+                    // skip because 2400 shortens the post-dark gap below the
+                    // RATE_LL floor stock consoles ship with, which latches
+                    // the safety interlock — see motion_config.py. Shown only
+                    // when the selected exposure actually crosses the line.
+                    Text {
+                        objectName: "altExposureDarkContaminationWarning"
+                        // Gated on the CONFIG value rather than the combo's
+                        // currentIndex: the config value is what actually
+                        // reaches the cameras, so a hand-edited off-grid
+                        // exposure warns on its real value instead of the
+                        // row the combo display snapped to.
+                        visible: MotionInterface.appConfig.altCameraSettingsEnabled === true
+                                 && MotionInterface.appConfig.altCameraExposureUs > 1700
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: 11
+                        color: AppTheme.accentYellow
+                        text: qsTr("Dark frames are contaminated above 1700 µs — "
+                                   + "the scheduled dark's laser pulse only moves "
+                                   + "to 1900 µs, so this exposure re-catches it "
+                                   + "and BFI/BVI come out biased. To fix: lower "
+                                   + "the console's EE/OPT_RATE_LL to ≤ 22600 µs "
+                                   + "FIRST, then raise the dark-frame skip 1800 → "
+                                   + "2400 µs (motion_config.DARK_SKIP_DELAY_US). "
+                                   + "Raising the skip on a stock console (RATE_LL "
+                                   + "23125 µs) latches the laser-safety interlock "
+                                   + "until a power-cycle.")
+                    }
+
+                    // Per-position analog gain (cameras 1–8); one set applied
+                    // to both sensor modules, like the firmware's own ladder.
+                    // Horizontal serpentine matching the sensor diagram in
+                    // ContactQualityModal (transposed): cameras run 1→4
+                    // across the top row and 5→8 back along the bottom, so
+                    // the column pairs are (1,8) (2,7) (3,6) (4,5) — which
+                    // is also exactly the symmetry of the firmware gain
+                    // ladder.
+                    GridLayout {
+                        Layout.fillWidth: true
+                        columns: 4
+                        columnSpacing: 14
+                        rowSpacing: 8
+                        Repeater {
+                            model: [1, 2, 3, 4, 8, 7, 6, 5]
+                            delegate: ColumnLayout {
+                                id: gainCell
+                                // modelData = 1-based camera number; gains
+                                // array position == camera number - 1 (same
+                                // convention as the ft_*_per_camera arrays).
+                                readonly property int camIdx: modelData - 1
+                                spacing: 2
+                                Text {
+                                    text: "Camera " + (gainCell.camIdx + 1) + " gain"
+                                    color: root.colTextSec
+                                    font.pixelSize: 11
+                                }
+                                StyledCombo {
+                                    objectName: "altCameraGainCombo" + (gainCell.camIdx + 1)
+                                    Layout.preferredWidth: 92
+                                    enabled: MotionInterface.appConfig.altCameraSettingsEnabled === true
+                                    readonly property var gainValues: [1, 2, 4, 8, 16]
+                                    model: ["1×", "2×", "4×", "8×", "16×"]
+                                    currentIndex: {
+                                        var gains = MotionInterface.appConfig.altCameraGains
+                                        var g = (gains && gains.length === 8)
+                                            ? gains[gainCell.camIdx]
+                                            : [16, 4, 2, 1, 1, 2, 4, 16][gainCell.camIdx]
+                                        var idx = gainValues.indexOf(g)
+                                        return idx >= 0 ? idx : 0
+                                    }
+                                    onActivated: {
+                                        var gains = (MotionInterface.appConfig.altCameraGains
+                                                     || []).slice()
+                                        if (gains.length !== 8)
+                                            gains = [16, 4, 2, 1, 1, 2, 4, 16]
+                                        gains[gainCell.camIdx] = gainValues[currentIndex]
+                                        MotionInterface.setConfig("altCameraGains", gains)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // ── Laser pulse width (#449) — separate enable from the
+                    // camera settings above, so camera experiments never
+                    // silently change laser emission. Overrides the trigger
+                    // config's LaserPulseWidthUsec on every push while
+                    // enabled; no restore needed (the trigger config is
+                    // re-resolved from SDK defaults on every push).
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Layout.topMargin: 4
+                        spacing: 12
+                        Text {
+                            text: "Enable Alternative laser pulse width?"
+                            color: root.colTextSec
+                            font.pixelSize: 13
+                        }
+                        PillSwitch {
+                            objectName: "altLaserPulseWidthSwitch"
+                            checked: MotionInterface.appConfig.altLaserPulseWidthEnabled === true
+                            onToggled: MotionInterface.setConfig("altLaserPulseWidthEnabled", checked)
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    // Live-hazard note, shown only while enabled (same
+                    // pattern as the sensor-debug-log warning above).
+                    Text {
+                        visible: MotionInterface.appConfig.altLaserPulseWidthEnabled === true
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: 11
+                        color: AppTheme.accentYellow
+                        text: qsTr("Experiments only — never for clinical scans. "
+                                   + "Writes the TA driver's pulse-width register "
+                                   + "(the actual optical pulse) plus the trigger "
+                                   + "config at every scan start while enabled; "
+                                   + "turning it off restores the standard "
+                                   + "500 µs at the next scan start. The stock "
+                                   + "safety interlock trips and latches above "
+                                   + "1000 µs unless the safety config is "
+                                   + "adjusted first. Make sure the camera "
+                                   + "exposure covers the pulse (delay 100 µs "
+                                   + "+ width). The driver emits ~17 µs less "
+                                   + "than commanded — negligible at 500 µs, "
+                                   + "but the 20 µs entry is a ~3 µs pulse.")
+                    }
+
+                    FieldRow {
+                        label: "Laser pulse width"
+                        StyledCombo {
+                            objectName: "altLaserPulseWidthCombo"
+                            Layout.preferredWidth: 180
+                            maxPopupHeight: 320
+                            enabled: MotionInterface.appConfig.altLaserPulseWidthEnabled === true
+                            // 20 µs, then 100 µs steps to 2200 µs. The
+                            // console takes raw whole-µs values (no
+                            // quantization), so a hand-edited
+                            // altLaserPulseWidthUsec between steps still
+                            // validates and applies — the combo then shows
+                            // the nearest entry. 20 µs is the hardware
+                            // floor (motion_config.TA_PULSE_MIN_TICKS).
+                            readonly property var widthValues: {
+                                var v = [20]
+                                for (var n = 1; n <= 22; n++) v.push(n * 100)
+                                return v
+                            }
+                            model: widthValues.map(function(us) {
+                                if (us === 500) return us + " µs (default)"
+                                // The TA driver truncates ~17 µs off the
+                                // commanded width, which only matters here.
+                                if (us === 20) return us + " µs (~3 µs emitted)"
+                                return us + " µs"
+                            })
+                            currentIndex: {
+                                var us = MotionInterface.appConfig.altLaserPulseWidthUsec
+                                var best = widthValues.indexOf(500)
+                                if (typeof us === "number" && isFinite(us)) {
+                                    var bestD = Infinity
+                                    for (var i = 0; i < widthValues.length; i++) {
+                                        var d = Math.abs(widthValues[i] - us)
+                                        if (d < bestD) { bestD = d; best = i }
+                                    }
+                                }
+                                return best
+                            }
+                            onActivated: MotionInterface.setConfig(
+                                "altLaserPulseWidthUsec", widthValues[currentIndex])
+                        }
+                        Item { Layout.fillWidth: true }
                     }
 
                     Rectangle { Layout.fillWidth: true; height: 1; color: root.colBorderSoft }

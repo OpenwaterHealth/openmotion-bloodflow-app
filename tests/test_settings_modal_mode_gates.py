@@ -77,11 +77,25 @@ class _StubMotionInterface(QObject):
         self._directory = "C:/tmp"
         self.saved_configs: list[dict] = []
         self.write_raw_csv_calls: list[bool] = []
+        self.write_telemetry_csv_calls: list[bool] = []
+        self._write_telemetry_csv = False
 
     # ── Mode flags (the gates under test) ────────────────────────────
     def setFlags(self, clinical: bool, engineering: bool):
         self._clinical = bool(clinical)
         self._engineering = bool(engineering)
+        self.appConfigChanged.emit()
+
+    def setAltCameraEnabled(self, enabled: bool):
+        self._alt_camera_enabled = bool(enabled)
+        self.appConfigChanged.emit()
+
+    def setAltLaserEnabled(self, enabled: bool):
+        self._alt_laser_enabled = bool(enabled)
+        self.appConfigChanged.emit()
+
+    def setAltExposureUs(self, exposure_us: int):
+        self._alt_exposure_us = int(exposure_us)
         self.appConfigChanged.emit()
 
     @pyqtProperty("QVariantMap", notify=appConfigChanged)
@@ -90,6 +104,12 @@ class _StubMotionInterface(QObject):
             "engineeringMode": self._engineering,
             "clinicalMode": self._clinical,
             "darkMode": True,
+            "altCameraSettingsEnabled": getattr(
+                self, "_alt_camera_enabled", False),
+            "altLaserPulseWidthEnabled": getattr(
+                self, "_alt_laser_enabled", False),
+            "altCameraExposureUs": getattr(self, "_alt_exposure_us", 648),
+            "writeTelemetryCsv": self._write_telemetry_csv,
         }
 
     # ── open()/close() dependencies ──────────────────────────────────
@@ -108,6 +128,14 @@ class _StubMotionInterface(QObject):
     @pyqtSlot(bool)
     def setWriteRawCsv(self, enabled):
         self.write_raw_csv_calls.append(bool(enabled))
+
+    @pyqtSlot(bool)
+    def setWriteTelemetryCsv(self, enabled):
+        # Mimics the connector: persist-then-notify, so the switch's
+        # appConfig rebind sees the new value (#471).
+        self.write_telemetry_csv_calls.append(bool(enabled))
+        self._write_telemetry_csv = bool(enabled)
+        self.appConfigChanged.emit()
 
     @pyqtSlot("QVariant")
     def setRawCsvDurationSec(self, value):
@@ -297,6 +325,143 @@ def test_engineering_card_follows_engineering_flag(modal_factory):
     # Live flip — the same path the runtime unlock/disable exercises.
     modal_factory.stub.setFlags(clinical=False, engineering=False)
     assert _card_visible(modal, "Engineering") is False
+
+
+def _find_item(root, object_name):
+    """Find a named QQuickItem by walking the VISUAL tree.
+
+    findChild() only traverses QObject parentage, which misses
+    Repeater-created delegates (their parent is the visual container,
+    not the component root) — e.g. the per-camera gain combos (#446).
+    """
+    if root.objectName() == object_name:
+        return root
+    for child in root.childItems():
+        found = _find_item(child, object_name)
+        if found is not None:
+            return found
+    return None
+
+
+def test_alt_camera_controls_gate_on_enable_toggle(modal_factory):
+    """#446: the exposure + gain dropdowns stay greyed out until the
+    'Enable Alternative camera settings?' toggle is on, and the exposure
+    list holds the ~100 µs-spaced usability subset of valid 9 µs-row
+    values (22 targets snapped to whole rows + the 648 µs firmware
+    default = 23 entries) with the default preselected."""
+    stub = modal_factory.stub
+    stub.setFlags(clinical=False, engineering=True)
+    stub.setAltCameraEnabled(False)
+    modal = modal_factory()
+
+    exposure = _find_item(modal, "altCameraExposureCombo")
+    assert exposure is not None
+    assert exposure.property("count") == 23
+    assert exposure.property("displayText") == "648 µs (default)"
+    assert exposure.property("enabled") is False
+    for cam in (1, 8):
+        gain = _find_item(modal, f"altCameraGainCombo{cam}")
+        assert gain is not None, f"gain combo {cam} not instantiated"
+        assert gain.property("count") == 5
+        assert gain.property("enabled") is False
+
+    stub.setAltCameraEnabled(True)
+    assert exposure.property("enabled") is True
+    assert _find_item(
+        modal, "altCameraGainCombo8").property("enabled") is True
+
+
+def test_alt_laser_pulse_width_gates_on_its_own_toggle(modal_factory):
+    """#449: the laser pulse-width dropdown gates on its OWN enable —
+    turning on the camera settings must never enable it (a camera
+    experiment must not silently change laser emission). List = 23
+    entries: the 20 µs short pulse plus 100–2200 µs in 100 µs steps,
+    500 µs default labeled."""
+    stub = modal_factory.stub
+    stub.setFlags(clinical=False, engineering=True)
+    stub.setAltCameraEnabled(True)
+    stub.setAltLaserEnabled(False)
+    modal = modal_factory()
+
+    combo = _find_item(modal, "altLaserPulseWidthCombo")
+    assert combo is not None
+    assert combo.property("count") == 23
+    assert combo.property("displayText") == "500 µs (default)"
+    assert combo.property("enabled") is False  # camera toggle ON, laser OFF
+
+    stub.setAltLaserEnabled(True)
+    assert combo.property("enabled") is True
+
+
+def test_dark_contamination_warning_follows_the_selected_exposure(modal_factory):
+    """#449: the app runs the 1800 µs dark skip (2400 latches the safety
+    interlock on stock consoles), so exposures past 1700 µs re-catch the
+    displaced dark pulse. The warning must fire on exactly those, and stay
+    out of the way at the firmware default."""
+    stub = modal_factory.stub
+    stub.setFlags(clinical=False, engineering=True)
+    stub.setAltCameraEnabled(True)
+    stub.setAltExposureUs(648)
+    modal = modal_factory()
+
+    name = "altExposureDarkContaminationWarning"
+    assert _control_visible(modal, name) is False   # fw default is clean
+
+    stub.setAltExposureUs(1701)                     # first row past the ceiling
+    assert _control_visible(modal, name) is True
+
+    stub.setAltExposureUs(2196)                     # top of the dropdown
+    assert _control_visible(modal, name) is True
+
+    stub.setAltExposureUs(1750)                     # off-grid hand-edit
+    assert _control_visible(modal, name) is True
+
+    stub.setAltCameraEnabled(False)                 # feature off ⇒ no warning
+    assert _control_visible(modal, name) is False
+
+
+def test_telemetry_csv_switch_gates_on_engineering_mode(modal_factory):
+    """#471: 'Save telemetry CSV' lives in the Engineering card — visible
+    only with the engineering unlock (clinical build included), never on
+    plain research/clinical sessions."""
+    stub = modal_factory.stub
+    stub.setFlags(clinical=False, engineering=True)
+    modal = modal_factory()
+    assert _control_visible(modal, "saveTelemetryCsvSwitch") is True
+
+    stub.setFlags(clinical=True, engineering=True)
+    assert _control_visible(modal, "saveTelemetryCsvSwitch") is True
+
+    stub.setFlags(clinical=False, engineering=False)
+    assert _control_visible(modal, "saveTelemetryCsvSwitch") is False
+
+    stub.setFlags(clinical=True, engineering=False)
+    assert _control_visible(modal, "saveTelemetryCsvSwitch") is False
+
+
+def test_telemetry_csv_switch_drives_connector_slot(modal_factory):
+    """#471: toggling the switch calls setWriteTelemetryCsv with the new
+    state — immediate-apply, no Save button involved."""
+    stub = modal_factory.stub
+    stub.setFlags(clinical=False, engineering=True)
+    stub._write_telemetry_csv = False
+    stub.write_telemetry_csv_calls.clear()
+    modal = modal_factory()
+
+    switch = modal.findChild(QObject, "saveTelemetryCsvSwitch")
+    assert switch is not None
+    assert switch.property("checked") is False
+
+    # click() (not toggle()) — only interactive toggles and click(), which
+    # routes through nextCheckState(), emit toggled(); the bare toggle()
+    # method flips checked silently and would never reach onToggled.
+    _invoke(switch, "click")
+    assert switch.property("checked") is True
+    assert stub.write_telemetry_csv_calls == [True]
+
+    _invoke(switch, "click")
+    assert switch.property("checked") is False
+    assert stub.write_telemetry_csv_calls == [True, False]
 
 
 def test_close_never_persists_clinical_mode(modal_factory):

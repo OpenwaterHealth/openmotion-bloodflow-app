@@ -16,8 +16,9 @@ Three categories so far:
   - **Modal handling**: ``dismiss_signal_quality_modal``, ``visible_modals``.
 
 ``SENSOR_OPTIONS`` is the canonical sensor-dropdown ordering used by both
-the scan-settings and scan-auto-stop tests; keep it in sync with the QML
-``SensorComboBox`` model if that list ever changes.
+the scan-settings and scan-auto-stop tests; keep it in sync with the
+``sensorPatterns`` model in ``components/ScanSettingsModal.qml`` if that
+list ever changes.
 """
 
 from __future__ import annotations
@@ -52,11 +53,26 @@ RE_CONNECTED    = re.compile(r"state \S+ -> CONNECTED")
 RE_DISCONNECTED = re.compile(r"state \S+ -> DISCONNECTED")
 
 # Sensor dropdown options in the order they appear in the QML model. Keep
-# this in sync with ``components/SensorComboBox.qml`` if the list changes.
+# this in sync with the ``sensorPatterns`` model in
+# ``components/ScanSettingsModal.qml`` if the list changes. "Custom" must
+# stay last (it doubles as the modal's customPatternIndex).
 SENSOR_OPTIONS = [
     "None", "Near", "Middle", "Far", "Outer",
-    "Left", "Right", "Third Row", "All",
+    "Left", "Right", "Third Row", "All", "Custom",
 ]
+
+# Sidebar (panel) button positions as fractions of the app window
+# (rx, ry) — used by ``conftest.click_sidebar``. These work consistently
+# across the UI test scripts without any per-machine calibration.
+# Layout below assumes non-reduced mode (Scan Settings + Check visible).
+SIDEBAR_START         = (0.019, 0.115)
+SIDEBAR_SCAN_SETTINGS = (0.019, 0.210)
+SIDEBAR_NOTES         = (0.019, 0.320)
+SIDEBAR_CHECK         = (0.019, 0.420)
+SIDEBAR_HISTORY       = (0.020, 0.820)
+SIDEBAR_SETTINGS      = (0.019, 0.920)
+# In reduced mode, Notes shifts up into the Scan Settings slot.
+SIDEBAR_NOTES_REDUCED = (0.019, 0.210)
 
 # Height of the auto-update banner (components/UpdateBanner.qml line 13:
 # ``height: visible ? 36 : 0``). When the banner is shown, every
@@ -714,21 +730,47 @@ def _calibrate_panel_buttons() -> dict[str, tuple[int, int]]:
         except Exception as e:
             log.warning(f"  calibrate: descendants walk failed: {e}")
 
-    # Fall back to the QML pixel layout for any label UIA didn't find.
+    # Fall back to the shared SIDEBAR_* relative coordinates for any
+    # label UIA didn't find. These are the same coordinates the other
+    # UI test scripts use directly via click_sidebar(), so the
+    # calibration cache and the direct-click path agree on positions.
+    #
+    # Clinical mode hides Scan\nSettings + Check and slides Notes up
+    # into the former Scan Settings slot — pick the right Notes coord
+    # based on the current ``clinicalMode`` config value, matching how
+    # ``panel_button_screen_pos`` handles the same case.
+    reduced = bool(read_app_config_value("clinicalMode", False))
+    notes_pos = SIDEBAR_NOTES_REDUCED if reduced else SIDEBAR_NOTES
+    label_to_sidebar = {
+        "Start":          SIDEBAR_START,
+        "Scan\nSettings": SIDEBAR_SCAN_SETTINGS,
+        "Notes":          notes_pos,
+        "Check":          SIDEBAR_CHECK,
+        "History":        SIDEBAR_HISTORY,
+        "Settings":       SIDEBAR_SETTINGS,
+    }
+    try:
+        w = get_app_window()
+    except Exception as e:
+        log.warning(f"  calibrate fallback: get_app_window failed: {e}")
+        w = None
+
     for lbl in _PANEL_BUTTON_LABELS:
         if lbl in rects:
             continue
-        pos = panel_button_screen_pos(lbl)
-        if pos is not None:
-            rects[lbl] = pos
+        rel = label_to_sidebar.get(lbl)
+        if w is not None and rel is not None:
+            cx = int(w.left + rel[0] * w.width)
+            cy = int(w.top + rel[1] * w.height)
+            rects[lbl] = (cx, cy)
             log.info(
-                f"  calibrated panel '{lbl!r}' → {pos} via QML pixel "
-                f"layout (UIA fallback)"
+                f"  calibrated panel '{lbl!r}' → ({cx}, {cy}) "
+                f"via SIDEBAR_* relative {rel} (UIA fallback)"
             )
         else:
             log.warning(
                 f"  calibrated panel '{lbl!r}' → NOT FOUND "
-                f"(UIA missed and no QML slot)"
+                f"(UIA missed and no SIDEBAR mapping)"
             )
 
     return rects

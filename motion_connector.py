@@ -10,6 +10,7 @@ from PyQt6.QtCore import (
     QMetaObject,
     Qt,
 )
+from PyQt6.QtQml import QJSValue
 from pathlib import Path
 from typing import NamedTuple, Optional
 import itertools
@@ -47,12 +48,21 @@ from omotion.MotionProcessing import process_bin_file
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
 from omotion.contact_quality import CQThresholds, ContactQualityMonitor
 from motion_config import (
+    FW_DEFAULT_CAMERA_SETTINGS,
+    TA_PULSE_TICK_US,
     TEC_TRIP_MAX_C,
     TEC_TRIP_MIN_C,
     TecTripOutcome,
+    apply_camera_settings,
+    camera_settings_from_config,
     ensure_tec_trip,
+    laser_pulse_width_from_config,
     load_tec_voltage_params,
     select_tec_voltage,
+    ta_pulse_width_write,
+    ALT_PULSE_WIDTH_SAFETY_CEILING_US,
+    SAFETY_PULSE_TICK_US,
+    safety_pulse_width_ul_writes,
 )
 import error_codes
 import bug_report
@@ -473,6 +483,11 @@ class _LivePlotSink:
         n = batch.bfi_live.shape[0]
         connector = self._connector
         threshold = connector._camera_temp_alert_threshold_c
+        # Over-temp toast is Research-only: a clinical operator has no action
+        # to take on a chip-temperature reading and shouldn't get a mid-scan
+        # popup for one. Clinical builds still get the capture-log + app-log
+        # line below, so the event stays in the record either way.
+        temp_toast_enabled = not connector._app_config.get("clinicalMode", False)
         now_mono = time.monotonic()
 
         low_light_rt = getattr(batch, "low_light_rt", None)
@@ -558,6 +573,21 @@ class _LivePlotSink:
                         )
                         connector.captureLog.emit(msg)
                         logger.warning(msg)
+                        # captureLog only reaches the app log (its QML
+                        # terminus is console.log), so the operator sees
+                        # nothing on screen without this. notify() is safe
+                        # from this runner thread — it emits a signal that
+                        # is delivered queued onto the GUI thread, same as
+                        # _on_camera_dropout_recovered below.
+                        if temp_toast_enabled:
+                            connector.notify(
+                                f"Camera {side.upper()} {cam_id + 1} temperature "
+                                f"{temp_c:.1f}°C — above {threshold:.0f}°C threshold. "
+                                f"Check the airflow around the sensor module.",
+                                type_="warning",
+                                duration_ms=5000,
+                                tag=f"temp_{side}_{cam_id}",
+                            )
 
                 # Non-finite BFI/BVI: row-addressed LIGHT rows are appended
                 # anyway (issue #418) — an unlit (covered / off-target)
@@ -851,6 +881,40 @@ class _ScanOutcomeSink:
         pass
 
 
+def _result_outcome(result) -> str:
+    """Terminal outcome of a Calibration/TestScan result as a plain string.
+
+    Prefers the SDK's authoritative ``outcome`` field; falls back to
+    deriving from the legacy boolean triple for SDKs that predate it
+    (pre-outcome SDKs cannot distinguish a watchdog timeout from a
+    cancel, so both report "canceled" there).
+    """
+    out = getattr(result, "outcome", None)
+    if out is not None:
+        return str(getattr(out, "value", out))
+    if result.canceled:
+        return "canceled"
+    if not result.ok:
+        return "error"
+    return "passed" if result.passed else "failed"
+
+
+def _format_threshold_breakdown(rows, tests) -> str:
+    """Per-camera FAIL breakdown, e.g. 'L1:mean,contrast; R3:bfi'.
+    ``tests`` is a tuple of (label, row_attr) pairs."""
+    breakdown = "; ".join(
+        f"{'L' if r.side == 'left' else 'R'}{r.cam_id + 1}:"
+        f"{','.join(n for n, a in tests if getattr(r, a) == 'FAIL')}"
+        for r in rows
+        if any(getattr(r, a) == "FAIL" for _, a in tests)
+    )
+    # #122: call out ambient explicitly so "ambient" isn't misread as a
+    # generic test name.
+    if any(r.dark_test == "FAIL" for r in rows):
+        breakdown = f"too much ambient light — {breakdown}"
+    return breakdown
+
+
 class MotionConnector(QObject):
     # Ensure signals are correctly defined
     signalConnected = pyqtSignal(str, str)  # (descriptor, port)
@@ -932,9 +996,9 @@ class MotionConnector(QObject):
     captureFinished = pyqtSignal(bool, str, str, str)  # ok, error, leftPath, rightPath
 
     # Calibration procedure signals
-    calibrationStateChanged = pyqtSignal()  # any of running/passed/failed/aborted/idle
+    calibrationStateChanged = pyqtSignal()  # any of running/passed/failed/canceled/timed_out/error/idle
     _calibrationCompleteSignal = pyqtSignal(object)  # private worker→main marshalling
-    testScanStateChanged = pyqtSignal()                # any of running/done/aborted/failed/idle
+    testScanStateChanged = pyqtSignal()                # any of running/passed/failed/canceled/timed_out/error/idle
     _testScanCompleteSignal = pyqtSignal(object)       # private worker→main marshalling
     scanNotesChanged = pyqtSignal()
     # Fires once at the end of _on_complete (after the duration line has
@@ -974,6 +1038,9 @@ class MotionConnector(QObject):
     tecDacChanged = pyqtSignal()
     appConfigChanged = pyqtSignal()
     consoleFanChanged = pyqtSignal()
+    # Sensor-module fan state cache (issue #463) — notify for the
+    # left/rightSensorFanOn properties behind the Engineering switches.
+    sensorFanChanged = pyqtSignal()
     # Per-device firmware versions, refreshed on every (dis)connect by
     # _log_device_stats. Surfaced to Settings → System Information.
     firmwareVersionsChanged = pyqtSignal()
@@ -1144,6 +1211,10 @@ class MotionConnector(QObject):
         self._write_raw_csv               = bool(cfg.get("writeRawCsv", False))
         raw_csv                           = cfg.get("rawCsvDurationSec")
         self._raw_csv_duration_sec        = float(raw_csv) if raw_csv is not None else None
+        # Telemetry CSV is engineering-only (#43) and opt-in via Settings →
+        # Engineering → "Save telemetry CSV" (#471); default False so a
+        # config missing the key fails closed for clinical use.
+        self._write_telemetry_csv         = bool(cfg.get("writeTelemetryCsv", False))
         self._uncorrected_only            = bool(cfg.get("uncorrectedOnly", False))
 
         # Initialize CSV output directory to user's home directory
@@ -1234,10 +1305,11 @@ class MotionConnector(QObject):
         self._test_scan_duration_sec = int(
             cfg.get("test_scan_duration_sec", 5)
         )
-        self._calibration_status = ""  # "", "running", "passed", "failed", "aborted"
+        # "", "running", "passed", "failed", "canceled", "timed_out", "error"
+        self._calibration_status = ""
         self._calibration_failure_reason = ""  # populated only on FAIL in dev mode
         self._calibration_target = None  # last runCalibration() target
-        self._test_scan_status = ""              # "", "running", "done", "aborted", "failed"
+        self._test_scan_status = ""              # "", "running", "passed", "failed", "canceled", "timed_out", "error"
         self._test_scan_failure_reason = ""
         self._test_scan_rows: list[dict] = []
 
@@ -1784,6 +1856,19 @@ class MotionConnector(QObject):
         Engineering settings switch when the Settings modal opens."""
         return self._console_fan_on
 
+    @pyqtProperty(bool, notify=sensorFanChanged)
+    def leftSensorFanOn(self) -> bool:
+        """Cached left sensor-module fan state (issue #463). Seeded from
+        the hardware by the connect-time getFanControlStatus poll, updated
+        by setFanControl, and reset to unknown (shown Off) at disconnect.
+        Read by the Engineering settings switch."""
+        return bool(self._last_fan_status.get("left"))
+
+    @pyqtProperty(bool, notify=sensorFanChanged)
+    def rightSensorFanOn(self) -> bool:
+        """Right-side counterpart of leftSensorFanOn."""
+        return bool(self._last_fan_status.get("right"))
+
     @pyqtSlot(bool, result=bool)
     def setConsoleFan(self, on: bool) -> bool:
         """Drive the console fan to 100% (on) or 0% (off).
@@ -1844,6 +1929,35 @@ class MotionConnector(QObject):
                 logger.warning("Failed to set console debug logging")
         except Exception as e:  # noqa: BLE001 — slot must not raise
             logger.error("Error setting console debug logging: %s", e)
+
+    @pyqtSlot(bool)
+    def setForceLaserFail(self, enabled: bool) -> None:
+        """Toggle the forceLaserFail flag (Settings → Engineering, issue #464).
+
+        Persists the flag and updates the runtime cache that
+        ``set_laser_power_from_config`` reads. Deliberately NOT pushed live:
+        the laser param set is written once per console connect, so the
+        change takes effect at the next console power-cycle/replug — which
+        the interlock test needs anyway, since a tripped interlock stays
+        latched until a power-cycle, and that same power-cycle loads the new
+        param set. ON selects the SDK's ``laser_params_fault.json``, a set
+        engineered to trip the hardware laser-safety interlock at the next
+        laser start.
+        """
+        enabled = bool(enabled)
+        old = self._app_config.get("forceLaserFail")
+        self._force_laser_fail = enabled
+        self._app_config["forceLaserFail"] = enabled
+        self._save_app_config()
+        self.appConfigChanged.emit()
+        if old != enabled:
+            self._audit.log("settings_changed",
+                            {"changes": {"forceLaserFail":
+                                         {"old": old, "new": enabled}}})
+        logger.info(
+            "forceLaserFail set to %s — applies when laser params load at "
+            "the next console connect", enabled,
+        )
 
     @pyqtProperty(bool, notify=laserStateChanged)
     def laserOn(self):
@@ -2077,6 +2191,7 @@ class MotionConnector(QObject):
             elif is_now_lost:
                 self._leftSensorConnected = False
                 self._last_fan_status["left"] = None
+                self.sensorFanChanged.emit()
                 try:
                     if getattr(self._interface.left, "clear_id_cache", None):
                         self._interface.left.clear_id_cache()
@@ -2089,6 +2204,7 @@ class MotionConnector(QObject):
             elif is_now_lost:
                 self._rightSensorConnected = False
                 self._last_fan_status["right"] = None
+                self.sensorFanChanged.emit()
                 try:
                     if getattr(self._interface.right, "clear_id_cache", None):
                         self._interface.right.clear_id_cache()
@@ -3102,6 +3218,12 @@ class MotionConnector(QObject):
     @pyqtSlot(str, 'QVariant')
     def setConfig(self, key: str, value):
         """Update a single config key, persist to disk, and notify QML."""
+        # QML arrays/objects reach 'QVariant' slots as QJSValue, which is
+        # not JSON-serializable — the first array-valued key (#446's
+        # altCameraGains) crashed the app inside save_overrides. Unwrap to
+        # plain Python at the bridge, once, for every caller.
+        if isinstance(value, QJSValue):
+            value = value.toVariant()
         old = self._app_config.get(key)
         self._app_config[key] = value
         self._save_app_config()
@@ -3116,6 +3238,12 @@ class MotionConnector(QObject):
     @pyqtSlot('QVariantMap')
     def saveConfigs(self, configs: dict):
         """Update multiple config keys at once, persist to disk, and notify QML."""
+        # Same QJSValue unwrap as setConfig — a QVariantMap converts its
+        # top level, but array/object VALUES still arrive as QJSValue.
+        configs = {
+            k: (v.toVariant() if isinstance(v, QJSValue) else v)
+            for k, v in configs.items()
+        }
         changes = {}
         for k, v in configs.items():
             old = self._app_config.get(k)
@@ -3171,6 +3299,15 @@ class MotionConnector(QObject):
         self._save_app_config()
         self.appConfigChanged.emit()
         logger.debug(f"[Connector] writeRawCsv set to {self._write_raw_csv}")
+
+    @pyqtSlot(bool)
+    def setWriteTelemetryCsv(self, enabled: bool) -> None:
+        """Update writeTelemetryCsv in both the runtime cache and persisted config."""
+        self._write_telemetry_csv = bool(enabled)
+        self._app_config["writeTelemetryCsv"] = self._write_telemetry_csv
+        self._save_app_config()
+        self.appConfigChanged.emit()
+        logger.debug(f"[Connector] writeTelemetryCsv set to {self._write_telemetry_csv}")
 
     @pyqtSlot('QVariant')
     def setRawCsvDurationSec(self, value) -> None:
@@ -3804,6 +3941,324 @@ class MotionConnector(QObject):
         suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
         return f"ow{suffix}"
 
+    def _apply_alt_camera_settings(self, left_mask: int, right_mask: int):
+        """Write the Engineering-mode alternative camera settings (#446).
+
+        Runs just before every scan start, after the scan flow's
+        configure/CQ/trigger-config steps — so the writes land on
+        configured, idle cameras and are re-asserted every scan (a camera
+        power-cycle between scans silently reverts registers to firmware
+        defaults; OW_CAMERA_SET_CONFIG skips already-configured cameras,
+        so nothing else rewrites them mid-session).
+
+        Camera registers persist until the camera loses power, so turning
+        the toggle OFF must actively restore the firmware defaults: the
+        persisted ``altCameraSettingsDirty`` flag makes the first scan
+        after disabling write the firmware values back once (redundant but
+        harmless if the cameras were really power-cycled meanwhile).
+
+        Fail-soft throughout: a failed write logs and the scan proceeds —
+        this is an engineering lever, not a scan gate.
+        """
+        enabled = self._app_config.get("altCameraSettingsEnabled") is True
+        dirty = self._app_config.get("altCameraSettingsDirty") is True
+        if not enabled and not dirty:
+            return
+
+        if enabled:
+            settings, reason = camera_settings_from_config(
+                self._app_config.get("altCameraExposureUs"),
+                self._app_config.get("altCameraGains"),
+            )
+            if settings is None:
+                logger.warning(
+                    "Alternative camera settings enabled but invalid (%s); "
+                    "NOT writing camera registers for this scan", reason
+                )
+                return
+            label = "alternative"
+        else:
+            settings = FW_DEFAULT_CAMERA_SETTINGS
+            label = "firmware-default restore"
+
+        t0 = time.monotonic()
+        failures = []
+        wrote_any = False
+        for side, mask, connected in (
+            ("left", left_mask, self._leftSensorConnected),
+            ("right", right_mask, self._rightSensorConnected),
+        ):
+            if not connected or not mask:
+                continue
+            sensor = getattr(self._interface, side, None)
+            if sensor is None:
+                continue
+            wrote_any = True
+            failures.extend(
+                f"{side} {f}"
+                for f in apply_camera_settings(sensor, mask, settings)
+            )
+        logger.info(
+            "Camera settings (%s): exposure %d rows (%g us), gains %s -> "
+            "left=0x%02X right=0x%02X in %.0f ms",
+            label, settings.exposure_rows, settings.exposure_us,
+            list(settings.gains), left_mask, right_mask,
+            (time.monotonic() - t0) * 1000.0,
+        )
+        if failures:
+            logger.warning(
+                "Camera settings: %d register write(s) failed: %s",
+                len(failures), "; ".join(failures),
+            )
+
+        # Dirty bookkeeping, persisted so an app restart can't strand stale
+        # registers. Enabled + wrote → registers differ from firmware
+        # defaults. Restore pass with zero failures → clean (a module that
+        # wasn't connected lost camera power with its USB, which reset its
+        # registers anyway); any failure keeps dirty so the next scan
+        # retries the restore.
+        if enabled and wrote_any:
+            new_dirty = True
+        elif not enabled and not failures:
+            new_dirty = False
+        else:
+            new_dirty = dirty
+        if new_dirty != dirty:
+            self._app_config["altCameraSettingsDirty"] = new_dirty
+            self._save_app_config()
+
+    def _apply_alt_laser_pulse_width(self, trigger_data: dict) -> dict:
+        """Engineering override: alternative laser pulse width (#449).
+
+        Replaces ``LaserPulseWidthUsec`` in the resolved trigger config
+        just before it is pushed to the console — every push, while
+        enabled. Experiments only. The safety FPGAs' PULSE_WIDTH_UL
+        ceiling is raised to cover the whole width range at scan start
+        while this is enabled (#483, ``_apply_alt_safety_pulse_width_ul``),
+        so nobody edits the laser-safety config by hand for it any more.
+
+        Unlike the camera-register overrides there is no restore path:
+        the scan flow re-resolves the full trigger config from the SDK
+        defaults on every push, so disabling the toggle is sufficient.
+
+        Fail-closed on a plain clinical build (#43/#234 pattern): a
+        hand-edited config key must never change laser emission for a
+        clinical user; the UI to enable this only exists behind the
+        engineering unlock anyway.
+        """
+        if self._app_config.get("altLaserPulseWidthEnabled") is not True:
+            return trigger_data
+        if (self._app_config.get("clinicalMode", False)
+                and not self._app_config.get("engineeringMode", False)):
+            logger.warning(
+                "altLaserPulseWidthEnabled is set but this is a clinical "
+                "build without engineering mode — ignoring the override"
+            )
+            return trigger_data
+        width, reason = laser_pulse_width_from_config(
+            self._app_config.get("altLaserPulseWidthUsec")
+        )
+        if width is None:
+            logger.warning(
+                "Alternative laser pulse width enabled but invalid (%s); "
+                "keeping the resolved trigger config", reason
+            )
+            return trigger_data
+        old = trigger_data.get("LaserPulseWidthUsec")
+        trigger_data = dict(trigger_data)
+        trigger_data["LaserPulseWidthUsec"] = width
+        # WARNING on purpose — an active laser-emission override must be
+        # unmissable in any log this scan appears in.
+        logger.warning(
+            "ALT LASER PULSE WIDTH ACTIVE (experiments only): %s -> %d µs "
+            "(safety PULSE_WIDTH_UL ceiling %d µs while enabled)",
+            old, width, ALT_PULSE_WIDTH_SAFETY_CEILING_US,
+        )
+        return trigger_data
+
+    def _apply_alt_ta_pulse_width(self):
+        """Write the TA driver FPGA's pulse_width register (#449).
+
+        This register — not the trigger config — shapes the optical
+        pulse: the TA driver edge-detects the console's laser trigger and
+        times the drive itself (driver_control.v), which is why
+        LaserPulseWidthUsec alone changed nothing on the bench
+        (2026-08-10: 500/700/1100 µs gates → identical means). The
+        setTrigger override stays purely so the console's echoed config
+        records the commanded width alongside the scan.
+
+        Same persistence shape as the camera registers: the TA FPGA holds
+        the value until console power-off or the next apply_laser_power
+        (console connect re-applies laser_params.json), so disabling the
+        toggle restores the laser_params baseline once via the persisted
+        ``altLaserPulseWidthDirty`` flag. Runs at scan start with the
+        trigger off. Fail-soft: a failed write logs and the scan
+        proceeds; a failed restore keeps the dirty flag for retry.
+        """
+        enabled = self._app_config.get("altLaserPulseWidthEnabled") is True
+        dirty = self._app_config.get("altLaserPulseWidthDirty") is True
+        if not enabled and not dirty:
+            return
+        if (self._app_config.get("clinicalMode", False)
+                and not self._app_config.get("engineeringMode", False)):
+            return  # same fail-closed gate as the trigger override
+        console = getattr(self._interface, "console", None)
+        if console is None:
+            return
+
+        if enabled:
+            width, reason = laser_pulse_width_from_config(
+                self._app_config.get("altLaserPulseWidthUsec"))
+            if width is None:
+                logger.warning(
+                    "Alternative laser pulse width enabled but invalid "
+                    "(%s); NOT writing TA_PULSE_WIDTH for this scan", reason
+                )
+                return
+            write_kwargs, ticks = ta_pulse_width_write(width)
+            label = f"{width} µs = {ticks} ticks (alternative)"
+        else:
+            write_kwargs, ticks = ta_pulse_width_write(None)
+            label = (f"{ticks * TA_PULSE_TICK_US:.1f} µs = {ticks} ticks "
+                     f"(laser_params baseline restore)")
+
+        try:
+            ok = console.write_i2c_packet(**write_kwargs) is not False
+        except Exception as e:
+            logger.warning("TA_PULSE_WIDTH write raised: %s", e)
+            ok = False
+        if ok:
+            # WARNING on purpose — this changes actual laser emission.
+            logger.warning("TA_PULSE_WIDTH WRITTEN: %s", label)
+        else:
+            logger.warning(
+                "TA_PULSE_WIDTH write FAILED (%s); laser drive keeps its "
+                "previous pulse width", label,
+            )
+
+        new_dirty = dirty
+        if enabled and ok:
+            new_dirty = True
+        elif not enabled and ok:
+            new_dirty = False
+        if new_dirty != dirty:
+            self._app_config["altLaserPulseWidthDirty"] = new_dirty
+            self._save_app_config()
+
+    def _apply_alt_safety_pulse_width_ul(self) -> bool:
+        """Raise / restore the safety FPGAs' pulse-width ceiling (#483).
+
+        The Safety EE / OPT FPGAs trip and LATCH the laser (E-202, console
+        power-cycle to clear) when the actual pulse exceeds their
+        PULSE_WIDTH_UL — 1000 µs stock, ~550 µs on a WI-15-calibrated
+        console — so an alternative pulse width above that cannot be
+        written safely without raising the ceiling first. While the
+        toggle is on this writes ALT_PULSE_WIDTH_SAFETY_CEILING_US
+        (2200 µs, the dropdown max) to both registers at every scan
+        start; on the first scan after the toggle is turned off it
+        restores the unit's baseline once — the flash user-config value
+        when the console has one, else the laser_params.json stock —
+        via the persisted ``altLaserSafetyCeilingDirty`` flag. Runs at
+        scan start with the trigger off.
+
+        Returns False only when a write this scan needed actually failed
+        (the caller then skips widening the TA pulse); gated no-ops
+        return True. Never writes while ``forceLaserFail`` is armed: that
+        test stages EE_PULSE_WIDTH_UL = 0 through apply_laser_power, and a
+        raise OR a restore here would neutralize it (the sdk#252 bug
+        class) — the dirty flag is carried until the flag is cleared.
+        Same clinical fail-closed gate as the TA write.
+        """
+        enabled = self._app_config.get("altLaserPulseWidthEnabled") is True
+        dirty = self._app_config.get("altLaserSafetyCeilingDirty") is True
+        if not enabled and not dirty:
+            return True
+        if (self._app_config.get("clinicalMode", False)
+                and not self._app_config.get("engineeringMode", False)):
+            return True  # same fail-closed gate as the trigger override
+        console = getattr(self._interface, "console", None)
+        if console is None:
+            return True
+        if self._force_laser_fail:
+            logger.warning(
+                "forceLaserFail is armed; leaving the safety PULSE_WIDTH_UL "
+                "registers alone (%s deferred)",
+                "ceiling raise" if enabled else "ceiling restore",
+            )
+            return True
+
+        if enabled:
+            writes = safety_pulse_width_ul_writes(
+                ALT_PULSE_WIDTH_SAFETY_CEILING_US)
+        else:
+            user_cfg = None
+            try:
+                cfg_obj = console.read_config()
+                json_data = getattr(cfg_obj, "json_data", None)
+                if isinstance(json_data, dict):
+                    user_cfg = json_data
+            except Exception as e:
+                logger.warning(
+                    "Could not read the console user config before the "
+                    "safety PULSE_WIDTH_UL restore (%s); restoring the "
+                    "laser_params baseline", e,
+                )
+            writes = safety_pulse_width_ul_writes(None, user_config=user_cfg)
+
+        failures = []
+        wrote_any = False
+        for name, write_kwargs, ticks, source in writes:
+            label = (f"{name} {ticks * SAFETY_PULSE_TICK_US:.0f} µs = "
+                     f"{ticks} ticks ({source})")
+            try:
+                ok = console.write_i2c_packet(**write_kwargs) is not False
+            except Exception as e:
+                logger.warning("%s write raised: %s", name, e)
+                ok = False
+            if ok:
+                wrote_any = True
+                # WARNING on purpose — this moves a laser-safety limit.
+                logger.warning("SAFETY PULSE_WIDTH_UL WRITTEN: %s", label)
+            else:
+                failures.append(label)
+                logger.warning(
+                    "SAFETY PULSE_WIDTH_UL write FAILED (%s); the register "
+                    "keeps its previous limit", label,
+                )
+
+        new_dirty = dirty
+        if enabled and wrote_any:
+            new_dirty = True
+        elif not enabled and not failures:
+            new_dirty = False
+        if new_dirty != dirty:
+            self._app_config["altLaserSafetyCeilingDirty"] = new_dirty
+            self._save_app_config()
+        return not failures
+
+    def _apply_alt_laser_pulse_width_registers(self):
+        """Scan-start orchestration for the alt-pulse-width register pair.
+
+        Order matters because the safety FPGAs act on the actual pulse:
+        raise the ceiling BEFORE widening the TA pulse, and narrow the
+        pulse BEFORE lowering the ceiling. If raising the ceiling fails,
+        the TA override is skipped for this scan — the laser keeps its
+        previous width rather than pulsing wider than the interlock
+        allows and latching the console.
+        """
+        if self._app_config.get("altLaserPulseWidthEnabled") is True:
+            if not self._apply_alt_safety_pulse_width_ul():
+                logger.warning(
+                    "NOT writing TA_PULSE_WIDTH this scan: the safety "
+                    "PULSE_WIDTH_UL ceiling could not be raised, so a wider "
+                    "pulse would latch the laser-safety interlock (E-202)"
+                )
+                return
+            self._apply_alt_ta_pulse_width()
+        else:
+            self._apply_alt_ta_pulse_width()
+            self._apply_alt_safety_pulse_width_ul()
+
     # --- CONSOLE COMMUNICATION METHODS ---
     @pyqtSlot()
     def queryConsoleInfo(self):
@@ -4158,6 +4613,19 @@ class MotionConnector(QObject):
         _cq_light_clear = _cq_int_or(
             "cq_live_clear_frames", _CQ_DEFAULT_LIVE_CLEAR_FRAMES)
 
+        # Engineering-mode alternative camera settings (#446): write exposure
+        # + per-camera analog gain via the SDK just before the scan starts,
+        # every time — or restore firmware defaults on the first scan after
+        # the toggle was turned off. No-op when disabled and clean.
+        self._apply_alt_camera_settings(left_camera_mask, right_camera_mask)
+
+        # #449: the TA driver FPGA times the optical pulse itself, so the
+        # alternative pulse width must be written to its pulse_width
+        # register — the setTrigger gate override alone is record-keeping.
+        # #483: bracketed by the safety FPGAs' PULSE_WIDTH_UL ceiling —
+        # raised before the pulse is widened, restored after it's narrowed.
+        self._apply_alt_laser_pulse_width_registers()
+
         req = ScanRequest(
             subject_id=subject_id,
             duration_sec=duration_sec,
@@ -4175,7 +4643,10 @@ class MotionConnector(QObject):
             # to True, so the per-scan {scan_id}_{subject}_telemetry.csv
             # must be explicitly gated on engineeringMode here. The original
             # gate was dropped in the sink-refactor follow-up (93c2feb).
-            write_telemetry_csv=engineering_mode,
+            # #471 made it additionally opt-in: the persisted toggle is
+            # re-checked at scan start alongside the mode flag, so a stale
+            # writeTelemetryCsv=true never writes on a plain clinical build.
+            write_telemetry_csv=engineering_mode and self._write_telemetry_csv,
             # Raw CSV duration forwarded to the pipeline's Tee("raw") gate
             # via raw_save_max_duration_s. None means unbounded (write entire
             # scan); 0 omits raw tee entirely. The persisted writeRawCsv
@@ -4540,6 +5011,15 @@ class MotionConnector(QObject):
             # through to the SDK's resolved default rather than being
             # sent as missing keys.
             json_trigger_data = self._interface.resolve_trigger_config(
+                json_trigger_data
+            )
+
+            # Engineering override (#446 family): alternative laser pulse
+            # width, applied to every trigger push while enabled. (The
+            # dark-frame skip needs no counterpart here — it lives in the
+            # interface's default_trigger_config (main.py, #449), so the
+            # resolve above already carries it.)
+            json_trigger_data = self._apply_alt_laser_pulse_width(
                 json_trigger_data
             )
 
@@ -5369,13 +5849,14 @@ class MotionConnector(QObject):
         Returns:
             bool: True if command was sent successfully, False otherwise
         """
+        side = sensor_side.lower()
         try:
-            if sensor_side.lower() == "left":
+            if side == "left":
                 if not self._leftSensorConnected:
                     logger.error("Left sensor not connected")
                     return False
                 result = self._interface.left.set_fan_control(fan_on)
-            elif sensor_side.lower() == "right":
+            elif side == "right":
                 if not self._rightSensorConnected:
                     logger.error("Right sensor not connected")
                     return False
@@ -5388,6 +5869,10 @@ class MotionConnector(QObject):
                 logger.info(
                     f"Fan control set to {'ON' if fan_on else 'OFF'} for {sensor_side} sensor"
                 )
+                # Keep the QML-facing cache truthful (issue #463) — the
+                # Engineering switches bind to left/rightSensorFanOn.
+                self._last_fan_status[side] = bool(fan_on)
+                self.sensorFanChanged.emit()
             else:
                 logger.error(f"Failed to set fan control for {sensor_side} sensor")
 
@@ -5422,6 +5907,7 @@ class MotionConnector(QObject):
             status = sensor.get_fan_control_status()
             if status != self._last_fan_status.get(side):
                 self._last_fan_status[side] = status
+                self.sensorFanChanged.emit()
                 logger.info(
                     f"Fan status for {sensor_side} sensor: {'ON' if status else 'OFF'}"
                 )
@@ -5718,6 +6204,46 @@ class MotionConnector(QObject):
         # on the GUI thread (same marshalling pattern as _pastScanBuffersReady).
         self._scanOutcomeWarningSignal.connect(self._on_scan_outcome_warning)
 
+    def _ft_thresholds(self):
+        """``CalibrationThresholds`` from the ft_* config values, falling
+        back per-field to the SDK's factory acceptance thresholds.
+
+        The fallback used to be ``[0.0]*8`` — bars that can never fail,
+        which turned the SDK's calibration pre-write gate, rollback, and
+        PASS verdict into no-ops (#473). The SDK now also refuses to start
+        a run whose gate cannot fail, so a config that somehow still zeroes
+        the thresholds surfaces as a loud refusal in the capture log
+        instead of a below-spec EEPROM write displayed as PASSED.
+        """
+        from omotion import CalibrationThresholds, factory_calibration_thresholds
+
+        f = factory_calibration_thresholds()
+        return CalibrationThresholds(
+            min_mean_per_camera=list(
+                self._ft_min_mean_per_camera or f.min_mean_per_camera),
+            min_contrast_per_camera=list(
+                self._ft_min_contrast_per_camera or f.min_contrast_per_camera),
+            min_bfi_per_camera=list(
+                self._ft_min_bfi_per_camera or f.min_bfi_per_camera),
+            min_bvi_per_camera=list(
+                self._ft_min_bvi_per_camera or f.min_bvi_per_camera),
+            max_bfi_per_camera=(
+                list(self._ft_max_bfi_per_camera)
+                if self._ft_max_bfi_per_camera is not None
+                else f.max_bfi_per_camera
+            ),
+            max_bvi_per_camera=(
+                list(self._ft_max_bvi_per_camera)
+                if self._ft_max_bvi_per_camera is not None
+                else f.max_bvi_per_camera
+            ),
+            max_dark_per_camera=(
+                list(self._ft_max_dark_per_camera)
+                if self._ft_max_dark_per_camera is not None
+                else f.max_dark_per_camera
+            ),
+        )
+
     @pyqtSlot()
     @pyqtSlot(str)
     def runCalibration(self, target: str = "both"):
@@ -5731,7 +6257,7 @@ class MotionConnector(QObject):
         Camera mask is still ``0xFF`` per side (every camera on the chosen
         sensor); the app config's leftMask/rightMask still don't apply.
         """
-        from omotion import CalibrationRequest, CalibrationThresholds
+        from omotion import CalibrationRequest
 
         if self._calibration_status == "running":
             return
@@ -5752,32 +6278,25 @@ class MotionConnector(QObject):
         left_mask  = 0xFF if (want_left  and self._leftSensorConnected)  else 0x00
         right_mask = 0xFF if (want_right and self._rightSensorConnected) else 0x00
         if (left_mask | right_mask) == 0:
+            # #362 — the dropdown now filters disconnected targets, but keep
+            # the guard for programmatic callers and races (sensor unplugged
+            # between selection and click). Surface it in the persistent
+            # status label too: a captureLog line alone is invisible to an
+            # operator sitting in the Settings overlay, which is exactly why
+            # #362 read as "no action is performed".
             if target == "left" and not self._leftSensorConnected:
-                self.captureLog.emit("⚠️ Cannot calibrate: left sensor not connected.")
+                reason = "left sensor not connected"
             elif target == "right" and not self._rightSensorConnected:
-                self.captureLog.emit("⚠️ Cannot calibrate: right sensor not connected.")
+                reason = "right sensor not connected"
             else:
-                self.captureLog.emit("⚠️ Cannot calibrate: no sensors connected.")
+                reason = "no sensors connected"
+            self.captureLog.emit(f"⚠️ Cannot calibrate: {reason}.")
+            self._calibration_status = "error"
+            self._calibration_failure_reason = reason
+            self.calibrationStateChanged.emit()
             return
 
-        thresholds = CalibrationThresholds(
-            min_mean_per_camera=list(self._ft_min_mean_per_camera or [0.0]*8),
-            min_contrast_per_camera=list(self._ft_min_contrast_per_camera or [0.0]*8),
-            min_bfi_per_camera=list(self._ft_min_bfi_per_camera or [0.0]*8),
-            min_bvi_per_camera=list(self._ft_min_bvi_per_camera or [0.0]*8),
-            max_bfi_per_camera=(
-                list(self._ft_max_bfi_per_camera)
-                if self._ft_max_bfi_per_camera is not None else None
-            ),
-            max_bvi_per_camera=(
-                list(self._ft_max_bvi_per_camera)
-                if self._ft_max_bvi_per_camera is not None else None
-            ),
-            max_dark_per_camera=(
-                list(self._ft_max_dark_per_camera)
-                if self._ft_max_dark_per_camera is not None else None
-            ),
-        )
+        thresholds = self._ft_thresholds()
         output_dir = os.path.join(self._data_root, "calibrations")
         os.makedirs(output_dir, exist_ok=True)
         # CalibrationWorkflow resolves the trigger config to the
@@ -5808,6 +6327,9 @@ class MotionConnector(QObject):
             target, left_mask, right_mask, self._calibration_scan_duration_sec,
         )
 
+        # The SDK enforces the never-write rule itself: any camera outside
+        # any threshold means the run FAILS and the console EEPROM is never
+        # touched — there is no consent hook to wire up.
         started = self._interface.start_calibration(
             req,
             on_log_fn=lambda msg: self.captureLog.emit(msg),
@@ -5817,6 +6339,18 @@ class MotionConnector(QObject):
             self._calibration_status = ""
             self.calibrationStateChanged.emit()
             self.captureLog.emit("⚠️ Calibration failed to start.")
+
+    @pyqtSlot()
+    def cancelCalibration(self):
+        """Cancel the in-flight calibration or Test scan. Non-blocking:
+        join_timeout=0 skips the SDK's thread join (up to 10 s by default,
+        which would freeze the GUI thread); completion still arrives via
+        the normal on_complete callback with outcome=canceled."""
+        if (self._calibration_status != "running"
+                and self._test_scan_status != "running"):
+            return
+        self.captureLog.emit("Canceling…")
+        self._interface.cancel_calibration(join_timeout=0)
 
     @pyqtSlot()
     @pyqtSlot(str)
@@ -5830,7 +6364,7 @@ class MotionConnector(QObject):
         ``"right"``, or ``"both"`` (default). Issue #117 — test stations
         with only one static phantom need to test one side at a time.
         """
-        from omotion import CalibrationRequest, CalibrationThresholds
+        from omotion import CalibrationRequest
 
         # Mutual exclusion with the Calibrate flow.
         if self._test_scan_status == "running":
@@ -5859,32 +6393,22 @@ class MotionConnector(QObject):
         left_mask  = 0xFF if (want_left  and self._leftSensorConnected)  else 0x00
         right_mask = 0xFF if (want_right and self._rightSensorConnected) else 0x00
         if (left_mask | right_mask) == 0:
+            # #362 — same visibility fix as runCalibration: the Test row's
+            # status lives in the results window, so park the reason there
+            # instead of only in the transient capture log.
             if target == "left" and not self._leftSensorConnected:
-                self.captureLog.emit("⚠️ Cannot run Test scan: left sensor not connected.")
+                reason = "left sensor not connected"
             elif target == "right" and not self._rightSensorConnected:
-                self.captureLog.emit("⚠️ Cannot run Test scan: right sensor not connected.")
+                reason = "right sensor not connected"
             else:
-                self.captureLog.emit("⚠️ Cannot run Test scan: no sensors connected.")
+                reason = "no sensors connected"
+            self.captureLog.emit(f"⚠️ Cannot run Test scan: {reason}.")
+            self._test_scan_status = "error"
+            self._test_scan_failure_reason = reason
+            self.testScanStateChanged.emit()
             return
 
-        thresholds = CalibrationThresholds(
-            min_mean_per_camera=list(self._ft_min_mean_per_camera or [0.0]*8),
-            min_contrast_per_camera=list(self._ft_min_contrast_per_camera or [0.0]*8),
-            min_bfi_per_camera=list(self._ft_min_bfi_per_camera or [0.0]*8),
-            min_bvi_per_camera=list(self._ft_min_bvi_per_camera or [0.0]*8),
-            max_bfi_per_camera=(
-                list(self._ft_max_bfi_per_camera)
-                if self._ft_max_bfi_per_camera is not None else None
-            ),
-            max_bvi_per_camera=(
-                list(self._ft_max_bvi_per_camera)
-                if self._ft_max_bvi_per_camera is not None else None
-            ),
-            max_dark_per_camera=(
-                list(self._ft_max_dark_per_camera)
-                if self._ft_max_dark_per_camera is not None else None
-            ),
-        )
+        thresholds = self._ft_thresholds()
         output_dir = os.path.join(self._data_root, "calibrations")
         os.makedirs(output_dir, exist_ok=True)
         req = CalibrationRequest(
@@ -5926,38 +6450,30 @@ class MotionConnector(QObject):
         _testScanCompleteSignal). Translates a TestScanResult into the
         QML-friendly _test_scan_rows model and updates _test_scan_status.
         """
-        self._test_scan_failure_reason = ""
-        if result.canceled:
-            self._test_scan_status = "aborted"
-            self.captureLog.emit(
-                f"⚠️ Test scan aborted: {result.error or 'canceled'}"
-            )
-        elif not result.ok:
-            self._test_scan_status = "aborted"
-            self.captureLog.emit(
-                f"⚠️ Test scan aborted: {result.error or 'unknown error'}"
-            )
-        elif result.passed:
-            self._test_scan_status = "done"
+        self._test_scan_failure_reason = ""  # reset each run
+        outcome = _result_outcome(result)
+        self._test_scan_status = outcome
+        if outcome == "passed":
             self.captureLog.emit(
                 f"✅ Test scan: PASS  (CSV: {result.csv_path})"
             )
-        else:
-            self._test_scan_status = "failed"
+        elif outcome == "failed":
             if self._app_config.get("engineeringMode", False):
                 tests = (("mean", "mean_test"), ("contrast", "contrast_test"),
                          ("ambient", "dark_test"))
-                breakdown = "; ".join(
-                    f"{'L' if r.side == 'left' else 'R'}{r.cam_id + 1}:"
-                    f"{','.join(n for n, a in tests if getattr(r, a) == 'FAIL')}"
-                    for r in result.rows
-                    if any(getattr(r, a) == "FAIL" for _, a in tests)
-                )
-                if any(r.dark_test == "FAIL" for r in result.rows):
-                    breakdown = f"too much ambient light — {breakdown}"
-                self._test_scan_failure_reason = breakdown
+                self._test_scan_failure_reason = _format_threshold_breakdown(
+                    result.rows, tests)
             self.captureLog.emit(
                 f"❌ Test scan: FAIL  (CSV: {result.csv_path})"
+            )
+        else:
+            # canceled / timed_out / error — surface the SDK's reason in the
+            # persistent status label, not just this transient log line.
+            self._test_scan_failure_reason = result.error or ""
+            icon = "⚠️" if outcome in ("canceled", "timed_out") else "❌"
+            self.captureLog.emit(
+                f"{icon} Test scan {outcome.replace('_', ' ')}: "
+                f"{result.error or 'unknown'}"
             )
 
         elapsed_s = (
@@ -6015,41 +6531,40 @@ class MotionConnector(QObject):
     def _on_calibration_complete(self, result):
         """Runs on the Qt main thread (queued from worker via signal)."""
         self._calibration_failure_reason = ""  # reset each run
-        if result.canceled:
-            self._calibration_status = "aborted"
-            self.captureLog.emit(
-                f"⚠️ Calibration aborted: {result.error or 'canceled'}"
-            )
-        elif not result.ok:
-            self._calibration_status = "aborted"
-            self.captureLog.emit(
-                f"⚠️ Calibration aborted: {result.error or 'unknown error'}"
-            )
-        elif result.passed:
-            self._calibration_status = "passed"
-            self.captureLog.emit(
-                f"✅ Calibration: PASS  (CSV: {result.csv_path})"
-            )
-        else:
-            self._calibration_status = "failed"
+        outcome = _result_outcome(result)
+        self._calibration_status = outcome
+        if outcome == "passed":
+            self.captureLog.emit(f"✅ Calibration: PASS  (CSV: {result.csv_path})")
+        elif outcome == "failed":
             if self._app_config.get("engineeringMode", False):
                 tests = (("mean", "mean_test"), ("contrast", "contrast_test"),
                          ("bfi", "bfi_test"), ("bvi", "bvi_test"),
                          ("ambient", "dark_test"))
-                breakdown = "; ".join(
-                    f"{'L' if r.side == 'left' else 'R'}{r.cam_id + 1}:"
-                    f"{','.join(n for n, a in tests if getattr(r, a) == 'FAIL')}"
-                    for r in result.rows
-                    if any(getattr(r, a) == "FAIL" for _, a in tests)
+                self._calibration_failure_reason = _format_threshold_breakdown(
+                    result.rows, tests)
+            # A FAILED run never touches the console (the SDK writes the
+            # EEPROM only after a fully-passing validation); result.error
+            # carries the gate's below-threshold detail when the run failed
+            # at the pre-write gate.
+            if getattr(result, "error", ""):
+                self._calibration_failure_reason = (
+                    f"{self._calibration_failure_reason} — {result.error}"
+                    if self._calibration_failure_reason
+                    else result.error
                 )
-                # #122: dev-mode message must explicitly call out ambient-
-                # light failures so operators don't misread an "ambient"
-                # tag in the breakdown as a generic test name.
-                if any(r.dark_test == "FAIL" for r in result.rows):
-                    breakdown = f"too much ambient light — {breakdown}"
-                self._calibration_failure_reason = breakdown
+            self.captureLog.emit(f"❌ Calibration: FAIL  (CSV: {result.csv_path})")
             self.captureLog.emit(
-                f"❌ Calibration: FAIL  (CSV: {result.csv_path})"
+                "Nothing was written to the console — it keeps its "
+                "existing calibration."
+            )
+        else:
+            # canceled / timed_out / error — surface the SDK's reason in the
+            # persistent status label, not just this transient log line.
+            self._calibration_failure_reason = result.error or ""
+            icon = "⚠️" if outcome in ("canceled", "timed_out") else "❌"
+            self.captureLog.emit(
+                f"{icon} Calibration {outcome.replace('_', ' ')}: "
+                f"{result.error or 'unknown'}"
             )
         elapsed_s = (
             time.monotonic() - self._calibration_t0

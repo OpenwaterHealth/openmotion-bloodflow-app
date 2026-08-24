@@ -13,7 +13,9 @@ QML → connector → SDK chain on real hardware:
   - Verify the status text shifts away from idle within a few seconds
     (procedure actually started — not silently swallowed).
   - Poll for a terminal status text ("Calibration Passed",
-    "Calibration Failed", or "Calibration Aborted").
+    "Calibration Failed", "Calibration Canceled", "Calibration Timed
+    Out", or "Calibration Error" — "Failed"/"Timed Out"/"Error" may
+    carry a " — <breakdown>" or " — <reason>" suffix).
   - Verify the indicator label confirms the procedure ran end-to-end.
 
 Preconditions
@@ -40,6 +42,9 @@ This test verifies the UI plumbing, not acceptance criteria.
 import time
 
 import pytest
+# Windows-only UI automation; this whole module is a HIL test. Skip the module
+# rather than fail collection on a non-Windows dev machine.
+pytest.importorskip("pywinauto", reason="pywinauto is Windows-only (HIL test)")
 from pywinauto import findwindows
 
 from conftest import SLEEP, ensure_visible, log, uia_window
@@ -61,8 +66,10 @@ _TERMINAL_WAIT_SEC = 180
 
 _TERMINAL_TEXTS = (
     "Calibration Passed",
-    "Calibration Failed",
-    "Calibration Aborted",
+    "Calibration Failed",      # may carry " — <breakdown>"
+    "Calibration Canceled",
+    "Calibration Timed Out",   # may carry " — <reason>"
+    "Calibration Error",       # may carry " — <reason>"
 )
 _RUNNING_PREFIX = "Calibrating..."
 
@@ -119,7 +126,7 @@ def _read_calibration_status_text() -> str:
             text = text.strip()
             if not text:
                 continue
-            if text.startswith(_RUNNING_PREFIX) or text in _TERMINAL_TEXTS:
+            if text.startswith(_RUNNING_PREFIX) or text.startswith(_TERMINAL_TEXTS):
                 return text
     except (RuntimeError, findwindows.ElementNotFoundError):
         pass
@@ -137,7 +144,7 @@ def _poll_for_terminal_state(timeout_sec: int) -> str:
         text = _read_calibration_status_text()
         if text:
             last_seen = text
-            if text in _TERMINAL_TEXTS:
+            if text.startswith(_TERMINAL_TEXTS):
                 return text
         # Log progress at most every ~5 s so the test output is
         # readable without flooding.
@@ -155,7 +162,7 @@ def test_calibration_button_runs_to_terminal_state(app):
         _click_run_calibration()
         final = _poll_for_terminal_state(_TERMINAL_WAIT_SEC)
         log.info(f"  final calibration status: {final!r}")
-        assert final in _TERMINAL_TEXTS, (
+        assert final.startswith(_TERMINAL_TEXTS), (
             f"Calibration did not reach a terminal state within "
             f"{_TERMINAL_WAIT_SEC} s. Last observed text: {final!r}. "
             f"Expected one of {_TERMINAL_TEXTS}."

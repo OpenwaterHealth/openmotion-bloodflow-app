@@ -31,7 +31,8 @@ from PyQt6.QtQml import (
 from PyQt6.QtCore import qInstallMessageHandler, QtMsgType, QUrl
 
 from motion_connector import MotionConnector
-from omotion import MotionInterface
+from motion_config import DEFAULT_TRIGGER_OVERRIDES
+from omotion import MotionInterface, factory_calibration_thresholds
 from utils.single_instance import check_single_instance, cleanup_single_instance
 from version import get_version
 from utils.resource_path import resource_path
@@ -72,6 +73,28 @@ def qt_message_handler(msg_type, context, message):
     qml_logger.log(log_level, "QML: %s", message)
 
 
+def _ft_factory_defaults() -> dict:
+    """ft_* code defaults = the SDK's factory acceptance thresholds.
+
+    These were zeros once: a zero min-mean/min-contrast can never fail
+    (both quantities are non-negative), which silently disabled the SDK's
+    calibration pre-write gate whenever a config lacked the ft_* keys — a
+    below-spec calibration then wrote the console EEPROM and displayed
+    PASSED (#473). Config files still override every key; only the
+    fallback changed.
+    """
+    f = factory_calibration_thresholds()
+    return {
+        "ft_min_mean_per_camera": f.min_mean_per_camera,
+        "ft_min_contrast_per_camera": f.min_contrast_per_camera,
+        "ft_min_bfi_per_camera": f.min_bfi_per_camera,
+        "ft_max_bfi_per_camera": f.max_bfi_per_camera,
+        "ft_min_bvi_per_camera": f.min_bvi_per_camera,
+        "ft_max_bvi_per_camera": f.max_bvi_per_camera,
+        "ft_max_dark_per_camera": f.max_dark_per_camera,
+    }
+
+
 def _load_app_config() -> dict:
     """Load application config from config/app_config.json. Returns defaults if missing or invalid."""
     defaults = {
@@ -109,13 +132,7 @@ def _load_app_config() -> dict:
         "powerOffUnusedCameras": False,
         "commVerbose": False,  # Enable cmd id and "." prints from MCU
         "verboseCommandHandling": False,  # Enable printf in MCU command handlers
-        "ft_min_mean_per_camera": [0] * 8,
-        "ft_min_contrast_per_camera": [0] * 8,
-        "ft_min_bfi_per_camera": [0.0] * 8,
-        "ft_max_bfi_per_camera": None,
-        "ft_min_bvi_per_camera": [0.0] * 8,
-        "ft_max_bvi_per_camera": None,
-        "ft_max_dark_per_camera": [3.0] * 8,
+        **_ft_factory_defaults(),
         "max_calibration_time_sec": 600,
         "calibration_scan_duration_sec": 15,
         "test_scan_duration_sec": 5,
@@ -124,6 +141,31 @@ def _load_app_config() -> dict:
         "rightMask": 0x66,
         "uncorrectedOnly": False,
         "engineeringMode": False,
+        # Alternative camera settings (#446, Settings → Engineering →
+        # Camera settings). When enabled, exposure + per-camera analog gain
+        # are written via the SDK to every scanned camera just before each
+        # scan starts. Defaults mirror what the sensor firmware itself
+        # programs (X02C1B_Sensor_Config.h: 72 rows × 9 µs = 648 µs;
+        # X02C1B_configure_sensor per-position gain ladder). Valid exposures
+        # are whole 9 µs rows in 99–2196 µs; valid gains 1/2/4/8/16.
+        "altCameraSettingsEnabled": False,
+        "altCameraExposureUs": 648,
+        "altCameraGains": [16, 4, 2, 1, 1, 2, 4, 16],
+        # Internal (no UI): true while camera registers may hold alternative
+        # values, so the first scan after disabling restores fw defaults.
+        "altCameraSettingsDirty": False,
+        # Alternative laser pulse width (#449) — experiments only, separate
+        # enable from the camera settings above. Overrides the trigger
+        # config's LaserPulseWidthUsec (SDK default 500 µs) on every push
+        # while enabled; valid 100–2200 whole µs (stock safety interlock
+        # latches above ~1000 µs — the operator disables it first).
+        # Ignored on a plain clinical build.
+        "altLaserPulseWidthEnabled": False,
+        "altLaserPulseWidthUsec": 500,
+        # Internal (no UI): true while the TA driver's pulse_width register
+        # may hold an alternative value, so the first scan after disabling
+        # restores the laser_params.json baseline.
+        "altLaserPulseWidthDirty": False,
         "showBfiBvi": True,
         "bfiMin": 0.0,
         "bfiMax": 10.0,
@@ -136,6 +178,9 @@ def _load_app_config() -> dict:
         "dataDirectory": None,
         "writeRawCsv": True,
         "rawCsvDurationSec": None,
+        # Per-scan telemetry CSV — engineering-only (#43) AND opt-in via the
+        # Settings → Engineering switch (#471). Fail closed by default.
+        "writeTelemetryCsv": False,
         # Corrected per-cam CSV ({scan_id}.csv) is redundant now that
         # per-cam BFI/BVI lands in scans.db (the new viewer + past replay
         # read from there). Default off; set true to keep exporting it
@@ -225,6 +270,23 @@ def _load_app_config() -> dict:
         clinical = os.environ["OPENMOTION_CLINICAL"] == "1"
         baseline["clinicalMode"] = clinical
         merged["clinicalMode"] = clinical
+
+    # macOS is a research-only platform: it is never validated or shipped for
+    # clinical use. This has to win over the bundled config AND the env
+    # override, because clinicalMode drives require_encrypted_db (see the
+    # MotionInterface construction below), and the SDK refuses the scan-db
+    # keystore on macOS outright — so a "clinical" macOS session cannot start
+    # at all, it can only fail later and less clearly. Forcing it here is what
+    # makes the DMG a coherent research build rather than a broken clinical
+    # one. build_macos.sh bundles config/ wholesale and has no variant flip of
+    # its own (unlike scripts/build_common.ps1), so this is the only gate.
+    if sys.platform == "darwin" and (baseline.get("clinicalMode") or merged.get("clinicalMode")):
+        logger.warning(
+            "clinicalMode requested on macOS — forcing Research. macOS builds "
+            "are research-only and are not validated for clinical use."
+        )
+        baseline["clinicalMode"] = False
+        merged["clinicalMode"] = False
 
     _APP_CONFIG_BASELINE.clear()
     _APP_CONFIG_BASELINE.update(baseline)
@@ -359,6 +421,11 @@ def main():
         scan_db_path=_scan_db_path,
         operator_id="bloodflow-app",
         require_encrypted_db=_clinical,
+        # Dark-frame skip displacement (#449): pinned at the interface level
+        # so EVERY resolved trigger config carries it — including the SDK's
+        # own re-send right before start_trigger, which reverts anything
+        # patched in after resolution. See motion_config.py for the numbers.
+        default_trigger_config=DEFAULT_TRIGGER_OVERRIDES,
     )
 
     # An existing PLAINTEXT scans.db must be encrypted before anything opens it:

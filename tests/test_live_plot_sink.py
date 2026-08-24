@@ -34,18 +34,25 @@ class _RecorderLiveSource:
         self.dropped.append({"side": side, "cam_id": cam_id, "t": t})
 
 
-def _connector():
+def _connector(clinical_mode=False):
     conn = SimpleNamespace(
         _camera_temp_alert_threshold_c=100.0,
         _camera_dropped=set(),
         _camera_last_seen={},
         _camera_last_temp={},
+        _app_config={"clinicalMode": clinical_mode},
         captureLog=_Signal(),
         recovered=[],
+        notified=[],
     )
     # Called by the sink when a dropped camera's frames resume.
     conn._on_camera_dropout_recovered = (
         lambda side, cam_id: conn.recovered.append((side, cam_id)))
+    # Toast surface — records the kwargs the sink fires it with.
+    conn.notify = (
+        lambda text, type_="info", duration_ms=4000, dismissible=True, tag="":
+        conn.notified.append({"text": text, "type": type_, "tag": tag,
+                              "durationMs": duration_ms}))
     return conn
 
 
@@ -252,6 +259,85 @@ def test_live_plot_sink_passes_temp_for_light_frames():
 
     assert len(src.appended) == 1
     assert src.appended[0]["temp"] == pytest.approx(54.3, abs=1e-4)
+
+
+def _over_temp_batch(temp_c=112.0, frame_type="light"):
+    """One row from LEFT camera 3 (cam_id 2) at ``temp_c``."""
+    batch = SimpleNamespace(
+        bfi_live=np.zeros((1, 2, 8), dtype=np.float32),
+        bvi_live=np.zeros((1, 2, 8), dtype=np.float32),
+        mean_dc_rt=np.zeros((1, 2, 8), dtype=np.float32),
+        contrast_sn_rt=np.zeros((1, 2, 8), dtype=np.float32),
+        temperature_c=np.full((1, 2, 8), temp_c, dtype=np.float32),
+        frame_type=np.array([frame_type], dtype="<U8"),
+        timestamp_s=np.array([0.5], dtype=np.float64),
+        abs_frame_ids=np.array([1], dtype=np.int64),
+        side_ids=np.array([0], dtype=np.int8),
+        cam_ids=np.array([2], dtype=np.int8),
+    )
+    batch.bfi_live[0, 0, 2] = 0.3
+    batch.bvi_live[0, 0, 2] = 5.0
+    return batch
+
+
+def test_over_temp_fires_a_toast_not_just_a_log_line():
+    """Crossing cameraTempAlertThresholdC must raise an on-screen toast.
+    captureLog alone only reaches the app log (its QML terminus is
+    console.log), so the operator saw nothing during the scan."""
+    conn = _connector()
+    sink, _ = _make_sink(conn)
+
+    sink.consume("live", _over_temp_batch(temp_c=112.0))
+
+    assert len(conn.notified) == 1
+    toast = conn.notified[0]
+    assert toast["type"] == "warning"
+    assert toast["tag"] == "temp_left_2"
+    assert toast["durationMs"] == 5000   # auto-dismiss, not sticky
+    assert "LEFT 3" in toast["text"]
+    assert "112.0" in toast["text"]
+    # The operator needs an action, not just a number.
+    assert "airflow" in toast["text"]
+    # The log line is unchanged — the toast is additive.
+    assert len(conn.captureLog.calls) == 1
+
+
+def test_over_temp_toast_suppressed_in_clinical_mode():
+    """Clinical builds get the log line but no mid-scan popup."""
+    conn = _connector(clinical_mode=True)
+    sink, _ = _make_sink(conn)
+
+    sink.consume("live", _over_temp_batch(temp_c=112.0))
+
+    assert conn.notified == []
+    assert len(conn.captureLog.calls) == 1
+
+
+def test_over_temp_toast_fires_once_per_camera_per_scan():
+    """The _temp_alerted latch must gate the toast too — at 40 Hz an
+    unlatched toast would re-fire on every frame."""
+    conn = _connector()
+    sink, _ = _make_sink(conn)
+
+    for _ in range(5):
+        sink.consume("live", _over_temp_batch(temp_c=112.0))
+
+    assert len(conn.notified) == 1
+
+    # A new scan re-arms the latch.
+    sink.on_scan_start(None)
+    sink.consume("live", _over_temp_batch(temp_c=112.0))
+    assert len(conn.notified) == 2
+
+
+def test_no_over_temp_toast_below_threshold():
+    conn = _connector()
+    sink, _ = _make_sink(conn)
+
+    sink.consume("live", _over_temp_batch(temp_c=99.0))
+
+    assert conn.notified == []
+    assert conn.captureLog.calls == []
 
 
 def test_live_plot_sink_no_temp_for_dark_frames():

@@ -140,6 +140,7 @@ def test_calibration_complete_logs_ended(tmp_path):
     c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
     c._calibration_t0 = None
     result = MagicMock()
+    result.outcome = None  # pre-outcome SDK stand-in; drives the bool fallback
     result.canceled = False
     result.ok = True
     result.passed = True

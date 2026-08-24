@@ -209,3 +209,45 @@ def test_beta_updates_present_in_shipped_config():
         data = json.load(f)
     assert data["downloadBetaUpdates"] is False
     assert "downloadBetaFirmware" not in data
+
+
+def test_ft_threshold_defaults_are_the_sdk_factory_values(tmp_path, monkeypatch):
+    """The in-code ft_* defaults must be the SDK factory acceptance
+    thresholds — never zeros. A zero min-mean/min-contrast can never fail
+    (both quantities are non-negative), which disabled the SDK's
+    calibration pre-write gate outright: a config lacking the ft_* keys
+    wrote below-spec calibrations to the console EEPROM and displayed
+    PASSED (#473)."""
+    from omotion import factory_calibration_thresholds
+
+    _patch_config_path(monkeypatch, tmp_path / "app_config.json")
+    cfg = app_main._load_app_config()
+    f = factory_calibration_thresholds()
+    assert cfg["ft_min_mean_per_camera"] == f.min_mean_per_camera
+    assert cfg["ft_min_contrast_per_camera"] == f.min_contrast_per_camera
+    assert cfg["ft_min_bfi_per_camera"] == f.min_bfi_per_camera
+    assert cfg["ft_max_bfi_per_camera"] == f.max_bfi_per_camera
+    assert cfg["ft_min_bvi_per_camera"] == f.min_bvi_per_camera
+    assert cfg["ft_max_bvi_per_camera"] == f.max_bvi_per_camera
+    assert cfg["ft_max_dark_per_camera"] == f.max_dark_per_camera
+    # The gate must actually be able to fail with these defaults.
+    assert all(v > 0 for v in cfg["ft_min_mean_per_camera"])
+    assert all(v > 0 for v in cfg["ft_min_contrast_per_camera"])
+
+
+def test_shipped_config_ft_thresholds_agree_with_factory():
+    """The shipped config overrides the in-code defaults, so it must agree
+    with the SDK factory values — a shipped zero would disable the
+    calibration gate in every field install."""
+    from omotion import factory_calibration_thresholds
+
+    shipped = json.loads(
+        (REPO_ROOT / "config" / "app_config.json").read_text(encoding="utf-8"))
+    f = factory_calibration_thresholds()
+    assert shipped["ft_min_mean_per_camera"] == f.min_mean_per_camera
+    assert shipped["ft_min_contrast_per_camera"] == f.min_contrast_per_camera
+    assert shipped["ft_min_bfi_per_camera"] == f.min_bfi_per_camera
+    assert shipped["ft_max_bfi_per_camera"] == f.max_bfi_per_camera
+    assert shipped["ft_min_bvi_per_camera"] == f.min_bvi_per_camera
+    assert shipped["ft_max_bvi_per_camera"] == f.max_bvi_per_camera
+    assert shipped["ft_max_dark_per_camera"] == f.max_dark_per_camera
