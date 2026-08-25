@@ -25,9 +25,12 @@ no-ops and the build ships unsigned (the pre-EV behavior). In CI the
 cert; the `CODESIGN_THUMBPRINT` repo secret remains as a manual fallback
 for signing with a locally-installed cert (e.g. a self-hosted runner).
 
-**When CI signs:** tag builds, plus `workflow_dispatch` runs with the
-`sign` input checked. Pushes to `next`/`main` build unsigned — no reason
-to spend cloud signings on throwaway builds.
+**When CI signs:** **production tag builds only** (`X.Y.Z` with no
+pre-release suffix), plus `workflow_dispatch` runs with the `sign` input
+checked. eSigner cloud signings are metered (~7 per signed build), so
+dev/rc pre-release tags and pushes to `next`/`main` all build unsigned.
+Testers may see SmartScreen warnings on pre-release installers — expected
+and internal-only.
 
 macOS is unaffected: the DMG stays ad-hoc signed (Apple notarization is a
 separate, unrelated pipeline).
@@ -92,6 +95,10 @@ with the legacy self-signed key at zero eSigner cost. Details: sdk#216.
 - **`_REQUIRE_SIGNED_UPDATES` (motion_connector.py) is still `False`.**
   Flip it to `True` one release *after* the first signed release ships
   and verifies, so the in-app updater starts refusing unsigned bundles.
+  Caveat under the production-only signing policy: after the flip, an
+  updater configured to take pre-releases would refuse unsigned dev/rc
+  bundles — either sign those builds too by then, or keep the flip scoped
+  to production-update channels.
 - **Driver: Microsoft attestation signing** (optional, later). The EV
   cert qualifies us to register a Microsoft Partner Center hardware
   account; attestation-signed driver packages install with no

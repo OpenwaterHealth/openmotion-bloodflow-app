@@ -115,14 +115,16 @@ jobs:
           echo "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Append
 
       # ── eSigner CKA: load the EV code-signing cert ───────────────
-      # Tag builds (and manual runs with sign=true) Authenticode-sign every
-      # Windows artifact with the org's SSL.com EV cert. The private key
-      # never leaves SSL.com's cloud HSM; eSigner CKA exposes it through
-      # Windows CNG so native signtool works against a store thumbprint.
-      # When the ES_* secrets are absent this warns and the build ships
-      # unsigned, exactly as before signing existed. See docs/SIGNING.md.
+      # PRODUCTION tag builds only (X.Y.Z with no pre-release suffix), plus
+      # manual runs with sign=true, Authenticode-sign every Windows artifact
+      # (~7 metered eSigner signings per build) with the org's SSL.com EV
+      # cert. dev/rc pre-release tags build UNSIGNED to conserve the signing
+      # quota. The private key never leaves SSL.com's cloud HSM; eSigner CKA
+      # exposes it through Windows CNG so native signtool works against a
+      # store thumbprint. When the ES_* secrets are absent this warns and
+      # the build ships unsigned. See docs/SIGNING.md.
       - name: Set up eSigner CKA (EV code signing)
-        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.sign)
+        if: (startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-')) || (github.event_name == 'workflow_dispatch' && inputs.sign)
         shell: pwsh
         env:
           ES_USERNAME: ${{ secrets.ES_USERNAME }}
