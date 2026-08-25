@@ -17,15 +17,17 @@ name: Signed Installers
 # validated" guarantee.
 #
 # eSigner signings are METERED (fixed allowance per year). Cost per run:
-#   clinical on a production tag: 3   (MSI, Burn engine, bundle — the exe
+#   clinical on a production tag: 2   (Burn engine + Setup bundle — the exe
 #                                      inside the zip is already signed by
-#                                      the tag build; sign.ps1 skips it)
+#                                      the tag build; sign.ps1 skips it, and
+#                                      the MSI is deliberately unsigned, see
+#                                      build_installer.ps1)
 #   on a dev/rc tag (unsigned exe): +1 for the exe
-#   each additional variant:       +3
+#   each additional variant:       +2
 # The driver MSI inside the bundles is pre-signed in the SDK repo (sdk#216)
 # and costs nothing here. Unlike the unsigned QA artifacts, signing here is
 # mandatory: missing secrets or an invalid signature fails the run — this
-# workflow must never emit an unsigned artifact.
+# workflow must never emit an unsigned distributed artifact.
 #
 # Constraint: the target tag must contain the signing-era build scripts
 # (installer/sign.ps1 with signtool discovery + skip-if-signed,
@@ -161,16 +163,17 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "build_installer failed for $v" }
           }
 
-      # Hard gate: every artifact leaving this workflow must carry a Valid
-      # Authenticode signature. This catches any path where sign.ps1 was
-      # skipped or a signing silently failed.
+      # Hard gate: every distributed artifact leaving this workflow must
+      # carry a Valid Authenticode signature. This catches any path where
+      # sign.ps1 was skipped or a signing silently failed. The MSI is
+      # deliberately unsigned (quota trim — see build_installer.ps1): it
+      # ships only embedded in the signed bundle.
       - name: Verify Authenticode signatures
         shell: pwsh
         run: |
           $files = @(Get-Item "dist\Open-Motion\Open-Motion.exe")
-          $files += Get-ChildItem "build\installer\*.msi"
           $files += Get-ChildItem "build\installer\*-Setup-*.exe"
-          if ($files.Count -lt 3) { throw "expected at least exe + MSI + Setup bundle, found $($files.Count) files" }
+          if ($files.Count -lt 2) { throw "expected at least exe + Setup bundle, found $($files.Count) files" }
           foreach ($f in $files) {
             $sig = Get-AuthenticodeSignature $f.FullName
             if ($sig.Status -ne "Valid") {
@@ -179,7 +182,7 @@ jobs:
             Write-Host ("OK  {0}  [{1}]" -f $f.Name, $sig.SignerCertificate.Subject)
           }
           $setups = @(Get-ChildItem "build\installer\*-Setup-*.exe")
-          Write-Host ("eSigner signings consumed this run: at most {0} (3 per variant, +1 only if the exe was not already signed — see the 'Sign Open-Motion.exe' step log)" -f (1 + 3 * $setups.Count))
+          Write-Host ("eSigner signings consumed this run: at most {0} (2 per variant, +1 only if the exe was not already signed — see the 'Sign Open-Motion.exe' step log)" -f (1 + 2 * $setups.Count))
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4

@@ -18,8 +18,8 @@ dev/rc tag builds now).
 | Trigger | Windows artifacts | Signed? |
 |---|---|---|
 | `X.Y.Z-dev.N` / `X.Y.Z-rc.N` tag (automatic) | Both portables + both installers | **Nothing** (0 signings) — QA validates scan *and install* flows on these |
-| `X.Y.Z` production tag (automatic) | Both portables + the **Research** installer | Research installer chain + the shared exe (**4 signings**); missing eSigner secrets fail the build |
-| `signed-installers.yml` (manual dispatch, production tag, after QA sign-off) | **Clinical** installer (repacked from the tag's QA-validated portable zip) | Fully (**3 signings** — the exe inside the zip is already signed; `sign.ps1` skips it) |
+| `X.Y.Z` production tag (automatic) | Both portables + the **Research** installer | exe + Research engine/bundle (**3 signings**); missing eSigner secrets fail the build |
+| `signed-installers.yml` (manual dispatch, production tag, after QA sign-off) | **Clinical** installer (repacked from the tag's QA-validated portable zip) | engine + bundle (**2 signings** — the exe inside the zip is already signed; `sign.ps1` skips it) |
 
 - The production tag build deliberately does **not** build a clinical
   installer, so an unsigned clinical installer can never appear on a
@@ -42,8 +42,9 @@ dev/rc tag builds now).
 | Artifact | Signed by |
 |---|---|
 | `Open-Motion.exe` in the dist (→ both portables and every MSI harvest it) | production tag build (`package_artifacts.ps1` → `installer/sign.ps1`), once — `sign.ps1` skips already-signed files everywhere else |
-| `Open-Motion-Research.msi` + Research Burn engine + Setup bundle | production tag build (`release-build.yml` → `installer/build_installer.ps1` → `sign.ps1`) |
-| `Open-Motion.msi` + Clinical Burn engine + Setup bundle | `signed-installers.yml` manual dispatch → `installer/build_installer.ps1` → `sign.ps1` |
+| Research Burn engine + Setup bundle | production tag build (`release-build.yml` → `installer/build_installer.ps1` → `sign.ps1`) |
+| Clinical Burn engine + Setup bundle | `signed-installers.yml` manual dispatch → `installer/build_installer.ps1` → `sign.ps1` |
+| `Open-Motion.msi` / `Open-Motion-Research.msi` | **Deliberately unsigned** (quota trim): the MSI is never distributed standalone — it ships only embedded in the signed bundle, the UAC elevation prompt users see comes from the signed Burn engine, and repair/uninstall run the already-installed cached copy. Residual cost: some security scanners flag unsigned MSIs. Re-add the `sign.ps1` call in `build_installer.ps1` if a bare MSI ever becomes a distributed artifact (e.g. enterprise/GPO deployment). |
 | WinUSB driver catalogs + `OpenMotionDriver-x64.msi` | `openmotion-sdk` repo, `driver-msi.yml` (sdk#216), once per driver change — the signed zip is vendored here as `resources/OpenMotionDriver-x64.zip` and never rebuilt or re-signed per app release |
 
 Everything funnels through `installer/sign.ps1`, driven by one
@@ -62,11 +63,11 @@ per year); timestamping is free.
 | Event | Signings |
 |---|---|
 | dev/rc tag build | **0** |
-| Production tag build (automatic — exe + Research installer chain) | **4** |
-| Signed Installers dispatch, clinical, production tag | **3** |
-| **Total per production release** | **7** |
+| Production tag build (automatic — exe + Research engine/bundle) | **3** |
+| Signed Installers dispatch, clinical, production tag | **2** |
+| **Total per production release** | **5** |
 | Driver refresh (sdk repo, rare) | **5** (4 catalogs + driver MSI) |
-| Extra: signing an rc installer for a beta update push | 4 first variant (unsigned exe), +3 per additional |
+| Extra: signing an rc installer for a beta update push | 3 first variant (unsigned exe), +2 per additional |
 
 macOS is unaffected: the DMG stays ad-hoc signed (Apple notarization is a
 separate, unrelated pipeline).
@@ -101,8 +102,8 @@ separate, unrelated pipeline).
 
 - Run **Signed Installers** against an existing (pre-release) tag with
   `upload_to_release` unchecked — signs real artifacts and uploads them
-  only as workflow artifacts, leaving the release untouched. Costs 4
-  signings for one variant on a dev/rc tag (unsigned exe), +3 per
+  only as workflow artifacts, leaving the release untouched. Costs 3
+  signings for one variant on a dev/rc tag (unsigned exe), +2 per
   additional variant.
 - For a dry run against SSL.com's **sandbox** environment instead of the
   production cert: set repo variable `ES_MODE=sandbox` and temporarily

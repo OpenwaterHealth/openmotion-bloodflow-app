@@ -6,10 +6,12 @@ name: Build & Release
 #                    artifacts (installers included so QA can validate the
 #                    install flow without spending metered eSigner signings).
 #   production tags: both portables + the SIGNED Research installer — the
-#                    only automatic signing anywhere (~4 metered signings:
-#                    exe, MSI, Burn engine, bundle). The clinical installer
-#                    is NOT built here: it exists only as the signed artifact
-#                    a manual dispatch of signed-installers.yml produces.
+#                    only automatic signing anywhere (3 metered signings:
+#                    exe, Burn engine, Setup bundle; the MSI is deliberately
+#                    unsigned — see build_installer.ps1). The clinical
+#                    installer is NOT built here: it exists only as the
+#                    signed artifact a manual dispatch of
+#                    signed-installers.yml produces.
 # The macOS job builds its (ad-hoc-signed) DMG on every tag, as before.
 
 on:
@@ -218,16 +220,16 @@ jobs:
           }
 
       # Hard gate on production tags: nothing reaches the release unless the
-      # exe and the Research installer chain carry Valid Authenticode
-      # signatures. Catches any path where signing silently failed.
+      # exe and the Research Setup bundle carry Valid Authenticode
+      # signatures. Catches any path where signing silently failed. The MSI
+      # is deliberately unsigned (quota trim — see build_installer.ps1).
       - name: Verify Authenticode signatures (production tags)
         if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-')
         shell: pwsh
         run: |
           $files = @(Get-Item "dist\Open-Motion\Open-Motion.exe")
-          $files += Get-ChildItem "build\installer\Open-Motion-Research.msi"
           $files += Get-ChildItem "build\installer\Open-Motion-Research-Setup-*.exe"
-          if ($files.Count -lt 3) { throw "expected exe + Research MSI + Research Setup bundle, found $($files.Count) files" }
+          if ($files.Count -lt 2) { throw "expected exe + Research Setup bundle, found $($files.Count) files" }
           foreach ($f in $files) {
             $sig = Get-AuthenticodeSignature $f.FullName
             if ($sig.Status -ne "Valid") {
