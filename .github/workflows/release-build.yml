@@ -1,12 +1,13 @@
 name: Build & Release
 
+# Automatic builds produce UNSIGNED portable zips only — QA/validation
+# artifacts (#501, Cybersecurity upgrades #500). Installers are never built
+# here: clinical software ships exclusively as a signed installer from the
+# on-demand signed-installers.yml workflow, which also signs the Research
+# installer. eSigner signings are metered, so nothing in this workflow signs.
+
 on:
-  workflow_dispatch:
-    inputs:
-      sign:
-        description: "Code-sign artifacts (requires the eSigner secrets)"
-        type: boolean
-        default: false
+  workflow_dispatch: {}
   push:
     branches: [main, next]
     tags:
@@ -103,67 +104,6 @@ jobs:
           conda activate omotion
           python -m PyInstaller -y openwater.spec
 
-      - name: Install WiX v5
-        shell: pwsh
-        run: |
-          # Pin to 5.0.2 — the last MIT-licensed WiX. v6/v7 require accepting the
-          # paid Open Source Maintenance Fee EULA (WIX7015) and would fail CI.
-          dotnet tool install --global wix --version 5.0.2
-          # In WiX v5 the standard bootstrapper application ships in this package
-          # (not WixToolset.Bal.wixext); the bal: namespace in bundle.wxs is unchanged.
-          wix extension add -g WixToolset.BootstrapperApplications.wixext/5.0.2
-          echo "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Append
-
-      # ── eSigner CKA: load the EV code-signing cert ───────────────
-      # PRODUCTION tag builds only (X.Y.Z with no pre-release suffix), plus
-      # manual runs with sign=true, Authenticode-sign every Windows artifact
-      # (~7 metered eSigner signings per build) with the org's SSL.com EV
-      # cert. dev/rc pre-release tags build UNSIGNED to conserve the signing
-      # quota. The private key never leaves SSL.com's cloud HSM; eSigner CKA
-      # exposes it through Windows CNG so native signtool works against a
-      # store thumbprint. When the ES_* secrets are absent this warns and
-      # the build ships unsigned. See docs/SIGNING.md.
-      - name: Set up eSigner CKA (EV code signing)
-        if: (startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-')) || (github.event_name == 'workflow_dispatch' && inputs.sign)
-        shell: pwsh
-        env:
-          ES_USERNAME: ${{ secrets.ES_USERNAME }}
-          ES_PASSWORD: ${{ secrets.ES_PASSWORD }}
-          ES_TOTP_SECRET: ${{ secrets.ES_TOTP_SECRET }}
-          # repo variable ES_MODE=sandbox targets SSL.com's sandbox
-          # environment for pipeline testing (needs sandbox credentials)
-          ES_MODE: ${{ vars.ES_MODE || 'product' }}
-        run: |
-          if (-not $env:ES_USERNAME -or -not $env:ES_PASSWORD -or -not $env:ES_TOTP_SECRET) {
-            Write-Host "::warning::eSigner secrets (ES_USERNAME / ES_PASSWORD / ES_TOTP_SECRET) not set — artifacts will be UNSIGNED"
-            exit 0
-          }
-          $work = Join-Path $env:RUNNER_TEMP "esigner-cka"
-          New-Item -ItemType Directory -Force $work | Out-Null
-          Set-Location $work
-          Invoke-WebRequest -OutFile eSigner_CKA_Setup.zip "https://github.com/SSLcom/eSignerCKA/releases/download/v1.0.8/SSL.COM-eSigner-CKA_1.0.8.zip"
-          Expand-Archive -Force eSigner_CKA_Setup.zip
-          Move-Item -Destination "eSigner_CKA_Installer.exe" -Path "eSigner_CKA_Setup\*.exe"
-          $dir = Join-Path $env:USERPROFILE "eSignerCKA"
-          New-Item -ItemType Directory -Force $dir | Out-Null
-          Start-Process ".\eSigner_CKA_Installer.exe" -ArgumentList "/CURRENTUSER /VERYSILENT /SUPPRESSMSGBOXES /DIR=`"$dir`"" -Wait
-          # Post-install helpers from SSL.com's reference workflow; guarded
-          # because not every CKA build ships them (VC++ redists are already
-          # on the hosted runners).
-          foreach ($aux in @("$work\setup\vc_redist.x86.exe", "$work\setup\vc_redist.x64.exe")) {
-            if (Test-Path $aux) { Start-Process $aux -ArgumentList "/install /q" -Wait }
-          }
-          foreach ($aux in @("$dir\RegisterKSP.exe", "$dir\eSignerCSP.Config.exe")) {
-            if (Test-Path $aux) { & $aux | Out-Null }
-          }
-          & "$dir\eSignerCKATool.exe" config -mode $env:ES_MODE -user $env:ES_USERNAME -pass $env:ES_PASSWORD -totp $env:ES_TOTP_SECRET -key "$dir\master.key" -r
-          & "$dir\eSignerCKATool.exe" unload
-          & "$dir\eSignerCKATool.exe" load
-          $cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert | Select-Object -First 1
-          if (-not $cert) { throw "eSigner CKA loaded no code-signing certificate" }
-          Write-Host "Signing as: $($cert.Subject)  [$($cert.Thumbprint)]"
-          "CODESIGN_THUMBPRINT=$($cert.Thumbprint)" >> $env:GITHUB_ENV
-
       # ── package ──────────────────────────────────────────────────
       - name: Determine version tag
         id: meta
@@ -190,14 +130,13 @@ jobs:
 
           echo "::notice ::Version tag resolved to: ${TAG}"
 
-      - name: Package all artifacts (zips + installers, clinical + Research)
+      # Portables only, deliberately unsigned (no CODESIGN_THUMBPRINT in the
+      # environment, so every sign step no-ops): these are the QA artifacts.
+      # Installers come from signed-installers.yml, dispatched per release.
+      - name: Package portable zips (Clinical + Research, unsigned QA artifacts)
         shell: pwsh
-        env:
-          # env.CODESIGN_THUMBPRINT is exported by the eSigner CKA step above;
-          # the secret is a manual fallback for a runner with a local cert.
-          CODESIGN_THUMBPRINT: ${{ env.CODESIGN_THUMBPRINT || secrets.CODESIGN_THUMBPRINT }}
         run: |
-          powershell -NoProfile -File scripts\package_artifacts.ps1 -Version "${{ steps.meta.outputs.TAG }}"
+          powershell -NoProfile -File scripts\package_artifacts.ps1 -Version "${{ steps.meta.outputs.TAG }}" -SkipInstaller
 
       # ── always upload workflow artifact ──────────────────────────
       - name: Upload workflow artifact
@@ -249,11 +188,11 @@ jobs:
           name: ${{ steps.meta.outputs.TAG }}
           body_path: notes.md
           prerelease: ${{ steps.meta.outputs.PRERELEASE == 'true' }}
+          # No installers here — signed-installers.yml attaches the signed
+          # Setup bundles to this same release when dispatched for this tag.
           files: |
             ${{ steps.meta.outputs.ARTIFACT_ZIP }}
             ${{ steps.meta.outputs.ARTIFACT_ZIP_RESEARCH }}
-            build/installer/Open-Motion-Setup-*.exe
-            build/installer/Open-Motion-Research-Setup-*.exe
             resources/OpenMotionDriver-x64.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
