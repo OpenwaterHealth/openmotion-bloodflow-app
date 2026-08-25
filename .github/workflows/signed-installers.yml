@@ -2,10 +2,12 @@ name: Signed Installers
 
 # On-demand signed-installer builds (#501, Cybersecurity upgrades epic #500).
 #
-# Policy: the automatic tag builds (release-build.yml) produce UNSIGNED
-# portable zips only — those are the QA artifacts. Clinical software ships
-# exclusively as the signed installer this workflow produces; the Research
-# installer is signed the same way. Portable zips are never signed.
+# Policy: the SIGNED CLINICAL installer exists only through this workflow,
+# and only for full (production) releases — dispatch it against the X.Y.Z
+# tag after QA validates. The Research installer is signed automatically by
+# the production tag build in release-build.yml; the `variant` input here is
+# a fallback for re-generating it (or, exceptionally, signing an rc
+# installer for a beta in-app-update push).
 #
 # This workflow does NOT rebuild the app. It downloads the portable zip the
 # tag's automatic build published — the exact bytes QA validated — and
@@ -15,16 +17,20 @@ name: Signed Installers
 # validated" guarantee.
 #
 # eSigner signings are METERED (fixed allowance per year). Cost per run:
-#   both variants: 7   (Open-Motion.exe ×1, MSI ×2, Burn engine ×2, bundle ×2)
-#   one variant:   4
+#   clinical on a production tag: 3   (MSI, Burn engine, bundle — the exe
+#                                      inside the zip is already signed by
+#                                      the tag build; sign.ps1 skips it)
+#   on a dev/rc tag (unsigned exe): +1 for the exe
+#   each additional variant:       +3
 # The driver MSI inside the bundles is pre-signed in the SDK repo (sdk#216)
-# and costs nothing here. Unlike the QA path, signing here is mandatory:
-# missing secrets or an invalid signature fails the run — this workflow must
-# never emit an unsigned artifact.
+# and costs nothing here. Unlike the unsigned QA artifacts, signing here is
+# mandatory: missing secrets or an invalid signature fails the run — this
+# workflow must never emit an unsigned artifact.
 #
 # Constraint: the target tag must contain the signing-era build scripts
-# (installer/sign.ps1 with signtool discovery, scripts/build_common.ps1) —
-# i.e. any tag cut after the code-signing + pipeline-split PRs landed.
+# (installer/sign.ps1 with signtool discovery + skip-if-signed,
+# scripts/build_common.ps1) — i.e. any tag cut after the code-signing +
+# pipeline-split PRs landed.
 
 on:
   workflow_dispatch:
@@ -34,13 +40,13 @@ on:
         required: true
         type: string
       variant:
-        description: "Which installer(s) to build and sign"
+        description: "Which installer(s) to build and sign (research is normally auto-signed by the production tag build)"
         type: choice
         options:
-          - both
           - clinical
           - research
-        default: both
+          - both
+        default: clinical
       upload_to_release:
         description: "Attach the signed installers to the tag's GitHub release"
         type: boolean
@@ -130,9 +136,11 @@ jobs:
           Write-Host "Signing as: $($cert.Subject)  [$($cert.Thumbprint)]"
           "CODESIGN_THUMBPRINT=$($cert.Thumbprint)" >> $env:GITHUB_ENV
 
-      # One exe signature covers every artifact of this run: both MSIs
-      # harvest this same dist tree.
-      - name: Sign Open-Motion.exe
+      # One exe signature covers every artifact of this run — and on a
+      # production tag it costs nothing: the tag build already signed the
+      # exe inside the zip, and sign.ps1 skips files validly signed by this
+      # cert. Only a dev/rc zip (unsigned exe) spends a signing here.
+      - name: Sign Open-Motion.exe (skipped if already signed)
         shell: pwsh
         run: |
           if (-not $env:CODESIGN_THUMBPRINT) { throw "no signing certificate loaded" }
@@ -171,7 +179,7 @@ jobs:
             Write-Host ("OK  {0}  [{1}]" -f $f.Name, $sig.SignerCertificate.Subject)
           }
           $setups = @(Get-ChildItem "build\installer\*-Setup-*.exe")
-          Write-Host ("eSigner signings consumed this run: {0} (exe 1 + 3 per variant)" -f (1 + 3 * $setups.Count))
+          Write-Host ("eSigner signings consumed this run: at most {0} (3 per variant, +1 only if the exe was not already signed — see the 'Sign Open-Motion.exe' step log)" -f (1 + 3 * $setups.Count))
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4

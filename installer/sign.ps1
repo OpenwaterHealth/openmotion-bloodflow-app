@@ -25,6 +25,17 @@ if (-not $signtool) {
 if (-not $signtool) { throw "signtool.exe not found (PATH or Windows Kits)" }
 
 foreach ($f in $Files) {
+    # eSigner signings are metered: skip files already validly signed by this
+    # exact cert. This is what keeps the shared dist exe at ONE signing per
+    # release even though multiple packaging calls each request it (the
+    # production tag build's clinical/research passes, and a later
+    # signed-installers.yml dispatch repacking the same zip). A file signed
+    # by a different cert (or with a broken chain) is re-signed as before.
+    $existing = Get-AuthenticodeSignature $f
+    if ($existing.Status -eq 'Valid' -and $existing.SignerCertificate.Thumbprint -eq $thumb) {
+        Write-Host "already signed by $thumb — skipping $f" -ForegroundColor DarkGray
+        continue
+    }
     Write-Host "signing $f" -ForegroundColor Cyan
     # Both the eSigner cloud signing call and the timestamp server can flake
     # transiently, so retry before failing the build.
