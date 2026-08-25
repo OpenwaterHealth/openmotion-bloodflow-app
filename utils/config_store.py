@@ -103,8 +103,13 @@ def save_overrides(current: dict, baseline: dict) -> None:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(diff, f, indent=2)
         os.replace(tmp, path)
-    except OSError as e:
-        logger.warning("Could not write overrides %s: %s", path, e)
+    except (OSError, TypeError, ValueError) as e:
+        # TypeError/ValueError: a non-JSON-serializable value slipped into
+        # the config (e.g. a QJSValue leaking through the QML bridge —
+        # #446 crash). Losing one settings write is recoverable; letting
+        # the exception propagate out of a QML-invoked slot aborts the
+        # whole app.
+        logger.error("Could not write overrides %s: %s", path, e)
         try:
             if tmp.exists():
                 tmp.unlink()
