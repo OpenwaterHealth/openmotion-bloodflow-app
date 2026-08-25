@@ -79,10 +79,13 @@ Get-AuthenticodeSignature .\Open-Motion-Setup-1.6.0.exe | Format-List Status, Si
 `driver-msi.yml` uses the same CKA recipe to sign the four driver
 catalogs and the driver MSI, replacing the retired self-signed
 `CN=Openwater WinUSB` scheme (which required installing a private root
-cert on every user machine). After the first EV-signed driver build,
-download the `OpenMotionDriver-x64` CI artifact and commit it here as
-`resources/OpenMotionDriver-x64.zip` so the Setup bundles chain the
-EV-signed driver MSI. Details: sdk#216.
+cert on every user machine). **EV signing runs only on manual
+`workflow_dispatch`** — signings are metered, and the driver rarely
+changes, so it is signed once per driver change: dispatch the workflow,
+download the `OpenMotionDriver-x64` artifact, verify its signature, and
+commit it here as `resources/OpenMotionDriver-x64.zip` so the Setup
+bundles chain the EV-signed driver MSI. PR-triggered runs build-validate
+with the legacy self-signed key at zero eSigner cost. Details: sdk#216.
 
 ## Deliberate follow-ups
 
