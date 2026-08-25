@@ -37,8 +37,10 @@ Rectangle {
     property bool clinicalMode: MotionInterface.appConfig.clinicalMode === true
     // In clinical mode, Start first runs a contact-quality preflight check.
     property bool clinicalStartPending: false
-    // Prevent late CQ callbacks from re-opening the modal while a stop/cancel
-    // is in flight.
+    // Prevent CQ callbacks from re-opening the modal. Set while a stop/cancel
+    // is in flight, and by the engineering Force Dismiss button for the rest
+    // of the running scan (#492). Reset at the scan boundaries (beginScanNow /
+    // scanRunner.onScanFinished), so the next scan warns again.
     property bool suppressLiveCqModal: false
 
     // Camera masks (updated by camera selection modal)
@@ -453,6 +455,15 @@ Rectangle {
                 MotionInterface.stopCapture()
             }
             clinicalStartPending = false
+        }
+        onForceDismissed: {
+            // Engineering Force Dismiss is sticky (#492): suppress live CQ
+            // re-opens for the remainder of this scan. Outside a scan
+            // (quick check / pre-scan gate) nothing re-opens the modal, so
+            // there is nothing to suppress — and the flag must not leak
+            // into the next scan, which beginScanNow guarantees anyway.
+            if (bloodFlow.scanning)
+                bloodFlow.suppressLiveCqModal = true
         }
         onContinueRequested: {
             if (bloodFlow.clinicalStartPending) {
