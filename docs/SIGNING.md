@@ -85,10 +85,12 @@ catalogs and the driver MSI, replacing the retired self-signed
 cert on every user machine). **EV signing runs only on manual
 `workflow_dispatch`** — signings are metered, and the driver rarely
 changes, so it is signed once per driver change: dispatch the workflow,
-download the `OpenMotionDriver-x64` artifact, verify its signature, and
-commit it here as `resources/OpenMotionDriver-x64.zip` so the Setup
-bundles chain the EV-signed driver MSI. PR-triggered runs build-validate
-with the legacy self-signed key at zero eSigner cost. Details: sdk#216.
+download the `OpenMotionDriver-x64` artifact, verify its signature,
+commit it in the SDK repo as `winusb-driver/OpenMotionDriver-x64.zip`
+(the canonical copy), and vendor the same zip here as
+`resources/OpenMotionDriver-x64.zip` so the Setup bundles chain the
+EV-signed driver MSI. PR-triggered runs build-validate with the legacy
+self-signed key at zero eSigner cost. Details: sdk#216.
 
 ## Deliberate follow-ups
 
