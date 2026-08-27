@@ -3953,7 +3953,7 @@ class MotionConnector(QObject):
         """Write the Engineering-mode alternative camera settings (#446).
 
         Runs just before every scan start and every preflight
-        signal-quality check (via _apply_alt_scan_settings, #510), after
+        signal-quality check (via _sync_alt_scan_settings, #510), after
         the scan flow's configure/trigger-config steps — so the writes
         land on configured, idle cameras and are re-asserted every run (a
         camera power-cycle between scans silently reverts registers to
@@ -4270,9 +4270,15 @@ class MotionConnector(QObject):
             self._apply_alt_ta_pulse_width()
             self._apply_alt_safety_pulse_width_ul()
 
-    def _apply_alt_scan_settings(self, left_mask: int, right_mask: int):
-        """Apply the Engineering-mode alternative hardware settings — the
-        ONE place they are written (#510).
+    def _sync_alt_scan_settings(self, left_mask: int, right_mask: int):
+        """Bring the hardware in line with the Engineering-mode alternative
+        settings toggles — the ONE place those registers are written (#510).
+
+        "Sync", not "apply": each sub-step is apply-or-restore-or-no-op.
+        Toggle on → write the alternative values; toggle freshly off
+        (persisted dirty flag) → write the firmware/baseline values back
+        once; off and clean → no hardware I/O at all, three config reads
+        and out.
 
         Called immediately before each capture start AND before each
         preflight signal-quality check, so the preflight evaluates
@@ -4654,7 +4660,7 @@ class MotionConnector(QObject):
 
         # Engineering-mode alternative camera + laser settings (#446/#449),
         # shared with the preflight signal-quality check (#510).
-        self._apply_alt_scan_settings(left_camera_mask, right_camera_mask)
+        self._sync_alt_scan_settings(left_camera_mask, right_camera_mask)
 
         req = ScanRequest(
             subject_id=subject_id,
@@ -5271,7 +5277,7 @@ class MotionConnector(QObject):
         # alternative camera + laser settings before the check scan, exactly
         # as startCapture does. Synchronous on this thread, before the SDK
         # worker spawns, mirroring the scan-start call.
-        self._apply_alt_scan_settings(left_mask, right_mask)
+        self._sync_alt_scan_settings(left_mask, right_mask)
 
         self._cq_t0 = time.monotonic()
         logger.info(

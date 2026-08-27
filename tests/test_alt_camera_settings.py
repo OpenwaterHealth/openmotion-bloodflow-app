@@ -447,8 +447,8 @@ class TestConnectorTaPulseWidth:
 # ── Preflight signal-quality check applies the same settings (#510) ──────────
 
 class TestPreflightAppliesAltSettings:
-    """The alt camera + laser registers are applied in ONE place
-    (_apply_alt_scan_settings), called by startCapture AND by the preflight
+    """The alt camera + laser registers are synced in ONE place
+    (_sync_alt_scan_settings), called by startCapture AND by the preflight
     runContactQualityCheck. #510: the preflight used to run at whatever the
     hardware held — after an app restart that's the connect-time ~500 µs
     laser baseline, so a 20 µs alt pulse passed preflight and then failed
@@ -525,9 +525,9 @@ class TestPreflightAppliesAltSettings:
         assert seen["camera_writes"] == 0
         assert seen["console_writes"] == 0
 
-    def test_shared_helper_is_the_single_apply_path(self, tmp_path):
+    def test_shared_helper_is_the_single_sync_path(self, tmp_path):
         # startCapture and runContactQualityCheck both go through
-        # _apply_alt_scan_settings — camera writes first, then the laser
+        # _sync_alt_scan_settings — camera writes first, then the laser
         # register pair.
         c = _connector(tmp_path, {})
         order = []
@@ -535,7 +535,7 @@ class TestPreflightAppliesAltSettings:
             lambda left, right: order.append(("camera", left, right)))
         c._apply_alt_laser_pulse_width_registers = (
             lambda: order.append(("laser",)))
-        c._apply_alt_scan_settings(0x0F, 0xF0)
+        c._sync_alt_scan_settings(0x0F, 0xF0)
         assert order == [("camera", 0x0F, 0xF0), ("laser",)]
 
 
