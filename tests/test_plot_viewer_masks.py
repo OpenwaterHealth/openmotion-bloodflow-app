@@ -638,3 +638,54 @@ def test_clinical_model_drops_disconnected_side(viewer_factory):
     finally:
         viewer_factory.stub.setSensorsConnected(left=True, right=True)
         viewer.setProperty("clinicalMode", False)
+
+
+# ── Issue #487 — placeholder centers when no plot windows are up ───────
+# The clinical side-readout column (fixed 250 px) must collapse entirely
+# when NO side has active cameras. Its individual panels are already
+# mask-gated (#298), but the column itself staying visible left a dead
+# 250 px block in the row that pushed the "No active cameras selected"
+# placeholder off the canvas center.
+
+
+def test_clinical_panel_column_collapses_when_no_cameras(viewer_factory):
+    viewer = viewer_factory()
+    try:
+        viewer.setProperty("clinicalMode", True)
+        viewer.setProperty("leftMask", 0xC3)
+        viewer.setProperty("rightMask", 0xC3)
+        viewer_factory.stub.setSensorsConnected(left=False, right=False)
+        assert _clinical_cells(viewer) == []
+        assert viewer.property("_showClinicalPanels") is False
+    finally:
+        viewer_factory.stub.setSensorsConnected(left=True, right=True)
+        viewer.setProperty("clinicalMode", False)
+
+
+def test_clinical_panel_column_tracks_connects_midsession(viewer_factory):
+    """Both sides up → column shows; one side is enough to keep it; all
+    sensors gone → column collapses so the placeholder can center."""
+    viewer = viewer_factory()
+    try:
+        viewer.setProperty("clinicalMode", True)
+        viewer.setProperty("leftMask", 0xC3)
+        viewer.setProperty("rightMask", 0xC3)
+        viewer_factory.stub.setSensorsConnected(left=True, right=True)
+        assert viewer.property("_showClinicalPanels") is True
+
+        viewer_factory.stub.setSensorsConnected(left=False, right=True)
+        assert viewer.property("_showClinicalPanels") is True
+
+        viewer_factory.stub.setSensorsConnected(left=False, right=False)
+        assert viewer.property("_showClinicalPanels") is False
+    finally:
+        viewer_factory.stub.setSensorsConnected(left=True, right=True)
+        viewer.setProperty("clinicalMode", False)
+
+
+def test_research_mode_never_shows_clinical_panel_column(viewer_factory):
+    viewer = viewer_factory()
+    viewer.setProperty("leftMask", ALL_MASK)
+    viewer.setProperty("rightMask", ALL_MASK)
+    assert len(_cells(viewer)) == 16
+    assert viewer.property("_showClinicalPanels") is False
