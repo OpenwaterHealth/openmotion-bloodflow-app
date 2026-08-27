@@ -3952,12 +3952,13 @@ class MotionConnector(QObject):
     def _apply_alt_camera_settings(self, left_mask: int, right_mask: int):
         """Write the Engineering-mode alternative camera settings (#446).
 
-        Runs just before every scan start, after the scan flow's
-        configure/CQ/trigger-config steps — so the writes land on
-        configured, idle cameras and are re-asserted every scan (a camera
-        power-cycle between scans silently reverts registers to firmware
-        defaults; OW_CAMERA_SET_CONFIG skips already-configured cameras,
-        so nothing else rewrites them mid-session).
+        Runs just before every scan start and every preflight
+        signal-quality check (via _apply_alt_scan_settings, #510), after
+        the scan flow's configure/trigger-config steps — so the writes
+        land on configured, idle cameras and are re-asserted every run (a
+        camera power-cycle between scans silently reverts registers to
+        firmware defaults; OW_CAMERA_SET_CONFIG skips already-configured
+        cameras, so nothing else rewrites them mid-session).
 
         Camera registers persist until the camera loses power, so turning
         the toggle OFF must actively restore the firmware defaults: the
@@ -4099,9 +4100,10 @@ class MotionConnector(QObject):
         the value until console power-off or the next apply_laser_power
         (console connect re-applies laser_params.json), so disabling the
         toggle restores the laser_params baseline once via the persisted
-        ``altLaserPulseWidthDirty`` flag. Runs at scan start with the
-        trigger off. Fail-soft: a failed write logs and the scan
-        proceeds; a failed restore keeps the dirty flag for retry.
+        ``altLaserPulseWidthDirty`` flag. Runs before every scan start
+        and preflight signal-quality check (#510), with the trigger off.
+        Fail-soft: a failed write logs and the scan proceeds; a failed
+        restore keeps the dirty flag for retry.
         """
         enabled = self._app_config.get("altLaserPulseWidthEnabled") is True
         dirty = self._app_config.get("altLaserPulseWidthDirty") is True
@@ -4162,12 +4164,12 @@ class MotionConnector(QObject):
         console — so an alternative pulse width above that cannot be
         written safely without raising the ceiling first. While the
         toggle is on this writes ALT_PULSE_WIDTH_SAFETY_CEILING_US
-        (2200 µs, the dropdown max) to both registers at every scan
-        start; on the first scan after the toggle is turned off it
-        restores the unit's baseline once — the flash user-config value
-        when the console has one, else the laser_params.json stock —
-        via the persisted ``altLaserSafetyCeilingDirty`` flag. Runs at
-        scan start with the trigger off.
+        (2200 µs, the dropdown max) to both registers before every scan
+        start and preflight signal-quality check (#510); on the first
+        run after the toggle is turned off it restores the unit's
+        baseline once — the flash user-config value when the console has
+        one, else the laser_params.json stock — via the persisted
+        ``altLaserSafetyCeilingDirty`` flag. Runs with the trigger off.
 
         Returns False only when a write this scan needed actually failed
         (the caller then skips widening the TA pulse); gated no-ops
@@ -4245,7 +4247,8 @@ class MotionConnector(QObject):
         return not failures
 
     def _apply_alt_laser_pulse_width_registers(self):
-        """Scan-start orchestration for the alt-pulse-width register pair.
+        """Orchestration for the alt-pulse-width register pair, run before
+        every scan start and preflight signal-quality check (#510).
 
         Order matters because the safety FPGAs act on the actual pulse:
         raise the ceiling BEFORE widening the TA pulse, and narrow the
@@ -4266,6 +4269,34 @@ class MotionConnector(QObject):
         else:
             self._apply_alt_ta_pulse_width()
             self._apply_alt_safety_pulse_width_ul()
+
+    def _apply_alt_scan_settings(self, left_mask: int, right_mask: int):
+        """Apply the Engineering-mode alternative hardware settings — the
+        ONE place they are written (#510).
+
+        Called immediately before each capture start AND before each
+        preflight signal-quality check, so the preflight evaluates
+        contact under exactly the registers the scan it gates will run
+        with. Issue #510: the alt writes used to live only in
+        startCapture, so after an app restart (console connect restores
+        the ~500 µs laser_params baseline) a 20 µs alt pulse passed the
+        preflight at full baseline light, then failed live CQ the moment
+        the scan applied the ~3 µs optical pulse. The restore-on-disable
+        dirty paths ride along for the same reason: the first preflight
+        after a toggle is turned off already runs at the restored
+        baseline.
+        """
+        # #446: write exposure + per-camera analog gain via the SDK, every
+        # time — or restore firmware defaults on the first run after the
+        # toggle was turned off. No-op when disabled and clean.
+        self._apply_alt_camera_settings(left_mask, right_mask)
+
+        # #449: the TA driver FPGA times the optical pulse itself, so the
+        # alternative pulse width must be written to its pulse_width
+        # register — the setTrigger gate override alone is record-keeping.
+        # #483: bracketed by the safety FPGAs' PULSE_WIDTH_UL ceiling —
+        # raised before the pulse is widened, restored after it's narrowed.
+        self._apply_alt_laser_pulse_width_registers()
 
     # --- CONSOLE COMMUNICATION METHODS ---
     @pyqtSlot()
@@ -4621,18 +4652,9 @@ class MotionConnector(QObject):
         _cq_light_clear = _cq_int_or(
             "cq_live_clear_frames", _CQ_DEFAULT_LIVE_CLEAR_FRAMES)
 
-        # Engineering-mode alternative camera settings (#446): write exposure
-        # + per-camera analog gain via the SDK just before the scan starts,
-        # every time — or restore firmware defaults on the first scan after
-        # the toggle was turned off. No-op when disabled and clean.
-        self._apply_alt_camera_settings(left_camera_mask, right_camera_mask)
-
-        # #449: the TA driver FPGA times the optical pulse itself, so the
-        # alternative pulse width must be written to its pulse_width
-        # register — the setTrigger gate override alone is record-keeping.
-        # #483: bracketed by the safety FPGAs' PULSE_WIDTH_UL ceiling —
-        # raised before the pulse is widened, restored after it's narrowed.
-        self._apply_alt_laser_pulse_width_registers()
+        # Engineering-mode alternative camera + laser settings (#446/#449),
+        # shared with the preflight signal-quality check (#510).
+        self._apply_alt_scan_settings(left_camera_mask, right_camera_mask)
 
         req = ScanRequest(
             subject_id=subject_id,
@@ -5243,6 +5265,13 @@ class MotionConnector(QObject):
 
         left_mask = int(left_camera_mask) if self._leftSensorConnected else 0x00
         right_mask = int(right_camera_mask) if self._rightSensorConnected else 0x00
+
+        # #510: the preflight must run under the same registers the scan it
+        # gates will use — apply (or restore) the Engineering-mode
+        # alternative camera + laser settings before the check scan, exactly
+        # as startCapture does. Synchronous on this thread, before the SDK
+        # worker spawns, mirroring the scan-start call.
+        self._apply_alt_scan_settings(left_mask, right_mask)
 
         self._cq_t0 = time.monotonic()
         logger.info(
