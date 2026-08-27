@@ -36,7 +36,9 @@ Window {
     minimumHeight: 280
     flags: Qt.Window
     modality: Qt.NonModal
-    color: AppTheme.bgBase
+    // windowBg, not bgBase: a separate Window has no AmbientBackground
+    // behind it, and bgBase is transparent in glass mode (#486).
+    color: AppTheme.windowBg
 
     property string logPath: ""
     property int maxLines: 5000
@@ -170,7 +172,7 @@ Window {
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            color: AppTheme.bgPlot
+            color: AppTheme.windowInsetBg
             radius: 6
             border.color: AppTheme.borderStrong
             border.width: 1
