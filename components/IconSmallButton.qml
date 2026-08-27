@@ -56,7 +56,9 @@ Item {
         width: Math.max(80, buttonText.length * 8)
         height: 28
         radius: 4
-        color: AppTheme.bgBase
+        // overlayBgSolid, not bgBase: bgBase is transparent in glass
+        // mode, which made the tooltip unreadable (#486).
+        color: AppTheme.overlayBgSolid
         border.color: "transparent"
         z: 10
 
