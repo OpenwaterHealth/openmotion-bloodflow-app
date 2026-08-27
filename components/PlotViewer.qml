@@ -263,6 +263,13 @@ Rectangle {
         ? _clinicalCellModel
         : _devCellModel
 
+    // Clinical readout column gate — the whole 250 px column collapses when
+    // no side has active cameras, not just its individual panels (#298):
+    // an empty-but-visible column would push the "No active cameras
+    // selected" placeholder off the canvas center (issue #487).
+    readonly property bool _showClinicalPanels:
+        viewer.effectiveClinical && viewer._activeCellModel.length > 0
+
     // ── Autoscale recompute (shared by Timer + displayMode change) ────
     // Writes to _auto* — the derived primaryYMin/Max bindings above
     // pick the _auto vs setting-bound value based on autoScale.
@@ -733,7 +740,7 @@ Rectangle {
             // nested layouts default it to true, which would make this
             // column compete with the grid for the whole row width.
             ColumnLayout {
-                visible: viewer.effectiveClinical
+                visible: viewer._showClinicalPanels
                 Layout.fillWidth: false
                 Layout.fillHeight: true
                 Layout.preferredWidth: 250
