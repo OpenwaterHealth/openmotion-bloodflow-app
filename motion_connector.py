@@ -5518,15 +5518,17 @@ class MotionConnector(QObject):
         # is NOT fail-soft: if no camera has delivered a frame for
         # scanDataStallTimeoutSec the scan is dead air — abort it and
         # tell the user instead of counting down to a hollow "complete".
-        if not self._scan_abort_notified:
-            stalled_s = _scan_data_stall_decision(
-                now,
-                self._trigger_on_mono,
-                self._camera_last_seen,
-                self._scan_data_stall_timeout_sec,
-            )
-            if stalled_s is not None:
-                self._abort_scan_data_stall(stalled_s)
+        # (An already-notified abort can't reach here — the issue-#489
+        # early return above bailed, and nothing in the per-camera loop
+        # sets the flag synchronously.)
+        stalled_s = _scan_data_stall_decision(
+            now,
+            self._trigger_on_mono,
+            self._camera_last_seen,
+            self._scan_data_stall_timeout_sec,
+        )
+        if stalled_s is not None:
+            self._abort_scan_data_stall(stalled_s)
 
     def _dismiss_dropout_toasts(self, side: str | None = None) -> None:
         """Dismiss per-camera 'connection lost' toasts (issue #489).
