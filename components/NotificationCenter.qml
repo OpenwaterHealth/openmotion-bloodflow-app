@@ -60,19 +60,27 @@ Item {
     // field; other fields fall back to defaults defined here.
     //
     // If `request.tag` is a non-empty string and an existing notification has
-    // the same tag, the existing one is removed first (instant) so the new
-    // one slides in at the bottom — preventing duplicate "Connecting..." style
-    // toasts from stacking.
+    // the same tag, the new one REPLACES it at the same stack position (a
+    // fresh model entry, so the delegate — and with it the auto-dismiss
+    // clock and the enter animation — restarts in place). It must NOT jump
+    // to the bottom: during rapid connect/disconnect cycles the disconnect_*
+    // tags re-fire while their previous cards are still visible, and the
+    // old remove-here-append-at-bottom behavior made cards leapfrog each
+    // other — the whole stack appeared to shuffle (issue #489). Replacement
+    // also swallows a card that is mid-exit-animation (its delegate dies
+    // with the model row; the stale onStopped removal targets an id that no
+    // longer exists, which is a no-op).
     //
     // If `request.id` is provided (the Python `notify` slot supplies one so
     // it can return the assigned id to its caller), it's used; otherwise an
     // id is generated locally so QML-only callers still get uniqueness.
     function notify(request) {
         var tag = request.tag || ""
+        var replaceIndex = -1
         if (tag !== "") {
             for (var i = 0; i < model_.count; ++i) {
                 if (model_.get(i).tag === tag) {
-                    model_.remove(i)
+                    replaceIndex = i
                     break
                 }
             }
@@ -86,7 +94,15 @@ Item {
             durationMs: (request.durationMs !== undefined) ? request.durationMs : 4000,
             dismissible: (request.dismissible !== undefined) ? request.dismissible : true
         }
-        model_.append(entry)
+        if (replaceIndex >= 0) {
+            // Same-tick remove + insert at the same index: the cards below
+            // see no net movement, so the Column's move transition stays
+            // quiet and only the refreshed card re-enters.
+            model_.remove(replaceIndex)
+            model_.insert(replaceIndex, entry)
+        } else {
+            model_.append(entry)
+        }
         // Cap-eviction is intentionally NOT animated — when the user fires
         // many toasts quickly, the oldest just disappears. Animating it would
         // visually compete with the new toast sliding in at the bottom.
@@ -135,6 +151,18 @@ Item {
         for (var i = model_.count - 1; i >= 0; --i) {
             _animateAtIndex(i)
         }
+    }
+
+    // Public: snapshot of the current stack, top→bottom, as
+    // [{id, tag, text, type}]. For tests and diagnostics — the model itself
+    // is a private id and unreachable from outside this file.
+    function stackSnapshot() {
+        var out = []
+        for (var i = 0; i < model_.count; ++i) {
+            var e = model_.get(i)
+            out.push({id: e.id, tag: e.tag, text: e.text, type: e.type})
+        }
+        return out
     }
 
     // Internal helper. Looks up the wrapper Item at `index` and triggers its
