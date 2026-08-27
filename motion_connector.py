@@ -2213,6 +2213,10 @@ class MotionConnector(QObject):
 
         if is_now_connected:
             logger.info("Handle %s -> CONNECTED (%s)", name, reason)
+            # A '<device> disconnected' card must not outlive the reconnect
+            # (issue #489): during a console power-cycle the cards kept
+            # saying 'disconnected' after the devices were already back.
+            self.dismissNotification(f"disconnect_{name}")
             self.signalConnected.emit(name, "")
             self._audit.log("device_connected",
                             {"device": name, "reason": str(reason)})
@@ -2252,6 +2256,12 @@ class MotionConnector(QObject):
                 self.configFinished.emit(
                     False, f"Device disconnected during sensor configuration ({name})"
                 )
+            # A sensor-level disconnect subsumes its cameras' per-camera
+            # 'connection lost' cards (issue #489) — both a card lingering
+            # from a scan that already ended and cards that fired in the
+            # window before the USB drop was detected.
+            if name in _SIDE_NAMES:
+                self._dismiss_dropout_toasts(side=name)
             # A device dropped off USB (issue #387). If it's a device taking
             # part in a running scan, raise the E-304 critical modal and abort;
             # otherwise (idle, or a non-participating device) show a low-key
@@ -5438,6 +5448,14 @@ class MotionConnector(QObject):
         # X connection lost at HH:MM:SS' toast on every active cam.
         if self._trigger_state != "ON":
             return
+        # Once a scan-ending abort has fired (E-303 stall / E-304 device
+        # disconnect), the critical modal IS the notification — stop
+        # emitting per-camera 'connection lost' toasts for a scan that is
+        # already tearing down. Without this gate a system-wide unplug
+        # buries the device-level cards under up to 16 camera cards
+        # (issue #489).
+        if self._scan_abort_notified:
+            return
         now = time.monotonic()
         threshold = self._camera_dropout_threshold_sec
         for key, last_t in list(self._camera_last_seen.items()):
@@ -5495,6 +5513,25 @@ class MotionConnector(QObject):
             if stalled_s is not None:
                 self._abort_scan_data_stall(stalled_s)
 
+    def _dismiss_dropout_toasts(self, side: str | None = None) -> None:
+        """Dismiss per-camera 'connection lost' toasts (issue #489).
+
+        With ``side`` given, clears that sensor's 8 possible camera tags —
+        used on a sensor disconnect, where the device-level notification
+        subsumes its cameras' cards (including a card lingering from a scan
+        that already ended, and cards that fired in the window before the
+        USB drop was detected). With no ``side``, clears every camera the
+        current scan flagged dropped — used by the scan-abort paths, where
+        the E-303/E-304 modal is the notification. Dismissing a tag with no
+        matching toast is a no-op, so over-clearing is harmless.
+        """
+        if side is not None:
+            keys = [(side, cam_id) for cam_id in range(8)]
+        else:
+            keys = list(self._camera_dropped)
+        for s, cam_id in keys:
+            self.dismissNotification(f"dropout_{s}_{cam_id}")
+
     def _abort_scan_data_stall(self, stalled_s: float) -> None:
         """Abort the running scan because data acquisition has completely
         stopped (issue #248). Runs on the main thread from the 1 Hz
@@ -5505,6 +5542,9 @@ class MotionConnector(QObject):
         (and the state machine) to idle exactly like a user Stop.
         """
         self._scan_abort_notified = True
+        # The modal supersedes any per-camera 'connection lost' toasts the
+        # watchdog already fired for this scan (issue #489).
+        self._dismiss_dropout_toasts()
         elapsed_str = self._scan_elapsed_str()
         msg = (
             f"[{elapsed_str}] No data from any camera for "
@@ -5538,6 +5578,9 @@ class MotionConnector(QObject):
         if self._scan_abort_notified:
             return
         self._scan_abort_notified = True
+        # The modal supersedes any per-camera 'connection lost' toasts the
+        # watchdog already fired for this scan (issue #489).
+        self._dismiss_dropout_toasts()
         elapsed_str = self._scan_elapsed_str()
         msg = (
             f"[{elapsed_str}] {name} disconnected during the scan — "
