@@ -1228,6 +1228,16 @@ class MotionConnector(QObject):
         self._leftSensorConnected = left_sensor_connected
         self._rightSensorConnected = right_sensor_connected
         self._consoleConnected = console_connected
+        # Per-device "reached CONNECTED" latch backing the first-loss edge
+        # detection in _on_handle_state_changed_impl (issue #489). The
+        # _xxxConnected flags above can't serve: the console one is cleared
+        # on the intermediate DISCONNECTING event, before the DISCONNECTED
+        # event that does the surfacing arrives.
+        self._device_was_connected: dict[str, bool] = {
+            "console": bool(console_connected),
+            "left": bool(left_sensor_connected),
+            "right": bool(right_sensor_connected),
+        }
         self._config_running = False
         # Per-side count of connect-time sensor inits scheduled or running
         # (issue #303). Guarded by _sensor_init_lock: +1 on the GUI thread
@@ -2213,6 +2223,9 @@ class MotionConnector(QObject):
 
         if is_now_connected:
             logger.info("Handle %s -> CONNECTED (%s)", name, reason)
+            # Re-arm the first-loss edge (issue #489) — the next drop is a
+            # real one worth surfacing again.
+            self._device_was_connected[name] = True
             # A '<device> disconnected' card must not outlive the reconnect
             # (issue #489): during a console power-cycle the cards kept
             # saying 'disconnected' after the devices were already back.
@@ -2256,20 +2269,13 @@ class MotionConnector(QObject):
                 self.configFinished.emit(
                     False, f"Device disconnected during sensor configuration ({name})"
                 )
-            # A sensor-level disconnect subsumes its cameras' per-camera
-            # 'connection lost' cards (issue #489) — both a card lingering
-            # from a scan that already ended and cards that fired in the
-            # window before the USB drop was detected.
-            if name in _SIDE_NAMES:
-                self._dismiss_dropout_toasts(side=name)
-            # A device dropped off USB (issue #387). If it's a device taking
-            # part in a running scan, raise the E-304 critical modal and abort;
-            # otherwise (idle, or a non-participating device) show a low-key
-            # disconnect toast. The SDK's own mid-scan disconnect subscription
-            # is already tearing a running scan down; the E-304 modal is the
-            # operator-facing notice the app would otherwise omit (a real
-            # unplug rarely trips the E-303 stall watchdog).
-            self._surface_disconnect(name)
+            # User-facing surfacing, gated on the first loss since the
+            # device last reached CONNECTED (issue #489) — the SDK monitor
+            # keeps retrying an absent device, and each failed retry ends in
+            # another CONNECTING -> DISCONNECTED event.
+            first_loss = self._device_was_connected.get(name, False)
+            self._device_was_connected[name] = False
+            self._surface_device_loss(name, first_loss, reason)
         # CONNECTING / DISCONNECTING are intermediate; UI doesn't need to
         # fire a connect/disconnect signal for those, and emitting
         # connectionStatusChanged on every intermediate transition would
@@ -3923,6 +3929,12 @@ class MotionConnector(QObject):
             logger.warning(f"notify: unknown type '{type_}', falling back to 'info'")
             type_ = "info"
         nid = next(self._notification_ids)
+        # Every toast the user sees leaves a log line — field debug bundles
+        # must let us reconstruct the notification stack (issue #489).
+        logger.info(
+            "Toast #%d [%s] tag=%r duration_ms=%d: %s",
+            nid, type_, tag, int(duration_ms), text,
+        )
         self.notificationRequested.emit({
             "id": nid,
             "tag": str(tag),
@@ -3946,13 +3958,16 @@ class MotionConnector(QObject):
             logger.warning("dismissNotification: bool is not a valid id/tag")
             return
         if isinstance(value, int):
+            logger.info("Toast dismiss requested: #%d", value)
             self.notificationDismissByIdRequested.emit(value)
         else:
+            logger.info("Toast dismiss requested: tag=%r", str(value))
             self.notificationDismissByTagRequested.emit(str(value))
 
     @pyqtSlot()
     def dismissAllNotifications(self):
         """Dismiss every active toast. Animated."""
+        logger.info("Toast dismiss-all requested")
         self.notificationDismissAllRequested.emit()
 
     def generate_user_label(self) -> str:
@@ -5528,9 +5543,17 @@ class MotionConnector(QObject):
         if side is not None:
             keys = [(side, cam_id) for cam_id in range(8)]
         else:
-            keys = list(self._camera_dropped)
-        for s, cam_id in keys:
-            self.dismissNotification(f"dropout_{s}_{cam_id}")
+            keys = sorted(self._camera_dropped)
+        if not keys:
+            return
+        tags = [f"dropout_{s}_{cam_id}" for s, cam_id in keys]
+        # One summary line, emitting directly instead of routing through
+        # dismissNotification's per-call INFO — a system unplug would
+        # otherwise print 16 mostly-no-op dismiss lines.
+        logger.info("Dismissing per-camera dropout toasts: %s",
+                    ", ".join(tags))
+        for tag in tags:
+            self.notificationDismissByTagRequested.emit(tag)
 
     def _abort_scan_data_stall(self, stalled_s: float) -> None:
         """Abort the running scan because data acquisition has completely
@@ -5594,6 +5617,41 @@ class MotionConnector(QObject):
             detail=f"{name} disconnected mid-scan (scan elapsed {elapsed_str})",
         )
         self.stopCapture()
+
+    def _surface_device_loss(self, name: str, first_loss: bool,
+                             reason="") -> None:
+        """User-facing surfacing for a device drop, gated on the first loss
+        since the device last reached CONNECTED (issues #387/#489).
+
+        After a real unplug the SDK monitor keeps retrying the absent device
+        for a while, and every failed retry ends in another CONNECTING ->
+        DISCONNECTED transition. Bench trace 2026-08-27: one power-off
+        produced repeat DISCONNECTED events at ~2 s intervals per device
+        (four in a row for the console) — each re-fired the disconnect
+        toast, visibly recreating the card and resetting its 6 s clock, and
+        a card whose original had just expired re-appeared at the bottom of
+        the stack. Only the first loss notifies; repeats are logged and
+        dropped. On a sensor's first loss, its cameras' per-camera
+        'connection lost' cards are dismissed too — the device-level card
+        subsumes them (a card lingering from a scan that already ended, or
+        fired in the window before the USB drop was detected).
+        """
+        if not first_loss:
+            logger.info(
+                "Repeat DISCONNECTED for %s while already down (%s) — "
+                "not re-surfacing", name, reason,
+            )
+            return
+        if name in _SIDE_NAMES:
+            self._dismiss_dropout_toasts(side=name)
+        # A device dropped off USB (issue #387). If it's a device taking
+        # part in a running scan, raise the E-304 critical modal and abort;
+        # otherwise (idle, or a non-participating device) show a low-key
+        # disconnect toast. The SDK's own mid-scan disconnect subscription
+        # is already tearing a running scan down; the E-304 modal is the
+        # operator-facing notice the app would otherwise omit (a real
+        # unplug rarely trips the E-303 stall watchdog).
+        self._surface_disconnect(name)
 
     def _surface_disconnect(self, name: str) -> None:
         """Surface a device dropping off USB (issue #387). If the drop aborts a

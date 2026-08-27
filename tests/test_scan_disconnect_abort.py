@@ -166,7 +166,11 @@ class _FakeConnector:
         self.captureLog = _Signal()
         self.criticals = []
         self.stop_calls = 0
-        self.dismissed = []
+        self.notificationDismissByTagRequested = _Signal()
+
+    @property
+    def dismissed(self):
+        return [c[0] for c in self.notificationDismissByTagRequested.calls]
 
     def _scan_elapsed_str(self):
         return "00:02:05"
@@ -176,9 +180,6 @@ class _FakeConnector:
 
     def stopCapture(self):
         self.stop_calls += 1
-
-    def dismissNotification(self, value):
-        self.dismissed.append(value)
 
 
 def test_abort_raises_e304_and_stops_capture():

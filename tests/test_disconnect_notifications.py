@@ -127,10 +127,11 @@ def test_watchdog_still_fires_during_live_scan(monkeypatch):
 class _FakeDismisser:
     def __init__(self, dropped=()):
         self._camera_dropped = set(dropped)
-        self.dismissed = []
+        self.notificationDismissByTagRequested = _Signal()
 
-    def dismissNotification(self, value):
-        self.dismissed.append(value)
+    @property
+    def dismissed(self):
+        return [c[0] for c in self.notificationDismissByTagRequested.calls]
 
 
 def test_dismiss_by_side_clears_all_eight_camera_tags():
@@ -152,3 +153,51 @@ def test_dismiss_without_side_no_flagged_cameras_is_a_noop():
     fake = _FakeDismisser()
     MotionConnector._dismiss_dropout_toasts(fake)
     assert fake.dismissed == []
+
+
+# ── _surface_device_loss — the first-loss gate ──────────────────────────
+#
+# After a real unplug the SDK monitor keeps retrying the absent device,
+# and every failed retry ends in another CONNECTING -> DISCONNECTED
+# transition (bench trace 2026-08-27: repeats at ~2 s intervals, four in
+# a row for the console). Only the FIRST loss since the device last
+# reached CONNECTED may notify — the repeats re-fired the disconnect
+# toast, visibly recreating the card and resetting its clock.
+
+
+class _FakeLossSurfacer:
+    _dismiss_dropout_toasts = MotionConnector._dismiss_dropout_toasts
+
+    def __init__(self):
+        self._camera_dropped = set()
+        self.notificationDismissByTagRequested = _Signal()
+        self.surfaced = []
+
+    def _surface_disconnect(self, name):
+        self.surfaced.append(name)
+
+
+def test_first_sensor_loss_dismisses_camera_cards_and_surfaces():
+    fake = _FakeLossSurfacer()
+    MotionConnector._surface_device_loss(fake, "left", True, "usb_io_error")
+    assert fake.surfaced == ["left"]
+    tags = [c[0] for c in fake.notificationDismissByTagRequested.calls]
+    assert tags == [f"dropout_left_{i}" for i in range(8)]
+
+
+def test_first_console_loss_surfaces_without_camera_dismissals():
+    # The console has no cameras — nothing to dismiss.
+    fake = _FakeLossSurfacer()
+    MotionConnector._surface_device_loss(fake, "console", True,
+                                         "usb_io_error")
+    assert fake.surfaced == ["console"]
+    assert fake.notificationDismissByTagRequested.calls == []
+
+
+def test_repeat_loss_is_suppressed():
+    fake = _FakeLossSurfacer()
+    MotionConnector._surface_device_loss(
+        fake, "console", False, "connect_retry_exhausted"
+    )
+    assert fake.surfaced == []
+    assert fake.notificationDismissByTagRequested.calls == []
