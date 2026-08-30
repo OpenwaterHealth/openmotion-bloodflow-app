@@ -183,6 +183,7 @@ The `dataDirectory` config key controls the root (defaults to cwd if unset). Whe
 
 - Default branch: `main`; daily work on `next`. PR feature → `next`, `next` → `main` for release.
 - Releases triggered by semver tags (e.g. `1.1.2`, `1.1.2-dev.0`, `1.1.2-rc.1`) — see [../CLAUDE.md](../CLAUDE.md) for tag format.
+- **Code signing:** **production**-tag builds (`X.Y.Z`, no suffix) Authenticode-sign the exe, MSIs, and Setup bundles with the SSL.com EV cert via eSigner CKA (cloud key — `ES_*` org secrets); dev/rc tags build unsigned (signings are metered, ~7 per signed build). The driver is EV-signed separately, once per driver change, via manual dispatch of the SDK's `driver-msi.yml`, then vendored as `resources/OpenMotionDriver-x64.zip`. Everything funnels through `installer/sign.ps1` on `CODESIGN_THUMBPRINT`. See [docs/SIGNING.md](docs/SIGNING.md).
 - CI workflows: `.github/workflows/release-build.yml` (Windows runner, builds .exe + zip on tags / manual dispatch) and `hil-tests.yml` (self-hosted Windows runner with Shelly IoT outlet power control, runs after the release build completes).
 
 ### Curating release notes (issue #348)
