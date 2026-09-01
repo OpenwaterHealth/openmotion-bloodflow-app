@@ -1044,6 +1044,10 @@ class MotionConnector(QObject):
     # Per-device firmware versions, refreshed on every (dis)connect by
     # _log_device_stats. Surfaced to Settings → System Information.
     firmwareVersionsChanged = pyqtSignal()
+    # Per-device programmed serial numbers, cached on connect and cleared
+    # on disconnect (#529). Notify for the *SerialNumber properties behind
+    # Settings → About.
+    deviceIdentityChanged = pyqtSignal()
     # Firmware autoupdate (engineeringMode only)
     firmwareUpdateInfoChanged = pyqtSignal()                # notify for the properties below
     firmwareUpdateAvailable = pyqtSignal(str, str, str)     # deviceKey, current, latest
@@ -1263,6 +1267,11 @@ class MotionConnector(QObject):
         # to QML as console/left/rightSensorFirmwareVersion for the Settings
         # → System Information card.
         self._firmware_versions: dict[str, str] = {
+            "console": "", "left": "", "right": "",
+        }
+        # Programmed serial numbers (console EEPROM / sensor flash),
+        # surfaced to Settings → About (#529). "" = unprogrammed / unknown.
+        self._device_serials: dict[str, str] = {
             "console": "", "left": "", "right": "",
         }
         # Firmware autoupdate state (engineeringMode only).
@@ -1825,6 +1834,22 @@ class MotionConnector(QObject):
         """Right sensor firmware version; see consoleFirmwareVersion."""
         return self._firmware_versions["right"]
 
+    @pyqtProperty(str, notify=deviceIdentityChanged)
+    def consoleSerialNumber(self) -> str:
+        """Console EEPROM serial cached at connect time ("" when
+        unprogrammed / disconnected). Shown in Settings → About (#529)."""
+        return self._device_serials["console"]
+
+    @pyqtProperty(str, notify=deviceIdentityChanged)
+    def leftSensorSerialNumber(self) -> str:
+        """Left sensor module serial; see consoleSerialNumber."""
+        return self._device_serials["left"]
+
+    @pyqtProperty(str, notify=deviceIdentityChanged)
+    def rightSensorSerialNumber(self) -> str:
+        """Right sensor module serial; see consoleSerialNumber."""
+        return self._device_serials["right"]
+
     @pyqtProperty(bool, notify=firmwareUpdateInfoChanged)
     def anyFirmwareUpdateAvailable(self) -> bool:
         return any(self._firmware_update_available.values())
@@ -2241,6 +2266,9 @@ class MotionConnector(QObject):
             if name in self._firmware_versions and self._firmware_versions[name]:
                 self._firmware_versions[name] = ""
                 self.firmwareVersionsChanged.emit()
+            if self._device_serials.get(name):
+                self._device_serials[name] = ""
+                self.deviceIdentityChanged.emit()
             if self._firmware_update_available.get(name):
                 self._firmware_update_available[name] = False
                 self._firmware_latest[name] = ""
@@ -2298,8 +2326,10 @@ class MotionConnector(QObject):
         except Exception:
             logger.debug("device_stats: %s firmware-version lookup failed",
                          name, exc_info=True)
+        serial = self._refresh_device_identity(name)
         self._audit.log("device_stats", {
             "device": name, "hardware_id": hwid, "firmware_version": fw,
+            "serial": serial,
         })
         # Cache for the Settings → System Information card. Fired from the
         # SDK connection-monitor thread; the bound QML rows update via the
@@ -2308,6 +2338,26 @@ class MotionConnector(QObject):
             self._firmware_versions[name] = fw
             self.firmwareVersionsChanged.emit()
         self._maybe_check_firmware_update(name)
+
+    def _refresh_device_identity(self, name: str) -> str:
+        """Re-read a device's programmed serial number, cache it for
+        Settings → About (#529) and return it ("" when unprogrammed or
+        unknown). Best-effort like _log_device_stats — identity reads never
+        block a connect. Runs on the SDK monitor thread at connect; the
+        emit queues to the main thread for QML."""
+        handle = getattr(self._interface, name, None)
+        serial = ""
+        try:
+            if handle is not None and hasattr(handle, "read_serial_number"):
+                raw = handle.read_serial_number()
+                serial = raw.strip() if isinstance(raw, str) else ""
+        except Exception:
+            logger.debug("device_identity: %s serial lookup failed",
+                         name, exc_info=True)
+        if name in self._device_serials:
+            self._device_serials[name] = serial
+            self.deviceIdentityChanged.emit()
+        return serial
 
     @staticmethod
     def _kind_for_device(name: str) -> FirmwareKind:
