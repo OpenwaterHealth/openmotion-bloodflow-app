@@ -156,6 +156,13 @@ def test_log_startup_report_smoke(tmp_path, monkeypatch, caplog):
     assert "Build variant:  Research" in text
     assert "Install mode:" in text
     assert "dev (running from source)" in text
+    # SDK identity: version stamp + the resolved package path (the stamp
+    # alone lies on editable installs — the path is the truth-teller).
+    import omotion
+    from pathlib import Path
+    sdk_dir = str(Path(omotion.__file__).resolve().parent)
+    assert "SDK:" in text and sdk_dir in text
+    assert "Qt runtime:" in text and "PyQt6" in text
     assert "Config overrides file:" in text
     for name in ("app_config.json", "tec_params.json", "laser_params.json",
                  "laser_params_fault.json", "fpga_model.json"):

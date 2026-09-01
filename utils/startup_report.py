@@ -161,6 +161,25 @@ def log_startup_report(log, merged: dict, baseline: dict, defaults: dict) -> Non
         log.info("Install mode:   %s (portableMode=%s, frozen=%s)",
                  mode, portable, frozen)
 
+        # SDK identity. __version__ is an install-time metadata stamp — on an
+        # editable install it goes stale the moment the checkout moves, so the
+        # resolved package path is what actually says which SDK this process
+        # imported (editable checkout vs bundled wheel, and which checkout).
+        try:
+            import omotion
+            log.info("SDK:            %s (%s)",
+                     getattr(omotion, "__version__", "unknown"),
+                     Path(omotion.__file__).resolve().parent)
+        except Exception as e:
+            log.info("SDK:            unresolvable (%s)", e)
+
+        try:
+            from PyQt6.QtCore import PYQT_VERSION_STR, qVersion
+            log.info("Qt runtime:     Qt %s / PyQt6 %s",
+                     qVersion(), PYQT_VERSION_STR)
+        except Exception as e:
+            log.info("Qt runtime:     unresolvable (%s)", e)
+
         overrides_path = app_paths.local_config_path(portable)
         log.info("Config overrides file: %s (%s)", overrides_path,
                  "present" if overrides_path.exists() else "absent")

@@ -297,10 +297,10 @@ def _load_app_config() -> dict:
 
     _APP_CONFIG_BASELINE.clear()
     _APP_CONFIG_BASELINE.update(baseline)
-    logger.info(
-        "Loaded app config (overrides from %s)",
-        app_paths.local_config_path(bool(baseline.get("portableMode", False))),
-    )
+    # No config logging here: this runs before the log-file handler is
+    # attached (the log's location depends on the config), so anything
+    # logged here reaches only the console. The startup report logs the
+    # overrides path + merged config after the handler exists (#527).
     return merged
 
 
