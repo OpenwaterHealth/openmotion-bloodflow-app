@@ -290,6 +290,7 @@ Rectangle {
 
     // Data viewer — fills remaining space to the right of ButtonPanel.
     PlotViewer {
+        id: plotViewer
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         anchors.left: buttonPanel.right
@@ -351,6 +352,7 @@ Rectangle {
 
     NotesModal {
         id: notesModal
+        focusReturnTarget: plotViewer
     }
 
     // No-device offer to open the bundled sample scan. Raised by the

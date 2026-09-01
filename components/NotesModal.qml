@@ -5,6 +5,7 @@ import OpenMotion 1.0
 
 Item {
     id: root
+    property Item focusReturnTarget: null
     anchors.fill: parent
     visible: false
     z: 9998
@@ -42,6 +43,15 @@ Item {
         MotionInterface.scanNotes = notesArea.text
         MotionInterface.notify("Note saved.", "success", 4000, true)
         root.visible = false
+
+        // The notes TextArea owns active focus while the modal is open.
+        // Restore focus after hiding it so page-level keyboard shortcuts
+        // (including Space to open a new timestamped note) work immediately.
+        if (root.focusReturnTarget) {
+            Qt.callLater(function() {
+                root.focusReturnTarget.forceActiveFocus()
+            })
+        }
     }
 
     // Dimmed backdrop
