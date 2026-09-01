@@ -1867,14 +1867,60 @@ Item {
                     // after the sensor-init cache fill with cameras powered.
                     Rectangle { Layout.fillWidth: true; height: 1; color: root.colBorderSoft }
 
+                    // Serials are for support tickets, so every value is
+                    // copy-pasteable two ways: the text itself is a selectable
+                    // read-only TextEdit, and a ghost "Copy" chip pushes the
+                    // clean value (no placeholders / NBSPs) to the clipboard
+                    // through the same copyToClipboard + toast path the
+                    // Critical Error modal uses.
+                    component CopyChip: Rectangle {
+                        id: copyChip
+                        property string copyText: ""
+                        property string what: "Serial"
+                        visible: copyText.length > 0
+                        width: copyChipText.implicitWidth + 16; height: 22; radius: 4
+                        color: copyChipArea.containsMouse ? root.colBgInput : "transparent"
+                        border.width: 1
+                        border.color: root.colBorderSoft
+                        function copy() {
+                            MotionInterface.copyToClipboard(copyText)
+                            MotionInterface.notify(
+                                what + " copied to clipboard.",
+                                "success", 2500, true, "about-copy")
+                        }
+                        Text {
+                            id: copyChipText
+                            anchors.centerIn: parent
+                            text: "Copy"
+                            color: root.colTextSec
+                            font.pixelSize: 11
+                        }
+                        MouseArea {
+                            id: copyChipArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: copyChip.copy()
+                        }
+                    }
+
                     component SerialRow: FieldRow {
                         property bool connected: false
                         property string serial: ""
-                        Text {
+                        TextEdit {
+                            readOnly: true
+                            selectByMouse: true
+                            activeFocusOnTab: false
                             text: connected ? (serial || "Not programmed") : "Not connected"
                             color: (connected && serial) ? root.colTextPri : root.colTextMuted
+                            selectionColor: root.colAccent
+                            selectedTextColor: "#FFFFFF"
                             font.pixelSize: 13
                             font.family: "Consolas"
+                        }
+                        CopyChip {
+                            what: label
+                            copyText: connected ? serial : ""
                         }
                         Item { Layout.fillWidth: true }
                     }
@@ -1883,19 +1929,33 @@ Item {
                     // Hidden until the UIDs have been read (empty list) — a
                     // camera that reads back absent shows a dash, not zeros.
                     // A non-breaking space ties each "camN" to its UID so the
-                    // line only wraps between entries, never inside one.
+                    // line only wraps between entries, never inside one; the
+                    // Copy chip hands out one plain "camN <uid>" line per
+                    // camera instead.
                     component CameraUidRow: FieldRow {
                         property var uids: []
                         visible: uids.length > 0
-                        Text {
+                        TextEdit {
                             Layout.fillWidth: true
-                            wrapMode: Text.Wrap
+                            readOnly: true
+                            selectByMouse: true
+                            activeFocusOnTab: false
+                            wrapMode: TextEdit.Wrap
                             text: uids.map(function(u, i) {
                                 return "cam" + (i + 1) + "\u00a0" + (u || "—")
                             }).join("   ")
                             color: root.colTextMuted
+                            selectionColor: root.colAccent
+                            selectedTextColor: "#FFFFFF"
                             font.pixelSize: 11
                             font.family: "Consolas"
+                        }
+                        CopyChip {
+                            Layout.alignment: Qt.AlignTop
+                            what: label
+                            copyText: uids.map(function(u, i) {
+                                return "cam" + (i + 1) + " " + (u || "-")
+                            }).join("\n")
                         }
                     }
 
