@@ -1,7 +1,6 @@
 # utils/resource_path.py
 from pathlib import Path
 import sys
-import os
 
 
 def app_base_dir() -> Path:
@@ -27,20 +26,15 @@ def app_base_dir() -> Path:
 def resource_path(*relative_parts: str) -> Path:
     """
     Build a resource path with fallbacks:
-    - ENV override: OPENWATER_CONFIG_DIR (only when asking for 'config/...')
     - next to exe (one-folder)
     - inside _MEIPASS (one-file)
     - inside _internal (newer PyInstaller layouts)
-    """
-    # If asking for config/* and env override is present, honor it
-    parts = Path(*relative_parts)
-    if len(parts.parts) >= 1 and parts.parts[0] == "config":
-        env_dir = os.environ.get("OPENWATER_CONFIG_DIR")
-        if env_dir:
-            p = Path(env_dir).joinpath(*parts.parts[1:])
-            if p.exists():
-                return p
 
+    Resolution never consults the process environment (the old
+    OPENWATER_CONFIG_DIR override is gone), so a bundled resource is found
+    in exactly the same place on every machine. Tests that need to redirect
+    a resource monkeypatch this function at its import site instead.
+    """
     base = app_base_dir()
 
     # 1) Try directly under base (dev & one-folder)

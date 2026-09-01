@@ -99,8 +99,15 @@ def _ft_factory_defaults() -> dict:
     }
 
 
-def _load_app_config() -> dict:
-    """Load application config from config/app_config.json. Returns defaults if missing or invalid."""
+def _load_app_config(
+    *, clinical: bool | None = None, portable: bool | None = None
+) -> dict:
+    """Load application config from config/app_config.json. Returns defaults if missing or invalid.
+
+    ``clinical`` / ``portable`` are the dev-only launch overrides parsed from
+    the command line by ``_parse_dev_args`` (``None`` = keep the shipped
+    value). The process environment is never consulted here.
+    """
     defaults = {
         "forceLaserFail": False,
         # QA/bench lever: sets DEBUG_FLAG_HISTO_STALL on both sensors so a
@@ -266,17 +273,18 @@ def _load_app_config() -> dict:
     _APP_CONFIG_DEFAULTS.update(defaults)
     baseline, merged = config_store.load_app_config(defaults)
 
-    # Dev-only launch overrides (e.g. Zed tasks for Clinical/Research x
-    # always-portable). Packaged builds never set these env vars, so this
-    # is a no-op in production; the build-time flip in build_common.ps1
+    # Dev-only launch overrides from the command line (see _parse_dev_args —
+    # e.g. the Zed tasks for Clinical/Research x always-portable). main()
+    # only passes them for a source run: a frozen build drops the flags, and
+    # the process environment is never read, so a packaged artifact boots
+    # identically on every machine. The build-time flip in build_common.ps1
     # remains the source of truth for shipped artifacts.
-    if os.environ.get("OPENMOTION_PORTABLE") == "1":
-        baseline["portableMode"] = True
-        merged["portableMode"] = True
-    if "OPENMOTION_CLINICAL" in os.environ:
-        clinical = os.environ["OPENMOTION_CLINICAL"] == "1"
-        baseline["clinicalMode"] = clinical
-        merged["clinicalMode"] = clinical
+    if portable is not None:
+        baseline["portableMode"] = bool(portable)
+        merged["portableMode"] = bool(portable)
+    if clinical is not None:
+        baseline["clinicalMode"] = bool(clinical)
+        merged["clinicalMode"] = bool(clinical)
 
     # macOS is a research-only platform: it is never validated or shipped for
     # clinical use. This has to win over the bundled config AND the env
@@ -302,6 +310,115 @@ def _load_app_config() -> dict:
     # logged here reaches only the console. The startup report logs the
     # overrides path + merged config after the handler exists (#527).
     return merged
+
+
+# Qt runtime knobs the host environment could otherwise inject. Every one of
+# these changes how the window comes up (platform plugin, style/theme, DPI
+# scaling, render backend, logging) with no change to the build — exactly
+# what a validated artifact must not allow. They are removed before the first
+# QApplication is constructed; the three the app relies on are then pinned.
+#
+# Deliberately NOT listed: QT_PLUGIN_PATH, QML2_IMPORT_PATH and PATH.
+# PyInstaller's PyQt6 runtime hook sets those to the bundle's own Qt tree at
+# process start, and the frozen build needs them to find its plugins.
+_QT_ENV_SCRUB = (
+    "QT_QPA_PLATFORM",
+    "QT_QPA_PLATFORMTHEME",
+    "QT_QPA_PLATFORM_PLUGIN_PATH",
+    "QT_QPA_FONTDIR",
+    "QML_IMPORT_PATH",
+    "QT_STYLE_OVERRIDE",
+    "QT_QUICK_CONTROLS_CONF",
+    "QT_QUICK_CONTROLS_FALLBACK_STYLE",
+    "QT_QUICK_CONTROLS_HOVER_ENABLED",
+    "QT_QUICK_CONTROLS_MATERIAL_VARIANT",
+    "QT_QUICK_CONTROLS_MATERIAL_ACCENT",
+    "QT_QUICK_CONTROLS_MATERIAL_PRIMARY",
+    "QT_QUICK_CONTROLS_MATERIAL_FOREGROUND",
+    "QT_QUICK_CONTROLS_MATERIAL_BACKGROUND",
+    "QT_SCALE_FACTOR",
+    "QT_SCREEN_SCALE_FACTORS",
+    "QT_AUTO_SCREEN_SCALE_FACTOR",
+    "QT_ENABLE_HIGHDPI_SCALING",
+    "QT_SCALE_FACTOR_ROUNDING_POLICY",
+    "QT_FONT_DPI",
+    "QT_USE_PHYSICAL_DPI",
+    "QT_QUICK_BACKEND",
+    "QSG_RHI_BACKEND",
+    "QSG_RENDER_LOOP",
+    "QSG_INFO",
+    "QT_OPENGL",
+    "QT_ANGLE_PLATFORM",
+    "QT_D3D_ADAPTER_INDEX",
+    "QT_MESSAGE_PATTERN",
+    "QT_DEBUG_PLUGINS",
+    "QT_FATAL_WARNINGS",
+    "QML_DISABLE_DISK_CACHE",
+    "QML_FORCE_DISK_CACHE",
+    "QML_DISK_CACHE_PATH",
+)
+
+_QT_ENV_PINNED = {
+    "QT_QUICK_CONTROLS_STYLE": "Material",
+    "QT_QUICK_CONTROLS_MATERIAL_THEME": "Dark",
+    "QT_LOGGING_RULES": "qt.qpa.fonts=false",
+}
+
+
+def _pin_qt_environment(environ=None) -> list[str]:
+    """Make Qt's startup independent of the inherited environment.
+
+    Drops every key in _QT_ENV_SCRUB and sets the _QT_ENV_PINNED values, so
+    the platform plugin, Controls style/theme, DPI scaling and scene-graph
+    backend are decided by this file alone. Must run before QApplication is
+    created. Returns the names that were actually removed, for the log.
+    """
+    env = os.environ if environ is None else environ
+    removed = [k for k in _QT_ENV_SCRUB if env.pop(k, None) is not None]
+    env.update(_QT_ENV_PINNED)
+    return removed
+
+
+def _parse_dev_args(argv, *, frozen=None) -> tuple[dict, list[str]]:
+    """Split our dev-only launch flags out of ``argv``.
+
+    Returns ``(dev, qt_argv)``. ``dev`` has ``clinical`` / ``portable``
+    (``True`` / ``False`` / ``None`` = not given), ``data_root`` (str or
+    ``None``) and ``ignored`` (the flags a frozen build refused, or ``None``).
+    ``qt_argv`` is ``argv`` with our flags removed, for QApplication — Qt's
+    own ``-platform`` / ``-style`` options pass through untouched (no short
+    flags and no abbreviation matching, so ``-platform`` can never be read
+    as ``-p latform``).
+
+    These flags let a source checkout launch as either build variant (the
+    Zed tasks: ``--portable --clinical`` and ``--portable --research
+    --data-root <dir>``). They replaced the OPENMOTION_CLINICAL /
+    OPENMOTION_PORTABLE / OPENWATER_DATA_ROOT env vars so nothing ambient
+    can steer a launch. A frozen build ignores them entirely: the artifact's
+    variant and data root are baked in by scripts/build_common.ps1 (#233).
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--clinical", dest="clinical", action="store_true", default=None)
+    mode.add_argument("--research", dest="clinical", action="store_false", default=None)
+    parser.add_argument("--portable", action="store_true", default=None)
+    parser.add_argument("--data-root", dest="data_root", default=None)
+    argv = list(argv)
+    ns, rest = parser.parse_known_args(argv[1:])
+    dev = {
+        "clinical": ns.clinical,
+        "portable": ns.portable,
+        "data_root": ns.data_root,
+        "ignored": None,
+    }
+    if frozen is None:
+        frozen = bool(getattr(sys, "frozen", False))
+    given = {k: v for k, v in dev.items() if k != "ignored" and v is not None}
+    if frozen and given:
+        dev = {"clinical": None, "portable": None, "data_root": None, "ignored": given}
+    return dev, argv[:1] + rest
 
 
 def _app_icon() -> QIcon:
@@ -344,10 +461,19 @@ def main():
         except Exception:
             pass  # Ignore if not available
 
+    # Startup must not depend on the inherited environment. Strip the Qt
+    # knobs a host machine could inject and pin ours (before the first
+    # QApplication, including the single-instance message box below), and
+    # take the dev-only launch flags from argv — never from env vars.
+    scrubbed_qt_env = _pin_qt_environment()
+    dev, qt_argv = _parse_dev_args(sys.argv)
+    if dev["data_root"]:
+        app_paths.set_data_root_override(dev["data_root"])
+
     # Check if another instance is already running
     if not check_single_instance():
         # Create a minimal QApplication to show message box
-        app = QApplication(sys.argv)
+        app = QApplication(qt_argv)
         app.setWindowIcon(_app_icon())
         msg_box = QMessageBox()
         msg_box.setIcon(QMessageBox.Icon.Warning)
@@ -360,10 +486,8 @@ def main():
         msg_box.exec()
         sys.exit(1)
 
-    os.environ["QT_QUICK_CONTROLS_STYLE"] = "Material"
-    os.environ["QT_QUICK_CONTROLS_MATERIAL_THEME"] = "Dark"
-    os.environ["QT_LOGGING_RULES"] = "qt.qpa.fonts=false"
-
+    # Qt style/theme/logging are pinned by _pin_qt_environment() at the top of
+    # main(), before the first QApplication.
 
     # Configure logging
     formatter = logging.Formatter(
@@ -376,7 +500,7 @@ def main():
     logger.addHandler(console_handler)
 
     # Configure file logging
-    app_config = _load_app_config()
+    app_config = _load_app_config(clinical=dev["clinical"], portable=dev["portable"])
     # Single output root: dataDirectory, or app_paths.writable_root() (which
     # already applies the frozen/portable/dev-cwd precedence + the
     # ~/Documents fallback for an unwritable candidate — e.g. macOS Finder
@@ -404,12 +528,37 @@ def main():
     logger.info("Data directory: %s", _data_dir)
     logger.info("=" * 64)
 
+    # Startup-environment report. Logged here rather than at the top of
+    # main() so it lands in the file log, not just the (often hidden) console.
+    if scrubbed_qt_env:
+        logger.info(
+            "Ignored Qt environment overrides from the host: %s", scrubbed_qt_env
+        )
+    if dev["ignored"]:
+        logger.warning(
+            "Ignoring dev-only launch flags %s: a packaged build's variant and "
+            "data root are fixed at build time.", dev["ignored"],
+        )
+    elif any(dev[k] is not None for k in ("clinical", "portable", "data_root")):
+        logger.info(
+            "Dev launch overrides: clinical=%s portable=%s data_root=%s",
+            dev["clinical"], dev["portable"], dev["data_root"],
+        )
+
     # Startup diagnostics (issue #527): build variant, install mode, config
     # file inventory, and the merged config with overridden keys marked.
     # Deliberately AFTER the file handler attaches — everything logged
     # inside _load_app_config reaches only the console, not the log file.
+    # dev_keys: the build-time keys the --clinical/--research/--portable
+    # launch flags forced, so the report can mark them as such (the report
+    # reads no env vars either).
     startup_report.log_startup_report(
-        logger, app_config, _APP_CONFIG_BASELINE, _APP_CONFIG_DEFAULTS
+        logger, app_config, _APP_CONFIG_BASELINE, _APP_CONFIG_DEFAULTS,
+        dev_keys={
+            cfg_key for flag, cfg_key in (
+                ("clinical", "clinicalMode"), ("portable", "portableMode"),
+            ) if dev[flag] is not None
+        },
     )
 
     # Configure the SDK logger hierarchy to use the same handlers
@@ -473,7 +622,7 @@ def main():
 
     qInstallMessageHandler(qt_message_handler)
 
-    app = QApplication(sys.argv)
+    app = QApplication(qt_argv)
 
     # AppUserModelID is set at the top of main() (before any QApplication /
     # HWND exists) so the taskbar icon binds reliably.

@@ -78,8 +78,7 @@ def test_describe_file_states(tmp_path):
 
 # --- inventory_files ---------------------------------------------------------
 
-def test_inventory_covers_all_deployed_files(monkeypatch):
-    monkeypatch.delenv("OPENWATER_CONFIG_DIR", raising=False)
+def test_inventory_covers_all_deployed_files():
     inv = dict(startup_report.inventory_files())
     assert set(inv) == {
         "app_config.json",
@@ -97,9 +96,7 @@ def test_inventory_covers_all_deployed_files(monkeypatch):
 
 # --- config provenance -------------------------------------------------------
 
-def test_provenance_markers(monkeypatch):
-    monkeypatch.delenv("OPENMOTION_CLINICAL", raising=False)
-    monkeypatch.delenv("OPENMOTION_PORTABLE", raising=False)
+def test_provenance_markers():
     defaults = {"a": 1, "b": 2, "c": 3, "clinicalMode": False}
     baseline = {"a": 1, "b": 20, "c": 3, "clinicalMode": True}   # b, clinical shipped
     merged = {"a": 1, "b": 20, "c": 30, "clinicalMode": True}    # c local
@@ -110,22 +107,33 @@ def test_provenance_markers(monkeypatch):
     assert marks["clinicalMode"] == startup_report.MARK_SHIPPED
 
 
-def test_provenance_env_override_wins(monkeypatch):
+def test_provenance_dev_flag_wins():
+    defaults = {"clinicalMode": False, "portableMode": False}
+    # main mutates baseline AND merged for the dev launch flags, so
+    # value-diffing alone would mislabel these as [shipped].
+    baseline = {"clinicalMode": True, "portableMode": True}
+    merged = {"clinicalMode": True, "portableMode": True}
+    marks = startup_report.config_provenance(
+        merged, baseline, defaults, dev_keys={"clinicalMode", "portableMode"}
+    )
+    assert marks["clinicalMode"] == startup_report.MARK_DEV
+    assert marks["portableMode"] == startup_report.MARK_DEV
+
+
+def test_provenance_ignores_env_vars(monkeypatch):
+    """The retired OPENMOTION_* env vars are not a config source any more:
+    with no dev_keys the forced-looking values read as [shipped], whatever
+    the process environment says."""
     monkeypatch.setenv("OPENMOTION_CLINICAL", "1")
     monkeypatch.setenv("OPENMOTION_PORTABLE", "1")
     defaults = {"clinicalMode": False, "portableMode": False}
-    # main mutates baseline AND merged for env overrides, so value-diffing
-    # alone would mislabel these as [shipped].
     baseline = {"clinicalMode": True, "portableMode": True}
-    merged = {"clinicalMode": True, "portableMode": True}
-    marks = startup_report.config_provenance(merged, baseline, defaults)
-    assert marks["clinicalMode"] == startup_report.MARK_ENV
-    assert marks["portableMode"] == startup_report.MARK_ENV
+    marks = startup_report.config_provenance(dict(baseline), baseline, defaults)
+    assert marks["clinicalMode"] == startup_report.MARK_SHIPPED
+    assert marks["portableMode"] == startup_report.MARK_SHIPPED
 
 
-def test_merged_config_block_format(monkeypatch):
-    monkeypatch.delenv("OPENMOTION_CLINICAL", raising=False)
-    monkeypatch.delenv("OPENMOTION_PORTABLE", raising=False)
+def test_merged_config_block_format():
     defaults = {"alpha": 1, "beta": None}
     baseline = {"alpha": 2, "beta": None}
     merged = {"alpha": 2, "beta": [1, 2]}
@@ -145,10 +153,10 @@ def _report_logger(caplog):
     return log
 
 
-def test_log_startup_report_smoke(tmp_path, monkeypatch, caplog):
-    monkeypatch.setenv("OPENWATER_DATA_ROOT", str(tmp_path))
-    monkeypatch.delenv("OPENMOTION_CLINICAL", raising=False)
-    monkeypatch.delenv("OPENMOTION_PORTABLE", raising=False)
+# The writable root is already routed at tmp_path by conftest's autouse
+# _isolate_writable_root fixture (app_paths.DATA_ROOT_OVERRIDE).
+
+def test_log_startup_report_smoke(caplog):
     log = _report_logger(caplog)
     defaults = {"clinicalMode": False, "portableMode": False, "k": 1}
     startup_report.log_startup_report(log, dict(defaults), dict(defaults), defaults)
@@ -170,18 +178,27 @@ def test_log_startup_report_smoke(tmp_path, monkeypatch, caplog):
     assert "Merged app config" in text
 
 
-def test_log_startup_report_clinical_variant(tmp_path, monkeypatch, caplog):
-    monkeypatch.setenv("OPENWATER_DATA_ROOT", str(tmp_path))
+def test_log_startup_report_clinical_variant(caplog):
     log = _report_logger(caplog)
     cfg = {"clinicalMode": True, "portableMode": False}
     startup_report.log_startup_report(log, cfg, dict(cfg), dict(cfg))
     assert "Build variant:  Clinical" in caplog.text
 
 
-def test_log_startup_report_never_raises(tmp_path, monkeypatch, caplog):
+def test_log_startup_report_marks_dev_flag_keys(caplog):
+    log = _report_logger(caplog)
+    defaults = {"clinicalMode": False, "portableMode": False}
+    forced = {"clinicalMode": True, "portableMode": False}
+    startup_report.log_startup_report(
+        log, forced, dict(forced), defaults, dev_keys={"clinicalMode"}
+    )
+    line = next(l for l in caplog.text.splitlines() if l.strip().startswith("clinicalMode"))
+    assert startup_report.MARK_DEV in line
+
+
+def test_log_startup_report_never_raises(monkeypatch, caplog):
     """Logging must not take down the launch: an internal failure becomes
     a warning, and non-JSON-serializable values fall back to repr."""
-    monkeypatch.setenv("OPENWATER_DATA_ROOT", str(tmp_path))
     log = _report_logger(caplog)
     caplog.set_level(logging.WARNING, logger="test-startup-report")
 

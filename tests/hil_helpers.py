@@ -238,16 +238,15 @@ def resolve_local_config_path() -> Path:
     Since #233 the Settings UI persists changed keys ONLY here (via
     config_store) and never into the shipped app_config.json — asserts
     on UI-driven config changes must read this file, not
-    ``read_app_config_value``. Mirrors ``utils/app_paths.writable_root``:
-      1. ``OPENWATER_DATA_ROOT`` env override, used as-is.
-      2. From-source mode → repo root (the app's cwd).
-      3. Packaged exe → exe dir when its bundled config ships
+    ``read_app_config_value``. Mirrors ``utils/app_paths.writable_root``,
+    which reads no env vars (the old ``OPENWATER_DATA_ROOT`` override is
+    gone, so this helper must not honour it either — it would look in a
+    place the app never writes):
+      1. From-source mode → repo root (the app's cwd).
+      2. Packaged exe → exe dir when its bundled config ships
          ``portableMode: true`` (portable zips), else
          ``%PROGRAMDATA%\\Openwater`` (installers).
     """
-    env = os.environ.get("OPENWATER_DATA_ROOT", "")
-    if env:
-        return Path(env) / "app_config.local.json"
     if _from_source_mode():
         return _REPO_APP_CONFIG_PATH.parent.parent / "app_config.local.json"
     bundled = _resolve_app_config_path()

@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 import main as app_main
-from utils import config_store
+from utils import app_paths, config_store
 
 pytestmark = pytest.mark.unit
 
@@ -28,7 +28,7 @@ def _patch_config_path(monkeypatch, path):
     _load_app_config() delegates to config_store.load_app_config(), which has
     its own `from utils.resource_path import resource_path` binding separate
     from main's — patching main.resource_path is a no-op here. Also pin
-    OPENWATER_DATA_ROOT to path's tmp dir so the writable-overrides layer
+    app_paths.DATA_ROOT_OVERRIDE to path's tmp dir so the writable-overrides layer
     (app_paths.writable_root(), cwd in dev mode) can't pick up a real
     app_config.local.json left over from running the app locally.
     """
@@ -40,7 +40,7 @@ def _patch_config_path(monkeypatch, path):
         return real_resource_path(*parts)
 
     monkeypatch.setattr(config_store, "resource_path", fake_resource_path)
-    monkeypatch.setenv("OPENWATER_DATA_ROOT", str(path.parent))
+    monkeypatch.setattr(app_paths, "DATA_ROOT_OVERRIDE", path.parent)
 
 
 def test_missing_config_falls_back_to_defaults(tmp_path, monkeypatch):

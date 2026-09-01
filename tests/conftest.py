@@ -269,7 +269,8 @@ def _guard_tracked_app_config(request):
     """Fail loudly if a unit test dirties the tracked config/app_config.json.
 
     Unit tests must point config IO at tmp_path (monkeypatch
-    OPENWATER_DATA_ROOT / config_store.resource_path — see the pattern in
+    app_paths.DATA_ROOT_OVERRIDE / config_store.resource_path — see the
+    pattern in
     tests/test_app_config_defaults.py). HIL tests are exempt: several
     legitimately write the on-disk config mid-session and restore it
     themselves.
@@ -286,7 +287,8 @@ def _guard_tracked_app_config(request):
         pytest.fail(
             "this test modified the tracked config/app_config.json — unit "
             "tests must redirect config reads/writes to tmp_path "
-            "(monkeypatch OPENWATER_DATA_ROOT / config_store.resource_path). "
+            "(monkeypatch app_paths.DATA_ROOT_OVERRIDE / "
+            "config_store.resource_path). "
             "The original file contents were restored."
         )
 
@@ -911,20 +913,25 @@ def _isolate_writable_root(request, tmp_path, monkeypatch):
     Without this, a non-frozen (dev-mode) writable_root() falls through to
     cwd — the repo root when pytest runs from there. Any unit test that
     triggers a config save (e.g. via setConfig/_save_app_config) without
-    its own OPENWATER_DATA_ROOT override then writes a real
+    its own DATA_ROOT_OVERRIDE then writes a real
     app_config.local.json into the checked-out worktree, which persists
     across test runs and corrupts later tests that load the shipped
     config expecting no overrides present (seen: test_app_config_defaults
     failures that changed shape between runs depending on prior state).
 
     A test that needs its own root (e.g. to assert on the exact path)
-    still wins — monkeypatch.setenv/delenv in the test body simply
-    overrides this fixture's value, same monkeypatch instance either way.
+    still wins — a monkeypatch.setattr on app_paths.DATA_ROOT_OVERRIDE in
+    the test body simply overrides this fixture's value, same monkeypatch
+    instance either way. The app itself reads no env vars (the old
+    OPENWATER_DATA_ROOT override is gone — see utils/app_paths.py), so the
+    in-process attribute is the only hook.
     """
     if request.node.get_closest_marker("unit") is None:
         yield
         return
-    monkeypatch.setenv("OPENWATER_DATA_ROOT", str(tmp_path / "_app_paths_root"))
+    from utils import app_paths
+
+    monkeypatch.setattr(app_paths, "DATA_ROOT_OVERRIDE", tmp_path / "_app_paths_root")
     yield
 
 
