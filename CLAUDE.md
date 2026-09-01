@@ -132,7 +132,8 @@ old knobs:
 `main._parse_dev_args` strips the dev flags from argv before Qt sees it and
 **drops them entirely in a frozen build** (logged at WARNING) — an
 installed Research exe cannot be flipped to Clinical from a shortcut. The
-Zed tasks in `../.zed/tasks.json` pass the flags. `main._pin_qt_environment`
+Zed tasks in `../.zed/tasks.json` pass the flags, and the startup report
+(#527) marks the keys they forced as `[dev-flag]`. `main._pin_qt_environment`
 runs before the first `QApplication`: it removes the Qt runtime knobs a host
 could inject (`QT_QPA_PLATFORM`, `QT_SCALE_FACTOR`, `QT_QUICK_CONTROLS_CONF`,
 `QSG_RHI_BACKEND`, … — the list is `_QT_ENV_SCRUB`) and pins the three the

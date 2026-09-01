@@ -1369,11 +1369,6 @@ class MotionConnector(QObject):
         #    self._directory is resolved.
         from audit_log import gather_host_info
         try:
-            from version import get_version as _get_app_version
-            _app_version = _get_app_version()
-        except Exception:
-            _app_version = ""
-        try:
             _sdk_version = self._interface.get_sdk_version()
             _sdk_version = (
                 _sdk_version if isinstance(_sdk_version, str) else ""
@@ -1381,12 +1376,11 @@ class MotionConnector(QObject):
         except Exception:
             _sdk_version = ""
         self._audit.log("system_startup", {
-            "app_version": _app_version,
+            "app_version": self._app_version,
             "sdk_version": _sdk_version,
             "data_dir": self._directory,
         })
         self._audit.log("system_info", gather_host_info())
-        logger.info(f"[Connector] Directory initialized to: {self._directory}")
 
         self._user_label = self.generate_user_label()
         logger.info(f"[Connector] Generated user label: {self._user_label}")
@@ -3092,11 +3086,7 @@ class MotionConnector(QObject):
         unit tests call it synchronously."""
         try:
             from debug_bundle import build_debug_bundle, WINDOW_HOURS
-            try:
-                from version import get_version as _gv
-                app_version = _gv()
-            except Exception:
-                app_version = ""
+            app_version = self._app_version
             try:
                 sdk_version = self._interface.get_sdk_version()
                 sdk_version = (

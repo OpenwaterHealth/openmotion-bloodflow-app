@@ -36,7 +36,7 @@ from omotion import MotionInterface, factory_calibration_thresholds
 from utils.single_instance import check_single_instance, cleanup_single_instance
 from version import get_version
 from utils.resource_path import resource_path
-from utils import app_paths, config_store
+from utils import app_paths, config_store, startup_report
 
 
 APP_VERSION = get_version()
@@ -44,6 +44,10 @@ APP_VERSION = get_version()
 # Shipped baseline (defaults + read-only bundled config), captured at load so
 # the connector can diff runtime changes against it when saving overrides.
 _APP_CONFIG_BASELINE: dict = {}
+
+# Pure code defaults (no config file applied), captured at load so the
+# startup report can mark which merged keys the shipped config overrode.
+_APP_CONFIG_DEFAULTS: dict = {}
 
 
 logger = logging.getLogger("openmotion.bloodflow-app")
@@ -265,6 +269,8 @@ def _load_app_config(
         "requireConsole": True,
         "minSensors": 1,
     }
+    _APP_CONFIG_DEFAULTS.clear()
+    _APP_CONFIG_DEFAULTS.update(defaults)
     baseline, merged = config_store.load_app_config(defaults)
 
     # Dev-only launch overrides from the command line (see _parse_dev_args —
@@ -299,10 +305,10 @@ def _load_app_config(
 
     _APP_CONFIG_BASELINE.clear()
     _APP_CONFIG_BASELINE.update(baseline)
-    logger.info(
-        "Loaded app config (overrides from %s)",
-        app_paths.local_config_path(bool(baseline.get("portableMode", False))),
-    )
+    # No config logging here: this runs before the log-file handler is
+    # attached (the log's location depends on the config), so anything
+    # logged here reaches only the console. The startup report logs the
+    # overrides path + merged config after the handler exists (#527).
     return merged
 
 
@@ -538,6 +544,22 @@ def main():
             "Dev launch overrides: clinical=%s portable=%s data_root=%s",
             dev["clinical"], dev["portable"], dev["data_root"],
         )
+
+    # Startup diagnostics (issue #527): build variant, install mode, config
+    # file inventory, and the merged config with overridden keys marked.
+    # Deliberately AFTER the file handler attaches — everything logged
+    # inside _load_app_config reaches only the console, not the log file.
+    # dev_keys: the build-time keys the --clinical/--research/--portable
+    # launch flags forced, so the report can mark them as such (the report
+    # reads no env vars either).
+    startup_report.log_startup_report(
+        logger, app_config, _APP_CONFIG_BASELINE, _APP_CONFIG_DEFAULTS,
+        dev_keys={
+            cfg_key for flag, cfg_key in (
+                ("clinical", "clinicalMode"), ("portable", "portableMode"),
+            ) if dev[flag] is not None
+        },
+    )
 
     # Configure the SDK logger hierarchy to use the same handlers
     sdk_logger = logging.getLogger("openmotion.sdk")
