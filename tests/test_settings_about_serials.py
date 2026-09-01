@@ -2,14 +2,13 @@
 
 Loads the real components/SettingsModal.qml offscreen with a stubbed
 ``MotionInterface`` (extends the stub from test_settings_modal_mode_gates)
-that exposes the connector's device-identity properties, and asserts the
-About card renders one serial row per device plus a camera-UID line per
-sensor:
+that exposes the connector's serial-number properties, and asserts the
+About card renders one selectable serial row per device (console + the two
+sensor modules — no per-camera UIDs) with a Copy chip:
 
-- connected + programmed -> the serial itself
-- connected + unprogrammed -> "Not programmed"
-- disconnected -> "Not connected"
-- camera-UID line hidden until UIDs exist; an absent camera shows a dash
+- connected + programmed -> the serial itself, Copy chip shown
+- connected + unprogrammed -> "Not programmed", no chip
+- disconnected -> "Not connected", no chip (never a stale serial)
 
 Unit-marked: no app launch, no hardware, offscreen Qt platform.
 """
@@ -39,7 +38,7 @@ from test_settings_modal_mode_gates import (  # noqa: E402
 
 pytestmark = pytest.mark.unit
 
-UIDS = [f"0x00000000000{i}" for i in range(1, 9)]
+ROW_LABELS = {"Console SN", "Left Sensor SN", "Right Sensor SN"}
 
 
 class _IdentityStub(_StubMotionInterface):
@@ -52,17 +51,15 @@ class _IdentityStub(_StubMotionInterface):
         super().__init__(parent)
         self._connected = {"console": False, "left": False, "right": False}
         self._serials = {"console": "", "left": "", "right": ""}
-        self._uids = {"left": [], "right": []}
         self.copied: list[str] = []
 
     @pyqtSlot(str)
     def copyToClipboard(self, text):
         self.copied.append(text)
 
-    def setIdentity(self, connected, serials, uids):
+    def setIdentity(self, connected, serials):
         self._connected.update(connected)
         self._serials.update(serials)
-        self._uids.update(uids)
         self.connectionStatusChanged.emit()
         self.deviceIdentityChanged.emit()
 
@@ -89,14 +86,6 @@ class _IdentityStub(_StubMotionInterface):
     @pyqtProperty(str, notify=deviceIdentityChanged)
     def rightSensorSerialNumber(self):
         return self._serials["right"]
-
-    @pyqtProperty("QVariantList", notify=deviceIdentityChanged)
-    def leftSensorCameraUids(self):
-        return list(self._uids["left"])
-
-    @pyqtProperty("QVariantList", notify=deviceIdentityChanged)
-    def rightSensorCameraUids(self):
-        return list(self._uids["right"])
 
 
 @pytest.fixture(scope="module")
@@ -132,13 +121,12 @@ def modal():
     del stub
 
 
-def _rows(card, prop):
-    """FieldRow instances inside ``card`` carrying ``prop`` (SerialRow has
-    ``serial``, CameraUidRow has ``uids``), keyed by label."""
+def _serial_rows(card):
+    """SerialRow instances inside ``card`` (they carry ``serial``), by label."""
     out = {}
     for child in card.findChildren(QObject):
         try:
-            if child.property(prop) is not None and child.property("label"):
+            if child.property("serial") is not None and child.property("label"):
                 out[child.property("label")] = child
         except RuntimeError:
             continue
@@ -146,8 +134,8 @@ def _rows(card, prop):
 
 
 def _value_edit(row):
-    """The value TextEdit of a serial/UID row — the one selectable child
-    (the label Text and the Copy chip's caption are plain Text)."""
+    """The value TextEdit of a serial row — the one selectable child (the
+    label Text and the Copy chip's caption are plain Text)."""
     for child in row.findChildren(QObject):
         try:
             if child.property("selectByMouse") is True:
@@ -155,10 +143,6 @@ def _value_edit(row):
         except RuntimeError:
             continue
     raise AssertionError(f"No selectable value under row {row.property('label')!r}")
-
-
-def _value_text(row):
-    return _value_edit(row).property("text")
 
 
 def _copy_chip(row):
@@ -175,87 +159,47 @@ def test_serial_rows_reflect_connection_and_programming(modal):
     modal.stub.setIdentity(
         connected={"console": True, "left": True, "right": False},
         serials={"console": "WWW04Q40005", "left": "", "right": "STALE"},
-        uids={"left": UIDS, "right": []},
     )
     _invoke(modal, "open")
     try:
         card = _find_card(modal, "About")
-        rows = _rows(card, "serial")
-        assert set(rows) == {"Console S/N", "Left Sensor S/N", "Right Sensor S/N"}
-        assert _value_text(rows["Console S/N"]) == "WWW04Q40005"
-        assert _value_text(rows["Left Sensor S/N"]) == "Not programmed"
+        rows = _serial_rows(card)
+        assert set(rows) == ROW_LABELS
+        assert _value_edit(rows["Console SN"]).property("text") == "WWW04Q40005"
+        assert _value_edit(rows["Left Sensor SN"]).property("text") == "Not programmed"
         # A disconnected device never shows a (stale) serial.
-        assert _value_text(rows["Right Sensor S/N"]) == "Not connected"
+        assert _value_edit(rows["Right Sensor SN"]).property("text") == "Not connected"
         for row in rows.values():
             assert row.property("visible") is True
+            assert _value_edit(row).property("readOnly") is True
+        # No per-camera UID rows anywhere in the card.
+        labels = {
+            c.property("label") for c in card.findChildren(QObject)
+            if c.property("label")
+        }
+        assert not any("Camera" in str(lbl) for lbl in labels)
     finally:
         _invoke(modal, "close")
 
 
-def test_camera_uid_lines_hidden_until_read_and_mark_absent_camera(modal):
-    uids = list(UIDS)
-    uids[2] = ""  # camera 3 read back absent
-    modal.stub.setIdentity(
-        connected={"console": True, "left": True, "right": True},
-        serials={"console": "C", "left": "L", "right": "R"},
-        uids={"left": uids, "right": []},
-    )
-    _invoke(modal, "open")
-    try:
-        card = _find_card(modal, "About")
-        rows = _rows(card, "uids")
-        assert set(rows) == {"Left Cameras", "Right Cameras"}
-        assert rows["Left Cameras"].property("visible") is True
-        text = _value_text(rows["Left Cameras"])
-        # The QML ties "camN" to its UID with a non-breaking space so the
-        # line never wraps inside an entry (verified by render); the
-        # TextEdit .text getter reports it back as a plain space.
-        assert text.startswith("cam1 0x000000000001")
-        assert "cam3 —" in text
-        assert "cam8 0x000000000008" in text
-        assert rows["Right Cameras"].property("visible") is False
-    finally:
-        _invoke(modal, "close")
-
-
-def test_values_are_selectable_and_copy_chips_push_clean_text(modal):
-    uids = list(UIDS)
-    uids[2] = ""
+def test_copy_chip_only_for_real_values_and_pushes_serial(modal):
     modal.stub.setIdentity(
         connected={"console": True, "left": True, "right": False},
         serials={"console": "WWW04Q40005", "left": "", "right": "STALE"},
-        uids={"left": uids, "right": []},
     )
     modal.stub.copied.clear()
     _invoke(modal, "open")
     try:
-        card = _find_card(modal, "About")
-        serial_rows = _rows(card, "serial")
-        uid_rows = _rows(card, "uids")
-        for row in list(serial_rows.values()) + list(uid_rows.values()):
-            edit = _value_edit(row)
-            assert edit.property("readOnly") is True
-
-        # Copy chip only where there is a real value to copy: not for a
-        # placeholder ("Not programmed") and never for a disconnected
-        # device's stale serial.
-        assert _copy_chip(serial_rows["Console S/N"]).property("visible") is True
-        assert _copy_chip(serial_rows["Left Sensor S/N"]).property("visible") is False
-        assert _copy_chip(serial_rows["Right Sensor S/N"]).property("visible") is False
-        assert _copy_chip(uid_rows["Left Cameras"]).property("visible") is True
+        rows = _serial_rows(_find_card(modal, "About"))
+        # Chip only where there is a real value: not for a placeholder
+        # ("Not programmed") and never for a disconnected device's serial.
+        assert _copy_chip(rows["Console SN"]).property("visible") is True
+        assert _copy_chip(rows["Left Sensor SN"]).property("visible") is False
+        assert _copy_chip(rows["Right Sensor SN"]).property("visible") is False
 
         QMetaObject.invokeMethod(
-            _copy_chip(serial_rows["Console S/N"]), "copy",
+            _copy_chip(rows["Console SN"]), "copy",
             Qt.ConnectionType.DirectConnection)
-        QMetaObject.invokeMethod(
-            _copy_chip(uid_rows["Left Cameras"]), "copy",
-            Qt.ConnectionType.DirectConnection)
-        assert modal.stub.copied[0] == "WWW04Q40005"
-        # One plain "camN <uid>" line per camera: no NBSP, dash for absent.
-        lines = modal.stub.copied[1].split("\n")
-        assert lines[0] == "cam1 0x000000000001"
-        assert lines[2] == "cam3 -"
-        assert lines[7] == "cam8 0x000000000008"
-        assert "\u00a0" not in modal.stub.copied[1]
+        assert modal.stub.copied == ["WWW04Q40005"]
     finally:
         _invoke(modal, "close")

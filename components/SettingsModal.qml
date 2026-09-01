@@ -1861,18 +1861,18 @@ Item {
                     }
 
                     // Hardware identity (#529): the programmed serial number
-                    // of each connected device, cached by the connector on
-                    // connect (_log_device_stats) and cleared on disconnect.
-                    // Sensors also list their 8 camera security UIDs, read
-                    // after the sensor-init cache fill with cameras powered.
+                    // of each connected device (console + sensor modules),
+                    // cached by the connector on connect (_log_device_stats)
+                    // and cleared on disconnect. Per-camera UIDs are
+                    // deliberately NOT shown — they stay in the app log.
                     Rectangle { Layout.fillWidth: true; height: 1; color: root.colBorderSoft }
 
                     // Serials are for support tickets, so every value is
                     // copy-pasteable two ways: the text itself is a selectable
                     // read-only TextEdit, and a ghost "Copy" chip pushes the
-                    // clean value (no placeholders / NBSPs) to the clipboard
-                    // through the same copyToClipboard + toast path the
-                    // Critical Error modal uses.
+                    // value (never a placeholder) to the clipboard through the
+                    // same copyToClipboard + toast path the Critical Error
+                    // modal uses.
                     component CopyChip: Rectangle {
                         id: copyChip
                         property string copyText: ""
@@ -1925,62 +1925,20 @@ Item {
                         Item { Layout.fillWidth: true }
                     }
 
-                    // One wrapped, muted line per sensor: "cam1 0x… cam2 0x…".
-                    // Hidden until the UIDs have been read (empty list) — a
-                    // camera that reads back absent shows a dash, not zeros.
-                    // A non-breaking space ties each "camN" to its UID so the
-                    // line only wraps between entries, never inside one; the
-                    // Copy chip hands out one plain "camN <uid>" line per
-                    // camera instead.
-                    component CameraUidRow: FieldRow {
-                        property var uids: []
-                        visible: uids.length > 0
-                        TextEdit {
-                            Layout.fillWidth: true
-                            readOnly: true
-                            selectByMouse: true
-                            activeFocusOnTab: false
-                            wrapMode: TextEdit.Wrap
-                            text: uids.map(function(u, i) {
-                                return "cam" + (i + 1) + "\u00a0" + (u || "—")
-                            }).join("   ")
-                            color: root.colTextMuted
-                            selectionColor: root.colAccent
-                            selectedTextColor: "#FFFFFF"
-                            font.pixelSize: 11
-                            font.family: "Consolas"
-                        }
-                        CopyChip {
-                            Layout.alignment: Qt.AlignTop
-                            what: label
-                            copyText: uids.map(function(u, i) {
-                                return "cam" + (i + 1) + " " + (u || "-")
-                            }).join("\n")
-                        }
-                    }
-
                     SerialRow {
-                        label: "Console S/N"
+                        label: "Console SN"
                         connected: MotionInterface.consoleConnected
                         serial: MotionInterface.consoleSerialNumber
                     }
                     SerialRow {
-                        label: "Left Sensor S/N"
+                        label: "Left Sensor SN"
                         connected: MotionInterface.leftSensorConnected
                         serial: MotionInterface.leftSensorSerialNumber
                     }
-                    CameraUidRow {
-                        label: "Left Cameras"
-                        uids: MotionInterface.leftSensorCameraUids
-                    }
                     SerialRow {
-                        label: "Right Sensor S/N"
+                        label: "Right Sensor SN"
                         connected: MotionInterface.rightSensorConnected
                         serial: MotionInterface.rightSensorSerialNumber
-                    }
-                    CameraUidRow {
-                        label: "Right Cameras"
-                        uids: MotionInterface.rightSensorCameraUids
                     }
 
                     // Live flashing progress, driven by the connector. Shows a

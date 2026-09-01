@@ -1044,10 +1044,9 @@ class MotionConnector(QObject):
     # Per-device firmware versions, refreshed on every (dis)connect by
     # _log_device_stats. Surfaced to Settings → System Information.
     firmwareVersionsChanged = pyqtSignal()
-    # Per-device hardware identity — programmed serial numbers plus the 8
-    # camera security UIDs per sensor — cached on connect / after the
-    # sensor-init ID-cache fill and cleared on disconnect (#529). Notify for
-    # the *SerialNumber / *CameraUids properties behind Settings → About.
+    # Per-device programmed serial numbers, cached on connect and cleared
+    # on disconnect (#529). Notify for the *SerialNumber properties behind
+    # Settings → About.
     deviceIdentityChanged = pyqtSignal()
     # Firmware autoupdate (engineeringMode only)
     firmwareUpdateInfoChanged = pyqtSignal()                # notify for the properties below
@@ -1270,13 +1269,11 @@ class MotionConnector(QObject):
         self._firmware_versions: dict[str, str] = {
             "console": "", "left": "", "right": "",
         }
-        # Programmed serial numbers (console EEPROM / sensor flash) and the
-        # per-sensor camera security UIDs, surfaced to Settings → About
-        # (#529). "" = unprogrammed or unknown; [] = UIDs not read yet.
+        # Programmed serial numbers (console EEPROM / sensor flash),
+        # surfaced to Settings → About (#529). "" = unprogrammed / unknown.
         self._device_serials: dict[str, str] = {
             "console": "", "left": "", "right": "",
         }
-        self._camera_uids: dict[str, list[str]] = {"left": [], "right": []}
         # Firmware autoupdate state (engineeringMode only).
         self._firmware_latest: dict[str, str] = {"console": "", "left": "", "right": ""}
         self._firmware_update_available: dict[str, bool] = {
@@ -1626,12 +1623,6 @@ class MotionConnector(QObject):
         # startup — the three "log the configuration" calls.
         self._interface.log_sensor_info(side)
 
-        # Re-read the serial + camera UIDs now that the ID cache was filled
-        # with the cameras powered (#529): the connect-time read in
-        # _log_device_stats runs before that and sees zeros for any camera
-        # that was still off.
-        self._refresh_device_identity(side)
-
         self.connectionStatusChanged.emit()
 
     def _check_sensor_i2c_health(self, side: str) -> None:
@@ -1858,18 +1849,6 @@ class MotionConnector(QObject):
     def rightSensorSerialNumber(self) -> str:
         """Right sensor module serial; see consoleSerialNumber."""
         return self._device_serials["right"]
-
-    @pyqtProperty('QVariantList', notify=deviceIdentityChanged)
-    def leftSensorCameraUids(self) -> list:
-        """Security UIDs of the left sensor's 8 cameras, index 0 = camera 1
-        ("" for a camera that read back as absent). [] while disconnected or
-        until the sensor-init cache fill has run with the cameras powered."""
-        return list(self._camera_uids["left"])
-
-    @pyqtProperty('QVariantList', notify=deviceIdentityChanged)
-    def rightSensorCameraUids(self) -> list:
-        """Right sensor camera UIDs; see leftSensorCameraUids."""
-        return list(self._camera_uids["right"])
 
     @pyqtProperty(bool, notify=firmwareUpdateInfoChanged)
     def anyFirmwareUpdateAvailable(self) -> bool:
@@ -2287,10 +2266,8 @@ class MotionConnector(QObject):
             if name in self._firmware_versions and self._firmware_versions[name]:
                 self._firmware_versions[name] = ""
                 self.firmwareVersionsChanged.emit()
-            if self._device_serials.get(name) or self._camera_uids.get(name):
+            if self._device_serials.get(name):
                 self._device_serials[name] = ""
-                if name in self._camera_uids:
-                    self._camera_uids[name] = []
                 self.deviceIdentityChanged.emit()
             if self._firmware_update_available.get(name):
                 self._firmware_update_available[name] = False
@@ -2362,27 +2339,12 @@ class MotionConnector(QObject):
             self.firmwareVersionsChanged.emit()
         self._maybe_check_firmware_update(name)
 
-    @staticmethod
-    def _normalize_camera_uid(uid) -> str:
-        """An absent camera reads back as six zero bytes, which the SDK
-        formats as ``0x000000000000`` — report that as "" so the UI can show
-        a placeholder instead of a fake serial."""
-        if not isinstance(uid, str):
-            return ""
-        uid = uid.strip()
-        body = uid[2:] if uid.lower().startswith("0x") else uid
-        return "" if not body.strip("0") else uid
-
     def _refresh_device_identity(self, name: str) -> str:
-        """Re-read a device's programmed serial number and, for a sensor,
-        the SDK's cached camera security UIDs; cache both for Settings →
-        About (#529) and return the serial ("" when unprogrammed/unknown).
-
-        Best-effort like _log_device_stats — identity reads never block a
-        connect. Runs on the SDK monitor thread at connect and again on the
-        sensor-init worker after the cameras are powered for the ID-cache
-        fill, because the connect-time cache sees zeros for any camera that
-        was still off. The emit queues to the main thread for QML."""
+        """Re-read a device's programmed serial number, cache it for
+        Settings → About (#529) and return it ("" when unprogrammed or
+        unknown). Best-effort like _log_device_stats — identity reads never
+        block a connect. Runs on the SDK monitor thread at connect; the
+        emit queues to the main thread for QML."""
         handle = getattr(self._interface, name, None)
         serial = ""
         try:
@@ -2392,23 +2354,8 @@ class MotionConnector(QObject):
         except Exception:
             logger.debug("device_identity: %s serial lookup failed",
                          name, exc_info=True)
-        uids: list[str] = []
-        if name in self._camera_uids:
-            try:
-                getter = getattr(handle, "get_cached_camera_security_uid", None)
-                if getter is not None:
-                    uids = [self._normalize_camera_uid(getter(cam))
-                            for cam in range(8)]
-                    if not any(uids):
-                        uids = []
-            except Exception:
-                logger.debug("device_identity: %s camera-UID lookup failed",
-                             name, exc_info=True)
-                uids = []
         if name in self._device_serials:
             self._device_serials[name] = serial
-            if name in self._camera_uids:
-                self._camera_uids[name] = uids
             self.deviceIdentityChanged.emit()
         return serial
 
