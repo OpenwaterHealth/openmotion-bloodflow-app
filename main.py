@@ -102,6 +102,7 @@ def _load_app_config() -> dict:
         # QA/bench lever: sets DEBUG_FLAG_HISTO_STALL on both sensors so a
         # scan deterministically loses all camera data ~45 s in while USB
         # stays alive (sensor-fw#75) — the #248/#174 repro. Default off.
+        # Live toggle in Settings → Engineering (#525).
         "debugHistoStallTest": False,
         # In-app updater source overrides (default None => production GitHub
         # repo). updateRepo swaps the owner/repo; updateApiUrl fully overrides

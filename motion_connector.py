@@ -3288,6 +3288,7 @@ class MotionConnector(QObject):
     _SENSOR_DEBUG_FLAG_ATTRS = {
         "histoCmp": "_histo_cmp",
         "sensorDebugLogging": "_sensor_debug_logging",
+        "debugHistoStallTest": "_histo_stall_test",
     }
 
     @pyqtSlot(str, bool)

@@ -79,6 +79,8 @@ class _StubMotionInterface(QObject):
         self.write_raw_csv_calls: list[bool] = []
         self.write_telemetry_csv_calls: list[bool] = []
         self._write_telemetry_csv = False
+        self.sensor_debug_flag_calls: list[tuple] = []
+        self._histo_stall_test = False
 
     # ── Mode flags (the gates under test) ────────────────────────────
     def setFlags(self, clinical: bool, engineering: bool):
@@ -110,6 +112,7 @@ class _StubMotionInterface(QObject):
                 self, "_alt_laser_enabled", False),
             "altCameraExposureUs": getattr(self, "_alt_exposure_us", 648),
             "writeTelemetryCsv": self._write_telemetry_csv,
+            "debugHistoStallTest": self._histo_stall_test,
         }
 
     # ── open()/close() dependencies ──────────────────────────────────
@@ -140,6 +143,14 @@ class _StubMotionInterface(QObject):
     @pyqtSlot("QVariant")
     def setRawCsvDurationSec(self, value):
         pass
+
+    @pyqtSlot(str, bool)
+    def setSensorDebugFlag(self, key, enabled):
+        # Mimics the connector: persist-then-notify (#525).
+        self.sensor_debug_flag_calls.append((key, bool(enabled)))
+        if key == "debugHistoStallTest":
+            self._histo_stall_test = bool(enabled)
+        self.appConfigChanged.emit()
 
     @pyqtSlot(str, "QVariant")
     def setConfig(self, key, value):
@@ -462,6 +473,34 @@ def test_telemetry_csv_switch_drives_connector_slot(modal_factory):
     _invoke(switch, "click")
     assert switch.property("checked") is False
     assert stub.write_telemetry_csv_calls == [True, False]
+
+
+def test_histo_stall_test_switch_drives_live_flag_push(modal_factory):
+    """#525: the 'Histogram stall test' switch routes through
+    setSensorDebugFlag (the live push-to-connected-sensors path, same as
+    histoCmp), and its armed warning shows only while the flag is on."""
+    stub = modal_factory.stub
+    stub.setFlags(clinical=False, engineering=True)
+    stub.sensor_debug_flag_calls.clear()
+    modal = modal_factory()
+
+    switch = modal.findChild(QObject, "histoStallTestSwitch")
+    assert switch is not None
+    assert switch.property("checked") is False
+    assert _control_visible(modal, "histoStallTestWarning") is False
+
+    _invoke(switch, "click")
+    assert switch.property("checked") is True
+    assert stub.sensor_debug_flag_calls == [("debugHistoStallTest", True)]
+    assert _control_visible(modal, "histoStallTestWarning") is True
+
+    _invoke(switch, "click")
+    assert switch.property("checked") is False
+    assert stub.sensor_debug_flag_calls == [
+        ("debugHistoStallTest", True),
+        ("debugHistoStallTest", False),
+    ]
+    assert _control_visible(modal, "histoStallTestWarning") is False
 
 
 def test_close_never_persists_clinical_mode(modal_factory):
