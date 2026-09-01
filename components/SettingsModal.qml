@@ -1860,6 +1860,69 @@ Item {
                         updateAvailable: MotionInterface.rightSensorFirmwareUpdateAvailable
                     }
 
+                    // Hardware identity (#529): the programmed serial number
+                    // of each connected device, cached by the connector on
+                    // connect (_log_device_stats) and cleared on disconnect.
+                    // Sensors also list their 8 camera security UIDs, read
+                    // after the sensor-init cache fill with cameras powered.
+                    Rectangle { Layout.fillWidth: true; height: 1; color: root.colBorderSoft }
+
+                    component SerialRow: FieldRow {
+                        property bool connected: false
+                        property string serial: ""
+                        Text {
+                            text: connected ? (serial || "Not programmed") : "Not connected"
+                            color: (connected && serial) ? root.colTextPri : root.colTextMuted
+                            font.pixelSize: 13
+                            font.family: "Consolas"
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    // One wrapped, muted line per sensor: "cam1 0x… cam2 0x…".
+                    // Hidden until the UIDs have been read (empty list) — a
+                    // camera that reads back absent shows a dash, not zeros.
+                    // A non-breaking space ties each "camN" to its UID so the
+                    // line only wraps between entries, never inside one.
+                    component CameraUidRow: FieldRow {
+                        property var uids: []
+                        visible: uids.length > 0
+                        Text {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            text: uids.map(function(u, i) {
+                                return "cam" + (i + 1) + "\u00a0" + (u || "—")
+                            }).join("   ")
+                            color: root.colTextMuted
+                            font.pixelSize: 11
+                            font.family: "Consolas"
+                        }
+                    }
+
+                    SerialRow {
+                        label: "Console S/N"
+                        connected: MotionInterface.consoleConnected
+                        serial: MotionInterface.consoleSerialNumber
+                    }
+                    SerialRow {
+                        label: "Left Sensor S/N"
+                        connected: MotionInterface.leftSensorConnected
+                        serial: MotionInterface.leftSensorSerialNumber
+                    }
+                    CameraUidRow {
+                        label: "Left Cameras"
+                        uids: MotionInterface.leftSensorCameraUids
+                    }
+                    SerialRow {
+                        label: "Right Sensor S/N"
+                        connected: MotionInterface.rightSensorConnected
+                        serial: MotionInterface.rightSensorSerialNumber
+                    }
+                    CameraUidRow {
+                        label: "Right Cameras"
+                        uids: MotionInterface.rightSensorCameraUids
+                    }
+
                     // Live flashing progress, driven by the connector. Shows a
                     // clean status line plus a real ProgressBar (determinate
                     // for the dfu erase/write phases, indeterminate for the
