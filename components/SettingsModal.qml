@@ -1088,6 +1088,38 @@ Item {
                                    + "Turn off before clinical scans.")
                     }
 
+                    // QA/bench stall repro (issue #525) — arms the firmware's
+                    // DEBUG_FLAG_HISTO_STALL (sensor-fw#75): sensors stop
+                    // sending histogram frames ~45 s into a scan while USB
+                    // stays alive, the deterministic #248/#174 repro.
+                    FieldRow {
+                        label: "Histogram stall test"
+                        PillSwitch {
+                            objectName: "histoStallTestSwitch"
+                            checked: MotionInterface.appConfig.debugHistoStallTest === true
+                            onToggled: MotionInterface.setSensorDebugFlag("debugHistoStallTest", checked)
+                        }
+                        Text {
+                            text: MotionInterface.appConfig.debugHistoStallTest === true ? "On" : "Off"
+                            color: MotionInterface.appConfig.debugHistoStallTest === true ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    Text {
+                        objectName: "histoStallTestWarning"
+                        visible: MotionInterface.appConfig.debugHistoStallTest === true
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 4
+                        Layout.bottomMargin: 6
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: 11
+                        color: AppTheme.accentYellow
+                        text: qsTr("Every scan will lose all camera data ~45 s in "
+                                   + "(deterministic stall repro). Turn off after testing.")
+                    }
+
                     // Console USB-printf debug log — persisted to config AND
                     // pushed live to a connected console via
                     // setConsoleDebugLogging. Re-applied on connect (RAM-only

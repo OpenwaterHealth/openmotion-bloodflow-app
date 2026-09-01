@@ -1,9 +1,10 @@
 """Settings → Engineering switches for the sensor debug flags.
 
-``setSensorDebugFlag`` toggles ``histoCmp`` / ``sensorDebugLogging`` in the
-runtime cache and persisted config, then re-pushes the recomputed firmware
-debug-flag bitmask to every connected sensor immediately (no restart) —
-mirroring the live ``setConsoleFan`` engineering toggle.
+``setSensorDebugFlag`` toggles ``histoCmp`` / ``sensorDebugLogging`` /
+``debugHistoStallTest`` in the runtime cache and persisted config, then
+re-pushes the recomputed firmware debug-flag bitmask to every connected
+sensor immediately (no restart) — mirroring the live ``setConsoleFan``
+engineering toggle.
 """
 
 from unittest.mock import MagicMock
@@ -11,7 +12,11 @@ from unittest.mock import MagicMock
 import pytest
 
 from motion_connector import MotionConnector
-from omotion.config import DEBUG_FLAG_HISTO_CMP, DEBUG_FLAG_USB_PRINTF
+from omotion.config import (
+    DEBUG_FLAG_HISTO_CMP,
+    DEBUG_FLAG_HISTO_STALL,
+    DEBUG_FLAG_USB_PRINTF,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -61,6 +66,31 @@ def test_enable_sensor_debug_logging_preserves_other_bits(tmp_path):
     assert c._sensor_debug_logging is True
     assert c._app_config["sensorDebugLogging"] is True
     iface.left.set_debug_flags.assert_called_once_with(expected)
+
+
+def test_enable_histo_stall_test_pushes_bit_to_both_sensors(tmp_path):
+    c, iface = _connector(tmp_path, {"debugHistoStallTest": False})
+
+    c.setSensorDebugFlag("debugHistoStallTest", True)
+
+    assert c._histo_stall_test is True
+    assert c._app_config["debugHistoStallTest"] is True
+    c._save_app_config.assert_called_once()
+    iface.left.set_debug_flags.assert_called_once_with(DEBUG_FLAG_HISTO_STALL)
+    iface.right.set_debug_flags.assert_called_once_with(DEBUG_FLAG_HISTO_STALL)
+
+
+def test_disable_histo_stall_test_clears_bit_preserving_others(tmp_path):
+    c, iface = _connector(
+        tmp_path, {"debugHistoStallTest": True, "histoCmp": True}
+    )
+
+    c.setSensorDebugFlag("debugHistoStallTest", False)
+
+    assert c._histo_stall_test is False
+    assert c._app_config["debugHistoStallTest"] is False
+    iface.left.set_debug_flags.assert_called_once_with(DEBUG_FLAG_HISTO_CMP)
+    iface.right.set_debug_flags.assert_called_once_with(DEBUG_FLAG_HISTO_CMP)
 
 
 def test_disabling_last_flag_pushes_zero(tmp_path):
