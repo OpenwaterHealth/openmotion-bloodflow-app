@@ -22,8 +22,9 @@ _INT_KEYS = (
 )
 
 # Build-time-only keys (#233): decided per artifact by the build system
-# (scripts/build_common.ps1) or a dev env override (OPENMOTION_CLINICAL /
-# OPENMOTION_PORTABLE) — never by the operator at runtime. They are
+# (scripts/build_common.ps1) or, for a source run only, the --clinical /
+# --research / --portable launch flags (main._parse_dev_args) — never by
+# the operator at runtime, and never by an env var. They are
 # neither read from nor written to the writable overrides file, so a
 # stray app_config.local.json (e.g. left behind by a pre-1.5 build) can't
 # flip a Research install into Clinical or change the storage layout.
