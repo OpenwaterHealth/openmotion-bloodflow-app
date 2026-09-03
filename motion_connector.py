@@ -12,7 +12,7 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtQml import QJSValue
 from pathlib import Path
-from typing import NamedTuple, Optional
+from typing import Any, Dict, NamedTuple, Optional
 import itertools
 import logging
 import math
@@ -837,6 +837,67 @@ def classify_scan_outcome(
     return ScanOutcome("ok", "", "")
 
 
+# ── scan_ended audit record (issue #535) ─────────────────────────────────
+# The audit trail must say *why* a scan ended, not just what data survived.
+# classify_scan_outcome is the data verdict for the end-of-scan toast; every
+# app-side abort (E-303 stall, E-304 disconnect, E-202 safety trip) unwinds
+# through stopCapture(), which sets the same stop event a user Stop sets, so
+# to the classifier a faulted scan looks like a benign cancel ("ok" when an
+# interval had already closed, "skipped" when none had). Termination cause is
+# recorded separately (MotionConnector._note_scan_abort) and merged here.
+SCAN_TERMINATION_OK = "ok"            # ran to its configured end
+SCAN_TERMINATION_STOPPED = "stopped"  # operator stop, no fault
+SCAN_TERMINATION_ABORTED = "aborted"  # a fault ended it (error_code/reason)
+
+
+def audit_scan_ended_details(
+    *,
+    outcome: Optional[ScanOutcome],
+    canceled: bool,
+    abort_code: Optional[str],
+    abort_reason: str = "",
+) -> Dict[str, Any]:
+    """Termination fields for the ``scan_ended`` audit event.
+
+    Returns ``outcome`` (``ok`` / ``stopped`` / ``aborted``), ``data`` (the
+    classify_scan_outcome kind: ``ok`` / ``partial`` / ``empty`` /
+    ``skipped``, or None when classification failed), and ``error_code`` /
+    ``reason`` — populated only for an abort, null otherwise, so the CSV
+    export keeps one stable column set.
+
+    - An app-side abort (``abort_code`` set) always wins: E-303 / E-304 /
+      E-202 / E-301 all cancel the SDK scan, so ``canceled`` is True for
+      them too and must not be read as an operator stop.
+    - No abort code but the classifier flagged an unexpected end (severity
+      set — an interrupted scan the SDK tore down before any app-side
+      handler claimed it) → ``aborted`` with the classifier's message as the
+      reason and no error code.
+    - Otherwise ``stopped`` when the stop event was set, else ``ok``.
+    """
+    data = outcome.kind if outcome is not None else None
+    if abort_code:
+        return {
+            "outcome": SCAN_TERMINATION_ABORTED,
+            "data": data,
+            "error_code": abort_code,
+            "reason": abort_reason or None,
+        }
+    if outcome is not None and outcome.severity:
+        return {
+            "outcome": SCAN_TERMINATION_ABORTED,
+            "data": data,
+            "error_code": None,
+            "reason": outcome.message or None,
+        }
+    return {
+        "outcome": (SCAN_TERMINATION_STOPPED if canceled
+                    else SCAN_TERMINATION_OK),
+        "data": data,
+        "error_code": None,
+        "reason": None,
+    }
+
+
 class _ScanOutcomeSink:
     """Pipeline sink that tallies the two signals classify_scan_outcome needs.
 
@@ -1137,6 +1198,16 @@ class MotionConnector(QObject):
         # first wins so the two can't stack two modals. Cleared at the next
         # startCapture.
         self._scan_abort_notified = False
+        # Termination cause of the CURRENT scan for the audit trail (issue
+        # #535): the E-code + detail of the fault that ended it, or None when
+        # it ran to completion / the operator stopped it. Set by
+        # _note_scan_abort from every scan-ending fault path, cleared at
+        # startCapture, consumed by the scan_ended audit event.
+        self._scan_abort_code: Optional[str] = None
+        self._scan_abort_reason: str = ""
+        # Subject label of the CURRENT scan, for the E-301 scan_ended record
+        # (that path never reaches the completion closure that has it).
+        self._capture_subject_id: str = ""
         # Sides participating in the CURRENT scan — {"console"} plus any
         # sensor with a non-zero camera mask at scan start. Snapshotted in
         # startCapture; consulted by the disconnect handler so unplugging an
@@ -4514,6 +4585,9 @@ class MotionConnector(QObject):
         self._camera_last_temp = {}
         self._camera_dropped = set()
         self._scan_abort_notified = False
+        self._scan_abort_code = None
+        self._scan_abort_reason = ""
+        self._capture_subject_id = subject_id
         # Snapshot the devices participating in THIS scan for the mid-scan
         # disconnect abort (issue #387): the console always participates;
         # a sensor participates only when its gated camera mask is non-zero.
@@ -4635,20 +4709,20 @@ class MotionConnector(QObject):
             self._safety_cancel_scheduled = False
             self._capture_thread = None
             try:
-                _outcome_kind = outcome.kind
+                _outcome = outcome
             except Exception:
-                _outcome_kind = None
+                _outcome = None  # classification raised above
             try:
                 _dur = (time.time() - self._capture_start_time
                         if self._capture_start_time else None)
             except Exception:
                 _dur = None
-            self._audit.log("scan_ended", {
-                "label": subject_id,
-                "session_label": session_label or None,
-                "duration_s": round(_dur, 1) if _dur is not None else None,
-                "outcome": _outcome_kind,
-            })
+            # Termination cause + data verdict (issue #535): a fault-aborted
+            # scan is recorded as "aborted" with its error code, never as an
+            # operator stop.
+            self._log_scan_ended_audit(
+                subject_id, session_label, _dur, _outcome, canceled,
+            )
             self.captureFinished.emit(True, "", "", "")
             # Open the notes modal now, UNLESS a critical-error modal is on
             # screen (e.g. an E-304 device-disconnect abort raised it seconds
@@ -4854,6 +4928,11 @@ class MotionConnector(QObject):
         self.captureLog.emit(
             "Laser safety system tripped. Scan will be cancelled in 5 seconds."
         )
+        self._note_scan_abort(
+            "E-202",
+            f"laser safety system tripped mid-scan "
+            f"(scan elapsed {self._scan_elapsed_str()})",
+        )
         self._raise_critical("E-202")
         QTimer.singleShot(5000, self.stopCapture)
 
@@ -4871,6 +4950,7 @@ class MotionConnector(QObject):
             return  # already torn down (e.g. user cancelled first)
         logger.warning("scan worker aborted mid-capture: %s", detail)
         self.captureLog.emit(f"Scan aborted: {detail}")
+        self._note_scan_abort("E-301", detail)
         self._raise_critical("E-301", detail=detail)
         # Tear down: stop the dropout watchdog and cancel the (dead) scan, then
         # clear running state and unblock QML, mirroring the completion path.
@@ -4878,6 +4958,22 @@ class MotionConnector(QObject):
         self._capture_running = False
         self._safety_cancel_scheduled = False
         self._set_current_scan_source(None)
+        # The pipeline never completed, so _on_pipeline_complete — which
+        # records scan_ended for every other ending — will not run for this
+        # scan: record the abort here or the audit trail carries a
+        # scan_started with no end (issue #535). No double-log risk: when the
+        # runner does reach the completion sink (mid-scan exception, or the
+        # critical-sink rollback) it does so synchronously on the worker
+        # BEFORE on_error fires, and that handler clears _capture_running,
+        # which the guard at the top of this slot honours.
+        try:
+            _dur = (time.time() - self._capture_start_time
+                    if self._capture_start_time else None)
+        except Exception:
+            _dur = None
+        self._log_scan_ended_audit(
+            self._capture_subject_id, "", _dur, None, True,
+        )
         self.captureFinished.emit(False, detail, "", "")
 
     @pyqtSlot(result=QVariant)
@@ -5633,6 +5729,52 @@ class MotionConnector(QObject):
         for tag in tags:
             self.notificationDismissByTagRequested.emit(tag)
 
+    def _note_scan_abort(self, code: str, detail: str = "") -> None:
+        """Record that a fault is ending the current scan (issue #535).
+
+        Called from every scan-ending fault path — E-303 stall, E-304
+        device disconnect, E-202 safety trip, E-301 worker death — right
+        before the critical modal is raised and the scan is cancelled, so
+        the scan_ended audit event can name the cause instead of reporting
+        the cancel it triggers as an operator stop. First fault wins: a
+        disconnect that also trips the stall watchdog keeps its own code.
+        """
+        if self._scan_abort_code:
+            logger.info(
+                "Scan abort %s (%s) after %s already recorded — keeping "
+                "the first", code, detail, self._scan_abort_code,
+            )
+            return
+        self._scan_abort_code = code
+        self._scan_abort_reason = detail or ""
+
+    def _log_scan_ended_audit(
+        self,
+        subject_id: str,
+        session_label: str,
+        duration_s: Optional[float],
+        outcome: Optional[ScanOutcome],
+        canceled: bool,
+    ) -> None:
+        """Append the ``scan_ended`` audit event (issue #535). Never raises —
+        the audit log is fail-soft and so is this."""
+        try:
+            details: Dict[str, Any] = {
+                "label": subject_id,
+                "session_label": session_label or None,
+                "duration_s": (round(duration_s, 1)
+                               if duration_s is not None else None),
+            }
+            details.update(audit_scan_ended_details(
+                outcome=outcome,
+                canceled=canceled,
+                abort_code=self._scan_abort_code,
+                abort_reason=self._scan_abort_reason,
+            ))
+            self._audit.log("scan_ended", details)
+        except Exception:
+            logger.warning("scan_ended audit log failed", exc_info=True)
+
     def _abort_scan_data_stall(self, stalled_s: float) -> None:
         """Abort the running scan because data acquisition has completely
         stopped (issue #248). Runs on the main thread from the 1 Hz
@@ -5655,13 +5797,12 @@ class MotionConnector(QObject):
         )
         logger.error(msg)
         self.captureLog.emit(msg)
-        self._raise_critical(
-            "E-303",
-            detail=(
-                f"no camera frames for {stalled_s:.0f} s "
-                f"(scan elapsed {elapsed_str})"
-            ),
+        detail = (
+            f"no camera frames for {stalled_s:.0f} s "
+            f"(scan elapsed {elapsed_str})"
         )
+        self._note_scan_abort("E-303", detail)
+        self._raise_critical("E-303", detail=detail)
         self.stopCapture()
 
     def _abort_scan_device_disconnect(self, name: str) -> None:
@@ -5690,10 +5831,9 @@ class MotionConnector(QObject):
         )
         logger.error(msg)
         self.captureLog.emit(msg)
-        self._raise_critical(
-            "E-304",
-            detail=f"{name} disconnected mid-scan (scan elapsed {elapsed_str})",
-        )
+        detail = f"{name} disconnected mid-scan (scan elapsed {elapsed_str})"
+        self._note_scan_abort("E-304", detail)
+        self._raise_critical("E-304", detail=detail)
         self.stopCapture()
 
     def _surface_device_loss(self, name: str, first_loss: bool,
