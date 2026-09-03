@@ -159,9 +159,14 @@ class _FakeConnector:
     # Real per-camera toast-dismissal helper (issue #489) — funnels into the
     # dismissNotification recorder below.
     _dismiss_dropout_toasts = MotionConnector._dismiss_dropout_toasts
+    # Real termination-cause recorder (issue #535) — the abort must land
+    # its E-code on the connector for the scan_ended audit event.
+    _note_scan_abort = MotionConnector._note_scan_abort
 
     def __init__(self):
         self._scan_abort_notified = False
+        self._scan_abort_code = None
+        self._scan_abort_reason = ""
         self._camera_dropped = {("left", 3)}
         self.captureLog = _Signal()
         self.criticals = []
@@ -195,6 +200,9 @@ def test_abort_raises_e304_and_stops_capture():
     assert len(fake.criticals) == 1
     code, detail = fake.criticals[0]
     assert code == "E-304"
+    # Audit termination cause recorded before the modal (#535).
+    assert fake._scan_abort_code == "E-304"
+    assert fake._scan_abort_reason == "right disconnected mid-scan (scan elapsed 00:02:05)"
     assert "right" in detail
     assert "00:02:05" in detail
     # Capture-log line names the disconnected device and the elapsed stamp.

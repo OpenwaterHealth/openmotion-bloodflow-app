@@ -312,3 +312,104 @@ def test_prepare_debug_bundle_failure_returns_empty(tmp_path, monkeypatch):
     monkeypatch.setattr(debug_bundle, "build_debug_bundle", boom)
     assert c._prepare_debug_bundle_sync() == ""
     assert "debug_bundle_created" not in _types(c)
+
+
+# ── scan_ended termination cause (#535) ─────────────────────────────────
+
+def _scan_ended(c):
+    ev = [e for e in c.auditLogEntries() if e["event_type"] == "scan_ended"]
+    return [json.loads(e["details"]) for e in ev]
+
+
+def _arm_running_scan(c, subject="owTEST"):
+    import time
+    c._capture_running = True
+    c._capture_start_time = time.time()
+    c._capture_subject_id = subject
+    c._capture_active_sides = {"console", "left", "right"}
+
+
+def test_data_stall_abort_records_e303(tmp_path):
+    from motion_connector import ScanOutcome
+    c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
+    _arm_running_scan(c)
+    c._abort_scan_data_stall(4.0)
+    assert c._scan_abort_code == "E-303"
+    assert "no camera frames for 4 s" in c._scan_abort_reason
+    # The completion handler then sees canceled=True (stopCapture set the
+    # stop event) and a clean data verdict — exactly the bench case that
+    # used to log outcome "ok".
+    assert c._capture_stop.is_set()
+    c._log_scan_ended_audit("owTEST", "20260901_224549_owTEST", 51.2,
+                            ScanOutcome("ok", "", ""), True)
+    (d,) = _scan_ended(c)
+    assert d["outcome"] == "aborted"
+    assert d["error_code"] == "E-303"
+    assert "no camera frames for 4 s" in d["reason"]
+    assert d["data"] == "ok"
+    assert d["session_label"] == "20260901_224549_owTEST"
+    assert d["duration_s"] == 51.2
+
+
+def test_device_disconnect_abort_records_e304(tmp_path):
+    from motion_connector import ScanOutcome
+    c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
+    _arm_running_scan(c)
+    c._abort_scan_device_disconnect("left")
+    assert c._scan_abort_code == "E-304"
+    assert c._scan_abort_reason.startswith("left disconnected mid-scan")
+    c._log_scan_ended_audit("owTEST", "20260903_172338_owTEST", 3.0,
+                            ScanOutcome("skipped", "", ""), True)
+    (d,) = _scan_ended(c)
+    assert d["outcome"] == "aborted"
+    assert d["error_code"] == "E-304"
+    assert d["data"] == "skipped"
+
+
+def test_first_abort_code_wins(tmp_path):
+    c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
+    _arm_running_scan(c)
+    c._note_scan_abort("E-304", "left disconnected mid-scan")
+    c._note_scan_abort("E-303", "no camera frames for 3 s")
+    assert c._scan_abort_code == "E-304"
+    assert c._scan_abort_reason == "left disconnected mid-scan"
+
+
+def test_operator_stop_is_stopped_not_aborted(tmp_path):
+    from motion_connector import ScanOutcome
+    c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
+    _arm_running_scan(c)
+    c.stopCapture()
+    c._log_scan_ended_audit("owTEST", "20260903_172313_owTEST", 7.2,
+                            ScanOutcome("skipped", "", ""), True)
+    (d,) = _scan_ended(c)
+    assert d["outcome"] == "stopped"
+    assert d["error_code"] is None
+    assert d["reason"] is None
+    assert d["data"] == "skipped"
+
+
+def test_scan_worker_failure_logs_scan_ended_e301(tmp_path):
+    # E-301 never reaches the pipeline completion handler, so this slot must
+    # write the scan_ended row itself — previously the audit trail had a
+    # scan_started with no end for these scans.
+    c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
+    _arm_running_scan(c, subject="owDEAD")
+    c._on_scan_worker_failed("ScanDBSink failed to initialize: disk full")
+    assert c._capture_running is False
+    (d,) = _scan_ended(c)
+    assert d["label"] == "owDEAD"
+    assert d["outcome"] == "aborted"
+    assert d["error_code"] == "E-301"
+    assert "disk full" in d["reason"]
+    assert d["session_label"] is None
+    assert d["data"] is None
+
+
+def test_scan_worker_failure_after_teardown_does_not_double_log(tmp_path):
+    # Completion handler already ran (cleared _capture_running) → the
+    # worker-failed slot must be a no-op, not a second scan_ended row.
+    c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
+    c._capture_running = False
+    c._on_scan_worker_failed("late error")
+    assert _scan_ended(c) == []

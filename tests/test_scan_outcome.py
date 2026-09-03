@@ -111,3 +111,91 @@ def test_sink_resets_on_scan_start():
     sink.on_scan_start(meta=None)
     assert sink.final_frames == 0
     assert sink.terminal_dark_missing is False
+
+
+# ── scan_ended audit termination record (issue #535) ─────────────────────
+# The audit event must name WHY a scan ended, independent of the data
+# verdict above: every app-side abort cancels the SDK scan, so `canceled`
+# alone cannot tell a fault from an operator Stop.
+
+from motion_connector import audit_scan_ended_details  # noqa: E402
+
+_AUDIT_KEYS = {"outcome", "data", "error_code", "reason"}
+
+
+def test_audit_e303_after_data_is_aborted_not_ok():
+    # Bench case from #535: stall watchdog fired after the first interval
+    # closed → classifier says "ok"; the audit record must say aborted.
+    d = audit_scan_ended_details(
+        outcome=ScanOutcome("ok", "", ""), canceled=True,
+        abort_code="E-303", abort_reason="no camera frames for 4 s",
+    )
+    assert d["outcome"] == "aborted"
+    assert d["error_code"] == "E-303"
+    assert d["reason"] == "no camera frames for 4 s"
+    assert d["data"] == "ok"
+    assert set(d) == _AUDIT_KEYS
+
+
+def test_audit_e304_before_data_is_aborted_not_skipped():
+    d = audit_scan_ended_details(
+        outcome=ScanOutcome("skipped", "", ""), canceled=True,
+        abort_code="E-304", abort_reason="left disconnected mid-scan",
+    )
+    assert d["outcome"] == "aborted"
+    assert d["error_code"] == "E-304"
+    assert d["data"] == "skipped"
+
+
+def test_audit_operator_stop_before_data_is_stopped():
+    # Same classifier verdict as the E-304 case above, no fault → the two
+    # are now distinguishable in the audit trail.
+    d = audit_scan_ended_details(
+        outcome=ScanOutcome("skipped", "", ""), canceled=True,
+        abort_code=None,
+    )
+    assert d["outcome"] == "stopped"
+    assert d["error_code"] is None
+    assert d["reason"] is None
+    assert d["data"] == "skipped"
+
+
+def test_audit_clean_completion_is_ok():
+    d = audit_scan_ended_details(
+        outcome=ScanOutcome("ok", "", ""), canceled=False, abort_code=None,
+    )
+    assert d == {"outcome": "ok", "data": "ok",
+                 "error_code": None, "reason": None}
+
+
+def test_audit_classifier_flagged_interruption_without_code_is_aborted():
+    # SDK tore the scan down before any app-side abort path claimed it:
+    # classify_scan_outcome flags the unexpected end → aborted, no code,
+    # the classifier's message as the reason.
+    out = classify_scan_outcome(
+        final_frames=0, terminal_dark_missing=False,
+        canceled=False, disable_laser=False,
+    )
+    d = audit_scan_ended_details(outcome=out, canceled=False, abort_code=None)
+    assert d["outcome"] == "aborted"
+    assert d["error_code"] is None
+    assert d["reason"] == out.message
+    assert d["data"] == "empty"
+
+
+def test_audit_classification_failure_still_records_termination():
+    d = audit_scan_ended_details(outcome=None, canceled=True, abort_code=None)
+    assert d["outcome"] == "stopped"
+    assert d["data"] is None
+    d = audit_scan_ended_details(outcome=None, canceled=True,
+                                 abort_code="E-202", abort_reason="trip")
+    assert d["outcome"] == "aborted"
+    assert d["error_code"] == "E-202"
+
+
+def test_audit_empty_abort_reason_is_null():
+    d = audit_scan_ended_details(
+        outcome=ScanOutcome("ok", "", ""), canceled=True,
+        abort_code="E-303", abort_reason="",
+    )
+    assert d["reason"] is None
