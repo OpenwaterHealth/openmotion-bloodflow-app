@@ -312,10 +312,12 @@ def click_sidebar(rx: float, ry: float, label: str = "") -> None:
 # script never writes either file: put the desired mode in the overrides
 # file before starting the run.
 def _writable_root() -> Path:
-    """The app's writable data root (config overrides, logs, scan data)."""
-    env = os.environ.get("OPENWATER_DATA_ROOT")
-    if env:
-        return Path(env)
+    """The app's writable data root (config overrides, logs, scan data).
+
+    Mirrors utils/app_paths.writable_root for an installed build. The app
+    reads no env vars (the old OPENWATER_DATA_ROOT override is gone), so
+    this must not honour one either.
+    """
     return Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "Openwater"
 
 
@@ -350,7 +352,7 @@ def find_app_log() -> Path | None:
     """Locate the log written by the app instance under test.
 
     An installed build writes ``<writable-root>/logs/open-motion-*.log``
-    (%PROGRAMDATA%\\Openwater, or $OPENWATER_DATA_ROOT). A **portable** build
+    (%PROGRAMDATA%\\Openwater). A **portable** build
     writes next to its own exe instead — e.g.
     ``Documents/OpenMotion/Open-Motion-1.5.0-dev.5/Open-Motion/logs/`` — which
     is several levels below any root below, so the old one-level

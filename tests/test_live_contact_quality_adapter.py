@@ -43,7 +43,7 @@ def test_cq_live_debounce_keys_are_shipped_and_whitelisted(tmp_path, monkeypatch
         return real_resource_path(*parts)
 
     monkeypatch.setattr(config_store, "resource_path", fake_resource_path)
-    monkeypatch.setenv("OPENWATER_DATA_ROOT", str(tmp_path))
+    monkeypatch.setattr(config_store.app_paths, "DATA_ROOT_OVERRIDE", tmp_path)
 
     loaded = app_main._load_app_config()
     assert loaded["cq_live_activate_frames"] == 10

@@ -1,14 +1,33 @@
 import json
 import pytest
-from utils import config_store
+from utils import app_paths, config_store
 
 
 DEFAULTS = {"engineeringMode": False, "clinicalMode": False, "leftMask": 0x66, "bfiMax": 10.0}
 
 
+def _root(monkeypatch, tmp_path):
+    """Route the writable-overrides layer at tmp_path (the app reads no env
+    vars, so the in-process override is the one hook)."""
+    monkeypatch.setattr(app_paths, "DATA_ROOT_OVERRIDE", tmp_path)
+
+
+def _shipped(monkeypatch, path):
+    """Point the shipped-config layer at ``path`` instead of the repo's
+    config/app_config.json."""
+    real = config_store.resource_path
+
+    def fake(*parts):
+        if parts == ("config", "app_config.json"):
+            return path
+        return real(*parts)
+
+    monkeypatch.setattr(config_store, "resource_path", fake)
+
+
 @pytest.mark.unit
 def test_load_merges_overrides_over_baseline(tmp_path, monkeypatch):
-    monkeypatch.setenv("OPENWATER_DATA_ROOT", str(tmp_path))
+    _root(monkeypatch, tmp_path)
     (tmp_path / "app_config.local.json").write_text(
         json.dumps({"engineeringMode": True}), encoding="utf-8"
     )
@@ -20,7 +39,7 @@ def test_load_merges_overrides_over_baseline(tmp_path, monkeypatch):
 
 @pytest.mark.unit
 def test_save_writes_only_diff_against_baseline(tmp_path, monkeypatch):
-    monkeypatch.setenv("OPENWATER_DATA_ROOT", str(tmp_path))
+    _root(monkeypatch, tmp_path)
     baseline = dict(DEFAULTS)
     current = {**DEFAULTS, "engineeringMode": True}
     config_store.save_overrides(current, baseline)
@@ -30,25 +49,26 @@ def test_save_writes_only_diff_against_baseline(tmp_path, monkeypatch):
 
 @pytest.mark.unit
 def test_load_with_no_override_file_returns_baseline(tmp_path, monkeypatch):
-    monkeypatch.setenv("OPENWATER_DATA_ROOT", str(tmp_path))
+    _root(monkeypatch, tmp_path)
     baseline, merged = config_store.load_app_config(DEFAULTS)
     assert merged == baseline
 
 
 # ── Issue #233: clinicalMode is build-time only ──────────────────────────
 # The Clinical/Research split is decided per artifact by the build system
-# (scripts/build_common.ps1) or the OPENMOTION_CLINICAL env override —
-# never by the user at runtime. A stray clinicalMode in the writable
-# overrides file (e.g. left behind by a pre-1.5 build) must not flip a
-# Research install into Clinical, and runtime saves must never persist it.
+# (scripts/build_common.ps1) or, for a source run, the --clinical/--research
+# launch flags — never by the user at runtime, and never by an env var. A
+# stray clinicalMode in the writable overrides file (e.g. left behind by a
+# pre-1.5 build) must not flip a Research install into Clinical, and runtime
+# saves must never persist it.
 
 @pytest.mark.unit
 def test_stray_clinical_override_is_ignored_on_load(tmp_path, monkeypatch):
-    monkeypatch.setenv("OPENWATER_DATA_ROOT", str(tmp_path))
+    _root(monkeypatch, tmp_path)
     # Point the shipped-config layer at an empty file so the repo's real
     # config/app_config.json (clinicalMode: true) can't mask the override.
     (tmp_path / "app_config.json").write_text("{}", encoding="utf-8")
-    monkeypatch.setenv("OPENWATER_CONFIG_DIR", str(tmp_path))
+    _shipped(monkeypatch, tmp_path / "app_config.json")
     (tmp_path / "app_config.local.json").write_text(
         json.dumps({"clinicalMode": True, "bfiMax": 5.0}), encoding="utf-8"
     )
@@ -59,9 +79,9 @@ def test_stray_clinical_override_is_ignored_on_load(tmp_path, monkeypatch):
 
 @pytest.mark.unit
 def test_save_never_persists_clinical_mode(tmp_path, monkeypatch):
-    monkeypatch.setenv("OPENWATER_DATA_ROOT", str(tmp_path))
+    _root(monkeypatch, tmp_path)
     baseline = dict(DEFAULTS)
-    # e.g. OPENMOTION_CLINICAL=1 flipped only the merged copy upstream, or
+    # e.g. the --clinical dev flag flipped only the merged copy upstream, or
     # a legacy override leaked into the running config: either way the
     # diff-vs-baseline save must not write it back to disk.
     current = {**DEFAULTS, "clinicalMode": True, "engineeringMode": True}
@@ -75,7 +95,7 @@ def test_save_never_persists_clinical_mode(tmp_path, monkeypatch):
 def test_portable_mode_is_build_time_only_too(tmp_path, monkeypatch):
     """portableMode's docstring already declares it a build-time flag —
     enforce the same no-runtime-override rule as clinicalMode."""
-    monkeypatch.setenv("OPENWATER_DATA_ROOT", str(tmp_path))
+    _root(monkeypatch, tmp_path)
     defaults = {**DEFAULTS, "portableMode": False}
     (tmp_path / "app_config.local.json").write_text(
         json.dumps({"portableMode": True}), encoding="utf-8"
@@ -95,7 +115,7 @@ def test_save_survives_unserializable_value(tmp_path, monkeypatch):
     QJSValue through the QML bridge) must lose the write, not the app —
     save_overrides logs and returns, keeps the prior overrides intact, and
     leaves no truncated .tmp behind."""
-    monkeypatch.setenv("OPENWATER_DATA_ROOT", str(tmp_path))
+    _root(monkeypatch, tmp_path)
     existing = tmp_path / "app_config.local.json"
     existing.write_text(json.dumps({"engineeringMode": True}), encoding="utf-8")
 
@@ -105,3 +125,20 @@ def test_save_survives_unserializable_value(tmp_path, monkeypatch):
     assert json.loads(existing.read_text(encoding="utf-8")) == {
         "engineeringMode": True}
     assert not (tmp_path / "app_config.local.json.tmp").exists()
+
+
+@pytest.mark.unit
+def test_config_dir_env_var_is_ignored(tmp_path, monkeypatch):
+    """The retired OPENWATER_CONFIG_DIR override must not redirect the shipped
+    config layer: a bundled resource resolves to the same place on every
+    machine regardless of the host environment."""
+    _root(monkeypatch, tmp_path)
+    (tmp_path / "app_config.json").write_text(
+        json.dumps({"bfiMax": 99.0}), encoding="utf-8"
+    )
+    monkeypatch.setenv("OPENWATER_CONFIG_DIR", str(tmp_path))
+    from utils.resource_path import resource_path
+
+    assert resource_path("config", "app_config.json") != tmp_path / "app_config.json"
+    _baseline, merged = config_store.load_app_config(DEFAULTS)
+    assert merged["bfiMax"] != 99.0

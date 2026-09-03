@@ -66,6 +66,15 @@ QtObject {
     readonly property color bgCardAlt:    glass ? (dark ? Qt.rgba(1,1,1,0.045): Qt.rgba(1,1,1,0.40))
                                                  : (dark ? "#232329" : "#F1EEE5")
 
+    // ── standalone-window surfaces ────────────────────────────────
+    // Secondary top-level Windows (LogViewerWindow, TestResultsWindow)
+    // render outside the main window, so no AmbientBackground sits
+    // behind them — the glass "transparent" branch of bgBase/bgPlot
+    // would show the bare desktop straight through (#486). These are
+    // always the opaque solid-theme surfaces; glass changes nothing.
+    readonly property color windowBg:      dark ? "#1C1C1E" : "#F0EEE6"
+    readonly property color windowInsetBg: dark ? "#141417" : "#F5F3EB"
+
     // ── borders ───────────────────────────────────────────────────
     // In glass mode borders become bright hairlines — the light-catching
     // edge that sells the material. borderHover is the specular edge.

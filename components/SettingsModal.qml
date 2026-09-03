@@ -1088,6 +1088,38 @@ Item {
                                    + "Turn off before clinical scans.")
                     }
 
+                    // QA/bench stall repro (issue #525) — arms the firmware's
+                    // DEBUG_FLAG_HISTO_STALL (sensor-fw#75): sensors stop
+                    // sending histogram frames ~45 s into a scan while USB
+                    // stays alive, the deterministic #248/#174 repro.
+                    FieldRow {
+                        label: "Histogram stall test"
+                        PillSwitch {
+                            objectName: "histoStallTestSwitch"
+                            checked: MotionInterface.appConfig.debugHistoStallTest === true
+                            onToggled: MotionInterface.setSensorDebugFlag("debugHistoStallTest", checked)
+                        }
+                        Text {
+                            text: MotionInterface.appConfig.debugHistoStallTest === true ? "On" : "Off"
+                            color: MotionInterface.appConfig.debugHistoStallTest === true ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    Text {
+                        objectName: "histoStallTestWarning"
+                        visible: MotionInterface.appConfig.debugHistoStallTest === true
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 4
+                        Layout.bottomMargin: 6
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: 11
+                        color: AppTheme.accentYellow
+                        text: qsTr("Every scan will lose all camera data ~45 s in "
+                                   + "(deterministic stall repro). Turn off after testing.")
+                    }
+
                     // Console USB-printf debug log — persisted to config AND
                     // pushed live to a connected console via
                     // setConsoleDebugLogging. Re-applied on connect (RAM-only
@@ -1826,6 +1858,87 @@ Item {
                         connected: MotionInterface.rightSensorConnected
                         current: MotionInterface.rightSensorFirmwareVersion
                         updateAvailable: MotionInterface.rightSensorFirmwareUpdateAvailable
+                    }
+
+                    // Hardware identity (#529): the programmed serial number
+                    // of each connected device (console + sensor modules),
+                    // cached by the connector on connect (_log_device_stats)
+                    // and cleared on disconnect. Per-camera UIDs are
+                    // deliberately NOT shown — they stay in the app log.
+                    Rectangle { Layout.fillWidth: true; height: 1; color: root.colBorderSoft }
+
+                    // Serials are for support tickets, so every value is
+                    // copy-pasteable two ways: the text itself is a selectable
+                    // read-only TextEdit, and a ghost "Copy" chip pushes the
+                    // value (never a placeholder) to the clipboard through the
+                    // same copyToClipboard + toast path the Critical Error
+                    // modal uses.
+                    component CopyChip: Rectangle {
+                        id: copyChip
+                        property string copyText: ""
+                        property string what: "Serial"
+                        visible: copyText.length > 0
+                        width: copyChipText.implicitWidth + 16; height: 22; radius: 4
+                        color: copyChipArea.containsMouse ? root.colBgInput : "transparent"
+                        border.width: 1
+                        border.color: root.colBorderSoft
+                        function copy() {
+                            MotionInterface.copyToClipboard(copyText)
+                            MotionInterface.notify(
+                                what + " copied to clipboard.",
+                                "success", 2500, true, "about-copy")
+                        }
+                        Text {
+                            id: copyChipText
+                            anchors.centerIn: parent
+                            text: "Copy"
+                            color: root.colTextSec
+                            font.pixelSize: 11
+                        }
+                        MouseArea {
+                            id: copyChipArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: copyChip.copy()
+                        }
+                    }
+
+                    component SerialRow: FieldRow {
+                        property bool connected: false
+                        property string serial: ""
+                        TextEdit {
+                            readOnly: true
+                            selectByMouse: true
+                            activeFocusOnTab: false
+                            text: connected ? (serial || "Not programmed") : "Not connected"
+                            color: (connected && serial) ? root.colTextPri : root.colTextMuted
+                            selectionColor: root.colAccent
+                            selectedTextColor: "#FFFFFF"
+                            font.pixelSize: 13
+                            font.family: "Consolas"
+                        }
+                        CopyChip {
+                            what: label
+                            copyText: connected ? serial : ""
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    SerialRow {
+                        label: "Console SN"
+                        connected: MotionInterface.consoleConnected
+                        serial: MotionInterface.consoleSerialNumber
+                    }
+                    SerialRow {
+                        label: "Left Sensor SN"
+                        connected: MotionInterface.leftSensorConnected
+                        serial: MotionInterface.leftSensorSerialNumber
+                    }
+                    SerialRow {
+                        label: "Right Sensor SN"
+                        connected: MotionInterface.rightSensorConnected
+                        serial: MotionInterface.rightSensorSerialNumber
                     }
 
                     // Live flashing progress, driven by the connector. Shows a

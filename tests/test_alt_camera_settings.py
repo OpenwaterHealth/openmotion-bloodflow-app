@@ -10,6 +10,7 @@ defaults on the next scan start (the persisted dirty flag).
 """
 
 import json
+import threading
 
 from unittest.mock import MagicMock
 
@@ -441,6 +442,101 @@ class TestConnectorTaPulseWidth:
         })
         c._apply_alt_ta_pulse_width()
         write.assert_not_called()
+
+
+# ── Preflight signal-quality check applies the same settings (#510) ──────────
+
+class TestPreflightAppliesAltSettings:
+    """The alt camera + laser registers are synced in ONE place
+    (_sync_alt_scan_settings), called by startCapture AND by the preflight
+    runContactQualityCheck. #510: the preflight used to run at whatever the
+    hardware held — after an app restart that's the connect-time ~500 µs
+    laser baseline, so a 20 µs alt pulse passed preflight and then failed
+    live CQ the moment the scan applied it."""
+
+    def _cq_setup(self, tmp_path, app_config):
+        c = _connector(tmp_path, app_config)
+        write = MagicMock(return_value=True)
+        c._interface.console.write_i2c_packet = write
+        check_seen = {}
+        check_done = threading.Event()
+
+        def _fake_check(**kwargs):
+            # Snapshot hardware state at the moment the check scan starts —
+            # the alt registers must already be in place by now.
+            check_seen["camera_writes"] = len(c._interface.left.calls)
+            check_seen["console_writes"] = write.call_count
+            check_seen["masks"] = (
+                kwargs["left_camera_mask"], kwargs["right_camera_mask"])
+            check_done.set()
+            return MagicMock()
+
+        c._interface.contact_quality_workflow.check.side_effect = _fake_check
+        return c, write, check_seen, check_done
+
+    def test_alt_registers_written_before_the_check_scan(self, tmp_path):
+        c, write, seen, done = self._cq_setup(tmp_path, {
+            "altCameraSettingsEnabled": True,
+            "altCameraExposureUs": 999,
+            "altCameraGains": [8] * 8,
+            "altLaserPulseWidthEnabled": True,
+            "altLaserPulseWidthUsec": 800,
+        })
+        c.runContactQualityCheck(0x01, 0x01)
+        assert done.wait(5.0), "CQ worker never ran the check scan"
+        # Camera + laser registers all landed before the check scan started.
+        assert seen["camera_writes"] > 0
+        assert seen["console_writes"] == 3  # EE + OPT ceilings, then TA
+        assert seen["masks"] == (0x01, 0x01)
+        # #483 ordering holds on the preflight path too: both safety
+        # ceilings (ch 6/7) are raised before the TA width (ch 4).
+        channels = [k.kwargs["channel"] for k in write.call_args_list]
+        assert channels[:2] in ([6, 7], [7, 6])
+        assert channels[2] == 4
+        assert c._app_config["altCameraSettingsDirty"] is True
+        assert c._app_config["altLaserPulseWidthDirty"] is True
+
+    def test_preflight_restores_after_toggle_off(self, tmp_path):
+        # First preflight after disabling: the restore runs here, so the
+        # check already evaluates at the restored baseline.
+        c, write, seen, done = self._cq_setup(tmp_path, {
+            "altCameraSettingsEnabled": False,
+            "altCameraSettingsDirty": True,
+            "altLaserPulseWidthEnabled": False,
+            "altLaserPulseWidthDirty": True,
+            "altLaserSafetyCeilingDirty": True,
+        })
+        c.runContactQualityCheck(0x01, 0x00)
+        assert done.wait(5.0), "CQ worker never ran the check scan"
+        # Camera fw defaults + TA baseline + both ceilings, all pre-check.
+        assert seen["camera_writes"] > 0
+        assert seen["console_writes"] == 3
+        ta_writes = [k for k in write.call_args_list
+                     if k.kwargs["channel"] == 4]
+        assert ta_writes[0].kwargs["data"] == bytearray([27, 6, 0])
+        assert c._app_config["altCameraSettingsDirty"] is False
+        assert c._app_config["altLaserPulseWidthDirty"] is False
+        assert c._app_config["altLaserSafetyCeilingDirty"] is False
+
+    def test_preflight_disabled_and_clean_touches_nothing(self, tmp_path):
+        c, write, seen, done = self._cq_setup(tmp_path, {})
+        c.runContactQualityCheck(0xFF, 0xFF)
+        assert done.wait(5.0), "CQ worker never ran the check scan"
+        assert seen["camera_writes"] == 0
+        assert seen["console_writes"] == 0
+
+    def test_shared_helper_is_the_single_sync_path(self, tmp_path):
+        # startCapture and runContactQualityCheck both go through
+        # _sync_alt_scan_settings — camera writes first, then the laser
+        # register pair.
+        c = _connector(tmp_path, {})
+        order = []
+        c._apply_alt_camera_settings = (
+            lambda left, right: order.append(("camera", left, right)))
+        c._apply_alt_laser_pulse_width_registers = (
+            lambda: order.append(("laser",)))
+        c._sync_alt_scan_settings(0x0F, 0xF0)
+        assert order == [("camera", 0x0F, 0xF0), ("laser",)]
 
 
 # ── Dark-frame skip delay (pinned 1800 µs, every build — #449) ───────────────

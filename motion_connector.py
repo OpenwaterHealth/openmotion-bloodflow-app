@@ -12,7 +12,7 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtQml import QJSValue
 from pathlib import Path
-from typing import NamedTuple, Optional
+from typing import Any, Dict, NamedTuple, Optional
 import itertools
 import logging
 import math
@@ -837,6 +837,67 @@ def classify_scan_outcome(
     return ScanOutcome("ok", "", "")
 
 
+# ── scan_ended audit record (issue #535) ─────────────────────────────────
+# The audit trail must say *why* a scan ended, not just what data survived.
+# classify_scan_outcome is the data verdict for the end-of-scan toast; every
+# app-side abort (E-303 stall, E-304 disconnect, E-202 safety trip) unwinds
+# through stopCapture(), which sets the same stop event a user Stop sets, so
+# to the classifier a faulted scan looks like a benign cancel ("ok" when an
+# interval had already closed, "skipped" when none had). Termination cause is
+# recorded separately (MotionConnector._note_scan_abort) and merged here.
+SCAN_TERMINATION_OK = "ok"            # ran to its configured end
+SCAN_TERMINATION_STOPPED = "stopped"  # operator stop, no fault
+SCAN_TERMINATION_ABORTED = "aborted"  # a fault ended it (error_code/reason)
+
+
+def audit_scan_ended_details(
+    *,
+    outcome: Optional[ScanOutcome],
+    canceled: bool,
+    abort_code: Optional[str],
+    abort_reason: str = "",
+) -> Dict[str, Any]:
+    """Termination fields for the ``scan_ended`` audit event.
+
+    Returns ``outcome`` (``ok`` / ``stopped`` / ``aborted``), ``data`` (the
+    classify_scan_outcome kind: ``ok`` / ``partial`` / ``empty`` /
+    ``skipped``, or None when classification failed), and ``error_code`` /
+    ``reason`` — populated only for an abort, null otherwise, so the CSV
+    export keeps one stable column set.
+
+    - An app-side abort (``abort_code`` set) always wins: E-303 / E-304 /
+      E-202 / E-301 all cancel the SDK scan, so ``canceled`` is True for
+      them too and must not be read as an operator stop.
+    - No abort code but the classifier flagged an unexpected end (severity
+      set — an interrupted scan the SDK tore down before any app-side
+      handler claimed it) → ``aborted`` with the classifier's message as the
+      reason and no error code.
+    - Otherwise ``stopped`` when the stop event was set, else ``ok``.
+    """
+    data = outcome.kind if outcome is not None else None
+    if abort_code:
+        return {
+            "outcome": SCAN_TERMINATION_ABORTED,
+            "data": data,
+            "error_code": abort_code,
+            "reason": abort_reason or None,
+        }
+    if outcome is not None and outcome.severity:
+        return {
+            "outcome": SCAN_TERMINATION_ABORTED,
+            "data": data,
+            "error_code": None,
+            "reason": outcome.message or None,
+        }
+    return {
+        "outcome": (SCAN_TERMINATION_STOPPED if canceled
+                    else SCAN_TERMINATION_OK),
+        "data": data,
+        "error_code": None,
+        "reason": None,
+    }
+
+
 class _ScanOutcomeSink:
     """Pipeline sink that tallies the two signals classify_scan_outcome needs.
 
@@ -1044,6 +1105,10 @@ class MotionConnector(QObject):
     # Per-device firmware versions, refreshed on every (dis)connect by
     # _log_device_stats. Surfaced to Settings → System Information.
     firmwareVersionsChanged = pyqtSignal()
+    # Per-device programmed serial numbers, cached on connect and cleared
+    # on disconnect (#529). Notify for the *SerialNumber properties behind
+    # Settings → About.
+    deviceIdentityChanged = pyqtSignal()
     # Firmware autoupdate (engineeringMode only)
     firmwareUpdateInfoChanged = pyqtSignal()                # notify for the properties below
     firmwareUpdateAvailable = pyqtSignal(str, str, str)     # deviceKey, current, latest
@@ -1133,6 +1198,16 @@ class MotionConnector(QObject):
         # first wins so the two can't stack two modals. Cleared at the next
         # startCapture.
         self._scan_abort_notified = False
+        # Termination cause of the CURRENT scan for the audit trail (issue
+        # #535): the E-code + detail of the fault that ended it, or None when
+        # it ran to completion / the operator stopped it. Set by
+        # _note_scan_abort from every scan-ending fault path, cleared at
+        # startCapture, consumed by the scan_ended audit event.
+        self._scan_abort_code: Optional[str] = None
+        self._scan_abort_reason: str = ""
+        # Subject label of the CURRENT scan, for the E-301 scan_ended record
+        # (that path never reaches the completion closure that has it).
+        self._capture_subject_id: str = ""
         # Sides participating in the CURRENT scan — {"console"} plus any
         # sensor with a non-zero camera mask at scan start. Snapshotted in
         # startCapture; consulted by the disconnect handler so unplugging an
@@ -1228,6 +1303,16 @@ class MotionConnector(QObject):
         self._leftSensorConnected = left_sensor_connected
         self._rightSensorConnected = right_sensor_connected
         self._consoleConnected = console_connected
+        # Per-device "reached CONNECTED" latch backing the first-loss edge
+        # detection in _on_handle_state_changed_impl (issue #489). The
+        # _xxxConnected flags above can't serve: the console one is cleared
+        # on the intermediate DISCONNECTING event, before the DISCONNECTED
+        # event that does the surfacing arrives.
+        self._device_was_connected: dict[str, bool] = {
+            "console": bool(console_connected),
+            "left": bool(left_sensor_connected),
+            "right": bool(right_sensor_connected),
+        }
         self._config_running = False
         # Per-side count of connect-time sensor inits scheduled or running
         # (issue #303). Guarded by _sensor_init_lock: +1 on the GUI thread
@@ -1253,6 +1338,11 @@ class MotionConnector(QObject):
         # to QML as console/left/rightSensorFirmwareVersion for the Settings
         # → System Information card.
         self._firmware_versions: dict[str, str] = {
+            "console": "", "left": "", "right": "",
+        }
+        # Programmed serial numbers (console EEPROM / sensor flash),
+        # surfaced to Settings → About (#529). "" = unprogrammed / unknown.
+        self._device_serials: dict[str, str] = {
             "console": "", "left": "", "right": "",
         }
         # Firmware autoupdate state (engineeringMode only).
@@ -1359,11 +1449,6 @@ class MotionConnector(QObject):
         #    self._directory is resolved.
         from audit_log import gather_host_info
         try:
-            from version import get_version as _get_app_version
-            _app_version = _get_app_version()
-        except Exception:
-            _app_version = ""
-        try:
             _sdk_version = self._interface.get_sdk_version()
             _sdk_version = (
                 _sdk_version if isinstance(_sdk_version, str) else ""
@@ -1371,12 +1456,11 @@ class MotionConnector(QObject):
         except Exception:
             _sdk_version = ""
         self._audit.log("system_startup", {
-            "app_version": _app_version,
+            "app_version": self._app_version,
             "sdk_version": _sdk_version,
             "data_dir": self._directory,
         })
         self._audit.log("system_info", gather_host_info())
-        logger.info(f"[Connector] Directory initialized to: {self._directory}")
 
         self._user_label = self.generate_user_label()
         logger.info(f"[Connector] Generated user label: {self._user_label}")
@@ -1821,6 +1905,22 @@ class MotionConnector(QObject):
         """Right sensor firmware version; see consoleFirmwareVersion."""
         return self._firmware_versions["right"]
 
+    @pyqtProperty(str, notify=deviceIdentityChanged)
+    def consoleSerialNumber(self) -> str:
+        """Console EEPROM serial cached at connect time ("" when
+        unprogrammed / disconnected). Shown in Settings → About (#529)."""
+        return self._device_serials["console"]
+
+    @pyqtProperty(str, notify=deviceIdentityChanged)
+    def leftSensorSerialNumber(self) -> str:
+        """Left sensor module serial; see consoleSerialNumber."""
+        return self._device_serials["left"]
+
+    @pyqtProperty(str, notify=deviceIdentityChanged)
+    def rightSensorSerialNumber(self) -> str:
+        """Right sensor module serial; see consoleSerialNumber."""
+        return self._device_serials["right"]
+
     @pyqtProperty(bool, notify=firmwareUpdateInfoChanged)
     def anyFirmwareUpdateAvailable(self) -> bool:
         return any(self._firmware_update_available.values())
@@ -2213,6 +2313,13 @@ class MotionConnector(QObject):
 
         if is_now_connected:
             logger.info("Handle %s -> CONNECTED (%s)", name, reason)
+            # Re-arm the first-loss edge (issue #489) — the next drop is a
+            # real one worth surfacing again.
+            self._device_was_connected[name] = True
+            # A '<device> disconnected' card must not outlive the reconnect
+            # (issue #489): during a console power-cycle the cards kept
+            # saying 'disconnected' after the devices were already back.
+            self.dismissNotification(f"disconnect_{name}")
             self.signalConnected.emit(name, "")
             self._audit.log("device_connected",
                             {"device": name, "reason": str(reason)})
@@ -2230,6 +2337,9 @@ class MotionConnector(QObject):
             if name in self._firmware_versions and self._firmware_versions[name]:
                 self._firmware_versions[name] = ""
                 self.firmwareVersionsChanged.emit()
+            if self._device_serials.get(name):
+                self._device_serials[name] = ""
+                self.deviceIdentityChanged.emit()
             if self._firmware_update_available.get(name):
                 self._firmware_update_available[name] = False
                 self._firmware_latest[name] = ""
@@ -2252,14 +2362,13 @@ class MotionConnector(QObject):
                 self.configFinished.emit(
                     False, f"Device disconnected during sensor configuration ({name})"
                 )
-            # A device dropped off USB (issue #387). If it's a device taking
-            # part in a running scan, raise the E-304 critical modal and abort;
-            # otherwise (idle, or a non-participating device) show a low-key
-            # disconnect toast. The SDK's own mid-scan disconnect subscription
-            # is already tearing a running scan down; the E-304 modal is the
-            # operator-facing notice the app would otherwise omit (a real
-            # unplug rarely trips the E-303 stall watchdog).
-            self._surface_disconnect(name)
+            # User-facing surfacing, gated on the first loss since the
+            # device last reached CONNECTED (issue #489) — the SDK monitor
+            # keeps retrying an absent device, and each failed retry ends in
+            # another CONNECTING -> DISCONNECTED event.
+            first_loss = self._device_was_connected.get(name, False)
+            self._device_was_connected[name] = False
+            self._surface_device_loss(name, first_loss, reason)
         # CONNECTING / DISCONNECTING are intermediate; UI doesn't need to
         # fire a connect/disconnect signal for those, and emitting
         # connectionStatusChanged on every intermediate transition would
@@ -2288,8 +2397,10 @@ class MotionConnector(QObject):
         except Exception:
             logger.debug("device_stats: %s firmware-version lookup failed",
                          name, exc_info=True)
+        serial = self._refresh_device_identity(name)
         self._audit.log("device_stats", {
             "device": name, "hardware_id": hwid, "firmware_version": fw,
+            "serial": serial,
         })
         # Cache for the Settings → System Information card. Fired from the
         # SDK connection-monitor thread; the bound QML rows update via the
@@ -2298,6 +2409,26 @@ class MotionConnector(QObject):
             self._firmware_versions[name] = fw
             self.firmwareVersionsChanged.emit()
         self._maybe_check_firmware_update(name)
+
+    def _refresh_device_identity(self, name: str) -> str:
+        """Re-read a device's programmed serial number, cache it for
+        Settings → About (#529) and return it ("" when unprogrammed or
+        unknown). Best-effort like _log_device_stats — identity reads never
+        block a connect. Runs on the SDK monitor thread at connect; the
+        emit queues to the main thread for QML."""
+        handle = getattr(self._interface, name, None)
+        serial = ""
+        try:
+            if handle is not None and hasattr(handle, "read_serial_number"):
+                raw = handle.read_serial_number()
+                serial = raw.strip() if isinstance(raw, str) else ""
+        except Exception:
+            logger.debug("device_identity: %s serial lookup failed",
+                         name, exc_info=True)
+        if name in self._device_serials:
+            self._device_serials[name] = serial
+            self.deviceIdentityChanged.emit()
+        return serial
 
     @staticmethod
     def _kind_for_device(name: str) -> FirmwareKind:
@@ -2791,12 +2922,20 @@ class MotionConnector(QObject):
         }
 
     @staticmethod
-    def _friendly_ts(ts: str) -> str:
-        """'YYYYMMDD_HHMMSS' -> 'YYYY-MM-DD HH:MM:SS'; pass through."""
+    def _friendly_ts(ts: str, tz=None) -> str:
+        """Convert a UTC scan timestamp to local time for display."""
         if not ts or len(ts) != 15:
             return ts or "-"
-        return (f"{ts[0:4]}-{ts[4:6]}-{ts[6:8]} "
-                f"{ts[9:11]}:{ts[11:13]}:{ts[13:15]}")
+
+        try:
+            utc_dt = datetime.datetime.strptime(
+                ts, "%Y%m%d_%H%M%S"
+            ).replace(tzinfo=datetime.timezone.utc)
+        except ValueError:
+            return ts
+
+        local_dt = utc_dt.astimezone(tz)
+        return local_dt.strftime("%Y-%m-%d %H:%M:%S")
 
     def _session_to_row(self, s: dict) -> dict:
         """Flatten one ScanDatabase session dict into the QVariantMap the
@@ -3068,11 +3207,7 @@ class MotionConnector(QObject):
         unit tests call it synchronously."""
         try:
             from debug_bundle import build_debug_bundle, WINDOW_HOURS
-            try:
-                from version import get_version as _gv
-                app_version = _gv()
-            except Exception:
-                app_version = ""
+            app_version = self._app_version
             try:
                 sdk_version = self._interface.get_sdk_version()
                 sdk_version = (
@@ -3264,6 +3399,7 @@ class MotionConnector(QObject):
     _SENSOR_DEBUG_FLAG_ATTRS = {
         "histoCmp": "_histo_cmp",
         "sensorDebugLogging": "_sensor_debug_logging",
+        "debugHistoStallTest": "_histo_stall_test",
     }
 
     @pyqtSlot(str, bool)
@@ -3905,6 +4041,12 @@ class MotionConnector(QObject):
             logger.warning(f"notify: unknown type '{type_}', falling back to 'info'")
             type_ = "info"
         nid = next(self._notification_ids)
+        # Every toast the user sees leaves a log line — field debug bundles
+        # must let us reconstruct the notification stack (issue #489).
+        logger.info(
+            "Toast #%d [%s] tag=%r duration_ms=%d: %s",
+            nid, type_, tag, int(duration_ms), text,
+        )
         self.notificationRequested.emit({
             "id": nid,
             "tag": str(tag),
@@ -3928,13 +4070,16 @@ class MotionConnector(QObject):
             logger.warning("dismissNotification: bool is not a valid id/tag")
             return
         if isinstance(value, int):
+            logger.info("Toast dismiss requested: #%d", value)
             self.notificationDismissByIdRequested.emit(value)
         else:
+            logger.info("Toast dismiss requested: tag=%r", str(value))
             self.notificationDismissByTagRequested.emit(str(value))
 
     @pyqtSlot()
     def dismissAllNotifications(self):
         """Dismiss every active toast. Animated."""
+        logger.info("Toast dismiss-all requested")
         self.notificationDismissAllRequested.emit()
 
     def generate_user_label(self) -> str:
@@ -3944,12 +4089,13 @@ class MotionConnector(QObject):
     def _apply_alt_camera_settings(self, left_mask: int, right_mask: int):
         """Write the Engineering-mode alternative camera settings (#446).
 
-        Runs just before every scan start, after the scan flow's
-        configure/CQ/trigger-config steps — so the writes land on
-        configured, idle cameras and are re-asserted every scan (a camera
-        power-cycle between scans silently reverts registers to firmware
-        defaults; OW_CAMERA_SET_CONFIG skips already-configured cameras,
-        so nothing else rewrites them mid-session).
+        Runs just before every scan start and every preflight
+        signal-quality check (via _sync_alt_scan_settings, #510), after
+        the scan flow's configure/trigger-config steps — so the writes
+        land on configured, idle cameras and are re-asserted every run (a
+        camera power-cycle between scans silently reverts registers to
+        firmware defaults; OW_CAMERA_SET_CONFIG skips already-configured
+        cameras, so nothing else rewrites them mid-session).
 
         Camera registers persist until the camera loses power, so turning
         the toggle OFF must actively restore the firmware defaults: the
@@ -4091,9 +4237,10 @@ class MotionConnector(QObject):
         the value until console power-off or the next apply_laser_power
         (console connect re-applies laser_params.json), so disabling the
         toggle restores the laser_params baseline once via the persisted
-        ``altLaserPulseWidthDirty`` flag. Runs at scan start with the
-        trigger off. Fail-soft: a failed write logs and the scan
-        proceeds; a failed restore keeps the dirty flag for retry.
+        ``altLaserPulseWidthDirty`` flag. Runs before every scan start
+        and preflight signal-quality check (#510), with the trigger off.
+        Fail-soft: a failed write logs and the scan proceeds; a failed
+        restore keeps the dirty flag for retry.
         """
         enabled = self._app_config.get("altLaserPulseWidthEnabled") is True
         dirty = self._app_config.get("altLaserPulseWidthDirty") is True
@@ -4154,12 +4301,12 @@ class MotionConnector(QObject):
         console — so an alternative pulse width above that cannot be
         written safely without raising the ceiling first. While the
         toggle is on this writes ALT_PULSE_WIDTH_SAFETY_CEILING_US
-        (2200 µs, the dropdown max) to both registers at every scan
-        start; on the first scan after the toggle is turned off it
-        restores the unit's baseline once — the flash user-config value
-        when the console has one, else the laser_params.json stock —
-        via the persisted ``altLaserSafetyCeilingDirty`` flag. Runs at
-        scan start with the trigger off.
+        (2200 µs, the dropdown max) to both registers before every scan
+        start and preflight signal-quality check (#510); on the first
+        run after the toggle is turned off it restores the unit's
+        baseline once — the flash user-config value when the console has
+        one, else the laser_params.json stock — via the persisted
+        ``altLaserSafetyCeilingDirty`` flag. Runs with the trigger off.
 
         Returns False only when a write this scan needed actually failed
         (the caller then skips widening the TA pulse); gated no-ops
@@ -4237,7 +4384,8 @@ class MotionConnector(QObject):
         return not failures
 
     def _apply_alt_laser_pulse_width_registers(self):
-        """Scan-start orchestration for the alt-pulse-width register pair.
+        """Orchestration for the alt-pulse-width register pair, run before
+        every scan start and preflight signal-quality check (#510).
 
         Order matters because the safety FPGAs act on the actual pulse:
         raise the ceiling BEFORE widening the TA pulse, and narrow the
@@ -4258,6 +4406,40 @@ class MotionConnector(QObject):
         else:
             self._apply_alt_ta_pulse_width()
             self._apply_alt_safety_pulse_width_ul()
+
+    def _sync_alt_scan_settings(self, left_mask: int, right_mask: int):
+        """Bring the hardware in line with the Engineering-mode alternative
+        settings toggles — the ONE place those registers are written (#510).
+
+        "Sync", not "apply": each sub-step is apply-or-restore-or-no-op.
+        Toggle on → write the alternative values; toggle freshly off
+        (persisted dirty flag) → write the firmware/baseline values back
+        once; off and clean → no hardware I/O at all, three config reads
+        and out.
+
+        Called immediately before each capture start AND before each
+        preflight signal-quality check, so the preflight evaluates
+        contact under exactly the registers the scan it gates will run
+        with. Issue #510: the alt writes used to live only in
+        startCapture, so after an app restart (console connect restores
+        the ~500 µs laser_params baseline) a 20 µs alt pulse passed the
+        preflight at full baseline light, then failed live CQ the moment
+        the scan applied the ~3 µs optical pulse. The restore-on-disable
+        dirty paths ride along for the same reason: the first preflight
+        after a toggle is turned off already runs at the restored
+        baseline.
+        """
+        # #446: write exposure + per-camera analog gain via the SDK, every
+        # time — or restore firmware defaults on the first run after the
+        # toggle was turned off. No-op when disabled and clean.
+        self._apply_alt_camera_settings(left_mask, right_mask)
+
+        # #449: the TA driver FPGA times the optical pulse itself, so the
+        # alternative pulse width must be written to its pulse_width
+        # register — the setTrigger gate override alone is record-keeping.
+        # #483: bracketed by the safety FPGAs' PULSE_WIDTH_UL ceiling —
+        # raised before the pulse is widened, restored after it's narrowed.
+        self._apply_alt_laser_pulse_width_registers()
 
     # --- CONSOLE COMMUNICATION METHODS ---
     @pyqtSlot()
@@ -4403,6 +4585,9 @@ class MotionConnector(QObject):
         self._camera_last_temp = {}
         self._camera_dropped = set()
         self._scan_abort_notified = False
+        self._scan_abort_code = None
+        self._scan_abort_reason = ""
+        self._capture_subject_id = subject_id
         # Snapshot the devices participating in THIS scan for the mid-scan
         # disconnect abort (issue #387): the console always participates;
         # a sensor participates only when its gated camera mask is non-zero.
@@ -4524,20 +4709,20 @@ class MotionConnector(QObject):
             self._safety_cancel_scheduled = False
             self._capture_thread = None
             try:
-                _outcome_kind = outcome.kind
+                _outcome = outcome
             except Exception:
-                _outcome_kind = None
+                _outcome = None  # classification raised above
             try:
                 _dur = (time.time() - self._capture_start_time
                         if self._capture_start_time else None)
             except Exception:
                 _dur = None
-            self._audit.log("scan_ended", {
-                "label": subject_id,
-                "session_label": session_label or None,
-                "duration_s": round(_dur, 1) if _dur is not None else None,
-                "outcome": _outcome_kind,
-            })
+            # Termination cause + data verdict (issue #535): a fault-aborted
+            # scan is recorded as "aborted" with its error code, never as an
+            # operator stop.
+            self._log_scan_ended_audit(
+                subject_id, session_label, _dur, _outcome, canceled,
+            )
             self.captureFinished.emit(True, "", "", "")
             # Open the notes modal now, UNLESS a critical-error modal is on
             # screen (e.g. an E-304 device-disconnect abort raised it seconds
@@ -4613,18 +4798,9 @@ class MotionConnector(QObject):
         _cq_light_clear = _cq_int_or(
             "cq_live_clear_frames", _CQ_DEFAULT_LIVE_CLEAR_FRAMES)
 
-        # Engineering-mode alternative camera settings (#446): write exposure
-        # + per-camera analog gain via the SDK just before the scan starts,
-        # every time — or restore firmware defaults on the first scan after
-        # the toggle was turned off. No-op when disabled and clean.
-        self._apply_alt_camera_settings(left_camera_mask, right_camera_mask)
-
-        # #449: the TA driver FPGA times the optical pulse itself, so the
-        # alternative pulse width must be written to its pulse_width
-        # register — the setTrigger gate override alone is record-keeping.
-        # #483: bracketed by the safety FPGAs' PULSE_WIDTH_UL ceiling —
-        # raised before the pulse is widened, restored after it's narrowed.
-        self._apply_alt_laser_pulse_width_registers()
+        # Engineering-mode alternative camera + laser settings (#446/#449),
+        # shared with the preflight signal-quality check (#510).
+        self._sync_alt_scan_settings(left_camera_mask, right_camera_mask)
 
         req = ScanRequest(
             subject_id=subject_id,
@@ -4752,6 +4928,11 @@ class MotionConnector(QObject):
         self.captureLog.emit(
             "Laser safety system tripped. Scan will be cancelled in 5 seconds."
         )
+        self._note_scan_abort(
+            "E-202",
+            f"laser safety system tripped mid-scan "
+            f"(scan elapsed {self._scan_elapsed_str()})",
+        )
         self._raise_critical("E-202")
         QTimer.singleShot(5000, self.stopCapture)
 
@@ -4769,6 +4950,7 @@ class MotionConnector(QObject):
             return  # already torn down (e.g. user cancelled first)
         logger.warning("scan worker aborted mid-capture: %s", detail)
         self.captureLog.emit(f"Scan aborted: {detail}")
+        self._note_scan_abort("E-301", detail)
         self._raise_critical("E-301", detail=detail)
         # Tear down: stop the dropout watchdog and cancel the (dead) scan, then
         # clear running state and unblock QML, mirroring the completion path.
@@ -4776,6 +4958,22 @@ class MotionConnector(QObject):
         self._capture_running = False
         self._safety_cancel_scheduled = False
         self._set_current_scan_source(None)
+        # The pipeline never completed, so _on_pipeline_complete — which
+        # records scan_ended for every other ending — will not run for this
+        # scan: record the abort here or the audit trail carries a
+        # scan_started with no end (issue #535). No double-log risk: when the
+        # runner does reach the completion sink (mid-scan exception, or the
+        # critical-sink rollback) it does so synchronously on the worker
+        # BEFORE on_error fires, and that handler clears _capture_running,
+        # which the guard at the top of this slot honours.
+        try:
+            _dur = (time.time() - self._capture_start_time
+                    if self._capture_start_time else None)
+        except Exception:
+            _dur = None
+        self._log_scan_ended_audit(
+            self._capture_subject_id, "", _dur, None, True,
+        )
         self.captureFinished.emit(False, detail, "", "")
 
     @pyqtSlot(result=QVariant)
@@ -5236,6 +5434,13 @@ class MotionConnector(QObject):
         left_mask = int(left_camera_mask) if self._leftSensorConnected else 0x00
         right_mask = int(right_camera_mask) if self._rightSensorConnected else 0x00
 
+        # #510: the preflight must run under the same registers the scan it
+        # gates will use — apply (or restore) the Engineering-mode
+        # alternative camera + laser settings before the check scan, exactly
+        # as startCapture does. Synchronous on this thread, before the SDK
+        # worker spawns, mirroring the scan-start call.
+        self._sync_alt_scan_settings(left_mask, right_mask)
+
         self._cq_t0 = time.monotonic()
         logger.info(
             "=== Contact-quality check started: duration=%.1fs "
@@ -5430,6 +5635,14 @@ class MotionConnector(QObject):
         # X connection lost at HH:MM:SS' toast on every active cam.
         if self._trigger_state != "ON":
             return
+        # Once a scan-ending abort has fired (E-303 stall / E-304 device
+        # disconnect), the critical modal IS the notification — stop
+        # emitting per-camera 'connection lost' toasts for a scan that is
+        # already tearing down. Without this gate a system-wide unplug
+        # buries the device-level cards under up to 16 camera cards
+        # (issue #489).
+        if self._scan_abort_notified:
+            return
         now = time.monotonic()
         threshold = self._camera_dropout_threshold_sec
         for key, last_t in list(self._camera_last_seen.items()):
@@ -5477,15 +5690,90 @@ class MotionConnector(QObject):
         # is NOT fail-soft: if no camera has delivered a frame for
         # scanDataStallTimeoutSec the scan is dead air — abort it and
         # tell the user instead of counting down to a hollow "complete".
-        if not self._scan_abort_notified:
-            stalled_s = _scan_data_stall_decision(
-                now,
-                self._trigger_on_mono,
-                self._camera_last_seen,
-                self._scan_data_stall_timeout_sec,
+        # (An already-notified abort can't reach here — the issue-#489
+        # early return above bailed, and nothing in the per-camera loop
+        # sets the flag synchronously.)
+        stalled_s = _scan_data_stall_decision(
+            now,
+            self._trigger_on_mono,
+            self._camera_last_seen,
+            self._scan_data_stall_timeout_sec,
+        )
+        if stalled_s is not None:
+            self._abort_scan_data_stall(stalled_s)
+
+    def _dismiss_dropout_toasts(self, side: str | None = None) -> None:
+        """Dismiss per-camera 'connection lost' toasts (issue #489).
+
+        With ``side`` given, clears that sensor's 8 possible camera tags —
+        used on a sensor disconnect, where the device-level notification
+        subsumes its cameras' cards (including a card lingering from a scan
+        that already ended, and cards that fired in the window before the
+        USB drop was detected). With no ``side``, clears every camera the
+        current scan flagged dropped — used by the scan-abort paths, where
+        the E-303/E-304 modal is the notification. Dismissing a tag with no
+        matching toast is a no-op, so over-clearing is harmless.
+        """
+        if side is not None:
+            keys = [(side, cam_id) for cam_id in range(8)]
+        else:
+            keys = sorted(self._camera_dropped)
+        if not keys:
+            return
+        tags = [f"dropout_{s}_{cam_id}" for s, cam_id in keys]
+        # One summary line, emitting directly instead of routing through
+        # dismissNotification's per-call INFO — a system unplug would
+        # otherwise print 16 mostly-no-op dismiss lines.
+        logger.info("Dismissing per-camera dropout toasts: %s",
+                    ", ".join(tags))
+        for tag in tags:
+            self.notificationDismissByTagRequested.emit(tag)
+
+    def _note_scan_abort(self, code: str, detail: str = "") -> None:
+        """Record that a fault is ending the current scan (issue #535).
+
+        Called from every scan-ending fault path — E-303 stall, E-304
+        device disconnect, E-202 safety trip, E-301 worker death — right
+        before the critical modal is raised and the scan is cancelled, so
+        the scan_ended audit event can name the cause instead of reporting
+        the cancel it triggers as an operator stop. First fault wins: a
+        disconnect that also trips the stall watchdog keeps its own code.
+        """
+        if self._scan_abort_code:
+            logger.info(
+                "Scan abort %s (%s) after %s already recorded — keeping "
+                "the first", code, detail, self._scan_abort_code,
             )
-            if stalled_s is not None:
-                self._abort_scan_data_stall(stalled_s)
+            return
+        self._scan_abort_code = code
+        self._scan_abort_reason = detail or ""
+
+    def _log_scan_ended_audit(
+        self,
+        subject_id: str,
+        session_label: str,
+        duration_s: Optional[float],
+        outcome: Optional[ScanOutcome],
+        canceled: bool,
+    ) -> None:
+        """Append the ``scan_ended`` audit event (issue #535). Never raises —
+        the audit log is fail-soft and so is this."""
+        try:
+            details: Dict[str, Any] = {
+                "label": subject_id,
+                "session_label": session_label or None,
+                "duration_s": (round(duration_s, 1)
+                               if duration_s is not None else None),
+            }
+            details.update(audit_scan_ended_details(
+                outcome=outcome,
+                canceled=canceled,
+                abort_code=self._scan_abort_code,
+                abort_reason=self._scan_abort_reason,
+            ))
+            self._audit.log("scan_ended", details)
+        except Exception:
+            logger.warning("scan_ended audit log failed", exc_info=True)
 
     def _abort_scan_data_stall(self, stalled_s: float) -> None:
         """Abort the running scan because data acquisition has completely
@@ -5497,6 +5785,9 @@ class MotionConnector(QObject):
         (and the state machine) to idle exactly like a user Stop.
         """
         self._scan_abort_notified = True
+        # The modal supersedes any per-camera 'connection lost' toasts the
+        # watchdog already fired for this scan (issue #489).
+        self._dismiss_dropout_toasts()
         elapsed_str = self._scan_elapsed_str()
         msg = (
             f"[{elapsed_str}] No data from any camera for "
@@ -5506,13 +5797,12 @@ class MotionConnector(QObject):
         )
         logger.error(msg)
         self.captureLog.emit(msg)
-        self._raise_critical(
-            "E-303",
-            detail=(
-                f"no camera frames for {stalled_s:.0f} s "
-                f"(scan elapsed {elapsed_str})"
-            ),
+        detail = (
+            f"no camera frames for {stalled_s:.0f} s "
+            f"(scan elapsed {elapsed_str})"
         )
+        self._note_scan_abort("E-303", detail)
+        self._raise_critical("E-303", detail=detail)
         self.stopCapture()
 
     def _abort_scan_device_disconnect(self, name: str) -> None:
@@ -5530,6 +5820,9 @@ class MotionConnector(QObject):
         if self._scan_abort_notified:
             return
         self._scan_abort_notified = True
+        # The modal supersedes any per-camera 'connection lost' toasts the
+        # watchdog already fired for this scan (issue #489).
+        self._dismiss_dropout_toasts()
         elapsed_str = self._scan_elapsed_str()
         msg = (
             f"[{elapsed_str}] {name} disconnected during the scan — "
@@ -5538,11 +5831,45 @@ class MotionConnector(QObject):
         )
         logger.error(msg)
         self.captureLog.emit(msg)
-        self._raise_critical(
-            "E-304",
-            detail=f"{name} disconnected mid-scan (scan elapsed {elapsed_str})",
-        )
+        detail = f"{name} disconnected mid-scan (scan elapsed {elapsed_str})"
+        self._note_scan_abort("E-304", detail)
+        self._raise_critical("E-304", detail=detail)
         self.stopCapture()
+
+    def _surface_device_loss(self, name: str, first_loss: bool,
+                             reason="") -> None:
+        """User-facing surfacing for a device drop, gated on the first loss
+        since the device last reached CONNECTED (issues #387/#489).
+
+        After a real unplug the SDK monitor keeps retrying the absent device
+        for a while, and every failed retry ends in another CONNECTING ->
+        DISCONNECTED transition. Bench trace 2026-08-27: one power-off
+        produced repeat DISCONNECTED events at ~2 s intervals per device
+        (four in a row for the console) — each re-fired the disconnect
+        toast, visibly recreating the card and resetting its 6 s clock, and
+        a card whose original had just expired re-appeared at the bottom of
+        the stack. Only the first loss notifies; repeats are logged and
+        dropped. On a sensor's first loss, its cameras' per-camera
+        'connection lost' cards are dismissed too — the device-level card
+        subsumes them (a card lingering from a scan that already ended, or
+        fired in the window before the USB drop was detected).
+        """
+        if not first_loss:
+            logger.info(
+                "Repeat DISCONNECTED for %s while already down (%s) — "
+                "not re-surfacing", name, reason,
+            )
+            return
+        if name in _SIDE_NAMES:
+            self._dismiss_dropout_toasts(side=name)
+        # A device dropped off USB (issue #387). If it's a device taking
+        # part in a running scan, raise the E-304 critical modal and abort;
+        # otherwise (idle, or a non-participating device) show a low-key
+        # disconnect toast. The SDK's own mid-scan disconnect subscription
+        # is already tearing a running scan down; the E-304 modal is the
+        # operator-facing notice the app would otherwise omit (a real
+        # unplug rarely trips the E-303 stall watchdog).
+        self._surface_disconnect(name)
 
     def _surface_disconnect(self, name: str) -> None:
         """Surface a device dropping off USB (issue #387). If the drop aborts a

@@ -135,12 +135,27 @@ class _Signal:
 class _FakeConnector:
     """Just the attributes _abort_scan_data_stall touches."""
 
+    # Real per-camera toast-dismissal helper (issue #489) — funnels into the
+    # dismissNotification recorder below.
+    _dismiss_dropout_toasts = MotionConnector._dismiss_dropout_toasts
+    # Real termination-cause recorder (issue #535) — the abort must land
+    # its E-code on the connector for the scan_ended audit event.
+    _note_scan_abort = MotionConnector._note_scan_abort
+
     def __init__(self):
         self._scan_abort_notified = False
+        self._scan_abort_code = None
+        self._scan_abort_reason = ""
         self._scan_data_stall_timeout_sec = 15.0
+        self._camera_dropped = {("left", 0), ("right", 5)}
         self.captureLog = _Signal()
         self.criticals = []
         self.stop_calls = 0
+        self.notificationDismissByTagRequested = _Signal()
+
+    @property
+    def dismissed(self):
+        return [c[0] for c in self.notificationDismissByTagRequested.calls]
 
     def _scan_elapsed_str(self):
         return "00:01:23"
@@ -158,10 +173,16 @@ def test_abort_raises_e303_and_stops_capture():
 
     assert fake._scan_abort_notified is True
     assert fake.stop_calls == 1
+    # The E-303 modal supersedes the per-camera 'connection lost' toasts
+    # the watchdog fired earlier in this scan (issue #489).
+    assert sorted(fake.dismissed) == ["dropout_left_0", "dropout_right_5"]
     # E-303 critical modal with the stall duration + elapsed in the detail.
     assert len(fake.criticals) == 1
     code, detail = fake.criticals[0]
     assert code == "E-303"
+    # Audit termination cause recorded before the modal (#535).
+    assert fake._scan_abort_code == "E-303"
+    assert fake._scan_abort_reason == "no camera frames for 16 s (scan elapsed 00:01:23)"
     assert "16 s" in detail
     assert "00:01:23" in detail
     # Capture-log line names the condition and the configured timeout.

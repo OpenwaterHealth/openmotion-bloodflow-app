@@ -14,8 +14,9 @@ Window {
     flags: Qt.Window
     modality: Qt.NonModal
 
-
-    color: AppTheme.bgBase
+    // windowBg, not bgBase: a separate Window has no AmbientBackground
+    // behind it, and bgBase is transparent in glass mode (#486).
+    color: AppTheme.windowBg
 
     readonly property var rows: MotionInterface.testScanRows
     readonly property string status: MotionInterface.testScanStatus
@@ -154,7 +155,7 @@ Window {
                     delegate: Rectangle {
                         width: parent.width
                         implicitHeight: 24
-                        color: (index % 2 === 0) ? "transparent" : Qt.darker(AppTheme.bgBase, 1.05)
+                        color: (index % 2 === 0) ? "transparent" : Qt.darker(AppTheme.windowBg, 1.05)
                         border.color: AppTheme.borderSoft
                         border.width: 0
 

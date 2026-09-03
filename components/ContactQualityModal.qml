@@ -27,6 +27,10 @@ import OpenMotion 1.0
  *      stopScanRequested()  — user clicked "Stop scan" (live-scan footer)
  *      continueRequested()  — user clicked "Continue"  (live-scan footer)
  *      dismissed()          — modal closed by any button
+ *      forceDismissed()     — engineering Force Dismiss clicked; fires
+ *                             alongside dismissed(). BloodFlow uses it to
+ *                             keep the live-scan modal suppressed for the
+ *                             rest of the scan (#492).
  */
 Item {
     id: root
@@ -78,6 +82,7 @@ Item {
     signal continueRequested()
     signal retestRequested()
     signal dismissed()
+    signal forceDismissed()
 
     // ── public API ───────────────────────────────────────────────────────
     function open()  { root.visible = true; panel.forceActiveFocus() }
@@ -612,8 +617,14 @@ Item {
                     onClicked: { root.close(); root.retestRequested() }
                 }
 
-                // Engineering-mode escape hatch: bypass all contact-quality gates
+                // Engineering-mode escape hatch: bypass all contact-quality
+                // gates. Sticky during a live scan (#492) — the extra
+                // forceDismissed() signal lets BloodFlow suppress live
+                // re-opens until the scan ends. ESC (also engineering-gated)
+                // stays a one-shot dismiss for when you still want the next
+                // warning.
                 Button {
+                    objectName: "cqForceDismissBtn"
                     visible: root.engineeringMode
                     text: "Force Dismiss"
                     hoverEnabled: true
@@ -629,7 +640,7 @@ Item {
                         border.color: parent.hovered ? "#E8A020" : "#E8A020"
                         border.width: 1
                     }
-                    onClicked: { root.close(); root.dismissed() }
+                    onClicked: { root.close(); root.forceDismissed(); root.dismissed() }
                 }
             }
         }

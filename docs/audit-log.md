@@ -61,7 +61,7 @@ plus a small JSON `details` payload. The app records the following events:
 | `device_disconnected` | The console or a sensor disconnects. | `device`, `reason` |
 | `device_stats` | When a device connects, once its IDs are readable. | `device`, `hardware_id`, `firmware_version` |
 | `scan_started` | A scan begins. | `label`, `left_mask`, `right_mask` |
-| `scan_ended` | A scan finishes or is stopped. | `label`, `session_label`, `duration_s`, `outcome` |
+| `scan_ended` | A scan runs to its end, is stopped by the operator, or is aborted by a fault. | `label`, `session_label`, `duration_s`, `outcome` (`ok`/`stopped`/`aborted`), `data` (`ok`/`partial`/`empty`/`skipped`), `error_code` (e.g. `E-303`; null unless aborted), `reason` |
 | `calibration_started` | A calibration begins. | `target` (`both`/`left`/`right`) |
 | `calibration_ended` | A calibration finishes. | `target`, `outcome` (`passed`/`failed`/`canceled`/`timed_out`/`error`), `reason` |
 | `calibration_override_accepted` | At the pre-write gate, the operator authorised overwriting the console calibration despite below-threshold scan means/contrast. | `target`, `cameras_below_threshold` |
@@ -78,6 +78,16 @@ Notes for auditors:
 - **The audit log audits itself.** Opening the viewer and exporting it are
   both recorded (`audit_log_viewed`, `audit_log_exported`), so access to the
   audit data leaves its own trail.
+- **Scan terminations name their cause.** `scan_ended.outcome` is `ok` when the
+  scan ran to its configured end, `stopped` when the operator ended it, and
+  `aborted` when a fault ended it — then `error_code` carries the on-screen
+  error code (`E-303` camera data lost, `E-304` device disconnected, `E-202`
+  laser safety trip, `E-301` scan worker failed) and `reason` the same detail
+  the app log records. `data` is the separate data verdict: `ok` (all saved),
+  `partial` (final segment discarded), `empty` (nothing saved), `skipped`
+  (nothing expected — laser off, or ended before the first interval closed).
+  So an operator stop before any data is `stopped`/`skipped`, while a device
+  unplugged at the same point is `aborted`/`skipped` with `E-304`.
 - **System statistics** are split across two events: host/OS facts at launch
   (`system_info`) and per-device hardware/firmware IDs on connect
   (`device_stats`).
