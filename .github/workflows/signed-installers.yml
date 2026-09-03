@@ -1,0 +1,203 @@
+name: Signed Installers
+
+# On-demand signed-installer builds (#501, Cybersecurity upgrades epic #500).
+#
+# Policy: the SIGNED CLINICAL installer exists only through this workflow,
+# and only for full (production) releases — dispatch it against the X.Y.Z
+# tag after QA validates. The Research installer is signed automatically by
+# the production tag build in release-build.yml; the `variant` input here is
+# a fallback for re-generating it (or, exceptionally, signing an rc
+# installer for a beta in-app-update push).
+#
+# This workflow does NOT rebuild the app. It downloads the portable zip the
+# tag's automatic build published — the exact bytes QA validated — and
+# repacks it into the per-variant MSI + Burn Setup bundles. A rebuild here
+# could silently bundle a different SDK than QA saw (release-build.yml
+# installs the latest PyPI SDK at build time), breaking the "ship what QA
+# validated" guarantee.
+#
+# eSigner signings are METERED (fixed allowance per year). Cost per run:
+#   clinical on a production tag: 2   (Burn engine + Setup bundle — the exe
+#                                      inside the zip is already signed by
+#                                      the tag build; sign.ps1 skips it, and
+#                                      the MSI is deliberately unsigned, see
+#                                      build_installer.ps1)
+#   on a dev/rc tag (unsigned exe): +1 for the exe
+#   each additional variant:       +2
+# The driver MSI inside the bundles is pre-signed in the SDK repo (sdk#216)
+# and costs nothing here. Unlike the unsigned QA artifacts, signing here is
+# mandatory: missing secrets or an invalid signature fails the run — this
+# workflow must never emit an unsigned distributed artifact.
+#
+# Constraint: the target tag must contain the signing-era build scripts
+# (installer/sign.ps1 with signtool discovery + skip-if-signed,
+# scripts/build_common.ps1) — i.e. any tag cut after the code-signing +
+# pipeline-split PRs landed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to build installers for (e.g. 1.6.0)"
+        required: true
+        type: string
+      variant:
+        description: "Which installer(s) to build and sign (research is normally auto-signed by the production tag build)"
+        type: choice
+        options:
+          - clinical
+          - research
+          - both
+        default: clinical
+      upload_to_release:
+        description: "Attach the signed installers to the tag's GitHub release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  signed-installers:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      # The portable zip from the tag's automatic build is the dist source —
+      # see the header comment for why we repack instead of rebuilding. The
+      # Clinical and Research zips differ only in the staged app_config.json,
+      # which build_installer.ps1 re-stages per variant anyway, so either zip
+      # works; the Clinical one is used.
+      - name: Download the QA-validated portable zip
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ inputs.tag }}"
+          gh release download $tag --pattern "Open-Motion-$tag.zip" --dir zip-dl
+          if ($LASTEXITCODE -ne 0) {
+            throw "could not download Open-Motion-$tag.zip from release '$tag' — did the automatic tag build publish it?"
+          }
+          Expand-Archive -Path (Join-Path "zip-dl" "Open-Motion-$tag.zip") -DestinationPath dist -Force
+          if (-not (Test-Path "dist\Open-Motion\Open-Motion.exe")) {
+            throw "extracted zip does not contain Open-Motion\Open-Motion.exe — unexpected archive layout"
+          }
+
+      - name: Install WiX v5
+        shell: pwsh
+        run: |
+          # Pin to 5.0.2 — the last MIT-licensed WiX. v6/v7 require accepting the
+          # paid Open Source Maintenance Fee EULA (WIX7015) and would fail CI.
+          dotnet tool install --global wix --version 5.0.2
+          wix extension add -g WixToolset.BootstrapperApplications.wixext/5.0.2
+          echo "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      # Same eSigner CKA recipe as PR #443 validated, with one deliberate
+      # difference: missing secrets are a hard FAILURE here, not a warning —
+      # an unsigned artifact from this workflow is a bug, not a fallback.
+      - name: Set up eSigner CKA (EV code signing — required)
+        shell: pwsh
+        env:
+          ES_USERNAME: ${{ secrets.ES_USERNAME }}
+          ES_PASSWORD: ${{ secrets.ES_PASSWORD }}
+          ES_TOTP_SECRET: ${{ secrets.ES_TOTP_SECRET }}
+          # repo variable ES_MODE=sandbox targets SSL.com's sandbox
+          # environment for pipeline testing (needs sandbox credentials)
+          ES_MODE: ${{ vars.ES_MODE || 'product' }}
+        run: |
+          if (-not $env:ES_USERNAME -or -not $env:ES_PASSWORD -or -not $env:ES_TOTP_SECRET) {
+            throw "eSigner secrets (ES_USERNAME / ES_PASSWORD / ES_TOTP_SECRET) are not set — this workflow only produces signed artifacts"
+          }
+          $work = Join-Path $env:RUNNER_TEMP "esigner-cka"
+          New-Item -ItemType Directory -Force $work | Out-Null
+          Set-Location $work
+          Invoke-WebRequest -OutFile eSigner_CKA_Setup.zip "https://github.com/SSLcom/eSignerCKA/releases/download/v1.0.8/SSL.COM-eSigner-CKA_1.0.8.zip"
+          Expand-Archive -Force eSigner_CKA_Setup.zip
+          Move-Item -Destination "eSigner_CKA_Installer.exe" -Path "eSigner_CKA_Setup\*.exe"
+          $dir = Join-Path $env:USERPROFILE "eSignerCKA"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Start-Process ".\eSigner_CKA_Installer.exe" -ArgumentList "/CURRENTUSER /VERYSILENT /SUPPRESSMSGBOXES /DIR=`"$dir`"" -Wait
+          # Post-install helpers from SSL.com's reference workflow; guarded
+          # because not every CKA build ships them (VC++ redists are already
+          # on the hosted runners).
+          foreach ($aux in @("$work\setup\vc_redist.x86.exe", "$work\setup\vc_redist.x64.exe")) {
+            if (Test-Path $aux) { Start-Process $aux -ArgumentList "/install /q" -Wait }
+          }
+          foreach ($aux in @("$dir\RegisterKSP.exe", "$dir\eSignerCSP.Config.exe")) {
+            if (Test-Path $aux) { & $aux | Out-Null }
+          }
+          & "$dir\eSignerCKATool.exe" config -mode $env:ES_MODE -user $env:ES_USERNAME -pass $env:ES_PASSWORD -totp $env:ES_TOTP_SECRET -key "$dir\master.key" -r
+          & "$dir\eSignerCKATool.exe" unload
+          & "$dir\eSignerCKATool.exe" load
+          $cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert | Select-Object -First 1
+          if (-not $cert) { throw "eSigner CKA loaded no code-signing certificate" }
+          Write-Host "Signing as: $($cert.Subject)  [$($cert.Thumbprint)]"
+          "CODESIGN_THUMBPRINT=$($cert.Thumbprint)" >> $env:GITHUB_ENV
+
+      # One exe signature covers every artifact of this run — and on a
+      # production tag it costs nothing: the tag build already signed the
+      # exe inside the zip, and sign.ps1 skips files validly signed by this
+      # cert. Only a dev/rc zip (unsigned exe) spends a signing here.
+      - name: Sign Open-Motion.exe (skipped if already signed)
+        shell: pwsh
+        run: |
+          if (-not $env:CODESIGN_THUMBPRINT) { throw "no signing certificate loaded" }
+          powershell -NoProfile -File installer\sign.ps1 -Files dist\Open-Motion\Open-Motion.exe
+          if ($LASTEXITCODE -ne 0) { throw "signing Open-Motion.exe failed" }
+
+      - name: Build + sign installers
+        shell: pwsh
+        run: |
+          . scripts\build_common.ps1
+          $tag = "${{ inputs.tag }}"
+          $numeric = Get-NumericVersion -Version $tag
+          $variants = if ("${{ inputs.variant }}" -eq "both") { @("clinical", "research") } else { @("${{ inputs.variant }}") }
+          foreach ($v in $variants) {
+            Write-Host "=== Building signed $v installer ($tag) ===" -ForegroundColor Cyan
+            powershell -NoProfile -ExecutionPolicy Bypass -File installer\build_installer.ps1 `
+                -Variant $v -DistDir dist\Open-Motion -Version $numeric -FullVersion $tag
+            if ($LASTEXITCODE -ne 0) { throw "build_installer failed for $v" }
+          }
+
+      # Hard gate: every distributed artifact leaving this workflow must
+      # carry a Valid Authenticode signature. This catches any path where
+      # sign.ps1 was skipped or a signing silently failed. The MSI is
+      # deliberately unsigned (quota trim — see build_installer.ps1): it
+      # ships only embedded in the signed bundle.
+      - name: Verify Authenticode signatures
+        shell: pwsh
+        run: |
+          $files = @(Get-Item "dist\Open-Motion\Open-Motion.exe")
+          $files += Get-ChildItem "build\installer\*-Setup-*.exe"
+          if ($files.Count -lt 2) { throw "expected at least exe + Setup bundle, found $($files.Count) files" }
+          foreach ($f in $files) {
+            $sig = Get-AuthenticodeSignature $f.FullName
+            if ($sig.Status -ne "Valid") {
+              throw "$($f.Name): signature status '$($sig.Status)' — refusing to publish an unsigned/invalid artifact"
+            }
+            Write-Host ("OK  {0}  [{1}]" -f $f.Name, $sig.SignerCertificate.Subject)
+          }
+          $setups = @(Get-ChildItem "build\installer\*-Setup-*.exe")
+          Write-Host ("eSigner signings consumed this run: at most {0} (2 per variant, +1 only if the exe was not already signed — see the 'Sign Open-Motion.exe' step log)" -f (1 + 2 * $setups.Count))
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-installers-${{ inputs.tag }}
+          path: build/installer/*-Setup-*.exe
+
+      # Appends to the release the automatic tag build created; --clobber so
+      # a re-run replaces earlier uploads instead of failing.
+      - name: Attach to GitHub release
+        if: inputs.upload_to_release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $setups = @(Get-ChildItem "build\installer\*-Setup-*.exe" | ForEach-Object FullName)
+          gh release upload "${{ inputs.tag }}" $setups --clobber
+          if ($LASTEXITCODE -ne 0) { throw "release upload failed" }
