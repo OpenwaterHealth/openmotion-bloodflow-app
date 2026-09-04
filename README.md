@@ -6,16 +6,16 @@ Python Application UI for Open-Motion blood flow monitoring.
 
 ## Supported Platforms
 
-| Platform | Status |
-|----------|--------|
-| Windows 10/11 | Supported (PyInstaller .exe) |
+| Platform                          | Status                                                       |
+| --------------------------------- | ------------------------------------------------------------ |
+| Windows 10/11                     | Supported (PyInstaller .exe)                                 |
 | macOS 12+ (Apple Silicon & Intel) | **In development** — builds and launches, but device communication is not yet fully working |
-| Linux | Runs from source (Python 3.12+) |
+| Linux                             | Runs from source (Python 3.12+)                              |
 
 ## Prerequisites
 
 - **Python 3.12 or later**
-- **Open-Motion SDK** (`openmotion-pylib`) — installed from the [openmotion-sdk](https://github.com/OpenwaterHealth/OpenMOTION-Pylib) repo
+- **Open-Motion SDK** (`openmotion-pylib`) — installed from the [openmotion-sdk](https://github.com/OpenwaterHealth/openmotion-sdk) repo
 - **libusb** — required for USB communication with sensor modules
   - macOS: `brew install libusb`
   - Linux: `sudo apt install libusb-1.0-0-dev` (Debian/Ubuntu)
@@ -26,8 +26,8 @@ Python Application UI for Open-Motion blood flow monitoring.
 ```bash
 # Create a virtual environment (Python 3.12+)
 python3.12 -m venv .venv
-source .venv/bin/activate    # macOS/Linux
-# .venv\Scripts\activate     # Windows
+source .venv/bin/activate # macOS/Linux
+# .venv\Scripts\activate # Windows
 
 # Install the Open-Motion SDK (from the neighboring repo)
 pip install -e ../openmotion-sdk
@@ -68,20 +68,22 @@ python -m PyInstaller -y openwater.spec
 
 ## USB Drivers
 
-The OpenMotion sensor modules require platform-specific USB driver setup. See the [driver documentation](../openmotion-sdk/drivers/README.md) in the SDK repo.
+The OpenMotion sensor modules require platform-specific USB driver setup. The driver
+scripts live in the SDK repo, not in this repo — see the
+[driver documentation](https://github.com/OpenwaterHealth/openmotion-sdk/blob/main/drivers/README.md).
 
-- **Windows:** WinUSB driver installation required (run `drivers/windows/install.bat` as Administrator)
-- **Linux:** udev rules required (run `sudo drivers/linux/install.sh`)
+- **Windows:** WinUSB driver installation required (run `drivers/windows/install.bat` from the SDK repo as Administrator)
+- **Linux:** udev rules required (run `sudo drivers/linux/install.sh` from the SDK repo)
 - **macOS:** No driver needed — just `brew install libusb` *(device I/O still being stabilized)*
 
 ## Data & Log Directories
 
 The application creates two directories for output:
 
-| Directory | Contents |
-|-----------|----------|
-| `logs/` | Application log files (timestamped) |
-| `data/` | Scan CSVs, `scans.db`, calibrations, debug bundles, in-app-updater downloads |
+| Directory | Contents                                                     |
+| --------- | ------------------------------------------------------------ |
+| `logs/`   | Application log files (timestamped)                          |
+| `data/`   | Scan CSVs, `scans.db`, calibrations, debug bundles, in-app-updater downloads |
 
 **Where these are created:**
 
@@ -95,30 +97,30 @@ Both directories live under a single root, chosen in this order:
 
 Edit `config/app_config.json` to customize behavior:
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `dataDirectory` | `null` | Root directory for `logs/` and `data/` (null = auto-detect) |
-| `engineeringMode` | `false` | Enable engineering UI features (runtime-unlockable) |
-| `clinicalMode` | `false` | Simplified clinical UI: forces far camera config + free run, hides scan settings, shows large left/right BFI/BVI panels. Build-time only — never persisted as a runtime override |
-| `leftMask` / `rightMask` | `0x66` | Camera bitmask for left/right sensor modules |
-| `writeRawCsv` | `true` | Write raw histogram CSV during capture (requires `clinicalMode` off, or `engineeringMode` on) |
-| `rawCsvDurationSec` | `null` | Limit raw CSV capture duration (null = unlimited) |
-| `showBfiBvi` | `true` | Plot BFI/BVI instead of raw mean/contrast |
-| `plotWindowSec` | `15` | Realtime plot time window (3 / 5 / 15 / 30) |
-| `autoScale` | `true` | Auto-scale realtime plot Y-axes (always per-plot) |
-| `bfiColor` / `bviColor` | `#ff0000` / `#3437db` | Trace colors for BFI / BVI |
-| `bfiClampLow` / `bfiClampHigh` | `0.0` / `10.0` | BFI display clamps — values outside show `--` |
-| `bviClampLow` / `bviClampHigh` | `0.0` / `10.0` | BVI display clamps — values outside show `--` |
-| `bviLowPassCutoffHz` | `20.0` | Cutoff (Hz) for the 1-pole low-pass on the *displayed* BVI stream; `<= 0` disables, missing/invalid → 20. Display-only — stored scan data stays raw. No Settings UI |
-| `bfiMin` / `bfiMax` | `4.0` / `9.0` | Manual BFI plot bounds (when autoscale is off) |
-| `bviMin` / `bviMax` | `4.0` / `8.0` | Manual BVI plot bounds (when autoscale is off) |
-| `meanMin` / `meanMax` | `0` / `200` | Manual mean plot bounds |
-| `contrastMin` / `contrastMax` | `0.0` / `0.7` | Manual contrast plot bounds |
-| `support_email` | `support@openwater.health` | Destination for the error modal's **Contact Support** button |
-| `bug_report_smtp` | _(absent)_ | Optional `{host, port, username, password, from_addr, use_tls}` block. When set, bug reports are emailed automatically with the session log attached; otherwise the app opens your mail client for manual send |
-| `connectionTimeoutSec` | `12` | Startup connection watchdog grace period before warning about missing devices (E-104/E-106, yellow toast); `0` disables it |
-| `requireConsole` | `true` | Watchdog warns (E-104) if no console connected at startup |
-| `minSensors` | `1` | Watchdog warns (E-106) if fewer than this many sensors connected at startup |
+| Key                            | Default                    | Description                                                  |
+| ------------------------------ | -------------------------- | ------------------------------------------------------------ |
+| `dataDirectory`                | `null`                     | Root directory for `logs/` and `data/` (null = auto-detect)  |
+| `engineeringMode`              | `false`                    | Enable engineering UI features (runtime-unlockable)          |
+| `clinicalMode`                 | `false`                    | Simplified clinical UI: forces far camera config + free run, hides scan settings, shows large left/right BFI/BVI panels. Build-time only — never persisted as a runtime override |
+| `leftMask` / `rightMask`       | `0x66`                     | Camera bitmask for left/right sensor modules                 |
+| `writeRawCsv`                  | `true`                     | Write raw histogram CSV during capture (requires `clinicalMode` off, or `engineeringMode` on) |
+| `rawCsvDurationSec`            | `null`                     | Limit raw CSV capture duration (null = unlimited)            |
+| `showBfiBvi`                   | `true`                     | Plot BFI/BVI instead of raw mean/contrast                    |
+| `plotWindowSec`                | `15`                       | Realtime plot time window (3 / 5 / 15 / 30)                  |
+| `autoScale`                    | `true`                     | Auto-scale realtime plot Y-axes (always per-plot)            |
+| `bfiColor` / `bviColor`        | `#ff0000` / `#3437db`      | Trace colors for BFI / BVI                                   |
+| `bfiClampLow` / `bfiClampHigh` | `0.0` / `10.0`             | BFI display clamps — values outside show `--`                |
+| `bviClampLow` / `bviClampHigh` | `0.0` / `10.0`             | BVI display clamps — values outside show `--`                |
+| `bviLowPassCutoffHz`           | `20.0`                     | Cutoff (Hz) for the 1-pole low-pass on the *displayed* BVI stream; `<= 0` disables, missing/invalid → 20. Display-only — stored scan data stays raw. No Settings UI |
+| `bfiMin` / `bfiMax`            | `4.0` / `9.0`              | Manual BFI plot bounds (when autoscale is off)               |
+| `bviMin` / `bviMax`            | `4.0` / `8.0`              | Manual BVI plot bounds (when autoscale is off)               |
+| `meanMin` / `meanMax`          | `0` / `200`                | Manual mean plot bounds                                      |
+| `contrastMin` / `contrastMax`  | `0.0` / `0.7`              | Manual contrast plot bounds                                  |
+| `support_email`                | `support@openwater.health` | Destination for the error modal's **Contact Support** button |
+| `bug_report_smtp`              | _(absent)_                 | Optional `{host, port, username, password, from_addr, use_tls}` block. When set, bug reports are emailed automatically with the session log attached; otherwise the app opens your mail client for manual send |
+| `connectionTimeoutSec`         | `12`                       | Startup connection watchdog grace period before warning about missing devices (E-104/E-106, yellow toast); `0` disables it |
+| `requireConsole`               | `true`                     | Watchdog warns (E-104) if no console connected at startup    |
+| `minSensors`                   | `1`                        | Watchdog warns (E-106) if fewer than this many sensors connected at startup |
 
 Most of these are also editable from the in-app **Settings** panel and persisted automatically.
 
