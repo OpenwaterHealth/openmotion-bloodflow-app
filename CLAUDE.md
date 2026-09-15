@@ -71,16 +71,14 @@ artifacts, so every tagged release carries one.
 | Path | What lives here |
 |---|---|
 | `main.py` | Entry point. PyQt app, QML engine, logging. Registers `MotionInterface` as a QML singleton. |
-| `motion_connector.py` | **~4,700 lines.** Single `MotionConnector` QObject — all UI⇄hardware glue, ~64 signals / ~80 slots. State machine constants around line 252; transitions in `update_state` (~line 1947). |
+| `motion_connector.py` | **~7,100 lines.** Single `MotionConnector` QObject — all UI⇄hardware glue, ~64 signals / ~80 slots. State machine constants around line 252; transitions in `update_state` (~line 1947). |
 | `motion_config.py` | FPGA model + laser-parameter helpers (extracted in May 2025 for reuse). |
 | `pages/BloodFlow.qml` | Main scan page: patient info, sensor config, trigger. The only page `main.qml` loads. |
 | `components/PlotViewer.qml` | Real-time + replay BFI/BVI plot viewer (pan/zoom DVR, autoscale). |
 | `components/SettingsModal.qml` | Settings overlay (opened from BloodFlow — there is no `pages/Settings.qml`). |
-| `pages/scan/` | `ScanRunner.qml` plus task QMLs: `CaptureDataTask`, `ContactQualityCheckTask`, `FlashSensorsTask`, `PostProcessTask`, `SetTriggerTask`. Newer orchestration suite. |
+| `pages/scan/` | `ScanRunner.qml` plus task QMLs: `CaptureDataTask`, `ContactQualityCheckTask`, `FlashSensorsTask`, `SetTriggerTask`. Newer orchestration suite. |
 | `components/` | 25 reusable QML components — `SettingsModal`, `ContactQualityModal`, `CameraDot`, `TestResultsWindow`, etc. |
-| `processing/visualize_bloodflow.py` | BFI/BVI computation from CSV histograms. |
 | `config/app_config.json` | 56 feature flags / thresholds, grouped by topic: output paths, scan/camera masks, plot/UI, calibration + FT thresholds, contact quality, developer/debug. |
-| `config/laser_params.json` | 18 laser I2C register sets (TA / SEED / EE / OPT variants). **Not user-tunable calibration data** — init/baseline commands for the laser driver chips. |
 | `resources/sample_scan.csv` | Real exported scan (History → Export CSV / SDK `materialize_corrected_csv` per-cam wide format). Offered — never auto-loaded — into the replay viewer when a **research build** boots with **no device connected** (#314): the startup connection watchdog raises `components/SampleScanOfferModal.qml`, and only accepting it binds the sample. Clinical builds never see the offer. Swap this one file to change the sample dataset. Bundled by `openwater.spec` (targeted `datas` entry); located at runtime via `utils.resource_path.resource_path("resources", "sample_scan.csv")`. Parsed DB-free by `data_sources.load_csv_scan_buffers` → `PastScanSource(preloaded_buffers=…, scan_db=None)`; the user's real `scans.db` is never touched. |
 | `openwater.spec` | PyInstaller spec. Custom logic mirrors vendored libusb binaries into `_internal\_vendor` so the runtime hook can find them. |
 | `tests/` | Hardware-in-loop pytest suite, ~23 files. Markers: `@pytest.mark.dev` (~1–2 min, runs on every push to `next`), `@pytest.mark.release` (~6–8 min, runs on release tags). |
@@ -208,12 +206,12 @@ The `dataDirectory` config key controls the root (defaults to cwd if unset). Whe
 
 ## Gotchas
 
-- **`motion_connector.py` is ~4,700 lines** — the file is doing too much. Don't add to it without considering extraction; recent precedent is `motion_config.py` (May 2025).
+- **`motion_connector.py` is ~7,100 lines** — the file is doing too much. Don't add to it without considering extraction; recent precedent is `motion_config.py` (May 2025).
 - **Cross-thread signals:** 135+ signals; several (e.g. `_calibrationCompleteSignal`, `safetyTripDuringCaptureRequested`) fire from USB I/O / scanner worker threads. Use `Qt.QueuedConnection` or you'll race QML.
 - **PyInstaller libusb mirror** (`openwater.spec` lines 61–95): if bundled app fails USB enumeration, the runtime hook can't find vendored libusb DLLs. Check the spec's mirror step.
-- **`laser_params.json` is not "tunable":** editing values risks laser-off, wrong pulse widths, safety failures. Treat as locked baseline.
+- **`laser_params.json` is not "tunable":** it ships inside the SDK (`omotion/data/laser_params.json`), not this repo; editing values risks laser-off, wrong pulse widths, safety failures. Treat as locked baseline.
 - **SDK is editable, not pinned to a wheel here** (unlike `openmotion-test-app`). Bumping the SDK requires no action; bugs in either repo are visible immediately.
-- **Don't track `docs/superpowers/`** — brainstorming specs, implementation plans, and session/status notes are local process artifacts, not repo deliverables. The directory is gitignored; keep it that way and never `git add -f` files under it into a PR.
+- **Don't track `docs/superpowers/`** — brainstorming specs, implementation plans, and session/status notes are local process artifacts, not repo deliverables. The directory is gitignored (#539 — it was not before, only `.superpowers/` was); keep it that way and never `git add -f` files under it into a PR.
 
 ## Branching and releases
 
@@ -260,5 +258,5 @@ it's the audit trail, not something to delete.
 | Modify scan orchestration | `pages/scan/ScanRunner.qml` + the task QMLs. |
 | Tune a clinical threshold | `config/app_config.json` (check the table above first — most knobs live here). |
 | Reproduce a bug without hardware | Not currently possible in the running app (no working mock mode — see "Working without hardware"). Write a `unit`-marked pytest that mocks the hardware seam instead. |
-| Touch laser register defaults | `config/laser_params.json` — but loop in firmware/SDK owners first; this is locked baseline data. |
+| Touch laser register defaults | `omotion/data/laser_params.json` in the SDK repo — but loop in firmware/SDK owners first; this is locked baseline data. |
 | Diagnose USB enumeration in the packaged exe | `openwater.spec` libusb mirror + `rthook_libusb_paths.py`. |
