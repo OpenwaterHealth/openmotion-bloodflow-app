@@ -34,7 +34,7 @@ for item in ("main.qml",):
             f"run PyInstaller from the repo root ({SPECPATH})."
         )
     datas.append((item, "."))
-for folder in ("pages", "components", "assets", "config", "processing"):
+for folder in ("pages", "components", "assets", "config"):
     if not os.path.isdir(folder):
         raise SystemExit(
             f"[spec] FATAL: required resource folder {folder!r} not found in "
