@@ -17,13 +17,16 @@ dev/rc tag builds now).
 
 | Trigger | Windows artifacts | Signed? |
 |---|---|---|
-| `X.Y.Z-dev.N` / `X.Y.Z-rc.N` tag (automatic) | Both portables + both installers | **Nothing** (0 signings) — QA validates scan *and install* flows on these |
-| `X.Y.Z` production tag (automatic) | Both portables + the **Research** installer | exe + Research engine/bundle (**3 signings**); missing eSigner secrets fail the build |
-| `signed-installers.yml` (manual dispatch, production tag, after QA sign-off) | **Clinical** installer (repacked from the tag's QA-validated portable zip) | engine + bundle (**2 signings** — the exe inside the zip is already signed; `sign.ps1` skips it) |
+| `X.Y.Z-dev.N` tag (automatic) | Both portables + both installers | **Nothing** (0 signings) — the free day-to-day QA build; validates scan *and install* flows |
+| `X.Y.Z-rc.N` and `X.Y.Z` tags (automatic) | Both portables + the **Research** installer | exe + Research engine/bundle (**3 signings**); missing eSigner secrets fail the build |
+| `signed-installers.yml` (manual dispatch — on each rc, and on the production tag after QA sign-off) | **Clinical** installer (repacked from the tag's QA-validated portable zip) | engine + bundle (**2 signings** — the exe inside the zip is already signed; `sign.ps1` skips it) |
 
-- The production tag build deliberately does **not** build a clinical
-  installer, so an unsigned clinical installer can never appear on a
-  production release — the manual workflow is its only source.
+- rc and production tag builds deliberately do **not** build a clinical
+  installer, so an unsigned clinical installer can never appear on an rc
+  or production release — the manual workflow is its only source. An rc
+  is therefore a full rehearsal of the production process, manual step
+  included: QA validates the signed artifacts that actually ship, not
+  unsigned stand-ins.
 - `signed-installers.yml` fails hard if the eSigner secrets are missing,
   and both signing paths end in a `Get-AuthenticodeSignature` gate that
   refuses to publish anything not `Valid`.
@@ -31,25 +34,26 @@ dev/rc tag builds now).
   signed clinical installer contains the exact bytes QA validated; a
   rebuild could silently pick up a newer SDK from PyPI.
 - **Distribution policy:** Clinical software ships **only** as the signed
-  installer from `signed-installers.yml`, on full releases. Research
-  ships as the auto-signed installer (full releases) or the unsigned
-  portable zip. The Clinical portable zip is a QA-only artifact and is
-  never distributed. Testers see SmartScreen warnings on unsigned dev/rc
-  artifacts — expected and internal-only.
+  installer from `signed-installers.yml`, on full releases (the rc
+  dispatch is for rehearsal and QA, not distribution). Research ships as
+  the auto-signed installer (full releases) or the unsigned portable zip.
+  The Clinical portable zip is a QA-only artifact and is never
+  distributed. Testers see SmartScreen warnings on unsigned dev artifacts
+  — expected and internal-only.
 
 ## What gets signed, and where
 
 | Artifact | Signed by |
 |---|---|
-| `Open-Motion.exe` in the dist (→ both portables and every MSI harvest it) | production tag build (`package_artifacts.ps1` → `installer/sign.ps1`), once — `sign.ps1` skips already-signed files everywhere else |
-| Research Burn engine + Setup bundle | production tag build (`release-build.yml` → `installer/build_installer.ps1` → `sign.ps1`) |
+| `Open-Motion.exe` in the dist (→ both portables and every MSI harvest it) | rc/production tag build (`package_artifacts.ps1` → `installer/sign.ps1`), once — `sign.ps1` skips already-signed files everywhere else |
+| Research Burn engine + Setup bundle | rc/production tag build (`release-build.yml` → `installer/build_installer.ps1` → `sign.ps1`) |
 | Clinical Burn engine + Setup bundle | `signed-installers.yml` manual dispatch → `installer/build_installer.ps1` → `sign.ps1` |
 | `Open-Motion.msi` / `Open-Motion-Research.msi` | **Deliberately unsigned** (quota trim): the MSI is never distributed standalone — it ships only embedded in the signed bundle, the UAC elevation prompt users see comes from the signed Burn engine, and repair/uninstall run the already-installed cached copy. Residual cost: some security scanners flag unsigned MSIs. Re-add the `sign.ps1` call in `build_installer.ps1` if a bare MSI ever becomes a distributed artifact (e.g. enterprise/GPO deployment). |
 | WinUSB driver catalogs + `OpenMotionDriver-x64.msi` | `openmotion-sdk` repo, `driver-msi.yml` (sdk#216), once per driver change — the signed zip is vendored here as `resources/OpenMotionDriver-x64.zip` and never rebuilt or re-signed per app release |
 
 Everything funnels through `installer/sign.ps1`, driven by one
 environment variable: `CODESIGN_THUMBPRINT`. Unset → every signing step
-no-ops and the build ships unsigned (correct for dev/rc and local
+no-ops and the build ships unsigned (correct for dev and local
 builds; both signed paths guard against a silent skip with their
 signature-verify gates). Set → files already validly signed by that
 exact cert are skipped, so repeated packaging passes never re-spend a
@@ -62,12 +66,12 @@ per year); timestamping is free.
 
 | Event | Signings |
 |---|---|
-| dev/rc tag build | **0** |
-| Production tag build (automatic — exe + Research engine/bundle) | **3** |
-| Signed Installers dispatch, clinical, production tag | **2** |
-| **Total per production release** | **5** |
+| dev tag build | **0** |
+| rc or production tag build (automatic — exe + Research engine/bundle) | **3** |
+| Signed Installers dispatch, clinical, rc or production tag | **2** |
+| **Total per rc, and per production release** | **5 each** |
 | Driver refresh (sdk repo, rare) | **5** (4 catalogs + driver MSI) |
-| Extra: signing an rc installer for a beta update push | 3 first variant (unsigned exe), +2 per additional |
+| Extra: signing a dev-tag installer (unsigned exe) | 3 first variant, +2 per additional |
 
 macOS is unaffected: the DMG stays ad-hoc signed (Apple notarization is a
 separate, unrelated pipeline).
@@ -100,11 +104,14 @@ separate, unrelated pipeline).
 
 ## Testing the pipeline
 
-- Run **Signed Installers** against an existing (pre-release) tag with
-  `upload_to_release` unchecked — signs real artifacts and uploads them
-  only as workflow artifacts, leaving the release untouched. Costs 3
-  signings for one variant on a dev/rc tag (unsigned exe), +2 per
-  additional variant.
+- The first rc after the signing PRs merge is the natural end-to-end
+  test: its automatic build signs the Research installer (3 signings),
+  and dispatching **Signed Installers** for it rehearses the manual
+  clinical step (2). For an isolated test instead, run Signed Installers
+  against a dev tag with `upload_to_release` unchecked — signs real
+  artifacts and uploads them only as workflow artifacts, leaving the
+  release untouched; costs 3 signings for one variant (unsigned exe), +2
+  per additional variant.
 - For a dry run against SSL.com's **sandbox** environment instead of the
   production cert: set repo variable `ES_MODE=sandbox` and temporarily
   point the ES_* secrets at sandbox.ssl.com credentials. Unset when done.
@@ -140,14 +147,13 @@ self-signed key at zero eSigner cost. Details: sdk#216.
 - **`_REQUIRE_SIGNED_UPDATES` (motion_connector.py) is still `False`.**
   Flip it to `True` one release *after* the first signed release ships
   and verifies, so the in-app updater starts refusing unsigned bundles.
-  Caveat: dev/rc releases carry **unsigned** Setup bundles (built for QA
+  Caveat: **dev** releases carry unsigned Setup bundles (built for QA
   install-flow validation), so after the flip a beta-channel updater
-  would refuse them — either dispatch Signed Installers for the rc tag
-  to push a signed beta, or keep the flip scoped to production-update
-  channels. (A production release carries no clinical Setup bundle until
-  the manual dispatch runs; until then the updater logs "no installer
-  asset found" for it and offers nothing — run the dispatch promptly
-  after QA sign-off.)
+  would refuse a dev bundle; rc bundles are signed, so beta updates that
+  ride rc tags keep working. (An rc or production release carries no
+  clinical Setup bundle until the manual dispatch runs; until then the
+  updater logs "no installer asset found" for it and offers nothing —
+  run the dispatch promptly.)
 - **Driver: Microsoft attestation signing** (optional, later). The EV
   cert qualifies us to register a Microsoft Partner Center hardware
   account; attestation-signed driver packages install with no

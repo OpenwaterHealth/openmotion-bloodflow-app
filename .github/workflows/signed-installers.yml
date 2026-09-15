@@ -2,12 +2,13 @@ name: Signed Installers
 
 # On-demand signed-installer builds (#501, Cybersecurity upgrades epic #500).
 #
-# Policy: the SIGNED CLINICAL installer exists only through this workflow,
-# and only for full (production) releases — dispatch it against the X.Y.Z
-# tag after QA validates. The Research installer is signed automatically by
-# the production tag build in release-build.yml; the `variant` input here is
-# a fallback for re-generating it (or, exceptionally, signing an rc
-# installer for a beta in-app-update push).
+# Policy: the SIGNED CLINICAL installer exists only through this workflow.
+# Dispatch it against each rc tag (the rc is a full rehearsal of the
+# production process, this manual step included, so QA validates the signed
+# artifact that actually ships) and against the X.Y.Z production tag after
+# QA validates. The Research installer is signed automatically by the
+# rc/production tag build in release-build.yml; the `variant` input here is
+# a fallback for re-generating it.
 #
 # This workflow does NOT rebuild the app. It downloads the portable zip the
 # tag's automatic build published — the exact bytes QA validated — and
@@ -17,13 +18,14 @@ name: Signed Installers
 # validated" guarantee.
 #
 # eSigner signings are METERED (fixed allowance per year). Cost per run:
-#   clinical on a production tag: 2   (Burn engine + Setup bundle — the exe
-#                                      inside the zip is already signed by
-#                                      the tag build; sign.ps1 skips it, and
-#                                      the MSI is deliberately unsigned, see
-#                                      build_installer.ps1)
-#   on a dev/rc tag (unsigned exe): +1 for the exe
-#   each additional variant:       +2
+#   clinical on an rc/production tag: 2  (Burn engine + Setup bundle — the
+#                                         exe inside the zip is already
+#                                         signed by the tag build; sign.ps1
+#                                         skips it, and the MSI is
+#                                         deliberately unsigned, see
+#                                         build_installer.ps1)
+#   on a dev tag (unsigned exe):        +1 for the exe
+#   each additional variant:            +2
 # The driver MSI inside the bundles is pre-signed in the SDK repo (sdk#216)
 # and costs nothing here. Unlike the unsigned QA artifacts, signing here is
 # mandatory: missing secrets or an invalid signature fails the run — this
@@ -42,7 +44,7 @@ on:
         required: true
         type: string
       variant:
-        description: "Which installer(s) to build and sign (research is normally auto-signed by the production tag build)"
+        description: "Which installer(s) to build and sign (research is normally auto-signed by the rc/production tag build)"
         type: choice
         options:
           - clinical
@@ -138,10 +140,10 @@ jobs:
           Write-Host "Signing as: $($cert.Subject)  [$($cert.Thumbprint)]"
           "CODESIGN_THUMBPRINT=$($cert.Thumbprint)" >> $env:GITHUB_ENV
 
-      # One exe signature covers every artifact of this run — and on a
-      # production tag it costs nothing: the tag build already signed the
-      # exe inside the zip, and sign.ps1 skips files validly signed by this
-      # cert. Only a dev/rc zip (unsigned exe) spends a signing here.
+      # One exe signature covers every artifact of this run — and on an
+      # rc/production tag it costs nothing: the tag build already signed
+      # the exe inside the zip, and sign.ps1 skips files validly signed by
+      # this cert. Only a dev zip (unsigned exe) spends a signing here.
       - name: Sign Open-Motion.exe (skipped if already signed)
         shell: pwsh
         run: |
