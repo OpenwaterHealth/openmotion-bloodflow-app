@@ -4,9 +4,13 @@ name: HIL tests
 # self-hosted runner (MOTION-RUNNER-1).
 #
 # Test set is auto-selected from the upstream commit:
-#   * head SHA has a release-pattern tag  →  pytest -m release
+#   * head SHA has a release-pattern tag   →  pytest -m release
+#   * head SHA has a dev/rc pre-release tag →  pytest -m dev
 #   * head_branch == "next" (no tag)       →  pytest -m dev
 #   * anything else                        →  skip
+# Build & Release runs on tags only (#501), so in practice the dev set fires
+# on dev/rc tag builds; the next-branch clause is kept as a harmless fallback
+# should branch builds ever return.
 #
 # Required runner-side environment:
 #   SHELLY_IP_ADDRESS — IP/hostname of the Shelly outlet powering the DUT.
@@ -65,8 +69,11 @@ jobs:
         run: |
           $repo = '${{ github.repository }}'
           if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
-            $rid = (gh run list --repo $repo -w "Build & Release" -b next -s success -L 1 --json databaseId -q '.[0].databaseId').Trim()
-            if (-not $rid) { throw "No successful 'Build & Release' run on next" }
+            # Latest successful build regardless of ref — Build & Release
+            # runs on tags only (#501), so filtering on -b next would find
+            # nothing.
+            $rid = (gh run list --repo $repo -w "Build & Release" -s success -L 1 --json databaseId -q '.[0].databaseId').Trim()
+            if (-not $rid) { throw "No successful 'Build & Release' run found" }
             $sha = (gh run view --repo $repo $rid --json headSha -q '.headSha').Trim()
             $set = '${{ inputs.test_set }}'
             $skip = $false
@@ -81,11 +88,16 @@ jobs:
             # works for both lightweight and annotated tags.
             $tagsAtSha = gh api "repos/$repo/tags" --paginate --jq ".[] | select(.commit.sha == \`"$sha\`") | .name"
             $relTag = $tagsAtSha | Where-Object { $_ -match '^(pre-)?[0-9]+\.[0-9]+\.[0-9]+$' } | Select-Object -First 1
+            $preTag = $tagsAtSha | Where-Object { $_ -match '^[0-9]+\.[0-9]+\.[0-9]+-(dev|rc)\.[0-9]+$' } | Select-Object -First 1
 
             if ($relTag) {
               $set = 'release'
               $skip = $false
               Write-Host "release tag '$relTag' on $sha → test set: release"
+            } elseif ($preTag) {
+              $set = 'dev'
+              $skip = $false
+              Write-Host "pre-release tag '$preTag' on $sha → test set: dev"
             } elseif ($branch -eq 'next') {
               $set = 'dev'
               $skip = $false

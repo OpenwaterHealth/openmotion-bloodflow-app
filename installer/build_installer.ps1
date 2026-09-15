@@ -106,8 +106,13 @@ if ((Get-Item $appMsi).Length -lt 1MB) {
     throw "app MSI is only $((Get-Item $appMsi).Length) bytes; file harvesting from $DistAbs produced an empty package"
 }
 
-# sign the app MSI (skippable)
-powershell -NoProfile -File installer\sign.ps1 -Files $appMsi
+# The app MSI is DELIBERATELY NOT signed (quota trim, #501): eSigner
+# signings are metered, and in our flow the MSI is never distributed
+# standalone — it ships only embedded in the Burn bundle, whose signed
+# engine is what produces the UAC elevation prompt, and repair/uninstall
+# run the already-installed cached copy. The exe inside it and the bundle
+# around it are signed. Re-add a sign.ps1 call here if a bare MSI ever
+# becomes a distributed artifact (e.g. enterprise/GPO deployment).
 
 # -- build the Burn bundle --
 # -bindpath installer so the custom BA ThemeFile/LocalizationFile payloads

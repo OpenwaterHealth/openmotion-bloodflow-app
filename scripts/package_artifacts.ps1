@@ -37,6 +37,14 @@ if (-not (Test-Path (Join-Path $DistDir 'Open-Motion.exe'))) {
 }
 $cfgPath = Join-Path $DistDir "_internal\config\app_config.json"
 
+# -- Authenticode-sign the app exe in the dist (no-op without a cert). One
+#    signature covers all 4 artifacts: both zips and both MSIs harvest this
+#    same dist tree. The MSIs and Setup bundles are signed separately by
+#    installer/build_installer.ps1. --
+powershell -NoProfile -File (Join-Path $root "installer\sign.ps1") `
+    -Files (Join-Path $DistDir "Open-Motion.exe")
+if ($LASTEXITCODE -ne 0) { throw "signing Open-Motion.exe failed" }
+
 # -- WiX gate: skip installers (zips still build) when the toolchain is absent --
 $buildInstallers = -not $SkipInstaller
 if ($buildInstallers -and -not (Test-WixAvailable)) {
