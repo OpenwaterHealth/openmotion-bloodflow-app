@@ -57,7 +57,7 @@ from motion_config import (
     camera_settings_from_config,
     ensure_tec_trip,
     laser_pulse_width_from_config,
-    load_tec_voltage_params,
+    tec_voltage_params,
     select_tec_voltage,
     ta_pulse_width_write,
     ALT_PULSE_WIDTH_SAFETY_CEILING_US,
@@ -1126,6 +1126,8 @@ class MotionConnector(QObject):
         interface: MotionInterface,
         app_config=None,
         baseline_config=None,
+        settings_store=None,
+        legacy_import=None,
         data_dir=None,
         config_dir="config",
         parent=None,
@@ -1138,9 +1140,12 @@ class MotionConnector(QObject):
 
         # Store the full config dict — exposed to QML as appConfig property
         self._app_config = dict(cfg)
-        # Shipped baseline (defaults + read-only bundled config); runtime
-        # changes are persisted as a diff against this (see _save_app_config).
+        # Compiled baseline (config/app_config.py + dev launch flags); the
+        # PREFERENCE/STATE tiers are persisted as a diff against this into
+        # the scans.db settings table (see _save_app_config, #546). No file.
         self._baseline_config = dict(baseline_config or {})
+        self._settings_store = settings_store
+        self._legacy_import = legacy_import
 
         # Bug-report context (see sendBugReport). app_version + log_path come
         # from main.py; support_email / bug_report_smtp from app config.
@@ -1169,6 +1174,17 @@ class MotionConnector(QObject):
         # self._directory is resolved.
         from audit_log import AuditLog
         self._audit = AuditLog(getattr(self._interface, "scan_db_path", None))
+        if self._legacy_import:
+            # One-time import of a pre-#546 app_config.local.json (main.py
+            # did the import + delete; only preference/state keys were kept).
+            self._audit.log("settings_migrated", {
+                "source": "app_config.local.json",
+                "keys": sorted(self._legacy_import),
+            })
+        if self._settings_store is not None and not self._settings_store.enabled:
+            self._audit.log("settings_store_unavailable", {
+                "path": self._settings_store.path,
+            })
 
         # Unpack operational settings from config
         self._force_laser_fail            = bool(cfg.get("forceLaserFail", False))
@@ -1290,7 +1306,6 @@ class MotionConnector(QObject):
         # Engineering → "Save telemetry CSV" (#471); default False so a
         # config missing the key fails closed for clinical use.
         self._write_telemetry_csv         = bool(cfg.get("writeTelemetryCsv", False))
-        self._uncorrected_only            = bool(cfg.get("uncorrectedOnly", False))
 
         # Initialize CSV output directory to user's home directory
         self._csv_output_directory = os.path.expanduser("~")
@@ -1367,7 +1382,7 @@ class MotionConnector(QObject):
         # doesn't match the latest request is stale and dropped.
         self._past_scan_load_seq = 0
 
-        self._tec_voltage_params = load_tec_voltage_params(config_dir)
+        self._tec_voltage_params = tec_voltage_params()
         self._console_mutex = QRecursiveMutex()
 
         ft_mean     = cfg.get("ft_min_mean_per_camera")
@@ -2205,7 +2220,7 @@ class MotionConnector(QObject):
                     self._interface.log_console_info()
                     # EVT2 consoles (board-ID strap 1) need +1.16 V on the
                     # TEC DAC to hold the lasers at 25 C; DVT and beyond use
-                    # TEC_VOLTAGE_DEFAULT from tec_params.json (issue #269).
+                    # TEC_VOLTAGE_DEFAULT from config/tec_params.py (issue #269).
                     tec_voltage, tec_reason = select_tec_voltage(
                         self._interface.console, self._tec_voltage_params
                     )
@@ -3220,7 +3235,7 @@ class MotionConnector(QObject):
                 self._directory,
                 dest_dir,
                 time.time(),
-                config_path=resource_path("config", "app_config.json"),
+                config_json=self._effective_config_json(),
                 extra_info={
                     "app_version": app_version,
                     "sdk_version": sdk_version,
@@ -3305,15 +3320,15 @@ class MotionConnector(QObject):
 
     @directory.setter
     def directory(self, path):
-        # Normalize incoming QML "file:///" path
+        # Normalize incoming QML "file:///" path. The data directory is a
+        # compiled constant since #546 (the settings table lives under it,
+        # so it cannot be a saved preference); this setter only re-points
+        # the running instance and persists nothing.
         if path.startswith("file:///"):
             path = path[8:] if path[9] != ":" else path[8:]
         self._directory = path
-        self._app_config["dataDirectory"] = path
-        self._save_app_config()
         logger.debug(f"[Connector] Directory set to: {self._directory}")
         self.directoryChanged.emit()
-        self.appConfigChanged.emit()
 
     @property
     def _data_root(self) -> str:
@@ -3329,13 +3344,49 @@ class MotionConnector(QObject):
     def appConfig(self):
         return self._app_config
 
-    def _save_app_config(self):
-        """Persist runtime config changes as a diff vs the shipped baseline.
+    def _effective_config_json(self) -> str:
+        """The running config as pretty JSON, for the debug bundle (there is
+        no config file to copy any more — this is what the app actually
+        runs with, tier per key included)."""
+        payload = {
+            k: {"value": v, "tier": config_store.tier_of(k)}
+            for k, v in sorted(self._app_config.items())
+        }
+        return json.dumps(payload, indent=2, sort_keys=True, default=str)
 
-        Writes only changed keys to the writable app_config.local.json under
-        %PROGRAMDATA%, never the read-only bundled config in Program Files.
+    def _save_app_config(self):
+        """Persist the PREFERENCE / STATE tiers as a diff vs the compiled
+        baseline into the scans.db settings table (#546).
+
+        SESSION keys (engineering mode, debug flags, alt settings) and
+        CONSTANT keys are never written anywhere; a key back at its
+        compiled value has its row deleted. No-op without a store (unit
+        tests that build the connector with __new__).
         """
-        config_store.save_overrides(self._app_config, self._baseline_config)
+        store = getattr(self, "_settings_store", None)
+        if store is None:
+            return
+        to_save, to_delete = config_store.persistable_diff(
+            self._app_config, self._baseline_config
+        )
+        if to_save:
+            store.save(to_save)
+        if to_delete:
+            store.delete(to_delete)
+
+    def _refuse_config_write(self, keys, source: str) -> None:
+        """A runtime write to a compiled CONSTANT (or a key that is not in
+        the compiled config at all) is refused and recorded — that is the
+        tier-1 contract (#546). The tier table is the authority, not this
+        instance's dict, so a connector built with a partial config in a
+        test can still set any session/preference key."""
+        keys = sorted(keys)
+        logger.warning(
+            "[Connector] %s refused for compiled/unknown config key(s) %s",
+            source, keys,
+        )
+        self._audit.log("config_write_refused",
+                        {"source": source, "keys": keys})
 
     @pyqtSlot(str, result=bool)
     def checkEngineeringPassword(self, pw: str) -> bool:
@@ -3355,10 +3406,13 @@ class MotionConnector(QObject):
         """Update a single config key, persist to disk, and notify QML."""
         # QML arrays/objects reach 'QVariant' slots as QJSValue, which is
         # not JSON-serializable — the first array-valued key (#446's
-        # altCameraGains) crashed the app inside save_overrides. Unwrap to
+        # altCameraGains) crashed the app inside the JSON persist. Unwrap to
         # plain Python at the bridge, once, for every caller.
         if isinstance(value, QJSValue):
             value = value.toVariant()
+        if config_store.tier_of(key) is None or config_store.refused_keys([key]):
+            self._refuse_config_write([key], "setConfig")
+            return
         old = self._app_config.get(key)
         self._app_config[key] = value
         self._save_app_config()
@@ -3379,6 +3433,13 @@ class MotionConnector(QObject):
             k: (v.toVariant() if isinstance(v, QJSValue) else v)
             for k, v in configs.items()
         }
+        refused = [
+            k for k in configs
+            if config_store.tier_of(k) is None or config_store.refused_keys([k])
+        ]
+        if refused:
+            self._refuse_config_write(refused, "saveConfigs")
+            configs = {k: v for k, v in configs.items() if k not in refused}
         changes = {}
         for k, v in configs.items():
             old = self._app_config.get(k)

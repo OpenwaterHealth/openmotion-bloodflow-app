@@ -87,13 +87,13 @@ The application creates two directories for output:
 
 Both directories live under a single root, chosen in this order:
 
-1. `dataDirectory` from `config/app_config.json` (also settable from the UI directory picker)
+1. `dataDirectory` from `config/app_config.py` (a compiled constant since #546; `python main.py --data-root <dir>` for source runs)
 2. `portableMode` (build-time flag): next to the exe for a portable build, `%PROGRAMDATA%\Openwater` for an installed build — or the current working directory in a dev run, when writable
 3. `~/Documents/Open-Motion/` as a last-resort fallback (e.g. when the .app is launched from Finder on macOS and cwd is `/`)
 
 ## Configuration
 
-Edit `config/app_config.json` to customize behavior:
+The shipped values are compiled in (`config/app_config.py`, #546); each key belongs to a tier — constant, session-only, or a persisted operator preference. Edit the module to change a shipped value:
 
 | Key | Default | Description |
 |-----|---------|-------------|

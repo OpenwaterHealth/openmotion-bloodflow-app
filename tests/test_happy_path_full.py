@@ -86,28 +86,22 @@ from hil_helpers import (
     dismiss_signal_quality_modal,
     find_app_log,
     focus_combobox_by_label,
-    force_app_config_value,
     is_app_alive,
     log_size,
     read_app_config_value,
     recalibrate_panel_buttons,
     wait_for_pattern,
-    write_app_config_value,
 )
 
 pytestmark = pytest.mark.release
 
-# Scan Settings + Check are hidden in reduced mode; force the on-disk
-# flag false at module-import time (before the session-scoped ``app``
-# fixture launches the app) and restore it on teardown. Same pattern as
-# test_scan_flow / test_scan_settings / test_usb_disconnect_freeze.
-_INITIAL_REDUCED_MODE = force_app_config_value("reducedMode", False)
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _restore_reduced_mode_on_module_teardown():
-    yield
-    write_app_config_value("reducedMode", _INITIAL_REDUCED_MODE)
+# Scan Settings + Check are hidden in clinical mode; declare the forced
+# value so conftest passes it to a from-source launch as --config-override
+# (#546: the config is compiled in, there is no on-disk flag). Same pattern
+# as test_scan_flow / test_scan_settings / test_usb_disconnect_freeze. (This
+# module used to call force_app_config_value("reducedMode", ...) at import
+# time — a retired key, written at collection of every run.)
+FORCE_APP_CONFIG = {"clinicalMode": False}
 
 
 # ─────────────────────────────────────────────

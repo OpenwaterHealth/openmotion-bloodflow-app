@@ -40,10 +40,10 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture(autouse=True)
 def _no_config_writes(monkeypatch):
-    """_save_app_config must not clobber the repo's real app_config.local.json
-    (save_overrides writes to app_paths.local_config_path, not tmp_path)."""
+    """_save_app_config persists nothing here: a connector built with
+    __new__ has no settings store (#546), so nothing reaches scans.db."""
     from utils import config_store
-    monkeypatch.setattr(config_store, "save_overrides", lambda cur, base: None)
+    monkeypatch.setattr(config_store, "persistable_diff", lambda cur, base: ({}, []))
 
 
 FW_GAINS = [16, 4, 2, 1, 1, 2, 4, 16]

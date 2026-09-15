@@ -144,7 +144,6 @@ Item {
     function close() {
         // Commit any in-progress text field edit before saving
         panel.forceActiveFocus()
-        MotionInterface.directory = dataPathField.text
         MotionInterface.saveConfigs({
             "leftMask":           maskFromIndex(defaultLeftMaskIndex),
             "rightMask":          maskFromIndex(defaultRightMaskIndex),
@@ -596,6 +595,9 @@ Item {
                 SectionCard {
                     title: "Data Output"
 
+                    // Read-only since #546: the data directory is a compiled
+                    // constant (the settings table that would persist a
+                    // choice lives under it). Dev runs use --data-root.
                     FieldRow {
                         label: "Output Folder"
                         TextField {
@@ -610,20 +612,6 @@ Item {
                                 color: root.colBgInput; radius: 4
                                 border.color: root.colBorderSoft; border.width: 1
                             }
-                        }
-                        ActionButton {
-                            text: "Browse"
-                            Layout.preferredWidth: 80
-                            onClicked: folderDialog.open()
-                        }
-
-                        Dialogs.FolderDialog {
-                            id: folderDialog
-                            title: "Select Data Output Directory"
-                            currentFolder: Qt.platform.os === "windows"
-                                ? "file:///" + dataPathField.text.replace("\\", "/")
-                                : dataPathField.text
-                            onAccepted: dataPathField.text = selectedFolder.toString().replace("file:///", "")
                         }
                     }
 

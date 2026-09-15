@@ -55,19 +55,20 @@ def test_no_qml_references_bvi_low_pass():
 
 def test_enabled_bool_stays_gone():
     """The filter is governed by the cutoff number alone — no bool key."""
+    from config import app_config as compiled
+
     assert "bviLowPassEnabled" not in (
         (REPO_ROOT / "main.py").read_text(encoding="utf-8"))
-    with open(REPO_ROOT / "config" / "app_config.json",
-              encoding="utf-8") as f:
-        assert "bviLowPassEnabled" not in json.load(f)
+    assert "bviLowPassEnabled" not in compiled.APP_CONFIG
 
 
 def test_cutoff_key_ships_at_20():
-    with open(REPO_ROOT / "config" / "app_config.json",
-              encoding="utf-8") as f:
-        assert json.load(f)["bviLowPassCutoffHz"] == 20.0
+    from config import app_config as compiled
+
+    assert compiled.APP_CONFIG["bviLowPassCutoffHz"] == 20.0
+    assert compiled.tier_of("bviLowPassCutoffHz") == compiled.CONSTANT
     assert '"bviLowPassCutoffHz": 20.0' in (
-        (REPO_ROOT / "main.py").read_text(encoding="utf-8"))
+        (REPO_ROOT / "config" / "app_config.py").read_text(encoding="utf-8"))
 
 
 # ── Config-value resolution contract ────────────────────────────────────

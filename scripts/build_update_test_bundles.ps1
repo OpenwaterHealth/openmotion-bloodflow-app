@@ -33,24 +33,21 @@ Write-Host "Building against SDK: $sdk" -ForegroundColor Cyan
 function Build-ResearchBundle([string]$ver, [string]$apiUrl) {
     (Get-Content version.py) -replace '^_FALLBACK_VERSION = .*', "_FALLBACK_VERSION = `"$ver`"" |
         Set-Content version.py -Encoding UTF8
+    . (Join-Path $PSScriptRoot "build_common.ps1")
+    # Research variant + optional updateApiUrl, both compiled in (#546): stamp
+    # config/app_config.py BEFORE PyInstaller, restore it afterwards. There is
+    # no bundled JSON to edit after the build any more.
+    $origModule = Set-BuildVariant -Clinical $false
     try {
-        & conda run -n $CondaEnv python -m PyInstaller -y openwater.spec
-        if (-not (Test-Path "dist\Open-Motion\Open-Motion.exe")) { throw "dist missing after PyInstaller" }
-        # Research (clinicalMode:false) via the shared helper; optional
-        # updateApiUrl injection stays a JSON round-trip (no BOM, preserves
-        # the false above).
-        $cfgPath = "dist\Open-Motion\_internal\config\app_config.json"
-        . (Join-Path $PSScriptRoot "build_common.ps1")
-        [void](Set-ClinicalMode -ConfigPath $cfgPath -Clinical $false)
         if ($apiUrl) {
-            $py = "import json; p='dist/Open-Motion/_internal/config/app_config.json'; " +
-                  "d=json.load(open(p,encoding='utf-8')); d['updateApiUrl']='$apiUrl'; " +
-                  "json.dump(d, open(p,'w',encoding='utf-8'), indent=2)"
-            & conda run -n $CondaEnv python -c $py
+            [void](Set-CompiledConfigValue -Key "updateApiUrl" -PythonValue "'$apiUrl'")
         }
-        & powershell -NoProfile -ExecutionPolicy Bypass -File installer\build_installer.ps1 -Variant research -Version $ver
+        & conda run -n $CondaEnv python -m PyInstaller -y openwater.spec --distpath dist\research --workpath build\research
+        if (-not (Test-Path "dist\research\Open-Motion\Open-Motion.exe")) { throw "dist missing after PyInstaller" }
+        & powershell -NoProfile -ExecutionPolicy Bypass -File installer\build_installer.ps1 -Variant research -DistDir "dist\research\Open-Motion" -Version $ver
         if ($LASTEXITCODE -ne 0) { throw "build_installer failed for $ver" }
     } finally {
+        Restore-ConfigModule -Text $origModule
         git checkout -- version.py
     }
 }

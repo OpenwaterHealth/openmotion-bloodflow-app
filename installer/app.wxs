@@ -52,6 +52,13 @@
       <RemoveFolder Id="RemoveAppShortcutFolder" On="uninstall" />
       <RegistryValue Root="HKLM" Key="Software\Openwater\Open-Motion"
                      Name="installed" Type="integer" Value="1" KeyPath="yes" />
+      <!-- Install-mode marker (#546): the app derives "installed vs portable"
+           from this at launch (utils/app_paths.py) — an exe living in this
+           directory scatters its writable state to %PROGRAMDATA%; the
+           byte-identical exe in the portable zip keeps it next to itself.
+           HKLM, so only an administrator can write it. -->
+      <RegistryValue Root="HKLM" Key="Software\Openwater\Open-Motion"
+                     Name="InstallDir" Type="string" Value="[APPFOLDER]" />
     </Component>
 
     <!-- Optional desktop shortcut (All Users desktop, since perMachine). Only

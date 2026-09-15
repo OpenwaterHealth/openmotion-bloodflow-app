@@ -1,11 +1,10 @@
 """
 Reliability Test Script — overnight life test in clinical (FDA) mode.
 
-The script runs the app exactly as configured on the host. Set the desired
-mode before launching, e.g. ``"clinicalMode": true`` in the writable
-overrides file ``%PROGRAMDATA%\\Openwater\\app_config.local.json`` (the
-packaged app's bundled config in Program Files is read-only). A module
-fixture logs the effective mode and warns when clinicalMode is off.
+The script runs the app exactly as built on the host. Since #546 the
+Clinical/Research split is compiled into the exe (there is no config file
+to edit), so install the Clinical build for a clinical run. A module fixture
+logs the effective mode and warns when clinicalMode is off.
 """
 
 import atexit
@@ -92,7 +91,7 @@ SLEEP             = 2
 # "Open-Motion" (clinical) or "Open-Motion Research".
 APP_KEYWORDS = ("open-motion", "openmotion", "bloodflow", "openwater")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-APP_CONFIG_PATH = PROJECT_ROOT / "config" / "app_config.json"
+APP_CONFIG_MODULE = PROJECT_ROOT / "config" / "app_config.py"
 
 # Fallback Start-Scan button position (relative to the app window),
 # used when UIA can't find the modal's button element.
@@ -307,10 +306,9 @@ def click_sidebar(rx: float, ry: float, label: str = "") -> None:
 # ═══════════════════════════════════════════════════════════════════
 # App config helpers (read-only — the operator sets the mode)
 # ═══════════════════════════════════════════════════════════════════
-# The packaged app layers %PROGRAMDATA%\Openwater\app_config.local.json
-# over its read-only bundled config (see utils/config_store.py). This
-# script never writes either file: put the desired mode in the overrides
-# file before starting the run.
+# Since #546 the packaged app has no config file: the shipped values are
+# compiled in (config/app_config.py) and operator preferences persist in the
+# ``settings`` table of scans.db. This script never writes either.
 def _writable_root() -> Path:
     """The app's writable data root (config overrides, logs, scan data).
 
@@ -322,24 +320,27 @@ def _writable_root() -> Path:
 
 
 def _merged_app_config() -> dict:
-    """Best-effort view of the config the app reads: the installed exe's
-    bundled config (repo config as fallback) + writable overrides."""
+    """Best-effort view of the config the app runs with: the repo's compiled
+    config/app_config.py (the installed exe compiled the same module; its
+    CLINICAL_MODE stamp is unknowable from outside, so the window title is
+    the authority for the variant) + the scans.db settings table."""
     cfg: dict = {}
-    exe = _running_app_exe_path() or _find_installed_exe()
-    if exe:
-        bundled = Path(exe).parent / "_internal" / "config" / "app_config.json"
-        try:
-            cfg.update(json.loads(bundled.read_text(encoding="utf-8")))
-        except Exception:
-            pass
-    if not cfg:
-        try:
-            cfg.update(json.loads(APP_CONFIG_PATH.read_text(encoding="utf-8")))
-        except Exception:
-            pass
     try:
-        overrides = _writable_root() / "app_config.local.json"
-        cfg.update(json.loads(overrides.read_text(encoding="utf-8")))
+        root = str(PROJECT_ROOT)
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from config import app_config as compiled
+
+        cfg.update(compiled.compiled_config())
+    except Exception:
+        pass
+    try:
+        import sqlite3
+
+        db = _writable_root() / "data" / "scans.db"
+        with sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True) as conn:
+            for key, raw in conn.execute("SELECT key, value FROM settings"):
+                cfg[key] = json.loads(raw)
     except Exception:
         pass
     return cfg
@@ -1233,10 +1234,8 @@ _Report generated automatically by `{Path(__file__).name}` on \
 def _log_app_mode():
     """Log the effective app mode; warn when clinicalMode is off.
 
-    The script must not write any config file (the bundled config is
-    read-only under Program Files, and import-time writes to the repo
-    config abort collection — see conftest). The operator sets the mode
-    in app_config.local.json before the run instead.
+    The script cannot set the mode: since #546 clinicalMode is compiled
+    into the exe. Install the Clinical build for a clinical run.
     """
     cfg = _merged_app_config()
     clinical = cfg.get("clinicalMode")
@@ -1245,8 +1244,8 @@ def _log_app_mode():
     if clinical is not True:
         log.warning(
             "clinicalMode is not enabled — this reliability run is meant to "
-            "exercise clinical (FDA) mode. Set \"clinicalMode\": true in "
-            f"{_writable_root() / 'app_config.local.json'} and restart."
+            "exercise clinical (FDA) mode. Install the Clinical build "
+            "(clinicalMode is compiled in since #546) and restart."
         )
     yield
 

@@ -4,38 +4,35 @@ import sys
 
 import pytest
 
-from utils import app_paths, config_store
+from config import app_config as compiled
+from utils import app_paths
 
 
 def _root(monkeypatch, tmp_path):
     monkeypatch.setattr(app_paths, "DATA_ROOT_OVERRIDE", tmp_path)
 
 
-def _shipped(monkeypatch, path):
-    """Pin the shipped-config layer at ``path`` (config_store has its own
-    resource_path binding, so patch it there)."""
-    real = config_store.resource_path
-
-    def fake(*parts):
-        if parts == ("config", "app_config.json"):
-            return path
-        return real(*parts)
-
-    monkeypatch.setattr(config_store, "resource_path", fake)
+def _compiled(monkeypatch, **values):
+    """Pretend the build stamped these values into config/app_config.py."""
+    for key, value in values.items():
+        monkeypatch.setitem(compiled.APP_CONFIG, key, value)
 
 
 @pytest.mark.unit
-def test_load_app_config_applies_local_override(tmp_path, monkeypatch):
+def test_load_app_config_does_not_read_the_legacy_overrides_file(tmp_path, monkeypatch):
+    """Since #546 no file can set engineeringMode: the legacy
+    app_config.local.json is only ever imported (preference keys) by
+    main() once the settings store is open, never by the loader."""
     _root(monkeypatch, tmp_path)
     (tmp_path / "app_config.local.json").write_text(
-        json.dumps({"engineeringMode": True}), encoding="utf-8"
+        json.dumps({"engineeringMode": True, "bfiMax": 5.0}), encoding="utf-8"
     )
     main = importlib.import_module("main")
     cfg = main._load_app_config()
-    assert cfg["engineeringMode"] is True              # override applied over baseline
-    # baseline is stashed for the connector (value comes from the shipped
-    # config file, so assert presence, not a specific value).
-    assert "engineeringMode" in main._APP_CONFIG_BASELINE
+    assert cfg["engineeringMode"] is False
+    assert cfg["bfiMax"] == 10.0
+    assert (tmp_path / "app_config.local.json").exists()   # untouched here
+    assert main._APP_CONFIG_BASELINE["engineeringMode"] is False
 
 
 # --------------------------------------------------------------------------
@@ -50,11 +47,7 @@ def test_load_app_config_applies_local_override(tmp_path, monkeypatch):
 @pytest.mark.unit
 def test_env_vars_no_longer_steer_the_build_variant(tmp_path, monkeypatch):
     _root(monkeypatch, tmp_path)
-    shipped = tmp_path / "app_config.json"
-    shipped.write_text(
-        json.dumps({"clinicalMode": False, "portableMode": False}), encoding="utf-8"
-    )
-    _shipped(monkeypatch, shipped)
+    _compiled(monkeypatch, clinicalMode=False)
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setenv("OPENMOTION_CLINICAL", "1")
     monkeypatch.setenv("OPENMOTION_PORTABLE", "1")
@@ -71,11 +64,7 @@ def test_env_vars_no_longer_steer_the_build_variant(tmp_path, monkeypatch):
 @pytest.mark.unit
 def test_dev_flags_flip_variant_in_merged_and_baseline(tmp_path, monkeypatch):
     _root(monkeypatch, tmp_path)
-    shipped = tmp_path / "app_config.json"
-    shipped.write_text(
-        json.dumps({"clinicalMode": False, "portableMode": False}), encoding="utf-8"
-    )
-    _shipped(monkeypatch, shipped)
+    _compiled(monkeypatch, clinicalMode=False)
     monkeypatch.setattr(sys, "platform", "win32")
 
     main = importlib.import_module("main")
@@ -96,7 +85,8 @@ def test_parse_dev_args_source_run():
     ]
     dev, qt_argv = main._parse_dev_args(argv, frozen=False)
     assert dev == {
-        "clinical": False, "portable": True, "data_root": "D:\\ow", "ignored": None,
+        "clinical": False, "portable": True, "data_root": "D:\\ow",
+        "config_override": None, "ignored": None,
     }
     # Qt's own single-dash options pass through, ours are stripped.
     assert qt_argv == ["main.py", "-platform", "offscreen"]
@@ -111,8 +101,28 @@ def test_parse_dev_args_clinical_and_defaults():
     assert qt_argv == ["main.py"]
 
     dev, qt_argv = main._parse_dev_args(["main.py"], frozen=False)
-    assert dev == {"clinical": None, "portable": None, "data_root": None, "ignored": None}
+    assert dev == {
+        "clinical": None, "portable": None, "data_root": None,
+        "config_override": None, "ignored": None,
+    }
     assert qt_argv == ["main.py"]
+
+
+@pytest.mark.unit
+def test_parse_dev_args_config_override_is_a_json_object():
+    """--config-override (#546) replaces editing a config file for source
+    runs — the HIL harness forces engineeringMode / clinicalMode with it."""
+    main = importlib.import_module("main")
+    dev, qt_argv = main._parse_dev_args(
+        ["main.py", "--config-override", '{"engineeringMode": true, "tecTripTempC": 42}'],
+        frozen=False,
+    )
+    assert dev["config_override"] == {"engineeringMode": True, "tecTripTempC": 42}
+    assert qt_argv == ["main.py"]
+    with pytest.raises(SystemExit):
+        main._parse_dev_args(["main.py", "--config-override", "[1, 2]"], frozen=False)
+    with pytest.raises(SystemExit):
+        main._parse_dev_args(["main.py", "--config-override", "{nope"], frozen=False)
 
 
 @pytest.mark.unit
@@ -121,12 +131,17 @@ def test_parse_dev_args_frozen_build_ignores_the_flags():
     (#233); the flags must be dropped, not applied, and still kept away from
     Qt."""
     main = importlib.import_module("main")
-    argv = ["Open-Motion.exe", "--clinical", "--portable", "--data-root", "X"]
+    argv = ["Open-Motion.exe", "--clinical", "--portable", "--data-root", "X",
+            "--config-override", '{"engineeringMode": true}']
     dev, qt_argv = main._parse_dev_args(argv, frozen=True)
     assert dev["clinical"] is None
     assert dev["portable"] is None
     assert dev["data_root"] is None
-    assert dev["ignored"] == {"clinical": True, "portable": True, "data_root": "X"}
+    assert dev["config_override"] is None
+    assert dev["ignored"] == {
+        "clinical": True, "portable": True, "data_root": "X",
+        "config_override": {"engineeringMode": True},
+    }
     assert qt_argv == ["Open-Motion.exe"]
 
 
@@ -173,11 +188,10 @@ def test_pin_qt_environment_is_idempotent_on_a_clean_env():
 # resolving it *after* sys.platform is faked to "darwin" makes pytest take its
 # POSIX branch and call os.getuid(), which does not exist on Windows.
 
-def _config_with(tmp_path, monkeypatch, platform, overrides, **dev_flags):
+def _config_with(tmp_path, monkeypatch, platform, stamped, **dev_flags):
+    """``stamped`` plays the build's CLINICAL_MODE stamp."""
     _root(monkeypatch, tmp_path)
-    (tmp_path / "app_config.local.json").write_text(
-        json.dumps(overrides), encoding="utf-8"
-    )
+    _compiled(monkeypatch, **stamped)
     monkeypatch.setattr(sys, "platform", platform)
     main = importlib.import_module("main")
     return main, main._load_app_config(**dev_flags)

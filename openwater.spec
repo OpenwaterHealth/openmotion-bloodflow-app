@@ -34,7 +34,10 @@ for item in ("main.qml",):
             f"run PyInstaller from the repo root ({SPECPATH})."
         )
     datas.append((item, "."))
-for folder in ("pages", "components", "assets", "config", "processing"):
+# NOTE: config/ is no longer a data folder — config/app_config.py and
+# config/tec_params.py are Python modules that main.py imports, so the
+# Analysis below compiles them into the bundle like any other code (#546).
+for folder in ("pages", "components", "assets", "processing"):
     if not os.path.isdir(folder):
         raise SystemExit(
             f"[spec] FATAL: required resource folder {folder!r} not found in "
@@ -142,13 +145,16 @@ except Exception:
 # requirements.txt, so a local build inherits whatever happens to be in the
 # conda env - which is exactly how this shipped broken once. Research builds do
 # not need them, so only gate on clinicalMode.
-import json as _json
+import re as _re
 try:
-    with open(os.path.join(os.path.dirname(os.path.abspath(SPEC)), "config",
-                           "app_config.json"), encoding="utf-8") as _f:
-        _is_clinical = bool(_json.load(_f).get("clinicalMode", False))
+    with open(os.path.join(SPECPATH, "config", "app_config.py"),
+              encoding="utf-8") as _f:
+        _m = _re.search(r"^CLINICAL_MODE = (True|False)$", _f.read(), _re.M)
+    _is_clinical = bool(_m and _m.group(1) == "True")
 except Exception:
     _is_clinical = False
+print(f"[spec] building the {'Clinical' if _is_clinical else 'Research'} "
+      "variant (CLINICAL_MODE stamp in config/app_config.py)")
 if _is_clinical:
     _missing = []
     for _mod in ("keyring", "sqlcipher3"):
