@@ -116,10 +116,16 @@ def legacy_overrides_path(root: Path) -> Path:
 def import_legacy_overrides(cfg: dict, path: Path) -> Optional[dict]:
     """One-time import of a pre-#546 ``app_config.local.json``.
 
-    Returns the PREFERENCE / STATE keys imported (applied to ``cfg`` in
-    place), or None when there was no file. Everything else in the file is
-    dropped, engineering mode included. The file is deleted afterwards; a
-    file that cannot be parsed or deleted is left alone and reported.
+    Applies the file's PREFERENCE / STATE keys to ``cfg`` in place and
+    returns them (possibly an empty dict for a readable file that held
+    nothing worth keeping). Returns None when there is no file, or when
+    the file cannot be parsed — that one is left alone and reported.
+    Everything else in the file is dropped, engineering mode included.
+
+    The file is NOT deleted here: the caller removes it with
+    ``remove_legacy_overrides`` once the imported values are durable in the
+    settings table, so a launch whose store is unavailable leaves the file
+    for the next launch instead of losing the operator's preferences.
     """
     path = Path(path)
     if not path.exists():
@@ -131,26 +137,30 @@ def import_legacy_overrides(cfg: dict, path: Path) -> Optional[dict]:
             raise ValueError("not a JSON object")
     except (OSError, ValueError) as e:
         logger.warning("Legacy overrides %s unreadable (%s); left in place", path, e)
-        return {}
+        return None
     imported = {}
     for key, value in raw.items():
         if key in cfg and is_persisted(key):
             cfg[key] = value
             imported[key] = value
     _coerce_ints(cfg)
-    dropped = sorted(set(raw) - set(imported))
+    logger.warning(
+        "Legacy %s: importing %d preference(s) %s; dropping %s",
+        path, len(imported), sorted(imported), sorted(set(raw) - set(imported)),
+    )
+    return imported
+
+
+def remove_legacy_overrides(path: Path) -> bool:
+    """Delete the legacy overrides file after its values are persisted."""
+    path = Path(path)
     try:
         os.remove(path)
-        logger.warning(
-            "Imported %d preference(s) from legacy %s and deleted it "
-            "(dropped: %s)", len(imported), path, dropped,
-        )
+        logger.warning("Deleted legacy %s; it is no longer read", path)
+        return True
     except OSError as e:
-        logger.warning(
-            "Imported %d preference(s) from legacy %s but could not delete it "
-            "(%s); it is no longer read", len(imported), path, e,
-        )
-    return imported
+        logger.warning("Could not delete legacy %s (%s); it is no longer read", path, e)
+        return False
 
 
 def refused_keys(keys: Iterable[str]) -> list:

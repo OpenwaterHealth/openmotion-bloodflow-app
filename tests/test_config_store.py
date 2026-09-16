@@ -164,7 +164,23 @@ def test_import_legacy_overrides_keeps_preferences_drops_the_rest(tmp_path):
     assert cfg["engineeringMode"] is False          # never imported
     assert cfg["tecTripTempC"] == 40
     assert cfg["dataDirectory"] is None
-    assert not path.exists()                        # consumed
+    # the import itself does not delete: main() removes the file only once
+    # the values are durable in the settings table
+    assert path.exists()
+    assert config_store.remove_legacy_overrides(path) is True
+    assert not path.exists()
+    assert config_store.remove_legacy_overrides(path) is False
+
+
+def test_import_legacy_overrides_readable_but_nothing_to_keep_is_empty(tmp_path):
+    """A file holding only non-persisted keys (the classic hand-edited
+    engineeringMode) imports nothing, but is still 'handled' so main() can
+    delete it rather than re-parse it at every launch."""
+    path = tmp_path / "app_config.local.json"
+    path.write_text(json.dumps({"engineeringMode": True, "clinicalMode": False}), encoding="utf-8")
+    cfg = config_store.compiled_config()
+    assert config_store.import_legacy_overrides(cfg, path) == {}
+    assert cfg["engineeringMode"] is False
 
 
 def test_import_legacy_overrides_without_file_is_none(tmp_path):
@@ -177,7 +193,7 @@ def test_import_legacy_overrides_unreadable_file_is_left_alone(tmp_path):
     path = tmp_path / "app_config.local.json"
     path.write_text("{not json", encoding="utf-8")
     cfg = config_store.compiled_config()
-    assert config_store.import_legacy_overrides(cfg, path) == {}
+    assert config_store.import_legacy_overrides(cfg, path) is None   # not "handled"
     assert path.exists()
     assert cfg == config_store.compiled_config()
 

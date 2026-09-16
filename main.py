@@ -466,13 +466,21 @@ def main():
     # deleted; the connector records that in the audit log.
     settings = settings_store.SettingsStore(_scan_db_path)
     saved_keys = config_store.apply_saved_preferences(app_config, settings.load())
-    legacy_import = config_store.import_legacy_overrides(
-        app_config,
-        app_paths.local_config_path(app_config.get("portableMode")),
-    )
-    if legacy_import:
+    legacy_path = app_paths.local_config_path(app_config.get("portableMode"))
+    legacy_import = config_store.import_legacy_overrides(app_config, legacy_path)
+    if legacy_import is not None:
+        # Delete the old file only once its preferences are durable in the
+        # settings table (or it held nothing worth keeping). If the store is
+        # unavailable this launch the file stays for the next one, so the
+        # operator's saved preferences are never thrown away.
         to_save, _ = config_store.persistable_diff(app_config, _APP_CONFIG_BASELINE)
-        settings.save(to_save)
+        if not to_save or settings.save(to_save):
+            config_store.remove_legacy_overrides(legacy_path)
+        else:
+            logger.warning(
+                "Legacy %s kept: the settings store is unavailable, so its "
+                "preferences apply to this session only", legacy_path,
+            )
 
     # Startup diagnostics (issue #527): build variant, install mode, where
     # preferences persist, and the effective config with every key that is

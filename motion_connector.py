@@ -1174,9 +1174,10 @@ class MotionConnector(QObject):
         # self._directory is resolved.
         from audit_log import AuditLog
         self._audit = AuditLog(getattr(self._interface, "scan_db_path", None))
-        if self._legacy_import:
+        if self._legacy_import is not None:
             # One-time import of a pre-#546 app_config.local.json (main.py
-            # did the import + delete; only preference/state keys were kept).
+            # did the import + delete; only preference/state keys were kept,
+            # possibly none).
             self._audit.log("settings_migrated", {
                 "source": "app_config.local.json",
                 "keys": sorted(self._legacy_import),
