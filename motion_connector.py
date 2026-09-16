@@ -1127,7 +1127,6 @@ class MotionConnector(QObject):
         app_config=None,
         baseline_config=None,
         settings_store=None,
-        legacy_import=None,
         data_dir=None,
         config_dir="config",
         parent=None,
@@ -1145,7 +1144,6 @@ class MotionConnector(QObject):
         # the scans.db settings table (see _save_app_config, #546). No file.
         self._baseline_config = dict(baseline_config or {})
         self._settings_store = settings_store
-        self._legacy_import = legacy_import
 
         # Bug-report context (see sendBugReport). app_version + log_path come
         # from main.py; support_email / bug_report_smtp from app config.
@@ -1174,14 +1172,6 @@ class MotionConnector(QObject):
         # self._directory is resolved.
         from audit_log import AuditLog
         self._audit = AuditLog(getattr(self._interface, "scan_db_path", None))
-        if self._legacy_import is not None:
-            # One-time import of a pre-#546 app_config.local.json (main.py
-            # did the import + delete; only preference/state keys were kept,
-            # possibly none).
-            self._audit.log("settings_migrated", {
-                "source": "app_config.local.json",
-                "keys": sorted(self._legacy_import),
-            })
         if self._settings_store is not None and not self._settings_store.enabled:
             self._audit.log("settings_store_unavailable", {
                 "path": self._settings_store.path,

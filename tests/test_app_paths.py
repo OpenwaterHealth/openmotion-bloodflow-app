@@ -42,14 +42,6 @@ def test_set_data_root_override_round_trips(tmp_path, monkeypatch):
     assert app_paths.DATA_ROOT_OVERRIDE is None
 
 
-@pytest.mark.unit
-def test_local_config_path_under_root(tmp_path, monkeypatch):
-    """Only the one-time legacy import reads this path now (#546)."""
-    _override(monkeypatch, tmp_path / "ow")
-    expected = tmp_path / "ow" / "app_config.local.json"
-    assert app_paths.local_config_path() == expected
-
-
 # --- derived portable mode (#546) ------------------------------------------
 #
 # The exe in the portable zip and the one inside the installer are

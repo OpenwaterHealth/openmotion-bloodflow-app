@@ -219,8 +219,3 @@ def writable_root(portable: bool | None = None) -> Path:
         root.mkdir(parents=True, exist_ok=True)
     return root
 
-
-def local_config_path(portable: bool | None = None) -> Path:
-    """Where a pre-#546 build kept its overrides file. Only read by the
-    one-time legacy import in config_store; nothing writes it any more."""
-    return writable_root(portable) / "app_config.local.json"

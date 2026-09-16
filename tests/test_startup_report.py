@@ -21,11 +21,11 @@ def test_provenance_markers():
     baseline = {"a": 1, "b": 2, "c": 3, "d": 4}
     merged = {"a": 1, "b": 20, "c": 30, "d": 40}
     marks = startup_report.config_provenance(
-        merged, baseline, dev_keys={"c"}, saved_keys={"b"}, imported_keys={"d"})
+        merged, baseline, dev_keys={"c"}, saved_keys={"b"})
     assert marks["a"] == ""
     assert marks["b"] == startup_report.MARK_SAVED
     assert marks["c"] == startup_report.MARK_DEV
-    assert marks["d"] == startup_report.MARK_IMPORTED
+    assert marks["d"] == startup_report.MARK_SAVED   # deviates from compiled → saved
 
 
 def test_provenance_dev_flag_wins_over_value_diff():
@@ -100,18 +100,18 @@ def test_log_startup_report_clinical_variant_and_unavailable_store(caplog):
     assert "UNAVAILABLE, preferences are session-only" in caplog.text
 
 
-def test_log_startup_report_marks_dev_and_imported_keys(caplog):
+def test_log_startup_report_marks_dev_and_saved_keys(caplog):
     log = _report_logger(caplog)
     baseline = {"clinicalMode": False, "portableMode": False, "bfiMax": 10.0}
     merged = {"clinicalMode": True, "portableMode": False, "bfiMax": 5.0}
     startup_report.log_startup_report(
-        log, merged, baseline, dev_keys={"clinicalMode"}, imported_keys={"bfiMax"})
+        log, merged, baseline, dev_keys={"clinicalMode"}, saved_keys={"bfiMax"})
     lines = caplog.text.splitlines()
     clinical = next(l for l in lines if l.strip().startswith("clinicalMode"))
     bfi = next(l for l in lines if l.strip().startswith("bfiMax"))
     assert startup_report.MARK_DEV in clinical
-    assert startup_report.MARK_IMPORTED in bfi
-    assert "Legacy app_config.local.json imported this launch: ['bfiMax']" in caplog.text
+    assert startup_report.MARK_SAVED in bfi
+    assert "app_config.local.json" not in caplog.text
 
 
 def test_log_startup_report_never_raises(monkeypatch, caplog):

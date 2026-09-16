@@ -22,7 +22,6 @@ from config import app_config as compiled
 # Provenance markers for the merged-config dump.
 MARK_SAVED = "[saved]"        # differs from compiled: saved preference (scans.db)
 MARK_DEV = "[dev-flag]"       # forced by a source-run launch flag
-MARK_IMPORTED = "[imported]"  # imported this launch from the legacy overrides file
 
 
 def compiled_fingerprint() -> str:
@@ -33,16 +32,13 @@ def compiled_fingerprint() -> str:
 
 
 def config_provenance(
-    merged: dict, baseline: dict, dev_keys=frozenset(),
-    saved_keys=frozenset(), imported_keys=frozenset(),
+    merged: dict, baseline: dict, dev_keys=frozenset(), saved_keys=frozenset(),
 ) -> dict:
     """Map each merged key to its source marker ("" = compiled value)."""
     marks = {}
     for key in merged:
         if key in dev_keys:
             marks[key] = MARK_DEV
-        elif key in imported_keys:
-            marks[key] = MARK_IMPORTED
         elif key in saved_keys or merged[key] != baseline.get(key):
             marks[key] = MARK_SAVED
         else:
@@ -58,11 +54,10 @@ def _fmt_value(value) -> str:
 
 
 def merged_config_block(
-    merged: dict, baseline: dict, dev_keys=frozenset(),
-    saved_keys=frozenset(), imported_keys=frozenset(),
+    merged: dict, baseline: dict, dev_keys=frozenset(), saved_keys=frozenset(),
 ) -> str:
     """The merged config as one aligned multi-line block, markers and tiers applied."""
-    marks = config_provenance(merged, baseline, dev_keys, saved_keys, imported_keys)
+    marks = config_provenance(merged, baseline, dev_keys, saved_keys)
     width = max((len(k) for k in merged), default=0)
     lines = []
     for key in sorted(merged):
@@ -77,15 +72,13 @@ def merged_config_block(
 
 def log_startup_report(
     log, merged: dict, baseline: dict, *, dev_keys=frozenset(),
-    saved_keys=frozenset(), imported_keys=frozenset(),
-    settings_path=None, settings_enabled=None,
+    saved_keys=frozenset(), settings_path=None, settings_enabled=None,
 ) -> None:
     """Emit the whole startup report. Never raises — logging must not take
     down the launch.
 
     ``baseline`` is the compiled config; ``dev_keys`` the keys a source-run
-    launch flag forced; ``saved_keys`` those loaded from the settings table;
-    ``imported_keys`` those imported this launch from a legacy overrides file.
+    launch flag forced; ``saved_keys`` those loaded from the settings table.
     """
     try:
         clinical = bool(merged.get("clinicalMode", False))
@@ -132,15 +125,12 @@ def log_startup_report(
         else:
             state = "UNAVAILABLE, preferences are session-only"
         log.info("Settings store: %s (%s)", settings_path or "none", state)
-        if imported_keys:
-            log.warning("Legacy app_config.local.json imported this launch: %s",
-                        sorted(imported_keys))
 
         log.info(
-            "Effective app config (%s=saved preference, %s=dev launch flag, "
-            "%s=legacy import; <tier> per key):\n%s",
-            MARK_SAVED, MARK_DEV, MARK_IMPORTED,
-            merged_config_block(merged, baseline, dev_keys, saved_keys, imported_keys),
+            "Effective app config (%s=saved preference, %s=dev launch flag; "
+            "<tier> per key):\n%s",
+            MARK_SAVED, MARK_DEV,
+            merged_config_block(merged, baseline, dev_keys, saved_keys),
         )
     except Exception:
         log.warning("Startup report failed", exc_info=True)

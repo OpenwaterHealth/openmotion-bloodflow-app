@@ -461,26 +461,10 @@ def main():
     # compiled config live in the settings table of scans.db — encrypted and
     # HMAC-protected on a clinical build — instead of a plaintext overrides
     # file. Opened here because it needs the encryption policy set (above)
-    # and the plaintext migration done. A pre-#546 app_config.local.json is
-    # imported once (preference keys only, engineering mode never) and
-    # deleted; the connector records that in the audit log.
+    # and the plaintext migration done. A pre-#546 app_config.local.json,
+    # if one is still on the machine, is ignored: nothing reads it.
     settings = settings_store.SettingsStore(_scan_db_path)
     saved_keys = config_store.apply_saved_preferences(app_config, settings.load())
-    legacy_path = app_paths.local_config_path(app_config.get("portableMode"))
-    legacy_import = config_store.import_legacy_overrides(app_config, legacy_path)
-    if legacy_import is not None:
-        # Delete the old file only once its preferences are durable in the
-        # settings table (or it held nothing worth keeping). If the store is
-        # unavailable this launch the file stays for the next one, so the
-        # operator's saved preferences are never thrown away.
-        to_save, _ = config_store.persistable_diff(app_config, _APP_CONFIG_BASELINE)
-        if not to_save or settings.save(to_save):
-            config_store.remove_legacy_overrides(legacy_path)
-        else:
-            logger.warning(
-                "Legacy %s kept: the settings store is unavailable, so its "
-                "preferences apply to this session only", legacy_path,
-            )
 
     # Startup diagnostics (issue #527): build variant, install mode, where
     # preferences persist, and the effective config with every key that is
@@ -489,7 +473,6 @@ def main():
     startup_report.log_startup_report(
         logger, app_config, _APP_CONFIG_BASELINE,
         dev_keys=set(_DEV_CONFIG_KEYS), saved_keys=saved_keys,
-        imported_keys=set(legacy_import or {}),
         settings_path=settings.path, settings_enabled=settings.enabled,
     )
 
@@ -515,7 +498,6 @@ def main():
     connector = MotionConnector(
         motion_interface, app_config=app_config, data_dir=_data_dir,
         baseline_config=_APP_CONFIG_BASELINE, settings_store=settings,
-        legacy_import=legacy_import,
         app_version=APP_VERSION, log_path=logfile_path,
     )
     qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MotionInterface", connector)

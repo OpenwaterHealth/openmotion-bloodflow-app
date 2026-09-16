@@ -148,59 +148,18 @@ def test_refused_keys_are_the_constants():
     assert config_store.refused_keys(["nope"]) == []
 
 
-# ── legacy overrides import ─────────────────────────────────────────────
-
-def test_import_legacy_overrides_keeps_preferences_drops_the_rest(tmp_path):
-    path = tmp_path / "app_config.local.json"
-    path.write_text(json.dumps({
-        "bfiMax": 5.0, "darkMode": False, "altCameraSettingsDirty": True,
-        "engineeringMode": True, "clinicalMode": False, "tecTripTempC": 1,
-        "dataDirectory": "D:/somewhere", "someRetiredFlag": True,
-    }), encoding="utf-8")
-    cfg = config_store.compiled_config()
-    imported = config_store.import_legacy_overrides(cfg, path)
-    assert imported == {"bfiMax": 5.0, "darkMode": False, "altCameraSettingsDirty": True}
-    assert cfg["bfiMax"] == 5.0 and cfg["darkMode"] is False
-    assert cfg["engineeringMode"] is False          # never imported
-    assert cfg["tecTripTempC"] == 40
-    assert cfg["dataDirectory"] is None
-    # the import itself does not delete: main() removes the file only once
-    # the values are durable in the settings table
-    assert path.exists()
-    assert config_store.remove_legacy_overrides(path) is True
-    assert not path.exists()
-    assert config_store.remove_legacy_overrides(path) is False
-
-
-def test_import_legacy_overrides_readable_but_nothing_to_keep_is_empty(tmp_path):
-    """A file holding only non-persisted keys (the classic hand-edited
-    engineeringMode) imports nothing, but is still 'handled' so main() can
-    delete it rather than re-parse it at every launch."""
-    path = tmp_path / "app_config.local.json"
-    path.write_text(json.dumps({"engineeringMode": True, "clinicalMode": False}), encoding="utf-8")
-    cfg = config_store.compiled_config()
-    assert config_store.import_legacy_overrides(cfg, path) == {}
-    assert cfg["engineeringMode"] is False
-
-
-def test_import_legacy_overrides_without_file_is_none(tmp_path):
-    cfg = config_store.compiled_config()
-    assert config_store.import_legacy_overrides(cfg, tmp_path / "app_config.local.json") is None
-    assert cfg == config_store.compiled_config()
-
-
-def test_import_legacy_overrides_unreadable_file_is_left_alone(tmp_path):
-    path = tmp_path / "app_config.local.json"
-    path.write_text("{not json", encoding="utf-8")
-    cfg = config_store.compiled_config()
-    assert config_store.import_legacy_overrides(cfg, path) is None   # not "handled"
-    assert path.exists()
-    assert cfg == config_store.compiled_config()
-
-
 def test_config_dir_env_var_is_ignored(monkeypatch, tmp_path):
     """The retired OPENWATER_CONFIG_DIR override cannot redirect anything:
     there is no file to redirect. The compiled value is the value."""
     monkeypatch.setenv("OPENWATER_CONFIG_DIR", str(tmp_path))
     (tmp_path / "app_config.json").write_text(json.dumps({"bfiMax": 99.0}), encoding="utf-8")
     assert config_store.compiled_config()["bfiMax"] == 10.0
+
+
+def test_no_legacy_import_surface():
+    """A pre-#546 app_config.local.json is ignored outright: there is no
+    importer to smuggle values through (decision 2026-09-16)."""
+    assert not hasattr(config_store, "import_legacy_overrides")
+    assert not hasattr(config_store, "remove_legacy_overrides")
+    from utils import app_paths
+    assert not hasattr(app_paths, "local_config_path")

@@ -20,9 +20,8 @@ def _compiled(monkeypatch, **values):
 
 @pytest.mark.unit
 def test_load_app_config_does_not_read_the_legacy_overrides_file(tmp_path, monkeypatch):
-    """Since #546 no file can set engineeringMode: the legacy
-    app_config.local.json is only ever imported (preference keys) by
-    main() once the settings store is open, never by the loader."""
+    """Since #546 no file can set anything: a leftover app_config.local.json
+    from an older install is ignored outright (there is no importer)."""
     _root(monkeypatch, tmp_path)
     (tmp_path / "app_config.local.json").write_text(
         json.dumps({"engineeringMode": True, "bfiMax": 5.0}), encoding="utf-8"
