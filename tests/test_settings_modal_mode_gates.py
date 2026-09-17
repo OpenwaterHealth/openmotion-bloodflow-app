@@ -328,6 +328,20 @@ def test_raw_csv_controls_hidden_on_plain_clinical_build(modal_factory):
     assert _control_visible(modal, "rawCsvDurationField") is False
 
 
+def test_bvi_low_pass_switch_is_research_only(modal_factory):
+    """#552: the BVI low-pass filter switch (Settings → Realtime Plot
+    Display) exists on research builds only. Engineering unlock on a
+    clinical build does not bring it back — it is a research feature,
+    not an engineering one — and the connector ignores the flag there
+    anyway, so hiding the row is the whole UI story."""
+    modal_factory.stub.setFlags(clinical=False, engineering=False)
+    assert _control_visible(modal_factory(), "bviLowPassSwitch") is True
+    modal_factory.stub.setFlags(clinical=True, engineering=False)
+    assert _control_visible(modal_factory(), "bviLowPassSwitch") is False
+    modal_factory.stub.setFlags(clinical=True, engineering=True)
+    assert _control_visible(modal_factory(), "bviLowPassSwitch") is False
+
+
 def test_engineering_card_follows_engineering_flag(modal_factory):
     modal_factory.stub.setFlags(clinical=False, engineering=True)
     modal = modal_factory()

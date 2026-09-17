@@ -105,11 +105,13 @@ The shipped values are compiled in (`config/app_config.py`, #546); each key belo
 | `rawCsvDurationSec` | `null` | Limit raw CSV capture duration (null = unlimited) |
 | `showBfiBvi` | `true` | Plot BFI/BVI instead of raw mean/contrast |
 | `plotWindowSec` | `15` | Realtime plot time window (3 / 5 / 15 / 30) |
-| `autoScale` | `true` | Auto-scale realtime plot Y-axes (always per-plot) |
+| `autoScale` | `false` | Auto-scale realtime plot Y-axes (research builds only; clinical always uses the manual bounds) |
+| `autoScalePerPlot` | `false` | With `autoScale` on, fit each plot to its own camera instead of one shared range per metric. Switch lives in the plot's ⋯ menu under Autoscale (research builds only) |
 | `bfiColor` / `bviColor` | `#ff0000` / `#3437db` | Trace colors for BFI / BVI |
 | `bfiClampLow` / `bfiClampHigh` | `0.0` / `10.0` | BFI display clamps — values outside show `--` |
 | `bviClampLow` / `bviClampHigh` | `0.0` / `10.0` | BVI display clamps — values outside show `--` |
-| `bviLowPassCutoffHz` | `20.0` | Cutoff (Hz) for the 1-pole low-pass on the *displayed* BVI stream; `<= 0` disables, missing/invalid → 20. Display-only — stored scan data stays raw. No Settings UI |
+| `bviLowPassEnabled` | `true` | Settings → Realtime Plot Display → "BVI low-pass filter" switch (research builds only; clinical always runs the filter). Takes effect mid-scan |
+| `bviLowPassCutoffHz` | `20.0` | Cutoff (Hz) for the 1-pole low-pass on the *displayed* BVI stream; `<= 0` disables, missing/invalid → 20. Display-only — stored scan data stays raw. Compiled constant; the switch above gates it |
 | `bfiMin` / `bfiMax` | `4.0` / `9.0` | Manual BFI plot bounds (when autoscale is off) |
 | `bviMin` / `bviMax` | `4.0` / `8.0` | Manual BVI plot bounds (when autoscale is off) |
 | `meanMin` / `meanMax` | `0` / `200` | Manual mean plot bounds |

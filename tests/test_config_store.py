@@ -59,7 +59,8 @@ def test_engineering_and_debug_flags_are_session_only():
 
 def test_display_preferences_persist():
     for key in ("leftMask", "rightMask", "bfiMin", "bfiMax", "plotWindowSec",
-                "darkMode", "liquidGlass", "showAxisLabels", "writeRawCsv"):
+                "darkMode", "liquidGlass", "showAxisLabels", "writeRawCsv",
+                "autoScale", "autoScalePerPlot", "bviLowPassEnabled"):
         assert compiled.tier_of(key) == compiled.PREFERENCE, key
         assert config_store.is_persisted(key), key
 

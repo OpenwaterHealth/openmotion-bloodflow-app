@@ -82,6 +82,30 @@ Rectangle {
     // _recomputeAutoscale timer below repins primary/secondary YMin/YMax
     // to per-metric percentile bounds across the buffer.
     property bool autoScale: true
+    // autoScalePerPlot (#452) — research-only refinement of autoScale:
+    // each cell fits its own camera's trace instead of every cell
+    // sharing one range per metric. Config is the source of truth (same
+    // pattern as showAxisLabels): the ⋯ popup switch writes it through
+    // MotionInterface.setConfig. Clinical never autoscales at all, so
+    // the flag is forced off there regardless of what the settings
+    // table holds.
+    property bool autoScalePerPlot:
+        !viewer.effectiveClinical
+        && MotionInterface.appConfig.autoScalePerPlot === true
+    readonly property bool perPlotActive: viewer.autoScale && viewer.autoScalePerPlot
+    // Per-plot ranges, keyed "side:camId" → { pMin, pMax, sMin, sMax }
+    // for the current display pair. Rebuilt as a whole object by
+    // _recomputeAutoscale so the cell bindings re-evaluate (mutating a
+    // nested value would not notify). Empty unless perPlotActive.
+    property var _cellBounds: ({})
+    // Mode flips and grid re-layouts (mask change, sensor connect) get
+    // an immediate refit rather than waiting up to 3 s for the tick —
+    // a cell without an entry yet would draw on the global range. The
+    // cell-model hook is wired imperatively: QML has no on…Changed
+    // handler syntax for an underscore-prefixed property.
+    onPerPlotActiveChanged: viewer._recomputeAutoscale()
+    Component.onCompleted:
+        viewer._activeCellModelChanged.connect(viewer._recomputeAutoscale)
     // Camera masks — bound from BloodFlow.qml so the grid reacts to
     // Scan Settings changes, not just the persisted config defaults.
     property int leftMask:  0x66
@@ -271,19 +295,49 @@ Rectangle {
         viewer.effectiveClinical && viewer._activeCellModel.length > 0
 
     // ── Autoscale recompute (shared by Timer + displayMode change) ────
-    // Writes to _auto* — the derived primaryYMin/Max bindings above
-    // pick the _auto vs setting-bound value based on autoScale.
+    // Global mode writes _auto* — the derived primaryYMin/Max bindings
+    // above pick the _auto vs setting-bound value based on autoScale.
+    // Per-plot mode (#452) instead fills _cellBounds with one range per
+    // active cell from that camera's buffer alone; the delegate binding
+    // prefers its own entry and falls back to the global range.
+    function _validBounds(b) {
+        return b && typeof b.yMin === "number" && typeof b.yMax === "number"
+    }
+
     function _recomputeAutoscale() {
         if (!viewer.scanSource) return
-        var bp = viewer.scanSource.compute_bounds_for_metric(viewer._displayPair.primary)
-        if (bp && typeof bp.yMin === "number" && typeof bp.yMax === "number") {
-            viewer._autoPrimaryYMin = bp.yMin
-            viewer._autoPrimaryYMax = bp.yMax
-        }
-        var bs = viewer.scanSource.compute_bounds_for_metric(viewer._displayPair.secondary)
-        if (bs && typeof bs.yMin === "number" && typeof bs.yMax === "number") {
-            viewer._autoSecondaryYMin = bs.yMin
-            viewer._autoSecondaryYMax = bs.yMax
+        var src = viewer.scanSource
+        // Resolve the pair from displayMode directly rather than reading
+        // _displayPair: onDisplayModeChanged fires before that derived
+        // binding re-evaluates, so the immediate refit on a BFI/BVI ↔
+        // Mean/Contrast flip would otherwise fit the pair being left.
+        var pair = viewer._pairForMode(viewer.displayMode)
+        if (viewer.perPlotActive) {
+            var bounds = ({})
+            var cells = viewer._activeCellModel
+            for (var i = 0; i < cells.length; i++) {
+                var c = cells[i]
+                var bp = src.compute_bounds_for_cell(c.side, c.camId, pair.primary)
+                var bs = src.compute_bounds_for_cell(c.side, c.camId, pair.secondary)
+                if (!_validBounds(bp) || !_validBounds(bs)) continue
+                bounds[c.side + ":" + c.camId] = {
+                    pMin: bp.yMin, pMax: bp.yMax, sMin: bs.yMin, sMax: bs.yMax
+                }
+            }
+            viewer._cellBounds = bounds
+        } else {
+            if (Object.keys(viewer._cellBounds).length > 0)
+                viewer._cellBounds = ({})
+            var gp = src.compute_bounds_for_metric(pair.primary)
+            if (_validBounds(gp)) {
+                viewer._autoPrimaryYMin = gp.yMin
+                viewer._autoPrimaryYMax = gp.yMax
+            }
+            var gs = src.compute_bounds_for_metric(pair.secondary)
+            if (_validBounds(gs)) {
+                viewer._autoSecondaryYMin = gs.yMin
+                viewer._autoSecondaryYMax = gs.yMax
+            }
         }
         viewer._dirty = true
     }
@@ -423,11 +477,12 @@ Rectangle {
     // ── Display-mode pair resolution ───────────────────────────────────
     // Maps the displayMode toggle to the primary/secondary metric pair
     // pushed to every cell.
-    readonly property var _displayPair: {
-        if (viewer.displayMode === "mean_contrast")
+    function _pairForMode(mode) {
+        if (mode === "mean_contrast")
             return { primary: "mean", secondary: "contrast" }
         return { primary: "bfi", secondary: "bvi" }
     }
+    readonly property var _displayPair: viewer._pairForMode(viewer.displayMode)
 
     // ── Viewer-driven paint throttle ───────────────────────────────────
     // Single dirty flag set by ANY samplesAppended emission. A 33 ms
@@ -804,13 +859,19 @@ Rectangle {
                         windowSeconds: viewer.windowSeconds
                         followLive: viewer.followLive
                         windowStartT: viewer.windowStartT
+                        // Per-plot autoscale (#452): this cell's own fitted
+                        // range when active and already computed, else the
+                        // viewer-wide range (global autoscale or manual).
+                        property var _ownBounds: viewer.perPlotActive
+                            ? viewer._cellBounds[modelData.side + ":" + modelData.camId]
+                            : undefined
                         metric: viewer._displayPair.primary
-                        yMin: viewer.primaryYMin
-                        yMax: viewer.primaryYMax
+                        yMin: _ownBounds ? _ownBounds.pMin : viewer.primaryYMin
+                        yMax: _ownBounds ? _ownBounds.pMax : viewer.primaryYMax
                         traceColor: viewer._traceColorForMetric(viewer._displayPair.primary)
                         secondaryMetric: viewer._displayPair.secondary
-                        secondaryYMin: viewer.secondaryYMin
-                        secondaryYMax: viewer.secondaryYMax
+                        secondaryYMin: _ownBounds ? _ownBounds.sMin : viewer.secondaryYMin
+                        secondaryYMax: _ownBounds ? _ownBounds.sMax : viewer.secondaryYMax
                         secondaryColor: viewer._traceColorForMetric(viewer._displayPair.secondary)
                         showValueLabels: viewer.showCellValues
                         showAxisLabels: viewer.showAxisLabels
@@ -1115,7 +1176,8 @@ Rectangle {
     // Window-seconds pill shows the current zoom and opens a dropdown
     // menu of the canonical zoom options when clicked. The three-dot
     // button to its right opens a popup with switches for display mode,
-    // autoscale, and (dev-only) profiler.
+    // autoscale (+ per-plot scale, #452), axis labels, and (dev-only)
+    // profiler.
     Row {
         id: bottomRightOverlay
         visible: viewer.scanSource !== null
@@ -1304,6 +1366,26 @@ Rectangle {
                         Text {
                             anchors.verticalCenter: autoScaleSwitch.verticalCenter
                             text: "Autoscale"
+                            color: AppTheme.textPrimary
+                            font.pixelSize: 12
+                            font.family: "Roboto Mono"
+                        }
+                    }
+                    Row {
+                        // Per-plot scale (#452) — research-only, and only
+                        // meaningful while autoscale is on, so it is
+                        // disclosed under that switch rather than shown
+                        // dead. Clinical never sees it (nor autoscale).
+                        visible: !viewer.effectiveClinical && viewer.autoScale
+                        spacing: 8
+                        PopupPillSwitch {
+                            id: perPlotSwitch
+                            checked: viewer.autoScalePerPlot
+                            onToggled: MotionInterface.setConfig("autoScalePerPlot", checked)
+                        }
+                        Text {
+                            anchors.verticalCenter: perPlotSwitch.verticalCenter
+                            text: perPlotSwitch.checked ? "Per-plot scale" : "Global scale"
                             color: AppTheme.textPrimary
                             font.pixelSize: 12
                             font.family: "Roboto Mono"
