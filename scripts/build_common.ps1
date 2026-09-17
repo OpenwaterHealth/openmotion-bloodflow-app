@@ -57,11 +57,16 @@ function Set-BuildVariant {
     )
     if (-not (Test-Path $ModulePath)) { throw "config module not found at $ModulePath" }
     $orig = [System.IO.File]::ReadAllText($ModulePath)
-    if ($orig -notmatch '(?m)^CLINICAL_MODE = (True|False)$') {
+    # (?=\r?$): a .NET multiline '$' matches before "\n" only, so a CRLF
+    # checkout (the GitHub Windows runner, autocrlf=true) never matched and
+    # the first Nuitka CI build died here (#548). The lookahead keeps the
+    # original line ending untouched.
+    $stamp = '(?m)^CLINICAL_MODE = (True|False)(?=\r?$)'
+    if ($orig -notmatch $stamp) {
         throw "CLINICAL_MODE stamp line not found in $ModulePath"
     }
     $val = if ($Clinical) { "True" } else { "False" }
-    $new = [regex]::Replace($orig, '(?m)^CLINICAL_MODE = (True|False)$', "CLINICAL_MODE = $val")
+    $new = [regex]::Replace($orig, $stamp, "CLINICAL_MODE = $val")
     [System.IO.File]::WriteAllText($ModulePath, $new, (New-Object System.Text.UTF8Encoding $false))
     return $orig
 }
@@ -77,7 +82,7 @@ function Set-CompiledConfigValue {
         [string]$ModulePath = (Get-ConfigModulePath)
     )
     $orig = [System.IO.File]::ReadAllText($ModulePath)
-    $pattern = '(?m)^(\s*"' + [regex]::Escape($Key) + '": ).*,$'
+    $pattern = '(?m)^(\s*"' + [regex]::Escape($Key) + '": ).*,(?=\r?$)'
     if ($orig -notmatch $pattern) { throw "config key '$Key' not found in $ModulePath" }
     $new = [regex]::Replace($orig, $pattern, ('${1}' + $PythonValue + ','))
     [System.IO.File]::WriteAllText($ModulePath, $new, (New-Object System.Text.UTF8Encoding $false))
