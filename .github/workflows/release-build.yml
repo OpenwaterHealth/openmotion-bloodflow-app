@@ -7,6 +7,11 @@ on:
         description: "Code-sign artifacts (requires the eSigner secrets; ~7 metered signings)"
         type: boolean
         default: false
+      compiler:
+        description: "Windows build: pyinstaller (default) or nuitka (native compile, #548; slow)"
+        type: choice
+        options: [pyinstaller, nuitka]
+        default: pyinstaller
   push:
     branches: [main, next]
     tags:
@@ -90,6 +95,7 @@ jobs:
           sed -i "s/^_FALLBACK_VERSION = .*/_FALLBACK_VERSION = \"${VER}\"/" version.py
 
       - name: Build with PyInstaller (one build per variant)
+        if: github.event_name != 'workflow_dispatch' || inputs.compiler != 'nuitka'
         shell: bash -el {0}
         run: |
           conda activate omotion
@@ -107,6 +113,22 @@ jobs:
             python -m PyInstaller -y openwater.spec --distpath "dist/${variant}/Open-Motion" --workpath "build/${variant}"
           done
           sed -i "s/^CLINICAL_MODE = .*/CLINICAL_MODE = False/" config/app_config.py
+          git diff --exit-code -- config/app_config.py
+
+      # ── Nuitka native compile (#548), manual dispatch only for now ───────
+      # Selected with the `compiler` input. Compiles every module to C with
+      # MSVC (present on windows-latest); same onefile output contract as the
+      # PyInstaller path, so packaging below is unchanged. Not the default
+      # until a Nuitka build has been hand-validated on the HIL rig.
+      - name: Build with Nuitka (one build per variant)
+        if: github.event_name == 'workflow_dispatch' && inputs.compiler == 'nuitka'
+        shell: bash -el {0}
+        run: |
+          conda activate omotion
+          pip install "nuitka==4.2.1" ordered-set zstandard
+          for variant in clinical research; do
+            powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build_nuitka.ps1 -Variant "$variant"
+          done
           git diff --exit-code -- config/app_config.py
 
       - name: Install WiX v5

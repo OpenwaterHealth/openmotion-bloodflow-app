@@ -15,6 +15,8 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+
+from utils.frozen import bundler, is_frozen
 from pathlib import Path
 
 from config import app_config as compiled
@@ -83,7 +85,7 @@ def log_startup_report(
     try:
         clinical = bool(merged.get("clinicalMode", False))
         portable = bool(merged.get("portableMode", False))
-        frozen = bool(getattr(sys, "frozen", False))
+        frozen = is_frozen()
         if not frozen:
             mode = "dev (running from source)"
         elif sys.platform == "darwin":
@@ -93,8 +95,8 @@ def log_startup_report(
         else:
             mode = "installed (writable state under %PROGRAMDATA%)"
         log.info("Build variant:  %s", "Clinical" if clinical else "Research")
-        log.info("Install mode:   %s (portableMode=%s, frozen=%s)",
-                 mode, portable, frozen)
+        log.info("Install mode:   %s (portableMode=%s, frozen=%s, bundler=%s)",
+                 mode, portable, frozen, bundler())
         log.info("Config:         compiled (config/app_config.py), "
                  "%d keys, values sha256=%s",
                  len(compiled.APP_CONFIG), compiled_fingerprint())

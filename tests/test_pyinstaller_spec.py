@@ -250,8 +250,10 @@ def test_windows_spec_packages_onefile():
 def test_libusb_runtime_hook_covers_the_flat_onefile_layout():
     """In onefile the payload is extracted flat into sys._MEIPASS (no
     _internal\); the hook must probe that layout as well as onedir's."""
-    src = (_REPO_ROOT / "rthook_libusb_paths.py").read_text(encoding="utf-8")
+    src = (_REPO_ROOT / "utils" / "libusb_paths.py").read_text(encoding="utf-8")
     assert 'LAYOUT_ROOTS = ("", "_internal")' in src
+    hook = (_REPO_ROOT / "rthook_libusb_paths.py").read_text(encoding="utf-8")
+    assert "register_vendored_libusb" in hook, "PyInstaller hook must use the shared module"
     assert '("_vendor", "libusb", "windows", "x64")' in src
     assert '("omotion", "_vendor", "libusb", "windows", "x64")' in src
 

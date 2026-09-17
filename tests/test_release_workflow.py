@@ -157,3 +157,19 @@ def test_packaging_signs_each_variants_exe_before_zipping_and_harvesting():
     assert sign_at < zip_at < installer_at
     assert 'Join-Path $distDir "Open-Motion.exe"' in script
 
+
+def test_nuitka_is_an_opt_in_compiler_with_the_same_output_contract(workflow):
+    """#548: Nuitka runs only on a manual dispatch that selects it; the
+    PyInstaller step is skipped in that case and packaging is untouched
+    because build_nuitka.ps1 lands the exe at the same path."""
+    assert "compiler:" in workflow and "options: [pyinstaller, nuitka]" in workflow
+    assert "if: github.event_name == 'workflow_dispatch' && inputs.compiler == 'nuitka'" in workflow
+    assert "if: github.event_name != 'workflow_dispatch' || inputs.compiler != 'nuitka'" in workflow
+    assert 'pip install "nuitka==4.2.1" ordered-set zstandard' in workflow
+    script = (REPO_ROOT / "scripts" / "build_nuitka.ps1").read_text(encoding="utf-8-sig")
+    assert "--standalone" in script and "--onefile" in script and "--deployment" in script
+    assert '"--onefile-tempdir-spec=' not in script, "a static extraction dir recreates V-07"
+    assert 'Join-Path (Join-Path $DistRoot $Variant) "Open-Motion"' in script
+    packaging = (REPO_ROOT / "scripts" / "package_artifacts.ps1").read_text(encoding="utf-8-sig")
+    assert '[ValidateSet("pyinstaller", "nuitka")][string]$Compiler = "pyinstaller"' in packaging
+
