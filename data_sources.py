@@ -933,7 +933,7 @@ class LiveScanSource(ScanDataSource):
         # Fast path: whole window in memory, or buffer not yet trimmed.
         # Only reach for the DB once data has actually been ring-trimmed.
         if not self._needs_db_tail(side, int(cam_id), metric, t_lo) or not self._db_ready():
-            return super().points_for_window(side, cam_id, metric, t_lo, t_hi, int(max_points))
+            return super(LiveScanSource, self).points_for_window(side, cam_id, metric, t_lo, t_hi, int(max_points))
 
         # Straddling window: t_lo is below the oldest in-memory sample but
         # t_hi may reach into (or past) the live edge. Split at the in-memory
@@ -972,7 +972,7 @@ class LiveScanSource(ScanDataSource):
 
         mem_pts: list = []
         if mem_span > 0.0:
-            mem_pts = super().points_for_window(
+            mem_pts = super(LiveScanSource, self).points_for_window(
                 side, cam_id, metric, mem_lo, float(t_hi), mem_max
             )
         return db_pts + mem_pts
@@ -980,7 +980,7 @@ class LiveScanSource(ScanDataSource):
     @pyqtSlot(str, int, str, float, result=float)
     def value_at(self, side: str, cam_id: int, metric: str, t: float) -> float:
         if not self._needs_db_tail(side, int(cam_id), metric, t) or not self._db_ready():
-            return super().value_at(side, cam_id, metric, t)
+            return super(LiveScanSource, self).value_at(side, cam_id, metric, t)
         self._ensure_db_window(t, t)
         buf = self._db_window_buffers.get((side, int(cam_id), metric))
         if buf is None:
