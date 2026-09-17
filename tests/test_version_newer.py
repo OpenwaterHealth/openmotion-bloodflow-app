@@ -1,4 +1,5 @@
-"""Unit tests for MotionConnector._version_newer.
+"""Unit tests for app_updater.version_newer (was MotionConnector._version_newer
+before #543 moved the self-updater out of the connector).
 
 Regression for the update-check false positive: a setuptools_scm dev
 version like '1.2.0-dev.1-0-gabc1234-dirty' failed the old int() parse,
@@ -8,11 +9,11 @@ offered "update" 1.1.3 over a local 1.2.0-dev build).
 
 import pytest
 
-from motion_connector import MotionConnector
+from app_updater import version_newer
 
 pytestmark = pytest.mark.unit
 
-newer = MotionConnector._version_newer
+newer = version_newer
 
 
 def test_plain_upgrade():

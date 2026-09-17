@@ -1,5 +1,5 @@
 import pytest
-from motion_connector import (
+from app_updater import (
     _update_decision,
     _is_bundle_url,
     _looks_like_pe,
