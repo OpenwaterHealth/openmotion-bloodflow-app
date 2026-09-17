@@ -12,7 +12,7 @@
 #   powershell -File scripts\package_artifacts.ps1 -SkipInstaller   # 2 portable zips
 #   powershell -File scripts\package_artifacts.ps1 -Version 1.4.0-dev.0
 #   powershell -File scripts\package_artifacts.ps1 -SkipBuild       # dist\<variant>\ already built (CI)
-#   powershell -File scripts\package_artifacts.ps1 -Compiler nuitka # native compile (#548) instead of PyInstaller
+#   powershell -File scripts\package_artifacts.ps1 -Compiler pyinstaller # fallback; Nuitka is the default (#548)
 param(
     [string]$Version    = "",
     [string[]]$Variants = @("clinical", "research"),
@@ -21,7 +21,7 @@ param(
     [string]$DistRoot   = "dist",
     [string]$OutDir     = "",
     [string]$CondaEnv   = "ow-motion",
-    [ValidateSet("pyinstaller", "nuitka")][string]$Compiler = "pyinstaller"
+    [ValidateSet("pyinstaller", "nuitka")][string]$Compiler = "nuitka"
 )
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "build_common.ps1")
@@ -61,7 +61,7 @@ foreach ($variant in $Variants) {
 
     if (-not $SkipBuild) {
         if ($Compiler -eq "nuitka") {
-            # Same output contract (dist\<variant>\Open-Motion\Open-Motion.exe), native code (#548).
+            # Native code, the default since 2026-09-17 (#548); same output contract as PyInstaller.
             & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "scripts\build_nuitka.ps1") `
                 -Variant $variant -Version $verFull -DistRoot $DistRoot -CondaEnv $CondaEnv
             if ($LASTEXITCODE -ne 0) { throw "build_nuitka failed for $variant" }

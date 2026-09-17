@@ -303,24 +303,40 @@ PYEOF
 rm -f "$DMG_TEMP" "$DMG_FINAL"
 
 # Create a temporary read-write DMG
+# hdiutil's stderr is no longer discarded anywhere below: the #553 failure
+# showed up as a bare exit code because it was.
 hdiutil create \
     -volname "$APP_NAME" \
     -srcfolder "$DMG_STAGING" \
     -ov \
     -format UDRW \
     "$DMG_TEMP" \
-    >/dev/null 2>&1
+    >/dev/null
 
-# Mount it to set window properties
+# Detach with retries. hdiutil returns 16 ("Resource busy") when Finder or
+# Spotlight still holds the volume, the intermittent GitHub-runner failure
+# in #553; a busy detach used to fail the whole job under set -e.
+detach_with_retry() {
+    local mount="$1" attempt
+    for attempt in 1 2 3 4 5; do
+        if hdiutil detach "$mount" >/dev/null; then return 0; fi
+        echo "  hdiutil detach busy (attempt $attempt/5); retrying …"
+        sleep $((attempt * 2))
+    done
+    echo "  forcing detach of $mount"
+    hdiutil detach "$mount" -force >/dev/null
+}
+
 MOUNT_POINT="/Volumes/${APP_NAME}"
-# Detach if already mounted
-hdiutil detach "$MOUNT_POINT" >/dev/null 2>&1 || true
-hdiutil attach "$DMG_TEMP" -mountpoint "$MOUNT_POINT" >/dev/null 2>&1
 
-# Use AppleScript to set Finder window appearance. Skipped in CI: headless
-# runners have no Finder session / automation permission, and the styling is
-# cosmetic — the DMG is fully functional without it.
+# The image is mounted only to style the Finder window. Skipped in CI:
+# headless runners have no Finder session / automation permission, the
+# styling is cosmetic, and not mounting at all removes the detach that
+# flaked (#553).
 if [ -z "${CI:-}" ]; then
+# Detach if already mounted, then mount to set window properties
+hdiutil detach "$MOUNT_POINT" >/dev/null 2>&1 || true
+hdiutil attach "$DMG_TEMP" -mountpoint "$MOUNT_POINT" >/dev/null
 osascript << APPLESCRIPT
 tell application "Finder"
     tell disk "$APP_NAME"
@@ -345,20 +361,19 @@ tell application "Finder"
     end tell
 end tell
 APPLESCRIPT
-else
-    echo "  (CI: skipping Finder window styling)"
-fi
-
 # Unmount
 sync
-hdiutil detach "$MOUNT_POINT" >/dev/null 2>&1
+detach_with_retry "$MOUNT_POINT"
+else
+    echo "  (CI: skipping Finder window styling; image never mounted)"
+fi
 
 # Convert to compressed read-only DMG
 hdiutil convert "$DMG_TEMP" \
     -format UDZO \
     -imagekey zlib-level=9 \
     -o "$DMG_FINAL" \
-    >/dev/null 2>&1
+    >/dev/null
 
 # Clean up temp DMG
 rm -f "$DMG_TEMP"

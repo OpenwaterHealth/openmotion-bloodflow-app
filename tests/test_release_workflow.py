@@ -158,18 +158,39 @@ def test_packaging_signs_each_variants_exe_before_zipping_and_harvesting():
     assert 'Join-Path $distDir "Open-Motion.exe"' in script
 
 
-def test_nuitka_is_an_opt_in_compiler_with_the_same_output_contract(workflow):
-    """#548: Nuitka runs only on a manual dispatch that selects it; the
-    PyInstaller step is skipped in that case and packaging is untouched
-    because build_nuitka.ps1 lands the exe at the same path."""
-    assert "compiler:" in workflow and "options: [pyinstaller, nuitka]" in workflow
-    assert "if: github.event_name == 'workflow_dispatch' && inputs.compiler == 'nuitka'" in workflow
-    assert "if: github.event_name != 'workflow_dispatch' || inputs.compiler != 'nuitka'" in workflow
-    assert 'pip install "nuitka==4.2.1" ordered-set zstandard' in workflow
+def test_nuitka_is_the_default_compiler_with_pyinstaller_as_dispatch_fallback(workflow):
+    """#548 (default since 2026-09-17): every push/tag build compiles both
+    Windows variants with Nuitka; PyInstaller runs only on a manual dispatch
+    that selects it. build_nuitka.ps1 lands the exe at the PyInstaller path
+    so packaging is untouched, and the C-compile cache is restored between
+    runs."""
+    assert "options: [nuitka, pyinstaller]" in workflow and "default: nuitka" in workflow
+    assert "if: github.event_name != 'workflow_dispatch' || inputs.compiler != 'pyinstaller'" in workflow
+    assert "if: github.event_name == 'workflow_dispatch' && inputs.compiler == 'pyinstaller'" in workflow
+    assert "- name: Cache Nuitka's C-compile cache" in workflow
+    assert "scripts/build_nuitka.ps1 -Variant" in workflow
+    reqs = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")
+    assert "nuitka==4.2.1" in reqs and "ordered-set==" in reqs and "zstandard==" in reqs
     script = (REPO_ROOT / "scripts" / "build_nuitka.ps1").read_text(encoding="utf-8-sig")
     assert "--standalone" in script and "--onefile" in script and "--deployment" in script
     assert '"--onefile-tempdir-spec=' not in script, "a static extraction dir recreates V-07"
+    assert "--include-qt-plugins=sensible,qml" in script
     assert 'Join-Path (Join-Path $DistRoot $Variant) "Open-Motion"' in script
+    # clinical must not carry the self-updater (#543): Nuitka follows the
+    # conditional import statically, so the build tells it not to.
+    assert '"--nofollow-import-to=app_updater"' in script
     packaging = (REPO_ROOT / "scripts" / "package_artifacts.ps1").read_text(encoding="utf-8-sig")
-    assert '[ValidateSet("pyinstaller", "nuitka")][string]$Compiler = "pyinstaller"' in packaging
+    assert '[ValidateSet("pyinstaller", "nuitka")][string]$Compiler = "nuitka"' in packaging
 
+
+def test_macos_dmg_step_mounts_only_to_style_and_retries_the_detach():
+    """#553: the CI path never mounts the image (nothing to style headless),
+    the local path retries a busy detach and forces it last, and hdiutil's
+    stderr is no longer thrown away."""
+    src = (REPO_ROOT / "build_macos.sh").read_text(encoding="utf-8")
+    assert "detach_with_retry()" in src
+    assert 'hdiutil detach "$mount" -force' in src
+    assert "image never mounted" in src
+    for cmd in ("hdiutil create", "hdiutil convert"):
+        block = src[src.index(cmd):src.index(cmd) + 260]
+        assert "2>&1" not in block, f"{cmd} still discards stderr"

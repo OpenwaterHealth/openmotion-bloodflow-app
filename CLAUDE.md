@@ -13,7 +13,8 @@ pip install -e ../openmotion-sdk
 
 python main.py                          # run the app
 
-python -m PyInstaller -y openwater.spec # package → dist/Open-Motion.exe (onefile, #547)
+powershell -File scripts\build_nuitka.ps1 -Variant research   # native onefile → dist\research\Open-Motion\Open-Motion.exe (#548)
+python -m PyInstaller -y openwater.spec # PyInstaller fallback → dist/Open-Motion.exe (onefile, #547)
 .\build_and_zip.ps1                     # build + package all 4 artifacts
 
 # 4 artifacts: Clinical/Research × Portable/Installer
@@ -255,7 +256,8 @@ The `dataDirectory` config key controls the root (defaults to cwd if unset). Whe
 
 ## Packaging (onefile, #547)
 
-The Windows build is a PyInstaller **onefile** exe: `dist\<variant>\Open-Motion\Open-Motion.exe`
+The Windows build is a **onefile** exe (Nuitka by default, PyInstaller as the
+fallback; both land at) `dist\<variant>\Open-Motion\Open-Motion.exe`
 and nothing else (the `Open-Motion\` folder is kept so the portable zip and the
 MSI harvest keep their shape and a portable user's `logs\` / `data\` land beside
 the exe). Why: every shipped byte sits under the exe's Authenticode signature,
@@ -271,17 +273,23 @@ Nuitka's onefile included (#548). Startup therefore pays the extraction
 aggressive antivirus scanning. macOS stays a onedir `.app` (research-only,
 ad-hoc signed).
 
-### Native compile with Nuitka (#548, opt-in)
+### Native compile with Nuitka (#548, the default since 2026-09-17)
 
 `scripts/build_nuitka.ps1 -Variant <clinical|research>` compiles the app to
 C with Nuitka (`--standalone --onefile --deployment`, PyQt6 plugin) and lands
 the exe at the **same** path as the PyInstaller build
 (`dist\<variant>\Open-Motion\Open-Motion.exe`), so `package_artifacts.ps1
 -Compiler nuitka` zips and installs it unchanged. CI: `workflow_dispatch` with
-`compiler=nuitka` (MSVC on `windows-latest`; locally `pip install nuitka
-ordered-set zstandard ziglang`). **PyInstaller stays the default** until a
-Nuitka build has been hand-validated on the HIL rig; flipping the default is
-a one-line change in `release-build.yml`. macOS stays on PyInstaller.
+`compiler=pyinstaller` selects the PyInstaller fallback; every push and tag
+build compiles with Nuitka (MSVC on `windows-latest`, its C-compile cache
+restored between runs; locally `pip install -r requirements.txt` plus
+`pip install ziglang` for the compiler). `package_artifacts.ps1` and
+`build_and_zip.ps1` default to Nuitka too. The clinical build passes
+`--nofollow-import-to=app_updater` (Nuitka follows the conditional import
+statically; the spec's `excludes=` only covered PyInstaller). macOS stays on
+PyInstaller. Nuitka became the default before any Nuitka build had been
+launched on the HIL rig (Ethan, 2026-09-17); the first dev tag after that is
+that launch.
 
 What Nuitka buys: no `.pyc` archive to decompile (tracker M-09 / M-14).
 What it does not change: onefile still extracts to a per-process

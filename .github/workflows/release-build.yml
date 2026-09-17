@@ -8,10 +8,10 @@ on:
         type: boolean
         default: false
       compiler:
-        description: "Windows build: pyinstaller (default) or nuitka (native compile, #548; slow)"
+        description: "Windows build: nuitka (default, native compile) or pyinstaller (fallback)"
         type: choice
-        options: [pyinstaller, nuitka]
-        default: pyinstaller
+        options: [nuitka, pyinstaller]
+        default: nuitka
   push:
     branches: [main, next]
     tags:
@@ -94,8 +94,10 @@ jobs:
           # Update _FALLBACK_VERSION in version.py so the frozen exe uses it
           sed -i "s/^_FALLBACK_VERSION = .*/_FALLBACK_VERSION = \"${VER}\"/" version.py
 
+      # PyInstaller is the fallback only (workflow_dispatch compiler=pyinstaller)
+      # since Nuitka became the default on 2026-09-17 (#548).
       - name: Build with PyInstaller (one build per variant)
-        if: github.event_name != 'workflow_dispatch' || inputs.compiler != 'nuitka'
+        if: github.event_name == 'workflow_dispatch' && inputs.compiler == 'pyinstaller'
         shell: bash -el {0}
         run: |
           conda activate omotion
@@ -115,17 +117,29 @@ jobs:
           sed -i "s/^CLINICAL_MODE = .*/CLINICAL_MODE = False/" config/app_config.py
           git diff --exit-code -- config/app_config.py
 
-      # ── Nuitka native compile (#548), manual dispatch only for now ───────
-      # Selected with the `compiler` input. Compiles every module to C with
-      # MSVC (present on windows-latest); same onefile output contract as the
-      # PyInstaller path, so packaging below is unchanged. Not the default
-      # until a Nuitka build has been hand-validated on the HIL rig.
+      # ── Nuitka native compile (#548): the default since 2026-09-17 ─────
+      # Every module compiled to C with MSVC (present on windows-latest); same
+      # onefile output contract as the PyInstaller fallback, so packaging
+      # below is unchanged. nuitka / ordered-set / zstandard come from
+      # requirements.txt so the SBOM records the compiler. The C-compile
+      # cache is restored between runs: a cold build is tens of minutes per
+      # variant on the 2-core runner, a warm one a fraction of that.
+      - name: Cache Nuitka's C-compile cache
+        if: github.event_name != 'workflow_dispatch' || inputs.compiler != 'pyinstaller'
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\Nuitka\Nuitka\Cache
+          key: nuitka-${{ runner.os }}-${{ hashFiles('requirements.txt', 'sdk-version.txt') }}-${{ github.sha }}
+          restore-keys: |
+            nuitka-${{ runner.os }}-${{ hashFiles('requirements.txt', 'sdk-version.txt') }}-
+            nuitka-${{ runner.os }}-
+
       - name: Build with Nuitka (one build per variant)
-        if: github.event_name == 'workflow_dispatch' && inputs.compiler == 'nuitka'
+        if: github.event_name != 'workflow_dispatch' || inputs.compiler != 'pyinstaller'
         shell: bash -el {0}
         run: |
           conda activate omotion
-          pip install "nuitka==4.2.1" ordered-set zstandard
+          python -m nuitka --version
           for variant in clinical research; do
             powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build_nuitka.ps1 -Variant "$variant"
           done
