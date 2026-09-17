@@ -64,6 +64,15 @@ foreach ($variant in $Variants) {
         throw "Open-Motion.exe not found under $distDir; build the '$variant' variant first (or drop -SkipBuild)"
     }
 
+    # -- Authenticode-sign this variant's exe in the dist (no-op without a
+    #    cert, #443). Since #547 the exe is the whole onefile payload, so this
+    #    one signature covers every shipped byte of the portable zip and of
+    #    what the MSI harvests. The MSI and Setup bundle are signed separately
+    #    by installer/build_installer.ps1. --
+    & powershell -NoProfile -File (Join-Path $root "installer\sign.ps1") `
+        -Files (Join-Path $distDir "Open-Motion.exe")
+    if ($LASTEXITCODE -ne 0) { throw "signing Open-Motion.exe failed for $variant" }
+
     # portable zip (full version)
     $zip = Join-Path $OutDir "$($m.FileBase)-$verFull.zip"
     Write-Host "=== Portable ($variant): $zip ===" -ForegroundColor Cyan

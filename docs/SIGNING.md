@@ -1,0 +1,132 @@
+# Code signing (SSL.com EV via eSigner cloud)
+
+Release artifacts are Authenticode-signed with Openwater's SSL.com **EV
+code-signing certificate**. Post-2023 CA/B Forum rules forbid EV keys from
+existing as an exportable PFX, so the private key lives in SSL.com's
+**eSigner** cloud HSM and never touches the runner. CI uses **eSigner CKA**
+(SSL.com's Cloud Key Adapter): it registers a Windows CNG key provider and
+loads the cert into `Cert:\CurrentUser\My`, so native `signtool` signs
+against a store thumbprint while each signature is actually performed in
+SSL.com's cloud.
+
+**Every signing is metered.** Do not add signing to more build paths, and
+do not trigger a signed `workflow_dispatch`, without asking first.
+
+## What gets signed, and where
+
+| Artifact | Signed by |
+|---|---|
+| `Open-Motion.exe`, the onefile build (#547) that is the whole portable zip and the whole MSI payload | `scripts/package_artifacts.ps1` → `installer/sign.ps1`, once per variant |
+| `Open-Motion.msi` / `Open-Motion-Research.msi` | `installer/build_installer.ps1` → `sign.ps1` |
+| Burn Setup bundles (engine signed detached, then the reattached bundle) | `installer/build_installer.ps1` → `sign.ps1` |
+| WinUSB driver catalogs + `OpenMotionDriver-x64.msi` | `openmotion-sdk` repo, `driver-msi.yml` (sdk#216) — the signed zip is then vendored here as `resources/OpenMotionDriver-x64.zip` |
+
+Everything funnels through `installer/sign.ps1`, which is driven by one
+environment variable: `CODESIGN_THUMBPRINT`. Unset → every signing step
+no-ops and the build ships unsigned. In CI the "Set up eSigner CKA" step of
+`release-build.yml` sets it after loading the cert; the `CODESIGN_THUMBPRINT`
+repo secret remains as a manual fallback for signing with a locally
+installed cert (e.g. a self-hosted runner).
+
+**When CI signs:** **production tag builds only** (`X.Y.Z` with no
+pre-release suffix), plus `workflow_dispatch` runs with the `sign` input
+checked. eSigner cloud signings are metered (~7 per signed build), so
+dev/rc pre-release tags and pushes to `next`/`main` all build unsigned.
+Testers may see SmartScreen warnings on pre-release installers — expected
+and internal-only.
+
+macOS is unaffected: the DMG stays ad-hoc signed (Apple notarization is a
+separate, unrelated pipeline).
+
+## History: nothing shipped signed before 2026-09-17
+
+The signing step was written and exercised on the PR branch (#443; the
+2026-08-25 verification run was a manual dispatch there), but the PR was not
+merged until 2026-09-17. Every release up to and including **1.5.2 shipped
+unsigned**, and so did the previously vendored driver zip. The first signed
+release is therefore the first production tag cut after that date; verify
+it (below) before treating any tracker item that depends on signing as met.
+
+## The certificate
+
+Open Water Internet, Inc. (San Francisco, CA), issued by SSL.com EV Code
+Signing Intermediate CA RSA R3, valid 2026-08-05 to 2027-11-06.
+
+| Digest of the DER-encoded leaf | Value |
+|---|---|
+| SHA-1 (what Windows calls "Thumbprint") | `ADFCD7CB6A7900A204F91EDF9E5ADADB5A8C1AB4` |
+| SHA-256 | `BE77B247E7776240EC65DC854C86423C4C15C00F22365385BE101189FC71AC1F` |
+
+The in-app updater (`app_updater.ACCEPTED_SIGNER_SHA256`, #544) installs a
+downloaded bundle only when Windows verifies its signature **and** the
+signer is this certificate. **Rotation:** add the successor certificate's
+SHA-256 to that set and ship a release signed with the *old* certificate
+first, so installed apps learn the new pin before it is used.
+
+## One-time setup (account + secrets)
+
+1. **Finish eSigner enrollment** on the approved EV order at ssl.com:
+   the order's certificate must be *attested into eSigner* (chosen as the
+   cloud-delivery option, not a shipped YubiKey).
+2. **Create the eSigner TOTP secret**: order → Signing Credentials →
+   eSigner authenticator QR code → copy the **text version** of the
+   secret. This is what lets CI generate the per-signature OTPs.
+3. **Malware Blocker**: eSigner's pre-signing malware scan is only
+   supported through CodeSignTool/eSigner Express. For CKA (signtool)
+   signing it must be **disabled** on the signing credential in the
+   SSL.com portal, or cloud signing requests fail.
+4. **Create the GitHub secrets** — org-level, granted to
+   `openmotion-bloodflow-app` **and** `openmotion-sdk` (the driver build
+   uses the same cert):
+
+   ```bash
+   gh secret set ES_USERNAME    --org OpenwaterHealth --visibility selected --repos "openmotion-bloodflow-app,openmotion-sdk"
+   gh secret set ES_PASSWORD    --org OpenwaterHealth --visibility selected --repos "openmotion-bloodflow-app,openmotion-sdk"
+   gh secret set ES_TOTP_SECRET --org OpenwaterHealth --visibility selected --repos "openmotion-bloodflow-app,openmotion-sdk"
+   ```
+
+   `ES_USERNAME`/`ES_PASSWORD` are the SSL.com account login; the TOTP
+   secret is from step 2. (Per-repo secrets work too if org policy is in
+   the way.)
+
+## Testing the pipeline without cutting a release
+
+- Run **Build & Release** via `workflow_dispatch` with `sign` checked —
+  signs real artifacts (metered!), uploads them as workflow artifacts,
+  creates no GitHub release.
+- For a dry run against SSL.com's **sandbox** environment instead of the
+  production cert: set repo variable `ES_MODE=sandbox` and temporarily
+  point the ES_* secrets at sandbox.ssl.com credentials. Unset when done.
+
+Verify any produced artifact:
+
+```powershell
+Get-AuthenticodeSignature .\Open-Motion-Setup-1.6.0.exe | Format-List Status, SignerCertificate
+# Status must be Valid; the signer must be the Openwater EV cert above
+```
+
+## Driver (openmotion-sdk)
+
+`driver-msi.yml` uses the same CKA recipe to sign the four driver
+catalogs and the driver MSI, replacing the retired self-signed
+`CN=Openwater WinUSB` scheme (which required installing a private root
+cert on every user machine). **EV signing runs only on manual
+`workflow_dispatch`** — signings are metered, and the driver rarely
+changes, so it is signed once per driver change: dispatch the workflow,
+download the `OpenMotionDriver-x64` artifact, verify its signature,
+commit it in the SDK repo as the canonical copy, and vendor the same zip
+here as `resources/OpenMotionDriver-x64.zip` so the Setup bundles chain the
+EV-signed driver MSI. PR-triggered runs build-validate with the legacy
+self-signed key at zero eSigner cost. Details: sdk#216.
+
+## Deliberate follow-ups
+
+- **Driver: Microsoft attestation signing** (optional, later). The EV
+  cert qualifies us to register a Microsoft Partner Center hardware
+  account; attestation-signed driver packages install with no
+  TrustedPublisher step and no prompt at all.
+- eSigner billing: cloud signings are metered per the eSigner service
+  plan — check the tier if release cadence increases significantly.
+- rc bundles are unsigned, so the in-app beta channel offers them and then
+  refuses them (#544). Signing rc tags too is a one-line change to the
+  CKA step's `if:` condition, at the cost of ~7 signings per rc.
