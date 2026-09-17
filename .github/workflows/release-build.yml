@@ -269,17 +269,23 @@ jobs:
           powershell -NoProfile -File scripts\package_artifacts.ps1 -SkipBuild -Version "${{ steps.meta.outputs.TAG }}"
 
       # ── always upload workflow artifact ──────────────────────────
+      # upload-artifact wraps whatever it is given in its own zip, so
+      # handing it the portable zip made every run download a zip inside
+      # a zip (#567). Upload the packaged dist tree instead: it is the
+      # exact tree New-PortableZip compresses (signed exe included), so the
+      # download is Open-Motion-<tag>.zip holding Open-Motion\ directly -
+      # the same layout as the release asset.
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.meta.outputs.ARTIFACT_NAME }}
-          path: ${{ steps.meta.outputs.ARTIFACT_ZIP }}
+          path: dist/clinical
 
       - name: Upload Research workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.meta.outputs.ARTIFACT_NAME_RESEARCH }}
-          path: ${{ steps.meta.outputs.ARTIFACT_ZIP_RESEARCH }}
+          path: dist/research
 
       # ── build release notes ───────────────────────────────────────
       - name: Build release notes
