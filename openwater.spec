@@ -249,13 +249,22 @@ _mirror_vendor_from_collected(om_bins)
 # Optionally add a runtime hook to put these dirs on the DLL path for Windows
 runtime_hooks = ["rthook_libusb_paths.py"]
 
+# Mixed-Qt guards, plus the app self-updater for a clinical build (#543,
+# tracker M-02): motion_connector only imports app_updater when the stamped
+# CLINICAL_MODE is False, and excluding it here keeps the module out of the
+# clinical PYZ entirely rather than merely unused. Guarded by
+# tests/test_updater_compiled_out.py.
+_excludes = ["PySide6", "shiboken6", "PySide2", "PyQt5"]
+if _is_clinical:
+    _excludes.append("app_updater")
+
 a = Analysis(
     [ENTRY],
     pathex=pathex,                  # SDK parent dir; see the omotion block
     binaries=binaries,
     datas=datas,
     hiddenimports=hidden,
-    excludes=['PySide6','shiboken6','PySide2','PyQt5'],  # avoid mixed Qt
+    excludes=_excludes,
     runtime_hooks=runtime_hooks,
     noarchive=False,
     optimize=0,

@@ -73,6 +73,7 @@ artifacts, so every tagged release carries one.
 | `main.py` | Entry point. PyQt app, QML engine, logging. Registers `MotionInterface` as a QML singleton. |
 | `motion_connector.py` | **~4,700 lines.** Single `MotionConnector` QObject — all UI⇄hardware glue, ~64 signals / ~80 slots. State machine constants around line 252; transitions in `update_state` (~line 1947). |
 | `motion_config.py` | FPGA model + laser-parameter helpers (extracted in May 2025 for reuse). |
+| `app_updater.py` | The in-app self-updater (GitHub release check, download, Authenticode check, detached install handoff). **Compiled out of clinical builds** (#543): `motion_connector.py` imports it only when the compiled `CLINICAL_MODE` is False and `openwater.spec` excludes it from the clinical bundle; the connector keeps the `checkForUpdates` / `applyUpdate` slots and update signals in every variant as no-ops. A source run with `--clinical` still has the module (constant unchanged) and relies on the runtime `clinicalMode` guard. |
 | `pages/BloodFlow.qml` | Main scan page: patient info, sensor config, trigger. The only page `main.qml` loads. |
 | `components/PlotViewer.qml` | Real-time + replay BFI/BVI plot viewer (pan/zoom DVR, autoscale). |
 | `components/SettingsModal.qml` | Settings overlay (opened from BloodFlow — there is no `pages/Settings.qml`). |

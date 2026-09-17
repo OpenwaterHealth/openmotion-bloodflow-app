@@ -1,5 +1,5 @@
 import pytest
-from motion_connector import _select_update_asset
+from app_updater import _select_update_asset
 
 
 CLINICAL = {"name": "Open-Motion-Setup-1.2.3.exe", "browser_download_url": "u/clinical"}
