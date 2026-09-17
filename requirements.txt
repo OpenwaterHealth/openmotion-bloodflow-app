@@ -14,6 +14,13 @@ pyusb==1.3.1
 libusb1==3.3.1
 keyboard==0.13.5
 pyinstaller==6.11.1
+# Native compile (#548): Nuitka is the default Windows compiler; PyInstaller
+# stays the fallback and the macOS bundler. A C compiler is needed too: MSVC
+# on the GitHub runner, `pip install ziglang` locally (not pinned here so CI
+# does not install a second compiler).
+nuitka==4.2.1
+ordered-set==4.1.0
+zstandard==0.23.0
 # Scan-database encryption (clinical builds). These MUST be installed in the
 # build environment even though the SDK declares them in its [encryption]
 # extra: PyInstaller can only bundle packages that are actually installed, so
