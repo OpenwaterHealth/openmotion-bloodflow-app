@@ -85,6 +85,8 @@ artifacts, so every tagged release carries one.
 | `config/laser_params.json` | 18 laser I2C register sets (TA / SEED / EE / OPT variants). **Not user-tunable calibration data** — init/baseline commands for the laser driver chips. |
 | `resources/sample_scan.csv` | Real exported scan (History → Export CSV / SDK `materialize_corrected_csv` per-cam wide format). Offered — never auto-loaded — into the replay viewer when a **research build** boots with **no device connected** (#314): the startup connection watchdog raises `components/SampleScanOfferModal.qml`, and only accepting it binds the sample. Clinical builds never see the offer. Swap this one file to change the sample dataset. Bundled by `openwater.spec` (targeted `datas` entry); located at runtime via `utils.resource_path.resource_path("resources", "sample_scan.csv")`. Parsed DB-free by `data_sources.load_csv_scan_buffers` → `PastScanSource(preloaded_buffers=…, scan_db=None)`; the user's real `scans.db` is never touched. |
 | `openwater.spec` | PyInstaller spec, **onefile** since #547: the build output is the single `Open-Motion.exe` with every bundled byte (bytecode archive, Qt/native DLLs, QML, assets, sample scan) appended to it, so the Authenticode signature covers all of it. Custom logic mirrors the vendored libusb DLLs to `_vendor\` at the bundle root so `rthook_libusb_paths.py` finds them in the extraction directory. The spec refuses a dist directory that still holds a onedir `_internal\` tree. See "Packaging" below. |
+| `utils/frozen.py` | The one answer to "built executable?" and "which exe / where are resources?" for PyInstaller **and** Nuitka (#548). Nothing else may read `sys.frozen`, `sys._MEIPASS` or `sys.executable`. |
+| `scripts/build_nuitka.ps1` | Opt-in native compile (#548); same output path as the PyInstaller build. See "Native compile with Nuitka". |
 | `sdk-version.txt` | The one place the release SDK is pinned (#545): rc/prod CI builds install exactly this `openmotion-sdk` release and fail if the installed version differs; the per-release SBOM asserts the same line. Dev builds and the editable local setup ignore it. |
 | `tests/` | Hardware-in-loop pytest suite, ~23 files. Markers: `@pytest.mark.dev` (~1–2 min, runs on every push to `next`), `@pytest.mark.release` (~6–8 min, runs on release tags). |
 
@@ -268,6 +270,45 @@ Nuitka's onefile included (#548). Startup therefore pays the extraction
 (~120 MB) every launch: a few seconds on an SSD, longer on a slow disk or under
 aggressive antivirus scanning. macOS stays a onedir `.app` (research-only,
 ad-hoc signed).
+
+### Native compile with Nuitka (#548, opt-in)
+
+`scripts/build_nuitka.ps1 -Variant <clinical|research>` compiles the app to
+C with Nuitka (`--standalone --onefile --deployment`, PyQt6 plugin) and lands
+the exe at the **same** path as the PyInstaller build
+(`dist\<variant>\Open-Motion\Open-Motion.exe`), so `package_artifacts.ps1
+-Compiler nuitka` zips and installs it unchanged. CI: `workflow_dispatch` with
+`compiler=nuitka` (MSVC on `windows-latest`; locally `pip install nuitka
+ordered-set zstandard ziglang`). **PyInstaller stays the default** until a
+Nuitka build has been hand-validated on the HIL rig; flipping the default is
+a one-line change in `release-build.yml`. macOS stays on PyInstaller.
+
+What Nuitka buys: no `.pyc` archive to decompile (tracker M-09 / M-14).
+What it does not change: onefile still extracts to a per-process
+`%TEMP%\onefile_<pid>_<time>_<random>` directory at every launch (never pass
+`--onefile-tempdir-spec` with a static location), so the residual risk above
+is identical. Costs: the compile takes tens of minutes per variant, the
+first signed release should be submitted to Microsoft's false-positive portal
+(antivirus dislikes fresh onefile bootstraps), and the runner's VC++ runtime
+DLLs must be bundled (MSVC finds them; zig does not, so a local zig build
+relies on the target's installed runtime).
+
+**Runtime facts that differ from PyInstaller**, all absorbed by
+`utils/frozen.py` (use it, never `sys.frozen` / `sys._MEIPASS` /
+`sys.executable` directly; `tests/test_frozen.py` greps for offenders):
+
+- Nuitka sets **no** `sys.frozen`; every compiled module has `__compiled__`.
+  `is_frozen()` checks both. This matters: `main._parse_dev_args` drops the
+  `--clinical` / `--data-root` flags only when frozen.
+- In onefile, `sys.executable` is the *extracted* `python.exe` in the temp
+  directory; the launched exe is `__compiled__.original_argv0` →
+  `executable_path()`. Used by the installed-vs-portable check, the portable
+  data root and the updater's relaunch.
+- No `_MEIPASS`: data files sit next to the modules, i.e. the parent of
+  `utils/` exactly like a source tree → `bundle_dir()`.
+- No runtime hooks: `main.py` calls `utils.libusb_paths.register_vendored_libusb`
+  before importing the SDK; the PyInstaller `rthook_libusb_paths.py` is now
+  a shim over the same function.
 
 Consequences to remember:
 

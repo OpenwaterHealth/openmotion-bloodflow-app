@@ -30,6 +30,8 @@ file) and DATA_DIRNAME (scans.db, scan CSVs, calibrations,
 debug-bundles, downloaded updates).
 """
 from pathlib import Path
+
+from utils.frozen import executable_path, is_frozen
 import os
 import sys
 
@@ -128,13 +130,13 @@ def installed_dir() -> Path | None:
 
 def is_installed_exe() -> bool:
     """True when this frozen exe is the one the installer registered."""
-    if not getattr(sys, "frozen", False) or sys.platform != "win32":
+    if not is_frozen() or sys.platform != "win32":
         return False
     target = installed_dir()
     if target is None:
         return False
     try:
-        exe_dir = Path(sys.executable).resolve().parent
+        exe_dir = executable_path().resolve().parent
         return exe_dir == target.resolve()
     except OSError:
         return False
@@ -146,7 +148,7 @@ def portable_mode() -> bool:
     macOS are never portable (cwd / Application Support respectively)."""
     if PORTABLE_MODE_OVERRIDE is not None:
         return bool(PORTABLE_MODE_OVERRIDE)
-    if not getattr(sys, "frozen", False) or sys.platform != "win32":
+    if not is_frozen() or sys.platform != "win32":
         return False
     return not is_installed_exe()
 
@@ -193,14 +195,16 @@ def writable_root(portable: bool | None = None) -> Path:
         root.mkdir(parents=True, exist_ok=True)
         return root
 
-    if getattr(sys, "frozen", False):
+    if is_frozen():
         if sys.platform == "darwin":
             # macOS has no %PROGRAMDATA%, and the portable layout can't apply
             # either: writing inside Open-Motion.app invalidates its code
             # signature. Both variants use the standard per-user data location.
             root = _home_dir() / "Library" / "Application Support" / _APP_DIRNAME
         elif portable:
-            root = Path(sys.executable).resolve().parent
+            # The launched exe (utils.frozen resolves Nuitka's outer exe; the
+            # interpreter path there is the extracted copy, #548).
+            root = executable_path().resolve().parent
         else:
             root = _program_data_dir() / _APP_DIRNAME
     else:

@@ -20,11 +20,11 @@ import json
 import logging
 import os
 import re
-import sys
 
 from PyQt6.QtCore import QCoreApplication, QMetaObject, Qt
 
 from utils import app_paths
+from utils.frozen import executable_path
 
 logger = logging.getLogger("openmotion.bloodflow-app.updater")
 
@@ -339,7 +339,7 @@ def apply_update(connector, download_url: str) -> None:
         helper = updates_dir / "update_helper.ps1"
         helper.write_text(
             _build_update_helper_script(
-                os.getpid(), str(dest), sys.executable
+                os.getpid(), str(dest), str(executable_path())
             ),
             encoding="utf-8",
         )

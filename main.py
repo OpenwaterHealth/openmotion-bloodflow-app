@@ -22,6 +22,15 @@ if sys.stderr is None:
     sys.stderr = open(os.devnull, "w", encoding="utf-8", buffering=1)
 
 
+# Vendored libusb DLL directories must be on the search path before the SDK
+# (pyusb / libusb1) is imported. PyInstaller did this in a runtime hook; a
+# Nuitka build has none, so it happens here for every frozen build (#548).
+from utils.frozen import bundle_dir, is_frozen  # noqa: E402
+from utils.libusb_paths import register_vendored_libusb  # noqa: E402
+
+if is_frozen():
+    register_vendored_libusb(bundle_dir())
+
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtQml import (
@@ -260,7 +269,7 @@ def _parse_dev_args(argv, *, frozen=None) -> tuple[dict, list[str]]:
         "ignored": None,
     }
     if frozen is None:
-        frozen = bool(getattr(sys, "frozen", False))
+        frozen = is_frozen()
     given = {k: v for k, v in dev.items() if k != "ignored" and v is not None}
     if frozen and given:
         dev = {
