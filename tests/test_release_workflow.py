@@ -136,3 +136,24 @@ def test_stale_hand_written_sbom_is_gone():
     """The generated per-release SBOM replaces the 0.4.3 snapshot that
     recorded omotion as 'latest'."""
     assert not (REPO_ROOT / "sbom.cdx.json").exists()
+
+
+def test_release_builds_sign_only_production_tags_or_explicit_dispatch(workflow):
+    """#443: the eSigner CKA step provides CODESIGN_THUMBPRINT on production
+    tags (X.Y.Z, no '-') and on a manual run with sign=true; nothing else
+    signs, because every signing is metered."""
+    assert "- name: Set up eSigner CKA (EV code signing)" in workflow
+    assert ("if: (startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-')) "
+            "|| (github.event_name == 'workflow_dispatch' && inputs.sign)") in workflow
+    assert "CODESIGN_THUMBPRINT: ${{ env.CODESIGN_THUMBPRINT || secrets.CODESIGN_THUMBPRINT }}" in workflow
+    assert "      sign:\n        description:" in workflow
+
+
+def test_packaging_signs_each_variants_exe_before_zipping_and_harvesting():
+    script = (REPO_ROOT / "scripts" / "package_artifacts.ps1").read_text(encoding="utf-8-sig")
+    sign_at = script.index('installer\\sign.ps1")')
+    zip_at = script.index("New-PortableZip -DistDir $distDir")
+    installer_at = script.index(r'installer\build_installer.ps1")')  # the call, not the comment
+    assert sign_at < zip_at < installer_at
+    assert 'Join-Path $distDir "Open-Motion.exe"' in script
+
