@@ -196,6 +196,12 @@ jobs:
           fi
 
       # ── create release on tag push ──────────────────────────────
+      # softprops creates (or updates) the release with the notes only. The
+      # assets go up in the next step, one at a time with retries: the
+      # action's parallel upload died mid-way with "Error saving asset" on
+      # both attempts of 1.5.3-dev.0 (#555), and with overwrite_files it had
+      # already deleted the previous assets, so every retry left the release
+      # with a different partial set.
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
@@ -204,14 +210,49 @@ jobs:
           name: ${{ steps.meta.outputs.TAG }}
           body_path: notes.md
           prerelease: ${{ steps.meta.outputs.PRERELEASE == 'true' }}
-          files: |
-            ${{ steps.meta.outputs.ARTIFACT_ZIP }}
-            ${{ steps.meta.outputs.ARTIFACT_ZIP_RESEARCH }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload release assets (sequential, with retries)
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.TAG }}
+        run: |
+          set -euo pipefail
+          assets=(
+            "${{ steps.meta.outputs.ARTIFACT_ZIP }}"
+            "${{ steps.meta.outputs.ARTIFACT_ZIP_RESEARCH }}"
             build/installer/Open-Motion-Setup-*.exe
             build/installer/Open-Motion-Research-Setup-*.exe
             resources/OpenMotionDriver-x64.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          )
+          for f in "${assets[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "::error::release asset missing on disk: $f"
+              exit 1
+            fi
+            for attempt in 1 2 3; do
+              if gh release upload "$TAG" "$f" --clobber -R "$GITHUB_REPOSITORY"; then
+                echo "uploaded $f"
+                break
+              fi
+              echo "upload of $f failed (attempt $attempt/3)"
+              if [ "$attempt" -eq 3 ]; then exit 1; fi
+              sleep 20
+            done
+          done
+          # Every asset must be on the release before HIL (workflow_run on
+          # success) tests it, so a silent partial upload fails the job.
+          present=$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          echo "release assets:"; echo "$present" | sed 's/^/  /'
+          for f in "${assets[@]}"; do
+            if ! echo "$present" | grep -qx "$(basename "$f")"; then
+              echo "::error::asset not on release after upload: $(basename "$f")"
+              exit 1
+            fi
+          done
 
   build-macos:
     runs-on: macos-15   # Apple Silicon runner
