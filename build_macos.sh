@@ -113,14 +113,31 @@ if os.path.exists(ICNS_FILE):
     datas.append((ICNS_FILE, "."))
 
 # ── PyQt6 ──
-qt_datas, qt_bins, qt_hidden = collect_all("PyQt6")
+# include_py_files=False: collect_all() otherwise copies every .py of the
+# package into the bundle as loose plaintext next to the compiled PYZ,
+# which is never imported and only leaks the source (#557).
+qt_datas, qt_bins, qt_hidden = collect_all("PyQt6", include_py_files=False)
 datas   += qt_datas
 binaries += qt_bins
 hidden  += qt_hidden
 hidden  += collect_submodules("PyQt6")
 
 # ── omotion SDK ──
-om_datas, om_bins, om_hidden = collect_all("omotion")
+# Parent directory on pathex: an editable SDK install (pip install -e) is
+# exposed through a PEP 660 finder the module analysis does not consult,
+# so without this the PYZ holds no omotion module at all (#557). A wheel
+# install resolves to site-packages and this changes nothing.
+import importlib.util as _ilu
+_om_spec = _ilu.find_spec("omotion")
+if _om_spec is None or not _om_spec.submodule_search_locations:
+    raise SystemExit(
+        "[spec] FATAL: omotion is not importable in the build environment"
+    )
+pathex = [os.path.dirname(list(_om_spec.submodule_search_locations)[0])]
+print(f"[spec] omotion package resolved under {pathex[0]}")
+om_datas, om_bins, om_hidden = collect_all(
+    "omotion", include_py_files=False
+)
 datas   += om_datas
 binaries += om_bins
 hidden  += om_hidden
@@ -148,7 +165,7 @@ runtime_hooks = ["rthook_libusb_macos.py"]
 
 a = Analysis(
     [ENTRY],
-    pathex=[],
+    pathex=pathex,
     binaries=binaries,
     datas=datas,
     hiddenimports=hidden,

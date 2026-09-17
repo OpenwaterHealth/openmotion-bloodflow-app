@@ -37,7 +37,10 @@ for item in ("main.qml",):
 # NOTE: config/ is no longer a data folder — config/app_config.py and
 # config/tec_params.py are Python modules that main.py imports, so the
 # Analysis below compiles them into the bundle like any other code (#546).
-for folder in ("pages", "components", "assets", "processing"):
+# processing/ is deliberately absent: visualize_bloodflow.py is a standalone
+# CSV script the app never imports, and shipping the folder as data put its
+# source in the bundle as plaintext (#557).
+for folder in ("pages", "components", "assets"):
     if not os.path.isdir(folder):
         raise SystemExit(
             f"[spec] FATAL: required resource folder {folder!r} not found in "
@@ -70,14 +73,42 @@ else:
 datas.append((ICON_FILE, "assets/images"))
 
 # --- PyQt6 (keep as before) ---
-qt_datas, qt_bins, qt_hidden = collect_all("PyQt6")
+# include_py_files=False on every collect_all() below: the default (True)
+# copies each .py of the package into the bundle as a loose data file next
+# to the bytecode the Analysis already compiles into the PYZ. The frozen
+# finder resolves the PYZ first, so those copies are never imported - they
+# only ship the source as plaintext. 1.5.3-dev.0 carried 100 omotion files
+# that way, including the laser_params.py / fpga_model.py modules that had
+# just been converted from JSON (#557). Guarded by
+# tests/test_pyinstaller_spec.py.
+qt_datas, qt_bins, qt_hidden = collect_all("PyQt6", include_py_files=False)
 datas   += qt_datas
 binaries += qt_bins
 hidden  += qt_hidden
 hidden  += collect_submodules("PyQt6")
 
 # --- ✅ add omotion explicitly ---
-om_datas, om_bins, om_hidden = collect_all("omotion")
+# Put the package's parent directory on pathex. A PEP 660 editable install
+# (pip install -e ../openmotion-sdk, the documented dev setup) exposes
+# omotion through an import-hook finder that PyInstaller's module analysis
+# does not consult, so the Analysis compiled no omotion module into the PYZ
+# and the frozen app imported the SDK from the loose .py copies that
+# collect_all() used to ship as data. With those gone (#557) the package
+# must be reachable as a plain directory. For a regular wheel/git install
+# (CI) the directory is site-packages and this changes nothing. The script
+# directory stays first on the analysis path, so the app's own packages
+# (config/, utils/) cannot be shadowed by anything in the SDK checkout.
+import importlib.util as _ilu
+_om_spec = _ilu.find_spec("omotion")
+if _om_spec is None or not _om_spec.submodule_search_locations:
+    raise SystemExit(
+        "[spec] FATAL: omotion is not importable in the build environment"
+    )
+pathex = [os.path.dirname(list(_om_spec.submodule_search_locations)[0])]
+print(f"[spec] omotion package resolved under {pathex[0]}")
+om_datas, om_bins, om_hidden = collect_all(
+    "omotion", include_py_files=False
+)
 datas   += om_datas
 binaries += om_bins
 hidden  += om_hidden
@@ -131,7 +162,9 @@ try:
     # sqlcipher3 is a single native extension with OpenSSL statically linked,
     # so there are no side-car DLLs to chase - collect_all still future-proofs
     # against that changing.
-    _sc_datas, _sc_bins, _sc_hidden = collect_all("sqlcipher3")
+    _sc_datas, _sc_bins, _sc_hidden = collect_all(
+        "sqlcipher3", include_py_files=False
+    )
     datas += _sc_datas
     binaries += _sc_bins
     hidden += _sc_hidden
@@ -218,7 +251,7 @@ runtime_hooks = ["rthook_libusb_paths.py"]
 
 a = Analysis(
     [ENTRY],
-    pathex=[],                      # you can leave this empty now
+    pathex=pathex,                  # SDK parent dir; see the omotion block
     binaries=binaries,
     datas=datas,
     hiddenimports=hidden,
