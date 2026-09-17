@@ -70,8 +70,14 @@ during the in-place file swap (the scenario the relaunch-helper was built for).
 
 ## Notes
 
-- The download is allowed despite being **unsigned** because
-  `_REQUIRE_SIGNED_UPDATES = False` (transition period until the EV cert lands);
-  the PE-header (`MZ`) check still rejects truncated/HTML downloads.
+- Since #544 an **unsigned bundle is refused**: `app_updater.verify_authenticode`
+  runs `WinVerifyTrust` and the signer certificate's SHA-256 thumbprint must be
+  in `app_updater.ACCEPTED_SIGNER_SHA256` (the Openwater EV certificate). With a
+  locally built, unsigned bundle the expected end-to-end outcome is therefore
+  the "Update bundle is not signed; refusing to install" failure on the banner
+  and in the log, with no helper spawned. To exercise the install path, serve a
+  bundle from a signed production release (or sign your local bundle with the
+  org certificate). The PE-header (`MZ`) check still rejects truncated/HTML
+  downloads before the signature check runs.
 - `updateRepo` / `updateApiUrl` config keys default to `None` → production
   GitHub repo. They exist only to point a build at a staging/local source.
