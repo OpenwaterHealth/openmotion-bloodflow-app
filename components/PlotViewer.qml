@@ -71,7 +71,7 @@ Rectangle {
     property bool showCellValues: !viewer.effectiveClinical
     // Y-axis tick labels (max/mid/min per metric). Config is the single
     // source of truth: the ⋯ popup toggle (hidden in clinical mode) writes
-    // through MotionInterface.setConfig, which persists to app_config.json
+    // through MotionInterface.setConfig, which persists it to the scans.db settings table
     // and notifies appConfigChanged — this binding then updates.
     property bool showAxisLabels: MotionInterface.appConfig.showAxisLabels === true
     // displayMode pair selector — driven externally (BloodFlow.qml binds

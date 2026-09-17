@@ -42,11 +42,54 @@ def test_set_data_root_override_round_trips(tmp_path, monkeypatch):
     assert app_paths.DATA_ROOT_OVERRIDE is None
 
 
+# --- derived portable mode (#546) ------------------------------------------
+#
+# The exe in the portable zip and the one inside the installer are
+# byte-identical, so "installed vs portable" comes from the MSI's HKLM
+# InstallDir marker, not from a config value.
+
 @pytest.mark.unit
-def test_local_config_path_under_root(tmp_path, monkeypatch):
-    _override(monkeypatch, tmp_path / "ow")
-    expected = tmp_path / "ow" / "app_config.local.json"
-    assert app_paths.local_config_path() == expected
+def test_portable_mode_override_wins(monkeypatch):
+    monkeypatch.setattr(app_paths, "PORTABLE_MODE_OVERRIDE", True)
+    assert app_paths.portable_mode() is True
+    monkeypatch.setattr(app_paths, "PORTABLE_MODE_OVERRIDE", False)
+    assert app_paths.portable_mode() is False
+
+
+@pytest.mark.unit
+def test_source_runs_are_never_portable(monkeypatch):
+    monkeypatch.setattr(app_paths, "PORTABLE_MODE_OVERRIDE", None)
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+    assert app_paths.portable_mode() is False
+
+
+@pytest.mark.unit
+def test_frozen_exe_in_registered_dir_is_installed(tmp_path, monkeypatch):
+    monkeypatch.setattr(app_paths, "PORTABLE_MODE_OVERRIDE", None)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "platform", "win32")
+    exe_dir = tmp_path / "Program Files" / "Openwater" / "Open-Motion"
+    exe_dir.mkdir(parents=True)
+    monkeypatch.setattr(sys, "executable", str(exe_dir / "Open-Motion.exe"))
+    monkeypatch.setattr(app_paths, "installed_dir", lambda: exe_dir)
+    assert app_paths.is_installed_exe() is True
+    assert app_paths.portable_mode() is False
+
+
+@pytest.mark.unit
+def test_frozen_exe_elsewhere_is_portable(tmp_path, monkeypatch):
+    monkeypatch.setattr(app_paths, "PORTABLE_MODE_OVERRIDE", None)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "platform", "win32")
+    zip_dir = tmp_path / "Downloads" / "Open-Motion"
+    zip_dir.mkdir(parents=True)
+    monkeypatch.setattr(sys, "executable", str(zip_dir / "Open-Motion.exe"))
+    # a different install elsewhere on the same machine must not claim us
+    monkeypatch.setattr(app_paths, "installed_dir", lambda: tmp_path / "Program Files" / "Open-Motion")
+    assert app_paths.portable_mode() is True
+    # ...and no registration at all is portable too
+    monkeypatch.setattr(app_paths, "installed_dir", lambda: None)
+    assert app_paths.portable_mode() is True
 
 
 @pytest.mark.unit

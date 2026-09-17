@@ -92,11 +92,23 @@ jobs:
           # Update _FALLBACK_VERSION in version.py so the frozen exe uses it
           sed -i "s/^_FALLBACK_VERSION = .*/_FALLBACK_VERSION = \"${VER}\"/" version.py
 
-      - name: Build with PyInstaller
+      - name: Build with PyInstaller (one build per variant)
         shell: bash -el {0}
         run: |
           conda activate omotion
-          python -m PyInstaller -y openwater.spec
+          # #546: the Clinical/Research split is compiled in. Stamp
+          # CLINICAL_MODE into config/app_config.py, build, repeat; the
+          # repo value (Research) is restored afterwards. portableMode is
+          # derived at launch (HKLM InstallDir marker), so the portable zip
+          # and the installer share each variant's exe byte-for-byte.
+          for variant in clinical research; do
+            if [ "$variant" = "clinical" ]; then flag=True; else flag=False; fi
+            sed -i "s/^CLINICAL_MODE = .*/CLINICAL_MODE = ${flag}/" config/app_config.py
+            grep -n "^CLINICAL_MODE = " config/app_config.py
+            python -m PyInstaller -y openwater.spec --distpath "dist/${variant}" --workpath "build/${variant}"
+          done
+          sed -i "s/^CLINICAL_MODE = .*/CLINICAL_MODE = False/" config/app_config.py
+          git diff --exit-code -- config/app_config.py
 
       - name: Install WiX v5
         shell: pwsh
@@ -140,7 +152,7 @@ jobs:
         env:
           CODESIGN_THUMBPRINT: ${{ secrets.CODESIGN_THUMBPRINT }}
         run: |
-          powershell -NoProfile -File scripts\package_artifacts.ps1 -Version "${{ steps.meta.outputs.TAG }}"
+          powershell -NoProfile -File scripts\package_artifacts.ps1 -SkipBuild -Version "${{ steps.meta.outputs.TAG }}"
 
       # ── always upload workflow artifact ──────────────────────────
       - name: Upload workflow artifact

@@ -1,13 +1,14 @@
 # installer/build_installer.ps1 - build the app MSI + Burn bundle for one variant.
 param(
     [ValidateSet("clinical", "research")][string]$Variant = "clinical",
-    [string]$DistDir = "dist\Open-Motion",
+    [string]$DistDir = "",       # default: dist\<variant>\Open-Motion (per-variant PyInstaller output, #546)
     [string]$Version = "",      # override the numeric X.Y.Z (else derived from git)
     [string]$FullVersion = ""   # full semver for the bundle filename, e.g. 1.4.0-dev.2 (else $Version)
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Definition)
 Set-Location $root
+if (-not $DistDir) { $DistDir = "dist\$Variant\Open-Motion" }
 
 # -- constant, never-changing GUIDs (distinct per variant so they never
 #    cross-upgrade). Generated once with [guid]::NewGuid(). --
@@ -70,30 +71,21 @@ if (-not (Test-Path (Join-Path $DistAbs 'Open-Motion.exe'))) {
     throw "Open-Motion.exe not found under $DistAbs; PyInstaller build looks incomplete"
 }
 
-# -- stage the per-variant UI mode into the harvested config --
-# The MSI harvests dist\Open-Motion as-is, so clinical/Research must be
-# written into the bundled config BEFORE wix runs. Mirrors the per-variant
-# flip in scripts/package_artifacts.ps1: clinical keeps clinicalMode=true
-# (reduced clinical UI), Research sets it false (full research UI). We set it
-# explicitly per variant
-# so repeated builds against one dist are always correct regardless of prior
-# state — including when scripts/package_artifacts.ps1 already staged the
-# same value before invoking us (the re-apply is an idempotent no-op, not a
-# bug). This self-contained flip is also what lets build_installer.ps1 be run
-# standalone.
-# Set-ClinicalMode writes UTF-8 *without* BOM — the app's json.load fails
-# silently on a BOM and falls back to defaults.
-$cfgPath = Join-Path $DistAbs "_internal\config\app_config.json"
-. (Join-Path $root "scripts\build_common.ps1")
-$clinical = ($Variant -ne "research")   # clinical => clinicalMode true; research => false
-[void](Set-ClinicalMode -ConfigPath $cfgPath -Clinical $clinical)
-Write-Host "Staged clinicalMode=$clinical into bundled config" -ForegroundColor Green
-
-# Installed (MSI) apps always scatter writable state to %PROGRAMDATA% —
-# portableMode is a portable-zip-only concept. Force it off here too so this
-# script stays correct when run standalone, not just via package_artifacts.ps1.
-[void](Set-PortableMode -ConfigPath $cfgPath -Portable $false)
-Write-Host "Staged portableMode=false into bundled config" -ForegroundColor Green
+# -- variant sanity (#546) --
+# The MSI harvests the per-variant PyInstaller output as-is. There is no
+# bundled config to stage any more: the Clinical/Research split is compiled
+# into the exe (CLINICAL_MODE stamped before PyInstaller ran), and
+# portableMode is derived at launch from the HKLM InstallDir marker app.wxs
+# writes below — an installed exe scatters its writable state to
+# %PROGRAMDATA%, the byte-identical exe in the portable zip keeps it next to
+# itself. Refuse an obviously mismatched dist so a research build can never
+# be packaged as the clinical installer by accident.
+if ((Test-Path (Join-Path $DistAbs "_internal\config\app_config.json"))) {
+    throw "dist at $DistAbs carries a pre-#546 bundled app_config.json; rebuild it"
+}
+if ($DistAbs -notmatch "[\\/]$Variant[\\/]Open-Motion$") {
+    Write-Host "WARNING: DistDir '$DistAbs' does not look like the '$Variant' variant's build output (expected ...\$Variant\Open-Motion)" -ForegroundColor Yellow
+}
 
 wix build installer\app.wxs -o $appMsi `
     -d "ProductName=$($g.ProductName)" `

@@ -7,12 +7,23 @@ set (see writable_root). In a dev (non-frozen) run, everything stays under
 the cwd so local development is unchanged.
 
 Nothing in this module reads the process environment. The resolved root
-depends only on how the build was made (frozen / portableMode / platform)
-plus the in-process DATA_ROOT_OVERRIDE, which ``python main.py --data-root``
-(source runs only) and the unit-test fixtures set explicitly. Even the
-ProgramData and home folders are asked of the Windows shell rather than
-read from %PROGRAMDATA% / %USERPROFILE%, so a packaged artifact starts the
-same way whatever env vars the host machine carries.
+depends only on how the build was made (frozen / platform), whether the
+installer registered this exe (portable_mode(), from the HKLM InstallDir
+marker installer/app.wxs writes), and the in-process DATA_ROOT_OVERRIDE,
+which ``python main.py --data-root`` (source runs only) and the unit-test
+fixtures set explicitly. Even the ProgramData and home folders are asked of
+the Windows shell rather than read from %PROGRAMDATA% / %USERPROFILE%, so a
+packaged artifact starts the same way whatever env vars the host machine
+carries.
+
+Since #546 ``portableMode`` is derived, not configured: the exe in the
+portable zip and the exe inside the installer are byte-identical (the
+signed-installer workflow repacks the QA-validated zip), so the difference
+has to come from the install itself. The MSI writes
+``HKLM/Software/Openwater/Open-Motion/InstallDir`` (backslashes); a frozen Windows
+build whose exe lives in that directory is "installed" (writable state
+under %PROGRAMDATA%), anything else is "portable" (next to the exe). Only
+an administrator can write that key.
 
 Two fixed children live under the writable root: LOGS_DIRNAME (this run's log
 file) and DATA_DIRNAME (scans.db, scan CSVs, calibrations,
@@ -38,6 +49,13 @@ DATA_ROOT_OVERRIDE: Path | None = None
 _FOLDERID_PROGRAM_DATA = "{62AB5D82-FDC1-4DC3-A9DD-070D1D495D97}"
 _FOLDERID_PROFILE = "{5E6C858F-0E22-4760-9AFE-EA3317B67173}"
 _DEFAULT_PROGRAM_DATA = r"C:\ProgramData"
+
+# Written by installer/app.wxs (AppShortcut component) as [APPFOLDER].
+_INSTALL_REG_KEY = r"Software\Openwater\Open-Motion"
+_INSTALL_REG_VALUE = "InstallDir"
+
+# Test / dev hook: None = derive from the registry + exe location.
+PORTABLE_MODE_OVERRIDE: bool | None = None
 
 
 def set_data_root_override(path) -> None:
@@ -85,6 +103,54 @@ def _known_folder(folder_id: str) -> Path | None:
         return None
 
 
+def installed_dir() -> Path | None:
+    """The directory the MSI installed the app to, per HKLM, or None.
+
+    Reads the 64-bit registry view explicitly so a 32-bit host process
+    (or WOW64 redirection) cannot point it at a different hive.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import winreg
+
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE, _INSTALL_REG_KEY, 0,
+            winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+        ) as key:
+            value, kind = winreg.QueryValueEx(key, _INSTALL_REG_VALUE)
+        if kind != winreg.REG_SZ or not value:
+            return None
+        return Path(value)
+    except OSError:
+        return None
+
+
+def is_installed_exe() -> bool:
+    """True when this frozen exe is the one the installer registered."""
+    if not getattr(sys, "frozen", False) or sys.platform != "win32":
+        return False
+    target = installed_dir()
+    if target is None:
+        return False
+    try:
+        exe_dir = Path(sys.executable).resolve().parent
+        return exe_dir == target.resolve()
+    except OSError:
+        return False
+
+
+def portable_mode() -> bool:
+    """Derived portableMode: a frozen Windows build that the installer did
+    not register keeps its writable state next to the exe. Source runs and
+    macOS are never portable (cwd / Application Support respectively)."""
+    if PORTABLE_MODE_OVERRIDE is not None:
+        return bool(PORTABLE_MODE_OVERRIDE)
+    if not getattr(sys, "frozen", False) or sys.platform != "win32":
+        return False
+    return not is_installed_exe()
+
+
 def _program_data_dir() -> Path:
     """The machine-wide ProgramData folder (stock location if the shell call fails)."""
     return _known_folder(_FOLDERID_PROGRAM_DATA) or Path(_DEFAULT_PROGRAM_DATA)
@@ -110,16 +176,18 @@ def _home_dir() -> Path:
     return Path.home()
 
 
-def writable_root(portable: bool = False) -> Path:
+def writable_root(portable: bool | None = None) -> Path:
     """Return the writable data root, creating it if necessary.
 
-    ``portable`` mirrors the shipped ``portableMode`` config flag: when set,
-    a frozen build keeps everything next to the exe (the old un-installed
-    behavior) instead of scattering it to %PROGRAMDATA%. An explicit
-    DATA_ROOT_OVERRIDE is used as-is, no writability check. The other
-    branches fall back to ~/Documents/Open-Motion if the resolved root isn't
-    writable (e.g. cwd is "/" on a macOS Finder launch).
+    ``portable``: keep everything next to the exe (the un-installed layout)
+    instead of scattering it to %PROGRAMDATA%; ``None`` derives it with
+    portable_mode(). An explicit DATA_ROOT_OVERRIDE is used as-is, no
+    writability check. The other branches fall back to
+    ~/Documents/Open-Motion if the resolved root isn't writable (e.g. cwd
+    is "/" on a macOS Finder launch).
     """
+    if portable is None:
+        portable = portable_mode()
     if DATA_ROOT_OVERRIDE is not None:
         root = Path(DATA_ROOT_OVERRIDE)
         root.mkdir(parents=True, exist_ok=True)
@@ -151,7 +219,3 @@ def writable_root(portable: bool = False) -> Path:
         root.mkdir(parents=True, exist_ok=True)
     return root
 
-
-def local_config_path(portable: bool = False) -> Path:
-    """Path to the writable config-overrides file."""
-    return writable_root(portable) / "app_config.local.json"

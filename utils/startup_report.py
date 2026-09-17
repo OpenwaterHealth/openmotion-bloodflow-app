@@ -1,118 +1,46 @@
-"""Startup diagnostics for the app log (issue #527).
+"""Startup diagnostics report (issue #527).
 
-Logged once per launch so support can reconstruct what build, mode, and
-configuration a log came from without asking the operator:
+Logged once per launch, after the file log handler exists: build variant,
+install mode, SDK and Qt identity, where preferences are persisted, and the
+effective config with every key that is not at its compiled value marked.
 
-* build variant (Clinical/Research) and install mode (portable/installed/dev)
-* an inventory line per deployed config/data file — present/valid + SHA-256
-* the merged app config, with every overridden key's source marked
-
-Must be called AFTER the log-file handler is attached: everything logged
-during ``_load_app_config`` (which runs first, because the log file's
-location depends on the config) reaches only the console.
-
-Validity here means "the real loader would accept it": files are decoded
-as strict UTF-8 before parsing, exactly like ``config_store`` and the
-SDK's ``omotion.laser`` do, so a BOM'd file (the PowerShell
-``Set-Content -Encoding utf8`` trap) reports INVALID here just as it
-silently falls back to defaults there.
+Since #546 there is no configuration file to fingerprint: the shipped values
+compile into the executable (``config.app_config``) and the only persisted
+layer is the ``settings`` table in scans.db. The SDK's laser/FPGA data are
+compiled into the SDK the same way (openmotion-sdk#278), so the SDK version
+line is their provenance.
 """
-from pathlib import Path
+from __future__ import annotations
+
 import hashlib
 import json
 import sys
+from pathlib import Path
 
-from utils import app_paths
-from utils.resource_path import resource_path
+from config import app_config as compiled
 
 # Provenance markers for the merged-config dump.
-MARK_SHIPPED = "[shipped]"    # set by the bundled config/app_config.json
-MARK_LOCAL = "[local]"        # set by the writable app_config.local.json
-MARK_DEV = "[dev-flag]"       # --clinical/--research/--portable launch flag (source runs)
+MARK_SAVED = "[saved]"        # differs from compiled: saved preference (scans.db)
+MARK_DEV = "[dev-flag]"       # forced by a source-run launch flag
 
 
-def inventory_files() -> list:
-    """(name, path) for every deployed config/data file worth fingerprinting.
-
-    app_config.json + tec_params.json ship with the app; the laser/FPGA
-    register files are bundled inside the SDK package (``omotion/data``).
-    """
-    from omotion import laser as sdk_laser
-
-    sdk_data = getattr(sdk_laser, "_DATA_DIR", None)
-    if sdk_data is None:  # private layout changed — derive from the module
-        sdk_data = Path(sdk_laser.__file__).resolve().parent / "data"
-    sdk_data = Path(sdk_data)
-    return [
-        ("app_config.json", resource_path("config", "app_config.json")),
-        ("tec_params.json", resource_path("config", "tec_params.json")),
-        ("laser_params.json", sdk_data / "laser_params.json"),
-        ("laser_params_fault.json", sdk_data / "laser_params_fault.json"),
-        ("fpga_model.json", sdk_data / "fpga_model.json"),
-    ]
-
-
-def inspect_file(path) -> dict:
-    """Presence/validity/checksum for one JSON config file.
-
-    Returns {present, size, sha256, valid, error}; never raises.
-    """
-    info = {"present": False, "size": None, "sha256": None,
-            "valid": False, "error": None}
-    try:
-        data = Path(path).read_bytes()
-    except FileNotFoundError:
-        info["error"] = "missing"
-        return info
-    except OSError as e:
-        info["error"] = str(e)
-        return info
-    info["present"] = True
-    info["size"] = len(data)
-    info["sha256"] = hashlib.sha256(data).hexdigest()
-    try:
-        # Strict UTF-8, like the real loaders (open(encoding="utf-8")) —
-        # a BOM must fail here because it fails there.
-        json.loads(data.decode("utf-8"))
-        info["valid"] = True
-    except (UnicodeDecodeError, json.JSONDecodeError) as e:
-        info["error"] = f"invalid JSON: {e}"
-    return info
-
-
-def describe_file(name: str, path) -> str:
-    """One log line: name, status, size, sha256, path."""
-    info = inspect_file(path)
-    if not info["present"]:
-        return f"  {name:<24} MISSING  ({path}: {info['error']})"
-    status = "OK     " if info["valid"] else "INVALID"
-    line = (f"  {name:<24} {status}  {info['size']:>6} B  "
-            f"sha256={info['sha256']}  ({path})")
-    if not info["valid"]:
-        line += f"  [{info['error']}]"
-    return line
+def compiled_fingerprint() -> str:
+    """sha256 over the compiled values, so support can match a log to a
+    build even when the module source is not on disk (frozen build)."""
+    payload = json.dumps(compiled.APP_CONFIG, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def config_provenance(
-    merged: dict, baseline: dict, defaults: dict, dev_keys=frozenset()
+    merged: dict, baseline: dict, dev_keys=frozenset(), saved_keys=frozenset(),
 ) -> dict:
-    """Map each merged key to its source marker ("" = code default).
-
-    baseline = defaults + shipped app_config.json; merged = baseline +
-    local overrides. ``dev_keys`` names the build-time keys main() forced
-    from the --clinical/--research/--portable launch flags (it mutates
-    baseline AND merged, so value-diffing alone would mislabel them as
-    [shipped]). The process environment is never consulted: the app reads
-    no env vars, so nothing ambient can be a config source.
-    """
+    """Map each merged key to its source marker ("" = compiled value)."""
     marks = {}
-    for key, value in merged.items():
+    for key in merged:
         if key in dev_keys:
             marks[key] = MARK_DEV
-        elif value != baseline.get(key):
-            marks[key] = MARK_LOCAL
-        elif baseline.get(key) != defaults.get(key):
-            marks[key] = MARK_SHIPPED
+        elif key in saved_keys or merged[key] != baseline.get(key):
+            marks[key] = MARK_SAVED
         else:
             marks[key] = ""
     return marks
@@ -126,27 +54,32 @@ def _fmt_value(value) -> str:
 
 
 def merged_config_block(
-    merged: dict, baseline: dict, defaults: dict, dev_keys=frozenset()
+    merged: dict, baseline: dict, dev_keys=frozenset(), saved_keys=frozenset(),
 ) -> str:
-    """The merged config as one aligned multi-line block, markers applied."""
-    marks = config_provenance(merged, baseline, defaults, dev_keys)
+    """The merged config as one aligned multi-line block, markers and tiers applied."""
+    marks = config_provenance(merged, baseline, dev_keys, saved_keys)
     width = max((len(k) for k in merged), default=0)
     lines = []
     for key in sorted(merged):
+        tier = compiled.tier_of(key) or "?"
         mark = marks.get(key, "")
         lines.append(
-            f"  {key:<{width}} = {_fmt_value(merged[key])}"
+            f"  {key:<{width}} = {_fmt_value(merged[key])}  <{tier}>"
             + (f"  {mark}" if mark else "")
         )
     return "\n".join(lines)
 
 
 def log_startup_report(
-    log, merged: dict, baseline: dict, defaults: dict, dev_keys=frozenset()
+    log, merged: dict, baseline: dict, *, dev_keys=frozenset(),
+    saved_keys=frozenset(), settings_path=None, settings_enabled=None,
 ) -> None:
-    """Emit the whole startup report. Never raises — logging must not
-    take down the launch. ``dev_keys``: config keys main() forced from the
-    dev-only launch flags (see config_provenance)."""
+    """Emit the whole startup report. Never raises — logging must not take
+    down the launch.
+
+    ``baseline`` is the compiled config; ``dev_keys`` the keys a source-run
+    launch flag forced; ``saved_keys`` those loaded from the settings table.
+    """
     try:
         clinical = bool(merged.get("clinicalMode", False))
         portable = bool(merged.get("portableMode", False))
@@ -162,6 +95,9 @@ def log_startup_report(
         log.info("Build variant:  %s", "Clinical" if clinical else "Research")
         log.info("Install mode:   %s (portableMode=%s, frozen=%s)",
                  mode, portable, frozen)
+        log.info("Config:         compiled (config/app_config.py), "
+                 "%d keys, values sha256=%s",
+                 len(compiled.APP_CONFIG), compiled_fingerprint())
 
         # SDK identity. __version__ is an install-time metadata stamp — on an
         # editable install it goes stale the moment the checkout moves, so the
@@ -182,19 +118,19 @@ def log_startup_report(
         except Exception as e:
             log.info("Qt runtime:     unresolvable (%s)", e)
 
-        overrides_path = app_paths.local_config_path(portable)
-        log.info("Config overrides file: %s (%s)", overrides_path,
-                 "present" if overrides_path.exists() else "absent")
-
-        log.info("Config/data file inventory:")
-        for name, path in inventory_files():
-            log.info("%s", describe_file(name, path))
+        if settings_enabled is None:
+            state = "unknown"
+        elif settings_enabled:
+            state = f"open, {len(saved_keys)} saved preference(s)"
+        else:
+            state = "UNAVAILABLE, preferences are session-only"
+        log.info("Settings store: %s (%s)", settings_path or "none", state)
 
         log.info(
-            "Merged app config (%s=app_config.json, %s=app_config.local.json, "
-            "%s=dev launch flag):\n%s",
-            MARK_SHIPPED, MARK_LOCAL, MARK_DEV,
-            merged_config_block(merged, baseline, defaults, dev_keys),
+            "Effective app config (%s=saved preference, %s=dev launch flag; "
+            "<tier> per key):\n%s",
+            MARK_SAVED, MARK_DEV,
+            merged_config_block(merged, baseline, dev_keys, saved_keys),
         )
     except Exception:
         log.warning("Startup report failed", exc_info=True)

@@ -24,6 +24,8 @@ list ever changes.
 from __future__ import annotations
 
 import json
+import sys
+import sqlite3
 import os
 import re
 import time
@@ -136,9 +138,7 @@ _PANEL_BUTTON_LABELS = (
     "Start", "Scan\nSettings", "Notes", "Check", "History", "Settings",
 )
 
-_REPO_APP_CONFIG_PATH = (
-    Path(__file__).resolve().parent.parent / "config" / "app_config.json"
-)
+_HIL_PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _from_source_mode() -> bool:
@@ -147,168 +147,119 @@ def _from_source_mode() -> bool:
     )
 
 
-def _resolve_app_config_path() -> Path:
-    """Return the app_config.json the running/about-to-run bloodflow app
-    actually reads.
-
-    From-source mode reads ``<repo>/config/app_config.json`` (cwd is
-    PROJECT_ROOT when ``python main.py`` is launched). The packaged
-    PyInstaller exe reads ``<exe-dir>/_internal/config/app_config.json``
-    — its own bundled copy, NOT the repo's. Tests that write to the
-    wrong file silently no-op against the running exe and the
-    snapshot-and-restore dance leaves an alien value on disk afterward.
-
-    Resolution order:
-      1. ``OPENWATER_APP_CONFIG`` env var (explicit override).
-      2. From-source mode  → repo config.
-      3. ``OPENWATER_EXE`` env var → its sibling ``_internal/config``.
-      4. Latest installed exe via the same glob set as conftest's
-         ``_find_exe``  → its sibling ``_internal/config``.
-      5. Fall back to the repo config (tests that don't run an exe
-         still need somewhere to read/write).
-    """
-    explicit = os.environ.get("OPENWATER_APP_CONFIG", "")
-    if explicit and Path(explicit).exists():
-        return Path(explicit)
-    if _from_source_mode():
-        return _REPO_APP_CONFIG_PATH
-    candidates: list[str] = []
-    env_exe = os.environ.get("OPENWATER_EXE", "")
-    if env_exe and os.path.exists(env_exe):
-        candidates.append(env_exe)
-    else:
-        import glob as _glob
-        for pattern in (
-            r"C:\Users\*\Documents\OpenMotion\**\Open-Motion.exe",
-            r"C:\Users\*\Desktop\**\Open-Motion.exe",
-            r"C:\Program Files\**\Open-Motion.exe",
-            r"C:\Program Files (x86)\**\Open-Motion.exe",
-        ):
-            candidates.extend(_glob.glob(pattern, recursive=True))
-    if candidates:
-        latest = max(candidates, key=os.path.getmtime)
-        bundled = Path(latest).parent / "_internal" / "config" / "app_config.json"
-        if bundled.exists():
-            return bundled
-    return _REPO_APP_CONFIG_PATH
-
-
 # ─────────────────────────────────────────────
-# App config (read / write / snapshot-and-force)
+# App config (compiled since #546) + the scans.db settings table
 # ─────────────────────────────────────────────
 #
-# Test modules that need to pin a specific app_config.json value before
-# the bloodflow app launches (e.g. clinicalMode=false, so the modal
-# layout matches what tab walks expect) declare it at module level:
+# The app has no configuration file any more: config/app_config.py compiles
+# the shipped values in (each key in a tier — constant / session /
+# preference / state), and the only persisted layer is the ``settings``
+# table in scans.db, which replaced app_config.local.json. Tests that need
+# a value forced before the app launches declare
 #
 #     FORCE_APP_CONFIG = {"clinicalMode": False}
 #
-# conftest's pytest_collection_finish applies the declarations (via
-# ``force_app_config_value``) after collection + ``-m`` deselection —
-# only for modules that actually have selected tests — and restores the
-# file byte-exact at session end.
-#
-# NEVER call ``force_app_config_value`` at module level yourself: pytest
-# imports every test module during collection, so the write would fire
-# on every run (including ``-m unit`` runs that never execute the
-# module) and leave the tracked config dirty, with no fixture teardown
-# to restore it. conftest fails the run loudly if it detects that.
-#
-# Caveat: the connector caches its config at startup, so writes only
-# affect the *next* app launch. Declarations are applied before any
-# fixture runs (so before the session-scoped ``app`` fixture) precisely
-# so any fresh launch in this session boots with the desired value. If
-# the app was already running before pytest started, see
-# ``force_app_config_value``'s warning log.
+# at module level; conftest passes the merged declarations to a from-source
+# launch as ``--config-override``. A packaged exe ignores the flag by
+# design (its variant is compiled in), so in exe mode the tests run against
+# whatever the build carries.
+
+def compiled_app_config() -> dict:
+    """The repo's compiled config (config/app_config.py) as a fresh dict."""
+    root = str(_HIL_PROJECT_ROOT)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from config import app_config as compiled
+
+    return compiled.compiled_config()
+
+
+def forced_app_config() -> dict:
+    """This session's merged FORCE_APP_CONFIG declarations (conftest)."""
+    try:
+        import conftest
+
+        return dict(getattr(conftest, "FORCED_APP_CONFIG", {}) or {})
+    except Exception:
+        return {}
+
 
 def read_app_config_value(key: str, default: Any = None) -> Any:
-    """Return the value of ``key`` in app_config.json, or ``default``
-    if the key is absent or the file is missing/unreadable."""
-    try:
-        with _resolve_app_config_path().open(encoding="utf-8") as fh:
-            return json.load(fh).get(key, default)
-    except Exception:
-        return default
+    """The value the app under test launched with: this session's
+    FORCE_APP_CONFIG (from-source launches) over the compiled config."""
+    forced = forced_app_config()
+    if key in forced:
+        return forced[key]
+    return compiled_app_config().get(key, default)
 
 
-def resolve_local_config_path() -> Path:
-    """Return the writable ``app_config.local.json`` for the app under
-    test.
-
-    Since #233 the Settings UI persists changed keys ONLY here (via
-    config_store) and never into the shipped app_config.json — asserts
-    on UI-driven config changes must read this file, not
-    ``read_app_config_value``. Mirrors ``utils/app_paths.writable_root``,
-    which reads no env vars (the old ``OPENWATER_DATA_ROOT`` override is
-    gone, so this helper must not honour it either — it would look in a
-    place the app never writes):
-      1. From-source mode → repo root (the app's cwd).
-      2. Packaged exe → exe dir when its bundled config ships
-         ``portableMode: true`` (portable zips), else
-         ``%PROGRAMDATA%\\Openwater`` (installers).
+def resolve_settings_db_path(data_dir: "str | Path | None" = None) -> Path:
+    """scans.db of the app under test — its ``settings`` table is where
+    UI-driven preference changes persist (#546).
+      1. From-source mode → <repo>/data/scans.db (the app's cwd).
+      2. Packaged exe → <exe-dir>/data/scans.db when that exists (portable
+         zip layout), else %PROGRAMDATA%\\Openwater\\data\\scans.db (installer).
     """
+    if data_dir:   # a test pinned dataDirectory via --config-override
+        return Path(data_dir) / "data" / "scans.db"
     if _from_source_mode():
-        return _REPO_APP_CONFIG_PATH.parent.parent / "app_config.local.json"
-    bundled = _resolve_app_config_path()
-    portable = False
-    try:
-        with bundled.open(encoding="utf-8") as fh:
-            portable = bool(json.load(fh).get("portableMode", False))
-    except Exception:
-        pass
-    if portable and bundled.name == "app_config.json" and bundled.parent.name == "config":
-        # <exe-dir>/_internal/config/app_config.json → <exe-dir>
-        return bundled.parent.parent.parent / "app_config.local.json"
+        return _HIL_PROJECT_ROOT / "data" / "scans.db"
+    candidates = []
+    env_exe = os.environ.get("OPENWATER_EXE", "")
+    if env_exe:
+        candidates.append(Path(env_exe).parent / "data" / "scans.db")
     base = os.environ.get("PROGRAMDATA", r"C:\ProgramData")
-    return Path(base) / "Openwater" / "app_config.local.json"
+    candidates.append(Path(base) / "Openwater" / "data" / "scans.db")
+    for c in candidates:
+        if c.exists():
+            return c
+    return candidates[-1]
 
 
-def read_local_config_value(key: str, default: Any = None) -> Any:
-    """Return ``key`` from the writable overrides file (see
-    ``resolve_local_config_path``), or ``default`` if the key is absent
-    or the file is missing/unreadable."""
+def resolve_local_config_path(data_dir: "str | Path | None" = None) -> Path:
+    """Kept under the pre-#546 name for existing asserts: the settings
+    table in scans.db is where a Settings-UI change now lands."""
+    return resolve_settings_db_path(data_dir)
+
+
+def read_local_config_value(
+    key: str, default: Any = None, data_dir: "str | Path | None" = None,
+) -> Any:
+    """Return ``key`` from the scans.db settings table, or ``default`` when
+    the row is absent, the DB is missing, or it is encrypted (clinical
+    builds — read the app log / audit ``settings_changed`` event instead)."""
+    path = resolve_settings_db_path(data_dir)
     try:
-        with resolve_local_config_path().open(encoding="utf-8") as fh:
-            return json.load(fh).get(key, default)
+        with sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True) as conn:
+            row = conn.execute(
+                "SELECT value FROM settings WHERE key = ?", (key,)
+            ).fetchone()
+        return json.loads(row[0]) if row else default
     except Exception:
         return default
 
 
 def write_app_config_value(key: str, value: Any) -> None:
-    """Persist ``key=value`` to app_config.json. Logs a warning on
-    failure rather than raising — config IO shouldn't take a test
-    down."""
-    path = _resolve_app_config_path()
-    try:
-        with path.open(encoding="utf-8") as fh:
-            cfg = json.load(fh)
-        cfg[key] = value
-        with path.open("w", encoding="utf-8") as fh:
-            json.dump(cfg, fh, indent=2)
-    except Exception as e:
-        log.warning(f"  Failed to persist {key}={value} at {path}: {e}")
+    """Retired with the config file (#546): there is nothing to write.
+    Declare FORCE_APP_CONFIG at module level instead."""
+    log.warning(
+        f"  write_app_config_value({key!r}, {value!r}) ignored: the app "
+        "config is compiled in (#546); declare FORCE_APP_CONFIG = {...} at "
+        "module level so conftest passes it as --config-override."
+    )
 
 
 def force_app_config_value(key: str, value: Any) -> Any:
-    """Snapshot the current value of ``key``, write ``value`` if it
-    differs, return the original. Pair with a teardown fixture that
-    calls ``write_app_config_value(key, original)`` so the file ends
-    in the same state we found it.
-
-    The running app caches its config at startup and won't reload, so
-    if a write happened the warning log tells the operator to relaunch
-    if they want this session's tests to actually see the new value.
-    """
-    initial = read_app_config_value(key)
-    if initial != value:
-        write_app_config_value(key, value)
+    """Retired with the config file (#546). Returns the value the app
+    launched with so legacy call sites keep a sensible return."""
+    current = read_app_config_value(key)
+    if current != value:
         log.warning(
-            f"  app_config.json {key} was {initial!r}; forced it to "
-            f"{value!r} for this test module — relaunch the app if it "
-            f"was already running, otherwise the running instance is "
-            f"still on the old value and tests may fail."
+            f"  force_app_config_value({key!r}, {value!r}) cannot apply to a "
+            f"compiled config (currently {current!r}); declare "
+            "FORCE_APP_CONFIG = {...} at module level instead."
         )
-    return initial
+    return current
 
 
 # ─────────────────────────────────────────────

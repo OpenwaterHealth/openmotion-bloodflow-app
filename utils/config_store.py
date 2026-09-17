@@ -1,35 +1,31 @@
-"""Load app config from layered sources and persist runtime overrides.
+"""Resolve the effective app config from the compiled module plus saved
+preferences, and persist preference changes (#546).
 
-Layers (lowest to highest precedence):
-  1. code defaults (passed in by the caller)
-  2. shipped, read-only config/app_config.json (PyInstaller bundle)
-  3. writable overrides: %PROGRAMDATA%\\Openwater\\app_config.local.json
+Layers, lowest to highest precedence:
+  1. ``config.app_config.APP_CONFIG``, compiled into the executable. Values
+     and tiers live there.
+  2. Dev-only launch overrides (source runs only: --clinical / --research /
+     --portable / --config-override). A frozen build drops them.
+  3. Saved PREFERENCE / STATE keys from the ``settings`` table of scans.db
+     (``utils.settings_store``). CONSTANT and SESSION keys are never read
+     from storage, so nothing saved anywhere can move them.
 
-Runtime changes are written as a *diff* against layers 1+2 so future changes to
-shipped defaults still reach keys the operator never touched.
+There is no configuration file any more: neither a shipped JSON nor the
+old writable ``app_config.local.json``. A leftover one from a pre-#546
+install is ignored; nothing reads it.
 """
-import json
+from __future__ import annotations
+
 import logging
-import os
+from typing import Any, Dict, Iterable, Optional, Tuple
 
-from utils.resource_path import resource_path
-from utils import app_paths
+from config import app_config as compiled
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("openmotion.bloodflow-app.config")
 
 _INT_KEYS = (
-    "leftMask", "rightMask", "clinicalModeLeftMask", "clinicalModeRightMask"
+    "leftMask", "rightMask", "clinicalModeLeftMask", "clinicalModeRightMask",
 )
-
-# Build-time-only keys (#233): decided per artifact by the build system
-# (scripts/build_common.ps1) or, for a source run only, the --clinical /
-# --research / --portable launch flags (main._parse_dev_args) — never by
-# the operator at runtime, and never by an env var. They are
-# neither read from nor written to the writable overrides file, so a
-# stray app_config.local.json (e.g. left behind by a pre-1.5 build) can't
-# flip a Research install into Clinical or change the storage layout.
-_BUILD_TIME_KEYS = ("clinicalMode", "portableMode")
-
 
 def _coerce_ints(cfg: dict) -> dict:
     for key in _INT_KEYS:
@@ -38,81 +34,73 @@ def _coerce_ints(cfg: dict) -> dict:
     return cfg
 
 
-def shipped_baseline(defaults: dict) -> dict:
-    """defaults merged with the read-only bundled app_config.json."""
-    base = dict(defaults)
-    path = resource_path("config", "app_config.json")
-    if path.exists():
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                loaded = json.load(f)
-            base.update({k: v for k, v in loaded.items() if k in defaults})
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning("Could not load %s: %s; using defaults", path, e)
-    return _coerce_ints(base)
+def compiled_config() -> dict:
+    """The compiled values, as a fresh dict the caller may mutate."""
+    return _coerce_ints(compiled.compiled_config())
 
 
-def load_overrides(portable: bool = False) -> dict:
-    """Read the writable overrides file (empty dict if absent/invalid)."""
-    path = app_paths.local_config_path(portable)
-    if not path.exists():
-        return {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning("Could not load overrides %s: %s", path, e)
-        return {}
+def tier_of(key: str) -> Optional[str]:
+    return compiled.tier_of(key)
 
 
-def load_app_config(defaults: dict):
-    """Return (baseline, merged); merged = baseline + writable overrides.
+def is_persisted(key: str) -> bool:
+    return key in compiled.PERSISTED_KEYS
 
-    ``portableMode`` is read off the shipped baseline itself (it's a
-    build-time flag, never a runtime override) to decide where the writable
-    overrides file lives before we go looking for it.
+
+def apply_dev_overrides(cfg: dict, overrides: Optional[dict]) -> set:
+    """Apply source-run launch overrides in place; returns the keys applied.
+
+    Unknown keys are logged and ignored (there is no whitelist to register
+    them in any more: a key that is not compiled in does not exist).
     """
-    baseline = shipped_baseline(defaults)
-    portable = bool(baseline.get("portableMode", False))
-    overrides = load_overrides(portable)
-    merged = {
-        **baseline,
-        **{
-            k: v for k, v in overrides.items()
-            if k in baseline and k not in _BUILD_TIME_KEYS
-        },
-    }
-    return baseline, _coerce_ints(merged)
+    applied = set()
+    for key, value in (overrides or {}).items():
+        if key not in cfg:
+            logger.warning("--config-override: unknown config key %r ignored", key)
+            continue
+        cfg[key] = value
+        applied.add(key)
+    _coerce_ints(cfg)
+    return applied
 
 
-def save_overrides(current: dict, baseline: dict) -> None:
-    """Persist only keys whose value differs from the baseline.
+def apply_saved_preferences(cfg: dict, saved: Dict[str, Any]) -> set:
+    """Overlay saved PREFERENCE / STATE values in place; returns keys used.
 
-    Written atomically (temp file + os.replace) so a crash mid-write can't
-    leave a truncated, unparseable overrides file that silently drops all
-    of the operator's settings on the next load.
+    Anything else in the table (a constant, a session key, a retired key)
+    is ignored, so the settings table can never move a control.
     """
-    diff = _coerce_ints(
-        {
-            k: v for k, v in current.items()
-            if baseline.get(k) != v and k not in _BUILD_TIME_KEYS
-        }
-    )
-    path = app_paths.local_config_path(bool(baseline.get("portableMode", False)))
-    tmp = path.with_name(path.name + ".tmp")
-    try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(diff, f, indent=2)
-        os.replace(tmp, path)
-    except (OSError, TypeError, ValueError) as e:
-        # TypeError/ValueError: a non-JSON-serializable value slipped into
-        # the config (e.g. a QJSValue leaking through the QML bridge —
-        # #446 crash). Losing one settings write is recoverable; letting
-        # the exception propagate out of a QML-invoked slot aborts the
-        # whole app.
-        logger.error("Could not write overrides %s: %s", path, e)
-        try:
-            if tmp.exists():
-                tmp.unlink()
-        except OSError:
-            pass
+    used = set()
+    for key, value in saved.items():
+        if key in cfg and is_persisted(key):
+            cfg[key] = value
+            used.add(key)
+        else:
+            logger.info("settings table: ignoring non-preference key %r", key)
+    _coerce_ints(cfg)
+    return used
+
+
+def persistable_diff(current: dict, baseline: dict) -> Tuple[dict, list]:
+    """Split the persisted tier into (to_save, to_delete) against ``baseline``.
+
+    A persisted key whose value differs from the compiled one is saved; one
+    that is back at the compiled value is deleted so the table only ever
+    holds real deviations (same diff-vs-baseline contract the overrides
+    file had).
+    """
+    to_save: dict = {}
+    to_delete: list = []
+    for key in compiled.PERSISTED_KEYS:
+        if key not in current:
+            continue
+        if current[key] != baseline.get(key):
+            to_save[key] = current[key]
+        else:
+            to_delete.append(key)
+    return _coerce_ints(to_save), to_delete
+
+
+def refused_keys(keys: Iterable[str]) -> list:
+    """The CONSTANT keys among ``keys`` (a runtime write to them is refused)."""
+    return [k for k in keys if tier_of(k) == compiled.CONSTANT]

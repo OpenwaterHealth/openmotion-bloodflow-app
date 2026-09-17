@@ -1,6 +1,6 @@
 """Build a zip bundle of recent app logs for emailing to support.
 
-Collects the last N hours of app log files plus app_config.json and a
+Collects the last N hours of app log files plus the effective app config and a
 generated system_info.txt into a single zip. Pure file logic -- no Qt, no
 hardware -- so it is unit-testable against a temp directory.
 """
@@ -46,13 +46,16 @@ def build_debug_bundle(
     *,
     window_hours: int = WINDOW_HOURS,
     config_path: str | Path | None = None,
+    config_json: str | None = None,
     extra_info: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Zip recent app logs + config + system info into dest_dir.
 
-    Includes <root_dir>/logs/*.log with mtime within window_hours,
-    the app_config.json at config_path (default <root_dir>/app_config.json)
-    if present, and a generated system_info.txt. Returns
+    Includes <root_dir>/logs/*.log with mtime within window_hours, the
+    effective config as app_config.json — ``config_json`` (the running
+    app's config dump, since #546 there is no file to copy) or, failing
+    that, the file at config_path (default <root_dir>/app_config.json) if
+    present — and a generated system_info.txt. Returns
     {"path", "file_count", "log_count", "bytes"} where:
       - log_count  = log files that matched the time window.
       - file_count = entries actually written into the zip (logs + config
@@ -96,7 +99,10 @@ def build_debug_bundle(
                 logger.warning(
                     "debug_bundle: could not add %s", p, exc_info=True
                 )
-        if config_path.is_file():
+        if config_json is not None:
+            zf.writestr("app_config.json", config_json)
+            file_count += 1
+        elif config_path.is_file():
             try:
                 zf.write(config_path, arcname=config_path.name)
                 file_count += 1

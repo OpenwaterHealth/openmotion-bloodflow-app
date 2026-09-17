@@ -12,7 +12,8 @@ Usage:
         --bundle build/installer/Open-Motion-Research-Setup-1.3.1.exe \
         --tag 1.3.1 --port 8077
 
-Then the old build's bundled config/app_config.json must contain:
+Then the old build must be compiled with (scripts/build_update_test_bundles.ps1
+stamps it into config/app_config.py before PyInstaller, #546):
     "updateApiUrl": "http://127.0.0.1:8077/releases/latest"
 """
 import argparse
