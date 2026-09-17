@@ -139,9 +139,14 @@ def test_built_exe_has_both_icon_groups():
     """
     from win_icon_resource import group_icon_names, has_named_group_icon
 
-    exe = REPO_ROOT / "dist" / "Open-Motion" / "Open-Motion.exe"
-    if not exe.exists():
+    # onefile (#547): a variant build lands at dist/<variant>/Open-Motion/
+    # Open-Motion.exe; a bare `pyinstaller openwater.spec` at dist/Open-Motion.exe.
+    candidates = sorted((REPO_ROOT / "dist").glob("*/Open-Motion/Open-Motion.exe")) \
+        + [REPO_ROOT / "dist" / "Open-Motion.exe"]
+    built = [p for p in candidates if p.exists()]
+    if not built:
         pytest.skip("no build in dist/ — run PyInstaller first")
+    exe = built[0]
 
     names = group_icon_names(exe)
     assert ("STR", "IDI_ICON1") in names, f"missing Qt class icon; got {names}"

@@ -210,9 +210,11 @@ try:
 except Exception:
     pass
 
-# ---------- MIRROR omotion vendored libusb under _internal\_vendor ----------
-# Some builds only carry the vendored files inside _internal\omotion\_vendor\...
-# We duplicate those files to _internal\_vendor\... so the wheel's _dll_dir() can find them.
+# ---------- MIRROR omotion vendored libusb under <bundle>\_vendor ----------
+# Some builds only carry the vendored files inside omotion\_vendor\... within
+# the bundle. We duplicate those files to _vendor\... at the bundle root (the
+# onefile extraction directory; _internal\ in a onedir build) so the wheel's
+# _dll_dir() and rthook_libusb_paths.py can find them.
 def _norm(p): return p.replace("/", os.sep).replace("\\", os.sep)
 
 arch = "x64" if 8 * struct.calcsize("P") == 64 else "x86"
@@ -291,27 +293,38 @@ if sys.platform == "win32":
     from win_icon_resource import install_pyinstaller_hook, has_named_group_icon
     install_pyinstaller_hook()
 
+# ---------- one-file packaging (#547) ----------
+# Every shipped byte (the bytecode archive, Qt and native DLLs, QML, assets,
+# the sample scan) is appended to this one PE, so the Authenticode signature
+# installer/sign.ps1 applies covers all of it and any modification is
+# detectable with signtool or the file's Digital Signatures tab (tracker
+# V-04, V-05, R-13). No COLLECT step: the build output is the exe alone.
+#
+# Residual risk, recorded rather than hidden: at every launch the
+# bootloader extracts the payload into a per-process, randomly named
+# directory under %TEMP% and deletes it on exit. Nothing verifies the
+# extracted copies before they are loaded (PyInstaller has no such check),
+# so a process that can write that directory in the interval between
+# extraction and load is outside what signing defends against. Every
+# self-extracting bundler shares that window, Nuitka's onefile included
+# (#548); the on-disk artifact is what the signature protects.
 exe_gui = EXE(
-    pyz, a.scripts, [],
-    exclude_binaries=True,
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.datas,
+    [],
     name=APP_NAME,
     console=False,
     icon=ICON_FILE,
-    upx=False   # safer for DLLs on Windows
-)
-
-coll = COLLECT(
-    exe_gui,
-    a.binaries, a.zipfiles, a.datas,
-    strip=False, upx=False, upx_exclude=[],
-    name=APP_NAME
+    upx=False,   # safer for DLLs on Windows
 )
 
 # Verify on the artifact that actually ships. This also catches a warm build/
 # tree: PyInstaller's EXE cache compares the icon *path*, not its contents, so
 # a cached exe can silently carry stale resources — fail loudly instead.
 if sys.platform == "win32":
-    _dist_exe = os.path.join(DISTPATH, APP_NAME, APP_NAME + ".exe")
+    _dist_exe = os.path.join(DISTPATH, APP_NAME + ".exe")
     if not has_named_group_icon(_dist_exe):
         raise SystemExit(
             f"[spec] FATAL: {_dist_exe} has no 'IDI_ICON1' icon resource — Qt "
@@ -319,3 +332,14 @@ if sys.platform == "win32":
             f"(#223). Rebuild with --clean."
         )
     print(f"[spec] verified 'IDI_ICON1' window-class icon in {_dist_exe}")
+    # A onefile build ships as exactly one file. A leftover onedir tree from
+    # an earlier build in the same dist directory would be zipped and
+    # harvested into the MSI next to the exe, so refuse to call this a build.
+    _leftover = os.path.join(DISTPATH, "_internal")
+    if os.path.isdir(_leftover):
+        raise SystemExit(
+            f"[spec] FATAL: {_leftover} exists next to the onefile exe — a "
+            f"stale onedir build; delete the dist directory and rebuild."
+        )
+    print(f"[spec] onefile build: {_dist_exe} "
+          f"({os.path.getsize(_dist_exe) / 1e6:.1f} MB)")

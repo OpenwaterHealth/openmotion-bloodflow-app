@@ -212,3 +212,60 @@ def test_analysis_puts_the_sdk_package_on_pathex(spec):
             break
     else:
         pytest.fail("no Analysis(...) call found in the spec")
+
+def _calls_named(source: str, name: str) -> list[ast.Call]:
+    return [
+        node for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == name
+    ]
+
+
+def test_windows_spec_packages_onefile():
+    """One signed file ships (#547): the EXE takes a.binaries and a.datas
+    itself and there is no COLLECT step, so nothing the app runs from can
+    sit outside the Authenticode signature."""
+    source = (_REPO_ROOT / "openwater.spec").read_text(encoding="utf-8")
+    assert not _calls_named(source, "COLLECT"), "onedir COLLECT step is back"
+    exe_calls = _calls_named(source, "EXE")
+    assert len(exe_calls) == 1
+    exe = exe_calls[0]
+    positional = {
+        f"{a.value.id}.{a.attr}"
+        for a in exe.args
+        if isinstance(a, ast.Attribute) and isinstance(a.value, ast.Name)
+    }
+    assert {"a.scripts", "a.binaries", "a.datas"} <= positional
+    keywords = {kw.arg: kw.value for kw in exe.keywords}
+    assert "exclude_binaries" not in keywords or (
+        isinstance(keywords["exclude_binaries"], ast.Constant)
+        and keywords["exclude_binaries"].value is False
+    )
+    # The stale-tree guard: a leftover onedir _internal\ next to the exe
+    # must fail the build, not ship.
+    assert '_leftover = os.path.join(DISTPATH, "_internal")' in source
+
+
+def test_libusb_runtime_hook_covers_the_flat_onefile_layout():
+    """In onefile the payload is extracted flat into sys._MEIPASS (no
+    _internal\); the hook must probe that layout as well as onedir's."""
+    src = (_REPO_ROOT / "rthook_libusb_paths.py").read_text(encoding="utf-8")
+    assert 'LAYOUT_ROOTS = ("", "_internal")' in src
+    assert '("_vendor", "libusb", "windows", "x64")' in src
+    assert '("omotion", "_vendor", "libusb", "windows", "x64")' in src
+
+
+def test_every_variant_build_entry_point_keeps_the_open_motion_folder():
+    """PyInstaller onefile writes <distpath>\Open-Motion.exe; the three
+    places that invoke it must all pass dist\<variant>\Open-Motion so the
+    zip and the MSI harvest keep the released shape (#547)."""
+    workflow = (_REPO_ROOT / ".github" / "workflows" / "release-build.yml").read_text(encoding="utf-8")
+    assert '--distpath "dist/${variant}/Open-Motion"' in workflow
+    common = (_REPO_ROOT / "scripts" / "build_common.ps1").read_text(encoding="utf-8")
+    assert 'Join-Path (Join-Path $DistRoot $Variant) "Open-Motion"' in common
+    assert "Remove-Item -Recurse -Force $distPath" in common
+    bundles = (_REPO_ROOT / "scripts" / "build_update_test_bundles.ps1").read_text(encoding="utf-8")
+    assert "--distpath dist\\research\\Open-Motion" in bundles
+    installer = (_REPO_ROOT / "installer" / "build_installer.ps1").read_text(encoding="utf-8")
+    assert "$distFiles.Count -ne 1" in installer

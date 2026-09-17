@@ -42,7 +42,7 @@ function Build-ResearchBundle([string]$ver, [string]$apiUrl) {
         if ($apiUrl) {
             [void](Set-CompiledConfigValue -Key "updateApiUrl" -PythonValue "'$apiUrl'")
         }
-        & conda run -n $CondaEnv python -m PyInstaller -y openwater.spec --distpath dist\research --workpath build\research
+        & conda run -n $CondaEnv python -m PyInstaller -y openwater.spec --distpath dist\research\Open-Motion --workpath build\research
         if (-not (Test-Path "dist\research\Open-Motion\Open-Motion.exe")) { throw "dist missing after PyInstaller" }
         & powershell -NoProfile -ExecutionPolicy Bypass -File installer\build_installer.ps1 -Variant research -DistDir "dist\research\Open-Motion" -Version $ver
         if ($LASTEXITCODE -ne 0) { throw "build_installer failed for $ver" }

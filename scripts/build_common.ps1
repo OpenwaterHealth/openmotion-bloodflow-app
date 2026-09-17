@@ -117,8 +117,11 @@ function Invoke-AppPython {
 }
 
 function Invoke-VariantBuild {
-    # One PyInstaller build for one variant: stamp CLINICAL_MODE, build into
-    # dist\<variant>\Open-Motion (work dir build\<variant>), restore the stamp.
+    # One PyInstaller build for one variant: stamp CLINICAL_MODE, build the
+    # onefile exe into dist\<variant>\Open-Motion\Open-Motion.exe (work dir
+    # build\<variant>), restore the stamp. The Open-Motion\ folder is kept so
+    # the portable zip and the MSI harvest have the same shape as before
+    # #547; it now holds exactly one file.
     param(
         [Parameter(Mandatory)][ValidateSet("clinical", "research")][string]$Variant,
         [string]$SpecFile = "openwater.spec",
@@ -128,17 +131,21 @@ function Invoke-VariantBuild {
     )
     $orig = Set-BuildVariant -Clinical ($Variant -eq "clinical")
     try {
-        $distPath = Join-Path $DistRoot $Variant
+        $distPath = Join-Path (Join-Path $DistRoot $Variant) "Open-Motion"
         $workPath = Join-Path $WorkRoot $Variant
+        # Start from an empty dist directory: a stale onedir tree (_internal\)
+        # from an older build would otherwise ride along into the zip and the
+        # MSI next to the onefile exe (the spec refuses that too).
+        if (Test-Path $distPath) { Remove-Item -Recurse -Force $distPath }
         Write-Host "=== PyInstaller ($Variant) -> $distPath ===" -ForegroundColor Cyan
         Invoke-AppPython -CondaEnv $CondaEnv -Arguments @(
             "-m", "PyInstaller", "-y", $SpecFile,
             "--distpath", $distPath, "--workpath", $workPath
         )
         if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed for variant '$Variant'" }
-        $exe = Join-Path $distPath "Open-Motion\Open-Motion.exe"
+        $exe = Join-Path $distPath "Open-Motion.exe"
         if (-not (Test-Path $exe)) { throw "PyInstaller output missing: $exe" }
-        return (Join-Path $distPath "Open-Motion")
+        return $distPath
     } finally {
         Restore-ConfigModule -Text $orig
     }
@@ -147,7 +154,9 @@ function Invoke-VariantBuild {
 function New-PortableZip {
     # Zip a variant's dist tree so the archive contains a top-level Open-Motion\
     # folder (the released structure - matches CI's `Compress-Archive dist\*`).
-    # $DistDir is dist\<variant>\Open-Motion; zip its PARENT's contents.
+    # $DistDir is dist\<variant>\Open-Motion; zip its PARENT's contents. Since
+    # #547 the folder holds the single onefile exe; it is kept so a portable
+    # user's logs\ and data\ land beside the exe instead of loose in Downloads.
     param(
         [Parameter(Mandatory)][string]$DistDir,
         [Parameter(Mandatory)][string]$OutZip

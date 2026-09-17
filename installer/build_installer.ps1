@@ -71,17 +71,22 @@ if (-not (Test-Path (Join-Path $DistAbs 'Open-Motion.exe'))) {
     throw "Open-Motion.exe not found under $DistAbs; PyInstaller build looks incomplete"
 }
 
-# -- variant sanity (#546) --
-# The MSI harvests the per-variant PyInstaller output as-is. There is no
-# bundled config to stage any more: the Clinical/Research split is compiled
-# into the exe (CLINICAL_MODE stamped before PyInstaller ran), and
+# -- variant / layout sanity (#546, #547) --
+# The MSI harvests the per-variant PyInstaller output as-is. Since #547 that
+# is the single onefile Open-Motion.exe: the Clinical/Research split is
+# compiled into it (CLINICAL_MODE stamped before PyInstaller ran), and
 # portableMode is derived at launch from the HKLM InstallDir marker app.wxs
 # writes below — an installed exe scatters its writable state to
 # %PROGRAMDATA%, the byte-identical exe in the portable zip keeps it next to
-# itself. Refuse an obviously mismatched dist so a research build can never
-# be packaged as the clinical installer by accident.
-if ((Test-Path (Join-Path $DistAbs "_internal\config\app_config.json"))) {
-    throw "dist at $DistAbs carries a pre-#546 bundled app_config.json; rebuild it"
+# itself. A leftover onedir tree (_internal\) from an older build would be
+# harvested next to the exe and ship loose, unsigned files again, so refuse
+# it; likewise an obviously mismatched dist path.
+if ((Test-Path (Join-Path $DistAbs "_internal"))) {
+    throw "dist at $DistAbs carries a pre-#547 onedir _internal\ tree; delete the dist directory and rebuild"
+}
+$distFiles = @(Get-ChildItem -LiteralPath $DistAbs -File)
+if ($distFiles.Count -ne 1 -or $distFiles[0].Name -ne 'Open-Motion.exe') {
+    throw "dist at $DistAbs must contain exactly Open-Motion.exe (onefile, #547); found: $($distFiles.Name -join ', ')"
 }
 if ($DistAbs -notmatch "[\\/]$Variant[\\/]Open-Motion$") {
     Write-Host "WARNING: DistDir '$DistAbs' does not look like the '$Variant' variant's build output (expected ...\$Variant\Open-Motion)" -ForegroundColor Yellow
