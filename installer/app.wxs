@@ -1,4 +1,4 @@
-<!-- installer/app.wxs — packages dist\Open-Motion\ into Program Files. -->
+<!-- installer/app.wxs — packages dist\<variant>\Open-Motion\Open-Motion.exe into Program Files. -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package Name="$(var.ProductName)"
            Manufacturer="Openwater"
@@ -33,7 +33,11 @@
       <ComponentRef Id="DesktopShortcut" />
     </Feature>
 
-    <!-- Harvest the entire PyInstaller one-folder output. -->
+    <!-- Harvest the PyInstaller output. Since #547 that is the single onefile
+         Open-Motion.exe (every bundled byte sits under its Authenticode
+         signature); the glob is kept so nothing that lands in dist\ is
+         silently dropped, and build_installer.ps1 refuses a dist directory
+         holding anything but that one file. -->
     <ComponentGroup Id="AppFiles" Directory="APPFOLDER">
       <Files Include="$(var.SourceDir)\**" />
     </ComponentGroup>

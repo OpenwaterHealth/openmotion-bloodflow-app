@@ -13,7 +13,7 @@ pip install -e ../openmotion-sdk
 
 python main.py                          # run the app
 
-python -m PyInstaller -y openwater.spec # package .exe → dist/Open-Motion/
+python -m PyInstaller -y openwater.spec # package → dist/Open-Motion.exe (onefile, #547)
 .\build_and_zip.ps1                     # build + package all 4 artifacts
 
 # 4 artifacts: Clinical/Research × Portable/Installer
@@ -84,7 +84,7 @@ artifacts, so every tagged release carries one.
 | `utils/settings_store.py` | The `settings` table in `scans.db` — where PREFERENCE/STATE keys persist (SQLCipher-encrypted + HMAC on clinical builds). Replaced `app_config.local.json`; a leftover one from an older install is ignored (nothing reads it), so preferences on that machine start from the compiled defaults. |
 | `config/laser_params.json` | 18 laser I2C register sets (TA / SEED / EE / OPT variants). **Not user-tunable calibration data** — init/baseline commands for the laser driver chips. |
 | `resources/sample_scan.csv` | Real exported scan (History → Export CSV / SDK `materialize_corrected_csv` per-cam wide format). Offered — never auto-loaded — into the replay viewer when a **research build** boots with **no device connected** (#314): the startup connection watchdog raises `components/SampleScanOfferModal.qml`, and only accepting it binds the sample. Clinical builds never see the offer. Swap this one file to change the sample dataset. Bundled by `openwater.spec` (targeted `datas` entry); located at runtime via `utils.resource_path.resource_path("resources", "sample_scan.csv")`. Parsed DB-free by `data_sources.load_csv_scan_buffers` → `PastScanSource(preloaded_buffers=…, scan_db=None)`; the user's real `scans.db` is never touched. |
-| `openwater.spec` | PyInstaller spec. Custom logic mirrors vendored libusb binaries into `_internal\_vendor` so the runtime hook can find them. |
+| `openwater.spec` | PyInstaller spec, **onefile** since #547: the build output is the single `Open-Motion.exe` with every bundled byte (bytecode archive, Qt/native DLLs, QML, assets, sample scan) appended to it, so the Authenticode signature covers all of it. Custom logic mirrors the vendored libusb DLLs to `_vendor\` at the bundle root so `rthook_libusb_paths.py` finds them in the extraction directory. The spec refuses a dist directory that still holds a onedir `_internal\` tree. See "Packaging" below. |
 | `sdk-version.txt` | The one place the release SDK is pinned (#545): rc/prod CI builds install exactly this `openmotion-sdk` release and fail if the installed version differs; the per-release SBOM asserts the same line. Dev builds and the editable local setup ignore it. |
 | `tests/` | Hardware-in-loop pytest suite, ~23 files. Markers: `@pytest.mark.dev` (~1–2 min, runs on every push to `next`), `@pytest.mark.release` (~6–8 min, runs on release tags). |
 
@@ -250,6 +250,36 @@ The `dataDirectory` config key controls the root (defaults to cwd if unset). Whe
 - `data/` — everything else. **Scan output is DB-only by default**: everything lands in `scans.db` (per-cam BFI/BVI, sessions, notes in `sessions.session_notes`); no per-scan CSVs are written unless opted in. User-facing CSVs are export-time artifacts: History → Export CSV (`exportScanCsv`). The opt-in per-scan CSVs land directly in `data/`: telemetry CSV (`{scan_id}_{subject}_telemetry.csv`, gated on `engineeringMode && writeTelemetryCsv` — issues #43/#471), raw histogram CSVs (`(!clinicalMode \|\| engineeringMode) && writeRawCsv`, #234), corrected per-cam CSV (`writeCorrectedCsv`). `data/calibrations/` holds saved calibration JSONs plus the SDK's per-camera PASS/FAIL CSVs (`calibration-<ts>.csv` / `test-<ts>.csv`); `data/debug-bundles/` holds "Send Debug Logs" zips; `data/updates/` holds in-app-updater downloads. `*_notes.txt` files are legacy read-only fallbacks. (`data/ft-test-csvs/` was a legacy per-scan factory-test export — dead since May 2026 and retired; the Test/Calibrate flows' CSVs are its superset.)
 
 **Important:** the runner is fail-soft. `ScanRunner._safe_consume` catches sink exceptions and logs them as `sink %r raised on channel ...` at ERROR; `pipeline.process` exceptions log as `pipeline.process raised — resetting and continuing` at ERROR. **Neither aborts the scan**, so the app may report "complete" while every interval was actually broken. Always grep for `raised|exception` even on apparent successes when something downstream looks wrong.
+
+## Packaging (onefile, #547)
+
+The Windows build is a PyInstaller **onefile** exe: `dist\<variant>\Open-Motion\Open-Motion.exe`
+and nothing else (the `Open-Motion\` folder is kept so the portable zip and the
+MSI harvest keep their shape and a portable user's `logs\` / `data\` land beside
+the exe). Why: every shipped byte sits under the exe's Authenticode signature,
+so tampering with any bundled file is detectable by verifying that one file
+(tracker V-04, V-05, R-13). What it does **not** do, stated for the security
+review: at each launch the bootloader extracts the payload into a per-process,
+randomly named `%TEMP%\_MEIxxxxxx` directory and deletes it on exit, and
+nothing verifies those extracted copies before they are loaded. A process that
+can write that directory in the interval between extraction and load is outside
+what signing defends against; every self-extracting bundler shares that window,
+Nuitka's onefile included (#548). Startup therefore pays the extraction
+(~120 MB) every launch: a few seconds on an SSD, longer on a slow disk or under
+aggressive antivirus scanning. macOS stays a onedir `.app` (research-only,
+ad-hoc signed).
+
+Consequences to remember:
+
+- `sys._MEIPASS` is the extraction directory and the payload is **flat** there
+  (no `_internal\`); `utils/resource_path.py` and `rthook_libusb_paths.py` probe
+  both layouts.
+- Never build into a dist directory that still holds an older onedir tree:
+  `Invoke-VariantBuild` wipes it, the spec and `build_installer.ps1` refuse it.
+- To inventory what ships, list the exe's embedded archive rather than a folder:
+  `PyInstaller.archive.readers.CArchiveReader(exe).toc` (typecodes `b` binary,
+  `x` data, `z` the PYZ, `s` scripts) and open the `z` entry with
+  `ZlibArchiveReader` for the module list.
 
 ## Gotchas
 

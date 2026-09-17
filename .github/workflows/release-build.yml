@@ -97,7 +97,9 @@ jobs:
             if [ "$variant" = "clinical" ]; then flag=True; else flag=False; fi
             sed -i "s/^CLINICAL_MODE = .*/CLINICAL_MODE = ${flag}/" config/app_config.py
             grep -n "^CLINICAL_MODE = " config/app_config.py
-            python -m PyInstaller -y openwater.spec --distpath "dist/${variant}" --workpath "build/${variant}"
+            # onefile (#547): the output is dist/<variant>/Open-Motion/Open-Motion.exe
+            # and nothing else; the folder keeps the zip / MSI shape unchanged.
+            python -m PyInstaller -y openwater.spec --distpath "dist/${variant}/Open-Motion" --workpath "build/${variant}"
           done
           sed -i "s/^CLINICAL_MODE = .*/CLINICAL_MODE = False/" config/app_config.py
           git diff --exit-code -- config/app_config.py
