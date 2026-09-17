@@ -1,5 +1,5 @@
 """In-app self-updater for Research builds: GitHub release check, bundle
-download, signature check and the detached install handoff.
+download, signature verification and the detached install handoff.
 
 Compiled out of clinical builds (#543, tracker M-02): ``motion_connector``
 imports this module only when the compiled ``CLINICAL_MODE`` constant is
@@ -9,6 +9,13 @@ keeps the ``checkForUpdates`` / ``applyUpdate`` slots and the update signals
 in every variant so the QML contract is unchanged; in a clinical build they
 are no-ops.
 
+Signature policy (#544, tracker M-03, M-10, V-03, V-10, V-11): a downloaded
+bundle is installed only if Windows' ``WinVerifyTrust`` reports a valid,
+chained Authenticode signature **and** the signer certificate's SHA-256
+thumbprint is one of ``ACCEPTED_SIGNER_SHA256``. There is no unsigned
+transition path any more, and the check is a direct Win32 call: nothing is
+built into a PowerShell command line from the download path.
+
 The two entry points take the connector so they can read its config, the
 beta-channel decision and emit its signals; nothing here imports the
 connector back.
@@ -16,10 +23,13 @@ connector back.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import re
+import sys
+from typing import NamedTuple, Optional
 
 from PyQt6.QtCore import QCoreApplication, QMetaObject, Qt
 
@@ -30,10 +40,219 @@ logger = logging.getLogger("openmotion.bloodflow-app.updater")
 
 GITHUB_REPO = "OpenwaterHealth/openmotion-bloodflow-app"
 
-# Flip to True once release builds are Authenticode-signed; until then an
-# unsigned (NotSigned) update bundle is allowed through with a logged warning
-# (#544 owns the flip and the publisher pin).
-_REQUIRE_SIGNED_UPDATES = False
+# Publisher pin (#544). SHA-256 over the DER encoding of the signer's leaf
+# certificate, as Windows shows under "Thumbprint" only for SHA-1; the SHA-256
+# form is what the deferred startup self-check (#549) pins too. Rotation:
+# append the successor certificate's thumbprint here and ship that release
+# signed with the OLD certificate; only then may the new one sign a release.
+#
+#   Open Water Internet, Inc. (San Francisco, CA; serial 5995870)
+#   issued by SSL.com EV Code Signing Intermediate CA RSA R3
+#   valid 2026-08-05 .. 2027-11-06, SHA-1 ADFCD7CB6A7900A204F91EDF9E5ADADB5A8C1AB4
+ACCEPTED_SIGNER_SHA256 = frozenset({
+    "BE77B247E7776240EC65DC854C86423C4C15C00F22365385BE101189FC71AC1F",
+})
+
+# Fixed local names for the downloaded bundle. The URL's last path segment is
+# never used as a filename: it comes from a network response and would end
+# up inside the PowerShell helper script this module writes (V-10).
+BUNDLE_FILENAME = {
+    True: "Open-Motion-Research-Setup.exe",
+    False: "Open-Motion-Setup.exe",
+}
+
+
+class SignatureInfo(NamedTuple):
+    """Outcome of an Authenticode check.
+
+    ``status`` is "Valid" for a verified, chained signature; "NotSigned" when
+    the file carries none; one of a few named failures ("HashMismatch",
+    "UntrustedRoot", "Expired", "Distrusted", "NotPE"); "Error" when the
+    check itself could not run (non-Windows, missing DLL, exception); or the
+    raw HRESULT as hex for anything else. ``thumbprint_sha256`` and
+    ``subject`` are only set for "Valid".
+    """
+    status: str
+    thumbprint_sha256: Optional[str] = None
+    subject: Optional[str] = None
+    detail: str = ""
+
+
+# --- WinVerifyTrust (Windows only) --------------------------------------------
+
+_HRESULT_NAMES = {
+    0x800B0100: "NotSigned",       # TRUST_E_NOSIGNATURE
+    0x80096010: "HashMismatch",    # TRUST_E_BAD_DIGEST
+    0x800B0003: "NotPE",           # TRUST_E_SUBJECT_FORM_UNKNOWN
+    0x800B0109: "UntrustedRoot",   # CERT_E_UNTRUSTEDROOT
+    0x800B0101: "Expired",         # CERT_E_EXPIRED
+    0x800B0111: "Distrusted",      # TRUST_E_EXPLICIT_DISTRUST
+    0x800B010A: "ChainError",      # CERT_E_CHAINING
+    0x80092026: "PolicyBlocked",   # CRYPT_E_SECURITY_SETTINGS
+}
+
+_WTD_UI_NONE = 2
+_WTD_REVOKE_NONE = 0
+_WTD_CHOICE_FILE = 1
+_WTD_STATEACTION_VERIFY = 1
+_WTD_STATEACTION_CLOSE = 2
+_WTD_CACHE_ONLY_URL_RETRIEVAL = 0x1000   # never stall an offline host
+_CERT_NAME_SIMPLE_DISPLAY_TYPE = 4
+
+
+def _win32():
+    """ctypes bindings for wintrust / crypt32, built lazily (Windows only)."""
+    import ctypes
+    from ctypes import wintypes
+
+    class GUID(ctypes.Structure):
+        _fields_ = [("Data1", ctypes.c_ulong), ("Data2", ctypes.c_ushort),
+                    ("Data3", ctypes.c_ushort), ("Data4", ctypes.c_ubyte * 8)]
+
+    class WINTRUST_FILE_INFO(ctypes.Structure):
+        _fields_ = [("cbStruct", wintypes.DWORD),
+                    ("pcwszFilePath", wintypes.LPCWSTR),
+                    ("hFile", wintypes.HANDLE),
+                    ("pgKnownSubject", ctypes.POINTER(GUID))]
+
+    class WINTRUST_DATA(ctypes.Structure):
+        _fields_ = [("cbStruct", wintypes.DWORD),
+                    ("pPolicyCallbackData", ctypes.c_void_p),
+                    ("pSIPClientData", ctypes.c_void_p),
+                    ("dwUIChoice", wintypes.DWORD),
+                    ("fdwRevocationChecks", wintypes.DWORD),
+                    ("dwUnionChoice", wintypes.DWORD),
+                    ("pFile", ctypes.POINTER(WINTRUST_FILE_INFO)),
+                    ("dwStateAction", wintypes.DWORD),
+                    ("hWVTStateData", wintypes.HANDLE),
+                    ("pwszURLReference", wintypes.LPWSTR),
+                    ("dwProvFlags", wintypes.DWORD),
+                    ("dwUIContext", wintypes.DWORD),
+                    ("pSignatureSettings", ctypes.c_void_p)]
+
+    class CERT_CONTEXT(ctypes.Structure):
+        _fields_ = [("dwCertEncodingType", wintypes.DWORD),
+                    ("pbCertEncoded", ctypes.POINTER(ctypes.c_ubyte)),
+                    ("cbCertEncoded", wintypes.DWORD),
+                    ("pCertInfo", ctypes.c_void_p),
+                    ("hCertStore", ctypes.c_void_p)]
+
+    class CRYPT_PROVIDER_CERT(ctypes.Structure):
+        # Only the leading fields are needed; the struct is read, never built.
+        _fields_ = [("cbStruct", wintypes.DWORD),
+                    ("pCert", ctypes.POINTER(CERT_CONTEXT))]
+
+    wintrust = ctypes.WinDLL("wintrust", use_last_error=True)
+    crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+
+    wintrust.WinVerifyTrust.argtypes = [wintypes.HWND, ctypes.POINTER(GUID), ctypes.c_void_p]
+    wintrust.WinVerifyTrust.restype = ctypes.c_long
+    wintrust.WTHelperProvDataFromStateData.argtypes = [wintypes.HANDLE]
+    wintrust.WTHelperProvDataFromStateData.restype = ctypes.c_void_p
+    wintrust.WTHelperGetProvSignerFromChain.argtypes = [
+        ctypes.c_void_p, wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    wintrust.WTHelperGetProvSignerFromChain.restype = ctypes.c_void_p
+    wintrust.WTHelperGetProvCertFromChain.argtypes = [ctypes.c_void_p, wintypes.DWORD]
+    wintrust.WTHelperGetProvCertFromChain.restype = ctypes.POINTER(CRYPT_PROVIDER_CERT)
+    crypt32.CertGetNameStringW.argtypes = [
+        ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+        wintypes.LPWSTR, wintypes.DWORD]
+    crypt32.CertGetNameStringW.restype = wintypes.DWORD
+
+    action = GUID(0x00AAC56B, 0xCD44, 0x11D0,
+                  (ctypes.c_ubyte * 8)(0x8C, 0xC2, 0x00, 0xC0, 0x4F, 0xC2, 0x95, 0xEE))
+    return ctypes, wintypes, wintrust, crypt32, WINTRUST_FILE_INFO, WINTRUST_DATA, action
+
+
+def _verify_with_wintrust(path: str) -> tuple[int, Optional[str], Optional[str]]:
+    """Run WinVerifyTrust on ``path``.
+
+    Returns ``(hresult, signer_sha256, signer_subject)``; the last two are
+    None unless the result is 0. Separated from :func:`verify_authenticode`
+    so tests can substitute it without a signed fixture.
+    """
+    (ctypes, wintypes, wintrust, crypt32,
+     WINTRUST_FILE_INFO, WINTRUST_DATA, action) = _win32()
+
+    file_info = WINTRUST_FILE_INFO()
+    file_info.cbStruct = ctypes.sizeof(file_info)
+    file_info.pcwszFilePath = os.fspath(path)
+    file_info.hFile = None
+    data = WINTRUST_DATA()
+    data.cbStruct = ctypes.sizeof(data)
+    data.dwUIChoice = _WTD_UI_NONE
+    data.fdwRevocationChecks = _WTD_REVOKE_NONE
+    data.dwUnionChoice = _WTD_CHOICE_FILE
+    data.pFile = ctypes.pointer(file_info)
+    data.dwStateAction = _WTD_STATEACTION_VERIFY
+    data.dwProvFlags = _WTD_CACHE_ONLY_URL_RETRIEVAL
+    no_window = wintypes.HWND(-1)   # INVALID_HANDLE_VALUE: never show UI
+
+    sha256 = subject = None
+    hresult = wintrust.WinVerifyTrust(no_window, ctypes.byref(action), ctypes.byref(data))
+    try:
+        if hresult == 0:
+            prov = wintrust.WTHelperProvDataFromStateData(data.hWVTStateData)
+            sgnr = wintrust.WTHelperGetProvSignerFromChain(prov, 0, False, 0) if prov else None
+            cert = wintrust.WTHelperGetProvCertFromChain(sgnr, 0) if sgnr else None
+            if cert and cert.contents.pCert:
+                ctx = cert.contents.pCert.contents
+                der = ctypes.string_at(ctx.pbCertEncoded, ctx.cbCertEncoded)
+                sha256 = hashlib.sha256(der).hexdigest().upper()
+                buf = ctypes.create_unicode_buffer(512)
+                n = crypt32.CertGetNameStringW(
+                    cert.contents.pCert, _CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, None, buf, 512)
+                subject = buf.value if n > 1 else None
+    finally:
+        data.dwStateAction = _WTD_STATEACTION_CLOSE
+        wintrust.WinVerifyTrust(no_window, ctypes.byref(action), ctypes.byref(data))
+    return hresult & 0xFFFFFFFF, sha256, subject
+
+
+def verify_authenticode(path: str) -> SignatureInfo:
+    """Verify the Authenticode signature of ``path`` and identify its signer.
+
+    A valid result means Windows accepted the signature and chained it to a
+    trusted root (cached revocation data only, so an offline host does not
+    stall; the timestamp counter-signature keeps an expired certificate
+    valid for builds signed while it was current).
+    """
+    if sys.platform != "win32":
+        return SignatureInfo("Error", detail="Authenticode verification needs Windows")
+    try:
+        hresult, sha256, subject = _verify_with_wintrust(path)
+    except Exception as e:                       # missing DLL, bad handle, ...
+        logger.warning("Authenticode check could not run for %s: %s", path, e)
+        return SignatureInfo("Error", detail=str(e))
+    if hresult == 0:
+        if not sha256:
+            return SignatureInfo("Error", detail="signature valid but signer certificate unreadable")
+        return SignatureInfo("Valid", sha256, subject)
+    return SignatureInfo(_HRESULT_NAMES.get(hresult, f"0x{hresult:08X}"))
+
+
+# --- policy -------------------------------------------------------------------
+
+def _update_decision(info: SignatureInfo, accepted=ACCEPTED_SIGNER_SHA256):
+    """Decide whether to launch the downloaded bundle.
+
+    Returns (should_launch: bool, error_message: str | None). Only a valid
+    signature from a pinned Openwater certificate launches; there is no
+    unsigned path (#544).
+    """
+    if info.status == "Valid":
+        if info.thumbprint_sha256 in accepted:
+            return True, None
+        who = info.subject or "unknown"
+        return False, (f"Update is signed by an unexpected publisher ({who}); "
+                       "refusing to install.")
+    if info.status == "NotSigned":
+        return False, ("Update bundle is not signed; refusing to install. "
+                       "Pre-release builds are unsigned: install them from the "
+                       "releases page instead.")
+    if info.status == "Error":
+        return False, f"Update signature could not be verified: {info.detail or 'check failed'}"
+    return False, f"Update signature check failed: {info.status}"
 
 
 def _select_update_asset(assets: list, is_research: bool):
@@ -71,46 +290,6 @@ def _select_release(releases, include_prerelease):
     return None
 
 
-def _authenticode_status(path: str) -> str:
-    """Return the Authenticode signature status of ``path``.
-
-    Uses PowerShell's Get-AuthenticodeSignature (always present on Windows).
-    Returns one of 'Valid', 'NotSigned', 'HashMismatch', 'UnknownError', ... or
-    'Error' if the check itself could not run.
-    """
-    import subprocess
-
-    try:
-        result = subprocess.run(
-            [
-                "powershell",
-                "-NoProfile",
-                "-Command",
-                f"(Get-AuthenticodeSignature -LiteralPath '{path}').Status",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        return result.stdout.strip() or "Error"
-    except Exception:
-        return "Error"
-
-
-def _update_decision(status: str, require_signed: bool):
-    """Decide whether to launch the downloaded bundle given its signature.
-
-    Returns (should_launch: bool, error_message: str | None).
-    """
-    if status == "Valid":
-        return True, None
-    if status == "NotSigned":
-        if require_signed:
-            return False, "Update is not signed; refusing to install."
-        return True, None  # transition period: allow with a warning logged
-    return False, f"Update signature check failed: {status}"
-
-
 def _is_bundle_url(url) -> bool:
     """True if ``url`` is a Setup .exe bundle, not the release HTML page.
 
@@ -143,7 +322,14 @@ def _build_update_helper_script(
     the event loop) can otherwise leave the app alive and stall the whole
     upgrade, (2) runs the bundle non-interactively (one UAC elevation, no
     bootstrapper UI), then (3) relaunches the app.
+
+    Both paths are ours (a fixed name under the app's data directory and
+    the launched executable path), never derived from network input; the guard below
+    makes that a hard rule rather than a convention.
     """
+    for p in (installer, app_exe):
+        if any(ch in p for ch in "\"`$\r\n"):
+            raise ValueError(f"unsafe character in helper path: {p!r}")
     return (
         "# OpenWater in-app update helper (auto-generated; do not edit)\n"
         "$ErrorActionPreference = 'SilentlyContinue'\n"
@@ -153,9 +339,9 @@ def _build_update_helper_script(
         "#    GUI thread is wedged), force-kill it - installing over a live app fails the\n"
         "#    in-place file swap.\n"
         "$deadline = (Get-Date).AddSeconds(10)\n"
-        f"while (Get-Process -Id {app_pid} -ErrorAction SilentlyContinue) {{\n"
+        f"while (Get-Process -Id {int(app_pid)} -ErrorAction SilentlyContinue) {{\n"
         "    if ((Get-Date) -gt $deadline) {\n"
-        f"        Stop-Process -Id {app_pid} -Force -ErrorAction SilentlyContinue\n"
+        f"        Stop-Process -Id {int(app_pid)} -Force -ErrorAction SilentlyContinue\n"
         "        Start-Sleep -Milliseconds 500\n"
         "        break\n"
         "    }\n"
@@ -284,9 +470,10 @@ def check_for_updates(connector) -> None:
 
 
 def apply_update(connector, download_url: str) -> None:
-    """Download the bundle, verify it, spawn the detached install helper and
-    ask Qt to quit. Runs on the connector's background thread; the connector
-    owns the re-entry flag around this call."""
+    """Download the bundle, verify its signature against the publisher pin,
+    spawn the detached install helper and ask Qt to quit. Runs on the
+    connector's background thread; the connector owns the re-entry flag
+    around this call."""
     import urllib.request
     import subprocess
 
@@ -306,7 +493,8 @@ def apply_update(connector, download_url: str) -> None:
             except OSError:
                 pass
 
-        dest = updates_dir / download_url.rsplit("/", 1)[-1]
+        is_research = not bool(cfg.get("clinicalMode", False))
+        dest = updates_dir / BUNDLE_FILENAME[is_research]
         connector.updateProgress.emit("Downloading update…")
         logger.info("Downloading update %s -> %s", download_url, dest)
         urllib.request.urlretrieve(download_url, str(dest))
@@ -320,17 +508,14 @@ def apply_update(connector, download_url: str) -> None:
             )
             return
 
-        status = _authenticode_status(str(dest))
-        should_launch, error = _update_decision(
-            status, _REQUIRE_SIGNED_UPDATES
-        )
+        info = verify_authenticode(str(dest))
+        should_launch, error = _update_decision(info)
+        logger.info("Update bundle signature: %s signer=%s sha256=%s -> %s",
+                    info.status, info.subject, info.thumbprint_sha256,
+                    "install" if should_launch else "refuse")
         if not should_launch:
             connector.updateCheckFailed.emit(error)
             return
-        if status == "NotSigned":
-            logger.warning(
-                "Update bundle not signed (transition); proceeding"
-            )
 
         # The app cannot replace its own running files, and the Burn
         # bundle does not relaunch the app. So write a detached helper
