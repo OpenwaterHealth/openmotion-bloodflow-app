@@ -71,7 +71,7 @@ from utils.resource_path import resource_path
 from utils import app_paths, config_store, log_tail
 from data_sources import (
     LiveScanSource, PastScanSource, ScanDataSource, buffers_are_empty,
-    load_csv_scan_buffers, resolve_bvi_lpf_cutoff,
+    effective_bvi_lpf_cutoff, load_csv_scan_buffers,
 )
 
 # constants for calculations
@@ -3414,6 +3414,8 @@ class MotionConnector(QObject):
                             {"changes": {key: {"old": old, "new": value}}})
         if old != value and key in ("downloadBetaUpdates", "engineeringMode"):
             self._refresh_update_checks()
+        if old != value and key == "bviLowPassEnabled":
+            self._apply_bvi_lpf_setting()
 
     @pyqtSlot('QVariantMap')
     def saveConfigs(self, configs: dict):
@@ -3444,6 +3446,38 @@ class MotionConnector(QObject):
             self._audit.log("settings_changed", {"changes": changes})
         if any(k in changes for k in ("downloadBetaUpdates", "engineeringMode")):
             self._refresh_update_checks()
+        if "bviLowPassEnabled" in changes:
+            self._apply_bvi_lpf_setting()
+
+    # ── BVI display low-pass (#228, #552) ─────────────────────────────
+    def _bvi_lpf_cutoff_hz(self) -> float:
+        """Effective display low-pass cutoff: the compiled
+        bviLowPassCutoffHz constant, gated by the research-only Settings
+        switch. A clinical build has no switch, so a persisted
+        bviLowPassEnabled=false can never turn the filter off there — the
+        same forcing BloodFlow.qml applies to autoScale."""
+        enabled = self._app_config.get("bviLowPassEnabled")
+        if self._app_config.get("clinicalMode") is True:
+            enabled = True
+        return effective_bvi_lpf_cutoff(
+            enabled, self._app_config.get("bviLowPassCutoffHz"))
+
+    @staticmethod
+    def _describe_bvi_lpf(cutoff_hz: float) -> str:
+        return (f"{cutoff_hz:g} Hz cutoff" if cutoff_hz > 0.0
+                else "off (bviLowPassEnabled false or cutoff <= 0)")
+
+    def _apply_bvi_lpf_setting(self) -> None:
+        """Push the Settings switch to the running live source so the
+        toggle takes effect mid-scan (#552). No-op without a live scan;
+        the next startCapture reads the config afresh anyway."""
+        src = self._live_scan_source
+        if src is None:
+            return
+        cutoff = self._bvi_lpf_cutoff_hz()
+        src.set_bvi_lpf_cutoff_hz(cutoff)
+        logger.info("BVI display low-pass (live): %s",
+                    self._describe_bvi_lpf(cutoff))
 
     # Sensor debug-flag config keys surfaced as live Settings → Engineering
     # toggles, mapped to the runtime cache attribute that
@@ -4600,16 +4634,12 @@ class MotionConnector(QObject):
         # exercise the DB lazy-load quickly (e.g. 60 → eviction after 1 min).
         _live_cache_sec = self._app_config.get("liveCacheMaxSeconds", 1800)
         _live_cache_samples = max(2, int(float(_live_cache_sec) * 40))
-        # BVI display low-pass (issue #228): config-only — the number is
-        # the whole contract (missing/invalid → 20 Hz, <= 0 → off).
+        # BVI display low-pass (#228, #552): the compiled cutoff, gated by
+        # the research-only Settings switch (see _bvi_lpf_cutoff_hz).
         # Applied at live ingest only; scans.db / CSVs / replay stay raw.
-        _bvi_lpf_cutoff = resolve_bvi_lpf_cutoff(
-            self._app_config.get("bviLowPassCutoffHz"))
-        logger.info(
-            "BVI display low-pass: %s",
-            f"{_bvi_lpf_cutoff:g} Hz cutoff" if _bvi_lpf_cutoff > 0.0
-            else "disabled (bviLowPassCutoffHz <= 0)",
-        )
+        _bvi_lpf_cutoff = self._bvi_lpf_cutoff_hz()
+        logger.info("BVI display low-pass: %s",
+                    self._describe_bvi_lpf(_bvi_lpf_cutoff))
         live_source = LiveScanSource(
             plot_t0=plot_t0,
             parent=self,

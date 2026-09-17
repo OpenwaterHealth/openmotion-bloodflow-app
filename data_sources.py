@@ -30,12 +30,13 @@ logger = logging.getLogger("openmotion.bloodflow-app.data_sources")
 _MAX_CAPACITY = 72000       # ≈ 30 min @ 40 Hz; ring-trim above this.
 _INITIAL_CAPACITY = _MAX_CAPACITY
 
-# ── BVI display low-pass (issue #228) ───────────────────────────────────
+# ── BVI display low-pass (issues #228, #552) ────────────────────────────
 # The live display applies a 1-pole IIR low-pass to the BVI stream at
-# LiveScanSource ingest, governed ONLY by the bviLowPassCutoffHz config
-# key (the Settings switch and the bviLowPassEnabled bool are gone).
-# Display-side only: the scan DB record (SDK ScanDBSink), CSVs, the
-# DB-tail history windows, and replay all stay raw.
+# LiveScanSource ingest. The cutoff is the compiled bviLowPassCutoffHz
+# constant; the research-only Settings switch (bviLowPassEnabled, #552)
+# gates it on/off — see effective_bvi_lpf_cutoff. Display-side only:
+# the scan DB record (SDK ScanDBSink), CSVs, the DB-tail history
+# windows, and replay all stay raw.
 BVI_LPF_DEFAULT_CUTOFF_HZ = 20.0
 _BVI_LPF_SAMPLE_HZ = 40.0   # nominal live sample rate (dt = 1/40 s)
 
@@ -55,6 +56,17 @@ def resolve_bvi_lpf_cutoff(value) -> float:
     if math.isnan(cutoff):
         return BVI_LPF_DEFAULT_CUTOFF_HZ
     return cutoff if cutoff > 0.0 else 0.0
+
+
+def effective_bvi_lpf_cutoff(enabled, cutoff_value) -> float:
+    """The cutoff the live source should run with, given the Settings
+    switch (``bviLowPassEnabled``, #552) and the compiled cutoff. Only an
+    explicit ``False`` turns the filter off — a missing or garbage flag
+    keeps the shipped default (on), the same lenience
+    ``resolve_bvi_lpf_cutoff`` gives the number. Returns 0.0 for off."""
+    if enabled is False:
+        return 0.0
+    return resolve_bvi_lpf_cutoff(cutoff_value)
 
 
 def bvi_lpf_alpha(cutoff_hz: float) -> float:
@@ -583,18 +595,38 @@ class ScanDataSource(QObject):
         # Stay in numpy throughout — building a Python list from
         # `.tolist()` was the dominant cost of this slot at 1 Hz over
         # 8 cams × 2 metrics × growing buffers.
-        chunks: list[np.ndarray] = []
-        for (_side, _cam_id, m), buf in self.buffers.items():
-            if m != metric or buf.n == 0:
-                continue
-            slice_v = buf.v[: buf.n]
-            finite_mask = np.isfinite(slice_v)
-            if finite_mask.any():
-                chunks.append(slice_v[finite_mask])
+        chunks = [
+            self._finite_values(buf)
+            for (_side, _cam_id, m), buf in self.buffers.items()
+            if m == metric
+        ]
+        return self._padded_percentile_bounds(
+            chunks, percentile_lo, percentile_hi, pad_frac)
 
+    @pyqtSlot(str, int, str, result="QVariantMap")
+    def compute_bounds_for_cell(self, side: str, cam_id: int, metric: str) -> dict:
+        """Per-plot autoscale (#452): the same padded 2%/98% percentile
+        bounds as compute_bounds_for_metric, but over ONE (side, cam_id)
+        buffer so each cell can fit its own trace. Same neutral fallback
+        when that camera has fewer than 4 finite samples."""
+        buf = self.buffers.get((side, int(cam_id), metric))
+        chunks = [self._finite_values(buf)] if buf is not None else []
+        return self._padded_percentile_bounds(chunks, 2.0, 98.0, 0.25)
+
+    @staticmethod
+    def _finite_values(buf: "_CameraBuffer") -> np.ndarray:
+        slice_v = buf.v[: buf.n]
+        return slice_v[np.isfinite(slice_v)]
+
+    @staticmethod
+    def _padded_percentile_bounds(
+        chunks: list, percentile_lo: float, percentile_hi: float, pad_frac: float,
+    ) -> dict:
+        """Shared bounds math for the global and per-cell slots."""
+        chunks = [c for c in chunks if c.size]
         if not chunks:
             return {"yMin": 0.0, "yMax": 1.0}
-        combined = np.concatenate(chunks)
+        combined = np.concatenate(chunks) if len(chunks) > 1 else chunks[0]
         if combined.size < 4:
             return {"yMin": 0.0, "yMax": 1.0}
 
@@ -664,9 +696,12 @@ class LiveScanSource(ScanDataSource):
         # The constructor default 0.0 = OFF, preserving raw-storage
         # semantics for direct constructions (tests); the connector — the
         # sole production construction site — passes the config-resolved
-        # cutoff (resolve_bvi_lpf_cutoff: missing/invalid → 20 Hz). State
-        # is per-scan by construction: a fresh source per scan.
-        self._bvi_lpf_alpha = bvi_lpf_alpha(float(bvi_lpf_cutoff_hz))
+        # cutoff (effective_bvi_lpf_cutoff: the compiled 20 Hz gated by the
+        # Settings switch, #552). State is per-scan by construction: a
+        # fresh source per scan. set_bvi_lpf_cutoff_hz re-targets it
+        # mid-scan when the switch is flipped.
+        self._bvi_lpf_cutoff_hz = float(bvi_lpf_cutoff_hz)
+        self._bvi_lpf_alpha = bvi_lpf_alpha(self._bvi_lpf_cutoff_hz)
         self._bvi_lpf_prev: dict[tuple[str, int], float] = {}
         # DB tail state — all lazily initialized on first pan-into-past.
         self._scan_db_path = scan_db_path
@@ -990,6 +1025,26 @@ class LiveScanSource(ScanDataSource):
             buf = self.buffers.get((side, int(cam_id), metric))
             if buf is not None:
                 buf.mark_dropped(t)
+
+    @property
+    def bvi_lpf_cutoff_hz(self) -> float:
+        """Current display low-pass cutoff in Hz (0.0 = off)."""
+        return self._bvi_lpf_cutoff_hz
+
+    def set_bvi_lpf_cutoff_hz(self, cutoff_hz: float) -> None:
+        """Re-target the display low-pass mid-scan (#552: the Settings
+        switch applies immediately, not at the next scan). Samples already
+        in the buffers keep whatever filtering they had; the filter state
+        is cleared so the next finite sample re-seeds it instead of
+        continuing from an output computed under the old cutoff.
+        ``<= 0`` turns the filter off.
+
+        Called from the GUI thread while the sink thread may be inside
+        _bvi_lpf: the float store and the dict clear are each atomic under
+        the GIL, so the worst case is one sample seeded a frame early."""
+        self._bvi_lpf_cutoff_hz = float(cutoff_hz)
+        self._bvi_lpf_alpha = bvi_lpf_alpha(self._bvi_lpf_cutoff_hz)
+        self._bvi_lpf_prev.clear()
 
     # ── internal ──────────────────────────────────────────────────────────
 

@@ -73,6 +73,9 @@ APP_CONFIG = {
     "bviClampHigh": 10.0,
     "bfiColor": "#ffffff",
     "bviColor": "#3437db",
+    # BVI display low-pass (#228, #552): the cutoff is a compiled constant;
+    # the research-only Settings switch gates it via bviLowPassEnabled.
+    "bviLowPassEnabled": True,
     "bviLowPassCutoffHz": 20.0,
     "plotWindowSec": 5,
     "autoScale": False,
@@ -207,6 +210,7 @@ PREFERENCE_KEYS = frozenset({
     "meanMin", "meanMax", "contrastMin", "contrastMax",
     "bfiColor", "bviColor", "plotWindowSec",
     "autoScale", "autoScalePerPlot", "showAxisLabels",
+    "bviLowPassEnabled",
     "darkMode", "liquidGlass",
     # Research data output. Persisting these is harmless in a clinical
     # build: the scan-start gate is (!clinicalMode || engineeringMode), and
