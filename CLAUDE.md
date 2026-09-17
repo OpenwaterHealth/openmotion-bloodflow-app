@@ -84,6 +84,7 @@ artifacts, so every tagged release carries one.
 | `config/laser_params.json` | 18 laser I2C register sets (TA / SEED / EE / OPT variants). **Not user-tunable calibration data** — init/baseline commands for the laser driver chips. |
 | `resources/sample_scan.csv` | Real exported scan (History → Export CSV / SDK `materialize_corrected_csv` per-cam wide format). Offered — never auto-loaded — into the replay viewer when a **research build** boots with **no device connected** (#314): the startup connection watchdog raises `components/SampleScanOfferModal.qml`, and only accepting it binds the sample. Clinical builds never see the offer. Swap this one file to change the sample dataset. Bundled by `openwater.spec` (targeted `datas` entry); located at runtime via `utils.resource_path.resource_path("resources", "sample_scan.csv")`. Parsed DB-free by `data_sources.load_csv_scan_buffers` → `PastScanSource(preloaded_buffers=…, scan_db=None)`; the user's real `scans.db` is never touched. |
 | `openwater.spec` | PyInstaller spec. Custom logic mirrors vendored libusb binaries into `_internal\_vendor` so the runtime hook can find them. |
+| `sdk-version.txt` | The one place the release SDK is pinned (#545): rc/prod CI builds install exactly this `openmotion-sdk` release and fail if the installed version differs; the per-release SBOM asserts the same line. Dev builds and the editable local setup ignore it. |
 | `tests/` | Hardware-in-loop pytest suite, ~23 files. Markers: `@pytest.mark.dev` (~1–2 min, runs on every push to `next`), `@pytest.mark.release` (~6–8 min, runs on release tags). |
 
 **Note:** the old `motion_singleton.py` no longer exists — connector logic was consolidated into `motion_connector.py` and registered as a QML singleton in `main.py`.
@@ -262,6 +263,20 @@ The `dataDirectory` config key controls the root (defaults to cwd if unset). Whe
 
 - Default branch: `main`; daily work on `next`. PR feature → `next`, `next` → `main` for release.
 - Releases triggered by semver tags (e.g. `1.1.2`, `1.1.2-dev.0`, `1.1.2-rc.1`) — see [../CLAUDE.md](../CLAUDE.md) for tag format.
+- **SDK pin (#545):** rc and production tags (and main/dispatch builds) install
+  exactly `openmotion-sdk==<sdk-version.txt>`; dev tags and pushes to `next`
+  install `openmotion-sdk@next`. **Bump `sdk-version.txt` to the SDK release
+  that is on PyPI before tagging an rc or production release** — CI fails the
+  build (`scripts/check_sdk_pin.py --enforce`) if the installed SDK differs.
+  The local dev setup is unaffected: it still installs the SDK editable and
+  bundles whatever is installed.
+- **SBOM (#545):** each CI run generates a CycloneDX SBOM of the build
+  environment (`cyclonedx-py environment` via `pipx`, then
+  `scripts/stamp_sbom.py` sets the app name/tag and, on rc/prod, asserts the
+  SDK line equals the pin). `Open-Motion-<tag>-sbom.cdx.json` (Windows, both
+  variants) and `Open-Motion-<tag>-macOS-sbom.cdx.json` are uploaded as
+  workflow artifacts and attached to the GitHub Release. There is no tracked
+  SBOM file any more.
 - CI workflows: `.github/workflows/release-build.yml` (Windows runner, builds .exe + zip on tags / manual dispatch) and `hil-tests.yml` (self-hosted Windows runner with Shelly IoT outlet power control, runs after the release build completes).
 
 ### Curating release notes (issue #348)
@@ -277,11 +292,10 @@ that commit list:
 1. **Changelog** — plain-English feature summary since the last *production*
    release (not the last pre-release tag — diff against the last `X.Y.Z`
    with no suffix), grouped by theme. Include `openmotion-sdk` changes too:
-   prod/rc tags install the SDK's latest PyPI release at build time (see
-   `release-build.yml`'s SDK-selection step), so diff the SDK version bundled
-   at the last production release (check that build's CI log for
-   `Successfully installed ... openmotion-sdk-X.Y.Z`) against whatever's
-   currently on PyPI, and fold in anything user-visible.
+   rc/prod tags install the exact SDK release pinned in `sdk-version.txt`
+   (#545), so diff the pin at the last production tag
+   (`git show <tag>:sdk-version.txt`) against the current pin, and fold in
+   anything user-visible.
 2. **Known Issues** — currently-open bugs a tester could hit in this build.
    Never list unimplemented/future features here. Cross-check each candidate
    against the merge log first — a ticket can still show "open" on the board

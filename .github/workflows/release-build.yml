@@ -5,8 +5,8 @@ on:
   push:
     branches: [main, next]
     tags:
-      - "[0-9]+.[0-9]+.[0-9]+"             # production release (cut from main)       — SDK from PyPI
-      - "[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+"   # release candidate (cut from next)        — SDK from PyPI
+      - "[0-9]+.[0-9]+.[0-9]+"             # production release (cut from main)       — SDK pinned by sdk-version.txt
+      - "[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+"   # release candidate (cut from next)        — SDK pinned by sdk-version.txt
       - "[0-9]+.[0-9]+.[0-9]+-dev.[0-9]+"  # dev pre-release   (cut from next)        — SDK from @next source
 permissions:
   contents: write
@@ -37,45 +37,37 @@ jobs:
           conda activate omotion
           python -m pip install --upgrade pip
 
-          # SDK selection:
-          #   * X.Y.Z-dev.N tag → source-install from openmotion-sdk@next so
-          #     the dev pre-release ships against the matching dev SDK.
-          #   * refs/heads/next push → same, source-install from
-          #     openmotion-sdk@next. The bloodflow next branch tracks SDK
-          #     API drift before any release, so it must always pair with
-          #     SDK next; PyPI's latest stable can be API-behind.
-          #   * X.Y.Z      tag → install latest openmotion-sdk from PyPI.
-          #     Production releases ship against the fully-released SDK.
-          #   * X.Y.Z-rc.N tag → install latest openmotion-sdk from PyPI.
-          #     RCs are a hardening pass on a fully-released SDK, so PyPI too.
-          #   * Anything else (refs/heads/main push, manual dispatch) →
-          #     fetch the latest published openmotion-sdk wheel from
-          #     GitHub Releases, with a source-install of main as the
-          #     fallback.
+          # SDK selection (#545):
+          #   * X.Y.Z-dev.N tag / refs/heads/next push → source-install from
+          #     openmotion-sdk@next. The bloodflow next branch tracks SDK API
+          #     drift before any release, so it must always pair with SDK
+          #     next; PyPI's latest stable can be API-behind.
+          #   * Everything else (X.Y.Z production tag, X.Y.Z-rc.N tag,
+          #     refs/heads/main push, manual dispatch) → the exact release
+          #     pinned in sdk-version.txt, so the binary, the SBOM and the
+          #     verification evidence all describe the same SDK. Bump the
+          #     pin before tagging an rc/production release; the check step
+          #     below fails the build if the installed SDK does not match.
+          SDK_PIN=$(tr -d '[:space:]' < sdk-version.txt)
           if [[ "$GITHUB_REF" == refs/tags/*-dev.* ]] || [[ "$GITHUB_REF" == refs/heads/next ]]; then
             echo "Dev/next-branch ($GITHUB_REF) — installing SDK from openmotion-sdk@next"
             pip install "git+https://github.com/OpenwaterHealth/openmotion-sdk.git@next"
-          elif [[ "$GITHUB_REF" =~ ^refs/tags/[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
-            echo "Production/RC tag detected ($GITHUB_REF) — installing latest openmotion-sdk from PyPI"
-            pip install --upgrade openmotion-sdk
           else
-            # Fetch the latest openmotion-sdk wheel from GitHub Releases.
-            # Kept as a one-liner so the YAML indent (12 spaces inside the
-            # else block) doesn't get treated as Python module-level
-            # whitespace — multiline `python -c` here would fail with
-            # IndentationError: unexpected indent.
-            WHL_URL=$(python -c "import json,urllib.request as ur,sys; d=json.load(ur.urlopen('https://api.github.com/repos/OpenwaterHealth/openmotion-sdk/releases/latest')); w=[a['browser_download_url'] for a in d.get('assets',[]) if a['name'].endswith('.whl')]; print(w[0] if w else '')" 2>/dev/null || true)
-
-            if [ -n "$WHL_URL" ]; then
-              echo "Installing pylib wheel: $WHL_URL"
-              pip install "$WHL_URL"
-            else
-              echo "No wheel found – falling back to source install"
-              pip install git+https://github.com/OpenwaterHealth/openmotion-sdk.git
-            fi
+            echo "Release/rc/main/dispatch ($GITHUB_REF) — installing openmotion-sdk==${SDK_PIN} (sdk-version.txt)"
+            pip install "openmotion-sdk==${SDK_PIN}"
           fi
 
           pip install -r requirements.txt
+
+      - name: Check the bundled SDK against sdk-version.txt
+        shell: bash -el {0}
+        run: |
+          conda activate omotion
+          if [[ "$GITHUB_REF" == refs/tags/*-dev.* ]] || [[ "$GITHUB_REF" == refs/heads/next ]]; then
+            python scripts/check_sdk_pin.py            # dev: report only
+          else
+            python scripts/check_sdk_pin.py --enforce
+          fi
 
       # ── build ────────────────────────────────────────────────────
       - name: Stamp version from git tag
@@ -146,6 +138,33 @@ jobs:
           fi
 
           echo "::notice ::Version tag resolved to: ${TAG}"
+
+      # ── SBOM (#545) ─────────────────────────────────────────────
+      - name: Generate SBOM (CycloneDX) of the build environment
+        id: sbom
+        shell: bash -el {0}
+        run: |
+          conda activate omotion
+          BUILD_PY=$(python -c "import sys; print(sys.executable)")
+          SBOM="Open-Motion-${{ steps.meta.outputs.TAG }}-sbom.cdx.json"
+          # pipx runs the generator from its own venv, so the tool does not
+          # show up in the SBOM of the environment it inspects. One SBOM
+          # covers both Windows variants: they are frozen from this same env.
+          pipx run --spec cyclonedx-bom cyclonedx-py environment "$BUILD_PY" \
+            --of JSON --mc-type application -o "$SBOM"
+          if [[ "$GITHUB_REF" == refs/tags/*-dev.* ]] || [[ "$GITHUB_REF" == refs/heads/next ]]; then
+            python scripts/stamp_sbom.py "$SBOM" --name Open-Motion --version "${{ steps.meta.outputs.TAG }}"
+          else
+            python scripts/stamp_sbom.py "$SBOM" --name Open-Motion --version "${{ steps.meta.outputs.TAG }}" \
+              --expect-sdk "$(tr -d '[:space:]' < sdk-version.txt)"
+          fi
+          echo "SBOM_PATH=${SBOM}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload SBOM workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Open-Motion-${{ steps.meta.outputs.TAG }}-sbom
+          path: ${{ steps.sbom.outputs.SBOM_PATH }}
 
       - name: Package all artifacts (zips + installers, clinical + Research)
         shell: pwsh
@@ -224,6 +243,7 @@ jobs:
           assets=(
             "${{ steps.meta.outputs.ARTIFACT_ZIP }}"
             "${{ steps.meta.outputs.ARTIFACT_ZIP_RESEARCH }}"
+            "${{ steps.sbom.outputs.SBOM_PATH }}"
             build/installer/Open-Motion-Setup-*.exe
             build/installer/Open-Motion-Research-Setup-*.exe
             resources/OpenMotionDriver-x64.zip
@@ -279,23 +299,14 @@ jobs:
           python -m pip install --upgrade pip
 
           # SDK selection — mirrors the Windows job above (see the comment
-          # there for the full rationale).
+          # there for the full rationale, #545).
+          SDK_PIN=$(tr -d '[:space:]' < sdk-version.txt)
           if [[ "$GITHUB_REF" == refs/tags/*-dev.* ]] || [[ "$GITHUB_REF" == refs/heads/next ]]; then
             echo "Dev/next-branch ($GITHUB_REF) — installing SDK from openmotion-sdk@next"
             pip install "git+https://github.com/OpenwaterHealth/openmotion-sdk.git@next"
-          elif [[ "$GITHUB_REF" =~ ^refs/tags/[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
-            echo "Production/RC tag detected ($GITHUB_REF) — installing latest openmotion-sdk from PyPI"
-            pip install --upgrade openmotion-sdk
           else
-            WHL_URL=$(python -c "import json,urllib.request as ur,sys; d=json.load(ur.urlopen('https://api.github.com/repos/OpenwaterHealth/openmotion-sdk/releases/latest')); w=[a['browser_download_url'] for a in d.get('assets',[]) if a['name'].endswith('.whl')]; print(w[0] if w else '')" 2>/dev/null || true)
-
-            if [ -n "$WHL_URL" ]; then
-              echo "Installing pylib wheel: $WHL_URL"
-              pip install "$WHL_URL"
-            else
-              echo "No wheel found – falling back to source install"
-              pip install git+https://github.com/OpenwaterHealth/openmotion-sdk.git
-            fi
+            echo "Release/rc/main/dispatch ($GITHUB_REF) — installing openmotion-sdk==${SDK_PIN} (sdk-version.txt)"
+            pip install "openmotion-sdk==${SDK_PIN}"
           fi
 
           pip install -r requirements.txt
@@ -305,6 +316,15 @@ jobs:
           # (FileExistsError on Versions/Current/* during assemble); fixed
           # in later 6.x. Override the pin for this job only.
           pip install --upgrade "pyinstaller>=6.13"
+
+      - name: Check the bundled SDK against sdk-version.txt
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/*-dev.* ]] || [[ "$GITHUB_REF" == refs/heads/next ]]; then
+            python scripts/check_sdk_pin.py            # dev: report only
+          else
+            python scripts/check_sdk_pin.py --enforce
+          fi
 
       - name: Stamp version from git tag
         shell: bash
@@ -335,6 +355,28 @@ jobs:
             echo "PRERELEASE=false" >> "$GITHUB_OUTPUT"
           fi
           echo "::notice ::Version tag resolved to: ${TAG}"
+
+      - name: Generate SBOM (CycloneDX) of the build environment
+        id: sbom
+        shell: bash
+        run: |
+          BUILD_PY=$(python -c "import sys; print(sys.executable)")
+          SBOM="Open-Motion-${{ steps.meta.outputs.TAG }}-macOS-sbom.cdx.json"
+          pipx run --spec cyclonedx-bom cyclonedx-py environment "$BUILD_PY" \
+            --of JSON --mc-type application -o "$SBOM"
+          if [[ "$GITHUB_REF" == refs/tags/*-dev.* ]] || [[ "$GITHUB_REF" == refs/heads/next ]]; then
+            python scripts/stamp_sbom.py "$SBOM" --name Open-Motion-macOS --version "${{ steps.meta.outputs.TAG }}"
+          else
+            python scripts/stamp_sbom.py "$SBOM" --name Open-Motion-macOS --version "${{ steps.meta.outputs.TAG }}" \
+              --expect-sdk "$(tr -d '[:space:]' < sdk-version.txt)"
+          fi
+          echo "SBOM_PATH=${SBOM}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload SBOM workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Open-Motion-${{ steps.meta.outputs.TAG }}-macOS-sbom
+          path: ${{ steps.sbom.outputs.SBOM_PATH }}
 
       - name: Build .app + DMG
         shell: bash
@@ -368,6 +410,8 @@ jobs:
         with:
           tag_name: ${{ steps.meta.outputs.TAG }}
           prerelease: ${{ steps.meta.outputs.PRERELEASE == 'true' }}
-          files: ${{ steps.dmg.outputs.DMG_PATH }}
+          files: |
+            ${{ steps.dmg.outputs.DMG_PATH }}
+            ${{ steps.sbom.outputs.SBOM_PATH }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
