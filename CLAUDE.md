@@ -317,6 +317,16 @@ relies on the target's installed runtime).
 - No runtime hooks: `main.py` calls `utils.libusb_paths.register_vendored_libusb`
   before importing the SDK; the PyInstaller `rthook_libusb_paths.py` is now
   a shim over the same function.
+- **`@pyqtSlot` methods are not compiled** (#566): Nuitka's pyqt6 plugin
+  lists `pyqtSlot` as an "uncompiled decorator", so every slot is shipped as
+  its unparsed source and re-created at import time by `exec` into the class
+  namespace (tracebacks show `File "<string>"`, lines counted from the
+  decorator). Such a function has no `__class__` cell: a zero-argument
+  `super()` inside it raises `RuntimeError: super(): __class__ cell not
+  found` on first call — that was the first Nuitka build's crash on Scan.
+  Write `super(ClassName, self)` in slots; `tests/test_nuitka_slot_compat.py`
+  fails on the zero-argument form anywhere in the app tree. Source runs and
+  PyInstaller never hit this, so the guard test is the only early warning.
 
 Consequences to remember:
 
