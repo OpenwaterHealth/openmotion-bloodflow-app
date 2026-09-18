@@ -1,5 +1,6 @@
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -90,6 +91,79 @@ def test_frozen_exe_elsewhere_is_portable(tmp_path, monkeypatch):
     # ...and no registration at all is portable too
     monkeypatch.setattr(app_paths, "installed_dir", lambda: None)
     assert app_paths.portable_mode() is True
+
+
+@pytest.mark.unit
+def test_installed_dir_finds_the_marker_in_either_registry_view(monkeypatch):
+    """#577: the app MSI is a 32-bit package, so its InstallDir marker lives
+    under WOW6432Node. Reading only the 64-bit view made every installed build
+    think it was portable and crash writing logs\\ into Program Files."""
+    import types
+
+    target = r"C:\Program Files (x86)\Openwater\Open-Motion"
+
+    def fake_winreg(present_in):
+        mod = types.SimpleNamespace(
+            HKEY_LOCAL_MACHINE=1, KEY_READ=0x1, REG_SZ=1,
+            KEY_WOW64_64KEY=0x100, KEY_WOW64_32KEY=0x200, opened=[],
+        )
+
+        class _Key:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def open_key(_root, _sub, _reserved, access):
+            view = access & ~mod.KEY_READ
+            mod.opened.append(view)
+            if view not in present_in:
+                raise FileNotFoundError(view)
+            return _Key()
+
+        mod.OpenKey = open_key
+        mod.QueryValueEx = lambda _key, _name: (target, mod.REG_SZ)
+        return mod
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    only_32 = fake_winreg({0x200})
+    monkeypatch.setitem(sys.modules, "winreg", only_32)
+    assert app_paths.installed_dir() == Path(target)
+    assert only_32.opened == [0x100, 0x200]  # 64-bit view first, explicitly
+
+    only_64 = fake_winreg({0x100})
+    monkeypatch.setitem(sys.modules, "winreg", only_64)
+    assert app_paths.installed_dir() == Path(target)
+    assert only_64.opened == [0x100]
+
+    monkeypatch.setitem(sys.modules, "winreg", fake_winreg(set()))
+    assert app_paths.installed_dir() is None
+
+
+@pytest.mark.unit
+def test_unwritable_root_falls_back_even_when_os_access_says_writable(tmp_path, monkeypatch):
+    """#577: on Windows os.access(W_OK) ignores ACLs and says True for
+    Program Files, so the ~/Documents fallback never fired. The root is now
+    probed by actually creating a file."""
+    _override(monkeypatch, None)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "platform", "win32")
+    exe_dir = tmp_path / "Program Files (x86)" / "Open-Motion"
+    exe_dir.mkdir(parents=True)
+    monkeypatch.setattr(sys, "executable", str(exe_dir / "Open-Motion.exe"))
+    home = tmp_path / "home"
+    _fake_home(monkeypatch, home)
+    monkeypatch.setattr(os, "access", lambda *_a, **_k: True)  # the Windows lie
+    monkeypatch.setattr(app_paths, "_can_write", lambda root: root != exe_dir.resolve())
+    assert app_paths.writable_root(portable=True) == home / "Documents" / "Open-Motion"
+
+
+@pytest.mark.unit
+def test_can_write_probes_with_a_real_file(tmp_path):
+    assert app_paths._can_write(tmp_path) is True
+    assert list(tmp_path.iterdir()) == []  # the probe cleans up after itself
+    assert app_paths._can_write(tmp_path / "does-not-exist") is False
 
 
 @pytest.mark.unit
@@ -264,7 +338,7 @@ def test_falls_back_to_documents_when_root_unwritable(tmp_path, monkeypatch):
     _override(monkeypatch, None)
     monkeypatch.setattr(sys, "frozen", False, raising=False)
     _fake_home(monkeypatch, tmp_path)
-    monkeypatch.setattr(os, "access", lambda path, mode: False)
+    monkeypatch.setattr(app_paths, "_can_write", lambda root: False)
 
     result = app_paths.writable_root()
 
