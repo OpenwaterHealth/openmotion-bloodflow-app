@@ -158,6 +158,27 @@ def test_packaging_signs_each_variants_exe_before_zipping_and_harvesting():
     assert 'Join-Path $distDir "Open-Motion.exe"' in script
 
 
+def test_installer_signs_the_engine_and_the_bundle_but_not_the_app_msi():
+    """#569: signings are metered, so a signed build makes exactly three per
+    variant: the exe (test above), the detached Burn engine and the
+    reattached bundle. The app MSI never ships on its own and Burn verifies
+    it by hash, so it is deliberately left unsigned. A new sign.ps1 call in
+    build_installer.ps1 has to be a decision, not a drive-by."""
+    script = (REPO_ROOT / "installer" / "build_installer.ps1").read_text(encoding="utf-8-sig")
+    calls = [
+        line.strip() for line in script.splitlines()
+        if "sign.ps1" in line and not line.lstrip().startswith("#")
+    ]
+    assert len(calls) == 2, calls
+    assert calls[0].endswith("-Files $engine")
+    assert calls[1].endswith("-Files $bundleExe")
+    assert not any("$appMsi" in c for c in calls)
+    # WiX order: detach, sign the engine, reattach, sign the bundle.
+    detach_at = script.index("wix burn detach")
+    reattach_at = script.index("wix burn reattach")
+    assert detach_at < script.index("-Files $engine") < reattach_at < script.index("-Files $bundleExe")
+
+
 def test_nuitka_is_the_default_compiler_with_pyinstaller_as_dispatch_fallback(workflow):
     """#548 (default since 2026-09-17): every push/tag build compiles both
     Windows variants with Nuitka; PyInstaller runs only on a manual dispatch

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       sign:
-        description: "Code-sign artifacts (requires the eSigner secrets; ~7 metered signings)"
+        description: "Code-sign artifacts (requires the eSigner secrets; 6 metered signings)"
         type: boolean
         default: false
       compiler:
@@ -158,9 +158,11 @@ jobs:
 
       # ── eSigner CKA: load the EV code-signing cert (#358 / #443) ─────
       # PRODUCTION tag builds only (X.Y.Z with no pre-release suffix), plus
-      # manual runs with sign=true, Authenticode-sign every Windows artifact
-      # (~7 metered eSigner signings per build) with the org's SSL.com EV
-      # cert. dev/rc pre-release tags and branch pushes build UNSIGNED to
+      # manual runs with sign=true, Authenticode-sign the shipped Windows
+      # artifacts with the org's SSL.com EV cert: 6 metered eSigner signings
+      # per build (the exe, the Burn engine and the Setup bundle, per
+      # variant; the app MSI inside the bundle is deliberately unsigned,
+      # #569). dev/rc pre-release tags and branch pushes build UNSIGNED to
       # conserve the signing quota. The private key never leaves SSL.com's
       # cloud HSM; eSigner CKA exposes it through Windows CNG so native
       # signtool works against a store thumbprint. When the ES_* secrets are

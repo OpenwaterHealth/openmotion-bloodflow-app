@@ -17,9 +17,25 @@ do not trigger a signed `workflow_dispatch`, without asking first.
 | Artifact | Signed by |
 |---|---|
 | `Open-Motion.exe`, the onefile build (#547) that is the whole portable zip and the whole MSI payload | `scripts/package_artifacts.ps1` → `installer/sign.ps1`, once per variant |
-| `Open-Motion.msi` / `Open-Motion-Research.msi` | `installer/build_installer.ps1` → `sign.ps1` |
-| Burn Setup bundles (engine signed detached, then the reattached bundle) | `installer/build_installer.ps1` → `sign.ps1` |
+| Burn Setup bundles: the engine signed detached, then the reattached bundle (two signings per variant) | `installer/build_installer.ps1` → `sign.ps1` |
 | WinUSB driver catalogs + `OpenMotionDriver-x64.msi` | `openmotion-sdk` repo, `driver-msi.yml` (sdk#216) — the signed zip is then vendored here as `resources/OpenMotionDriver-x64.zip` |
+
+That is **three signings per variant, six per signed build**: exe, engine,
+bundle. The engine and the bundle are separate signatures because Burn
+extracts and caches the engine on its own for elevation, repair and
+uninstall, so WiX requires detach → sign engine → reattach → sign bundle
+(<https://docs.firegiant.com/wix/tools/signing/>).
+
+**Not signed, on purpose: the app MSI** (`Open-Motion.msi` /
+`Open-Motion-Research.msi`, #569). It is never a release asset (only the
+Setup bundle ships, and the updater verifies only the bundle), Burn runs it
+from its already-elevated engine so it never raises its own UAC prompt, and
+Burn verifies it by the hash in the bundle manifest, which sits under the
+engine signature. Accepted trade-off: a managed PC whose AppLocker / WDAC
+policy allows Windows Installer packages *by publisher* would block the
+unsigned MSI. If a site needs that, re-add the one `sign.ps1` call after the
+MSI build in `installer/build_installer.ps1` (before the bundle build, which
+records the MSI's hash); it costs two more signings per signed build.
 
 Everything funnels through `installer/sign.ps1`, which is driven by one
 environment variable: `CODESIGN_THUMBPRINT`. Unset → every signing step
@@ -30,7 +46,7 @@ installed cert (e.g. a self-hosted runner).
 
 **When CI signs:** **production tag builds only** (`X.Y.Z` with no
 pre-release suffix), plus `workflow_dispatch` runs with the `sign` input
-checked. eSigner cloud signings are metered (~7 per signed build), so
+checked. eSigner cloud signings are metered (6 per signed build, see above), so
 dev/rc pre-release tags and pushes to `next`/`main` all build unsigned.
 Testers may see SmartScreen warnings on pre-release installers — expected
 and internal-only.
@@ -129,4 +145,4 @@ self-signed key at zero eSigner cost. Details: sdk#216.
   plan — check the tier if release cadence increases significantly.
 - rc bundles are unsigned, so the in-app beta channel offers them and then
   refuses them (#544). Signing rc tags too is a one-line change to the
-  CKA step's `if:` condition, at the cost of ~7 signings per rc.
+  CKA step's `if:` condition, at the cost of 6 signings per rc.
