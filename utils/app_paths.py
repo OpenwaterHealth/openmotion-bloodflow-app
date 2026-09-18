@@ -108,24 +108,32 @@ def _known_folder(folder_id: str) -> Path | None:
 def installed_dir() -> Path | None:
     """The directory the MSI installed the app to, per HKLM, or None.
 
-    Reads the 64-bit registry view explicitly so a 32-bit host process
-    (or WOW64 redirection) cannot point it at a different hive.
+    Both registry views are read, 64-bit first, each one explicitly so the
+    answer never depends on the bitness of this process. The app MSI is built
+    without ``-arch``, which makes it a 32-bit package: Windows Installer
+    writes its HKLM values under WOW6432Node and installs to
+    ``Program Files (x86)``. Reading only the 64-bit view (as #546 shipped)
+    never found the marker, so every installed build took itself for a
+    portable copy and died creating ``logs\`` next to the exe (#577).
     """
     if sys.platform != "win32":
         return None
     try:
         import winreg
-
-        with winreg.OpenKey(
-            winreg.HKEY_LOCAL_MACHINE, _INSTALL_REG_KEY, 0,
-            winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
-        ) as key:
-            value, kind = winreg.QueryValueEx(key, _INSTALL_REG_VALUE)
-        if kind != winreg.REG_SZ or not value:
-            return None
-        return Path(value)
-    except OSError:
+    except ImportError:
         return None
+    for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE, _INSTALL_REG_KEY, 0,
+                winreg.KEY_READ | view,
+            ) as key:
+                value, kind = winreg.QueryValueEx(key, _INSTALL_REG_VALUE)
+        except OSError:
+            continue
+        if kind == winreg.REG_SZ and value:
+            return Path(value)
+    return None
 
 
 def is_installed_exe() -> bool:
@@ -140,6 +148,27 @@ def is_installed_exe() -> bool:
         return exe_dir == target.resolve()
     except OSError:
         return False
+
+
+def _can_write(root: Path) -> bool:
+    """True when a file can actually be created in ``root``.
+
+    ``os.access(root, os.W_OK)`` is not that test on Windows: it looks at the
+    read-only attribute and ignores ACLs, so it answers True for
+    ``C:\Program Files`` and the ~/Documents fallback below never triggered
+    (#577).
+    """
+    probe = root / f".open-motion-write-test-{os.getpid()}"
+    try:
+        with open(probe, "wb"):
+            pass
+    except OSError:
+        return False
+    try:
+        probe.unlink()
+    except OSError:
+        pass
+    return True
 
 
 def portable_mode() -> bool:
@@ -211,10 +240,10 @@ def writable_root(portable: bool | None = None) -> Path:
         root = Path.cwd()
 
     # A read-only parent (Finder launches the app with cwd="/") makes mkdir
-    # itself raise, before the os.access check below could ever redirect us.
+    # itself raise, before the write probe below could ever redirect us.
     try:
         root.mkdir(parents=True, exist_ok=True)
-        writable = os.access(root, os.W_OK)
+        writable = _can_write(root)
     except OSError:
         writable = False
 
