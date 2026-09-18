@@ -1,8 +1,9 @@
 """Guards for the release SDK pin and the per-release SBOM (#545).
 
 rc and production builds must ship the exact openmotion-sdk release named in
-``sdk-version.txt``, and every release must carry a CycloneDX SBOM generated
-from the environment that was frozen. These tests pin the wiring in
+``sdk-version.txt``, and every build generates a CycloneDX SBOM of the
+environment that was frozen and checks its SDK line against the pin (the
+public workflow no longer publishes that SBOM, #573). These tests pin the wiring in
 ``release-build.yml`` and the two helper scripts it calls; the workflow itself
 only runs on GitHub, so this is the check that runs on every push.
 """
@@ -139,13 +140,17 @@ def test_release_builds_verify_the_pin_in_both_jobs(workflow):
     assert workflow.count("python scripts/check_sdk_pin.py --enforce") == 2
 
 
-def test_release_builds_generate_stamp_and_attach_the_sbom(workflow):
+def test_release_builds_generate_and_check_the_sbom_but_do_not_publish_it(workflow, release_workflow):
     assert workflow.count("cyclonedx-py environment") == 2
     assert workflow.count("python scripts/stamp_sbom.py") == 4  # dev + enforced, per job
     assert workflow.count("--expect-sdk") == 2
-    # Attached to the release by both jobs and always uploaded as an artifact.
-    assert workflow.count("${{ steps.sbom.outputs.SBOM_PATH }}") == 3  # macOS x2 + the action's output
-    assert workflow.count("${{ steps.win.outputs.sbom-path }}") == 2
+    # #573: generated and pin-checked on every build, published nowhere from
+    # this public repo (no workflow artifact, no release asset). The action
+    # still exposes the path: the private Clinical repo delivers its SBOM.
+    assert workflow.count("${{ steps.sbom.outputs.SBOM_PATH }}") == 1  # the action's output
+    assert "sbom-path" not in release_workflow
+    assert "SBOM_PATH }}" not in release_workflow
+    assert "-sbom\n" not in release_workflow  # no `name: ...-sbom` artifact
 
 
 def test_stale_hand_written_sbom_is_gone():
