@@ -203,8 +203,12 @@ jobs:
             echo "::warning::CLINICAL_DISPATCH_TOKEN not set — Clinical build for ${TAG} was NOT started; run clinical-prerelease.yml by hand"
             exit 0
           fi
-          if ! gh workflow run clinical-prerelease.yml \
-               -R OpenwaterHealth/openmotion-desktop-app-clinical -f tag="$TAG"; then
+          # The REST endpoint with an explicit ref, not the gh "workflow run"
+          # command: that one first resolves the repo's default branch over
+          # GraphQL, which a token holding only Actions: write cannot read
+          # (1.5.3-dev.3: "Resource not accessible by personal access token").
+          DISPATCH=repos/OpenwaterHealth/openmotion-desktop-app-clinical/actions/workflows/clinical-prerelease.yml/dispatches
+          if ! gh api -X POST "$DISPATCH" -f ref=main -f "inputs[tag]=$TAG"; then
             echo "::warning::could not start the Clinical build for ${TAG}; run clinical-prerelease.yml by hand"
           fi
 
