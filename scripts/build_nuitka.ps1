@@ -60,6 +60,10 @@ $args = @(
     # tree and the qml plugin dir). Without an explicit qml the plugin only
     # warns that the bundled QML "is unlikely to work"; "all" doubled the size.
     "--enable-plugin=pyqt6", "--include-qt-plugins=sensible,qml",
+    # #579: sign the app's main.dll inside the payload before onefile packing,
+    # so what the bootstrap extracts to %TEMP% at launch is signed too. A no-op
+    # without CODESIGN_THUMBPRINT (local builds, dev tags, branch pushes).
+    "--user-plugin=scripts\nuitka_sign_payload.py",
     "--windows-console-mode=disable",
     "--windows-icon-from-ico=assets\images\favicon.ico",
     "--company-name=Openwater", "--product-name=Open-Motion",
