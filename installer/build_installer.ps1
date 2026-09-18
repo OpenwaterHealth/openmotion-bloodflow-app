@@ -103,8 +103,16 @@ if ((Get-Item $appMsi).Length -lt 1MB) {
     throw "app MSI is only $((Get-Item $appMsi).Length) bytes; file harvesting from $DistAbs produced an empty package"
 }
 
-# sign the app MSI (skippable)
-powershell -NoProfile -File installer\sign.ps1 -Files $appMsi
+# The app MSI is deliberately NOT Authenticode-signed (#569). eSigner signings
+# are metered, and this was the one signature nothing in the shipped flow
+# checks: the MSI is never a release asset (only the Setup bundle is), Burn
+# runs it from its already-elevated engine so it raises no UAC prompt of its
+# own, and Burn verifies it by the hash in the bundle manifest, which sits
+# under the engine signature below. Accepted trade-off: a managed PC whose
+# AppLocker / WDAC policy allows Windows Installer packages by publisher would
+# block it; if a site needs that, re-add
+#   powershell -NoProfile -File installer\sign.ps1 -Files $appMsi
+# here, before the bundle is built (the bundle records the MSI's hash).
 
 # -- build the Burn bundle --
 # -bindpath installer so the custom BA ThemeFile/LocalizationFile payloads
