@@ -1,7 +1,19 @@
 name: HIL tests
 
-# Runs HIL tests against a packaged Build & Release artifact on the
-# self-hosted runner (MOTION-RUNNER-1).
+# RETIRED 2026-09-18 (#571): the self-hosted HIL system is no longer in use.
+# The workflow is disabled in GitHub (`gh workflow disable hil-tests.yml`)
+# and its `workflow_run` trigger on "Build & Release" is removed below, so
+# re-enabling it by accident cannot start queueing runs against a runner
+# that does not exist. The file is kept for reference. To bring it back:
+# register a runner, fix the artifact lookup (the build has uploaded the
+# dist trees, not the portable zips, since #567, so the "Extract build .zip"
+# step finds nothing), restore the trigger
+#     workflow_run: { workflows: ["Build & Release"], types: [completed] }
+# and run `gh workflow enable hil-tests.yml`. Note a workflow_run workflow
+# always runs from the DEFAULT branch's copy of this file.
+#
+# What it did: ran the HIL tests against a packaged Build & Release artifact
+# on the self-hosted runner (MOTION-RUNNER-1).
 #
 # Test set is auto-selected from the upstream commit:
 #   * head SHA has a release-pattern tag  →  pytest -m release
@@ -15,9 +27,6 @@ name: HIL tests
 #                       interactive desktop session pyautogui needs.
 
 on:
-  workflow_run:
-    workflows: ["Build & Release"]
-    types: [completed]
   workflow_dispatch:
     inputs:
       test_set:
