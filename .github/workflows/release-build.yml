@@ -73,11 +73,10 @@ jobs:
           es-mode: ${{ vars.ES_MODE || 'product' }}
           codesign-thumbprint: ${{ secrets.CODESIGN_THUMBPRINT }}
 
-      - name: Upload SBOM workflow artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Open-Motion-${{ steps.win.outputs.tag }}-sbom
-          path: ${{ steps.win.outputs.sbom-path }}
+      # The SBOM (#545) is still generated and checked inside the build
+      # action (on rc/prod it fails the build unless its SDK line equals
+      # sdk-version.txt), but it is no longer published from this public
+      # repo: neither as a workflow artifact nor as a release asset (#573).
 
       # ── always upload workflow artifact ──────────────────────────
       # upload-artifact wraps whatever it is given in its own zip, so
@@ -150,7 +149,6 @@ jobs:
           # Research only (#573). A production release carries the installer
           # and no portable zip; dev and rc carry both.
           assets=(
-            "${{ steps.win.outputs.sbom-path }}"
             build/installer/Open-Motion-Research-Setup-*.exe
             resources/OpenMotionDriver-x64.zip
           )
@@ -310,12 +308,6 @@ jobs:
           fi
           echo "SBOM_PATH=${SBOM}" >> "$GITHUB_OUTPUT"
 
-      - name: Upload SBOM workflow artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Open-Motion-${{ steps.meta.outputs.TAG }}-macOS-sbom
-          path: ${{ steps.sbom.outputs.SBOM_PATH }}
-
       - name: Build .app + DMG
         shell: bash
         env:
@@ -350,6 +342,5 @@ jobs:
           prerelease: ${{ steps.meta.outputs.PRERELEASE == 'true' }}
           files: |
             ${{ steps.dmg.outputs.DMG_PATH }}
-            ${{ steps.sbom.outputs.SBOM_PATH }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
