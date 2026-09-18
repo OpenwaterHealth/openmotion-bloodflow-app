@@ -39,7 +39,7 @@ checked out at the tag) and delivered to a Google Shared Drive.
 | Tag | Research → GitHub Release | Clinical → Google Drive |
 |---|---|---|
 | `X.Y.Z-dev.N` | portable zip + installer, unsigned | portable zip + installer, unsigned |
-| `X.Y.Z-rc.N` | portable zip + installer, **signed** | portable zip + installer, unsigned |
+| `X.Y.Z-rc.N` | portable zip + installer, **signed** | portable zip + installer, **signed** |
 | `X.Y.Z` | installer only, **signed** | nothing automatic |
 
 After a production release, the signed Clinical installer is a **manual**

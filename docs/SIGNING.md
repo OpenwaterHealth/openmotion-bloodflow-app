@@ -51,15 +51,19 @@ installed cert (e.g. a self-hosted runner).
 | Build | Research (this repo, public GitHub Release) | Clinical (private repo → Google Drive) |
 |---|---|---|
 | `X.Y.Z-dev.N` | unsigned zip + installer | unsigned zip + installer |
-| `X.Y.Z-rc.N` | **signed** zip + installer | unsigned zip + installer |
+| `X.Y.Z-rc.N` | **signed** zip + installer | **signed** zip + installer |
 | `X.Y.Z` | **signed** installer (no portable zip) | nothing automatic |
 | manual `clinical-release.yml` on an `X.Y.Z` tag | n/a | **signed** installer |
 | pushes to `next` / `main` | unsigned, no release | never built |
 
 A `workflow_dispatch` of `release-build.yml` with the `sign` input checked
 also signs. eSigner cloud signings are metered: 3 per signed Research build,
-3 per signed Clinical installer. **Signing rc tags is deliberate for the first
-releases under #573 and is expected to be dropped later** to conserve quota:
+3 per signed Clinical build, so **an rc tag costs 6** and a production release
+3 + 3 for the manual Clinical installer. **Signing rc tags (both variants) is
+deliberate for the first releases under #573**, to prove the signing path
+before a production release, **and is expected to be dropped later** to
+conserve quota. Clinical: `sign: false` in the private repo's
+`clinical-prerelease.yml`. Research:
 change `!contains(github.ref, '-dev.')` back to `!contains(github.ref, '-')`
 in the `sign:` expression of `release-build.yml` (and the guard in
 `tests/test_release_workflow.py`). While it lasts, the in-app beta channel

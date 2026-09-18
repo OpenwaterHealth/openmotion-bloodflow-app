@@ -6,7 +6,7 @@ name: Build & Release
 #
 #   tag            Research (GitHub Release, here)       Clinical (Google Drive, private repo)
 #   X.Y.Z-dev.N    portable zip + installer, unsigned    portable zip + installer, unsigned
-#   X.Y.Z-rc.N     portable zip + installer, SIGNED      portable zip + installer, unsigned
+#   X.Y.Z-rc.N     portable zip + installer, SIGNED      portable zip + installer, SIGNED
 #   X.Y.Z          installer only, SIGNED                nothing automatic; the signed installer
 #                                                        is a manual run in the private repo
 #
