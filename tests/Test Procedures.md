@@ -147,8 +147,11 @@ Two workflows in `.github/workflows/`:
 - `release-build.yml` — builds the frozen app on every push to
   `main`/`next` and on tag pushes. Different SDK source per tag form
   (see `AGENTS.md` for the SDK selection table).
-- `hil-tests.yml` — chained off Build & Release via `workflow_run`.
-  Picks the test set from the upstream commit:
+- `hil-tests.yml` — **retired 2026-09-18 (#571)**: the self-hosted HIL
+  system (`MOTION-RUNNER-1`) is no longer in use, the workflow is disabled
+  in GitHub and its `workflow_run` trigger is removed. Run the suite by hand
+  against hardware instead. When it was live it was chained off Build &
+  Release and picked the test set from the upstream commit:
   - Tag matching `[0-9]+.[0-9]+.[0-9]+` or `[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+`
     → `pytest -m release`.
   - Push to `next` (no tag) → `pytest -m dev`.

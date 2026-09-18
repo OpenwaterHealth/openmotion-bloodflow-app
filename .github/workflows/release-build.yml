@@ -366,8 +366,8 @@ jobs:
               sleep 20
             done
           done
-          # Every asset must be on the release before HIL (workflow_run on
-          # success) tests it, so a silent partial upload fails the job.
+          # Every asset must be on the release when this job reports success,
+          # so a silent partial upload fails the job.
           present=$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
           echo "release assets:"; echo "$present" | sed 's/^/  /'
           for f in "${assets[@]}"; do

@@ -89,7 +89,7 @@ artifacts, so every tagged release carries one.
 | `utils/frozen.py` | The one answer to "built executable?" and "which exe / where are resources?" for PyInstaller **and** Nuitka (#548). Nothing else may read `sys.frozen`, `sys._MEIPASS` or `sys.executable`. |
 | `scripts/build_nuitka.ps1` | Opt-in native compile (#548); same output path as the PyInstaller build. See "Native compile with Nuitka". |
 | `sdk-version.txt` | The one place the release SDK is pinned (#545): rc/prod CI builds install exactly this `openmotion-sdk` release and fail if the installed version differs; the per-release SBOM asserts the same line. Dev builds and the editable local setup ignore it. |
-| `tests/` | Hardware-in-loop pytest suite, ~23 files. Markers: `@pytest.mark.dev` (~1–2 min, runs on every push to `next`), `@pytest.mark.release` (~6–8 min, runs on release tags). |
+| `tests/` | Hardware-in-loop pytest suite, ~23 files. Markers: `@pytest.mark.dev` (~1–2 min) and `@pytest.mark.release` (~6–8 min); both are run by hand against hardware since the automated HIL workflow was retired on 2026-09-18 (#571). CI runs none of them. |
 
 **Note:** the old `motion_singleton.py` no longer exists — connector logic was consolidated into `motion_connector.py` and registered as a QML singleton in `main.py`.
 
@@ -368,7 +368,7 @@ Consequences to remember:
   workflow artifacts and attached to the GitHub Release. There is no tracked
   SBOM file any more.
 - **Code signing (#443, merged 2026-09-17):** **production**-tag builds (`X.Y.Z`, no suffix) Authenticode-sign the onefile exe and both Setup bundles (Burn engine signed detached, then the reattached bundle) with the SSL.com EV cert via eSigner CKA (cloud key; `ES_*` org secrets); dev/rc tags and branch pushes build unsigned (signings are metered: 3 per variant, 6 per signed build). The app MSI inside the bundle is deliberately **not** signed (#569): it never ships on its own, Burn runs it already elevated and verifies it by the hash in its signed manifest; the accepted cost is that an AppLocker / WDAC publisher rule for MSIs would block it. A `workflow_dispatch` with the `sign` input also signs — **ask Ethan before triggering one.** The driver is EV-signed separately, once per driver change, via manual dispatch of the SDK's `driver-msi.yml`, then vendored as `resources/OpenMotionDriver-x64.zip`. Everything funnels through `installer/sign.ps1` on `CODESIGN_THUMBPRINT`. **Before this merged no release build had ever been signed** (the step lived only on the PR branch; 1.5.2 shipped unsigned). The in-app updater pins the same certificate (#544). See [docs/SIGNING.md](docs/SIGNING.md).
-- CI workflows: `.github/workflows/release-build.yml` (Windows runner, builds .exe + zip on tags / manual dispatch) and `hil-tests.yml` (self-hosted Windows runner with Shelly IoT outlet power control, runs after the release build completes).
+- CI workflows: `.github/workflows/release-build.yml` (Windows runner, builds .exe + zip on tags / manual dispatch) and `hil-tests.yml`, which is **retired** (#571, 2026-09-18): the self-hosted HIL system is no longer in use, the workflow is disabled in GitHub and its `workflow_run` trigger is removed; the file is kept for reference with the steps to bring it back in its header. Nothing runs after a release build any more.
 
 ### Curating release notes (issue #348)
 
