@@ -262,7 +262,7 @@ def test_every_variant_build_entry_point_keeps_the_open_motion_folder():
     """PyInstaller onefile writes <distpath>\Open-Motion.exe; the three
     places that invoke it must all pass dist\<variant>\Open-Motion so the
     zip and the MSI harvest keep the released shape (#547)."""
-    workflow = (_REPO_ROOT / ".github" / "workflows" / "release-build.yml").read_text(encoding="utf-8")
+    workflow = (_REPO_ROOT / ".github" / "actions" / "windows-build" / "action.yml").read_text(encoding="utf-8")
     assert '--distpath "dist/${variant}/Open-Motion"' in workflow
     common = (_REPO_ROOT / "scripts" / "build_common.ps1").read_text(encoding="utf-8")
     assert 'Join-Path (Join-Path $DistRoot $Variant) "Open-Motion"' in common
