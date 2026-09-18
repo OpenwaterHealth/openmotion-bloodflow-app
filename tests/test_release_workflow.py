@@ -181,6 +181,10 @@ def test_public_workflow_never_builds_or_publishes_clinical(release_workflow, wi
     assert "if: startsWith(github.ref, 'refs/tags/') && contains(github.ref, '-')" in job
     assert "needs:" not in job
     assert "clinical-prerelease.yml" in job and "clinical-release.yml" not in job
+    # REST dispatch with an explicit ref: `gh workflow run` has to read the
+    # default branch, which the Actions-only token cannot (1.5.3-dev.3).
+    assert "gh workflow run" not in job
+    assert "clinical-prerelease.yml/dispatches" in job and "-f ref=main" in job
     assert "exit 1" not in job
     # The action must work from another repository: the tag is an input.
     assert "GITHUB_REF" not in windows_build.replace("GITHUB_REF / GITHUB_SHA", "")
