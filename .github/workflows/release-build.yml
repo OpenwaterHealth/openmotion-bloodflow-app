@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       sign:
-        description: "Code-sign artifacts (requires the eSigner secrets; 3 metered signings)"
+        description: "Code-sign artifacts (requires the eSigner secrets; 4 metered signings)"
         type: boolean
         default: false
       compiler:
@@ -52,8 +52,9 @@ jobs:
       # ── build + sign + package (Research only) ───────────────────
       # Signing policy (#443, #573): rc and production tags sign, plus a
       # manual run with sign=true; dev tags and branch pushes build UNSIGNED.
-      # Every signing is metered (3 per signed build here: exe, Burn engine,
-      # Setup bundle). rc signing is deliberate for the first releases under
+      # Every signing is metered (4 per signed build here: main.dll inside
+      # the onefile payload (#579), the exe, Burn engine, Setup
+      # bundle). rc signing is deliberate for the first releases under
       # #573 and is expected to be dropped later to conserve quota: remove
       # the `-rc.` half of the expression, nothing else. See docs/SIGNING.md.
       - name: Build Research (Windows)

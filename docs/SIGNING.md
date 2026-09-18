@@ -17,10 +17,12 @@ do not trigger a signed `workflow_dispatch`, without asking first.
 | Artifact | Signed by |
 |---|---|
 | `Open-Motion.exe`, the onefile build (#547) that is the whole portable zip and the whole MSI payload | `scripts/package_artifacts.ps1` → `installer/sign.ps1`, once per variant |
+| `main.dll` **inside** the onefile payload (#579): the compiled app itself (Nuitka 4.x builds the program as a DLL that the onefile bootstrap loads; there is no inner exe), signed between Nuitka's standalone folder and the onefile pack, so what the bootstrap extracts to `%TEMP%` at launch is signed too (one signing per variant). Third-party payload files are not signed by us. | `scripts/nuitka_sign_payload.py` (Nuitka user plugin) → `sign.ps1` |
 | Burn Setup bundles: the engine signed detached, then the reattached bundle (two signings per variant) | `installer/build_installer.ps1` → `sign.ps1` |
 | WinUSB driver catalogs + `OpenMotionDriver-x64.msi` | `openmotion-sdk` repo, `driver-msi.yml` (sdk#216) — the signed zip is then vendored here as `resources/OpenMotionDriver-x64.zip` |
 
-That is **three signings per variant, and one variant per signed build**
+That is **four signings per variant, and one variant per signed build**
+(payload `main.dll`, exe, engine, bundle; it was three before #579)
 (#573: Research is built here, Clinical in the private repo): exe, engine,
 bundle. The engine and the bundle are separate signatures because Burn
 extracts and caches the engine on its own for elevation, repair and
@@ -57,9 +59,9 @@ installed cert (e.g. a self-hosted runner).
 | pushes to `next` / `main` | unsigned, no release | never built |
 
 A `workflow_dispatch` of `release-build.yml` with the `sign` input checked
-also signs. eSigner cloud signings are metered: 3 per signed Research build,
-3 per signed Clinical build, so **an rc tag costs 6** and a production release
-3 + 3 for the manual Clinical installer. **Signing rc tags (both variants) is
+also signs. eSigner cloud signings are metered: 4 per signed Research build,
+4 per signed Clinical build, so **an rc tag costs 8** and a production release
+4 + 4 for the manual Clinical installer. **Signing rc tags (both variants) is
 deliberate for the first releases under #573**, to prove the signing path
 before a production release, **and is expected to be dropped later** to
 conserve quota. Clinical: `sign: false` in the private repo's
