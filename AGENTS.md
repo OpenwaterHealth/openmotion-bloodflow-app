@@ -29,6 +29,23 @@ against the latest SDK wheel from GitHub Releases (with a
 source-install of `main` as fallback). They are useful for
 verification builds; they do **not** create a GitHub Release.
 
+## What a tag publishes (#573)
+
+This repo is public, so `release-build.yml` builds **Research only**.
+Clinical is built by the private
+`OpenwaterHealth/openmotion-desktop-app-clinical` repo (same build action,
+checked out at the tag) and delivered to a Google Shared Drive.
+
+| Tag | Research → GitHub Release | Clinical → Google Drive |
+|---|---|---|
+| `X.Y.Z-dev.N` | portable zip + installer, unsigned | portable zip + installer, unsigned |
+| `X.Y.Z-rc.N` | portable zip + installer, **signed** | portable zip + installer, **signed** |
+| `X.Y.Z` | installer only, **signed** | nothing automatic |
+
+After a production release, the signed Clinical installer is a **manual**
+run of `clinical-release.yml` in the private repo on that tag. Never add a
+Clinical build, artifact upload or release asset to a workflow in this repo.
+
 ## Release progression
 
 For a given version `X.Y.Z` the natural progression is:

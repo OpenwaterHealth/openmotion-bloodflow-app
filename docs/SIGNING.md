@@ -20,7 +20,8 @@ do not trigger a signed `workflow_dispatch`, without asking first.
 | Burn Setup bundles: the engine signed detached, then the reattached bundle (two signings per variant) | `installer/build_installer.ps1` → `sign.ps1` |
 | WinUSB driver catalogs + `OpenMotionDriver-x64.msi` | `openmotion-sdk` repo, `driver-msi.yml` (sdk#216) — the signed zip is then vendored here as `resources/OpenMotionDriver-x64.zip` |
 
-That is **three signings per variant, six per signed build**: exe, engine,
+That is **three signings per variant, and one variant per signed build**
+(#573: Research is built here, Clinical in the private repo): exe, engine,
 bundle. The engine and the bundle are separate signatures because Burn
 extracts and caches the engine on its own for elevation, repair and
 uninstall, so WiX requires detach → sign engine → reattach → sign bundle
@@ -40,16 +41,43 @@ records the MSI's hash); it costs two more signings per signed build.
 Everything funnels through `installer/sign.ps1`, which is driven by one
 environment variable: `CODESIGN_THUMBPRINT`. Unset → every signing step
 no-ops and the build ships unsigned. In CI the "Set up eSigner CKA" step of
-`release-build.yml` sets it after loading the cert; the `CODESIGN_THUMBPRINT`
+the shared build action (`.github/actions/windows-build`, called by
+`release-build.yml` with `sign: true`) sets it after loading the cert; the `CODESIGN_THUMBPRINT`
 repo secret remains as a manual fallback for signing with a locally
 installed cert (e.g. a self-hosted runner).
 
-**When CI signs:** **production tag builds only** (`X.Y.Z` with no
-pre-release suffix), plus `workflow_dispatch` runs with the `sign` input
-checked. eSigner cloud signings are metered (6 per signed build, see above), so
-dev/rc pre-release tags and pushes to `next`/`main` all build unsigned.
-Testers may see SmartScreen warnings on pre-release installers — expected
-and internal-only.
+**When CI signs (#573):**
+
+| Build | Research (this repo, public GitHub Release) | Clinical (private repo → Google Drive) |
+|---|---|---|
+| `X.Y.Z-dev.N` | unsigned zip + installer | unsigned zip + installer |
+| `X.Y.Z-rc.N` | **signed** zip + installer | **signed** zip + installer |
+| `X.Y.Z` | **signed** installer (no portable zip) | nothing automatic |
+| manual `clinical-release.yml` on an `X.Y.Z` tag | n/a | **signed** installer |
+| pushes to `next` / `main` | unsigned, no release | never built |
+
+A `workflow_dispatch` of `release-build.yml` with the `sign` input checked
+also signs. eSigner cloud signings are metered: 3 per signed Research build,
+3 per signed Clinical build, so **an rc tag costs 6** and a production release
+3 + 3 for the manual Clinical installer. **Signing rc tags (both variants) is
+deliberate for the first releases under #573**, to prove the signing path
+before a production release, **and is expected to be dropped later** to
+conserve quota. Clinical: `sign: false` in the private repo's
+`clinical-prerelease.yml`. Research:
+change `!contains(github.ref, '-dev.')` back to `!contains(github.ref, '-')`
+in the `sign:` expression of `release-build.yml` (and the guard in
+`tests/test_release_workflow.py`). While it lasts, the in-app beta channel
+can install an rc (#544). Testers may see SmartScreen warnings on dev
+installers — expected and internal-only.
+
+**Clinical never touches this repo's CI.** The repo is public, so a release
+asset, a workflow artifact and the Actions log are all world-readable. The
+private `OpenwaterHealth/openmotion-desktop-app-clinical` repo checks this
+one out at the tag, runs the same `.github/actions/windows-build` with
+`variants: clinical`, and uploads to a Shared Drive. `release-build.yml`'s
+`notify-clinical` job starts its pre-release workflow on dev/rc tags and
+never waits for it; the signed production installer is a manual run there,
+which refuses a tag not on `main` and any output that is not validly signed.
 
 macOS is unaffected: the DMG stays ad-hoc signed (Apple notarization is a
 separate, unrelated pipeline).
@@ -143,6 +171,6 @@ self-signed key at zero eSigner cost. Details: sdk#216.
   TrustedPublisher step and no prompt at all.
 - eSigner billing: cloud signings are metered per the eSigner service
   plan — check the tier if release cadence increases significantly.
-- rc bundles are unsigned, so the in-app beta channel offers them and then
-  refuses them (#544). Signing rc tags too is a one-line change to the
-  CKA step's `if:` condition, at the cost of 6 signings per rc.
+- Research rc bundles are signed since #573 (3 signings per rc). When that is
+  dropped again, the in-app beta channel goes back to offering rc bundles and
+  then refusing them (#544).

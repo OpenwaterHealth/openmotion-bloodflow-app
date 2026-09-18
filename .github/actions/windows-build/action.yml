@@ -1,0 +1,318 @@
+name: Windows build (Open-Motion)
+description: >
+  Build, optionally sign, and package the Windows artifacts (portable zip +
+  Setup bundle) for the requested variants from the repository checked out at
+  the workspace root (fetch-depth 0). Shared by release-build.yml (Research,
+  public) and by the private openmotion-desktop-app-clinical workflows
+  (Clinical, #573), which check this repo out at a tag and call it as a local
+  action. That second caller runs in ANOTHER repository, so nothing in here may
+  read GITHUB_REF / GITHUB_SHA to learn what is being built: pass `tag`.
+
+inputs:
+  tag:
+    description: "Release tag being built (X.Y.Z, X.Y.Z-rc.N, X.Y.Z-dev.N). Empty on a branch push: the version then comes from git describe."
+    default: ""
+  sdk-next:
+    description: "'true' on a branch build that must pair with openmotion-sdk@next (pushes to next). Dev tags always do; ignored when `tag` is set."
+    default: "false"
+  variants:
+    description: "Space-separated variants to build and package: clinical, research, or both."
+    default: "research"
+  sign:
+    description: "'true' to Authenticode-sign (3 metered eSigner signings per variant). Needs the es-* inputs."
+    default: "false"
+  compiler:
+    description: "nuitka (default, native compile) or pyinstaller (fallback)"
+    default: "nuitka"
+  es-username:
+    description: "eSigner username"
+    default: ""
+  es-password:
+    description: "eSigner password"
+    default: ""
+  es-totp-secret:
+    description: "eSigner TOTP secret"
+    default: ""
+  es-mode:
+    description: "eSigner environment: product, or sandbox for pipeline testing (needs sandbox credentials)"
+    default: "product"
+  codesign-thumbprint:
+    description: "Manual fallback for a runner with a local cert; the eSigner step overrides it."
+    default: ""
+
+outputs:
+  tag:
+    description: "Resolved version tag used in the artifact file names."
+    value: ${{ steps.meta.outputs.TAG }}
+  channel:
+    description: "dev | rc | prod for a tag build, branch otherwise."
+    value: ${{ steps.meta.outputs.CHANNEL }}
+  prerelease:
+    description: "'true' for dev and rc tags."
+    value: ${{ steps.meta.outputs.PRERELEASE }}
+  sbom-path:
+    description: "CycloneDX SBOM of the build environment (covers every variant: they are frozen from the same env)."
+    value: ${{ steps.sbom.outputs.SBOM_PATH }}
+
+runs:
+  using: composite
+  steps:
+    # ── what is being built ──────────────────────────────────────
+    - name: Resolve version, channel and SDK source
+      id: meta
+      shell: bash
+      env:
+        INPUT_TAG: ${{ inputs.tag }}
+        INPUT_SDK_NEXT: ${{ inputs.sdk-next }}
+      run: |
+        if [ -n "$INPUT_TAG" ]; then
+          TAG="$INPUT_TAG"
+          # Strip leading 'v' only; '-dev.N' suffixes stay (semver pre-release).
+          VER="${TAG#v}"
+          case "$TAG" in
+            *-dev.*) CHANNEL=dev ;;
+            *-rc.*)  CHANNEL=rc ;;
+            *)       CHANNEL=prod ;;
+          esac
+        else
+          TAG=$(git describe --tags --dirty --always 2>/dev/null || echo "dev-$(git rev-parse --short=8 HEAD)")
+          VER=$(git describe --tags --dirty --always --long 2>/dev/null || echo "$TAG")
+          CHANNEL=branch
+        fi
+
+        # SDK selection (#545):
+        #   * X.Y.Z-dev.N tag / push to next → source-install from
+        #     openmotion-sdk@next. The bloodflow next branch tracks SDK API
+        #     drift before any release, so it must always pair with SDK
+        #     next; PyPI's latest stable can be API-behind.
+        #   * Everything else (X.Y.Z production tag, X.Y.Z-rc.N tag, push to
+        #     main, manual dispatch) → the exact release pinned in
+        #     sdk-version.txt, so the binary, the SBOM and the verification
+        #     evidence all describe the same SDK. Bump the pin before tagging
+        #     an rc/production release; the check step below fails the build
+        #     if the installed SDK does not match.
+        if [ "$CHANNEL" = "dev" ] || { [ "$CHANNEL" = "branch" ] && [ "$INPUT_SDK_NEXT" = "true" ]; }; then
+          SDK_SOURCE=next
+        else
+          SDK_SOURCE=pin
+        fi
+
+        # pre-release flag — X.Y.Z-dev.N (dev) and X.Y.Z-rc.N (release
+        # candidate) tags both mark prerelease in the GitHub release UI.
+        if [ "$CHANNEL" = "dev" ] || [ "$CHANNEL" = "rc" ]; then PRERELEASE=true; else PRERELEASE=false; fi
+
+        {
+          echo "TAG=${TAG}"
+          echo "VER=${VER}"
+          echo "CHANNEL=${CHANNEL}"
+          echo "SDK_SOURCE=${SDK_SOURCE}"
+          echo "PRERELEASE=${PRERELEASE}"
+          echo "COMMIT=$(git rev-parse HEAD)"
+        } >> "$GITHUB_OUTPUT"
+        echo "::notice ::Building ${TAG} (channel=${CHANNEL}, sdk=${SDK_SOURCE})"
+
+    # ── conda environment "omotion" ──────────────────────────────
+    - name: Set up Miniconda
+      uses: conda-incubator/setup-miniconda@v3
+      with:
+        auto-update-conda: true
+        python-version: "3.12"
+        activate-environment: omotion
+
+    - name: Install dependencies into omotion
+      shell: bash -el {0}
+      env:
+        SDK_SOURCE: ${{ steps.meta.outputs.SDK_SOURCE }}
+      run: |
+        conda activate omotion
+        python -m pip install --upgrade pip
+        SDK_PIN=$(tr -d '[:space:]' < sdk-version.txt)
+        if [ "$SDK_SOURCE" = "next" ]; then
+          echo "Dev/next-branch build — installing SDK from openmotion-sdk@next"
+          pip install "git+https://github.com/OpenwaterHealth/openmotion-sdk.git@next"
+        else
+          echo "Release/rc/main/dispatch build — installing openmotion-sdk==${SDK_PIN} (sdk-version.txt)"
+          pip install "openmotion-sdk==${SDK_PIN}"
+        fi
+
+        pip install -r requirements.txt
+
+    - name: Check the bundled SDK against sdk-version.txt
+      shell: bash -el {0}
+      env:
+        SDK_SOURCE: ${{ steps.meta.outputs.SDK_SOURCE }}
+      run: |
+        conda activate omotion
+        if [ "$SDK_SOURCE" = "next" ]; then
+          python scripts/check_sdk_pin.py            # dev: report only
+        else
+          python scripts/check_sdk_pin.py --enforce
+        fi
+
+    # ── build ────────────────────────────────────────────────────
+    - name: Stamp version
+      shell: bash -el {0}
+      env:
+        VER: ${{ steps.meta.outputs.VER }}
+      run: |
+        echo "Stamping version: $VER"
+        # Update _FALLBACK_VERSION in version.py so the frozen exe uses it
+        sed -i "s/^_FALLBACK_VERSION = .*/_FALLBACK_VERSION = \"${VER}\"/" version.py
+
+    # PyInstaller is the fallback only (compiler=pyinstaller) since Nuitka
+    # became the default on 2026-09-17 (#548).
+    - name: Build with PyInstaller (one build per variant)
+      if: inputs.compiler == 'pyinstaller'
+      shell: bash -el {0}
+      env:
+        VARIANTS: ${{ inputs.variants }}
+      run: |
+        conda activate omotion
+        # #546: the Clinical/Research split is compiled in. Stamp
+        # CLINICAL_MODE into config/app_config.py, build, repeat; the
+        # repo value (Research) is restored afterwards. portableMode is
+        # derived at launch (HKLM InstallDir marker), so the portable zip
+        # and the installer share each variant's exe byte-for-byte.
+        for variant in $VARIANTS; do
+          if [ "$variant" = "clinical" ]; then flag=True; else flag=False; fi
+          sed -i "s/^CLINICAL_MODE = .*/CLINICAL_MODE = ${flag}/" config/app_config.py
+          grep -n "^CLINICAL_MODE = " config/app_config.py
+          # onefile (#547): the output is dist/<variant>/Open-Motion/Open-Motion.exe
+          # and nothing else; the folder keeps the zip / MSI shape unchanged.
+          python -m PyInstaller -y openwater.spec --distpath "dist/${variant}/Open-Motion" --workpath "build/${variant}"
+        done
+        sed -i "s/^CLINICAL_MODE = .*/CLINICAL_MODE = False/" config/app_config.py
+        git diff --exit-code -- config/app_config.py
+
+    # ── Nuitka native compile (#548): the default since 2026-09-17 ─────
+    # Every module compiled to C with MSVC (present on windows-latest); same
+    # onefile output contract as the PyInstaller fallback, so packaging
+    # below is unchanged. nuitka / ordered-set / zstandard come from
+    # requirements.txt so the SBOM records the compiler. The C-compile
+    # cache is restored between runs: a cold build is tens of minutes per
+    # variant on the 2-core runner, a warm one a fraction of that. The key
+    # carries the variant list: each calling repository has its own cache.
+    - name: Cache Nuitka's C-compile cache
+      if: inputs.compiler != 'pyinstaller'
+      uses: actions/cache@v4
+      with:
+        path: ~\AppData\Local\Nuitka\Nuitka\Cache
+        key: nuitka-${{ runner.os }}-${{ inputs.variants }}-${{ hashFiles('requirements.txt', 'sdk-version.txt') }}-${{ steps.meta.outputs.COMMIT }}
+        restore-keys: |
+          nuitka-${{ runner.os }}-${{ inputs.variants }}-${{ hashFiles('requirements.txt', 'sdk-version.txt') }}-
+          nuitka-${{ runner.os }}-${{ inputs.variants }}-
+          nuitka-${{ runner.os }}-
+
+    - name: Build with Nuitka (one build per variant)
+      if: inputs.compiler != 'pyinstaller'
+      shell: bash -el {0}
+      env:
+        VARIANTS: ${{ inputs.variants }}
+      run: |
+        conda activate omotion
+        python -m nuitka --version
+        for variant in $VARIANTS; do
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build_nuitka.ps1 -Variant "$variant"
+        done
+        git diff --exit-code -- config/app_config.py
+
+    - name: Install WiX v5
+      shell: pwsh
+      run: |
+        # Pin to 5.0.2 — the last MIT-licensed WiX. v6/v7 require accepting the
+        # paid Open Source Maintenance Fee EULA (WIX7015) and would fail CI.
+        dotnet tool install --global wix --version 5.0.2
+        # In WiX v5 the standard bootstrapper application ships in this package
+        # (not WixToolset.Bal.wixext); the bal: namespace in bundle.wxs is unchanged.
+        wix extension add -g WixToolset.BootstrapperApplications.wixext/5.0.2
+        echo "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+    # ── eSigner CKA: load the EV code-signing cert (#358 / #443) ─────
+    # When the caller asks for it (sign=true), Authenticode-sign the shipped
+    # Windows artifacts with the org's SSL.com EV cert: 3 metered eSigner
+    # signings per variant (the exe, the Burn engine and the Setup bundle;
+    # the app MSI inside the bundle is deliberately unsigned, #569). WHICH
+    # builds sign is the caller's policy, see release-build.yml and
+    # docs/SIGNING.md. The private key never leaves SSL.com's cloud HSM;
+    # eSigner CKA exposes it through Windows CNG so native signtool works
+    # against a store thumbprint. When the es-* inputs are empty this warns
+    # and the build ships unsigned.
+    - name: Set up eSigner CKA (EV code signing)
+      if: inputs.sign == 'true'
+      shell: pwsh
+      env:
+        ES_USERNAME: ${{ inputs.es-username }}
+        ES_PASSWORD: ${{ inputs.es-password }}
+        ES_TOTP_SECRET: ${{ inputs.es-totp-secret }}
+        ES_MODE: ${{ inputs.es-mode || 'product' }}
+      run: |
+        if (-not $env:ES_USERNAME -or -not $env:ES_PASSWORD -or -not $env:ES_TOTP_SECRET) {
+          Write-Host "::warning::eSigner secrets (ES_USERNAME / ES_PASSWORD / ES_TOTP_SECRET) not set — artifacts will be UNSIGNED"
+          exit 0
+        }
+        $work = Join-Path $env:RUNNER_TEMP "esigner-cka"
+        New-Item -ItemType Directory -Force $work | Out-Null
+        Set-Location $work
+        Invoke-WebRequest -OutFile eSigner_CKA_Setup.zip "https://github.com/SSLcom/eSignerCKA/releases/download/v1.0.8/SSL.COM-eSigner-CKA_1.0.8.zip"
+        Expand-Archive -Force eSigner_CKA_Setup.zip
+        Move-Item -Destination "eSigner_CKA_Installer.exe" -Path "eSigner_CKA_Setup\*.exe"
+        $dir = Join-Path $env:USERPROFILE "eSignerCKA"
+        New-Item -ItemType Directory -Force $dir | Out-Null
+        Start-Process ".\eSigner_CKA_Installer.exe" -ArgumentList "/CURRENTUSER /VERYSILENT /SUPPRESSMSGBOXES /DIR=`"$dir`"" -Wait
+        # Post-install helpers from SSL.com's reference workflow; guarded
+        # because not every CKA build ships them (VC++ redists are already
+        # on the hosted runners).
+        foreach ($aux in @("$work\setup\vc_redist.x86.exe", "$work\setup\vc_redist.x64.exe")) {
+          if (Test-Path $aux) { Start-Process $aux -ArgumentList "/install /q" -Wait }
+        }
+        foreach ($aux in @("$dir\RegisterKSP.exe", "$dir\eSignerCSP.Config.exe")) {
+          if (Test-Path $aux) { & $aux | Out-Null }
+        }
+        & "$dir\eSignerCKATool.exe" config -mode $env:ES_MODE -user $env:ES_USERNAME -pass $env:ES_PASSWORD -totp $env:ES_TOTP_SECRET -key "$dir\master.key" -r
+        & "$dir\eSignerCKATool.exe" unload
+        & "$dir\eSignerCKATool.exe" load
+        $cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert | Select-Object -First 1
+        if (-not $cert) { throw "eSigner CKA loaded no code-signing certificate" }
+        Write-Host "Signing as: $($cert.Subject)  [$($cert.Thumbprint)]"
+        "CODESIGN_THUMBPRINT=$($cert.Thumbprint)" >> $env:GITHUB_ENV
+
+    # ── SBOM (#545) ─────────────────────────────────────────────
+    - name: Generate SBOM (CycloneDX) of the build environment
+      id: sbom
+      shell: bash -el {0}
+      env:
+        TAG: ${{ steps.meta.outputs.TAG }}
+        SDK_SOURCE: ${{ steps.meta.outputs.SDK_SOURCE }}
+      run: |
+        conda activate omotion
+        BUILD_PY=$(python -c "import sys; print(sys.executable)")
+        SBOM="Open-Motion-${TAG}-sbom.cdx.json"
+        # pipx runs the generator from its own venv, so the tool does not
+        # show up in the SBOM of the environment it inspects. One SBOM
+        # covers every Windows variant: they are frozen from this same env.
+        pipx run --spec cyclonedx-bom cyclonedx-py environment "$BUILD_PY" \
+          --of JSON --mc-type application -o "$SBOM"
+        if [ "$SDK_SOURCE" = "next" ]; then
+          python scripts/stamp_sbom.py "$SBOM" --name Open-Motion --version "$TAG"
+        else
+          python scripts/stamp_sbom.py "$SBOM" --name Open-Motion --version "$TAG" \
+            --expect-sdk "$(tr -d '[:space:]' < sdk-version.txt)"
+        fi
+        echo "SBOM_PATH=${SBOM}" >> "$GITHUB_OUTPUT"
+
+    # ── package ──────────────────────────────────────────────────
+    - name: Package artifacts (zip + installer per variant)
+      shell: pwsh
+      env:
+        # env.CODESIGN_THUMBPRINT is exported by the eSigner CKA step above;
+        # the input is a manual fallback for a runner with a local cert.
+        CODESIGN_THUMBPRINT: ${{ env.CODESIGN_THUMBPRINT || inputs.codesign-thumbprint }}
+        TAG: ${{ steps.meta.outputs.TAG }}
+        VARIANTS: ${{ inputs.variants }}
+      run: |
+        # One call per variant: `powershell -File` hands -Variants a single
+        # literal string, never an array.
+        foreach ($variant in ($env:VARIANTS -split '\s+' | Where-Object { $_ })) {
+          powershell -NoProfile -File scripts\package_artifacts.ps1 -SkipBuild -Version $env:TAG -Variants $variant
+          if ($LASTEXITCODE -ne 0) { throw "package_artifacts failed for $variant" }
+        }

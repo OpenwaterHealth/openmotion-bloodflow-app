@@ -18,6 +18,9 @@ pytestmark = pytest.mark.unit
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release-build.yml"
+# The Windows build steps live in a composite action so the private Clinical
+# repository runs the very same build (#573).
+WINDOWS_BUILD = REPO_ROOT / ".github" / "actions" / "windows-build" / "action.yml"
 PIN_FILE = REPO_ROOT / "sdk-version.txt"
 
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -105,8 +108,20 @@ def test_stamp_sbom_fails_on_wrong_or_missing_sdk(tmp_path):
 
 # ------------------------------------------------------- release-build.yml
 @pytest.fixture(scope="module")
-def workflow() -> str:
+def release_workflow() -> str:
     return WORKFLOW.read_text(encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def windows_build() -> str:
+    return WINDOWS_BUILD.read_text(encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def workflow(release_workflow, windows_build) -> str:
+    """Everything a release build runs: the workflow (macOS job inline) plus
+    the Windows composite action it calls."""
+    return release_workflow + "\n" + windows_build
 
 
 def test_release_builds_install_the_pinned_sdk(workflow):
@@ -129,7 +144,8 @@ def test_release_builds_generate_stamp_and_attach_the_sbom(workflow):
     assert workflow.count("python scripts/stamp_sbom.py") == 4  # dev + enforced, per job
     assert workflow.count("--expect-sdk") == 2
     # Attached to the release by both jobs and always uploaded as an artifact.
-    assert workflow.count("${{ steps.sbom.outputs.SBOM_PATH }}") == 4
+    assert workflow.count("${{ steps.sbom.outputs.SBOM_PATH }}") == 3  # macOS x2 + the action's output
+    assert workflow.count("${{ steps.win.outputs.sbom-path }}") == 2
 
 
 def test_stale_hand_written_sbom_is_gone():
@@ -138,15 +154,44 @@ def test_stale_hand_written_sbom_is_gone():
     assert not (REPO_ROOT / "sbom.cdx.json").exists()
 
 
-def test_release_builds_sign_only_production_tags_or_explicit_dispatch(workflow):
-    """#443: the eSigner CKA step provides CODESIGN_THUMBPRINT on production
-    tags (X.Y.Z, no '-') and on a manual run with sign=true; nothing else
-    signs, because every signing is metered."""
-    assert "- name: Set up eSigner CKA (EV code signing)" in workflow
-    assert ("if: (startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-')) "
-            "|| (github.event_name == 'workflow_dispatch' && inputs.sign)") in workflow
-    assert "CODESIGN_THUMBPRINT: ${{ env.CODESIGN_THUMBPRINT || secrets.CODESIGN_THUMBPRINT }}" in workflow
-    assert "      sign:\n        description:" in workflow
+def test_release_builds_sign_rc_and_production_tags_or_explicit_dispatch(release_workflow, windows_build):
+    """#443 / #573: the eSigner CKA step provides CODESIGN_THUMBPRINT on rc and
+    production tags (anything but -dev.) and on a manual run with sign=true;
+    dev tags and branch pushes never sign, because every signing is metered.
+    The policy is the caller's; the action only obeys `sign`."""
+    assert "- name: Set up eSigner CKA (EV code signing)" in windows_build
+    assert "      if: inputs.sign == 'true'" in windows_build
+    assert ("sign: ${{ (startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-dev.')) "
+            "|| (github.event_name == 'workflow_dispatch' && inputs.sign) }}") in release_workflow
+    assert "CODESIGN_THUMBPRINT: ${{ env.CODESIGN_THUMBPRINT || inputs.codesign-thumbprint }}" in windows_build
+    assert "      sign:\n        description:" in release_workflow
+
+
+def test_public_workflow_never_builds_or_publishes_clinical(release_workflow, windows_build):
+    """#573: this repo is public, so release assets, workflow artifacts and
+    logs are world-readable. The public workflow builds Research only; the
+    Clinical build lives in the private repo and is only poked from here."""
+    assert release_workflow.count("uses: ./.github/actions/windows-build") == 1
+    assert "          variants: research\n" in release_workflow
+    assert "dist/clinical" not in release_workflow
+    assert "Open-Motion-Setup-" not in release_workflow       # the Clinical bundle name
+    assert "path: dist/research" in release_workflow
+    # dev/rc tags only, fire-and-forget: no needs:, a failed poke only warns.
+    job = release_workflow[release_workflow.index("  notify-clinical:"):release_workflow.index("  build-macos:")]
+    assert "if: startsWith(github.ref, 'refs/tags/') && contains(github.ref, '-')" in job
+    assert "needs:" not in job
+    assert "clinical-prerelease.yml" in job and "clinical-release.yml" not in job
+    assert "exit 1" not in job
+    # The action must work from another repository: the tag is an input.
+    assert "GITHUB_REF" not in windows_build.replace("GITHUB_REF / GITHUB_SHA", "")
+    assert "github.ref" not in windows_build and "github.sha" not in windows_build
+
+
+def test_production_release_carries_the_installer_but_no_portable_zip(release_workflow):
+    upload = release_workflow[release_workflow.index("- name: Upload release assets"):]
+    upload = upload[:upload.index("  notify-clinical:")]
+    assert 'if [ "$CHANNEL" != "prod" ]; then\n            assets+=("Open-Motion-Research-${TAG}.zip")' in upload
+    assert "build/installer/Open-Motion-Research-Setup-*.exe" in upload
 
 
 def test_packaging_signs_each_variants_exe_before_zipping_and_harvesting():
@@ -186,8 +231,9 @@ def test_nuitka_is_the_default_compiler_with_pyinstaller_as_dispatch_fallback(wo
     so packaging is untouched, and the C-compile cache is restored between
     runs."""
     assert "options: [nuitka, pyinstaller]" in workflow and "default: nuitka" in workflow
-    assert "if: github.event_name != 'workflow_dispatch' || inputs.compiler != 'pyinstaller'" in workflow
-    assert "if: github.event_name == 'workflow_dispatch' && inputs.compiler == 'pyinstaller'" in workflow
+    assert "compiler: ${{ github.event_name == 'workflow_dispatch' && inputs.compiler || 'nuitka' }}" in workflow
+    assert "if: inputs.compiler != 'pyinstaller'" in workflow
+    assert "if: inputs.compiler == 'pyinstaller'" in workflow
     assert "- name: Cache Nuitka's C-compile cache" in workflow
     assert "scripts/build_nuitka.ps1 -Variant" in workflow
     reqs = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")
