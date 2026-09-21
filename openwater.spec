@@ -37,9 +37,8 @@ for item in ("main.qml",):
 # NOTE: config/ is no longer a data folder — config/app_config.py and
 # config/tec_params.py are Python modules that main.py imports, so the
 # Analysis below compiles them into the bundle like any other code (#546).
-# processing/ is deliberately absent: visualize_bloodflow.py is a standalone
-# CSV script the app never imports, and shipping the folder as data put its
-# source in the bundle as plaintext (#557).
+# processing/ was dropped as a data folder in #557 (shipping it put plaintext
+# source in the bundle) and the directory itself was removed in #539.
 for folder in ("pages", "components", "assets"):
     if not os.path.isdir(folder):
         raise SystemExit(

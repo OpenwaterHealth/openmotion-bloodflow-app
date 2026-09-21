@@ -41,7 +41,6 @@ from omotion.config import (
     DEBUG_FLAG_SEND_DEFER,
     DEBUG_FLAG_HISTO_STALL,
 )
-from omotion.MotionProcessing import process_bin_file
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
 from omotion.contact_quality import CQThresholds, ContactQualityMonitor
 from motion_config import (
@@ -963,9 +962,6 @@ class MotionConnector(QObject):
     cameraDropoutRecovered = pyqtSignal(str, int, str)  # side, cam_id (0-7), elapsed HH:MM:SS
 
     # post-processing signals
-    postProgress = pyqtSignal(int)
-    postLog = pyqtSignal(str)
-    postFinished = pyqtSignal(bool, str, str, str)  # ok, err, leftCsv, rightCsv
 
     pduMonChanged = pyqtSignal()
 
@@ -1283,8 +1279,6 @@ class MotionConnector(QObject):
         self._test_scan_failure_reason = ""
         self._test_scan_rows: list[dict] = []
 
-        self._post_thread = None
-        self._post_cancel = threading.Event()
 
         self._capture_thread = None
         self._capture_stop = threading.Event()
@@ -4656,9 +4650,8 @@ class MotionConnector(QObject):
             except Exception:
                 logger.exception("scan-outcome classification failed")
 
-            # New pipeline writes CSVs directly; no .raw→.csv post-processing
-            # needed.  Pass empty paths to captureFinished so startPostProcess
-            # is a no-op (QML still proceeds to the next scan step).
+            # The pipeline writes its own output; there is no .raw→.csv
+            # post-processing step, so captureFinished carries empty paths.
             self._capture_left_path = ""
             self._capture_right_path = ""
             self._capture_running = False
@@ -6200,92 +6193,6 @@ class MotionConnector(QObject):
             # the SDK's state machine already logs the disconnect at INFO.
             logger.debug(f"Fan status read on {side} failed during disconnect: {e}")
             return False
-
-    # --- POST-PROCESSING METHODS ---
-    @pyqtSlot(str, str, result=bool)
-    def startPostProcess(self, left_raw: str, right_raw: str) -> bool:
-        """
-        Convert left/right .raw to .csv in-place (same directory).
-        Returns False if a post job is already running.
-        """
-        if self._post_thread is not None:
-            self.postLog.emit("Post-process already running.")
-            return False
-
-        left_raw = left_raw or ""
-        right_raw = right_raw or ""
-        self._post_cancel = threading.Event()
-
-        def _worker():
-            ok = True
-            err = ""
-            left_csv = ""
-            right_csv = ""
-
-            try:
-                def _to_csv_path(p):
-                    base, ext = os.path.splitext(p)
-                    return base + ".csv" if base else ""
-
-                # Process LEFT
-                if left_raw and os.path.isfile(left_raw):
-                    self.postLog.emit(f"Processing LEFT: {os.path.basename(left_raw)}")
-                    self.postProgress.emit(5)
-                    left_csv = _to_csv_path(left_raw)
-                    process_bin_file(left_raw, left_csv)
-                    self.postLog.emit(f"LEFT → {os.path.basename(left_csv)}")
-                    self.postProgress.emit(50)
-                else:
-                    if left_raw:
-                        self.postLog.emit(f"LEFT missing: {left_raw}")
-                    self.postProgress.emit(50)
-
-                # Cancel check between files
-                if self._post_cancel.is_set():
-                    ok = False
-                    err = "Canceled"
-                    return
-
-                # Process RIGHT
-                if right_raw and os.path.isfile(right_raw):
-                    self.postLog.emit(
-                        f"Processing RIGHT: {os.path.basename(right_raw)}"
-                    )
-                    self.postProgress.emit(55)
-                    right_csv = _to_csv_path(right_raw)
-                    process_bin_file(right_raw, right_csv)
-                    self.postLog.emit(f"RIGHT → {os.path.basename(right_csv)}")
-                    self.postProgress.emit(95)
-                else:
-                    if right_raw:
-                        self.postLog.emit(f"RIGHT missing: {right_raw}")
-                    self.postProgress.emit(95)
-
-                self.postProgress.emit(100)
-
-            except Exception as e:
-                ok = False
-                err = str(e)
-                self.postLog.emit(f"Post-process error: {err}")
-            finally:
-                # clear thread handle before emitting
-                self._post_thread = None
-                self.postFinished.emit(ok, err, left_csv or "", right_csv or "")
-                logger.info(
-                    f"Post-process finished: ok={ok}, err={err}, left_csv={left_csv}, right_csv={right_csv}"
-                )
-
-        self._post_thread = threading.Thread(target=_worker, daemon=True)
-        self._post_thread.start()
-        return True
-
-    @pyqtSlot()
-    def cancelPostProcess(self):
-        """Request cancel; takes effect between files."""
-        if self._post_thread is None:
-            return
-        self.postLog.emit("Cancel requested.")
-        self._post_cancel.set()
 
     # --- ERROR HANDLING METHODS / MISCELLANEOUS METHODS ---
     @pyqtSlot(str)
