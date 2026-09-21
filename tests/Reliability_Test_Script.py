@@ -316,7 +316,9 @@ def _writable_root() -> Path:
     reads no env vars (the old OPENWATER_DATA_ROOT override is gone), so
     this must not honour one either.
     """
-    return Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "Openwater"
+    return Path(
+        os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
+    ) / "Openwater"
 
 
 def _merged_app_config() -> dict:
@@ -353,7 +355,7 @@ def find_app_log() -> Path | None:
     """Locate the log written by the app instance under test.
 
     An installed build writes ``<writable-root>/logs/open-motion-*.log``
-    (%PROGRAMDATA%\\Openwater). A **portable** build
+    (%LOCALAPPDATA%\\Openwater, per user since #581). A **portable** build
     writes next to its own exe instead — e.g.
     ``Documents/OpenMotion/Open-Motion-1.5.0-dev.5/Open-Motion/logs/`` — which
     is several levels below any root below, so the old one-level

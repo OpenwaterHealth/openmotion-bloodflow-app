@@ -56,7 +56,7 @@ log — you'll see the app's requests, confirming nothing goes to the internet.
    progress install, then the app **relaunches**.
 5. **Verify:** the relaunched app reports **1.3.1** (Settings/About), and the
    banner does **not** reappear (1.3.1 == latest).
-6. **State preserved:** settings / scan data still under `C:\ProgramData\Openwater\`.
+6. **State preserved:** settings / scan data still under `%LOCALAPPDATA%\Openwater\`.
 
 ## 4. Bonus (dev box + hardware)
 
