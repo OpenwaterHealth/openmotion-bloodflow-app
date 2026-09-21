@@ -14,18 +14,20 @@ Resulting APP_VERSION:
 
 import os
 import subprocess
-import sys
 
-# Fallback used when: no git, no tags, or running from a frozen PyInstaller bundle
+# Fallback used when: no git, no tags, or running from a built executable
+# (PyInstaller or Nuitka; detected via utils.frozen so a Nuitka build never
+# shells out to `git describe` from Program Files at startup, #548)
 _FALLBACK_VERSION = "1.0-pre3-0-g2b7a8aa"
 
 
 def get_version() -> str:
     """Return a PEP 440-ish version string derived from git describe."""
 
-    # Inside a PyInstaller bundle there is no .git directory;
+    # Inside a built executable there is no .git directory;
     # return whatever was stamped at build time.
-    if getattr(sys, "frozen", False):
+    from utils.frozen import is_frozen
+    if is_frozen():
         return _FALLBACK_VERSION
 
     repo_dir = os.path.dirname(os.path.abspath(__file__))

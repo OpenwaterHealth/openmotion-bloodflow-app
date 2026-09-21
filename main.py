@@ -3,6 +3,7 @@ import os
 import warnings
 import logging
 import datetime
+import json
 
 
 # PyInstaller --windowed/--noconsole builds set sys.stdout and sys.stderr
@@ -21,6 +22,15 @@ if sys.stderr is None:
     sys.stderr = open(os.devnull, "w", encoding="utf-8", buffering=1)
 
 
+# Vendored libusb DLL directories must be on the search path before the SDK
+# (pyusb / libusb1) is imported. PyInstaller did this in a runtime hook; a
+# Nuitka build has none, so it happens here for every frozen build (#548).
+from utils.frozen import bundle_dir, is_frozen  # noqa: E402
+from utils.libusb_paths import register_vendored_libusb  # noqa: E402
+
+if is_frozen():
+    register_vendored_libusb(bundle_dir())
+
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtQml import (
@@ -32,22 +42,23 @@ from PyQt6.QtCore import qInstallMessageHandler, QtMsgType, QUrl
 
 from motion_connector import MotionConnector
 from motion_config import DEFAULT_TRIGGER_OVERRIDES
-from omotion import MotionInterface, factory_calibration_thresholds
+from omotion import MotionInterface
 from utils.single_instance import check_single_instance, cleanup_single_instance
 from version import get_version
 from utils.resource_path import resource_path
-from utils import app_paths, config_store, startup_report
+from utils import app_paths, config_store, settings_store, startup_report
 
 
 APP_VERSION = get_version()
 
-# Shipped baseline (defaults + read-only bundled config), captured at load so
-# the connector can diff runtime changes against it when saving overrides.
+# The compiled config (config/app_config.py) plus any dev-only launch
+# overrides, captured at load so the connector can diff runtime changes
+# against it when persisting preferences and the startup report can mark
+# what deviates from it. There is no configuration file any more (#546).
 _APP_CONFIG_BASELINE: dict = {}
 
-# Pure code defaults (no config file applied), captured at load so the
-# startup report can mark which merged keys the shipped config overrode.
-_APP_CONFIG_DEFAULTS: dict = {}
+# Keys a source-run launch flag forced this launch (for the startup report).
+_DEV_CONFIG_KEYS: set = set()
 
 
 logger = logging.getLogger("openmotion.bloodflow-app")
@@ -77,240 +88,69 @@ def qt_message_handler(msg_type, context, message):
     qml_logger.log(log_level, "QML: %s", message)
 
 
-def _ft_factory_defaults() -> dict:
-    """ft_* code defaults = the SDK's factory acceptance thresholds.
-
-    These were zeros once: a zero min-mean/min-contrast can never fail
-    (both quantities are non-negative), which silently disabled the SDK's
-    calibration pre-write gate whenever a config lacked the ft_* keys — a
-    below-spec calibration then wrote the console EEPROM and displayed
-    PASSED (#473). Config files still override every key; only the
-    fallback changed.
-    """
-    f = factory_calibration_thresholds()
-    return {
-        "ft_min_mean_per_camera": f.min_mean_per_camera,
-        "ft_min_contrast_per_camera": f.min_contrast_per_camera,
-        "ft_min_bfi_per_camera": f.min_bfi_per_camera,
-        "ft_max_bfi_per_camera": f.max_bfi_per_camera,
-        "ft_min_bvi_per_camera": f.min_bvi_per_camera,
-        "ft_max_bvi_per_camera": f.max_bvi_per_camera,
-        "ft_max_dark_per_camera": f.max_dark_per_camera,
-    }
-
-
 def _load_app_config(
-    *, clinical: bool | None = None, portable: bool | None = None
+    *, clinical: bool | None = None, portable: bool | None = None,
+    overrides: dict | None = None,
 ) -> dict:
-    """Load application config from config/app_config.json. Returns defaults if missing or invalid.
+    """The effective app config before saved preferences are applied.
 
-    ``clinical`` / ``portable`` are the dev-only launch overrides parsed from
-    the command line by ``_parse_dev_args`` (``None`` = keep the shipped
-    value). The process environment is never consulted here.
+    Since #546 the shipped values are compiled in (``config/app_config.py``)
+    and there is no configuration file to read. ``clinical`` / ``portable``
+    / ``overrides`` are the dev-only launch flags parsed from the command
+    line by ``_parse_dev_args`` (``None`` = keep the compiled value); a
+    frozen build never passes them, and the process environment is never
+    consulted. Saved operator preferences are overlaid later in ``main``,
+    once the scan database (which holds the settings table) is available.
     """
-    defaults = {
-        "forceLaserFail": False,
-        # QA/bench lever: sets DEBUG_FLAG_HISTO_STALL on both sensors so a
-        # scan deterministically loses all camera data ~45 s in while USB
-        # stays alive (sensor-fw#75) — the #248/#174 repro. Default off.
-        # Live toggle in Settings → Engineering (#525).
-        "debugHistoStallTest": False,
-        # In-app updater source overrides (default None => production GitHub
-        # repo). updateRepo swaps the owner/repo; updateApiUrl fully overrides
-        # the releases-latest endpoint (used by the local update-test server).
-        "updateRepo": None,
-        "updateApiUrl": None,
-        # Beta/prerelease update channel for BOTH updaters (app self-update
-        # + device firmware). Effective only in a Research build with
-        # engineering mode unlocked — see MotionConnector._beta_enabled().
-        # Must be registered here or config_store drops it (silently
-        # non-persistent). Renamed from downloadBetaFirmware (#386).
-        "downloadBetaUpdates": False,
-        "cameraTempAlertThresholdC": 105,
-        # Whole-scan data-stall watchdog (issue #248): abort the scan with
-        # E-303 when no camera delivers a frame for this many seconds while
-        # the trigger is ON. <= 0 disables the abort.
-        "scanDataStallTimeoutSec": 3,
-        # Console over-temp trip (°C) pushed to the console user config on
-        # connect. 0/missing disables the firmware trip, so this is validated
-        # (1-60 °C) before any write; see motion_config.ensure_tec_trip.
-        "tecTripTempC": 40,
-        "sensorDebugLogging": False,
-        "consoleDebugLogging": False,
-        "cameraFakeData": False,
-        "histoThrottle": False,
-        "histoCmp": False,
-        "deferHistoSend": False,
-        "powerOffUnusedCameras": False,
-        "commVerbose": False,  # Enable cmd id and "." prints from MCU
-        "verboseCommandHandling": False,  # Enable printf in MCU command handlers
-        **_ft_factory_defaults(),
-        "max_calibration_time_sec": 600,
-        "calibration_scan_duration_sec": 15,
-        "test_scan_duration_sec": 5,
-        "calibration_scan_delay_sec": 1,
-        "leftMask": 0x66,   # 0b01100110 — cameras 2,3,6,7 (Middle pattern)
-        "rightMask": 0x66,
-        "uncorrectedOnly": False,
-        "engineeringMode": False,
-        # Alternative camera settings (#446, Settings → Engineering →
-        # Camera settings). When enabled, exposure + per-camera analog gain
-        # are written via the SDK to every scanned camera just before each
-        # scan starts. Defaults mirror what the sensor firmware itself
-        # programs (X02C1B_Sensor_Config.h: 72 rows × 9 µs = 648 µs;
-        # X02C1B_configure_sensor per-position gain ladder). Valid exposures
-        # are whole 9 µs rows in 99–2196 µs; valid gains 1/2/4/8/16.
-        "altCameraSettingsEnabled": False,
-        "altCameraExposureUs": 648,
-        "altCameraGains": [16, 4, 2, 1, 1, 2, 4, 16],
-        # Internal (no UI): true while camera registers may hold alternative
-        # values, so the first scan after disabling restores fw defaults.
-        "altCameraSettingsDirty": False,
-        # Alternative laser pulse width (#449) — experiments only, separate
-        # enable from the camera settings above. Overrides the trigger
-        # config's LaserPulseWidthUsec (SDK default 500 µs) on every push
-        # while enabled; valid 100–2200 whole µs (stock safety interlock
-        # latches above ~1000 µs — the operator disables it first).
-        # Ignored on a plain clinical build.
-        "altLaserPulseWidthEnabled": False,
-        "altLaserPulseWidthUsec": 500,
-        # Internal (no UI): true while the TA driver's pulse_width register
-        # may hold an alternative value, so the first scan after disabling
-        # restores the laser_params.json baseline.
-        "altLaserPulseWidthDirty": False,
-        "showBfiBvi": True,
-        "bfiMin": 0.0,
-        "bfiMax": 10.0,
-        "bviMin": 0.0,
-        "bviMax": 10.0,
-        "meanMin": 0.0,
-        "meanMax": 500.0,
-        "contrastMin": 0.0,
-        "contrastMax": 1.0,
-        "dataDirectory": None,
-        "writeRawCsv": True,
-        "rawCsvDurationSec": None,
-        # Per-scan telemetry CSV — engineering-only (#43) AND opt-in via the
-        # Settings → Engineering switch (#471). Fail closed by default.
-        "writeTelemetryCsv": False,
-        # Corrected per-cam CSV ({scan_id}.csv) is redundant now that
-        # per-cam BFI/BVI lands in scans.db (the new viewer + past replay
-        # read from there). Default off; set true to keep exporting it
-        # for external analysis tools.
-        "writeCorrectedCsv": False,
-        # Seconds of live data held in memory per plot buffer before the
-        # oldest half is ring-trimmed; older data then lazy-loads from the
-        # scan DB (async, off the GUI thread) on pan-into-past. The old
-        # 60 s default put the in-memory boundary a mere 30–60 s behind
-        # live, so nearly EVERY zoom/pan interaction fell through to the
-        # DB tail — with 16 cams × 40 Hz that re-bucketized ~10⁵ rows per
-        # interaction and froze the app for seconds (issue #256). 900 s
-        # keeps even the largest preset window (5 min) fully in memory
-        # after trims (post-trim floor = 450 s) at a bounded cost of
-        # ~0.7 MB per buffer (~58 MB for an All/All scan).
-        "liveCacheMaxSeconds": 900,
-        "autoScale": False,
-        "autoScalePerPlot": False,
-        # Y-axis tick labels on plot cells; runtime toggle in the ⋯ popup.
-        "showAxisLabels": True,
-        # Build-time flag: true keeps ALL writable state (config overrides,
-        # logs, scan data/db) next to the exe, like the old un-installed
-        # layout; false scatters it to %PROGRAMDATA%\Openwater (the
-        # installed/MSI layout). Set by the build system per artifact type
-        # (portable zip vs installer) — see scripts/build_common.ps1.
-        "portableMode": False,
-        "clinicalMode": False,
-        "clinicalModeLeftMask": 0xC3,
-        "clinicalModeRightMask": 0xC3,
-        "plotWindowSec": 15,
-        "bfiColor": "#E74C3C",
-        "bviColor": "#3498DB",
-        # 1-pole low-pass on the DISPLAYED BVI stream (live plots +
-        # clinical side averages); scans.db/CSVs/replay stay raw. The
-        # number is the only control (#228 — no enabled bool, no
-        # Settings UI): missing/invalid → 20.0, <= 0 disables.
-        "bviLowPassCutoffHz": 20.0,
-        "bfiClampLow": 0.0,
-        "bfiClampHigh": 10.0,
-        "bviClampLow": 0.0,
-        "bviClampHigh": 10.0,
-        "darkMode": True,
-        # Liquid Glass theme — translucent frosted surfaces over an
-        # animated ambient backdrop (Settings → Appearance → Theme).
-        # Orthogonal to darkMode; both light and dark have a glass
-        # variant, and "Liquid Glass" in the Theme selector is the
-        # dark-based one. Default ON for macOS (its native Tahoe look),
-        # OFF elsewhere so Windows clinical builds keep the solid palette.
-        "liquidGlass": sys.platform == "darwin",
-        "cq_check_duration_sec": 1.0,
-        "cq_rolling_avg_window": 5,
-        # Live contact-quality monitor debounce (issue #364), asymmetric:
-        # RAISE the warning fast (a late warning is a safety miss) but CLEAR
-        # it slowly (a premature dismiss strands the operator on a still-bad
-        # camera). Counts consecutive light-frame evaluations at ~40 Hz, so
-        # 10 ~= 0.25 s to pop up, 80 ~= 2 s to dismiss. The dark/ambient path
-        # is not debounced — darks are ~15 s apart, their own debounce.
-        "cq_live_activate_frames": 10,
-        "cq_live_clear_frames": 80,
-        "cq_dark_threshold_per_camera": [3.0] * 8,
-        "cq_light_threshold_per_camera": [15.0] * 8,
-        # Phase 2b: profile HUD overlay on the PlotViewer — sample
-        # rate, paint-tick ms, avg canvas-paint ms, total points
-        # painted. Gated on `engineeringMode && showProfiling` so clinical
-        # users never see it.
-        "showProfiling": False,
-        # Critical-error bug report (see error_codes.py / CriticalErrorModal).
-        "support_email": "support@openwater.health",
-        "bug_report_smtp": None,
-        # Startup connection watchdog (E-104/E-106). Also gates the
-        # research-build sample-dataset offer, so this is deliberately
-        # short — the user should not stare at an empty scan page.
-        "connectionTimeoutSec": 12,
-        "requireConsole": True,
-        "minSensors": 1,
-    }
-    _APP_CONFIG_DEFAULTS.clear()
-    _APP_CONFIG_DEFAULTS.update(defaults)
-    baseline, merged = config_store.load_app_config(defaults)
+    cfg = config_store.compiled_config()
+    dev_keys = set()
 
-    # Dev-only launch overrides from the command line (see _parse_dev_args —
-    # e.g. the Zed tasks for Clinical/Research x always-portable). main()
-    # only passes them for a source run: a frozen build drops the flags, and
-    # the process environment is never read, so a packaged artifact boots
-    # identically on every machine. The build-time flip in build_common.ps1
-    # remains the source of truth for shipped artifacts.
-    if portable is not None:
-        baseline["portableMode"] = bool(portable)
-        merged["portableMode"] = bool(portable)
+    # Dev-only launch overrides. main() only passes them for a source run:
+    # a frozen build drops the flags, so a packaged artifact boots
+    # identically on every machine. The build-time stamp of CLINICAL_MODE
+    # in config/app_config.py is the source of truth for shipped artifacts.
     if clinical is not None:
-        baseline["clinicalMode"] = bool(clinical)
-        merged["clinicalMode"] = bool(clinical)
+        cfg["clinicalMode"] = bool(clinical)
+        dev_keys.add("clinicalMode")
+    # portableMode is derived, not configured: a frozen build asks
+    # app_paths whether the installer registered this exe. --portable only
+    # matters for the startup report on a source run (the writable root of
+    # a source run is the cwd either way).
+    if portable is not None:
+        cfg["portableMode"] = bool(portable)
+        dev_keys.add("portableMode")
+    else:
+        cfg["portableMode"] = app_paths.portable_mode()
+    dev_keys |= config_store.apply_dev_overrides(cfg, overrides)
 
     # macOS is a research-only platform: it is never validated or shipped for
-    # clinical use. This has to win over the bundled config AND the env
-    # override, because clinicalMode drives require_encrypted_db (see the
+    # clinical use. This has to win over the compiled value AND the dev flag,
+    # because clinicalMode drives require_encrypted_db (see the
     # MotionInterface construction below), and the SDK refuses the scan-db
     # keystore on macOS outright — so a "clinical" macOS session cannot start
     # at all, it can only fail later and less clearly. Forcing it here is what
     # makes the DMG a coherent research build rather than a broken clinical
-    # one. build_macos.sh bundles config/ wholesale and has no variant flip of
-    # its own (unlike scripts/build_common.ps1), so this is the only gate.
-    if sys.platform == "darwin" and (baseline.get("clinicalMode") or merged.get("clinicalMode")):
+    # one. build_macos.sh has no variant stamp of its own (unlike
+    # scripts/build_common.ps1), so this is the only gate.
+    if sys.platform == "darwin" and cfg.get("clinicalMode"):
         logger.warning(
             "clinicalMode requested on macOS — forcing Research. macOS builds "
             "are research-only and are not validated for clinical use."
         )
-        baseline["clinicalMode"] = False
-        merged["clinicalMode"] = False
+        cfg["clinicalMode"] = False
 
     _APP_CONFIG_BASELINE.clear()
-    _APP_CONFIG_BASELINE.update(baseline)
+    _APP_CONFIG_BASELINE.update(config_store.compiled_config())
+    _APP_CONFIG_BASELINE.update({k: cfg[k] for k in dev_keys})
+    _APP_CONFIG_BASELINE["portableMode"] = cfg["portableMode"]
+    _APP_CONFIG_BASELINE["clinicalMode"] = cfg["clinicalMode"]
+    _DEV_CONFIG_KEYS.clear()
+    _DEV_CONFIG_KEYS.update(dev_keys)
     # No config logging here: this runs before the log-file handler is
     # attached (the log's location depends on the config), so anything
     # logged here reaches only the console. The startup report logs the
-    # overrides path + merged config after the handler exists (#527).
-    return merged
-
+    # effective config after the handler exists (#527).
+    return cfg
 
 # Qt runtime knobs the host environment could otherwise inject. Every one of
 # these changes how the window comes up (platform plugin, style/theme, DPI
@@ -384,7 +224,9 @@ def _parse_dev_args(argv, *, frozen=None) -> tuple[dict, list[str]]:
 
     Returns ``(dev, qt_argv)``. ``dev`` has ``clinical`` / ``portable``
     (``True`` / ``False`` / ``None`` = not given), ``data_root`` (str or
-    ``None``) and ``ignored`` (the flags a frozen build refused, or ``None``).
+    ``None``), ``config_override`` (a dict of config keys to force for this
+    source run, parsed from a JSON object, or ``None``) and ``ignored`` (the
+    flags a frozen build refused, or ``None``).
     ``qt_argv`` is ``argv`` with our flags removed, for QApplication — Qt's
     own ``-platform`` / ``-style`` options pass through untouched (no short
     flags and no abbreviation matching, so ``-platform`` can never be read
@@ -394,8 +236,11 @@ def _parse_dev_args(argv, *, frozen=None) -> tuple[dict, list[str]]:
     Zed tasks: ``--portable --clinical`` and ``--portable --research
     --data-root <dir>``). They replaced the OPENMOTION_CLINICAL /
     OPENMOTION_PORTABLE / OPENWATER_DATA_ROOT env vars so nothing ambient
-    can steer a launch. A frozen build ignores them entirely: the artifact's
-    variant and data root are baked in by scripts/build_common.ps1 (#233).
+    can steer a launch. ``--config-override '{"engineeringMode": true}'``
+    (#546) is what the HIL harness uses instead of editing a config file:
+    it can force any compiled key, constants included, on a source run.
+    A frozen build ignores all of them entirely: the artifact's variant is
+    compiled in by scripts/build_common.ps1 (#233 / #546).
     """
     import argparse
 
@@ -405,19 +250,32 @@ def _parse_dev_args(argv, *, frozen=None) -> tuple[dict, list[str]]:
     mode.add_argument("--research", dest="clinical", action="store_false", default=None)
     parser.add_argument("--portable", action="store_true", default=None)
     parser.add_argument("--data-root", dest="data_root", default=None)
+    parser.add_argument("--config-override", dest="config_override", default=None)
     argv = list(argv)
     ns, rest = parser.parse_known_args(argv[1:])
+    overrides = None
+    if ns.config_override is not None:
+        try:
+            overrides = json.loads(ns.config_override)
+        except ValueError as e:
+            raise SystemExit(f"--config-override is not valid JSON: {e}")
+        if not isinstance(overrides, dict):
+            raise SystemExit("--config-override must be a JSON object")
     dev = {
         "clinical": ns.clinical,
         "portable": ns.portable,
         "data_root": ns.data_root,
+        "config_override": overrides,
         "ignored": None,
     }
     if frozen is None:
-        frozen = bool(getattr(sys, "frozen", False))
+        frozen = is_frozen()
     given = {k: v for k, v in dev.items() if k != "ignored" and v is not None}
     if frozen and given:
-        dev = {"clinical": None, "portable": None, "data_root": None, "ignored": given}
+        dev = {
+            "clinical": None, "portable": None, "data_root": None,
+            "config_override": None, "ignored": given,
+        }
     return dev, argv[:1] + rest
 
 
@@ -500,7 +358,10 @@ def main():
     logger.addHandler(console_handler)
 
     # Configure file logging
-    app_config = _load_app_config(clinical=dev["clinical"], portable=dev["portable"])
+    app_config = _load_app_config(
+        clinical=dev["clinical"], portable=dev["portable"],
+        overrides=dev["config_override"],
+    )
     # Single output root: dataDirectory, or app_paths.writable_root() (which
     # already applies the frozen/portable/dev-cwd precedence + the
     # ~/Documents fallback for an unwritable candidate — e.g. macOS Finder
@@ -508,7 +369,7 @@ def main():
     # (this run's log file) and data/ (scans.db, scan CSVs, calibrations,
     # debug-bundles, downloaded updates).
     _data_dir = app_config.get("dataDirectory") or str(
-        app_paths.writable_root(bool(app_config.get("portableMode", False)))
+        app_paths.writable_root(app_config.get("portableMode"))
     )
     os.makedirs(_data_dir, exist_ok=True)
     run_dir = os.path.join(_data_dir, app_paths.LOGS_DIRNAME)
@@ -539,27 +400,14 @@ def main():
             "Ignoring dev-only launch flags %s: a packaged build's variant and "
             "data root are fixed at build time.", dev["ignored"],
         )
-    elif any(dev[k] is not None for k in ("clinical", "portable", "data_root")):
+    elif any(dev[k] is not None for k in
+             ("clinical", "portable", "data_root", "config_override")):
         logger.info(
-            "Dev launch overrides: clinical=%s portable=%s data_root=%s",
+            "Dev launch overrides: clinical=%s portable=%s data_root=%s "
+            "config_override=%s",
             dev["clinical"], dev["portable"], dev["data_root"],
+            dev["config_override"],
         )
-
-    # Startup diagnostics (issue #527): build variant, install mode, config
-    # file inventory, and the merged config with overridden keys marked.
-    # Deliberately AFTER the file handler attaches — everything logged
-    # inside _load_app_config reaches only the console, not the log file.
-    # dev_keys: the build-time keys the --clinical/--research/--portable
-    # launch flags forced, so the report can mark them as such (the report
-    # reads no env vars either).
-    startup_report.log_startup_report(
-        logger, app_config, _APP_CONFIG_BASELINE, _APP_CONFIG_DEFAULTS,
-        dev_keys={
-            cfg_key for flag, cfg_key in (
-                ("clinical", "clinicalMode"), ("portable", "portableMode"),
-            ) if dev[flag] is not None
-        },
-    )
 
     # Configure the SDK logger hierarchy to use the same handlers
     sdk_logger = logging.getLogger("openmotion.sdk")
@@ -618,6 +466,25 @@ def main():
                 "untouched."
             )
 
+    # Operator preferences (#546): the PREFERENCE / STATE tiers of the
+    # compiled config live in the settings table of scans.db — encrypted and
+    # HMAC-protected on a clinical build — instead of a plaintext overrides
+    # file. Opened here because it needs the encryption policy set (above)
+    # and the plaintext migration done. A pre-#546 app_config.local.json,
+    # if one is still on the machine, is ignored: nothing reads it.
+    settings = settings_store.SettingsStore(_scan_db_path)
+    saved_keys = config_store.apply_saved_preferences(app_config, settings.load())
+
+    # Startup diagnostics (issue #527): build variant, install mode, where
+    # preferences persist, and the effective config with every key that is
+    # not at its compiled value marked. AFTER the file handler attaches —
+    # everything logged inside _load_app_config reaches only the console.
+    startup_report.log_startup_report(
+        logger, app_config, _APP_CONFIG_BASELINE,
+        dev_keys=set(_DEV_CONFIG_KEYS), saved_keys=saved_keys,
+        settings_path=settings.path, settings_enabled=settings.enabled,
+    )
+
     motion_interface.log_system_info()
 
     qInstallMessageHandler(qt_message_handler)
@@ -639,7 +506,7 @@ def main():
 
     connector = MotionConnector(
         motion_interface, app_config=app_config, data_dir=_data_dir,
-        baseline_config=_APP_CONFIG_BASELINE,
+        baseline_config=_APP_CONFIG_BASELINE, settings_store=settings,
         app_version=APP_VERSION, log_path=logfile_path,
     )
     qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MotionInterface", connector)
@@ -697,6 +564,7 @@ def main():
             motion_interface.stop()
         except Exception as e:
             logger.warning("Error stopping MotionInterface: %s", e)
+        settings.close()
         engine.deleteLater()
         cleanup_single_instance()
         logger.info("=" * 64)

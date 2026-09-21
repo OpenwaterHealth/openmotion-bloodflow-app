@@ -80,7 +80,9 @@ binaries = []
 for item in ("main.qml",):
     if os.path.exists(item):
         datas.append((item, "."))
-for folder in ("pages", "components", "assets", "models", "config"):
+# config/ is a Python package since #546 (compiled in via the import graph),
+# not a data folder.
+for folder in ("pages", "components", "assets", "models"):
     if os.path.isdir(folder):
         datas.append((folder, folder))
 
@@ -111,14 +113,31 @@ if os.path.exists(ICNS_FILE):
     datas.append((ICNS_FILE, "."))
 
 # ── PyQt6 ──
-qt_datas, qt_bins, qt_hidden = collect_all("PyQt6")
+# include_py_files=False: collect_all() otherwise copies every .py of the
+# package into the bundle as loose plaintext next to the compiled PYZ,
+# which is never imported and only leaks the source (#557).
+qt_datas, qt_bins, qt_hidden = collect_all("PyQt6", include_py_files=False)
 datas   += qt_datas
 binaries += qt_bins
 hidden  += qt_hidden
 hidden  += collect_submodules("PyQt6")
 
 # ── omotion SDK ──
-om_datas, om_bins, om_hidden = collect_all("omotion")
+# Parent directory on pathex: an editable SDK install (pip install -e) is
+# exposed through a PEP 660 finder the module analysis does not consult,
+# so without this the PYZ holds no omotion module at all (#557). A wheel
+# install resolves to site-packages and this changes nothing.
+import importlib.util as _ilu
+_om_spec = _ilu.find_spec("omotion")
+if _om_spec is None or not _om_spec.submodule_search_locations:
+    raise SystemExit(
+        "[spec] FATAL: omotion is not importable in the build environment"
+    )
+pathex = [os.path.dirname(list(_om_spec.submodule_search_locations)[0])]
+print(f"[spec] omotion package resolved under {pathex[0]}")
+om_datas, om_bins, om_hidden = collect_all(
+    "omotion", include_py_files=False
+)
 datas   += om_datas
 binaries += om_bins
 hidden  += om_hidden
@@ -146,7 +165,7 @@ runtime_hooks = ["rthook_libusb_macos.py"]
 
 a = Analysis(
     [ENTRY],
-    pathex=[],
+    pathex=pathex,
     binaries=binaries,
     datas=datas,
     hiddenimports=hidden,
@@ -284,24 +303,40 @@ PYEOF
 rm -f "$DMG_TEMP" "$DMG_FINAL"
 
 # Create a temporary read-write DMG
+# hdiutil's stderr is no longer discarded anywhere below: the #553 failure
+# showed up as a bare exit code because it was.
 hdiutil create \
     -volname "$APP_NAME" \
     -srcfolder "$DMG_STAGING" \
     -ov \
     -format UDRW \
     "$DMG_TEMP" \
-    >/dev/null 2>&1
+    >/dev/null
 
-# Mount it to set window properties
+# Detach with retries. hdiutil returns 16 ("Resource busy") when Finder or
+# Spotlight still holds the volume, the intermittent GitHub-runner failure
+# in #553; a busy detach used to fail the whole job under set -e.
+detach_with_retry() {
+    local mount="$1" attempt
+    for attempt in 1 2 3 4 5; do
+        if hdiutil detach "$mount" >/dev/null; then return 0; fi
+        echo "  hdiutil detach busy (attempt $attempt/5); retrying …"
+        sleep $((attempt * 2))
+    done
+    echo "  forcing detach of $mount"
+    hdiutil detach "$mount" -force >/dev/null
+}
+
 MOUNT_POINT="/Volumes/${APP_NAME}"
-# Detach if already mounted
-hdiutil detach "$MOUNT_POINT" >/dev/null 2>&1 || true
-hdiutil attach "$DMG_TEMP" -mountpoint "$MOUNT_POINT" >/dev/null 2>&1
 
-# Use AppleScript to set Finder window appearance. Skipped in CI: headless
-# runners have no Finder session / automation permission, and the styling is
-# cosmetic — the DMG is fully functional without it.
+# The image is mounted only to style the Finder window. Skipped in CI:
+# headless runners have no Finder session / automation permission, the
+# styling is cosmetic, and not mounting at all removes the detach that
+# flaked (#553).
 if [ -z "${CI:-}" ]; then
+# Detach if already mounted, then mount to set window properties
+hdiutil detach "$MOUNT_POINT" >/dev/null 2>&1 || true
+hdiutil attach "$DMG_TEMP" -mountpoint "$MOUNT_POINT" >/dev/null
 osascript << APPLESCRIPT
 tell application "Finder"
     tell disk "$APP_NAME"
@@ -326,20 +361,19 @@ tell application "Finder"
     end tell
 end tell
 APPLESCRIPT
-else
-    echo "  (CI: skipping Finder window styling)"
-fi
-
 # Unmount
 sync
-hdiutil detach "$MOUNT_POINT" >/dev/null 2>&1
+detach_with_retry "$MOUNT_POINT"
+else
+    echo "  (CI: skipping Finder window styling; image never mounted)"
+fi
 
 # Convert to compressed read-only DMG
 hdiutil convert "$DMG_TEMP" \
     -format UDZO \
     -imagekey zlib-level=9 \
     -o "$DMG_FINAL" \
-    >/dev/null 2>&1
+    >/dev/null
 
 # Clean up temp DMG
 rm -f "$DMG_TEMP"

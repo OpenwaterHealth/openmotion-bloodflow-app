@@ -28,7 +28,8 @@ Item {
     property string dataOutputPath: MotionInterface.directory
     property bool   showBfiBvi:        true
     property bool   autoScale:         false
-    property bool   autoScalePerPlot:  false
+    // autoScalePerPlot (#452) is NOT mirrored here: the plot's ⋯ popup
+    // owns that switch and writes the key straight through setConfig.
     // Live binding to the clinicalMode config flag. Read-only on purpose:
     // clinical selection is build-time/env-only (#233), so the modal never
     // edits or persists it.
@@ -36,6 +37,10 @@ Item {
     property int    plotWindowSec:     15
     property color  bfiColor:          "#E74C3C"
     property color  bviColor:          "#3498DB"
+    // BVI display low-pass switch (#552) — research-only. The cutoff
+    // itself is the compiled bviLowPassCutoffHz constant; this only
+    // gates it, and the connector applies a change mid-scan.
+    property bool   bviLowPassEnabled: true
     property real   bfiMin:      0.0
     property real   bfiMax:      10.0
     property real   bviMin:      0.0
@@ -102,10 +107,10 @@ Item {
         defaultRightMaskIndex = maskToIndex(cfg.rightMask !== undefined ? cfg.rightMask : 0x99)
         showBfiBvi         = clinicalMode ? true : (cfg.showBfiBvi !== undefined ? cfg.showBfiBvi : true)
         autoScale          = cfg.autoScale          !== undefined ? cfg.autoScale          : false
-        autoScalePerPlot   = autoScale
         plotWindowSec      = cfg.plotWindowSec      !== undefined ? cfg.plotWindowSec      : 15
         bfiColor           = cfg.bfiColor           !== undefined ? cfg.bfiColor           : "#E74C3C"
         bviColor           = cfg.bviColor           !== undefined ? cfg.bviColor           : "#3498DB"
+        bviLowPassEnabled  = cfg.bviLowPassEnabled  !== undefined ? cfg.bviLowPassEnabled  : true
         // Persisted bounds are untrusted (#229) — sanitizeBoundPair
         // supplies the per-metric defaults for missing/garbage values
         // and re-clamps anything a hand-edited config smuggled in.
@@ -124,6 +129,11 @@ Item {
     }
 
     Component.onCompleted: _loadFromConfig()
+
+    function lpfCutoffLabel() {
+        var hz = MotionInterface.appConfig.bviLowPassCutoffHz
+        return (typeof hz === "number" && hz > 0) ? hz.toFixed(0) + " Hz cutoff" : "On"
+    }
 
     function maskToIndex(mask) {
         for (var i = 0; i < cameraPatterns.count; i++) {
@@ -144,19 +154,18 @@ Item {
     function close() {
         // Commit any in-progress text field edit before saving
         panel.forceActiveFocus()
-        MotionInterface.directory = dataPathField.text
         MotionInterface.saveConfigs({
             "leftMask":           maskFromIndex(defaultLeftMaskIndex),
             "rightMask":          maskFromIndex(defaultRightMaskIndex),
             "showBfiBvi":         showBfiBvi,
             "autoScale":          autoScale,
-            "autoScalePerPlot":   autoScalePerPlot,
             // clinicalMode is deliberately NOT saved here (#233): the
             // Clinical/Research split is build-time/env-only and the
             // config store refuses to persist it as a runtime override.
             "plotWindowSec":      plotWindowSec,
             "bfiColor":           "" + bfiColor,
             "bviColor":           "" + bviColor,
+            "bviLowPassEnabled":  bviLowPassEnabled,
             "bfiMin":      bfiMin,
             "bfiMax":      bfiMax,
             "bviMin":      bviMin,
@@ -596,6 +605,9 @@ Item {
                 SectionCard {
                     title: "Data Output"
 
+                    // Read-only since #546: the data directory is a compiled
+                    // constant (the settings table that would persist a
+                    // choice lives under it). Dev runs use --data-root.
                     FieldRow {
                         label: "Output Folder"
                         TextField {
@@ -610,20 +622,6 @@ Item {
                                 color: root.colBgInput; radius: 4
                                 border.color: root.colBorderSoft; border.width: 1
                             }
-                        }
-                        ActionButton {
-                            text: "Browse"
-                            Layout.preferredWidth: 80
-                            onClicked: folderDialog.open()
-                        }
-
-                        Dialogs.FolderDialog {
-                            id: folderDialog
-                            title: "Select Data Output Directory"
-                            currentFolder: Qt.platform.os === "windows"
-                                ? "file:///" + dataPathField.text.replace("\\", "/")
-                                : dataPathField.text
-                            onAccepted: dataPathField.text = selectedFolder.toString().replace("file:///", "")
                         }
                     }
 
@@ -741,14 +739,30 @@ Item {
                         label: "Auto-scale Y-axes"
                         PillSwitch {
                             checked: root.autoScale
-                            onCheckedChanged: {
-                                root.autoScale = checked
-                                root.autoScalePerPlot = checked
-                            }
+                            onCheckedChanged: root.autoScale = checked
                         }
                         Text {
                             text: root.autoScale ? "On" : "Off"
                             color: root.autoScale ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    FieldRow {
+                        // Research-only (#552). A clinical build always
+                        // runs the shipped filter: the connector ignores
+                        // the flag there, not just this row.
+                        visible: !root.clinicalMode
+                        label: "BVI low-pass filter"
+                        PillSwitch {
+                            objectName: "bviLowPassSwitch"
+                            checked: root.bviLowPassEnabled
+                            onCheckedChanged: root.bviLowPassEnabled = checked
+                        }
+                        Text {
+                            text: root.bviLowPassEnabled ? root.lpfCutoffLabel() : "Off"
+                            color: root.bviLowPassEnabled ? root.colAccent : root.colTextMuted
                             font.pixelSize: 12
                         }
                         Item { Layout.fillWidth: true }

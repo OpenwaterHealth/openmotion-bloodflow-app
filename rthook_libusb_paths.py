@@ -1,23 +1,12 @@
-# rthook_libusb_paths.py
+# rthook_libusb_paths.py — PyInstaller runtime hook.
+# Runs before main.py in a PyInstaller build and puts the vendored libusb DLL
+# directories on the DLL search path. The implementation is shared with the
+# Nuitka build, which has no runtime hooks and calls the same function from
+# main.py instead (#548); keep this file a thin shim.
 import os
 import sys
 
 if getattr(sys, "frozen", False) and os.name == "nt":
-    base = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
-    candidates = [
-        os.path.join(base, "_internal"),
-        os.path.join(base, "_internal", "_vendor", "libusb", "windows", "x64"),
-        os.path.join(base, "_internal", "_vendor", "libusb", "windows", "x86"),
-        os.path.join(
-            base, "_internal", "omotion", "_vendor", "libusb", "windows", "x64"
-        ),
-        os.path.join(
-            base, "_internal", "omotion", "_vendor", "libusb", "windows", "x86"
-        ),
-    ]
-    for p in candidates:
-        if os.path.isdir(p):
-            try:
-                os.add_dll_directory(p)
-            except Exception:
-                os.environ["PATH"] = p + os.pathsep + os.environ.get("PATH", "")
+    from utils.libusb_paths import register_vendored_libusb
+
+    register_vendored_libusb(getattr(sys, "_MEIPASS", os.path.dirname(sys.executable)))

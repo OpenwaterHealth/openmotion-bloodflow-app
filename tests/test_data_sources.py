@@ -1229,6 +1229,51 @@ def test_compute_bounds_expands_when_lo_equals_hi():
     assert b["yMax"] == pytest.approx(5.5)
 
 
+# ── compute_bounds_for_cell (#452 per-plot autoscale) ───────────────────
+
+
+def test_compute_bounds_for_cell_uses_only_that_camera():
+    src = ScanDataSource(plot_t0=0.0)
+    buf0 = src.get_or_create_buffer("left", 0, "bfi")
+    buf1 = src.get_or_create_buffer("left", 1, "bfi")
+    for i in range(50):
+        buf0.append(t=i * 0.025, v=float(i), frame_id=i)           # 0..49
+        buf1.append(t=i * 0.025, v=1000.0 + i, frame_id=100 + i)   # 1000..1049
+    b0 = src.compute_bounds_for_cell("left", 0, "bfi")
+    b1 = src.compute_bounds_for_cell("left", 1, "bfi")
+    assert b0["yMax"] < 100          # cam 1's thousands never leak in
+    assert b1["yMin"] > 900          # and cam 0's zeros don't drag cam 1
+    # The aggregate slot on the same two buffers spans both.
+    agg = src.compute_bounds_for_metric("bfi")
+    assert agg["yMin"] < 100 and agg["yMax"] > 900
+
+
+def test_compute_bounds_for_cell_matches_aggregate_math_on_one_buffer():
+    src = ScanDataSource(plot_t0=0.0)
+    buf = src.get_or_create_buffer("right", 6, "bvi")
+    for i in range(100):
+        buf.append(t=i * 0.025, v=float(i), frame_id=i)
+    assert src.compute_bounds_for_cell("right", 6, "bvi") == pytest.approx(
+        src.compute_bounds_for_metric("bvi"))
+
+
+def test_compute_bounds_for_cell_neutral_fallbacks():
+    src = ScanDataSource(plot_t0=0.0)
+    neutral = {"yMin": 0.0, "yMax": 1.0}
+    assert src.compute_bounds_for_cell("right", 3, "bvi") == neutral  # no buffer
+    buf = src.get_or_create_buffer("right", 3, "bvi")
+    for i in range(3):
+        buf.append(t=i * 0.025, v=float(i), frame_id=i)
+    assert src.compute_bounds_for_cell("right", 3, "bvi") == neutral  # < 4 samples
+    buf.append(t=0.075, v=float("nan"), frame_id=3)
+    assert src.compute_bounds_for_cell("right", 3, "bvi") == neutral  # NaN not counted
+    # Other cameras' data never satisfies this cell's minimum.
+    other = src.get_or_create_buffer("right", 4, "bvi")
+    for i in range(50):
+        other.append(t=i * 0.025, v=float(i), frame_id=i)
+    assert src.compute_bounds_for_cell("right", 3, "bvi") == neutral
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ScanDataSource.value_at (Phase 2b-ii — hover tooltip)
 # ─────────────────────────────────────────────────────────────────────────────

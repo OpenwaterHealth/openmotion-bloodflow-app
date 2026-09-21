@@ -69,7 +69,6 @@ from conftest import (
 )
 from hil_helpers import (
     RE_CONNECTED,
-    _resolve_app_config_path,
     click_element_center,
     click_panel,
     find_app_log,
@@ -79,7 +78,6 @@ from hil_helpers import (
     resolve_local_config_path,
     validate_raw_csv_payload,
     wait_for_pattern,
-    write_app_config_value,
 )
 
 import pyautogui
@@ -172,14 +170,27 @@ def _kill_bloodflow_processes() -> int:
     return killed
 
 
-def _launch_app() -> None:
+def _launch_app(overrides: "dict | None" = None) -> None:
+    """Launch the app; ``overrides`` are config keys to force for this
+    launch via ``--config-override`` (#546: the config is compiled in, so
+    only a source run can take them — a packaged exe drops the flag)."""
     if _from_source_mode():
         main_py = PROJECT_ROOT / "main.py"
         if not main_py.exists():
             pytest.fail(f"main.py not found at {main_py}")
-        log.info(f"  launching from source: {sys.executable} {main_py}")
-        subprocess.Popen([sys.executable, str(main_py)], cwd=str(PROJECT_ROOT))
+        cmd = [sys.executable, str(main_py)]
+        if overrides:
+            import json as _json
+            cmd += ["--config-override", _json.dumps(overrides)]
+        log.info(f"  launching from source: {' '.join(cmd)}")
+        subprocess.Popen(cmd, cwd=str(PROJECT_ROOT))
     else:
+        if overrides:
+            pytest.skip(
+                "this test pins config values at launch, which a packaged "
+                "exe cannot take (its config is compiled in, #546); run "
+                "with --from-source"
+            )
         exe = _find_exe()
         if not exe:
             pytest.fail("Open-Motion.exe not found and OPENWATER_EXE unset")
@@ -203,11 +214,11 @@ def _wait_for_connect(timeout: int = APP_CONNECT_TIMEOUT) -> Optional[str]:
     return wait_for_pattern(RE_CONNECTED, log_path, 0, timeout)
 
 
-def _restart_app(label: str) -> None:
+def _restart_app(label: str, overrides: "dict | None" = None) -> None:
     log.info(f"  [{label}] (re)launching app")
     _kill_bloodflow_processes()
     time.sleep(2)
-    _launch_app()
+    _launch_app(overrides)
     assert _wait_for_app_window(timeout=30), (
         f"[{label}] app window did not appear within 30 s of launch"
     )
@@ -687,18 +698,12 @@ class TestRawCsvSave:
         duration while the per-side raw CSVs stop at the
         ``rawCsvDurationSec`` mark.
         """
-        # ─── Step 0: snapshot config we will mutate ──────────────
-        # Byte-snapshots, not per-key: write_app_config_value re-dumps
-        # the shipped config with different formatting, so a value-level
-        # restore leaves the tracked file dirty in git. The local
-        # overrides file is where the Settings UI persists (#233); a
-        # stale one from a previous run or hand-test would override the
-        # dataDirectory seeding below AND make the toggle assert pass
-        # before the click, so it is parked for the duration of the run.
-        cfg_path    = _resolve_app_config_path()
-        cfg_bytes   = cfg_path.read_bytes()
-        local_path  = resolve_local_config_path()
-        local_bytes = local_path.read_bytes() if local_path.exists() else None
+        # ─── Step 0: record the config the app currently runs with ──
+        # Nothing on disk to snapshot or park any more (#546): the config
+        # is compiled in, the values this test needs are forced for the
+        # relaunch via --config-override, and the Settings UI persists
+        # preferences into the settings table of the pinned data dir's
+        # scans.db — which no other run shares.
         original = {
             "engineeringMode":     bool(read_app_config_value("engineeringMode", False)),
             "clinicalMode":       bool(read_app_config_value("clinicalMode", False)),
@@ -707,10 +712,6 @@ class TestRawCsvSave:
             "dataDirectory":     read_app_config_value("dataDirectory", None),
         }
         log.info(f"original config snapshot: {original}")
-        log.info(
-            f"local overrides at {local_path}: "
-            f"{'present (parked for the run)' if local_bytes is not None else 'absent'}"
-        )
 
         # Pin a known data directory so the diff-after-scan step
         # doesn't have to chase a default that depends on cwd. The app
@@ -730,28 +731,26 @@ class TestRawCsvSave:
             log.info("=" * 60)
             _kill_bloodflow_processes()
             time.sleep(2)
-            # Park any pre-existing local overrides (restored in step 9)
-            # so the shipped-config seeding below is what the app boots
-            # with — see the step-0 comment.
-            local_path.unlink(missing_ok=True)
             test_data_dir.mkdir(parents=True, exist_ok=True)
             # Research mode, NOT engineering: since #234 the raw-CSV
             # toggle lives in the research-visible Data Output card, so
             # this doubles as the hand-off check that research users
             # really can enable raw CSVs without the engineering unlock.
-            write_app_config_value("engineeringMode",     False)
-            write_app_config_value("clinicalMode",       False)
             # Start with writeRawCsv off so we can prove the UI toggle
             # actually changed it (rather than walking past a no-op).
-            write_app_config_value("writeRawCsv",       False)
-            write_app_config_value("rawCsvDurationSec", None)
-            write_app_config_value("dataDirectory",     str(test_data_dir))
+            launch_overrides = {
+                "engineeringMode":   False,
+                "clinicalMode":      False,
+                "writeRawCsv":       False,
+                "rawCsvDurationSec": None,
+                "dataDirectory":     str(test_data_dir),
+            }
 
             # ─── Step 4: launch + calibrate ─────────────────────────
             log.info("=" * 60)
             log.info("Step 4: launching app, calibrating panel buttons")
             log.info("=" * 60)
-            _restart_app("step 4")
+            _restart_app("step 4", launch_overrides)
 
             # Snapshot the data dir BEFORE the scan so we can diff
             # afterwards. Files written before this set don't count.
@@ -786,15 +785,15 @@ class TestRawCsvSave:
 
             # Sanity-check what the connector actually persisted. The
             # PillSwitch and TextField call setWriteRawCsv /
-            # setRawCsvDurationSec, and since #233 config_store writes
-            # changed keys ONLY to the local overrides file — the
-            # shipped app_config.json is never touched at runtime, so
-            # these reads MUST hit app_config.local.json.
-            wrote = read_local_config_value("writeRawCsv", False)
-            dur   = read_local_config_value("rawCsvDurationSec", None)
+            # setRawCsvDurationSec, and since #546 the connector persists
+            # changed PREFERENCE keys ONLY to the settings table of
+            # scans.db under the pinned data dir — so these reads MUST
+            # hit that table (research build: plaintext DB).
+            wrote = read_local_config_value("writeRawCsv", False, data_dir=test_data_dir)
+            dur   = read_local_config_value("rawCsvDurationSec", None, data_dir=test_data_dir)
             assert wrote is True, (
                 f"Settings UI didn't persist writeRawCsv=True to "
-                f"{resolve_local_config_path()} (got {wrote!r}). Either "
+                f"{resolve_local_config_path(test_data_dir)} (got {wrote!r}). Either "
                 f"the toggle click missed the PillSwitch (check "
                 f"_toggle_raw_csv_save_on) or config_store's write "
                 f"path changed."
@@ -966,24 +965,15 @@ class TestRawCsvSave:
                 )
 
         finally:
-            # ─── Step 9 (cleanup): restore original config on disk ───
-            # No kill / relaunch needed: the running app already
-            # consumed our config (writeRawCsv / rawCsvDurationSec /
-            # dataDirectory take effect immediately via the connector
-            # slots; engineeringMode / clinicalMode were captured at
-            # launch and won't change for THIS app instance regardless
-            # of what we write back). Whatever runs next is responsible
-            # for its own kill+relaunch if it needs the disk values
-            # honoured at startup.
+            # ─── Step 9 (cleanup) ────────────────────────────────────
+            # Nothing on disk to restore (#546): the forced values lived
+            # only in this launch's --config-override, and the toggled
+            # preference sits in the pinned data dir's own scans.db.
+            # Whatever runs next is responsible for its own kill+relaunch
+            # if it needs different values at startup.
             log.info("=" * 60)
             log.info(
-                "Step 9 (cleanup): byte-restoring shipped config and "
-                f"local overrides (snapshotted values were: {original})"
+                "Step 9 (cleanup): nothing to restore on disk "
+                f"(config the app launched with: {original})"
             )
             log.info("=" * 60)
-            cfg_path.write_bytes(cfg_bytes)
-            if local_bytes is None:
-                local_path.unlink(missing_ok=True)
-            else:
-                local_path.write_bytes(local_bytes)
-            log.info("  cleanup complete; original config restored byte-exact")

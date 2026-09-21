@@ -70,18 +70,18 @@ _DRAFT = {"tag_name": "1.7.0", "draft": True, "prerelease": False, "assets": []}
 
 
 def test_select_release_beta_takes_newest_non_draft():
-    from motion_connector import _select_release
+    from app_updater import _select_release
     # GitHub lists newest-first; the draft is skipped, the rc is taken.
     assert _select_release([_DRAFT, _RC, _STABLE], include_prerelease=True) is _RC
 
 
 def test_select_release_stable_skips_prerelease():
-    from motion_connector import _select_release
+    from app_updater import _select_release
     assert _select_release([_DRAFT, _RC, _STABLE], include_prerelease=False) is _STABLE
 
 
 def test_select_release_empty_is_none():
-    from motion_connector import _select_release
+    from app_updater import _select_release
     assert _select_release([], include_prerelease=True) is None
     assert _select_release([_DRAFT], include_prerelease=True) is None
 

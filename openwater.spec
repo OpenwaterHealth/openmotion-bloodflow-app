@@ -34,7 +34,13 @@ for item in ("main.qml",):
             f"run PyInstaller from the repo root ({SPECPATH})."
         )
     datas.append((item, "."))
-for folder in ("pages", "components", "assets", "config", "processing"):
+# NOTE: config/ is no longer a data folder — config/app_config.py and
+# config/tec_params.py are Python modules that main.py imports, so the
+# Analysis below compiles them into the bundle like any other code (#546).
+# processing/ is deliberately absent: visualize_bloodflow.py is a standalone
+# CSV script the app never imports, and shipping the folder as data put its
+# source in the bundle as plaintext (#557).
+for folder in ("pages", "components", "assets"):
     if not os.path.isdir(folder):
         raise SystemExit(
             f"[spec] FATAL: required resource folder {folder!r} not found in "
@@ -67,14 +73,42 @@ else:
 datas.append((ICON_FILE, "assets/images"))
 
 # --- PyQt6 (keep as before) ---
-qt_datas, qt_bins, qt_hidden = collect_all("PyQt6")
+# include_py_files=False on every collect_all() below: the default (True)
+# copies each .py of the package into the bundle as a loose data file next
+# to the bytecode the Analysis already compiles into the PYZ. The frozen
+# finder resolves the PYZ first, so those copies are never imported - they
+# only ship the source as plaintext. 1.5.3-dev.0 carried 100 omotion files
+# that way, including the laser_params.py / fpga_model.py modules that had
+# just been converted from JSON (#557). Guarded by
+# tests/test_pyinstaller_spec.py.
+qt_datas, qt_bins, qt_hidden = collect_all("PyQt6", include_py_files=False)
 datas   += qt_datas
 binaries += qt_bins
 hidden  += qt_hidden
 hidden  += collect_submodules("PyQt6")
 
 # --- ✅ add omotion explicitly ---
-om_datas, om_bins, om_hidden = collect_all("omotion")
+# Put the package's parent directory on pathex. A PEP 660 editable install
+# (pip install -e ../openmotion-sdk, the documented dev setup) exposes
+# omotion through an import-hook finder that PyInstaller's module analysis
+# does not consult, so the Analysis compiled no omotion module into the PYZ
+# and the frozen app imported the SDK from the loose .py copies that
+# collect_all() used to ship as data. With those gone (#557) the package
+# must be reachable as a plain directory. For a regular wheel/git install
+# (CI) the directory is site-packages and this changes nothing. The script
+# directory stays first on the analysis path, so the app's own packages
+# (config/, utils/) cannot be shadowed by anything in the SDK checkout.
+import importlib.util as _ilu
+_om_spec = _ilu.find_spec("omotion")
+if _om_spec is None or not _om_spec.submodule_search_locations:
+    raise SystemExit(
+        "[spec] FATAL: omotion is not importable in the build environment"
+    )
+pathex = [os.path.dirname(list(_om_spec.submodule_search_locations)[0])]
+print(f"[spec] omotion package resolved under {pathex[0]}")
+om_datas, om_bins, om_hidden = collect_all(
+    "omotion", include_py_files=False
+)
 datas   += om_datas
 binaries += om_bins
 hidden  += om_hidden
@@ -128,7 +162,9 @@ try:
     # sqlcipher3 is a single native extension with OpenSSL statically linked,
     # so there are no side-car DLLs to chase - collect_all still future-proofs
     # against that changing.
-    _sc_datas, _sc_bins, _sc_hidden = collect_all("sqlcipher3")
+    _sc_datas, _sc_bins, _sc_hidden = collect_all(
+        "sqlcipher3", include_py_files=False
+    )
     datas += _sc_datas
     binaries += _sc_bins
     hidden += _sc_hidden
@@ -142,13 +178,16 @@ except Exception:
 # requirements.txt, so a local build inherits whatever happens to be in the
 # conda env - which is exactly how this shipped broken once. Research builds do
 # not need them, so only gate on clinicalMode.
-import json as _json
+import re as _re
 try:
-    with open(os.path.join(os.path.dirname(os.path.abspath(SPEC)), "config",
-                           "app_config.json"), encoding="utf-8") as _f:
-        _is_clinical = bool(_json.load(_f).get("clinicalMode", False))
+    with open(os.path.join(SPECPATH, "config", "app_config.py"),
+              encoding="utf-8") as _f:
+        _m = _re.search(r"^CLINICAL_MODE = (True|False)$", _f.read(), _re.M)
+    _is_clinical = bool(_m and _m.group(1) == "True")
 except Exception:
     _is_clinical = False
+print(f"[spec] building the {'Clinical' if _is_clinical else 'Research'} "
+      "variant (CLINICAL_MODE stamp in config/app_config.py)")
 if _is_clinical:
     _missing = []
     for _mod in ("keyring", "sqlcipher3"):
@@ -171,9 +210,11 @@ try:
 except Exception:
     pass
 
-# ---------- MIRROR omotion vendored libusb under _internal\_vendor ----------
-# Some builds only carry the vendored files inside _internal\omotion\_vendor\...
-# We duplicate those files to _internal\_vendor\... so the wheel's _dll_dir() can find them.
+# ---------- MIRROR omotion vendored libusb under <bundle>\_vendor ----------
+# Some builds only carry the vendored files inside omotion\_vendor\... within
+# the bundle. We duplicate those files to _vendor\... at the bundle root (the
+# onefile extraction directory; _internal\ in a onedir build) so the wheel's
+# _dll_dir() and rthook_libusb_paths.py can find them.
 def _norm(p): return p.replace("/", os.sep).replace("\\", os.sep)
 
 arch = "x64" if 8 * struct.calcsize("P") == 64 else "x86"
@@ -210,13 +251,22 @@ _mirror_vendor_from_collected(om_bins)
 # Optionally add a runtime hook to put these dirs on the DLL path for Windows
 runtime_hooks = ["rthook_libusb_paths.py"]
 
+# Mixed-Qt guards, plus the app self-updater for a clinical build (#543,
+# tracker M-02): motion_connector only imports app_updater when the stamped
+# CLINICAL_MODE is False, and excluding it here keeps the module out of the
+# clinical PYZ entirely rather than merely unused. Guarded by
+# tests/test_updater_compiled_out.py.
+_excludes = ["PySide6", "shiboken6", "PySide2", "PyQt5"]
+if _is_clinical:
+    _excludes.append("app_updater")
+
 a = Analysis(
     [ENTRY],
-    pathex=[],                      # you can leave this empty now
+    pathex=pathex,                  # SDK parent dir; see the omotion block
     binaries=binaries,
     datas=datas,
     hiddenimports=hidden,
-    excludes=['PySide6','shiboken6','PySide2','PyQt5'],  # avoid mixed Qt
+    excludes=_excludes,
     runtime_hooks=runtime_hooks,
     noarchive=False,
     optimize=0,
@@ -243,27 +293,38 @@ if sys.platform == "win32":
     from win_icon_resource import install_pyinstaller_hook, has_named_group_icon
     install_pyinstaller_hook()
 
+# ---------- one-file packaging (#547) ----------
+# Every shipped byte (the bytecode archive, Qt and native DLLs, QML, assets,
+# the sample scan) is appended to this one PE, so the Authenticode signature
+# installer/sign.ps1 applies covers all of it and any modification is
+# detectable with signtool or the file's Digital Signatures tab (tracker
+# V-04, V-05, R-13). No COLLECT step: the build output is the exe alone.
+#
+# Residual risk, recorded rather than hidden: at every launch the
+# bootloader extracts the payload into a per-process, randomly named
+# directory under %TEMP% and deletes it on exit. Nothing verifies the
+# extracted copies before they are loaded (PyInstaller has no such check),
+# so a process that can write that directory in the interval between
+# extraction and load is outside what signing defends against. Every
+# self-extracting bundler shares that window, Nuitka's onefile included
+# (#548); the on-disk artifact is what the signature protects.
 exe_gui = EXE(
-    pyz, a.scripts, [],
-    exclude_binaries=True,
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.datas,
+    [],
     name=APP_NAME,
     console=False,
     icon=ICON_FILE,
-    upx=False   # safer for DLLs on Windows
-)
-
-coll = COLLECT(
-    exe_gui,
-    a.binaries, a.zipfiles, a.datas,
-    strip=False, upx=False, upx_exclude=[],
-    name=APP_NAME
+    upx=False,   # safer for DLLs on Windows
 )
 
 # Verify on the artifact that actually ships. This also catches a warm build/
 # tree: PyInstaller's EXE cache compares the icon *path*, not its contents, so
 # a cached exe can silently carry stale resources — fail loudly instead.
 if sys.platform == "win32":
-    _dist_exe = os.path.join(DISTPATH, APP_NAME, APP_NAME + ".exe")
+    _dist_exe = os.path.join(DISTPATH, APP_NAME + ".exe")
     if not has_named_group_icon(_dist_exe):
         raise SystemExit(
             f"[spec] FATAL: {_dist_exe} has no 'IDI_ICON1' icon resource — Qt "
@@ -271,3 +332,14 @@ if sys.platform == "win32":
             f"(#223). Rebuild with --clean."
         )
     print(f"[spec] verified 'IDI_ICON1' window-class icon in {_dist_exe}")
+    # A onefile build ships as exactly one file. A leftover onedir tree from
+    # an earlier build in the same dist directory would be zipped and
+    # harvested into the MSI next to the exe, so refuse to call this a build.
+    _leftover = os.path.join(DISTPATH, "_internal")
+    if os.path.isdir(_leftover):
+        raise SystemExit(
+            f"[spec] FATAL: {_leftover} exists next to the onefile exe — a "
+            f"stale onedir build; delete the dist directory and rebuild."
+        )
+    print(f"[spec] onefile build: {_dist_exe} "
+          f"({os.path.getsize(_dist_exe) / 1e6:.1f} MB)")

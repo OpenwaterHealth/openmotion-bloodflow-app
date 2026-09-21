@@ -10,40 +10,19 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
-def test_cq_live_debounce_keys_are_shipped_and_whitelisted(tmp_path, monkeypatch):
-    """Both halves must hold for BOTH asymmetric debounce keys or the key is
-    silently non-persistent: each must ship in config/app_config.json AND
-    appear in the in-code defaults inside _load_app_config(), which filters
-    the file and the runtime overrides to that whitelist. A key registered in
-    only one place looks fine until a user toggles it and the change
-    evaporates. The old single cq_live_debounce_frames key is retired; the
-    raise/clear edges are now configured independently (#364)."""
-    import json
-    from pathlib import Path
-
+def test_cq_live_debounce_keys_are_compiled_constants():
+    """Both asymmetric debounce keys ship in the compiled config as
+    constants (RAISE fast, CLEAR slow) and reach the loader. The old single
+    cq_live_debounce_frames key is retired; the raise/clear edges are
+    configured independently (#364)."""
     import main as app_main
-    from utils import config_store
+    from config import app_config as compiled
 
-    repo_root = Path(__file__).resolve().parents[1]
-    shipped_path = repo_root / "config" / "app_config.json"
-    shipped = json.loads(shipped_path.read_text(encoding="utf-8"))
-
-    # Half 1: both keys ship in the config file (RAISE fast, CLEAR slow).
-    assert shipped["cq_live_activate_frames"] == 10
-    assert shipped["cq_live_clear_frames"] == 80
-
-    # Half 2: they survive the whitelist filter. Pin the loader at the shipped
-    # file and redirect the writable-overrides layer at tmp_path so a local
-    # app_config.local.json left over from running the app can't skew this.
-    real_resource_path = config_store.resource_path
-
-    def fake_resource_path(*parts):
-        if parts == ("config", "app_config.json"):
-            return shipped_path
-        return real_resource_path(*parts)
-
-    monkeypatch.setattr(config_store, "resource_path", fake_resource_path)
-    monkeypatch.setattr(config_store.app_paths, "DATA_ROOT_OVERRIDE", tmp_path)
+    assert compiled.APP_CONFIG["cq_live_activate_frames"] == 10
+    assert compiled.APP_CONFIG["cq_live_clear_frames"] == 80
+    assert compiled.tier_of("cq_live_activate_frames") == compiled.CONSTANT
+    assert compiled.tier_of("cq_live_clear_frames") == compiled.CONSTANT
+    assert "cq_live_debounce_frames" not in compiled.APP_CONFIG
 
     loaded = app_main._load_app_config()
     assert loaded["cq_live_activate_frames"] == 10

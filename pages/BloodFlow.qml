@@ -325,7 +325,6 @@ Rectangle {
         // toggles.
         onAutoScaleToggleRequested: function(enabled) {
             settingsModal.autoScale = enabled
-            settingsModal.autoScalePerPlot = enabled
         }
         onDisplayModeToggleRequested: function(bfiBviMode) {
             settingsModal.showBfiBvi = bfiBviMode

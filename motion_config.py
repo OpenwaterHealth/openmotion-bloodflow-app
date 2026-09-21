@@ -1,8 +1,9 @@
 """TEC-parameter helper.
 
-Loads `config/tec_params.json` (the TEC DAC setpoints) and picks the one
-matching the connected console's hardware revision. Extracted from
-`motion_connector.py` to keep that file focused on the Qt connector.
+Reads the TEC DAC setpoints from the compiled `config.tec_params` module
+(formerly `config/tec_params.json`, #546) and picks the one matching the
+connected console's hardware revision. Extracted from `motion_connector.py`
+to keep that file focused on the Qt connector.
 
 The laser-power application and FPGA register map that used to live here now
 live in the SDK (`omotion.laser` — bundled `laser_params.json` /
@@ -15,12 +16,8 @@ from __future__ import annotations
 
 import dataclasses
 import enum
-import json
 import logging
 import math
-from pathlib import Path
-
-from utils.resource_path import resource_path
 
 
 logger = logging.getLogger("openmotion.bloodflow-app.motion_config")
@@ -29,7 +26,7 @@ logger = logging.getLogger("openmotion.bloodflow-app.motion_config")
 # --- TEC DAC setpoint (issue #269) --------------------------------------------
 # EVT2 units need +1.16 V on the TEC DAC to hold the lasers at 25 C; DVT1a
 # changed the voltage divider around the DAC input, so DVT-and-beyond use the
-# TEC_VOLTAGE_DEFAULT from tec_params.json (-0.07 V).
+# TEC_VOLTAGE_DEFAULT from config/tec_params.py (-0.07 V).
 #
 # The unit revision comes from the console's 3-bit BRD_V0..V2 hardware strap
 # (SDK `console.read_board_id()`, OW_CTRL_BOARDID): EVT2 straps 1; the DVT1a
@@ -42,84 +39,48 @@ EVT2_BOARD_IDS_DEFAULT = (1,)     # board-ID strap values that mean "EVT2"
 
 @dataclasses.dataclass(frozen=True)
 class TecVoltageParams:
-    """TEC DAC setpoints from tec_params.json, by console hardware revision."""
+    """TEC DAC setpoints (config/tec_params.py), by console hardware revision."""
 
     default_v: float = TEC_VOLTAGE_DEFAULT
     evt2_v: float = TEC_VOLTAGE_EVT2_DEFAULT
     evt2_board_ids: tuple = EVT2_BOARD_IDS_DEFAULT
 
 
-def load_tec_voltage_params(config_dir: str) -> TecVoltageParams:
-    """Load `tec_params.json` and return the TEC DAC setpoint parameters.
+def tec_voltage_params() -> TecVoltageParams:
+    """The TEC DAC setpoint parameters from the compiled ``config.tec_params``.
 
-    Every field falls back to its hard-coded default independently, so a
-    pre-#269 file (TEC_VOLTAGE_DEFAULT only) keeps working and a malformed
-    EVT2 entry can never break the DVT path.
+    Each field is validated independently and falls back to its hard-coded
+    default, so a bad edit to one value can never break the DVT path: the
+    voltages must be numbers, and EVT2_BOARD_IDS must be a list/tuple of
+    ints — bools (True == 1) and strings must never widen EVT2 detection.
     """
-    config_path = (
-        resource_path("config", "tec_params.json")
-        if config_dir == "config"
-        else Path(config_dir) / "tec_params.json"
-    )
+    from config import tec_params as compiled
 
-    try:
-        with open(config_path, "r") as f:
-            raw = json.load(f)
-    except FileNotFoundError:
-        logger.warning(
-            "TEC parameter file not found: %s, using defaults %r",
-            config_path, TecVoltageParams(),
-        )
-        return TecVoltageParams()
-    except json.JSONDecodeError as e:
-        logger.error(
-            "Invalid JSON in %s: %s, using defaults %r",
-            config_path, e, TecVoltageParams(),
-        )
-        return TecVoltageParams()
-    except Exception as e:
-        logger.error(
-            "Error loading TEC parameters: %s, using defaults %r",
-            e, TecVoltageParams(),
-        )
-        return TecVoltageParams()
-
-    def _volts(key, fallback):
-        value = raw.get(key, fallback)
+    def _volts(name, fallback):
+        value = getattr(compiled, name, fallback)
+        if isinstance(value, bool):
+            value = None
         try:
             return float(value)
         except (TypeError, ValueError):
-            logger.error(
-                "Invalid %s=%r in %s, using default %sV",
-                key, value, config_path, fallback,
-            )
+            logger.error("Invalid %s=%r in config/tec_params.py, using default %sV",
+                         name, value, fallback)
             return fallback
 
     default_v = _volts("TEC_VOLTAGE_DEFAULT", TEC_VOLTAGE_DEFAULT)
     evt2_v = _volts("TEC_VOLTAGE_EVT2", TEC_VOLTAGE_EVT2_DEFAULT)
-
-    ids_raw = raw.get("EVT2_BOARD_IDS", list(EVT2_BOARD_IDS_DEFAULT))
-    if isinstance(ids_raw, list):
-        # ints only — bools (True == 1) and strings must never widen
-        # EVT2 detection via a config typo.
+    ids_raw = getattr(compiled, "EVT2_BOARD_IDS", EVT2_BOARD_IDS_DEFAULT)
+    if isinstance(ids_raw, (list, tuple)):
         evt2_board_ids = tuple(x for x in ids_raw if type(x) is int)
         if len(evt2_board_ids) != len(ids_raw):
-            logger.error(
-                "Dropped non-integer entries from EVT2_BOARD_IDS=%r in %s",
-                ids_raw, config_path,
-            )
+            logger.error("Dropped non-integer entries from EVT2_BOARD_IDS=%r", ids_raw)
     else:
-        logger.error(
-            "Invalid EVT2_BOARD_IDS=%r in %s (expected a list), using "
-            "default %r", ids_raw, config_path, EVT2_BOARD_IDS_DEFAULT,
-        )
+        logger.error("Invalid EVT2_BOARD_IDS=%r (expected a list), using default %r",
+                     ids_raw, EVT2_BOARD_IDS_DEFAULT)
         evt2_board_ids = EVT2_BOARD_IDS_DEFAULT
-
-    params = TecVoltageParams(
+    return TecVoltageParams(
         default_v=default_v, evt2_v=evt2_v, evt2_board_ids=evt2_board_ids,
     )
-    logger.info("Loaded TEC voltage params from %s: %r", config_path, params)
-    return params
 
 
 def select_tec_voltage(console, params: TecVoltageParams):
@@ -226,7 +187,7 @@ def ensure_tec_trip(console, temp_c) -> TecTripOutcome:
 #   is deliberately never touched and stays at the firmware's 1.000x.
 #
 # Firmware defaults mirrored here (what the sensor firmware itself programs,
-# and what app_config.json ships as the alternative-settings defaults):
+# and what config/app_config.py ships as the alternative-settings defaults):
 # exposure 72 rows = 648 us (X02C1B_SENSOR_CONFIG), analog gain by array
 # position 16/4/2/1/1/2/4/16 (X02C1B_configure_sensor's per-camera ladder).
 CAMERA_EXPOSURE_ROW_US = 9.0

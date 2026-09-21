@@ -88,6 +88,22 @@ def test_explicit_config_path_is_used(tmp_path):
     assert "app_config.json" in names
 
 
+def test_config_json_is_written_and_wins_over_config_path(tmp_path):
+    """#546: the running app hands over its effective config as JSON —
+    there is no config file to copy any more."""
+    root = tmp_path / "root"
+    (root / "logs").mkdir(parents=True)
+    cfg = tmp_path / "elsewhere" / "app_config.json"
+    _write(cfg, '{"x":2}')
+    meta = build_debug_bundle(
+        str(root), str(tmp_path / "out"), now_epoch=_NOW,
+        config_path=str(cfg), config_json='{"y": 3}',
+    )
+    with zipfile.ZipFile(meta["path"]) as zf:
+        assert zf.read("app_config.json") == b'{"y": 3}'
+    assert meta["file_count"] == 2   # config + system_info
+
+
 def test_missing_logs_dir_still_produces_zip(tmp_path):
     # No logs/ directory at all — must still produce a valid zip
     # containing just system_info.txt, no exception.

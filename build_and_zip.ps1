@@ -49,7 +49,7 @@ if (-not (Test-Path $SpecFile)) {
     Remove-Item -Recurse -Force build, dist -ErrorAction SilentlyContinue
 }
 
-Write-Host "=== Building with PyInstaller ===" -ForegroundColor Cyan
+Write-Host "=== Building with Nuitka (one build per variant; -Compiler pyinstaller on package_artifacts.ps1 for the fallback) ===" -ForegroundColor Cyan
 
 # Determine version from git tags (shared helper)
 . (Join-Path $PSScriptRoot "scripts\build_common.ps1")
@@ -64,15 +64,13 @@ if (Test-Path $versionFile) {
     Write-Host "Stamped version.py with $GitVersion" -ForegroundColor Green
 }
 
-Invoke-Py @("-m","PyInstaller","-y",$SpecFile)
-
-if (-not (Test-Path "dist\$AppName")) {
-    throw "Build failed: dist\$AppName not found. Check your spec name and exe name."
-}
-
-# Package all 4 artifacts (Clinical/Research x Portable/Installer) via the shared
-# orchestrator. Installers are skipped with a warning if WiX isn't installed.
-& (Join-Path $PSScriptRoot "scripts\package_artifacts.ps1") -DistDir "dist\$AppName" -Version $GitVersion
+# Build + package all 4 artifacts (Clinical/Research x Portable/Installer) via
+# the shared orchestrator: since #546 it runs one build PER VARIANT (Nuitka
+# by default since #548; PyInstaller via -Compiler pyinstaller)
+# (CLINICAL_MODE is compiled in, stamped into config/app_config.py before each
+# build — see scripts/build_common.ps1) into dist\<variant>\Open-Motion and
+# packages each. Installers are skipped with a warning if WiX isn't installed.
+& (Join-Path $PSScriptRoot "scripts\package_artifacts.ps1") -Version $GitVersion -CondaEnv $CondaEnv
 if ($LASTEXITCODE -ne 0) { throw "package_artifacts failed" }
 
 Write-Host "=== Build complete ===" -ForegroundColor Green

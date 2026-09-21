@@ -1,4 +1,4 @@
-<!-- installer/app.wxs — packages dist\Open-Motion\ into Program Files. -->
+<!-- installer/app.wxs — packages dist\<variant>\Open-Motion\Open-Motion.exe into Program Files. -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package Name="$(var.ProductName)"
            Manufacturer="Openwater"
@@ -33,7 +33,11 @@
       <ComponentRef Id="DesktopShortcut" />
     </Feature>
 
-    <!-- Harvest the entire PyInstaller one-folder output. -->
+    <!-- Harvest the PyInstaller output. Since #547 that is the single onefile
+         Open-Motion.exe (every bundled byte sits under its Authenticode
+         signature); the glob is kept so nothing that lands in dist\ is
+         silently dropped, and build_installer.ps1 refuses a dist directory
+         holding anything but that one file. -->
     <ComponentGroup Id="AppFiles" Directory="APPFOLDER">
       <Files Include="$(var.SourceDir)\**" />
     </ComponentGroup>
@@ -52,6 +56,14 @@
       <RemoveFolder Id="RemoveAppShortcutFolder" On="uninstall" />
       <RegistryValue Root="HKLM" Key="Software\Openwater\Open-Motion"
                      Name="installed" Type="integer" Value="1" KeyPath="yes" />
+      <!-- Install-mode marker (#546): the app derives "installed vs portable"
+           from this at launch (utils/app_paths.py) — an exe living in this
+           directory keeps its writable state per user under
+           %LOCALAPPDATA%\Openwater (#581); the
+           byte-identical exe in the portable zip keeps it next to itself.
+           HKLM, so only an administrator can write it. -->
+      <RegistryValue Root="HKLM" Key="Software\Openwater\Open-Motion"
+                     Name="InstallDir" Type="string" Value="[APPFOLDER]" />
     </Component>
 
     <!-- Optional desktop shortcut (All Users desktop, since perMachine). Only

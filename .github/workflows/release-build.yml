@@ -1,12 +1,38 @@
 name: Build & Release
 
+# What ships where (#573). This repository is PUBLIC: a release asset, an
+# upload-artifact upload and this log are all world-readable, so this workflow
+# builds the RESEARCH variant only.
+#
+#   tag            Research (GitHub Release, here)       Clinical (Google Drive, private repo)
+#   X.Y.Z-dev.N    portable zip + installer, unsigned    portable zip + installer, unsigned
+#   X.Y.Z-rc.N     portable zip + installer, SIGNED      portable zip + installer, SIGNED
+#   X.Y.Z          installer only, SIGNED                nothing automatic; the signed installer
+#                                                        is a manual run in the private repo
+#
+# Clinical builds live in the private OpenwaterHealth/openmotion-desktop-app-clinical
+# repository, which checks this repo out at the tag and runs the same
+# .github/actions/windows-build. The notify-clinical job below only pokes it
+# on dev/rc tags; it never waits for it, so the two are not in lockstep.
+# NEVER build, upload or attach a Clinical binary from this workflow.
+
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      sign:
+        description: "Code-sign artifacts (requires the eSigner secrets; 4 metered signings)"
+        type: boolean
+        default: false
+      compiler:
+        description: "Windows build: nuitka (default, native compile) or pyinstaller (fallback)"
+        type: choice
+        options: [nuitka, pyinstaller]
+        default: nuitka
   push:
     branches: [main, next]
     tags:
-      - "[0-9]+.[0-9]+.[0-9]+"             # production release (cut from main)       — SDK from PyPI
-      - "[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+"   # release candidate (cut from next)        — SDK from PyPI
+      - "[0-9]+.[0-9]+.[0-9]+"             # production release (cut from main)       — SDK pinned by sdk-version.txt
+      - "[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+"   # release candidate (cut from next)        — SDK pinned by sdk-version.txt
       - "[0-9]+.[0-9]+.[0-9]+-dev.[0-9]+"  # dev pre-release   (cut from next)        — SDK from @next source
 permissions:
   contents: write
@@ -23,137 +49,48 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ── conda environment "omotion" ──────────────────────────────
-      - name: Set up Miniconda
-        uses: conda-incubator/setup-miniconda@v3
+      # ── build + sign + package (Research only) ───────────────────
+      # Signing policy (#443, #573): rc and production tags sign, plus a
+      # manual run with sign=true; dev tags and branch pushes build UNSIGNED.
+      # Every signing is metered (4 per signed build here: main.dll inside
+      # the onefile payload (#579), the exe, Burn engine, Setup
+      # bundle). rc signing is deliberate for the first releases under
+      # #573 and is expected to be dropped later to conserve quota: remove
+      # the `-rc.` half of the expression, nothing else. See docs/SIGNING.md.
+      - name: Build Research (Windows)
+        id: win
+        uses: ./.github/actions/windows-build
         with:
-          auto-update-conda: true
-          python-version: "3.12"
-          activate-environment: omotion
+          tag: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+          sdk-next: ${{ github.ref == 'refs/heads/next' }}
+          variants: research
+          sign: ${{ (startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-dev.')) || (github.event_name == 'workflow_dispatch' && inputs.sign) }}
+          compiler: ${{ github.event_name == 'workflow_dispatch' && inputs.compiler || 'nuitka' }}
+          es-username: ${{ secrets.ES_USERNAME }}
+          es-password: ${{ secrets.ES_PASSWORD }}
+          es-totp-secret: ${{ secrets.ES_TOTP_SECRET }}
+          # repo variable ES_MODE=sandbox targets SSL.com's sandbox
+          # environment for pipeline testing (needs sandbox credentials)
+          es-mode: ${{ vars.ES_MODE || 'product' }}
+          codesign-thumbprint: ${{ secrets.CODESIGN_THUMBPRINT }}
 
-      - name: Install dependencies into omotion
-        shell: bash -el {0}
-        run: |
-          conda activate omotion
-          python -m pip install --upgrade pip
-
-          # SDK selection:
-          #   * X.Y.Z-dev.N tag → source-install from openmotion-sdk@next so
-          #     the dev pre-release ships against the matching dev SDK.
-          #   * refs/heads/next push → same, source-install from
-          #     openmotion-sdk@next. The bloodflow next branch tracks SDK
-          #     API drift before any release, so it must always pair with
-          #     SDK next; PyPI's latest stable can be API-behind.
-          #   * X.Y.Z      tag → install latest openmotion-sdk from PyPI.
-          #     Production releases ship against the fully-released SDK.
-          #   * X.Y.Z-rc.N tag → install latest openmotion-sdk from PyPI.
-          #     RCs are a hardening pass on a fully-released SDK, so PyPI too.
-          #   * Anything else (refs/heads/main push, manual dispatch) →
-          #     fetch the latest published openmotion-sdk wheel from
-          #     GitHub Releases, with a source-install of main as the
-          #     fallback.
-          if [[ "$GITHUB_REF" == refs/tags/*-dev.* ]] || [[ "$GITHUB_REF" == refs/heads/next ]]; then
-            echo "Dev/next-branch ($GITHUB_REF) — installing SDK from openmotion-sdk@next"
-            pip install "git+https://github.com/OpenwaterHealth/openmotion-sdk.git@next"
-          elif [[ "$GITHUB_REF" =~ ^refs/tags/[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
-            echo "Production/RC tag detected ($GITHUB_REF) — installing latest openmotion-sdk from PyPI"
-            pip install --upgrade openmotion-sdk
-          else
-            # Fetch the latest openmotion-sdk wheel from GitHub Releases.
-            # Kept as a one-liner so the YAML indent (12 spaces inside the
-            # else block) doesn't get treated as Python module-level
-            # whitespace — multiline `python -c` here would fail with
-            # IndentationError: unexpected indent.
-            WHL_URL=$(python -c "import json,urllib.request as ur,sys; d=json.load(ur.urlopen('https://api.github.com/repos/OpenwaterHealth/openmotion-sdk/releases/latest')); w=[a['browser_download_url'] for a in d.get('assets',[]) if a['name'].endswith('.whl')]; print(w[0] if w else '')" 2>/dev/null || true)
-
-            if [ -n "$WHL_URL" ]; then
-              echo "Installing pylib wheel: $WHL_URL"
-              pip install "$WHL_URL"
-            else
-              echo "No wheel found – falling back to source install"
-              pip install git+https://github.com/OpenwaterHealth/openmotion-sdk.git
-            fi
-          fi
-
-          pip install -r requirements.txt
-
-      # ── build ────────────────────────────────────────────────────
-      - name: Stamp version from git tag
-        shell: bash -el {0}
-        run: |
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            TAG="${GITHUB_REF#refs/tags/}"
-            # Strip leading 'v' only; '-dev.N' suffixes stay (semver pre-release).
-            VER="${TAG#v}"
-          else
-            VER=$(git describe --tags --dirty --always --long 2>/dev/null || echo "dev-${GITHUB_SHA::8}")
-          fi
-          echo "Stamping version: $VER"
-          # Update _FALLBACK_VERSION in version.py so the frozen exe uses it
-          sed -i "s/^_FALLBACK_VERSION = .*/_FALLBACK_VERSION = \"${VER}\"/" version.py
-
-      - name: Build with PyInstaller
-        shell: bash -el {0}
-        run: |
-          conda activate omotion
-          python -m PyInstaller -y openwater.spec
-
-      - name: Install WiX v5
-        shell: pwsh
-        run: |
-          # Pin to 5.0.2 — the last MIT-licensed WiX. v6/v7 require accepting the
-          # paid Open Source Maintenance Fee EULA (WIX7015) and would fail CI.
-          dotnet tool install --global wix --version 5.0.2
-          # In WiX v5 the standard bootstrapper application ships in this package
-          # (not WixToolset.Bal.wixext); the bal: namespace in bundle.wxs is unchanged.
-          wix extension add -g WixToolset.BootstrapperApplications.wixext/5.0.2
-          echo "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Append
-
-      # ── package ──────────────────────────────────────────────────
-      - name: Determine version tag
-        id: meta
-        shell: bash
-        run: |
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            TAG="${GITHUB_REF#refs/tags/}"
-          else
-            TAG=$(git describe --tags --dirty --always 2>/dev/null || echo "dev-${GITHUB_SHA::8}")
-          fi
-          echo "TAG=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "ARTIFACT_NAME=Open-Motion-${TAG}" >> "$GITHUB_OUTPUT"
-          echo "ARTIFACT_ZIP=Open-Motion-${TAG}.zip" >> "$GITHUB_OUTPUT"
-          echo "ARTIFACT_NAME_RESEARCH=Open-Motion-Research-${TAG}" >> "$GITHUB_OUTPUT"
-          echo "ARTIFACT_ZIP_RESEARCH=Open-Motion-Research-${TAG}.zip" >> "$GITHUB_OUTPUT"
-
-          # pre-release flag — X.Y.Z-dev.N (dev) and X.Y.Z-rc.N (release
-          # candidate) tags both mark prerelease in the GitHub release UI.
-          if [[ "$TAG" == *-dev.* ]] || [[ "$TAG" == *-rc.* ]]; then
-            echo "PRERELEASE=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "PRERELEASE=false" >> "$GITHUB_OUTPUT"
-          fi
-
-          echo "::notice ::Version tag resolved to: ${TAG}"
-
-      - name: Package all artifacts (zips + installers, clinical + Research)
-        shell: pwsh
-        env:
-          CODESIGN_THUMBPRINT: ${{ secrets.CODESIGN_THUMBPRINT }}
-        run: |
-          powershell -NoProfile -File scripts\package_artifacts.ps1 -Version "${{ steps.meta.outputs.TAG }}"
+      # The SBOM (#545) is still generated and checked inside the build
+      # action (on rc/prod it fails the build unless its SDK line equals
+      # sdk-version.txt), but it is no longer published from this public
+      # repo: neither as a workflow artifact nor as a release asset (#573).
 
       # ── always upload workflow artifact ──────────────────────────
-      - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.meta.outputs.ARTIFACT_NAME }}
-          path: ${{ steps.meta.outputs.ARTIFACT_ZIP }}
-
+      # upload-artifact wraps whatever it is given in its own zip, so
+      # handing it the portable zip made every run download a zip inside
+      # a zip (#567). Upload the packaged dist tree instead: it is the
+      # exact tree New-PortableZip compresses (signed exe included), so the
+      # download is Open-Motion-Research-<tag>.zip holding Open-Motion\
+      # directly - the same layout as the release asset.
       - name: Upload Research workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.meta.outputs.ARTIFACT_NAME_RESEARCH }}
-          path: ${{ steps.meta.outputs.ARTIFACT_ZIP_RESEARCH }}
+          name: Open-Motion-Research-${{ steps.win.outputs.tag }}
+          path: dist/research
 
       # ── build release notes ───────────────────────────────────────
       - name: Build release notes
@@ -163,7 +100,7 @@ jobs:
         run: |
           : > notes.md
 
-          if [[ "${{ steps.meta.outputs.PRERELEASE }}" == "true" ]]; then
+          if [[ "${{ steps.win.outputs.prerelease }}" == "true" ]]; then
             echo "⚠️ **PRE-RELEASE – NOT FOR PRODUCTION**" >> notes.md
             echo "" >> notes.md
           fi
@@ -176,7 +113,7 @@ jobs:
             git log "${PREV_TAG}..HEAD" --pretty=format:"- %s (%h)" >> notes.md
             echo "" >> notes.md
             echo "" >> notes.md
-            echo "**Full diff:** [\`${PREV_TAG}...${{ steps.meta.outputs.TAG }}\`](https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${{ steps.meta.outputs.TAG }})" >> notes.md
+            echo "**Full diff:** [\`${PREV_TAG}...${{ steps.win.outputs.tag }}\`](https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${{ steps.win.outputs.tag }})" >> notes.md
           else
             echo "### Commits" >> notes.md
             echo "" >> notes.md
@@ -184,22 +121,95 @@ jobs:
           fi
 
       # ── create release on tag push ──────────────────────────────
+      # softprops creates (or updates) the release with the notes only. The
+      # assets go up in the next step, one at a time with retries: the
+      # action's parallel upload died mid-way with "Error saving asset" on
+      # both attempts of 1.5.3-dev.0 (#555), and with overwrite_files it had
+      # already deleted the previous assets, so every retry left the release
+      # with a different partial set.
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.meta.outputs.TAG }}
-          name: ${{ steps.meta.outputs.TAG }}
+          tag_name: ${{ steps.win.outputs.tag }}
+          name: ${{ steps.win.outputs.tag }}
           body_path: notes.md
-          prerelease: ${{ steps.meta.outputs.PRERELEASE == 'true' }}
-          files: |
-            ${{ steps.meta.outputs.ARTIFACT_ZIP }}
-            ${{ steps.meta.outputs.ARTIFACT_ZIP_RESEARCH }}
-            build/installer/Open-Motion-Setup-*.exe
-            build/installer/Open-Motion-Research-Setup-*.exe
-            resources/OpenMotionDriver-x64.zip
+          prerelease: ${{ steps.win.outputs.prerelease == 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload release assets (sequential, with retries)
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.win.outputs.tag }}
+          CHANNEL: ${{ steps.win.outputs.channel }}
+        run: |
+          set -euo pipefail
+          # Research only (#573). A production release carries the installer
+          # and no portable zip; dev and rc carry both.
+          assets=(
+            build/installer/Open-Motion-Research-Setup-*.exe
+            resources/OpenMotionDriver-x64.zip
+          )
+          if [ "$CHANNEL" != "prod" ]; then
+            assets+=("Open-Motion-Research-${TAG}.zip")
+          fi
+          for f in "${assets[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "::error::release asset missing on disk: $f"
+              exit 1
+            fi
+            for attempt in 1 2 3; do
+              if gh release upload "$TAG" "$f" --clobber -R "$GITHUB_REPOSITORY"; then
+                echo "uploaded $f"
+                break
+              fi
+              echo "upload of $f failed (attempt $attempt/3)"
+              if [ "$attempt" -eq 3 ]; then exit 1; fi
+              sleep 20
+            done
+          done
+          # Every asset must be on the release when this job reports success,
+          # so a silent partial upload fails the job.
+          present=$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          echo "release assets:"; echo "$present" | sed 's/^/  /'
+          for f in "${assets[@]}"; do
+            if ! echo "$present" | grep -qx "$(basename "$f")"; then
+              echo "::error::asset not on release after upload: $(basename "$f")"
+              exit 1
+            fi
+          done
+
+  # ── Clinical: poke the private repo, never wait for it (#573) ─────
+  # dev and rc tags only; a production tag does nothing here (the signed
+  # Clinical installer is a manual run in the private repo). No `needs:`, so
+  # the Clinical build neither waits on nor blocks the Research release, and
+  # a failed poke is a warning, not a failed release. The token is a
+  # fine-grained PAT limited to that one repository (Actions: read/write).
+  notify-clinical:
+    if: startsWith(github.ref, 'refs/tags/') && contains(github.ref, '-')
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Dispatch the Clinical pre-release build
+        env:
+          GH_TOKEN: ${{ secrets.CLINICAL_DISPATCH_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::CLINICAL_DISPATCH_TOKEN not set — Clinical build for ${TAG} was NOT started; run clinical-prerelease.yml by hand"
+            exit 0
+          fi
+          # The REST endpoint with an explicit ref, not the gh "workflow run"
+          # command: that one first resolves the repo's default branch over
+          # GraphQL, which a token holding only Actions: write cannot read
+          # (1.5.3-dev.3: "Resource not accessible by personal access token").
+          DISPATCH=repos/OpenwaterHealth/openmotion-desktop-app-clinical/actions/workflows/clinical-prerelease.yml/dispatches
+          if ! gh api -X POST "$DISPATCH" -f ref=main -f "inputs[tag]=$TAG"; then
+            echo "::warning::could not start the Clinical build for ${TAG}; run clinical-prerelease.yml by hand"
+          fi
 
   build-macos:
     runs-on: macos-15   # Apple Silicon runner
@@ -226,23 +236,14 @@ jobs:
           python -m pip install --upgrade pip
 
           # SDK selection — mirrors the Windows job above (see the comment
-          # there for the full rationale).
+          # there for the full rationale, #545).
+          SDK_PIN=$(tr -d '[:space:]' < sdk-version.txt)
           if [[ "$GITHUB_REF" == refs/tags/*-dev.* ]] || [[ "$GITHUB_REF" == refs/heads/next ]]; then
             echo "Dev/next-branch ($GITHUB_REF) — installing SDK from openmotion-sdk@next"
             pip install "git+https://github.com/OpenwaterHealth/openmotion-sdk.git@next"
-          elif [[ "$GITHUB_REF" =~ ^refs/tags/[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
-            echo "Production/RC tag detected ($GITHUB_REF) — installing latest openmotion-sdk from PyPI"
-            pip install --upgrade openmotion-sdk
           else
-            WHL_URL=$(python -c "import json,urllib.request as ur,sys; d=json.load(ur.urlopen('https://api.github.com/repos/OpenwaterHealth/openmotion-sdk/releases/latest')); w=[a['browser_download_url'] for a in d.get('assets',[]) if a['name'].endswith('.whl')]; print(w[0] if w else '')" 2>/dev/null || true)
-
-            if [ -n "$WHL_URL" ]; then
-              echo "Installing pylib wheel: $WHL_URL"
-              pip install "$WHL_URL"
-            else
-              echo "No wheel found – falling back to source install"
-              pip install git+https://github.com/OpenwaterHealth/openmotion-sdk.git
-            fi
+            echo "Release/rc/main/dispatch ($GITHUB_REF) — installing openmotion-sdk==${SDK_PIN} (sdk-version.txt)"
+            pip install "openmotion-sdk==${SDK_PIN}"
           fi
 
           pip install -r requirements.txt
@@ -252,6 +253,15 @@ jobs:
           # (FileExistsError on Versions/Current/* during assemble); fixed
           # in later 6.x. Override the pin for this job only.
           pip install --upgrade "pyinstaller>=6.13"
+
+      - name: Check the bundled SDK against sdk-version.txt
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/*-dev.* ]] || [[ "$GITHUB_REF" == refs/heads/next ]]; then
+            python scripts/check_sdk_pin.py            # dev: report only
+          else
+            python scripts/check_sdk_pin.py --enforce
+          fi
 
       - name: Stamp version from git tag
         shell: bash
@@ -282,6 +292,22 @@ jobs:
             echo "PRERELEASE=false" >> "$GITHUB_OUTPUT"
           fi
           echo "::notice ::Version tag resolved to: ${TAG}"
+
+      - name: Generate SBOM (CycloneDX) of the build environment
+        id: sbom
+        shell: bash
+        run: |
+          BUILD_PY=$(python -c "import sys; print(sys.executable)")
+          SBOM="Open-Motion-${{ steps.meta.outputs.TAG }}-macOS-sbom.cdx.json"
+          pipx run --spec cyclonedx-bom cyclonedx-py environment "$BUILD_PY" \
+            --of JSON --mc-type application -o "$SBOM"
+          if [[ "$GITHUB_REF" == refs/tags/*-dev.* ]] || [[ "$GITHUB_REF" == refs/heads/next ]]; then
+            python scripts/stamp_sbom.py "$SBOM" --name Open-Motion-macOS --version "${{ steps.meta.outputs.TAG }}"
+          else
+            python scripts/stamp_sbom.py "$SBOM" --name Open-Motion-macOS --version "${{ steps.meta.outputs.TAG }}" \
+              --expect-sdk "$(tr -d '[:space:]' < sdk-version.txt)"
+          fi
+          echo "SBOM_PATH=${SBOM}" >> "$GITHUB_OUTPUT"
 
       - name: Build .app + DMG
         shell: bash
@@ -315,6 +341,7 @@ jobs:
         with:
           tag_name: ${{ steps.meta.outputs.TAG }}
           prerelease: ${{ steps.meta.outputs.PRERELEASE == 'true' }}
-          files: ${{ steps.dmg.outputs.DMG_PATH }}
+          files: |
+            ${{ steps.dmg.outputs.DMG_PATH }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
