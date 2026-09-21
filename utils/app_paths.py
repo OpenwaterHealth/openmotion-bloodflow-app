@@ -2,17 +2,27 @@
 
 When the app is installed to Program Files, its bundled files are read-only.
 Runtime-writable state (config overrides, logs, scan data) lives under
-%PROGRAMDATA%\\Openwater\\ instead — or next to the exe when portableMode is
-set (see writable_root). In a dev (non-frozen) run, everything stays under
-the cwd so local development is unchanged.
+the launching user's %LOCALAPPDATA%\\Openwater\\ instead — or next to the exe
+when portableMode is set (see writable_root). In a dev (non-frozen) run,
+everything stays under the cwd so local development is unchanged.
+
+The installed root is per-user on purpose (#581). A Clinical build encrypts
+scans.db and the SDK keeps the key in Windows Credential Manager, which is
+per Windows user. While the root was the machine-wide %PROGRAMDATA%, the
+first account to launch created the database and the key, and every other
+account on that machine found an encrypted database it had no key for:
+settings and the audit log failed to open at boot and every scan start
+raised E-301. The database and the key that protects it must share one
+owner. Data an older build left under %PROGRAMDATA%\\Openwater is not
+migrated.
 
 Nothing in this module reads the process environment. The resolved root
 depends only on how the build was made (frozen / platform), whether the
 installer registered this exe (portable_mode(), from the HKLM InstallDir
 marker installer/app.wxs writes), and the in-process DATA_ROOT_OVERRIDE,
 which ``python main.py --data-root`` (source runs only) and the unit-test
-fixtures set explicitly. Even the ProgramData and home folders are asked of
-the Windows shell rather than read from %PROGRAMDATA% / %USERPROFILE%, so a
+fixtures set explicitly. Even the LocalAppData and home folders are asked of
+the Windows shell rather than read from %LOCALAPPDATA% / %USERPROFILE%, so a
 packaged artifact starts the same way whatever env vars the host machine
 carries.
 
@@ -22,7 +32,7 @@ signed-installer workflow repacks the QA-validated zip), so the difference
 has to come from the install itself. The MSI writes
 ``HKLM/Software/Openwater/Open-Motion/InstallDir`` (backslashes); a frozen Windows
 build whose exe lives in that directory is "installed" (writable state
-under %PROGRAMDATA%), anything else is "portable" (next to the exe). Only
+under %LOCALAPPDATA%), anything else is "portable" (next to the exe). Only
 an administrator can write that key.
 
 Two fixed children live under the writable root: LOGS_DIRNAME (this run's log
@@ -47,10 +57,9 @@ DATA_DIRNAME = "data"
 DATA_ROOT_OVERRIDE: Path | None = None
 
 # Windows KNOWNFOLDERIDs (shlobj_core.h). Asking the shell for these is what
-# lets the app ignore %PROGRAMDATA% / %USERPROFILE%.
-_FOLDERID_PROGRAM_DATA = "{62AB5D82-FDC1-4DC3-A9DD-070D1D495D97}"
+# lets the app ignore %LOCALAPPDATA% / %USERPROFILE%.
+_FOLDERID_LOCAL_APP_DATA = "{F1B32785-6FBA-4FCF-9D55-7B8E7F157091}"
 _FOLDERID_PROFILE = "{5E6C858F-0E22-4760-9AFE-EA3317B67173}"
-_DEFAULT_PROGRAM_DATA = r"C:\ProgramData"
 
 # Written by installer/app.wxs (AppShortcut component) as [APPFOLDER].
 _INSTALL_REG_KEY = r"Software\Openwater\Open-Motion"
@@ -182,11 +191,6 @@ def portable_mode() -> bool:
     return not is_installed_exe()
 
 
-def _program_data_dir() -> Path:
-    """The machine-wide ProgramData folder (stock location if the shell call fails)."""
-    return _known_folder(_FOLDERID_PROGRAM_DATA) or Path(_DEFAULT_PROGRAM_DATA)
-
-
 def _home_dir() -> Path:
     """The user's home folder without consulting HOME / USERPROFILE.
 
@@ -207,11 +211,20 @@ def _home_dir() -> Path:
     return Path.home()
 
 
+def _local_app_data_dir() -> Path:
+    """This user's LocalAppData folder (stock location under the profile if
+    the shell call fails). Per-user, never the machine-wide ProgramData —
+    see the module docstring (#581)."""
+    return _known_folder(_FOLDERID_LOCAL_APP_DATA) or (
+        _home_dir() / "AppData" / "Local"
+    )
+
+
 def writable_root(portable: bool | None = None) -> Path:
     """Return the writable data root, creating it if necessary.
 
     ``portable``: keep everything next to the exe (the un-installed layout)
-    instead of scattering it to %PROGRAMDATA%; ``None`` derives it with
+    instead of scattering it to %LOCALAPPDATA%; ``None`` derives it with
     portable_mode(). An explicit DATA_ROOT_OVERRIDE is used as-is, no
     writability check. The other branches fall back to
     ~/Documents/Open-Motion if the resolved root isn't writable (e.g. cwd
@@ -226,7 +239,7 @@ def writable_root(portable: bool | None = None) -> Path:
 
     if is_frozen():
         if sys.platform == "darwin":
-            # macOS has no %PROGRAMDATA%, and the portable layout can't apply
+            # macOS has no %LOCALAPPDATA%, and the portable layout can't apply
             # either: writing inside Open-Motion.app invalidates its code
             # signature. Both variants use the standard per-user data location.
             root = _home_dir() / "Library" / "Application Support" / _APP_DIRNAME
@@ -235,7 +248,7 @@ def writable_root(portable: bool | None = None) -> Path:
             # interpreter path there is the extracted copy, #548).
             root = executable_path().resolve().parent
         else:
-            root = _program_data_dir() / _APP_DIRNAME
+            root = _local_app_data_dir() / _APP_DIRNAME
     else:
         root = Path.cwd()
 

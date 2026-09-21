@@ -93,7 +93,7 @@ def log_startup_report(
         elif portable:
             mode = "portable (writable state next to exe)"
         else:
-            mode = "installed (writable state under %PROGRAMDATA%)"
+            mode = "installed (writable state under %LOCALAPPDATA%, per user)"
         log.info("Build variant:  %s", "Clinical" if clinical else "Research")
         log.info("Install mode:   %s (portableMode=%s, frozen=%s, bundler=%s)",
                  mode, portable, frozen, bundler())

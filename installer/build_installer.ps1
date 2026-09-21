@@ -76,8 +76,8 @@ if (-not (Test-Path (Join-Path $DistAbs 'Open-Motion.exe'))) {
 # is the single onefile Open-Motion.exe: the Clinical/Research split is
 # compiled into it (CLINICAL_MODE stamped before PyInstaller ran), and
 # portableMode is derived at launch from the HKLM InstallDir marker app.wxs
-# writes below — an installed exe scatters its writable state to
-# %PROGRAMDATA%, the byte-identical exe in the portable zip keeps it next to
+# writes below — an installed exe keeps its writable state per user under
+# %LOCALAPPDATA%\Openwater (#581), the byte-identical exe in the portable zip keeps it next to
 # itself. A leftover onedir tree (_internal\) from an older build would be
 # harvested next to the exe and ship loose, unsigned files again, so refuse
 # it; likewise an obviously mismatched dist path.

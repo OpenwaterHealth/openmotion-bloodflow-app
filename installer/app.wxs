@@ -58,7 +58,8 @@
                      Name="installed" Type="integer" Value="1" KeyPath="yes" />
       <!-- Install-mode marker (#546): the app derives "installed vs portable"
            from this at launch (utils/app_paths.py) — an exe living in this
-           directory scatters its writable state to %PROGRAMDATA%; the
+           directory keeps its writable state per user under
+           %LOCALAPPDATA%\Openwater (#581); the
            byte-identical exe in the portable zip keeps it next to itself.
            HKLM, so only an administrator can write it. -->
       <RegistryValue Root="HKLM" Key="Software\Openwater\Open-Motion"

@@ -198,7 +198,7 @@ def resolve_settings_db_path(data_dir: "str | Path | None" = None) -> Path:
     UI-driven preference changes persist (#546).
       1. From-source mode → <repo>/data/scans.db (the app's cwd).
       2. Packaged exe → <exe-dir>/data/scans.db when that exists (portable
-         zip layout), else %PROGRAMDATA%\\Openwater\\data\\scans.db (installer).
+         zip layout), else %LOCALAPPDATA%\\Openwater\\data\\scans.db (installer, per user since #581).
     """
     if data_dir:   # a test pinned dataDirectory via --config-override
         return Path(data_dir) / "data" / "scans.db"
@@ -208,7 +208,7 @@ def resolve_settings_db_path(data_dir: "str | Path | None" = None) -> Path:
     env_exe = os.environ.get("OPENWATER_EXE", "")
     if env_exe:
         candidates.append(Path(env_exe).parent / "data" / "scans.db")
-    base = os.environ.get("PROGRAMDATA", r"C:\ProgramData")
+    base = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
     candidates.append(Path(base) / "Openwater" / "data" / "scans.db")
     for c in candidates:
         if c.exists():
