@@ -111,6 +111,89 @@ Rectangle {
         viewer._refitPending = true
         viewer._dirty = true
     }
+    // A windowed fit re-evaluated every half second is noisy: the 2/98
+    // percentiles of a sliding 5 s window (about five beats) move ~7%
+    // of the axis between evaluations, and adopting every fit made the
+    // axes visibly jump (bench feedback 2026-09-23). A deadband with
+    // persistence was tried first and traded that for rarer but much
+    // larger moves (mean 56% of the axis) plus seconds of clipping —
+    // simulated on bench session 79 — because the tallest beat in any
+    // five genuinely varies that much. So instead the fit is SMOOTHED:
+    // each cell keeps a TARGET range that follows the fresh windowed fit
+    // with a first-order lag, asymmetric so nothing stays clipped for
+    // long — a bound moving outward follows with _perPlotTauUpSec (1 s),
+    // inward with _perPlotTauDownSec (10 s) — and the SHOWN range in
+    // _cellBounds glides toward the target every paint tick
+    // (_glideCellBounds, _perPlotSmoothK per 33 ms, ≈ 0.25 s). On the
+    // bench data that is ~2.5% of the axis per evaluation, largest move
+    // 17%, tallest beats off-axis <10% of the time. The target SNAPS
+    // (no lag) whenever the window itself changes — first fit, pan,
+    // zoom, window length, back to live, display-mode flip, new source
+    // — since that is new content, not the same window sliding.
+    readonly property real _perPlotTauUpSec: 1.0
+    readonly property real _perPlotTauDownSec: 10.0
+    readonly property real _perPlotEvalSec: 0.5
+    readonly property real _perPlotSmoothK: 0.12
+    property var _cellTargets: ({})
+    property string _cellTargetsPair: ""
+    property bool _perPlotSettled: true
+
+    // Next target range for one metric: the fresh fit itself when
+    // snapping, else the asymmetric first-order lag from the previous
+    // target. The exact neutral fallback (no usable samples in the
+    // window) holds the previous target rather than collapsing the axis
+    // to 0..1 while a camera is covered.
+    function _followRange(prev, f, snap) {
+        if (f.yMin === 0 && f.yMax === 1) return prev
+        if (snap || !prev) return [f.yMin, f.yMax]
+        var dt = viewer._perPlotEvalSec
+        var aUp = dt / (viewer._perPlotTauUpSec + dt)
+        var aDown = dt / (viewer._perPlotTauDownSec + dt)
+        var lo = prev[0] + ((f.yMin < prev[0]) ? aUp : aDown) * (f.yMin - prev[0])
+        var hi = prev[1] + ((f.yMax > prev[1]) ? aUp : aDown) * (f.yMax - prev[1])
+        return [lo, hi]
+    }
+
+    // Two zero-argument entries over _fitAutoscale(snap): every refit
+    // trigger (window change, new source, mode flip, mask change, the
+    // per-plot switch) snaps; only the autoscale Timer lets the target
+    // lag. Zero-argument so they stay invokable by name (tests).
+    function _recomputeAutoscale() { viewer._fitAutoscale(true) }
+    function _autoscaleTick() { viewer._fitAutoscale(false) }
+
+    // One glide step: move every shown range toward its target. Runs in
+    // the paint tick while unsettled and keeps the tick alive (dirty)
+    // until every value is within 0.1% of its target span, so a paused
+    // replay animates too, not only a live scan that is dirty anyway.
+    function _glideCellBounds() {
+        var k = viewer._perPlotSmoothK
+        var shown = viewer._cellBounds
+        var targets = viewer._cellTargets
+        var next = ({})
+        var settled = true
+        for (var key in targets) {
+            var t = targets[key]
+            var s = shown[key] || t
+            var tolP = 1e-3 * Math.abs(t.pMax - t.pMin)
+            var tolS = 1e-3 * Math.abs(t.sMax - t.sMin)
+            var o = ({})
+            var fields = [["pMin", tolP], ["pMax", tolP], ["sMin", tolS], ["sMax", tolS]]
+            for (var i = 0; i < fields.length; i++) {
+                var f = fields[i][0], tol = fields[i][1]
+                var d = t[f] - s[f]
+                if (Math.abs(d) <= tol) {
+                    o[f] = t[f]
+                } else {
+                    o[f] = s[f] + k * d
+                    settled = false
+                }
+            }
+            next[key] = o
+        }
+        viewer._cellBounds = next
+        viewer._perPlotSettled = settled
+        if (!settled) viewer._dirty = true
+    }
     // Mode flips and grid re-layouts (mask change, sensor connect) get
     // an immediate refit rather than waiting up to 3 s for the tick —
     // a cell without an entry yet would draw on the global range. The
@@ -331,7 +414,7 @@ Rectangle {
         return b && typeof b.yMin === "number" && typeof b.yMax === "number"
     }
 
-    function _recomputeAutoscale() {
+    function _fitAutoscale(snap) {
         if (!viewer.scanSource) return
         var src = viewer.scanSource
         // Resolve the pair from displayMode directly rather than reading
@@ -345,21 +428,43 @@ Rectangle {
             // within a few minutes, and a past excursion stayed inside
             // the percentile clip for ~50x its own duration.
             var w = viewer._visibleWindow()
-            var bounds = ({})
+            // Targets and shown ranges are per metric pair: a BFI/BVI ↔
+            // Mean/Contrast flip starts over (snap), it does not glide
+            // from a BVI range to a contrast range.
+            var pairKey = pair.primary + "/" + pair.secondary
+            var samePair = (viewer._cellTargetsPair === pairKey)
+            var prevTargets = samePair ? viewer._cellTargets : ({})
+            var prevShown = samePair ? viewer._cellBounds : ({})
+            var targets = ({})
+            var shown = ({})
             var cells = viewer._activeCellModel
             for (var i = 0; i < cells.length; i++) {
                 var c = cells[i]
-                var bp = src.compute_bounds_for_cell(c.side, c.camId, pair.primary, w.tLo, w.tHi)
-                var bs = src.compute_bounds_for_cell(c.side, c.camId, pair.secondary, w.tLo, w.tHi)
-                if (!_validBounds(bp) || !_validBounds(bs)) continue
-                bounds[c.side + ":" + c.camId] = {
-                    pMin: bp.yMin, pMax: bp.yMax, sMin: bs.yMin, sMax: bs.yMax
-                }
+                var key = c.side + ":" + c.camId
+                var fp = src.compute_bounds_for_cell(c.side, c.camId, pair.primary, w.tLo, w.tHi)
+                var fs = src.compute_bounds_for_cell(c.side, c.camId, pair.secondary, w.tLo, w.tHi)
+                if (!_validBounds(fp) || !_validBounds(fs)) continue
+                var prev = prevTargets[key]
+                var p = _followRange(prev ? [prev.pMin, prev.pMax] : null, fp, snap)
+                var s = _followRange(prev ? [prev.sMin, prev.sMax] : null, fs, snap)
+                if (!p || !s) continue   // neutral fit on a brand-new cell: nothing to show yet
+                targets[key] = { pMin: p[0], pMax: p[1], sMin: s[0], sMax: s[1] }
+                // A cell with no shown range yet (first fit, or a cell
+                // that just appeared) snaps; an existing one keeps what
+                // it shows and glides from there in the paint tick.
+                shown[key] = prevShown[key] ? prevShown[key] : targets[key]
             }
-            viewer._cellBounds = bounds
+            viewer._cellTargets = targets
+            viewer._cellTargetsPair = pairKey
+            viewer._cellBounds = shown
+            viewer._perPlotSettled = false
         } else {
-            if (Object.keys(viewer._cellBounds).length > 0)
+            if (Object.keys(viewer._cellBounds).length > 0) {
                 viewer._cellBounds = ({})
+                viewer._cellTargets = ({})
+                viewer._cellTargetsPair = ""
+                viewer._perPlotSettled = true
+            }
             var gp = src.compute_bounds_for_metric(pair.primary)
             if (_validBounds(gp)) {
                 viewer._autoPrimaryYMin = gp.yMin
@@ -667,6 +772,10 @@ Rectangle {
                     viewer._recomputeAutoscale()
                     viewer._dirty = false
                 }
+                // Per-plot glide (#591): one step toward the targets per
+                // paint; re-dirties itself until settled.
+                if (viewer.perPlotActive && !viewer._perPlotSettled)
+                    viewer._glideCellBounds()
                 viewer.paintTick++
                 if (viewer._hudVisible) {
                     var dt = Date.now() - t0
@@ -701,14 +810,15 @@ Rectangle {
     // with scan duration; 3 s amortizes that work without making the
     // y-axis feel unresponsive (a 3-second delay between bound adjustments
     // is hard to notice during live monitoring). Per-plot mode (#591) fits
-    // only the visible window, which is cheap and whose contents change
-    // as the followed window slides, so it ticks every 1 s.
+    // only the visible window, which is cheap, so it evaluates every
+    // 0.5 s (= _perPlotEvalSec, the lag math depends on it) and lets
+    // the smoothed target follow rather than snap.
     Timer {
-        interval: viewer.perPlotActive ? 1000 : 3000
+        interval: viewer.perPlotActive ? 500 : 3000
         running: viewer.autoScale && viewer.scanSource !== null
         repeat: true
         triggeredOnStart: true
-        onTriggered: viewer._recomputeAutoscale()
+        onTriggered: viewer._autoscaleTick()
     }
 
     // Window-seconds options — duplicated here from the old PlotToolbar
