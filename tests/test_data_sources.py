@@ -1274,6 +1274,59 @@ def test_compute_bounds_for_cell_neutral_fallbacks():
     assert src.compute_bounds_for_cell("right", 3, "bvi") == neutral
 
 
+# ── windowed per-cell bounds (#591: fit the visible window) ─────────────
+
+
+def test_compute_bounds_for_cell_window_uses_only_visible_samples():
+    src = ScanDataSource(plot_t0=0.0)
+    buf = src.get_or_create_buffer("left", 0, "bvi")
+    for i in range(400):                        # 10 s at 40 Hz
+        # Early drift down from 100, then a flat 5..6 band for the rest.
+        v = 100.0 * (1 - i / 100.0) if i < 100 else 5.0 + (i % 2)
+        buf.append(t=i * 0.025, v=v, frame_id=i)
+    whole = src.compute_bounds_for_cell("left", 0, "bvi")
+    assert whole["yMax"] > 50                   # the old drift dominates
+    win = src.compute_bounds_for_cell("left", 0, "bvi", 5.0, 10.0)
+    assert 4.0 < win["yMin"] < 5.0 and 6.0 < win["yMax"] < 7.0
+    # A window covering the whole buffer equals the unwindowed fit.
+    assert src.compute_bounds_for_cell("left", 0, "bvi", 0.0, 10.0) == pytest.approx(whole)
+
+
+def test_compute_bounds_for_cell_window_fallbacks():
+    src = ScanDataSource(plot_t0=0.0)
+    neutral = {"yMin": 0.0, "yMax": 1.0}
+    buf = src.get_or_create_buffer("left", 0, "bfi")
+    for i in range(40):
+        buf.append(t=i * 0.025, v=float(i), frame_id=i)
+    assert src.compute_bounds_for_cell("left", 0, "bfi", 5.0, 6.0) == neutral    # past the data
+    assert src.compute_bounds_for_cell("left", 0, "bfi", 0.0, 0.05) == neutral   # < 4 inside
+    assert src.compute_bounds_for_cell("left", 1, "bfi", 0.0, 1.0) == neutral    # no buffer
+    buf.append(t=1.0, v=float("nan"), frame_id=40)
+    assert src.compute_bounds_for_cell("left", 0, "bfi", 0.99, 1.01) == neutral  # NaN never counts
+
+
+def test_live_source_windowed_cell_bounds_include_cached_db_tail():
+    """Panned back past the in-memory ring, the windowed fit adds what
+    the cached DB-tail window holds below the in-memory boundary, so the
+    history on screen is not fitted to the neutral range."""
+    src = LiveScanSource(plot_t0=0.0)
+    mem = src.get_or_create_buffer("left", 0, "bfi")
+    for i in range(40):                                   # t = 100..101
+        mem.append(t=100.0 + i * 0.025, v=50.0 + (i % 2), frame_id=i)
+    mem.ring_trimmed = True
+    tail = _CameraBuffer(max_capacity=None)
+    for i in range(40):                                   # t = 98..99
+        tail.append(t=98.0 + i * 0.025, v=5.0 + (i % 2), frame_id=i)
+    src._db_window_buffers = {("left", 0, "bfi"): tail}
+    b = src.compute_bounds_for_cell("left", 0, "bfi", 98.0, 101.0)
+    assert b["yMin"] < 5.0 and b["yMax"] > 50.0
+    # Window entirely inside memory: the tail is not consulted.
+    b2 = src.compute_bounds_for_cell("left", 0, "bfi", 100.0, 101.0)
+    assert b2["yMin"] > 40.0
+    # Whole-buffer (unwindowed) fit is unchanged by the tail.
+    assert src.compute_bounds_for_cell("left", 0, "bfi")["yMin"] > 40.0
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ScanDataSource.value_at (Phase 2b-ii — hover tooltip)
 # ─────────────────────────────────────────────────────────────────────────────
