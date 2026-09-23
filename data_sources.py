@@ -198,6 +198,16 @@ class _CameraBuffer:
             i_hi = int(np.searchsorted(t_slice, t_hi, side="right"))
             return i_lo, i_hi
 
+    def window_finite_values(self, t_lo: float, t_hi: float) -> np.ndarray:
+        """Finite values whose timestamps fall in [t_lo, t_hi], as a fresh
+        array (empty when the window holds none). Per-plot autoscale
+        (#591) fits the visible window with this instead of the whole
+        buffer. Same lock discipline as window_decimated."""
+        with self._lock:
+            i_lo, i_hi = self.window_indices(t_lo, t_hi)
+            slice_v = self.v[i_lo:i_hi]
+            return slice_v[np.isfinite(slice_v)]
+
     def window_decimated(
         self,
         t_lo: float,
@@ -604,14 +614,33 @@ class ScanDataSource(QObject):
             chunks, percentile_lo, percentile_hi, pad_frac)
 
     @pyqtSlot(str, int, str, result="QVariantMap")
-    def compute_bounds_for_cell(self, side: str, cam_id: int, metric: str) -> dict:
+    @pyqtSlot(str, int, str, float, float, result="QVariantMap")
+    def compute_bounds_for_cell(
+        self, side: str, cam_id: int, metric: str,
+        t_lo: Optional[float] = None, t_hi: Optional[float] = None,
+    ) -> dict:
         """Per-plot autoscale (#452): the same padded 2%/98% percentile
         bounds as compute_bounds_for_metric, but over ONE (side, cam_id)
-        buffer so each cell can fit its own trace. Same neutral fallback
-        when that camera has fewer than 4 finite samples."""
-        buf = self.buffers.get((side, int(cam_id), metric))
-        chunks = [self._finite_values(buf)] if buf is not None else []
-        return self._padded_percentile_bounds(chunks, 2.0, 98.0, 0.25)
+        buffer so each cell can fit its own trace. With t_lo/t_hi (#591)
+        only the samples inside that window count: the viewer passes the
+        window the cell is drawing, so the axis fits what is on screen
+        rather than the whole scan (slow BVI drift used to balloon it
+        20x past the visible trace within a few minutes). Same neutral
+        fallback when fewer than 4 finite samples qualify."""
+        return self._padded_percentile_bounds(
+            self._cell_chunks(side, int(cam_id), metric, t_lo, t_hi),
+            2.0, 98.0, 0.25)
+
+    def _cell_chunks(self, side: str, cam_id: int, metric: str,
+                     t_lo: Optional[float], t_hi: Optional[float]) -> list:
+        """Finite-value chunks for one buffer, optionally windowed.
+        LiveScanSource extends this with the cached DB tail."""
+        buf = self.buffers.get((side, cam_id, metric))
+        if buf is None:
+            return []
+        if t_lo is None or t_hi is None:
+            return [self._finite_values(buf)]
+        return [buf.window_finite_values(float(t_lo), float(t_hi))]
 
     @staticmethod
     def _finite_values(buf: "_CameraBuffer") -> np.ndarray:
@@ -976,6 +1005,24 @@ class LiveScanSource(ScanDataSource):
                 side, cam_id, metric, mem_lo, float(t_hi), mem_max
             )
         return db_pts + mem_pts
+
+    def _cell_chunks(self, side: str, cam_id: int, metric: str,
+                     t_lo: Optional[float], t_hi: Optional[float]) -> list:
+        # Windowed per-plot fit (#591) panned back past the in-memory ring:
+        # add whatever the cached DB-tail window already holds below the
+        # in-memory boundary (points_for_window schedules the load; this
+        # only reads the cache), so history on screen is fitted to itself
+        # rather than to the 0..1 neutral range.
+        chunks = super(LiveScanSource, self)._cell_chunks(side, cam_id, metric, t_lo, t_hi)
+        if (t_lo is None or t_hi is None
+                or not self._needs_db_tail(side, cam_id, metric, float(t_lo))):
+            return chunks
+        dbuf = self._db_window_buffers.get((side, cam_id, metric))
+        if dbuf is None:
+            return chunks
+        split = float(self.buffers[(side, cam_id, metric)].t[0])
+        chunks.append(dbuf.window_finite_values(float(t_lo), min(split, float(t_hi))))
+        return chunks
 
     @pyqtSlot(str, int, str, float, result=float)
     def value_at(self, side: str, cam_id: int, metric: str, t: float) -> float:
