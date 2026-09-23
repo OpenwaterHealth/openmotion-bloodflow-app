@@ -17,7 +17,11 @@ per camera, then assert:
   - clinical: the flag is ignored even when the settings table holds it;
   - #591: the per-cell fit covers the visible window the cells draw, and
     a pan / zoom / window-length change refits (coalesced into the
-    33 ms paint tick, so the event loop is pumped for those).
+    33 ms paint tick, so the event loop is pumped for those);
+  - #591 smoothing: the periodic (Timer) evaluation lets each cell's
+    target follow the fresh fit with an asymmetric lag (outward fast,
+    inward slow) while a window change snaps it; the shown range
+    glides to the target over paint ticks instead of jumping.
 
 Unit-marked: no app launch, no hardware, offscreen Qt platform.
 """
@@ -36,6 +40,7 @@ from pathlib import Path
 # environment is untouched (see test_plot_viewer_masks.py).
 from PyQt6.QtCore import (  # noqa: E402
     QCoreApplication,
+    QMetaObject,
     QObject,
     QUrl,
     pyqtProperty,
@@ -70,7 +75,9 @@ LIVE_EDGE = 100.0   # the stub source's liveEdge, so windows are non-trivial
 def _cell_range(side, cam_id, metric):
     """Distinct per (side, camera, metric) so a cell fitted to its own
     trace is distinguishable from one that got the shared range."""
-    base = float(cam_id) * 10.0 + (1000.0 if side == "right" else 0.0)
+    # Offset by 2 so no cell ever reports exactly (0, 1): the viewer
+    # treats that pair as the source's "no usable samples" fallback.
+    base = 2.0 + float(cam_id) * 10.0 + (1000.0 if side == "right" else 0.0)
     return (base, base + 1.0) if metric == "bfi" else (base + 0.5, base + 1.5)
 
 
@@ -85,6 +92,7 @@ class _StubLiveSource(QObject):
         super().__init__(parent)
         self.cell_calls = []
         self.window_calls = []   # (t_lo, t_hi) per per-cell call (#591)
+        self.offset = 0.0        # added to every per-cell range (settling tests)
 
     @pyqtProperty(bool, notify=_neverEmitted)
     def live(self):
@@ -126,7 +134,7 @@ class _StubLiveSource(QObject):
         self.cell_calls.append((side, int(cam_id), metric))
         self.window_calls.append((t_lo, t_hi))
         y_min, y_max = _cell_range(side, int(cam_id), metric)
-        return {"yMin": y_min, "yMax": y_max}
+        return {"yMin": y_min + self.offset, "yMax": y_max + self.offset}
 
     @pyqtSlot(str, int, str, float, float, int, result="QVariantList")
     def points_for_window(self, side, cam_id, metric, t_lo, t_hi, max_points):
@@ -398,6 +406,123 @@ def test_pan_zoom_and_window_length_refit_per_plot(live_viewer):
     viewer.setProperty("followLive", True)        # back to live
     _pump()
     assert src.window_calls and set(src.window_calls) == {(LIVE_EDGE - 5.0, LIVE_EDGE)}
+
+
+def _refit(viewer):
+    """A snapping refit (what a window change, source change or mode
+    flip does), synchronously."""
+    QMetaObject.invokeMethod(viewer, "_recomputeAutoscale")
+
+
+def _tick(viewer):
+    """What the 0.5 s autoscale Timer does: a lagging evaluation."""
+    QMetaObject.invokeMethod(viewer, "_autoscaleTick")
+
+
+def _pump_paint_ticks(viewer, n, timeout=3.0):
+    start = int(viewer.property("paintTick"))
+    end = time.monotonic() + timeout
+    while int(viewer.property("paintTick")) < start + n and time.monotonic() < end:
+        _qt_app.processEvents()
+        time.sleep(0.005)
+    assert int(viewer.property("paintTick")) >= start + n, "paint tick did not advance"
+
+
+KEY = ("left", 0)
+
+
+def _target(viewer, key="left:0"):
+    """The smoothed TARGET range of one cell (what the shown range glides
+    to) — updated synchronously by a refit or tick, unlike the shown
+    range, which moves only in the paint tick."""
+    v = viewer.property("_cellTargets")
+    if hasattr(v, "toVariant"):
+        v = v.toVariant()
+    t = v[key]
+    return tuple(float(t[f]) for f in ("pMin", "pMax", "sMin", "sMax"))
+
+
+def test_per_plot_timer_evaluation_lags_outward_fast_inward_slow(live_viewer):
+    """After the whole fit shifts up by half a span, one Timer evaluation
+    moves the top bound (outward) a third of the way (tau 1 s at 0.5 s)
+    but the bottom bound (inward) only ~5% (tau 10 s); after five, the
+    top is >80% there and the bottom <30%."""
+    viewer, src, stub = live_viewer
+    stub.setConfig("autoScalePerPlot", True)
+    t0 = _target(viewer)
+    src.offset = 0.5
+    _tick(viewer)
+    t1 = _target(viewer)
+    assert t1[1] == pytest.approx(t0[1] + 0.5 / 3.0, rel=1e-3)     # pMax: outward, aUp = 1/3
+    assert t1[0] == pytest.approx(t0[0] + 0.5 / 21.0, rel=1e-3)    # pMin: inward, aDown = 1/21
+    for _ in range(4):
+        _tick(viewer)
+    t5 = _target(viewer)
+    assert (t5[1] - t0[1]) / 0.5 > 0.8
+    assert (t5[0] - t0[0]) / 0.5 < 0.3
+    assert t0[1] < t1[1] < t5[1] < t0[1] + 0.5 + 1e-9                # monotonic approach
+
+
+def test_per_plot_window_change_snaps_the_target(live_viewer):
+    """A pan (new window content) snaps the target to the fresh fit
+    instead of lagging toward it."""
+    viewer, src, stub = live_viewer
+    stub.setConfig("autoScalePerPlot", True)
+    t0 = _target(viewer)
+    src.offset = 0.5
+    viewer.setProperty("followLive", False)
+    viewer.setProperty("windowStartT", 20.0)
+    _pump()                                   # coalesced refit = snap
+    t1 = _target(viewer)
+    for i in range(4):
+        assert t1[i] == pytest.approx(t0[i] + 0.5), i
+
+
+def test_per_plot_glides_when_the_data_leaves_the_axis(live_viewer):
+    """A snapped refit moves the target at once, and the SHOWN range
+    glides there over paint ticks rather than jumping."""
+    viewer, src, stub = live_viewer
+    stub.setConfig("autoScalePerPlot", True)
+    before = _ranges(viewer)[KEY]
+    src.offset = 0.5                      # data now sits half a span higher
+    _refit(viewer)
+    assert _ranges(viewer)[KEY] == before  # no jump at the refit itself
+    _pump_paint_ticks(viewer, 2)
+    mid = _ranges(viewer)[KEY]
+    for i in range(4):                    # gliding: strictly between old and new
+        assert before[i] < mid[i] < before[i] + 0.5, (i, before[i], mid[i])
+    _pump(2500)                           # converge
+    after = _ranges(viewer)[KEY]
+    for i in range(4):
+        assert after[i] == pytest.approx(before[i] + 0.5, abs=2e-3), i
+    assert viewer.property("_perPlotSettled") is True
+
+
+def test_per_plot_first_fit_snaps_without_a_glide(live_viewer):
+    """Enabling per-plot lands on the fitted ranges immediately (no
+    animation in from the global range) — the existing exact-range
+    assertions rely on it; stated here explicitly."""
+    viewer, src, stub = live_viewer
+    stub.setConfig("autoScalePerPlot", True)
+    assert _ranges(viewer)[KEY][:2] == _cell_range(*KEY, "bfi")
+    _pump(200)
+    assert viewer.property("_perPlotSettled") is True
+
+
+def test_per_plot_neutral_fit_holds_the_axis(live_viewer):
+    """A window with no usable samples (covered camera) reports the
+    0..1 neutral fit; the axis must hold rather than collapse."""
+    viewer, src, stub = live_viewer
+    stub.setConfig("autoScalePerPlot", True)
+    before = _ranges(viewer)[KEY]
+    real = src.compute_bounds_for_cell
+    src.compute_bounds_for_cell = lambda *a, **k: {"yMin": 0.0, "yMax": 1.0}
+    try:
+        _refit(viewer)
+        _pump(300)
+        assert _ranges(viewer)[KEY] == before
+    finally:
+        src.compute_bounds_for_cell = real
 
 
 def test_global_mode_ignores_window_changes(live_viewer):
