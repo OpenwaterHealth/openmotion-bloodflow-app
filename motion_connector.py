@@ -130,7 +130,7 @@ def engineering_password_matches(pw) -> bool:
 # pattern table. Unmapped masks render as hex; -1 (unknown, e.g. a
 # clinical-mode scan whose meta lacks sdk_flags) renders as an em dash.
 _CONFIG_NAMES = {
-    0x00: "None", 0x5A: "Near", 0x66: "Middle", 0xC3: "Far",
+    0x00: "None", 0x3C: "Near", 0x66: "Middle", 0xC3: "Far",
     0x99: "Outer", 0x0F: "Left", 0xF0: "Right", 0x42: "Third Row",
     0xFF: "All",
 }
