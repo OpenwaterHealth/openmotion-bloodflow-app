@@ -342,6 +342,32 @@ def test_bvi_low_pass_switch_is_research_only(modal_factory):
     assert _control_visible(modal_factory(), "bviLowPassSwitch") is False
 
 
+def test_auto_export_csv_switch_is_research_only(modal_factory):
+    """#598: the scan-end CSV auto-export switch is a research feature —
+    hidden on a clinical build even with the engineering unlock."""
+    modal_factory.stub.setFlags(clinical=False, engineering=False)
+    assert _control_visible(modal_factory(), "autoExportCsvSwitch") is True
+    modal_factory.stub.setFlags(clinical=True, engineering=False)
+    assert _control_visible(modal_factory(), "autoExportCsvSwitch") is False
+    modal_factory.stub.setFlags(clinical=True, engineering=True)
+    assert _control_visible(modal_factory(), "autoExportCsvSwitch") is False
+
+
+def test_auto_export_csv_switch_is_saved_on_close(modal_factory):
+    """#598: the switch rides the close() saveConfigs payload, which is
+    what persists it to the settings table."""
+    stub = modal_factory.stub
+    stub.setFlags(clinical=False, engineering=False)
+    stub.saved_configs.clear()
+    modal = modal_factory()
+    _invoke(modal, "open")
+    switch = modal.findChild(QObject, "autoExportCsvSwitch")
+    assert switch.property("checked") is False
+    _invoke(switch, "click")
+    _invoke(modal, "close")
+    assert stub.saved_configs[-1]["autoExportCsv"] is True
+
+
 def test_research_use_notice_is_research_only(modal_factory):
     """The research-use-only notice at the top of Settings shows on a
     research build and never on a clinical one, engineering unlock or
