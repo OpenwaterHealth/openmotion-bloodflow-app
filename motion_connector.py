@@ -919,6 +919,8 @@ class MotionConnector(QObject):
     # Emitted from _on_pipeline_complete (pipeline worker thread); delivered
     # on the GUI thread via the auto-queued connection wired in connect_signals.
     _scanOutcomeWarningSignal = pyqtSignal(str, str)
+    # Worker->main: scan-end auto-export result (#598), (ok, path-or-reason).
+    _autoExportFinishedSignal = pyqtSignal(bool, str)
 
     configProgress = pyqtSignal(int)
     configLog = pyqtSignal(str)
@@ -3968,6 +3970,84 @@ class MotionConnector(QObject):
             self.errorOccurred.emit(f"Export failed:\n{exc}")
             return result
 
+    # ── Scan-end CSV auto-export (#598) ─────────────────────────────────
+    def _auto_export_enabled(self) -> bool:
+        """The Research-only Settings switch, re-checked at every scan end
+        so a persisted autoExportCsv=true never exports on a clinical
+        build (which has no switch to turn it off)."""
+        return (self._app_config.get("autoExportCsv") is True
+                and self._app_config.get("clinicalMode") is not True)
+
+    def _maybe_auto_export_scan_csv(self, session_label: str):
+        """Start the scan-end export when enabled. Returns the worker
+        thread (None when nothing was started) so tests can join it."""
+        if not session_label or not self._auto_export_enabled():
+            return None
+        out_path = os.path.join(self._data_root,
+                                f"{session_label}_export.csv")
+        t = threading.Thread(
+            target=self._auto_export_scan_csv_worker,
+            args=(session_label, out_path),
+            name="scan-csv-auto-export", daemon=True,
+        )
+        t.start()
+        return t
+
+    def _auto_export_scan_csv_worker(self, session_label: str,
+                                     out_path: str) -> None:
+        ok, detail = self._auto_export_scan_csv_sync(session_label, out_path)
+        if detail:
+            self._autoExportFinishedSignal.emit(ok, detail)
+
+    def _auto_export_scan_csv_sync(self, session_label: str,
+                                   out_path: str) -> tuple[bool, str]:
+        """Export the just-finished scan to ``out_path``. Returns
+        ``(ok, detail)``: ``(True, path)`` on success, ``(False, reason)``
+        on failure, ``(False, "")`` when there is nothing to export (an
+        empty scan, whose session row ScanDBSink already deleted — the
+        scan-outcome toast covers that case). Writes a ``.partial`` file
+        and renames it, so an export cut short by an app exit never leaves
+        a truncated CSV under the final name. Never raises."""
+        tmp_path = out_path + ".partial"
+        try:
+            from omotion.ScanDatabase import ScanDatabase
+            from omotion.SessionPlayback import materialize_corrected_csv
+
+            db_path = getattr(self._interface, "scan_db_path", None)
+            if not db_path:
+                return False, "no scan database available"
+            with ScanDatabase(db_path) as db:
+                session = db.get_session_by_label(session_label)
+            if not session:
+                logger.info("Auto-export: no saved data for %r; skipped",
+                            session_label)
+                return False, ""
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            materialize_corrected_csv(
+                str(db_path), int(session["id"]), tmp_path,
+                include_quality=True,
+            )
+            os.replace(tmp_path, out_path)
+            logger.info("Auto-export: %r (sid=%d) -> %s",
+                        session_label, session["id"], out_path)
+            return True, out_path
+        except Exception as exc:
+            logger.exception("Auto-export failed for %r", session_label)
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+            return False, str(exc) or type(exc).__name__
+
+    def _on_auto_export_finished(self, ok: bool, detail: str) -> None:
+        """GUI thread: toast the auto-export result."""
+        if ok:
+            self.notify(f"Scan CSV exported to {detail}", "success",
+                        duration_ms=6000, tag="scan-auto-export")
+        else:
+            self.notify(f"Automatic CSV export failed: {detail}", "warning",
+                        duration_ms=0, tag="scan-auto-export")
+
     @pyqtSlot(str, result=int)
     @pyqtSlot(str, str, result=int)
     @pyqtSlot(str, str, int, result=int)
@@ -4628,6 +4708,11 @@ class MotionConnector(QObject):
             # line above) so History shows the real scan time, not the pipeline
             # wall-clock session_end - session_start (issue #335).
             self._persist_scan_notes(session_label, actual_duration_sec=elapsed)
+
+            # Research auto-export (#598): same file as History → Export
+            # CSV, on its own thread so the scan-done flow isn't held up
+            # by a multi-second materialize.
+            self._maybe_auto_export_scan_csv(session_label)
 
             # Interrupted-scan outcome. An interrupted scan loses its open
             # interval; one that ends before any interval closes saves
@@ -6393,6 +6478,7 @@ class MotionConnector(QObject):
         # Auto-queued: emitted on the pipeline worker thread, runs the toast
         # on the GUI thread (same marshalling pattern as _pastScanBuffersReady).
         self._scanOutcomeWarningSignal.connect(self._on_scan_outcome_warning)
+        self._autoExportFinishedSignal.connect(self._on_auto_export_finished)
 
     def _ft_thresholds(self):
         """``CalibrationThresholds`` from the ft_* config values, falling

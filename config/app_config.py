@@ -52,6 +52,9 @@ APP_CONFIG = {
     "dataDirectory": None,
     "writeRawCsv": False,
     "rawCsvDurationSec": None,
+    # Research-only (#598): export the History → Export CSV file into data/
+    # automatically when each scan ends. Never exports on a clinical build.
+    "autoExportCsv": False,
     "writeTelemetryCsv": False,
     "leftMask": 102,
     "rightMask": 102,
@@ -214,8 +217,9 @@ PREFERENCE_KEYS = frozenset({
     "darkMode", "liquidGlass",
     # Research data output. Persisting these is harmless in a clinical
     # build: the scan-start gate is (!clinicalMode || engineeringMode), and
-    # engineeringMode is session-only.
-    "writeRawCsv", "rawCsvDurationSec",
+    # engineeringMode is session-only. autoExportCsv is gated on
+    # !clinicalMode alone at scan end.
+    "writeRawCsv", "rawCsvDurationSec", "autoExportCsv",
 })
 
 STATE_KEYS = frozenset({
