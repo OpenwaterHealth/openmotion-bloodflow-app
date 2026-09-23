@@ -560,6 +560,34 @@ Item {
                 // Top padding
                 Item { Layout.fillWidth: true; height: 8 }
 
+                // ── Research-use notice (research builds only) ───────────────
+                Rectangle {
+                    objectName: "researchUseNotice"
+                    visible: !root.clinicalMode
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 20
+                    Layout.rightMargin: 20
+                    implicitHeight: researchNotice.implicitHeight + 24
+                    radius: 10
+                    color: Qt.rgba(0.902, 0.494, 0.133, 0.12)   // #E67E22 tint
+                    border.color: "#E67E22"
+                    border.width: 1
+
+                    Text {
+                        id: researchNotice
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.leftMargin: 18
+                        anchors.rightMargin: 18
+                        text: "This software is intended for research use only."
+                        color: root.colTextPri
+                        font.pixelSize: 13
+                        font.weight: Font.DemiBold
+                        wrapMode: Text.WordWrap
+                    }
+                }
+
                 // ── Sensor Placement Instructions ────────────────────────────
                 SectionCard {
                     title: "Sensor Placement Instructions"
