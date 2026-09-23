@@ -419,6 +419,13 @@ def _tick(viewer):
     QMetaObject.invokeMethod(viewer, "_autoscaleTick")
 
 
+def _slide(viewer, n):
+    """Advance the followed window the way n evaluations of a live scan
+    would (the paint tick refreshes liveEdgeSnapshot from the source);
+    the Timer path only lags while the window is actually sliding."""
+    viewer.setProperty("liveEdgeSnapshot", LIVE_EDGE + 0.5 * n)
+
+
 def _pump_paint_ticks(viewer, n, timeout=3.0):
     start = int(viewer.property("paintTick"))
     end = time.monotonic() + timeout
@@ -443,24 +450,49 @@ def _target(viewer, key="left:0"):
 
 
 def test_per_plot_timer_evaluation_lags_outward_fast_inward_slow(live_viewer):
-    """After the whole fit shifts up by half a span, one Timer evaluation
-    moves the top bound (outward) a third of the way (tau 1 s at 0.5 s)
-    but the bottom bound (inward) only ~5% (tau 10 s); after five, the
-    top is >80% there and the bottom <30%."""
+    """While the followed window slides, after the whole fit shifts up
+    by half a span one Timer evaluation moves the top bound (outward) by
+    dt/(tauUp+dt) of the way and the bottom bound (inward) by only
+    dt/(tauDown+dt); after five, the top is >80% there and the bottom
+    lags behind it."""
     viewer, src, stub = live_viewer
     stub.setConfig("autoScalePerPlot", True)
     t0 = _target(viewer)
+    dt = float(viewer.property("_perPlotEvalSec"))
+    a_up = dt / (float(viewer.property("_perPlotTauUpSec")) + dt)
+    a_dn = dt / (float(viewer.property("_perPlotTauDownSec")) + dt)
+    assert a_dn < a_up
     src.offset = 0.5
+    _slide(viewer, 1)
     _tick(viewer)
     t1 = _target(viewer)
-    assert t1[1] == pytest.approx(t0[1] + 0.5 / 3.0, rel=1e-3)     # pMax: outward, aUp = 1/3
-    assert t1[0] == pytest.approx(t0[0] + 0.5 / 21.0, rel=1e-3)    # pMin: inward, aDown = 1/21
-    for _ in range(4):
+    assert t1[1] == pytest.approx(t0[1] + a_up * 0.5, rel=1e-3)    # pMax: outward
+    assert t1[0] == pytest.approx(t0[0] + a_dn * 0.5, rel=1e-3)    # pMin: inward
+    for n in range(2, 6):
+        _slide(viewer, n)
         _tick(viewer)
     t5 = _target(viewer)
-    assert (t5[1] - t0[1]) / 0.5 > 0.8
-    assert (t5[0] - t0[0]) / 0.5 < 0.3
+    up_progress = (t5[1] - t0[1]) / 0.5
+    down_progress = (t5[0] - t0[0]) / 0.5
+    assert up_progress > 0.8
+    assert down_progress < up_progress
+    assert down_progress == pytest.approx(1 - (1 - a_dn) ** 5, rel=1e-3)
     assert t0[1] < t1[1] < t5[1] < t0[1] + 0.5 + 1e-9                # monotonic approach
+
+
+def test_per_plot_static_window_snaps_on_the_timer(live_viewer):
+    """When the window has not moved since the last evaluation (scan
+    stopped, view paused) the fresh fit is final: the Timer path snaps
+    to it instead of creeping there for seconds."""
+    viewer, src, stub = live_viewer
+    stub.setConfig("autoScalePerPlot", True)
+    t0 = _target(viewer)
+    _tick(viewer)                       # same window as the enabling fit
+    src.offset = 0.5
+    _tick(viewer)                       # still the same window -> snap
+    t1 = _target(viewer)
+    for i in range(4):
+        assert t1[i] == pytest.approx(t0[i] + 0.5), i
 
 
 def test_per_plot_window_change_snaps_the_target(live_viewer):
