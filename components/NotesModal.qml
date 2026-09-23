@@ -21,6 +21,13 @@ Item {
     // See HistoryModal.qml for the original fix.
     readonly property int iconBarInset: 104
 
+    // Item that gets keyboard focus back when the modal closes (issue
+    // #517). The notes TextArea holds active focus while the modal is
+    // open; once it hides, nothing has focus and the page's Space
+    // shortcut (timestamped note) stays dead until the user clicks the
+    // window. BloodFlow.qml points this at the PlotViewer.
+    property Item focusReturnTarget: null
+
     function open() {
         notesArea.text = MotionInterface.scanNotes
         root.visible = true
@@ -42,6 +49,20 @@ Item {
         MotionInterface.scanNotes = notesArea.text
         MotionInterface.notify("Note saved.", "success", 4000, true)
         root.visible = false
+
+        // Deferred so the hide settles first. close() is the single
+        // hide path (backdrop, X, Escape, ModalManager), so this covers
+        // every way out. Skip the restore if focus moved while we
+        // waited: ModalManager.toggle() closes this modal and opens the
+        // next one in the same tick, and that one's focus must win.
+        if (root.focusReturnTarget) {
+            var focusAtClose = root.Window.activeFocusItem
+            Qt.callLater(function() {
+                if (!root.visible && root.focusReturnTarget
+                        && root.Window.activeFocusItem === focusAtClose)
+                    root.focusReturnTarget.forceActiveFocus()
+            })
+        }
     }
 
     // Dimmed backdrop
