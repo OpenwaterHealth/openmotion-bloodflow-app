@@ -23,8 +23,9 @@ Item {
     readonly property string label: "Software Update"
     readonly property bool dismissable: !MotionInterface.updateBusy
 
-    // Set by the host: true while a scan / check is running. An automatic
-    // raise waits for it to clear; the Review button always opens.
+    // Set by the host: true while a scan / check is running or the
+    // "What's new" notes are open. An automatic raise waits for it to
+    // clear; the Review button always opens.
     property bool deferAutoOpen: false
 
     readonly property bool _clinical: MotionInterface.appConfig.clinicalMode === true
