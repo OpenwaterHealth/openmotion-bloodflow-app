@@ -1,6 +1,6 @@
-# Contributing to ow-bloodflow-app
+# Contributing to openmotion-bloodflow-app
 
-Thank you for contributing to the **ow-bloodflow-app** project maintained by OpenwaterHealth.
+Thank you for contributing to the **openmotion-bloodflow-app** project maintained by OpenwaterHealth.
 
 This document outlines the development workflow, branching strategy, communication expectations, and pull request process.
 
@@ -23,14 +23,14 @@ All work must be traceable to an existing GitHub Issue.
 Fork the repository to your GitHub account, then:
 
 ```bash
-git clone https://github.com/<your-username>/ow-bloodflow-app.git
-cd ow-bloodflow-app
+git clone https://github.com/<your-username>/openmotion-bloodflow-app.git
+cd openmotion-bloodflow-app
 ```
 
 Add upstream:
 
 ```bash
-git remote add upstream https://github.com/OpenwaterHealth/ow-bloodflow-app.git
+git remote add upstream https://github.com/OpenwaterHealth/openmotion-bloodflow-app.git
 git fetch upstream
 ```
 
@@ -141,7 +141,7 @@ git push origin feature/<branch-name>
 2. Open a Pull Request:
 
    * **Base branch:** `next`
-   * **Target repository:** OpenwaterHealth/ow-bloodflow-app
+   * **Target repository:** OpenwaterHealth/openmotion-bloodflow-app
 
 3. PR Title Format:
 
