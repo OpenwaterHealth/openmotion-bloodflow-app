@@ -119,28 +119,32 @@ Rectangle {
     // larger moves (mean 56% of the axis) plus seconds of clipping —
     // simulated on bench session 79 — because the tallest beat in any
     // five genuinely varies that much. So instead the fit is SMOOTHED:
-    // each cell keeps a TARGET range that follows the fresh windowed fit
-    // with a first-order lag, asymmetric so nothing stays clipped for
-    // long — a bound moving outward follows with _perPlotTauUpSec (1 s),
-    // inward with _perPlotTauDownSec (3 s; 10 s read as "extremely
-    // slow" to tighten on the bench, 2026-09-23) — and the SHOWN range
-    // in _cellBounds glides toward the target every paint tick
-    // (_glideCellBounds, _perPlotSmoothK per 33 ms, ≈ 0.25 s). On the
-    // bench data that is ~3.8% of the axis per evaluation, largest move
-    // 19% (adopting every fit: 7% / 56%), tallest beats off-axis ~10%
-    // of the time. The target SNAPS (no lag) whenever the window itself
-    // changes — first fit, pan, zoom, window length, back to live,
-    // display-mode flip, new source — since that is new content, not
-    // the same window sliding; and also when the window has NOT moved
-    // since the last evaluation (scan stopped, view paused): the fresh
-    // fit is then final, so land on it instead of creeping for seconds.
+    // each cell's range follows the fresh windowed fit with a
+    // first-order lag, asymmetric so nothing stays clipped for long — a
+    // bound moving outward follows with _perPlotTauUpSec (1 s), inward
+    // with _perPlotTauDownSec (3 s; 10 s read as "extremely slow" to
+    // tighten on the bench). On the bench data that is ~3.8% of the
+    // axis per evaluation, largest move 19% (adopting every fit: 7% /
+    // 56%), tallest beats off-axis ~10% of the time. The range SNAPS
+    // (no lag) whenever the window itself changes — first fit, pan,
+    // zoom, window length, back to live, display-mode flip, new source
+    // — since that is new content, not the same window sliding; and
+    // also when the window has NOT moved since the last evaluation
+    // (scan stopped, view paused): the fresh fit is then final.
+    //
+    // The new range is applied directly at each 0.5 s evaluation. An
+    // earlier revision also glided the shown range toward it in the
+    // 33 ms paint tick; that kept the tick dirty for as long as the
+    // target kept moving (always, in per-plot mode), i.e. every cell
+    // repainted at 30 Hz even with no data streaming — measured 30
+    // paints/s vs 9/s in global mode — and the bench reported the whole
+    // UI "haltingly slow". Per-plot mode must not add repaints beyond
+    // the one its 0.5 s evaluation marks dirty.
     readonly property real _perPlotTauUpSec: 1.0
     readonly property real _perPlotTauDownSec: 3.0
     readonly property real _perPlotEvalSec: 0.5
-    readonly property real _perPlotSmoothK: 0.12
-    property var _cellTargets: ({})
+    property var _cellTargets: ({})     // same object as _cellBounds; kept for tests/readability
     property string _cellTargetsPair: ""
-    property bool _perPlotSettled: true
     property var _lastFitWindow: null   // {tLo, tHi} of the last per-plot fit
 
     // Next target range for one metric: the fresh fit itself when
@@ -166,39 +170,6 @@ Rectangle {
     function _recomputeAutoscale() { viewer._fitAutoscale(true) }
     function _autoscaleTick() { viewer._fitAutoscale(false) }
 
-    // One glide step: move every shown range toward its target. Runs in
-    // the paint tick while unsettled and keeps the tick alive (dirty)
-    // until every value is within 0.1% of its target span, so a paused
-    // replay animates too, not only a live scan that is dirty anyway.
-    function _glideCellBounds() {
-        var k = viewer._perPlotSmoothK
-        var shown = viewer._cellBounds
-        var targets = viewer._cellTargets
-        var next = ({})
-        var settled = true
-        for (var key in targets) {
-            var t = targets[key]
-            var s = shown[key] || t
-            var tolP = 1e-3 * Math.abs(t.pMax - t.pMin)
-            var tolS = 1e-3 * Math.abs(t.sMax - t.sMin)
-            var o = ({})
-            var fields = [["pMin", tolP], ["pMax", tolP], ["sMin", tolS], ["sMax", tolS]]
-            for (var i = 0; i < fields.length; i++) {
-                var f = fields[i][0], tol = fields[i][1]
-                var d = t[f] - s[f]
-                if (Math.abs(d) <= tol) {
-                    o[f] = t[f]
-                } else {
-                    o[f] = s[f] + k * d
-                    settled = false
-                }
-            }
-            next[key] = o
-        }
-        viewer._cellBounds = next
-        viewer._perPlotSettled = settled
-        if (!settled) viewer._dirty = true
-    }
     // Mode flips and grid re-layouts (mask change, sensor connect) get
     // an immediate refit rather than waiting up to 3 s for the tick —
     // a cell without an entry yet would draw on the global range. The
@@ -446,9 +417,7 @@ Rectangle {
             var pairKey = pair.primary + "/" + pair.secondary
             var samePair = (viewer._cellTargetsPair === pairKey)
             var prevTargets = samePair ? viewer._cellTargets : ({})
-            var prevShown = samePair ? viewer._cellBounds : ({})
             var targets = ({})
-            var shown = ({})
             var cells = viewer._activeCellModel
             for (var i = 0; i < cells.length; i++) {
                 var c = cells[i]
@@ -461,21 +430,15 @@ Rectangle {
                 var s = _followRange(prev ? [prev.sMin, prev.sMax] : null, fs, snap)
                 if (!p || !s) continue   // neutral fit on a brand-new cell: nothing to show yet
                 targets[key] = { pMin: p[0], pMax: p[1], sMin: s[0], sMax: s[1] }
-                // A cell with no shown range yet (first fit, or a cell
-                // that just appeared) snaps; an existing one keeps what
-                // it shows and glides from there in the paint tick.
-                shown[key] = prevShown[key] ? prevShown[key] : targets[key]
             }
             viewer._cellTargets = targets
             viewer._cellTargetsPair = pairKey
-            viewer._cellBounds = shown
-            viewer._perPlotSettled = false
+            viewer._cellBounds = targets
         } else {
             if (Object.keys(viewer._cellBounds).length > 0) {
                 viewer._cellBounds = ({})
                 viewer._cellTargets = ({})
                 viewer._cellTargetsPair = ""
-                viewer._perPlotSettled = true
             }
             var gp = src.compute_bounds_for_metric(pair.primary)
             if (_validBounds(gp)) {
@@ -784,10 +747,6 @@ Rectangle {
                     viewer._recomputeAutoscale()
                     viewer._dirty = false
                 }
-                // Per-plot glide (#591): one step toward the targets per
-                // paint; re-dirties itself until settled.
-                if (viewer.perPlotActive && !viewer._perPlotSettled)
-                    viewer._glideCellBounds()
                 viewer.paintTick++
                 if (viewer._hudVisible) {
                     var dt = Date.now() - t0
