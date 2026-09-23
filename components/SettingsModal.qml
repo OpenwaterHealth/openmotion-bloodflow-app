@@ -51,6 +51,8 @@ Item {
     property real   contrastMax: 1.0
     property bool   writeRawCsv:       false
     property var    rawCsvDurationSec: 60
+    // Research-only (#598): export each scan's CSV into data/ at scan end.
+    property bool   autoExportCsv:     false
 
     // ── App update state — driven by MotionInterface's auto-check on
     // launch (UpdateBanner.qml fires it ~3s after startup). "idle" until
@@ -124,6 +126,7 @@ Item {
         contrastMin = b.min; contrastMax = b.max
         writeRawCsv       = cfg.writeRawCsv       !== undefined ? cfg.writeRawCsv       : false
         rawCsvDurationSec = cfg.rawCsvDurationSec !== undefined ? cfg.rawCsvDurationSec : null
+        autoExportCsv     = cfg.autoExportCsv     === true
         // Theme selector (themeCombo) binds its currentIndex directly to
         // appConfig.darkMode/liquidGlass, so no manual sync is needed here.
     }
@@ -166,6 +169,7 @@ Item {
             "bfiColor":           "" + bfiColor,
             "bviColor":           "" + bviColor,
             "bviLowPassEnabled":  bviLowPassEnabled,
+            "autoExportCsv":      autoExportCsv,
             "bfiMin":      bfiMin,
             "bfiMax":      bfiMax,
             "bviMin":      bviMin,
@@ -651,6 +655,29 @@ Item {
                                 border.color: root.colBorderSoft; border.width: 1
                             }
                         }
+                    }
+
+                    // ── Scan-end CSV auto-export (research only, #598) ───────
+                    // Writes the History → Export CSV file into data/ when
+                    // each scan ends. Hidden on clinical builds, engineering
+                    // unlock included; the connector re-checks clinicalMode
+                    // at scan end, so a stale persisted value never exports.
+                    FieldRow {
+                        visible: !root.clinicalMode
+                        label: "Auto-export CSV"
+                        PillSwitch {
+                            objectName: "autoExportCsvSwitch"
+                            Accessible.name: "Auto-export CSV"
+                            checked: root.autoExportCsv
+                            onCheckedChanged: root.autoExportCsv = checked
+                        }
+                        Text {
+                            text: root.autoExportCsv ? "On — every scan, saved to data\\ in the output folder"
+                                                     : "Off"
+                            color: root.autoExportCsv ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
                     }
 
                     // ── Raw histogram CSVs (research + engineering, #234) ────
