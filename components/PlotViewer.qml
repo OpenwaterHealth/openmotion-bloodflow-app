@@ -122,21 +122,26 @@ Rectangle {
     // each cell keeps a TARGET range that follows the fresh windowed fit
     // with a first-order lag, asymmetric so nothing stays clipped for
     // long — a bound moving outward follows with _perPlotTauUpSec (1 s),
-    // inward with _perPlotTauDownSec (10 s) — and the SHOWN range in
-    // _cellBounds glides toward the target every paint tick
+    // inward with _perPlotTauDownSec (3 s; 10 s read as "extremely
+    // slow" to tighten on the bench, 2026-09-23) — and the SHOWN range
+    // in _cellBounds glides toward the target every paint tick
     // (_glideCellBounds, _perPlotSmoothK per 33 ms, ≈ 0.25 s). On the
-    // bench data that is ~2.5% of the axis per evaluation, largest move
-    // 17%, tallest beats off-axis <10% of the time. The target SNAPS
-    // (no lag) whenever the window itself changes — first fit, pan,
-    // zoom, window length, back to live, display-mode flip, new source
-    // — since that is new content, not the same window sliding.
+    // bench data that is ~3.8% of the axis per evaluation, largest move
+    // 19% (adopting every fit: 7% / 56%), tallest beats off-axis ~10%
+    // of the time. The target SNAPS (no lag) whenever the window itself
+    // changes — first fit, pan, zoom, window length, back to live,
+    // display-mode flip, new source — since that is new content, not
+    // the same window sliding; and also when the window has NOT moved
+    // since the last evaluation (scan stopped, view paused): the fresh
+    // fit is then final, so land on it instead of creeping for seconds.
     readonly property real _perPlotTauUpSec: 1.0
-    readonly property real _perPlotTauDownSec: 10.0
+    readonly property real _perPlotTauDownSec: 3.0
     readonly property real _perPlotEvalSec: 0.5
     readonly property real _perPlotSmoothK: 0.12
     property var _cellTargets: ({})
     property string _cellTargetsPair: ""
     property bool _perPlotSettled: true
+    property var _lastFitWindow: null   // {tLo, tHi} of the last per-plot fit
 
     // Next target range for one metric: the fresh fit itself when
     // snapping, else the asymmetric first-order lag from the previous
@@ -428,6 +433,13 @@ Rectangle {
             // within a few minutes, and a past excursion stayed inside
             // the percentile clip for ~50x its own duration.
             var w = viewer._visibleWindow()
+            // Same window as the last evaluation (scan stopped, view
+            // paused): nothing is sliding, the fresh fit is final — snap.
+            if (!snap && viewer._lastFitWindow
+                    && w.tLo === viewer._lastFitWindow.tLo
+                    && w.tHi === viewer._lastFitWindow.tHi)
+                snap = true
+            viewer._lastFitWindow = w
             // Targets and shown ranges are per metric pair: a BFI/BVI ↔
             // Mean/Contrast flip starts over (snap), it does not glide
             // from a BVI range to a contrast range.

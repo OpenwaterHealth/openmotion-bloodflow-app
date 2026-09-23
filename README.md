@@ -106,7 +106,7 @@ The shipped values are compiled in (`config/app_config.py`, #546); each key belo
 | `showBfiBvi` | `true` | Plot BFI/BVI instead of raw mean/contrast |
 | `plotWindowSec` | `15` | Realtime plot time window (3 / 5 / 15 / 30) |
 | `autoScale` | `false` | Auto-scale realtime plot Y-axes (research builds only; clinical always uses the manual bounds) |
-| `autoScalePerPlot` | `false` | With `autoScale` on, fit each plot to its own camera instead of one shared range per metric. Fits the data in the visible window (not the whole scan), refits on pan/zoom, follows the trace smoothly (the axis grows within about a second, shrinks over about ten) instead of jumping. Switch lives in the plot's ⋯ menu under Autoscale (research builds only) |
+| `autoScalePerPlot` | `false` | With `autoScale` on, fit each plot to its own camera instead of one shared range per metric. Fits the data in the visible window (not the whole scan), refits on pan/zoom, follows the trace smoothly (the axis grows within about a second, shrinks over a few) instead of jumping. Switch lives in the plot's ⋯ menu under Autoscale (research builds only) |
 | `bfiColor` / `bviColor` | `#ff0000` / `#3437db` | Trace colors for BFI / BVI |
 | `bfiClampLow` / `bfiClampHigh` | `0.0` / `10.0` | BFI display clamps — values outside show `--` |
 | `bviClampLow` / `bviClampHigh` | `0.0` / `10.0` | BVI display clamps — values outside show `--` |
