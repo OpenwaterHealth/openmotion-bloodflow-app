@@ -342,6 +342,18 @@ def test_bvi_low_pass_switch_is_research_only(modal_factory):
     assert _control_visible(modal_factory(), "bviLowPassSwitch") is False
 
 
+def test_research_use_notice_is_research_only(modal_factory):
+    """The research-use-only notice at the top of Settings shows on a
+    research build and never on a clinical one, engineering unlock or
+    not."""
+    modal_factory.stub.setFlags(clinical=False, engineering=False)
+    assert _control_visible(modal_factory(), "researchUseNotice") is True
+    modal_factory.stub.setFlags(clinical=True, engineering=False)
+    assert _control_visible(modal_factory(), "researchUseNotice") is False
+    modal_factory.stub.setFlags(clinical=True, engineering=True)
+    assert _control_visible(modal_factory(), "researchUseNotice") is False
+
+
 def test_engineering_card_follows_engineering_flag(modal_factory):
     modal_factory.stub.setFlags(clinical=False, engineering=True)
     modal = modal_factory()
