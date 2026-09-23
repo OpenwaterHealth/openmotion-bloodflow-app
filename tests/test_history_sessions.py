@@ -61,7 +61,7 @@ def test_friendly_ts_converts_utc_to_local_time():
 
 
 def test_config_name_known_and_unknown():
-    assert _config_name(0x5A) == "Near"
+    assert _config_name(0x3C) == "Near"
     assert _config_name(0xC3) == "Far"
     assert _config_name(0x00) == "None"
     assert _config_name(0x12) == "0x12"   # unmapped -> hex
@@ -98,7 +98,7 @@ def test_get_scan_sessions_skips_malformed_row_keeps_rest(tmp_path):
 def test_get_scan_sessions_rows_and_sort(tmp_path, monkeypatch):
     db_path = str(tmp_path / "scans.db")
     _make_session(db_path, "20260612_092000_subjA", 100.0, 105.0, 0xC3, 0xC3)
-    _make_session(db_path, "20260612_093100_subjB", 200.0, 215.0, 0x5A, 0x66)
+    _make_session(db_path, "20260612_093100_subjB", 200.0, 215.0, 0x3C, 0x66)
     c = _connector(tmp_path, db_path)
 
     real_friendly_ts = MotionConnector._friendly_ts
@@ -114,7 +114,7 @@ def test_get_scan_sessions_rows_and_sort(tmp_path, monkeypatch):
     top = rows[0]
     assert top["configL"] == "Near" and top["configR"] == "Middle"
     assert top["durationSec"] == 15.0
-    assert top["leftMask"] == 0x5A and top["rightMask"] == 0x66
+    assert top["leftMask"] == 0x3C and top["rightMask"] == 0x66
     assert top["interrupted"] is False
     assert top["dateTime"] == "2026-06-12 05:31:00"
 
@@ -218,7 +218,7 @@ def test_delete_scans_removes_session_and_cascades(tmp_path):
     keep = _make_session(
         db_path, "20260612_092000_keep", 100.0, 105.0, 0xC3, 0xC3)
     drop = _make_session(
-        db_path, "20260612_093000_drop", 200.0, 205.0, 0x5A, 0x5A)
+        db_path, "20260612_093000_drop", 200.0, 205.0, 0x3C, 0x3C)
     _insert_rows(db_path, drop, 5)
     c = _connector(tmp_path, db_path)
 
