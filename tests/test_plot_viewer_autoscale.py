@@ -19,9 +19,11 @@ per camera, then assert:
     a pan / zoom / window-length change refits (coalesced into the
     33 ms paint tick, so the event loop is pumped for those);
   - #591 smoothing: the periodic (Timer) evaluation lets each cell's
-    target follow the fresh fit with an asymmetric lag (outward fast,
-    inward slow) while a window change snaps it; the shown range
-    glides to the target over paint ticks instead of jumping.
+    range follow the fresh fit with an asymmetric lag (outward fast,
+    inward slow) while a window change snaps it; the range is applied
+    directly (no per-frame glide: that forced 30 Hz repaints of every
+    cell and made the UI sluggish), so per-plot mode must not keep the
+    paint tick running while idle.
 
 Unit-marked: no app launch, no hardware, offscreen Qt platform.
 """
@@ -426,22 +428,20 @@ def _slide(viewer, n):
     viewer.setProperty("liveEdgeSnapshot", LIVE_EDGE + 0.5 * n)
 
 
-def _pump_paint_ticks(viewer, n, timeout=3.0):
+def _paint_ticks_during(viewer, ms):
+    """How many paint ticks the viewer runs on its own over `ms` of
+    event-loop time (nothing else dirtying it)."""
     start = int(viewer.property("paintTick"))
-    end = time.monotonic() + timeout
-    while int(viewer.property("paintTick")) < start + n and time.monotonic() < end:
-        _qt_app.processEvents()
-        time.sleep(0.005)
-    assert int(viewer.property("paintTick")) >= start + n, "paint tick did not advance"
+    _pump(ms)
+    return int(viewer.property("paintTick")) - start
 
 
 KEY = ("left", 0)
 
 
 def _target(viewer, key="left:0"):
-    """The smoothed TARGET range of one cell (what the shown range glides
-    to) — updated synchronously by a refit or tick, unlike the shown
-    range, which moves only in the paint tick."""
+    """The smoothed range of one cell as the viewer holds it (same object
+    the cells bind), updated synchronously by a refit or tick."""
     v = viewer.property("_cellTargets")
     if hasattr(v, "toVariant"):
         v = v.toVariant()
@@ -468,6 +468,7 @@ def test_per_plot_timer_evaluation_lags_outward_fast_inward_slow(live_viewer):
     t1 = _target(viewer)
     assert t1[1] == pytest.approx(t0[1] + a_up * 0.5, rel=1e-3)    # pMax: outward
     assert t1[0] == pytest.approx(t0[0] + a_dn * 0.5, rel=1e-3)    # pMin: inward
+    assert _ranges(viewer)[KEY][:2] == pytest.approx(t1[:2])       # applied directly
     for n in range(2, 6):
         _slide(viewer, n)
         _tick(viewer)
@@ -510,35 +511,30 @@ def test_per_plot_window_change_snaps_the_target(live_viewer):
         assert t1[i] == pytest.approx(t0[i] + 0.5), i
 
 
-def test_per_plot_glides_when_the_data_leaves_the_axis(live_viewer):
-    """A snapped refit moves the target at once, and the SHOWN range
-    glides there over paint ticks rather than jumping."""
+def test_per_plot_refit_applies_at_once_and_does_not_keep_painting(live_viewer):
+    """A snapped refit lands on the new range immediately, and per-plot
+    mode adds no repaints of its own: after the one paint the refit
+    marks dirty, the paint tick stays idle. (An earlier per-frame glide
+    kept every cell repainting at 30 Hz and made the UI sluggish.)"""
     viewer, src, stub = live_viewer
     stub.setConfig("autoScalePerPlot", True)
+    _pump(200)                            # drain the timer start + that paint
     before = _ranges(viewer)[KEY]
-    src.offset = 0.5                      # data now sits half a span higher
+    src.offset = 0.5
     _refit(viewer)
-    assert _ranges(viewer)[KEY] == before  # no jump at the refit itself
-    _pump_paint_ticks(viewer, 2)
-    mid = _ranges(viewer)[KEY]
-    for i in range(4):                    # gliding: strictly between old and new
-        assert before[i] < mid[i] < before[i] + 0.5, (i, before[i], mid[i])
-    _pump(2500)                           # converge
     after = _ranges(viewer)[KEY]
     for i in range(4):
-        assert after[i] == pytest.approx(before[i] + 0.5, abs=2e-3), i
-    assert viewer.property("_perPlotSettled") is True
+        assert after[i] == pytest.approx(before[i] + 0.5), i
+    ticks = _paint_ticks_during(viewer, 400)
+    assert ticks <= 2, f"per-plot mode kept the paint tick running: {ticks} ticks in 400 ms"
 
 
 def test_per_plot_first_fit_snaps_without_a_glide(live_viewer):
-    """Enabling per-plot lands on the fitted ranges immediately (no
-    animation in from the global range) — the existing exact-range
-    assertions rely on it; stated here explicitly."""
+    """Enabling per-plot lands on the fitted ranges immediately — the
+    existing exact-range assertions rely on it; stated here explicitly."""
     viewer, src, stub = live_viewer
     stub.setConfig("autoScalePerPlot", True)
     assert _ranges(viewer)[KEY][:2] == _cell_range(*KEY, "bfi")
-    _pump(200)
-    assert viewer.property("_perPlotSettled") is True
 
 
 def test_per_plot_neutral_fit_holds_the_axis(live_viewer):
