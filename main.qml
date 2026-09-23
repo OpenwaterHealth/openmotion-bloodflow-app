@@ -286,10 +286,12 @@ ApplicationWindow {
         }
 
         // Pending app + firmware updates (#514). Raises itself on a new
-        // detection, but never over a running scan / check.
+        // detection, but never over a running scan / check, and not over
+        // the "What's new" notes (#597): after an upgrade the operator
+        // reads those first, then sees whatever is still pending.
         UpdatesModal {
             id: updatesModal
-            deferAutoOpen: window._anyInProgress
+            deferAutoOpen: window._anyInProgress || bloodFlowPage.whatsNewOpen
         }
     }
 

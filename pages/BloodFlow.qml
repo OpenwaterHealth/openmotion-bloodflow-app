@@ -31,6 +31,11 @@ Rectangle {
     // app tears down.
     readonly property alias modalManager: modalManager
 
+    // True while the post-upgrade "What's new" notes are on screen (#597).
+    // main.qml holds the updates modal's automatic raise until they are
+    // dismissed, so notes come first and pending updates right after (#514).
+    readonly property bool whatsNewOpen: whatsNewModal.visible
+
     // Clinical mode (read from app config). Forces Far camera pattern +
     // free run, hides scan-settings button, and swaps in the clinical
     // plot view.
