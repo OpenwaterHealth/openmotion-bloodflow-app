@@ -75,6 +75,7 @@ $args = @(
     "--include-data-dir=components=components",
     "--include-data-dir=assets=assets",
     "--include-data-files=resources\sample_scan.csv=resources\sample_scan.csv",
+    "--include-data-files=resources\whats_new.md=resources\whats_new.md",
     # the SDK: modules compiled, package data copied. Its vendored binaries
     # (libusb DLLs, dfu-util exes) are NOT data to Nuitka - --include-data-dir
     # silently drops .dll/.exe - so those trees go in raw: only the Windows

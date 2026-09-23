@@ -91,6 +91,10 @@ Item {
     // BloodFlow.qml opens the (ModalManager-governed) LogsModal in response.
     signal logsRequested()
 
+    // Settings → Application → "What's new": BloodFlow.qml closes Settings
+    // and opens WhatsNewModal with the running release's notes (#597).
+    signal whatsNewRequested()
+
     // Password gate for the audit Logs viewer.
     PasswordPromptModal {
         id: logsPasswordModal
@@ -1792,6 +1796,23 @@ Item {
                     FieldRow {
                         label: "Application"
                         Text { text: appVersion; color: root.colTextPri; font.pixelSize: 13; font.family: "Consolas" }
+                        Text {
+                            id: whatsNewLink
+                            text: "What's new"
+                            // Nothing to reopen when this build ships no notes.
+                            visible: MotionInterface.currentWhatsNew() !== ""
+                            color: AppTheme.accentInteractive
+                            font.pixelSize: 12
+                            font.underline: whatsNewArea.containsMouse
+                            Layout.leftMargin: 8
+                            MouseArea {
+                                id: whatsNewArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.whatsNewRequested()
+                            }
+                        }
                         Item { Layout.fillWidth: true }
                         Text {
                             visible: !root.clinicalMode && root.appUpdateStatus === "uptodate"

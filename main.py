@@ -45,6 +45,7 @@ from motion_config import DEFAULT_TRIGGER_OVERRIDES
 from omotion import MotionInterface
 from utils.single_instance import check_single_instance, cleanup_single_instance
 from version import get_version
+import whats_new
 from utils.resource_path import resource_path
 from utils import app_paths, config_store, settings_store, startup_report
 
@@ -423,6 +424,9 @@ def main():
     _scan_data_dir = os.path.join(_data_dir, app_paths.DATA_DIRNAME)
     os.makedirs(_scan_data_dir, exist_ok=True)
     _scan_db_path = os.path.join(_scan_data_dir, "scans.db")
+    # Checked before anything below can create the file: no scans.db yet
+    # means a fresh install, which gets no "What's new" modal (#597).
+    _fresh_install = not os.path.exists(_scan_db_path)
     # Clinical builds encrypt scans.db at rest (SQLCipher, key in the Windows
     # Credential Manager). The flag is the SIGNED build config, so the encrypt
     # decision cannot be independently forgotten. Constructing MotionInterface
@@ -474,6 +478,10 @@ def main():
     # if one is still on the machine, is ignored: nothing reads it.
     settings = settings_store.SettingsStore(_scan_db_path)
     saved_keys = config_store.apply_saved_preferences(app_config, settings.load())
+    if _fresh_install and app_config.get(whats_new.SEEN_KEY) is None:
+        # Nothing is "new" on a first install; start the history here.
+        app_config[whats_new.SEEN_KEY] = APP_VERSION
+        settings.save({whats_new.SEEN_KEY: APP_VERSION})
 
     # Startup diagnostics (issue #527): build variant, install mode, where
     # preferences persist, and the effective config with every key that is

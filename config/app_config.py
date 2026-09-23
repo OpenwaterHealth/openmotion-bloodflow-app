@@ -171,6 +171,9 @@ APP_CONFIG = {
     "altCameraSettingsDirty": False,
     "altLaserPulseWidthDirty": False,
     "altLaserSafetyCeilingDirty": False,
+    # Version whose "What's new" notes the operator last dismissed (#597);
+    # None until the first dismissal. See whats_new.py.
+    "whatsNewSeenVersion": None,
 }
 
 # ── Tiers ──────────────────────────────────────────────────────────────────
@@ -220,7 +223,7 @@ PREFERENCE_KEYS = frozenset({
 
 STATE_KEYS = frozenset({
     "altCameraSettingsDirty", "altLaserPulseWidthDirty",
-    "altLaserSafetyCeilingDirty",
+    "altLaserSafetyCeilingDirty", "whatsNewSeenVersion",
 })
 
 PERSISTED_KEYS = PREFERENCE_KEYS | STATE_KEYS
