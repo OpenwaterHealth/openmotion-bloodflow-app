@@ -145,7 +145,7 @@ Rectangle {
                 Item { Layout.fillWidth: true }
 
                 Text {
-                    text: "Open-Motion"
+                    text: windowMenu.clinicalMode ? "Open-Motion" : "Open-Motion Research"
                     color: AppTheme.textPrimary
                     font.pixelSize: 14
                     font.weight: Font.Bold
