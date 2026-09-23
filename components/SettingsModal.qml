@@ -195,7 +195,7 @@ Item {
     ListModel {
         id: cameraPatterns
         ListElement { name: "None";      maskHex: "0x00" }
-        ListElement { name: "Near";      maskHex: "0x5A" }
+        ListElement { name: "Near";      maskHex: "0x3C" }
         ListElement { name: "Middle";    maskHex: "0x66" }
         ListElement { name: "Far";       maskHex: "0xC3" }
         ListElement { name: "Outer";     maskHex: "0x99" }
