@@ -62,6 +62,7 @@ from motion_config import (
 )
 import error_codes
 import bug_report
+import whats_new
 from nan_gap_tracker import NanGapTracker, gap_note_line
 from utils.resource_path import resource_path
 from utils import app_paths, config_store, log_tail
@@ -3553,6 +3554,46 @@ class MotionConnector(QObject):
         return bool(self._consoleConnected
                     or self._leftSensorConnected
                     or self._rightSensorConnected)
+
+    # --- What's new (#597) -------------------------------------------------
+    def _whats_new_notes(self, last_seen) -> str:
+        return whats_new.notes_between(
+            whats_new.load_notes_text(), self._app_version, last_seen,
+            clinical=bool(self._app_config.get("clinicalMode", False)),
+        )
+
+    @pyqtSlot(result=str)
+    def pendingWhatsNew(self) -> str:
+        """Notes for every release since the last one dismissed, or "".
+
+        Pulled by BloodFlow.qml once at startup. Every outcome is logged:
+        the modal is a once-per-release event, so a silent "" would leave
+        no way to tell "nothing new" from "notes missing from the build".
+        """
+        last_seen = self._app_config.get(whats_new.SEEN_KEY)
+        if last_seen == self._app_version:
+            return ""
+        notes = self._whats_new_notes(last_seen)
+        if notes:
+            logger.info("[WhatsNew] showing notes for %s (last seen %s)",
+                        self._app_version, last_seen)
+        else:
+            logger.info("[WhatsNew] no notes for %s (last seen %s); nothing "
+                        "to show", self._app_version, last_seen)
+        return notes
+
+    @pyqtSlot(result=str)
+    def currentWhatsNew(self) -> str:
+        """The running release's own notes (Settings -> "What's new")."""
+        return self._whats_new_notes(None)
+
+    @pyqtSlot()
+    def markWhatsNewSeen(self) -> None:
+        """Record the running version once the operator dismisses the modal."""
+        if self._app_config.get(whats_new.SEEN_KEY) == self._app_version:
+            return
+        self._app_config[whats_new.SEEN_KEY] = self._app_version
+        self._save_app_config()
 
     @pyqtSlot()
     def loadSampleScan(self) -> None:

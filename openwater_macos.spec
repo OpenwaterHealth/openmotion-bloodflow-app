@@ -44,6 +44,16 @@ else:
         "dialog will appear and then do nothing."
     )
 
+# "What's new" notes shown after an upgrade (#597); read at runtime via
+# utils.resource_path.resource_path("resources", "whats_new.md"). Keep this
+# entry in openwater.spec, the build_macos.sh heredoc and build_nuitka.ps1.
+_WHATS_NEW = os.path.join("resources", "whats_new.md")
+if os.path.exists(_WHATS_NEW):
+    datas.append((_WHATS_NEW, "resources"))
+else:
+    print(f"[spec] WARNING: {_WHATS_NEW!r} not found — the build will ship "
+          "without release notes and never show the What's new modal.")
+
 # Ensure icon is bundled
 if os.path.exists(ICNS_FILE):
     datas.append((ICNS_FILE, "."))
