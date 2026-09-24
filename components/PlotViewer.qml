@@ -98,6 +98,78 @@ Rectangle {
     // _recomputeAutoscale so the cell bindings re-evaluate (mutating a
     // nested value would not notify). Empty unless perPlotActive.
     property var _cellBounds: ({})
+    // Per-plot fits the VISIBLE window (#591), so any change to the
+    // window the cells draw needs a refit. Coalesced into the 33 ms
+    // paint tick rather than run per event: a drag fires setWindow at
+    // pointer rate, and 16 cells × 2 metrics of percentiles per event
+    // would drag the pointer at the 5-min zoom. The live edge sliding
+    // under a followed window is NOT a trigger (that is every paint);
+    // the autoscale Timer covers it at 1 s in per-plot mode.
+    property bool _refitPending: false
+    function _requestRefit() {
+        if (!viewer.perPlotActive) return
+        viewer._refitPending = true
+        viewer._dirty = true
+    }
+    // A windowed fit re-evaluated every half second is noisy: the 2/98
+    // percentiles of a sliding 5 s window (about five beats) move ~7%
+    // of the axis between evaluations, and adopting every fit made the
+    // axes visibly jump (bench feedback 2026-09-23). A deadband with
+    // persistence was tried first and traded that for rarer but much
+    // larger moves (mean 56% of the axis) plus seconds of clipping —
+    // simulated on bench session 79 — because the tallest beat in any
+    // five genuinely varies that much. So instead the fit is SMOOTHED:
+    // each cell's range follows the fresh windowed fit with a
+    // first-order lag, asymmetric so nothing stays clipped for long — a
+    // bound moving outward follows with _perPlotTauUpSec (1 s), inward
+    // with _perPlotTauDownSec (3 s; 10 s read as "extremely slow" to
+    // tighten on the bench). On the bench data that is ~3.8% of the
+    // axis per evaluation, largest move 19% (adopting every fit: 7% /
+    // 56%), tallest beats off-axis ~10% of the time. The range SNAPS
+    // (no lag) whenever the window itself changes — first fit, pan,
+    // zoom, window length, back to live, display-mode flip, new source
+    // — since that is new content, not the same window sliding; and
+    // also when the window has NOT moved since the last evaluation
+    // (scan stopped, view paused): the fresh fit is then final.
+    //
+    // The new range is applied directly at each 0.5 s evaluation. An
+    // earlier revision also glided the shown range toward it in the
+    // 33 ms paint tick; that kept the tick dirty for as long as the
+    // target kept moving (always, in per-plot mode), i.e. every cell
+    // repainted at 30 Hz even with no data streaming — measured 30
+    // paints/s vs 9/s in global mode — and the bench reported the whole
+    // UI "haltingly slow". Per-plot mode must not add repaints beyond
+    // the one its 0.5 s evaluation marks dirty.
+    readonly property real _perPlotTauUpSec: 1.0
+    readonly property real _perPlotTauDownSec: 3.0
+    readonly property real _perPlotEvalSec: 0.5
+    property var _cellTargets: ({})     // same object as _cellBounds; kept for tests/readability
+    property string _cellTargetsPair: ""
+    property var _lastFitWindow: null   // {tLo, tHi} of the last per-plot fit
+
+    // Next target range for one metric: the fresh fit itself when
+    // snapping, else the asymmetric first-order lag from the previous
+    // target. The exact neutral fallback (no usable samples in the
+    // window) holds the previous target rather than collapsing the axis
+    // to 0..1 while a camera is covered.
+    function _followRange(prev, f, snap) {
+        if (f.yMin === 0 && f.yMax === 1) return prev
+        if (snap || !prev) return [f.yMin, f.yMax]
+        var dt = viewer._perPlotEvalSec
+        var aUp = dt / (viewer._perPlotTauUpSec + dt)
+        var aDown = dt / (viewer._perPlotTauDownSec + dt)
+        var lo = prev[0] + ((f.yMin < prev[0]) ? aUp : aDown) * (f.yMin - prev[0])
+        var hi = prev[1] + ((f.yMax > prev[1]) ? aUp : aDown) * (f.yMax - prev[1])
+        return [lo, hi]
+    }
+
+    // Two zero-argument entries over _fitAutoscale(snap): every refit
+    // trigger (window change, new source, mode flip, mask change, the
+    // per-plot switch) snaps; only the autoscale Timer lets the target
+    // lag. Zero-argument so they stay invokable by name (tests).
+    function _recomputeAutoscale() { viewer._fitAutoscale(true) }
+    function _autoscaleTick() { viewer._fitAutoscale(false) }
+
     // Mode flips and grid re-layouts (mask change, sensor connect) get
     // an immediate refit rather than waiting up to 3 s for the tick —
     // a cell without an entry yet would draw on the global range. The
@@ -134,6 +206,20 @@ Rectangle {
     // "Back to live" button restores it.
     property bool followLive: true
     property real windowStartT: 0.0
+    onFollowLiveChanged: viewer._requestRefit()
+    onWindowStartTChanged: viewer._requestRefit()
+    onWindowSecondsChanged: viewer._requestRefit()
+
+    // The window the cells are drawing — the same math as PlotCell:
+    // the last windowSeconds up to the live-edge snapshot when following
+    // live, else the pinned DVR window. Per-plot autoscale fits this
+    // (#591), not the whole scan.
+    function _visibleWindow() {
+        var tHi = viewer.followLive
+            ? viewer.liveEdgeSnapshot
+            : viewer.windowStartT + viewer.windowSeconds
+        return { tLo: tHi - viewer.windowSeconds, tHi: tHi }
+    }
 
     // Y-axis bounds — when autoScale is true, _autoPrimaryYMin/Max are
     // written by _recomputeAutoscale (every 3 s + on displayMode change)
@@ -304,7 +390,7 @@ Rectangle {
         return b && typeof b.yMin === "number" && typeof b.yMax === "number"
     }
 
-    function _recomputeAutoscale() {
+    function _fitAutoscale(snap) {
         if (!viewer.scanSource) return
         var src = viewer.scanSource
         // Resolve the pair from displayMode directly rather than reading
@@ -313,21 +399,47 @@ Rectangle {
         // Mean/Contrast flip would otherwise fit the pair being left.
         var pair = viewer._pairForMode(viewer.displayMode)
         if (viewer.perPlotActive) {
-            var bounds = ({})
+            // Fit what is on screen (#591): the whole-scan fit let slow
+            // BVI drift balloon a cell's axis 20x past the visible trace
+            // within a few minutes, and a past excursion stayed inside
+            // the percentile clip for ~50x its own duration.
+            var w = viewer._visibleWindow()
+            // Same window as the last evaluation (scan stopped, view
+            // paused): nothing is sliding, the fresh fit is final — snap.
+            if (!snap && viewer._lastFitWindow
+                    && w.tLo === viewer._lastFitWindow.tLo
+                    && w.tHi === viewer._lastFitWindow.tHi)
+                snap = true
+            viewer._lastFitWindow = w
+            // Targets and shown ranges are per metric pair: a BFI/BVI ↔
+            // Mean/Contrast flip starts over (snap), it does not glide
+            // from a BVI range to a contrast range.
+            var pairKey = pair.primary + "/" + pair.secondary
+            var samePair = (viewer._cellTargetsPair === pairKey)
+            var prevTargets = samePair ? viewer._cellTargets : ({})
+            var targets = ({})
             var cells = viewer._activeCellModel
             for (var i = 0; i < cells.length; i++) {
                 var c = cells[i]
-                var bp = src.compute_bounds_for_cell(c.side, c.camId, pair.primary)
-                var bs = src.compute_bounds_for_cell(c.side, c.camId, pair.secondary)
-                if (!_validBounds(bp) || !_validBounds(bs)) continue
-                bounds[c.side + ":" + c.camId] = {
-                    pMin: bp.yMin, pMax: bp.yMax, sMin: bs.yMin, sMax: bs.yMax
-                }
+                var key = c.side + ":" + c.camId
+                var fp = src.compute_bounds_for_cell(c.side, c.camId, pair.primary, w.tLo, w.tHi)
+                var fs = src.compute_bounds_for_cell(c.side, c.camId, pair.secondary, w.tLo, w.tHi)
+                if (!_validBounds(fp) || !_validBounds(fs)) continue
+                var prev = prevTargets[key]
+                var p = _followRange(prev ? [prev.pMin, prev.pMax] : null, fp, snap)
+                var s = _followRange(prev ? [prev.sMin, prev.sMax] : null, fs, snap)
+                if (!p || !s) continue   // neutral fit on a brand-new cell: nothing to show yet
+                targets[key] = { pMin: p[0], pMax: p[1], sMin: s[0], sMax: s[1] }
             }
-            viewer._cellBounds = bounds
+            viewer._cellTargets = targets
+            viewer._cellTargetsPair = pairKey
+            viewer._cellBounds = targets
         } else {
-            if (Object.keys(viewer._cellBounds).length > 0)
+            if (Object.keys(viewer._cellBounds).length > 0) {
                 viewer._cellBounds = ({})
+                viewer._cellTargets = ({})
+                viewer._cellTargetsPair = ""
+            }
             var gp = src.compute_bounds_for_metric(pair.primary)
             if (_validBounds(gp)) {
                 viewer._autoPrimaryYMin = gp.yMin
@@ -627,6 +739,14 @@ Rectangle {
                 var t0 = viewer._hudVisible ? Date.now() : 0
                 viewer._dirty = false
                 viewer.liveEdgeSnapshot = viewer.scanSource ? viewer.scanSource.liveEdge : 0
+                if (viewer._refitPending) {
+                    // Coalesced per-plot refit (#591), after the snapshot
+                    // so the fit and this paint use the same window. The
+                    // refit marks dirty for a paint we are about to do.
+                    viewer._refitPending = false
+                    viewer._recomputeAutoscale()
+                    viewer._dirty = false
+                }
                 viewer.paintTick++
                 if (viewer._hudVisible) {
                     var dt = Date.now() - t0
@@ -656,17 +776,20 @@ Rectangle {
         viewer._recomputeAutoscale()
     }
 
-    // Autoscale tick — every 3 s. compute_bounds_for_metric walks every
-    // sample across all buffers, so the per-call cost scales with scan
-    // duration; 3 s amortizes that work without making the y-axis feel
-    // unresponsive (a 3-second delay between bound adjustments is hard
-    // to notice during live monitoring).
+    // Autoscale tick — every 3 s in global mode: compute_bounds_for_metric
+    // walks every sample across all buffers, so the per-call cost scales
+    // with scan duration; 3 s amortizes that work without making the
+    // y-axis feel unresponsive (a 3-second delay between bound adjustments
+    // is hard to notice during live monitoring). Per-plot mode (#591) fits
+    // only the visible window, which is cheap, so it evaluates every
+    // 0.5 s (= _perPlotEvalSec, the lag math depends on it) and lets
+    // the smoothed target follow rather than snap.
     Timer {
-        interval: 3000
+        interval: viewer.perPlotActive ? 500 : 3000
         running: viewer.autoScale && viewer.scanSource !== null
         repeat: true
         triggeredOnStart: true
-        onTriggered: viewer._recomputeAutoscale()
+        onTriggered: viewer._autoscaleTick()
     }
 
     // Window-seconds options — duplicated here from the old PlotToolbar
