@@ -82,6 +82,10 @@ APP_CONFIG = {
     "autoScale": False,
     "autoScalePerPlot": False,
     "showAxisLabels": True,
+    # Research plot view (#606), from the plot's ⋯ menu: "individual" (one
+    # plot per camera) or "average" (one per-side averaged plot per module,
+    # clinical-style). Display-only; clinical builds ignore it.
+    "plotViewMode": "individual",
     "darkMode": True,
     "max_calibration_time_sec": 600,
     "calibration_scan_duration_sec": 15,
@@ -212,7 +216,7 @@ PREFERENCE_KEYS = frozenset({
     "bfiMin", "bfiMax", "bviMin", "bviMax",
     "meanMin", "meanMax", "contrastMin", "contrastMax",
     "bfiColor", "bviColor", "plotWindowSec",
-    "autoScale", "autoScalePerPlot", "showAxisLabels",
+    "autoScale", "autoScalePerPlot", "showAxisLabels", "plotViewMode",
     "bviLowPassEnabled",
     "darkMode", "liquidGlass",
     # Research data output. Persisting these is harmless in a clinical

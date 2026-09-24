@@ -572,7 +572,9 @@ class _LivePlotSink:
         )
 
     def on_complete(self) -> None:
-        pass
+        # Land the research Average view's last open capture per side
+        # (#606); a no-op when the source doesn't derive (clinical).
+        self._live_source.flush_side_average()
 
 
 class _TriggerStateSink:
@@ -3319,6 +3321,16 @@ class MotionConnector(QObject):
         if "bviLowPassEnabled" in changes:
             self._apply_bvi_lpf_setting()
 
+    # ── Research Average view (#606) ──────────────────────────────────
+    def _derive_side_average(self) -> bool:
+        """Whether plot sources derive the per-side average streams the
+        research Average view (⋯ menu, plotViewMode) draws. Research builds
+        always derive, whichever view is showing, so switching is instant
+        and has full history; clinical builds never do (their side average
+        is the SDK's reduced-mode stream). Safe from the past-scan loader
+        thread: a plain dict read."""
+        return self._app_config.get("clinicalMode") is not True
+
     # ── BVI display low-pass (#228, #552) ─────────────────────────────
     def _bvi_lpf_cutoff_hz(self) -> float:
         """Effective display low-pass cutoff: the compiled
@@ -3593,7 +3605,8 @@ class MotionConnector(QObject):
                 csv_path)
             return
         try:
-            buffers = load_csv_scan_buffers(csv_path)
+            buffers = load_csv_scan_buffers(
+                csv_path, derive_side_average=self._derive_side_average())
         except Exception:
             logger.warning(
                 "[Plot] sample scan load failed: %s", csv_path, exc_info=True)
@@ -3735,7 +3748,8 @@ class MotionConnector(QObject):
                         session_label, exc_info=True,
                     )
                 buffers, _ = load_past_scan_buffers(
-                    db, session_id, corrected_csv
+                    db, session_id, corrected_csv,
+                    derive_side_average=self._derive_side_average(),
                 )
             finally:
                 db.close()
@@ -4594,6 +4608,7 @@ class MotionConnector(QObject):
             scan_db_path=getattr(self._interface, "scan_db_path", None),
             cache_max_samples=_live_cache_samples,
             bvi_lpf_cutoff_hz=_bvi_lpf_cutoff,
+            derive_side_average=self._derive_side_average(),
         )
         # Track the live source separately so the user can navigate
         # to a past scan and return; emit so QML rebinds the
