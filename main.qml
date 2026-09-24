@@ -89,6 +89,29 @@ ApplicationWindow {
         onTriggered: window._exitArmed = false
     }
 
+    // Fullscreen toggle (#608), shared by the title-bar button and F11.
+    // Leaving fullscreen returns to whichever state it was entered
+    // from, so a maximized window comes back maximized.
+    property bool _wasMaximizedBeforeFullScreen: false
+
+    function toggleFullScreen() {
+        if (window.visibility === Window.FullScreen) {
+            if (window._wasMaximizedBeforeFullScreen) window.showMaximized()
+            else window.showNormal()
+        } else {
+            window._wasMaximizedBeforeFullScreen =
+                window.visibility === Window.Maximized
+            window.showFullScreen()
+        }
+    }
+
+    // No Escape binding: every modal closes on Escape, and a
+    // window-level Shortcut would take the key before they see it.
+    Shortcut {
+        sequence: "F11"
+        onActivated: window.toggleFullScreen()
+    }
+
     Rectangle {
         anchors.fill: parent
         color: AppTheme.bgBase
@@ -191,7 +214,7 @@ ApplicationWindow {
         }
     }
 
-    // Bottom-right resize handle (hidden when maximized)
+    // Bottom-right resize handle (hidden when maximized or fullscreen)
     Item {
         id: resizeHandle
         width: 18
@@ -199,6 +222,7 @@ ApplicationWindow {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         visible: window.visibility !== Window.Maximized
+                 && window.visibility !== Window.FullScreen
 
         // Diagonal grip lines
         Canvas {

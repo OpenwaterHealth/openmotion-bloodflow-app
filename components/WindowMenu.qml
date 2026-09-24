@@ -204,6 +204,15 @@ Rectangle {
             spacing: 10
             Layout.alignment: Qt.AlignRight
 
+            // Fullscreen toggle (#608). Stays highlighted while
+            // fullscreen; main.qml owns the toggle so F11 shares it.
+            IconWindowButton {
+                buttonIcon: "" // arrow-two-diagonals
+                backgroundColor: window.visibility === Window.FullScreen
+                                 ? AppTheme.bgHover : "transparent"
+                Layout.alignment: Qt.AlignHCenter
+                onClicked: window.toggleFullScreen()
+            }
             // Minimize Button
             IconWindowButton {
                 buttonIcon: "\ue9e4" // Minimize icon
