@@ -65,10 +65,9 @@ Rectangle {
 
     // ── Inputs ─────────────────────────────────────────────────────────
     property bool clinicalMode: false   // honored in Phase 2b-ii
-    // Per-cell top-left value labels. Default off in clinical mode — the
-    // large side panels show the same numbers there — and toggleable at
-    // runtime from the bottom-right ⋯ popup.
-    property bool showCellValues: !viewer.effectiveClinical
+    // Per-cell top-left value labels. Off whenever the large side panels
+    // show the same numbers (clinical, and the research Average view).
+    property bool showCellValues: !viewer.averageView
     // Y-axis tick labels (max/mid/min per metric). Config is the single
     // source of truth: the ⋯ popup toggle (hidden in clinical mode) writes
     // through MotionInterface.setConfig, which persists it to the scans.db settings table
@@ -93,6 +92,19 @@ Rectangle {
         !viewer.effectiveClinical
         && MotionInterface.appConfig.autoScalePerPlot === true
     readonly property bool perPlotActive: viewer.autoScale && viewer.autoScalePerPlot
+    // Research view mode (#606): the ⋯ popup's Individual | Average
+    // buttons write plotViewMode through MotionInterface.setConfig (same
+    // pattern as autoScalePerPlot). Average draws the clinical layout (one
+    // per-side averaged plot per module plus the large readout panels)
+    // from the cam_id=-1 streams the research sources derive from the
+    // per-camera data. Display-only. Gated on the build (clinicalMode) as
+    // well as the shown scan, so a clinical build never honors a stale
+    // value; clinical is averageView through effectiveClinical as before.
+    readonly property bool researchAverage:
+        !viewer.clinicalMode && !viewer.effectiveClinical
+        && MotionInterface.appConfig.plotViewMode === "average"
+    readonly property bool averageView: viewer.effectiveClinical || viewer.researchAverage
+    onResearchAverageChanged: viewer._recomputeAutoscale()
     // Per-plot ranges, keyed "side:camId" → { pMin, pMax, sMin, sMax }
     // for the current display pair. Rebuilt as a whole object by
     // _recomputeAutoscale so the cell bindings re-evaluate (mutating a
@@ -310,7 +322,7 @@ Rectangle {
     // (col 2) between them, but only when BOTH sides have active cameras —
     // a single-sided scan keeps filling the width with no dangling gap.
     readonly property bool _sideGapActive:
-        !viewer.effectiveClinical
+        !viewer.averageView
         && (viewer._effLeftMask & 0xFF) !== 0
         && (viewer._effRightMask & 0xFF) !== 0
     readonly property real _sideGapPx: 3
@@ -353,9 +365,10 @@ Rectangle {
         return entries
     }
 
-    // Clinical mode — one cell per ACTIVE side, each rendering the
-    // side-averaged stream (cam_id=-1, fed by SDK's SideAveragingStage
-    // via _LivePlotSink.consume). Stacked vertically in a single column.
+    // Clinical mode (and the research Average view, #606) — one cell per
+    // ACTIVE side, each rendering the side-averaged stream (cam_id=-1: the
+    // SDK's SideAveragingStage via _LivePlotSink.consume in clinical, the
+    // app-derived average in research). Stacked vertically in one column.
     // A side with no active cameras (disconnected sensor / recorded mask 0)
     // is dropped and the survivor compacts to row 0 so a single-sided
     // clinical scan doesn't reserve a blank row (issue #298).
@@ -369,7 +382,7 @@ Rectangle {
         return entries
     }
 
-    readonly property var _activeCellModel: viewer.effectiveClinical
+    readonly property var _activeCellModel: viewer.averageView
         ? _clinicalCellModel
         : _devCellModel
 
@@ -378,7 +391,7 @@ Rectangle {
     // an empty-but-visible column would push the "No active cameras
     // selected" placeholder off the canvas center (issue #487).
     readonly property bool _showClinicalPanels:
-        viewer.effectiveClinical && viewer._activeCellModel.length > 0
+        viewer.averageView && viewer._activeCellModel.length > 0
 
     // ── Autoscale recompute (shared by Timer + displayMode change) ────
     // Global mode writes _auto* — the derived primaryYMin/Max bindings
@@ -440,12 +453,18 @@ Rectangle {
                 viewer._cellTargets = ({})
                 viewer._cellTargetsPair = ""
             }
-            var gp = src.compute_bounds_for_metric(pair.primary)
+            // Research Average view fits the averaged traces it shows;
+            // every other view keeps the per-camera fit (#606).
+            var gp = viewer.researchAverage
+                ? src.compute_bounds_for_side_average(pair.primary)
+                : src.compute_bounds_for_metric(pair.primary)
             if (_validBounds(gp)) {
                 viewer._autoPrimaryYMin = gp.yMin
                 viewer._autoPrimaryYMax = gp.yMax
             }
-            var gs = src.compute_bounds_for_metric(pair.secondary)
+            var gs = viewer.researchAverage
+                ? src.compute_bounds_for_side_average(pair.secondary)
+                : src.compute_bounds_for_metric(pair.secondary)
             if (_validBounds(gs)) {
                 viewer._autoSecondaryYMin = gs.yMin
                 viewer._autoSecondaryYMax = gs.yMax
@@ -836,14 +855,24 @@ Rectangle {
         console.info("[Plot] windowSeconds → " + s + " s")
     }
 
-    // Large per-side BFI/BVI readout panel — clinical mode
-    // only, one per plot row, sitting to the left of the plot. Mirrors
-    // the legacy ReducedPlotView side column: side label up top, big
-    // mono values beneath. Values are the side-averaged stream
+    // Large per-side readout panel — clinical mode and the research
+    // Average view (#606), one per plot row, sitting to the left of the
+    // plot. Mirrors the legacy ReducedPlotView side column: side label up
+    // top, big mono values beneath. Values are the side-averaged stream
     // (cam_id = -1), refreshed on paintTick and clamped for display.
+    // Clinical always reads BFI/BVI; the research view follows the plots'
+    // BFI/BVI ↔ Mean/Contrast pair so the numbers match the traces.
     component SideMetricPanel: Item {
         id: panel
         property string panelSide: "left"
+        readonly property string topMetric:
+            viewer.effectiveClinical ? "bfi" : viewer._displayPair.primary
+        readonly property string bottomMetric:
+            viewer.effectiveClinical ? "bvi" : viewer._displayPair.secondary
+
+        function _metricLabel(m) {
+            return m.toUpperCase()
+        }
 
         function _displayText(metricName) {
             void viewer.paintTick  // dependency
@@ -869,13 +898,13 @@ Rectangle {
             Item { Layout.fillHeight: true }
 
             Text {
-                text: "BFI"
-                color: viewer.bfiInk
+                text: panel._metricLabel(panel.topMetric)
+                color: viewer._traceColorForMetric(panel.topMetric)
                 font.pixelSize: 24
                 font.weight: Font.DemiBold
             }
             Text {
-                text: panel._displayText("bfi")
+                text: panel._displayText(panel.topMetric)
                 color: AppTheme.textPrimary
                 font.pixelSize: 60
                 font.weight: Font.Bold
@@ -885,13 +914,13 @@ Rectangle {
             Item { height: 10 }
 
             Text {
-                text: "BVI"
-                color: viewer.bviInk
+                text: panel._metricLabel(panel.bottomMetric)
+                color: viewer._traceColorForMetric(panel.bottomMetric)
                 font.pixelSize: 24
                 font.weight: Font.DemiBold
             }
             Text {
-                text: panel._displayText("bvi")
+                text: panel._displayText(panel.bottomMetric)
                 color: AppTheme.textPrimary
                 font.pixelSize: 60
                 font.weight: Font.Bold
@@ -949,10 +978,11 @@ Rectangle {
                 visible: viewer._activeCellModel.length > 0
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                // Clinical mode: single column, 2 stacked cells. Engineering mode:
-                // 4 columns; +1 spacer column (col 2) when both sides are
-                // active, for a visual break between the modules.
-                columns: viewer.effectiveClinical ? 1 : (viewer._sideGapActive ? 5 : 4)
+                // Clinical mode / Average view: single column, 2 stacked
+                // cells. Individual view: 4 columns; +1 spacer column
+                // (col 2) when both sides are active, for a visual break
+                // between the modules.
+                columns: viewer.averageView ? 1 : (viewer._sideGapActive ? 5 : 4)
                 rowSpacing: 6
                 columnSpacing: 6
 
@@ -1298,9 +1328,9 @@ Rectangle {
     // ── Bottom-right overlay: window-seconds pill + three-dot menu ────
     // Window-seconds pill shows the current zoom and opens a dropdown
     // menu of the canonical zoom options when clicked. The three-dot
-    // button to its right opens a popup with switches for display mode,
-    // autoscale (+ per-plot scale, #452), axis labels, and (dev-only)
-    // profiler.
+    // button to its right opens a popup with the research view-mode
+    // buttons (#606) and switches for display mode, autoscale (+ per-plot
+    // scale, #452), axis labels, and (dev-only) profiler.
     Row {
         id: bottomRightOverlay
         visible: viewer.scanSource !== null
@@ -1455,6 +1485,73 @@ Rectangle {
                     id: popupColumn
                     spacing: 6
                     padding: 12
+
+                    // Research view mode (#606): Individual (one plot per
+                    // camera) | Average (one averaged plot per module).
+                    // Same gate as viewer.researchAverage: never in a
+                    // clinical build, nor while replaying a clinical scan
+                    // (it only holds the averages).
+                    Row {
+                        id: viewModeRow
+                        visible: !viewer.clinicalMode && !viewer.effectiveClinical
+                        spacing: 8
+                        Text {
+                            anchors.verticalCenter: viewModeSelector.verticalCenter
+                            text: "View"
+                            color: AppTheme.textSecondary
+                            font.pixelSize: 12
+                            font.family: "Roboto Mono"
+                        }
+                        Rectangle {
+                            id: viewModeSelector
+                            width: viewModeButtons.implicitWidth + 4
+                            height: 28
+                            radius: 14
+                            color: AppTheme.bgInput
+                            border.color: AppTheme.borderSoft
+                            border.width: 1
+                            Row {
+                                id: viewModeButtons
+                                anchors.centerIn: parent
+                                Repeater {
+                                    model: [
+                                        { value: "individual", label: "Individual" },
+                                        { value: "average",    label: "Average" }
+                                    ]
+                                    delegate: Rectangle {
+                                        id: viewModeButton
+                                        readonly property bool selected:
+                                            (viewer.researchAverage ? "average" : "individual")
+                                            === modelData.value
+                                        width: viewModeLabel.implicitWidth + 24
+                                        height: 24
+                                        radius: 12
+                                        color: selected ? AppTheme.accentInteractive : "transparent"
+                                        Behavior on color { ColorAnimation { duration: 120 } }
+                                        Accessible.role: Accessible.Button
+                                        Accessible.name: modelData.label + " view"
+                                        Text {
+                                            id: viewModeLabel
+                                            anchors.centerIn: parent
+                                            text: modelData.label
+                                            color: viewModeButton.selected ? "white" : AppTheme.textPrimary
+                                            font.pixelSize: 12
+                                            font.family: "Roboto Mono"
+                                        }
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: {
+                                                if (viewModeButton.selected) return
+                                                MotionInterface.setConfig("plotViewMode", modelData.value)
+                                                console.info("[Plot] view mode → " + modelData.value)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     Row {
                         // Hidden in clinical mode — that view only
