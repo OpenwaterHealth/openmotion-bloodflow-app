@@ -139,11 +139,19 @@ def _load_app_config(
         )
         cfg["clinicalMode"] = False
 
+    # Liquid Glass is the Research default, solid Dark the Clinical one.
+    # Derived from the effective variant (after the dev flag and the macOS
+    # gate) rather than the compiled stamp, and written into the baseline
+    # below, so a saved theme is a diff against the right default.
+    if "liquidGlass" not in dev_keys:
+        cfg["liquidGlass"] = not cfg["clinicalMode"]
+
     _APP_CONFIG_BASELINE.clear()
     _APP_CONFIG_BASELINE.update(config_store.compiled_config())
     _APP_CONFIG_BASELINE.update({k: cfg[k] for k in dev_keys})
     _APP_CONFIG_BASELINE["portableMode"] = cfg["portableMode"]
     _APP_CONFIG_BASELINE["clinicalMode"] = cfg["clinicalMode"]
+    _APP_CONFIG_BASELINE["liquidGlass"] = cfg["liquidGlass"]
     _DEV_CONFIG_KEYS.clear()
     _DEV_CONFIG_KEYS.update(dev_keys)
     # No config logging here: this runs before the log-file handler is

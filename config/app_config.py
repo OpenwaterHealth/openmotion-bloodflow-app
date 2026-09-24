@@ -30,8 +30,6 @@ one inside the installer are byte-identical (#501's repack step depends on
 that).
 """
 
-import sys
-
 # ── Build variant ─────────────────────────────────────────────────────────
 # Stamped per artifact by scripts/build_common.ps1 (regex on this exact
 # line). Source runs may override it with --clinical / --research.
@@ -164,9 +162,11 @@ APP_CONFIG = {
     # Critical-error bug report SMTP block (see bug_report.py); None
     # disables the SMTP path and the report is copied to the clipboard.
     "bug_report_smtp": None,
-    # Liquid Glass theme: on for macOS (its native look), off elsewhere so
-    # Windows clinical builds keep the solid palette.
-    "liquidGlass": sys.platform == "darwin",
+    # Liquid Glass theme: the default look of the Research variant (macOS
+    # included, which is Research-only); Clinical keeps the solid palette.
+    # main._load_app_config re-derives it from the effective clinicalMode
+    # so --clinical / --research source runs get the matching default.
+    "liquidGlass": not CLINICAL_MODE,
     # Internal restore bookkeeping for the alternative settings above:
     # True while camera / TA / safety-ceiling registers may still hold an
     # alternative value, so the first scan after the toggle goes off writes
