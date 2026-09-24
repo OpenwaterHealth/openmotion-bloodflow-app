@@ -234,3 +234,45 @@ def test_non_macos_still_honors_the_clinical_dev_flag(tmp_path, monkeypatch):
         tmp_path, monkeypatch, "win32", {"clinicalMode": False}, clinical=True
     )
     assert cfg["clinicalMode"] is True
+
+
+# --------------------------------------------------------------------------
+# Liquid Glass is the Research default, solid Dark the Clinical one
+# --------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_research_defaults_to_liquid_glass(tmp_path, monkeypatch):
+    main, cfg = _config_with(tmp_path, monkeypatch, "win32", {"clinicalMode": False})
+    assert cfg["liquidGlass"] is True
+    # saved preferences are diffs against the baseline, so it must agree
+    assert main._APP_CONFIG_BASELINE["liquidGlass"] is True
+
+
+@pytest.mark.unit
+def test_clinical_defaults_to_the_solid_theme(tmp_path, monkeypatch):
+    main, cfg = _config_with(tmp_path, monkeypatch, "win32", {"clinicalMode": True})
+    assert cfg["liquidGlass"] is False
+    assert main._APP_CONFIG_BASELINE["liquidGlass"] is False
+
+
+@pytest.mark.unit
+def test_liquid_glass_default_follows_the_clinical_dev_flag(tmp_path, monkeypatch):
+    _main, cfg = _config_with(
+        tmp_path, monkeypatch, "win32", {"clinicalMode": False}, clinical=True
+    )
+    assert cfg["liquidGlass"] is False
+
+
+@pytest.mark.unit
+def test_macos_defaults_to_liquid_glass_even_when_stamped_clinical(tmp_path, monkeypatch):
+    _main, cfg = _config_with(tmp_path, monkeypatch, "darwin", {"clinicalMode": True})
+    assert cfg["liquidGlass"] is True
+
+
+@pytest.mark.unit
+def test_liquid_glass_config_override_still_wins(tmp_path, monkeypatch):
+    _main, cfg = _config_with(
+        tmp_path, monkeypatch, "win32", {"clinicalMode": False},
+        overrides={"liquidGlass": False},
+    )
+    assert cfg["liquidGlass"] is False
