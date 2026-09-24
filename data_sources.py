@@ -102,7 +102,7 @@ class _CameraBuffer:
     """
 
     __slots__ = ("t", "v", "frame_id", "n", "dropped_at",
-                 "ring_trimmed", "_max_capacity", "_lock")
+                 "ring_trimmed", "derived", "_max_capacity", "_lock")
 
     def __init__(
         self,
@@ -135,6 +135,11 @@ class _CameraBuffer:
         # uses this to decide whether a pan below t[0] needs the DB tail
         # vs is simply before the scan start (no data, serve from memory).
         self.ring_trimmed: bool = False
+        # True for an app-derived Average-view stream (#606): a research
+        # side average computed from the per-camera buffers, not recorded
+        # data. compute_bounds_for_metric skips these so the Individual
+        # view's shared range is exactly what it was before they existed.
+        self.derived: bool = False
 
     def _grow(self) -> None:
         """Double the capacity of all three parallel arrays atomically,
@@ -351,6 +356,81 @@ class _CameraBuffer:
 
 
 _FLUSH_INTERVAL_MS = 100  # spec §"Throttled UI notify"
+
+# ── Research "Average" view (#606) ──────────────────────────────────────
+# Research scans record per-camera streams only (the SDK's side average is
+# tied to reduced_mode, which would also drop the per-camera record from
+# scans.db). The Average view instead derives the per-side average here, on
+# the display side, and stores it under cam_id=-1: the same key the clinical
+# SDK stream uses, so PlotViewer's clinical-style layout reads it unchanged.
+# Clinical sources never derive; they keep the SDK stream.
+_AVG_METRICS = ("bfi", "bvi", "mean", "contrast")
+
+
+def derive_side_average_buffers(buffers: dict) -> dict:
+    """Per-side spatial average of every per-camera stream in `buffers`.
+
+    Returns a new {(side, -1, metric): _CameraBuffer} dict (UNBOUNDED —
+    callers use it for finite bulk loads). Samples are grouped by frame_id,
+    which a capture's cameras share; each output sample is the NaN-aware
+    mean of the cameras that reported a finite value for that capture (the
+    rule of the SDK's spatial_side_average), NaN when none did, stamped
+    with the capture's earliest timestamp. Only cameras that recorded data
+    contribute, so the average follows whatever mask the scan ran with.
+    A metric with no per-camera buffer on a side yields no output buffer."""
+    out: dict = {}
+    for side in ("left", "right"):
+        for metric in _AVG_METRICS:
+            parts = [
+                buf for (s, cam_id, m), buf in buffers.items()
+                if s == side and m == metric and 0 <= cam_id < 8
+            ]
+            ts, vs, fids = [], [], []
+            for buf in parts:
+                with buf._lock:
+                    n = buf.n
+                    ts.append(buf.t[:n].copy())
+                    vs.append(buf.v[:n].astype(np.float64))
+                    fids.append(buf.frame_id[:n].copy())
+            if not parts or sum(a.size for a in ts) == 0:
+                continue
+            t_all = np.concatenate(ts)
+            v_all = np.concatenate(vs)
+            f_all = np.concatenate(fids)
+            uniq, inverse = np.unique(f_all, return_inverse=True)
+            finite = np.isfinite(v_all)
+            sums = np.bincount(inverse, weights=np.where(finite, v_all, 0.0),
+                               minlength=uniq.size)
+            counts = np.bincount(inverse, weights=finite.astype(np.float64),
+                                 minlength=uniq.size)
+            t_grp = np.full(uniq.size, np.inf)
+            np.minimum.at(t_grp, inverse, t_all)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                avg = np.where(counts > 0, sums / np.maximum(counts, 1.0), np.nan)
+            # window_indices needs non-decreasing t; frame_id order almost
+            # always is, but a timestamp-repaired capture must not break it.
+            order = np.argsort(t_grp, kind="stable")
+            dst = _CameraBuffer(initial_capacity=max(2, uniq.size),
+                                max_capacity=None)
+            n = uniq.size
+            dst.t[:n] = t_grp[order]
+            dst.v[:n] = avg[order].astype(np.float32)
+            dst.frame_id[:n] = uniq[order]
+            dst.n = n
+            dst.derived = True
+            out[(side, -1, metric)] = dst
+    return out
+
+
+def _add_derived_side_averages(buffers: dict) -> None:
+    """Add the Average-view cam_id=-1 buffers to a bulk-loaded research
+    scan, in place. A scan that already carries cam_id=-1 (a clinical
+    recording, whose DB holds only the SDK side average) is left alone."""
+    if any(key[1] == -1 for key in buffers):
+        return
+    if not any(0 <= key[1] < 8 for key in buffers):
+        return
+    buffers.update(derive_side_average_buffers(buffers))
 
 
 class ScanDataSource(QObject):
@@ -608,7 +688,7 @@ class ScanDataSource(QObject):
         chunks = [
             self._finite_values(buf)
             for (_side, _cam_id, m), buf in self.buffers.items()
-            if m == metric
+            if m == metric and not buf.derived
         ]
         return self._padded_percentile_bounds(
             chunks, percentile_lo, percentile_hi, pad_frac)
@@ -641,6 +721,19 @@ class ScanDataSource(QObject):
         if t_lo is None or t_hi is None:
             return [self._finite_values(buf)]
         return [buf.window_finite_values(float(t_lo), float(t_hi))]
+
+    @pyqtSlot(str, result="QVariantMap")
+    def compute_bounds_for_side_average(self, metric: str) -> dict:
+        """Research Average view (#606): the compute_bounds_for_metric fit
+        over the per-side average streams (cam_id=-1) only, so the shared
+        y-range follows the smoother averaged traces actually on screen
+        rather than the spread of the individual cameras."""
+        chunks = [
+            self._finite_values(buf)
+            for (_side, cam_id, m), buf in self.buffers.items()
+            if m == metric and cam_id == -1
+        ]
+        return self._padded_percentile_bounds(chunks, 2.0, 98.0, 0.25)
 
     @staticmethod
     def _finite_values(buf: "_CameraBuffer") -> np.ndarray:
@@ -716,10 +809,20 @@ class LiveScanSource(ScanDataSource):
     def __init__(self, plot_t0: float, parent: Optional[QObject] = None,
                  scan_db_path: Optional[str] = None,
                  cache_max_samples: int = _MAX_CAPACITY,
-                 bvi_lpf_cutoff_hz: float = 0.0) -> None:
+                 bvi_lpf_cutoff_hz: float = 0.0,
+                 derive_side_average: bool = False) -> None:
         super().__init__(plot_t0=plot_t0, parent=parent,
                          buffer_max_capacity=cache_max_samples)
         self._live = True
+        # Research Average view (#606): derive the per-side average from
+        # the per-camera rows as they arrive, under cam_id=-1. Always on
+        # for a research scan (not only while the view shows it) so a
+        # mid-scan switch to Average has the whole history. Off for
+        # clinical, whose cam_id=-1 stream comes from the SDK.
+        self._derive_side_average = bool(derive_side_average)
+        # Per side: the open capture being accumulated, or None —
+        # {"fid", "t", "sum": {metric: float}, "cnt": {metric: int}}.
+        self._side_acc: dict[str, Optional[dict]] = {"left": None, "right": None}
         # BVI display low-pass (issue #228): 1-pole IIR applied at ingest,
         # per (side, cam_id) stream (cam_id -1 = clinical side average).
         # The constructor default 0.0 = OFF, preserving raw-storage
@@ -916,6 +1019,10 @@ class LiveScanSource(ScanDataSource):
             buffers, _ = _bucketize_session_rows(
                 self._db, self._db_session_id, t_lo=want_lo, t_hi=want_hi
             )
+            # The DB holds only per-camera rows for a research scan; the
+            # Average view's cam_id=-1 history is derived per window (#606).
+            if self._derive_side_average:
+                _add_derived_side_averages(buffers)
         except Exception:
             if self._released:
                 # release() closed the DB under an in-flight load — the
@@ -1055,6 +1162,8 @@ class LiveScanSource(ScanDataSource):
         the existing _LivePlotSink passes None for samples where the
         SDK reported a non-finite mean_dc_rt / contrast_sn_rt, and None
         temp for dark frames (whose camera-temp reading is meaningless)."""
+        if self._derive_side_average and 0 <= int(cam_id) < 8:
+            self._accumulate_side(side, frame_id, t, bfi, bvi, mean, contrast)
         self._append_one(side, cam_id, "bfi", frame_id, t, bfi)
         self._append_one(side, cam_id, "bvi", frame_id, t,
                          self._bvi_lpf(side, cam_id, bvi))
@@ -1093,7 +1202,68 @@ class LiveScanSource(ScanDataSource):
         self._bvi_lpf_alpha = bvi_lpf_alpha(self._bvi_lpf_cutoff_hz)
         self._bvi_lpf_prev.clear()
 
+    def flush_side_average(self) -> None:
+        """Emit the captures still open in the Average-view accumulator
+        (#606). Called at scan end: without it the last capture of each
+        side would never land, since a capture is emitted only when the
+        next one starts."""
+        for side in ("left", "right"):
+            self._emit_side_average(side)
+
     # ── internal ──────────────────────────────────────────────────────────
+
+    def _accumulate_side(self, side: str, frame_id: int, t: float,
+                         bfi: float, bvi: float,
+                         mean: Optional[float],
+                         contrast: Optional[float]) -> None:
+        """Fold one camera row into its side's open capture (#606).
+
+        A capture's cameras share a frame_id and arrive as consecutive rows
+        per side (the same property the SDK's SideAverageStage relies on),
+        so a new frame_id closes the previous capture and emits its
+        average. BVI is averaged RAW and then low-passed under the side
+        stream's own key, exactly as the clinical side average is."""
+        acc = self._side_acc.get(side)
+        if acc is not None and acc["fid"] != frame_id:
+            self._emit_side_average(side)
+            acc = None
+        if acc is None:
+            acc = {"fid": frame_id, "t": t,
+                   "sum": dict.fromkeys(_AVG_METRICS, 0.0),
+                   "cnt": dict.fromkeys(_AVG_METRICS, 0)}
+            self._side_acc[side] = acc
+        for metric, v in (("bfi", bfi), ("bvi", bvi),
+                          ("mean", mean), ("contrast", contrast)):
+            if v is not None and math.isfinite(v):
+                acc["sum"][metric] += v
+                acc["cnt"][metric] += 1
+
+    def _emit_side_average(self, side: str) -> None:
+        acc = self._side_acc.get(side)
+        if acc is None:
+            return
+        self._side_acc[side] = None
+        avg = {
+            m: (acc["sum"][m] / acc["cnt"][m]) if acc["cnt"][m] else float("nan")
+            for m in _AVG_METRICS
+        }
+        fid, t = acc["fid"], acc["t"]
+        # BFI/BVI always land (NaN = every camera unlit → a trace gap, as
+        # for a single unlit camera); mean/contrast only when some camera
+        # reported one, matching append_uncorrected's None rule.
+        self._append_derived(side, "bfi", fid, t, avg["bfi"])
+        self._append_derived(side, "bvi", fid, t,
+                             self._bvi_lpf(side, -1, avg["bvi"]))
+        for m in ("mean", "contrast"):
+            if acc["cnt"][m]:
+                self._append_derived(side, m, fid, t, avg[m])
+
+    def _append_derived(self, side: str, metric: str, frame_id: int,
+                        t: float, v: float) -> None:
+        buf = self.get_or_create_buffer(side, -1, metric)
+        buf.derived = True
+        buf.append(t=t, v=v, frame_id=frame_id)
+        self.note_dirty(side, -1, metric, added=1)
 
     def _bvi_lpf(self, side: str, cam_id: int, bvi: float) -> float:
         """1-pole IIR low-pass on the DISPLAY BVI stream (issue #228).
@@ -1360,6 +1530,7 @@ def load_past_scan_buffers(
     scan_db,
     session_id: int,
     corrected_csv_path: Optional[str] = None,
+    derive_side_average: bool = False,
 ) -> tuple[dict, bool]:
     """Bulk-load a past scan's samples into a plain
     {(side, cam_id, metric): _CameraBuffer} dict. Returns (buffers, has_bfi).
@@ -1377,14 +1548,20 @@ def load_past_scan_buffers(
         Clinical cells query cam_id=-1, so replay reads it straight from
         the DB — no derivation.
     Pre-pipeline scans carry no BFI/BVI in the DB; the corrected-CSV
-    fallback covers those (CsvSink writes it for every scan)."""
+    fallback covers those (CsvSink writes it for every scan).
+
+    ``derive_side_average`` (research builds, #606) adds the Average view's
+    cam_id=-1 streams, computed from the per-camera ones, here on the
+    worker thread rather than at source construction on the GUI thread."""
     buffers, has_bfi = _bucketize_session_rows(scan_db, int(session_id))
     if not has_bfi and corrected_csv_path:
         _load_corrected_csv_into(buffers, corrected_csv_path)
+    if derive_side_average:
+        _add_derived_side_averages(buffers)
     return buffers, has_bfi
 
 
-def load_csv_scan_buffers(csv_path: str) -> dict:
+def load_csv_scan_buffers(csv_path: str, derive_side_average: bool = False) -> dict:
     """Bulk-load a scan-export CSV into a fresh
     {(side, cam_id, metric): _CameraBuffer} dict, DB-free.
 
@@ -1397,9 +1574,12 @@ def load_csv_scan_buffers(csv_path: str) -> dict:
 
     Fail-soft: a missing or unreadable file yields an empty dict (the
     OSError guard lives in ``_load_corrected_csv_into``); callers check
-    ``buffers_are_empty`` before displaying."""
+    ``buffers_are_empty`` before displaying. ``derive_side_average``: see
+    load_past_scan_buffers."""
     buffers: dict = {}
     _load_corrected_csv_into(buffers, csv_path)
+    if derive_side_average:
+        _add_derived_side_averages(buffers)
     return buffers
 
 
