@@ -223,7 +223,8 @@ Rectangle {
             }
             // Maximize/Restore Button
             IconWindowButton {
-                buttonIcon: window.visibility === Window.Maximized ? "\uea47" : "\ueb18"
+                // restore = size (two overlapping squares); maximize = up-square
+                buttonIcon: window.visibility === Window.Maximized ? "\ueacc" : "\ueb18"
                 Layout.alignment: Qt.AlignHCenter
                 onClicked: {
                     if (window.visibility === Window.Maximized) {
