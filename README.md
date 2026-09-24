@@ -58,7 +58,8 @@ xattr -dr com.apple.quarantine /Applications/Open-Motion.app
   and scrub real BFI/BVI traces in the plot viewer. Nothing loads unless you
   accept.
 - **History → Export CSV** exports any stored scan. By default the app writes no
-  per-scan CSV files; everything is kept in the local scan database.
+  per-scan CSV files; everything is kept in the local scan database. Turn on
+  **Settings → Data Output → Auto-export CSV** to export each scan when it ends.
 - **Errors** show a stable code such as `E-104`. The
   [error code catalog](docs/ERROR_CODES.md) explains each code and what to do
   about it.
@@ -103,6 +104,7 @@ Most display options live in the in-app **Settings** panel and in the plot's
 | BFI / BVI color | `#ffffff` / `#3437db` | Trace colors |
 | BVI low-pass filter | on | Smooths the **displayed** BVI trace (20 Hz, 1-pole). Stored data is never filtered |
 | Axis labels | on | Show axis labels on the plots |
+| Auto-export CSV | off | Write the same CSV as History → Export CSV to `data/` when each scan ends |
 | Write raw CSV | off | Also write raw histogram CSVs for each scan, optionally capped to a number of seconds |
 
 All other values (thresholds, timings, firmware flags) are compiled into the app
