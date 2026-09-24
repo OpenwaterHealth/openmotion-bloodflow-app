@@ -204,6 +204,47 @@ Rectangle {
             spacing: 10
             Layout.alignment: Qt.AlignRight
 
+            // Fullscreen toggle (#608). Stays highlighted while
+            // fullscreen; main.qml owns the toggle so F11 shares it.
+            // The icon font has no boxed fullscreen glyph, so the icon is
+            // drawn to match the boxed keenicons beside it at 24 px: 21.5 px
+            // box, 1.5 px stroke, ~6 px outer corner radius, ~8.5 px symbol.
+            IconWindowButton {
+                id: fullScreenButton
+                buttonIcon: ""
+                backgroundColor: window.visibility === Window.FullScreen
+                                 ? AppTheme.bgHover : "transparent"
+                Layout.alignment: Qt.AlignHCenter
+                onClicked: window.toggleFullScreen()
+
+                Canvas {
+                    anchors.fill: parent
+                    property color tint: fullScreenButton.currentIconColor
+                    onTintChanged: requestPaint()
+                    onPaint: {
+                        var ctx = getContext("2d")
+                        ctx.reset()
+                        var cx = width / 2, cy = height / 2
+                        ctx.strokeStyle = tint.toString()
+                        ctx.lineWidth = 1.5
+                        ctx.lineCap = "round"
+                        ctx.lineJoin = "round"
+                        // Box (path runs along the stroke centre)
+                        ctx.beginPath()
+                        ctx.roundedRect(cx - 10, cy - 10, 20, 20, 5.4, 5.4)
+                        ctx.stroke()
+                        // Double-headed diagonal arrow
+                        var a = 4.25, head = 3.5
+                        ctx.beginPath()
+                        ctx.moveTo(cx - a, cy + a); ctx.lineTo(cx + a, cy - a)
+                        ctx.moveTo(cx + a - head, cy - a); ctx.lineTo(cx + a, cy - a)
+                        ctx.lineTo(cx + a, cy - a + head)
+                        ctx.moveTo(cx - a + head, cy + a); ctx.lineTo(cx - a, cy + a)
+                        ctx.lineTo(cx - a, cy + a - head)
+                        ctx.stroke()
+                    }
+                }
+            }
             // Minimize Button
             IconWindowButton {
                 buttonIcon: "\ue9e4" // Minimize icon
@@ -214,7 +255,8 @@ Rectangle {
             }
             // Maximize/Restore Button
             IconWindowButton {
-                buttonIcon: window.visibility === Window.Maximized ? "\uea47" : "\ueb18"
+                // restore = size (two overlapping squares); maximize = up-square
+                buttonIcon: window.visibility === Window.Maximized ? "\ueacc" : "\ueb18"
                 Layout.alignment: Qt.AlignHCenter
                 onClicked: {
                     if (window.visibility === Window.Maximized) {
