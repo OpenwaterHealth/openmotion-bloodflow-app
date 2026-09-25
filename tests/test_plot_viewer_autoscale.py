@@ -609,6 +609,23 @@ def test_outward_moves_are_immediate_while_the_window_fills(live_viewer):
     assert t2[1] < t1[1] + 0.5 - 1e-6
 
 
+def test_trace_pen_is_at_most_one_device_pixel(live_viewer):
+    """#616: QPainter strokes a pen of at most one device pixel with its
+    fast stroker; the old 1.5 px trace pen cost ~270 ms per 8-cell
+    repaint on a 3440 px screen (vs ~6 ms), which held the plots to ~2
+    repaints/s and starved every other control. Canvas scales by the
+    device pixel ratio, so the width must be in device pixels."""
+    viewer, src, stub = live_viewer
+    for c in _plot_cells(viewer):
+        width = float(c.property("_tracePenWidth"))
+        dpr = c.window().devicePixelRatio() if c.window() else 1.0
+        assert 0.0 < width * dpr <= 1.0
+    qml = (REPO_ROOT / "components" / "PlotCell.qml").read_text(encoding="utf-8")
+    start = qml.index("function _drawTrace")
+    body = qml[start:qml.index("return pts.length", start)]
+    assert "ctx.lineWidth = cell._tracePenWidth" in body
+
+
 def test_global_mode_ignores_window_changes(live_viewer):
     """Global autoscale keeps fitting the whole scan: a pan must not
     consult the per-cell slot at all."""
