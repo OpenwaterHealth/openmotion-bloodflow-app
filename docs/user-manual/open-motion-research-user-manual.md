@@ -291,17 +291,6 @@ the others are grey. The scan keeps recording while the dialog is shown.
 | **Stop scan** | End the scan now. |
 | **Continue** | Return to the plots. Enabled only after every problem has stayed clear for a few seconds — re-seat the sensor and wait for the border to turn green and the message *"All contact quality issues are currently inactive. You may dismiss."* |
 
-**Camera messages.** Short messages in the bottom-right corner report individual cameras:
-
-- *"Camera RIGHT 2 connection lost at 00:01:23 — last temp 41.2°C"* — that camera has
-  delivered no data for more than 2 seconds, and its plot shows **CONNECTION LOST**. The
-  scan continues on the remaining cameras. Check the sensor module's cable and power.
-- *"Camera RIGHT 2 reconnected at 00:01:40"* — data from that camera resumed.
-- *"Camera RIGHT 2 temperature … — above 110°C threshold. Check the airflow around the
-  sensor module."* — a camera is running hot. Make sure nothing covers the module's vents.
-
-If every camera stops delivering data, the scan is stopped automatically (E-303, §12.4).
-
 **Ending the scan.** A timed scan stops by itself; otherwise press the red **Stop** badge
 (or **Stop scan** in a contact warning). After a few seconds, **Session Notes** opens with
 a closing line — *"Scan completed — duration: 00:02:00"* for a timed scan that ran to the
@@ -335,8 +324,7 @@ Each plot shows:
 - the camera label (`LEFT 3`, `RIGHT 7`, …) and its latest values under it;
 - the traces: BFI (white) and BVI (blue), or Mean (green) and Contrast (purple);
 - axis labels: the left scale belongs to the first trace (BFI or Mean), the right scale to
-  the second (BVI or Contrast);
-- **CONNECTION LOST** while that camera is not delivering data during a live scan.
+  the second (BVI or Contrast).
 
 BFI and BVI values are limited to a 0–10 display range: a value below 0 shows as `0.00`
 and a value above 10 as `10.00`. `--` means there is no valid reading.
@@ -541,7 +529,6 @@ hand. Up to five are shown at a time.
 | *"Could not start scan — the previous step is still finishing. Please press Start again."* | The system was still busy. Wait a few seconds and press Start again. |
 | *"Scan failed: …"* | The scan could not start or run; the reason follows. |
 | *"Scan duration cannot be 0 seconds — reset to 1 minute."* | See §4.3. |
-| *"Camera … connection lost …"*, *"… reconnected …"*, *"… temperature …"* | Individual camera events during a scan (§6). |
 | *"Scan ended unexpectedly …"* | See §6. |
 | *"Laser safety warning detected. Please restart your console. If this error persists, please contact support."* (red, stays on screen) | The console's hardware laser-safety monitor reported a fault. Power-cycle the console. Contact support if it recurs. |
 | *"Exported to …"*, *"Exported N scan(s) to …"* | A CSV export finished. |
