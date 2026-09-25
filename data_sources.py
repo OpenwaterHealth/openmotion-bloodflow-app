@@ -129,6 +129,49 @@ def bvi_lpf_alpha(cutoff_hz: float) -> float:
 # allocation cost is fine and consistent across the scan.
 
 
+# ── Statistics pane low-pass (#635) ─────────────────────────────────────
+# The plot viewer's Statistics pane shows each plotted stream next to the
+# same stream through a slow low-pass (0.5 Hz, set by the pane). It is the
+# BVI display filter's 1-pole IIR (bvi_lpf_alpha: nominal 40 Hz, and a
+# non-finite sample leaves the state untouched), but evaluated on demand
+# over the trailing samples instead of carried as state at ingest: over a
+# window long enough that the seed's weight has decayed below
+# _LPF_SEED_WEIGHT the result is the running filter's to display
+# precision, and a stateless filter reads the same for a live scan, a
+# replayed one, or a pane switched on mid-scan.
+_LPF_SEED_WEIGHT = 1e-6
+
+
+def lowpass_window_sec(alpha: float) -> float:
+    """Trailing window lowpass_last needs at `alpha` for the seed's
+    weight, (1 - alpha)^(n-1) over n samples, to fall below
+    _LPF_SEED_WEIGHT (4.6 s at 0.5 Hz). n / 40 s spans n + 1 nominal
+    sample times, so float fuzz at the far edge still leaves n."""
+    if alpha >= 1.0:
+        return 1.0 / _NOMINAL_HZ
+    n = math.ceil(math.log(_LPF_SEED_WEIGHT) / math.log(1.0 - alpha)) + 1
+    return n / _NOMINAL_HZ
+
+
+def lowpass_last(values: np.ndarray, alpha: float) -> float:
+    """Final output of ``y[n] = y[n-1] + alpha * (x[n] - y[n-1])`` run over
+    `values` in order, seeded with the first finite value and skipping
+    non-finite ones, as LiveScanSource._bvi_lpf does. NaN when none is
+    finite. Unrolled into one dot product:
+    ``y = (1-a)^(n-1) x0 + sum_k a (1-a)^(n-1-k) x_k``."""
+    x = np.asarray(values, dtype=np.float64)
+    x = x[np.isfinite(x)]
+    n = x.size
+    if n == 0:
+        return float("nan")
+    if alpha >= 1.0:
+        return float(x[-1])
+    decay = 1.0 - alpha
+    w = alpha * decay ** np.arange(n - 1, -1, -1, dtype=np.float64)
+    w[0] = decay ** (n - 1)
+    return float(np.dot(w, x))
+
+
 class _CameraBuffer:
     """Append-only growable buffer for one (side, cam_id, metric) stream.
 
@@ -724,6 +767,36 @@ class ScanDataSource(QObject):
         if buf is None:
             return float("nan")
         return buf.value_near(t)
+
+    @pyqtSlot("QVariantList", "QVariantList", float, float, result="QVariantMap")
+    def statistics_at(self, cells, metrics, t: float, cutoff_hz: float) -> dict:
+        """Statistics pane (#635), one call per refresh: for each cell key
+        (``"side:camId"``, as the viewer's cell model spells it) and each
+        metric, ``row[metric]`` is value_at(t), the number the cell's value
+        label shows, and ``row[metric + "_lpf"]`` the stream low-passed at
+        `cutoff_hz` up to t (lowpass_last over the trailing
+        lowpass_window_sec). Missing streams read NaN.
+
+        The low-pass reads only the in-memory buffer: the pane asks at the
+        live edge, which is always in memory."""
+        alpha = bvi_lpf_alpha(cutoff_hz)
+        window = lowpass_window_sec(alpha)
+        out = {}
+        for key in cells:
+            side, _, cam = str(key).partition(":")
+            try:
+                cam_id = int(cam)
+            except ValueError:
+                continue
+            row = {}
+            for metric in metrics:
+                metric = str(metric)
+                row[metric] = self.value_at(side, cam_id, metric, t)
+                buf = self.buffers.get((side, cam_id, metric))
+                row[metric + "_lpf"] = float("nan") if buf is None else lowpass_last(
+                    buf.window_finite_values(t - window, t), alpha)
+            out[str(key)] = row
+        return out
 
     @pyqtSlot(str, int, result=float)
     def dropped_at_for(self, side: str, cam_id: int) -> float:
