@@ -153,8 +153,7 @@ Press the green **Start** badge. Every scan begins with an automatic
 **contact-quality check**. The laser is on during the check.
 
 ![Contact-quality check in progress](img/cl-cq-checking.png)
-*"Checking contact quality…" — usually about 10 seconds. The first check after the sensor
-modules are powered up can take up to about a minute while the cameras are configured.*
+*"Checking contact quality…" — the check takes about 10 seconds.*
 
 The check tests **all eight cameras** on each connected sensor module — including the
 cameras a scan does not use — so it confirms that the whole module is seated. The check
@@ -319,8 +318,8 @@ Keyboard shortcuts (active when the plot area has keyboard focus — click a plo
 - Saved notes appear, read-only, in Scan History (§7).
 
 > **Do not enter patient-identifiable information in the notes.** The same reminder is
-> shown at the bottom of the Notes window. Notes are stored with the scan and included in
-> exported CSV files.
+> shown at the bottom of the Notes window. Notes are stored with the scan in the scan
+> database; they are not included in exported CSV files.
 
 ![Note saved confirmation](img/cl-toast.png)
 *Closing the Notes window saves the text.*
