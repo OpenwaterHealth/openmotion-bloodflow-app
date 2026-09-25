@@ -92,19 +92,27 @@ Rectangle {
         !viewer.effectiveClinical
         && MotionInterface.appConfig.autoScalePerPlot === true
     readonly property bool perPlotActive: viewer.autoScale && viewer.autoScalePerPlot
-    // Research view mode (#606): the ⋯ popup's Individual | Average
-    // buttons write plotViewMode through MotionInterface.setConfig (same
-    // pattern as autoScalePerPlot). Average draws the clinical layout (one
-    // per-side averaged plot per module plus the large readout panels)
-    // from the cam_id=-1 streams the research sources derive from the
-    // per-camera data. Display-only. Gated on the build (clinicalMode) as
-    // well as the shown scan, so a clinical build never honors a stale
-    // value; clinical is averageView through effectiveClinical as before.
-    readonly property bool researchAverage:
-        !viewer.clinicalMode && !viewer.effectiveClinical
-        && MotionInterface.appConfig.plotViewMode === "average"
+    // Research view mode (#606): the ⋯ popup's Individual | Aggregate |
+    // Average buttons write plotViewMode through MotionInterface.setConfig
+    // (same pattern as autoScalePerPlot). Average draws the clinical
+    // layout (one per-side averaged plot per module plus the large readout
+    // panels) from the cam_id=-1 streams the research sources derive from
+    // the per-camera data. Aggregate (#621) keeps the camera grid but folds
+    // each row's mirrored pair (1+8, 2+7, 3+6, 4+5) into one plot of their
+    // average, from the pair streams derived alongside. Display-only.
+    // Gated on the build (clinicalMode) as well as the shown scan, so a
+    // clinical build never honors a stale value; clinical is averageView
+    // through effectiveClinical as before. Anything unrecognized, and every
+    // clinical case, reads as "individual" here.
+    readonly property string researchViewMode: {
+        var m = MotionInterface.appConfig.plotViewMode
+        if (viewer.clinicalMode || viewer.effectiveClinical) return "individual"
+        return (m === "average" || m === "aggregate") ? m : "individual"
+    }
+    readonly property bool researchAverage: viewer.researchViewMode === "average"
+    readonly property bool aggregateView: viewer.researchViewMode === "aggregate"
     readonly property bool averageView: viewer.effectiveClinical || viewer.researchAverage
-    onResearchAverageChanged: viewer._recomputeAutoscale()
+    onResearchViewModeChanged: viewer._recomputeAutoscale()
     // Per-plot ranges, keyed "side:camId" → { pMin, pMax, sMin, sMax }
     // for the current display pair. Rebuilt as a whole object by
     // _recomputeAutoscale so the cell bindings re-evaluate (mutating a
@@ -326,13 +334,45 @@ Rectangle {
     // ── Side break ─────────────────────────────────────────────────────
     // A bit of extra margin between the left and right sensor modules in
     // dev (non-clinical) mode. The grid reserves an empty spacer column
-    // (col 2) between them, but only when BOTH sides have active cameras —
-    // a single-sided scan keeps filling the width with no dangling gap.
+    // between them (col 2; col 1 in the Aggregate view), but only when
+    // BOTH sides have active cameras — a single-sided scan keeps filling
+    // the width with no dangling gap.
     readonly property bool _sideGapActive:
         !viewer.averageView
         && (viewer._effLeftMask & 0xFF) !== 0
         && (viewer._effRightMask & 0xFF) !== 0
     readonly property real _sideGapPx: 3
+    readonly property int _sideGapCol: viewer.aggregateView ? 1 : 2
+
+    // ── Aggregate pair streams (#621) ──────────────────────────────────
+    // Pair p is the zero-based cameras (p, 7 - p), i.e. 1-based p+1 and
+    // 8-p, stored under cam_id _aggregateCamBase + p. Mirrors
+    // data_sources.AGGREGATE_CAM_BASE / AGGREGATE_PAIRS.
+    readonly property int _aggregateCamBase: 8
+
+    function _aggregatePair(camId) {
+        var p = camId - viewer._aggregateCamBase
+        return (p >= 0 && p < 4) ? [p, 7 - p] : null
+    }
+
+    // A cell's camera label: "LEFT 3", or "LEFT 1+8" for a pair. The
+    // hover tooltip passes compact=true for "L3" / "L1+8".
+    function _cellLabel(side, camId, compact) {
+        var s = compact ? side.charAt(0).toUpperCase() : side.toUpperCase() + " "
+        var pair = viewer._aggregatePair(camId)
+        return pair ? s + (pair[0] + 1) + "+" + (pair[1] + 1) : s + (camId + 1)
+    }
+
+    // Connection Lost badge key: a pair cell shows it when either of its
+    // cameras is lost — the trace is then one camera, not the pair.
+    function _cellLost(side, camId) {
+        var pair = viewer._aggregatePair(camId)
+        var ids = pair ? pair : [camId]
+        for (var i = 0; i < ids.length; i++) {
+            if (viewer._lostCameras[side + ":" + ids[i]] === true) return true
+        }
+        return false
+    }
 
     // ── Grid model ─────────────────────────────────────────────────────
     // Dev mode (default) — one cell per active camera (bits set in
@@ -389,9 +429,37 @@ Rectangle {
         return entries
     }
 
+    // Aggregate view (#621) — the dev grid with each row's two cells
+    // folded into one: display row r's mirrored pair (1-based 4-r | 5+r,
+    // pair index 3-r) as a single plot per module, left module in
+    // column 0 and right in column 2 (column 1 is the side-break spacer).
+    // Rows drop exactly as in the dev grid; a pair with only one camera
+    // enabled still gets its cell, which then plots that camera alone.
+    readonly property var _aggregateCellModel: {
+        var masks = [viewer._effLeftMask & 0xFF, viewer._effRightMask & 0xFF]
+        var sides = ["left", "right"]
+        var colBase = [0, masks[0] !== 0 ? 2 : 0]
+        var entries = []
+        var displayRow = 0
+        for (var r = 0; r < 4; r++) {
+            var p = 3 - r
+            var rowBits = (1 << p) | (1 << (7 - p))
+            if (!((masks[0] | masks[1]) & rowBits)) continue
+            for (var s = 0; s < 2; s++) {
+                if (masks[s] & rowBits) {
+                    entries.push({ side: sides[s],
+                                   camId: viewer._aggregateCamBase + p,
+                                   row: displayRow, col: colBase[s] })
+                }
+            }
+            displayRow++
+        }
+        return entries
+    }
+
     readonly property var _activeCellModel: viewer.averageView
         ? _clinicalCellModel
-        : _devCellModel
+        : (viewer.aggregateView ? _aggregateCellModel : _devCellModel)
 
     // Clinical readout column gate — the whole 250 px column collapses when
     // no side has active cameras, not just its individual panels (#298):
@@ -408,6 +476,15 @@ Rectangle {
     // prefers its own entry and falls back to the global range.
     function _validBounds(b) {
         return b && typeof b.yMin === "number" && typeof b.yMax === "number"
+    }
+
+    // Shared (global-mode) fit for one metric over the traces the current
+    // view draws: the research Average and Aggregate views fit their
+    // derived streams (#606, #621); every other view the cameras.
+    function _globalBounds(src, metric) {
+        if (viewer.researchAverage) return src.compute_bounds_for_side_average(metric)
+        if (viewer.aggregateView) return src.compute_bounds_for_aggregate(metric)
+        return src.compute_bounds_for_metric(metric)
     }
 
     function _fitAutoscale(snap) {
@@ -463,18 +540,12 @@ Rectangle {
                 viewer._cellTargets = ({})
                 viewer._cellTargetsPair = ""
             }
-            // Research Average view fits the averaged traces it shows;
-            // every other view keeps the per-camera fit (#606).
-            var gp = viewer.researchAverage
-                ? src.compute_bounds_for_side_average(pair.primary)
-                : src.compute_bounds_for_metric(pair.primary)
+            var gp = viewer._globalBounds(src, pair.primary)
             if (_validBounds(gp)) {
                 viewer._autoPrimaryYMin = gp.yMin
                 viewer._autoPrimaryYMax = gp.yMax
             }
-            var gs = viewer.researchAverage
-                ? src.compute_bounds_for_side_average(pair.secondary)
-                : src.compute_bounds_for_metric(pair.secondary)
+            var gs = viewer._globalBounds(src, pair.secondary)
             if (_validBounds(gs)) {
                 viewer._autoSecondaryYMin = gs.yMin
                 viewer._autoSecondaryYMax = gs.yMax
@@ -1001,19 +1072,23 @@ Rectangle {
                 // Clinical mode / Average view: single column, 2 stacked
                 // cells. Individual view: 4 columns; +1 spacer column
                 // (col 2) when both sides are active, for a visual break
-                // between the modules.
-                columns: viewer.averageView ? 1 : (viewer._sideGapActive ? 5 : 4)
+                // between the modules. Aggregate view: one column per
+                // module, spacer at col 1.
+                columns: viewer.averageView ? 1
+                    : viewer.aggregateView ? (viewer._sideGapActive ? 3 : 2)
+                    : (viewer._sideGapActive ? 5 : 4)
                 rowSpacing: 6
                 columnSpacing: 6
 
                 // Side-break spacer — fixed-width empty column 2 between the
-                // left (cols 0-1) and right (cols 3-4) modules. fillWidth is
-                // false so it stays a fixed gap; the plot cells (fillWidth)
-                // absorb the rest of the row width around it.
+                // left (cols 0-1) and right (cols 3-4) modules; column 1 in
+                // the Aggregate view. fillWidth is false so it stays a fixed
+                // gap; the plot cells (fillWidth) absorb the rest of the row
+                // width around it.
                 Item {
                     visible: viewer._sideGapActive
                     Layout.row: 0
-                    Layout.column: 2
+                    Layout.column: viewer._sideGapCol
                     Layout.fillWidth: false
                     Layout.fillHeight: false
                     Layout.preferredWidth: viewer._sideGapPx
@@ -1029,6 +1104,7 @@ Rectangle {
                         source: viewer.scanSource
                         side: modelData.side
                         camId: modelData.camId
+                        label: viewer._cellLabel(modelData.side, modelData.camId, false)
                         windowSeconds: viewer.windowSeconds
                         followLive: viewer.followLive
                         windowStartT: viewer.windowStartT
@@ -1057,7 +1133,7 @@ Rectangle {
                         // connection state to report (issue #174).
                         connectionLost: viewer.scanSource !== null
                             && viewer.scanSource.live === true
-                            && viewer._lostCameras[modelData.side + ":" + modelData.camId] === true
+                            && viewer._cellLost(modelData.side, modelData.camId)
                     }
                 }
             }
@@ -1150,10 +1226,11 @@ Rectangle {
                     viewer.scanSource.value_at(c.side, c.camId, secMetric, t))
                 // Clinical mode uses camId=-1 for the side-averaged stream;
                 // (c.camId + 1) would render "L0"/"R0" instead of the
-                // cell's own "LEFT AVG" / "RIGHT AVG" label.
+                // cell's own "LEFT AVG" / "RIGHT AVG" label. Aggregate
+                // pairs read "L1+8".
                 var label = c.camId === -1
                     ? c.side.charAt(0).toUpperCase() + " AVG"
-                    : c.side.charAt(0).toUpperCase() + (c.camId + 1)
+                    : viewer._cellLabel(c.side, c.camId, true)
                 rows.push({
                     label: label,
                     pVal: pv, pColor: primColor,
@@ -1349,8 +1426,8 @@ Rectangle {
     // Window-seconds pill shows the current zoom and opens a dropdown
     // menu of the canonical zoom options when clicked. The three-dot
     // button to its right opens a popup with the research view-mode
-    // buttons (#606) and switches for display mode, autoscale (+ per-plot
-    // scale, #452), axis labels, and (dev-only) profiler.
+    // buttons (#606, #621) and switches for display mode, autoscale
+    // (+ per-plot scale, #452), axis labels, and (dev-only) profiler.
     Row {
         id: bottomRightOverlay
         visible: viewer.scanSource !== null
@@ -1507,8 +1584,9 @@ Rectangle {
                     padding: 12
 
                     // Research view mode (#606): Individual (one plot per
-                    // camera) | Average (one averaged plot per module).
-                    // Same gate as viewer.researchAverage: never in a
+                    // camera) | Aggregate (one plot per mirrored camera
+                    // pair, #621) | Average (one averaged plot per module).
+                    // Same gate as viewer.researchViewMode: never in a
                     // clinical build, nor while replaying a clinical scan
                     // (it only holds the averages).
                     Row {
@@ -1536,13 +1614,13 @@ Rectangle {
                                 Repeater {
                                     model: [
                                         { value: "individual", label: "Individual" },
+                                        { value: "aggregate",  label: "Aggregate" },
                                         { value: "average",    label: "Average" }
                                     ]
                                     delegate: Rectangle {
                                         id: viewModeButton
                                         readonly property bool selected:
-                                            (viewer.researchAverage ? "average" : "individual")
-                                            === modelData.value
+                                            viewer.researchViewMode === modelData.value
                                         width: viewModeLabel.implicitWidth + 24
                                         height: 24
                                         radius: 12

@@ -83,8 +83,10 @@ APP_CONFIG = {
     "autoScalePerPlot": False,
     "showAxisLabels": True,
     # Research plot view (#606), from the plot's ⋯ menu: "individual" (one
-    # plot per camera) or "average" (one per-side averaged plot per module,
-    # clinical-style). Display-only; clinical builds ignore it.
+    # plot per camera), "aggregate" (one plot per mirrored camera pair,
+    # 1+8 / 2+7 / 3+6 / 4+5, per module; #621) or "average" (one per-side
+    # averaged plot per module, clinical-style). Display-only; clinical
+    # builds ignore it.
     "plotViewMode": "individual",
     "darkMode": True,
     "max_calibration_time_sec": 600,

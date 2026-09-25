@@ -572,8 +572,9 @@ class _LivePlotSink:
         )
 
     def on_complete(self) -> None:
-        # Land the research Average view's last open capture per side
-        # (#606); a no-op when the source doesn't derive (clinical).
+        # Land the research Average / Aggregate views' last open capture
+        # per side (#606, #621); a no-op when the source doesn't derive
+        # (clinical).
         self._live_source.flush_side_average()
 
 
@@ -3321,10 +3322,11 @@ class MotionConnector(QObject):
         if "bviLowPassEnabled" in changes:
             self._apply_bvi_lpf_setting()
 
-    # ── Research Average view (#606) ──────────────────────────────────
+    # ── Research Average / Aggregate views (#606, #621) ───────────────
     def _derive_side_average(self) -> bool:
-        """Whether plot sources derive the per-side average streams the
-        research Average view (⋯ menu, plotViewMode) draws. Research builds
+        """Whether plot sources derive the per-side average and mirrored-
+        pair streams the research Average and Aggregate views (⋯ menu,
+        plotViewMode) draw. Research builds
         always derive, whichever view is showing, so switching is instant
         and has full history; clinical builds never do (their side average
         is the SDK's reduced-mode stream). Safe from the past-scan loader
