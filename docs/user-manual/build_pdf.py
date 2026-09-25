@@ -1,32 +1,49 @@
-"""Render the user-manual markdown in this folder to a styled PDF.
+"""Render the Open-Motion Research user manual to a styled PDF.
 
-Usage:  python build_pdf.py
-Needs:  pip install markdown   (plus Microsoft Edge, used headless for printing)
+The user manual is Research-only (#371): this script renders exactly one
+source, ``open-motion-research-user-manual.md``. Clinical and engineering
+manuals do not belong in this public repository.
 
-The PDF lands next to the markdown source. Screenshots live in img/ (see
-README.md for how they were captured).
+Usage:
+    python build_pdf.py
+        Rebuild the committed PDF next to the markdown. Do this in the same
+        commit as any change to the markdown, img/ or this script — the
+        user-manual workflow fails a PR that changes them without the PDF.
+    python build_pdf.py --version 1.6.0 --out build/manual/Manual-1.6.0.pdf
+        CI build: stamp a "Built from" row on the cover and write elsewhere.
+    python build_pdf.py --check-version 1.6.0 [--strict] [--check-only]
+        Compare the manual's documented "Application version" with a release
+        tag (dev/rc suffixes ignored). A mismatch is a warning, or an error
+        with --strict (release-build.yml uses --strict on production tags).
+
+Needs ``markdown`` (pip-installed on demand when rendering) and a Chromium
+browser for headless printing: Microsoft Edge (preinstalled on Windows and on
+GitHub's Windows runners) or Google Chrome / Chromium.
 """
+import argparse
 import os
+import re
+import shutil
 import subprocess
 import sys
 import time
 
-try:
-    import markdown
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", "markdown"])
-    import markdown
-
 DOCS = os.path.dirname(os.path.abspath(__file__))
-EDGE_CANDIDATES = [
+MANUAL = "open-motion-research-user-manual.md"
+PDF_NAME = "Open-Motion-Research-User-Manual.pdf"
+
+BROWSER_PATHS = [
     r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
     r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
 ]
-EDGE = next(p for p in EDGE_CANDIDATES if os.path.exists(p))
+BROWSER_NAMES = ["msedge", "microsoft-edge", "google-chrome", "google-chrome-stable",
+                 "chromium", "chromium-browser"]
 
-FILES = {
-    "open-motion-research-user-manual.md": "Open-Motion-Research-User-Manual.pdf",
-}
+# The cover row that states which app version the manual's content describes.
+VERSION_ROW = re.compile(r"^\| \*\*Application version\*\* \| *([^|]+?) *\|$", re.M)
 
 CSS = """
 * { -webkit-print-color-adjust: exact; print-color-adjust: exact; box-sizing: border-box; }
@@ -99,9 +116,61 @@ TEMPLATE = """<!DOCTYPE html>
 <body>{body}</body></html>"""
 
 
-def build(md_name, pdf_name):
-    path = os.path.join(DOCS, md_name)
-    text = open(path, encoding="utf-8").read()
+def find_browser():
+    for path in BROWSER_PATHS:
+        if os.path.exists(path):
+            return path
+    for name in BROWSER_NAMES:
+        path = shutil.which(name)
+        if path:
+            return path
+    raise SystemExit("No Microsoft Edge, Google Chrome or Chromium found for headless PDF printing.")
+
+
+def documented_version(text):
+    m = VERSION_ROW.search(text)
+    if not m:
+        raise SystemExit(f"{MANUAL}: the cover has no '| **Application version** | X.Y.Z |' row.")
+    return m.group(1).strip()
+
+
+def base_version(version):
+    """'v1.6.0-rc.2' -> '1.6.0'."""
+    version = version.strip()
+    if version.startswith("v"):
+        version = version[1:]
+    return re.split(r"[-+]", version, maxsplit=1)[0]
+
+
+def check_version(text, tag, strict):
+    """True when the manual documents the tag's version (or the mismatch is only a warning)."""
+    documented = documented_version(text)
+    if base_version(documented) == base_version(tag):
+        print(f"User manual documents {documented}; matches {tag}.")
+        return True
+    level = "error" if strict else "warning"
+    message = (
+        f"The user manual documents version {documented} but this build is {tag}. "
+        f"Review docs/user-manual/{MANUAL} against the app, update its "
+        "'Application version' row, and rebuild the PDF (python docs/user-manual/build_pdf.py)."
+    )
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        print(f"::{level}::{message}")
+    else:
+        print(f"{level.upper()}: {message}")
+    return not strict
+
+
+def render(text, pdf_path, built_from=None):
+    try:
+        import markdown
+    except ImportError:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", "markdown"])
+        import markdown
+
+    if built_from:
+        text = VERSION_ROW.sub(
+            lambda m: m.group(0) + f"\n| **Built from** | {built_from} |", text, count=1)
     # enable markdown processing inside the cover div
     text = text.replace('<div class="cover">', '<div class="cover" markdown="1">')
     # inject a TOC after the cover (first --- after the closing div)
@@ -111,28 +180,53 @@ def build(md_name, pdf_name):
         extensions=["extra", "toc", "sane_lists"],
         extension_configs={"toc": {"toc_depth": "2-2", "title": "Contents"}},
     )
-    title = pdf_name[:-4].replace("-", " ")
-    html_path = os.path.join(DOCS, md_name.replace(".md", ".tmp.html"))
-    open(html_path, "w", encoding="utf-8").write(TEMPLATE.format(title=title, css=CSS, body=html_body))
+    # The HTML sits next to the markdown so img/ paths resolve.
+    html_path = os.path.join(DOCS, MANUAL.replace(".md", ".tmp.html"))
+    with open(html_path, "w", encoding="utf-8") as fh:
+        fh.write(TEMPLATE.format(title="Open-Motion Research User Manual", css=CSS, body=html_body))
 
-    pdf_path = os.path.join(DOCS, pdf_name)
+    pdf_path = os.path.abspath(pdf_path)
+    os.makedirs(os.path.dirname(pdf_path), exist_ok=True)
     if os.path.exists(pdf_path):
         os.remove(pdf_path)
-    url = "file:///" + html_path.replace("\\", "/")
-    subprocess.run(
-        [EDGE, "--headless", "--disable-gpu", "--no-pdf-header-footer",
-         f"--print-to-pdf={pdf_path}", url],
-        check=True, timeout=120,
-    )
-    for _ in range(20):
-        if os.path.exists(pdf_path) and os.path.getsize(pdf_path) > 10000:
-            break
-        time.sleep(0.5)
-    os.remove(html_path)
-    print(f"{pdf_name}: {os.path.getsize(pdf_path) // 1024} KB")
+    url = "file:///" + html_path.replace("\\", "/").lstrip("/")
+    cmd = [find_browser(), "--headless", "--disable-gpu", "--no-pdf-header-footer",
+           f"--print-to-pdf={pdf_path}", url]
+    if sys.platform.startswith("linux"):
+        cmd.insert(1, "--no-sandbox")
+    try:
+        subprocess.run(cmd, check=True, timeout=120)
+        for _ in range(20):
+            if os.path.exists(pdf_path) and os.path.getsize(pdf_path) > 10000:
+                break
+            time.sleep(0.5)
+    finally:
+        os.remove(html_path)
+    if not os.path.exists(pdf_path):
+        raise SystemExit(f"PDF was not written: {pdf_path}")
+    print(f"{pdf_path}: {os.path.getsize(pdf_path) // 1024} KB")
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--out", help=f"PDF path (default: {PDF_NAME} next to the markdown)")
+    ap.add_argument("--version", help="stamp a 'Built from' row on the cover")
+    ap.add_argument("--check-version", metavar="TAG",
+                    help="compare the documented 'Application version' with TAG")
+    ap.add_argument("--strict", action="store_true",
+                    help="a version mismatch is an error instead of a warning")
+    ap.add_argument("--check-only", action="store_true", help="check, do not render")
+    args = ap.parse_args(argv)
+
+    with open(os.path.join(DOCS, MANUAL), encoding="utf-8") as fh:
+        text = fh.read()
+    ok = check_version(text, args.check_version, args.strict) if args.check_version else True
+    if not ok:
+        return 1
+    if not args.check_only:
+        render(text, args.out or os.path.join(DOCS, PDF_NAME), args.version)
+    return 0
 
 
 if __name__ == "__main__":
-    for md, pdf in FILES.items():
-        build(md, pdf)
-    print("done")
+    sys.exit(main())
