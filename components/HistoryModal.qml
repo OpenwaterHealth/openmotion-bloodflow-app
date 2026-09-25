@@ -527,7 +527,7 @@ Item {
                     text: "🗑  Delete" + (root.checkedCount > 0 ? "  (" + root.checkedCount + ")" : "")
                     Layout.preferredWidth: 132; Layout.preferredHeight: 36
                     // Don't allow deleting while a scan is running (could be the
-                    // in-flight session). The password prompt still guards it.
+                    // in-flight session). The confirm prompt still guards it.
                     enabled: root.checkedCount > 0 && MotionInterface.state !== 4
                     hoverEnabled: enabled
                     contentItem: Text {
@@ -617,11 +617,16 @@ Item {
         }
     }
 
-    // Reused engineering-password prompt for delete confirmation.
+    // Delete confirmation. Clinical builds require the engineering
+    // password; Research builds get a plain confirm (still irreversible).
     PasswordPromptModal {
         id: deletePrompt
+        objectName: "deleteScansPrompt"
         title: "Confirm Delete"
-        description: "Enter the engineering password to permanently delete the "
+        requirePassword: MotionInterface.appConfig.clinicalMode === true
+        description: (requirePassword
+                      ? "Enter the engineering password to permanently delete the "
+                      : "Permanently delete the ")
                      + "selected scan(s) from the database. This cannot be undone."
         confirmLabel: "Delete"
         onAccepted: root.doDelete()

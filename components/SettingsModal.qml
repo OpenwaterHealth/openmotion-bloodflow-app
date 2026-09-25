@@ -103,6 +103,7 @@ Item {
     // Password gate for the audit Logs viewer.
     PasswordPromptModal {
         id: logsPasswordModal
+        objectName: "auditLogPasswordPrompt"
         title: "Audit Log"
         description: "Enter the password to view the audit log."
         confirmLabel: "View Logs"
@@ -1014,14 +1015,19 @@ Item {
                     FieldRow {
                         label: "Logs"
                         ActionButton {
+                            objectName: "viewAuditLogButton"
                             text: "View Logs"
                             Layout.preferredWidth: 130
-                            onClicked: logsPasswordModal.open()
+                            // Password-gated on clinical builds only.
+                            onClicked: root.clinicalMode ? logsPasswordModal.open()
+                                                         : root.logsRequested()
                         }
                         Item { Layout.fillWidth: true }
                     }
                     Text {
-                        text: "Password-protected, machine-readable record of system "
+                        text: (root.clinicalMode ? "Password-protected, machine-readable"
+                                                 : "Machine-readable")
+                              + " record of system "
                               + "events for auditors. Open the viewer to browse entries "
                               + "or export them as CSV."
                         color: root.colTextMuted
