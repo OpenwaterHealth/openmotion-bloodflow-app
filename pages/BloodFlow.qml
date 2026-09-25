@@ -422,7 +422,8 @@ Rectangle {
 
     SettingsModal {
         id: settingsModal
-        // Audit Log: the password gate lives in SettingsModal; on success
+        // Audit Log: the password gate (clinical only) lives in
+        // SettingsModal; on success, or straight away on Research,
         // close Settings first so toggle() sees current === null and goes
         // straight to logsModal.open() (no redundant close), then open the
         // ModalManager-governed LogsModal.

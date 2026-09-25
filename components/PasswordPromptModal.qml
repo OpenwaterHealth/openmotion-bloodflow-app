@@ -5,7 +5,8 @@ import OpenMotion 1.0
 
 // Reusable password prompt modal. Checks against the engineering password
 // and emits accepted() on success. Caller sets title, description, and
-// confirmLabel to customise the appearance.
+// confirmLabel to customise the appearance. With requirePassword false it
+// is a plain confirm dialog: no field, Confirm emits accepted() directly.
 Item {
     id: root
     anchors.fill: parent
@@ -16,6 +17,7 @@ Item {
     property string title: "Password Required"
     property string description: "Enter the password to continue."
     property string confirmLabel: "Confirm"
+    property bool requirePassword: true
 
     signal accepted()
 
@@ -23,14 +25,16 @@ Item {
         pwField.text = ""
         errorLabel.visible = false
         root.visible = true
-        pwField.forceActiveFocus()
+        if (requirePassword) pwField.forceActiveFocus()
+        else panel.forceActiveFocus()
     }
     function close() {
         root.visible = false
     }
 
     function _submit() {
-        if (MotionInterface.checkEngineeringPassword(pwField.text)) {
+        if (!requirePassword
+                || MotionInterface.checkEngineeringPassword(pwField.text)) {
             root.accepted()
             root.close()
         } else {
@@ -56,6 +60,7 @@ Item {
 
     // Panel
     Rectangle {
+        id: panel
         width: 360
         height: contentCol.implicitHeight + 48
         radius: 14
@@ -90,6 +95,7 @@ Item {
 
             TextField {
                 id: pwField
+                visible: root.requirePassword
                 Layout.fillWidth: true
                 Layout.preferredHeight: 38
                 echoMode: TextInput.Password
