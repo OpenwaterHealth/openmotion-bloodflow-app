@@ -392,6 +392,8 @@ Rectangle {
     // the modal from onStartStopClicked or scanFinished races the
     // append because scanRunner.scanFinished fires synchronously from
     // cancel(), before the SDK has unwound and _on_complete has run.
+    // If the operator already has the modal open (Space mid-scan), open()
+    // keeps their unsaved text and adds the footer below it (#617).
     Connections {
         target: MotionInterface
         function onScanNotesReady() { notesModal.open() }
