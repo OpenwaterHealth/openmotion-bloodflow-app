@@ -58,8 +58,8 @@ Item {
     // shows the same numbers on the large side panels) can hide them.
     property bool showValueLabels: true
 
-    // Y-axis tick labels (max/mid/min). Toggleable from the ⋯ popup;
-    // default comes from appConfig.showAxisLabels (false = labels off).
+    // Y-axis tick labels (max/mid/min). The viewer sets this; it has had
+    // no UI toggle since #622 (see PlotViewer.showAxisLabels).
     property bool showAxisLabels: true
 
     // Top-right temperature readout — engineering mode only; the viewer
