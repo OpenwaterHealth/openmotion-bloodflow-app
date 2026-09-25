@@ -643,15 +643,14 @@ def test_global_mode_ignores_window_changes(live_viewer):
     assert src.cell_calls == []
 
 
-def test_popup_switch_row_is_research_only():
-    """The ⋯ popup row carrying the per-plot switch is gated on
-    !effectiveClinical (and on autoscale being on, under which it is
-    disclosed). Static guard on the QML: opening a Popup needs a
-    window, which this harness deliberately does without."""
+def test_popup_scale_row_is_research_only():
+    """The ⋯ popup's Scale row (Fixed | Global | Per Plot, #622), which
+    carries the per-plot choice, is gated on !effectiveClinical. Static
+    guard on the QML: opening a Popup needs a window, which this harness
+    deliberately does without."""
     qml = PLOT_VIEWER_QML.read_text(encoding="utf-8")
-    idx = qml.index("id: perPlotSwitch")
-    row = qml[qml.rfind("Row {", 0, idx):idx]
-    assert "visible: !viewer.effectiveClinical && viewer.autoScale" in row
+    idx = qml.index("id: scaleRow")
+    assert "visible: !viewer.effectiveClinical" in qml[idx:idx + 100]
 
 
 def test_clinical_ignores_the_persisted_flag(live_viewer):
