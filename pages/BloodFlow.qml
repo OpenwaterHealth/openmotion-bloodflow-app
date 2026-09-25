@@ -328,14 +328,20 @@ Rectangle {
         settingContrastMin: settingsModal.contrastMin
         settingContrastMax: settingsModal.contrastMax
         // Bottom-right settings popup writes back through these
-        // signals → settingsModal owns the persisted state and
-        // the Settings modal stays in sync with the viewer's quick
-        // toggles.
+        // signals → settingsModal holds the state the viewer binds to,
+        // and the Settings modal stays in sync with the viewer's quick
+        // toggles. Persisted here as well (#622): settingsModal only
+        // saves on close and reloads from config on open, so a popup
+        // choice used to revert the next time Settings opened, and was
+        // lost at restart, while the popup's per-plot and view choices
+        // (written through setConfig) stuck.
         onAutoScaleToggleRequested: function(enabled) {
             settingsModal.autoScale = enabled
+            MotionInterface.setConfig("autoScale", enabled)
         }
         onDisplayModeToggleRequested: function(bfiBviMode) {
             settingsModal.showBfiBvi = bfiBviMode
+            MotionInterface.setConfig("showBfiBvi", bfiBviMode)
         }
     }
 
