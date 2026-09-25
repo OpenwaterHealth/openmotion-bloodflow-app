@@ -994,6 +994,11 @@ class MotionConnector(QObject):
     updateNotAvailable = pyqtSignal()
     updateCheckFailed = pyqtSignal(str)      # error message
     updateProgress = pyqtSignal(str)         # human-readable progress status
+    # Unified updates modal (#514): cached app offer + "Update all" batch.
+    appUpdateInfoChanged = pyqtSignal()      # notify for appUpdate* properties
+    updateBusyChanged = pyqtSignal()         # notify for updateBusy / batchUpdateRunning
+    batchUpdateStep = pyqtSignal(str)        # step starting: "left"/"right"/"console"/"app"
+    batchUpdateFinished = pyqtSignal(bool, str)  # ok, msg (ok+app step = app is quitting)
 
     def __init__(
         self,
@@ -1235,6 +1240,15 @@ class MotionConnector(QObject):
         self._firmware_check_lock = threading.Lock()         # guards check-then-add on _firmware_checking_kinds
         self._firmware_check_generation: int = 0
         self._firmware_update_in_progress: str | None = None # deviceKey being flashed
+        # Last app-update offer from app_updater (#514), cached so the
+        # updates modal can list it next to the firmware rows and so
+        # "Update all" knows what to install after the firmware flashes.
+        self._app_update_latest: str = ""
+        self._app_update_url: str = ""
+        self._update_in_progress: bool = False       # app download/install running
+        self._batch_update_running: bool = False     # "Update all" worker running
+        self.updateAvailable.connect(self._on_app_update_available)
+        self.updateNotAvailable.connect(self._on_app_update_withdrawn)
         # Track console connection time for safety grace period (issue #107 follow-up)
         self._console_connected_at: float | None = None
         # Real-time plot viewer source — assigned at scan start by startCapture.
@@ -1798,6 +1812,31 @@ class MotionConnector(QObject):
     def rightSensorSerialNumber(self) -> str:
         """Right sensor module serial; see consoleSerialNumber."""
         return self._device_serials["right"]
+
+    @pyqtProperty(bool, notify=appUpdateInfoChanged)
+    def appUpdateAvailable(self) -> bool:
+        """True while app_updater's last check offered a newer release."""
+        return bool(self._app_update_url)
+
+    @pyqtProperty(str, notify=appUpdateInfoChanged)
+    def appUpdateLatest(self) -> str:
+        return self._app_update_latest
+
+    @pyqtProperty(str, notify=appUpdateInfoChanged)
+    def appUpdateUrl(self) -> str:
+        return self._app_update_url
+
+    @pyqtProperty(bool, notify=updateBusyChanged)
+    def updateBusy(self) -> bool:
+        """Any flash, app install or "Update all" run is in flight; the
+        updates modal disables every Update button while this is true."""
+        return (self._batch_update_running
+                or self._firmware_update_in_progress is not None
+                or self._update_in_progress)
+
+    @pyqtProperty(bool, notify=updateBusyChanged)
+    def batchUpdateRunning(self) -> bool:
+        return self._batch_update_running
 
     @pyqtProperty(bool, notify=firmwareUpdateInfoChanged)
     def anyFirmwareUpdateAvailable(self) -> bool:
@@ -2428,7 +2467,8 @@ class MotionConnector(QObject):
             self.firmwareUpdateFinished.emit(
                 device_key, False, "Cannot update firmware during a scan.")
             return False
-        if self._firmware_update_in_progress is not None:
+        if (self._firmware_update_in_progress is not None
+                or self._batch_update_running or self._update_in_progress):
             self.firmwareUpdateFinished.emit(
                 device_key, False, "Another firmware update is in progress.")
             return False
@@ -2437,12 +2477,19 @@ class MotionConnector(QObject):
                 device_key, False, "No update available for this device.")
             return False
         self._firmware_update_in_progress = device_key
+        self.updateBusyChanged.emit()
         threading.Thread(
             target=self._firmware_update_worker, args=(device_key,), daemon=True
         ).start()
         return True
 
     def _firmware_update_worker(self, device_key: str) -> None:
+        self._flash_device(device_key)
+
+    def _flash_device(self, device_key: str) -> bool:
+        """Download + flash one device synchronously on the calling worker
+        thread. The caller has already set ``_firmware_update_in_progress``;
+        this clears it, emits ``firmwareUpdateFinished`` and returns ok."""
         import tempfile
         from omotion.firmware_update import FirmwareUpdater, download_firmware
 
@@ -2493,7 +2540,96 @@ class MotionConnector(QObject):
             # is read back after the device re-enumerates.
             self._firmware_latest_by_kind.pop(
                 self._kind_for_device(device_key).value, None)
+            if ok:
+                # Written, but the device runs the old image until it is
+                # power-cycled; stop offering it so neither the banner nor
+                # "Update all" tries to flash a device that cannot enter DFU.
+                self._firmware_update_available[device_key] = False
+                self.firmwareUpdateInfoChanged.emit()
+            self.updateBusyChanged.emit()
             self.firmwareUpdateFinished.emit(device_key, ok, msg)
+        return ok
+
+    # Flash order for "Update all" (#514): sensors before the console, so a
+    # console reboot into DFU can never take a sensor down mid-flash, and
+    # every firmware before the app, because the app install quits us.
+    BATCH_FIRMWARE_ORDER = ("left", "right", "console")
+
+    def _batch_update_plan(self) -> list[str]:
+        """Steps "Update all" would run right now, in order."""
+        steps = [d for d in self.BATCH_FIRMWARE_ORDER
+                 if self._firmware_update_available.get(d, False)]
+        if self._app_update_url and app_updater is not None:
+            steps.append("app")
+        return steps
+
+    @pyqtSlot(result=bool)
+    def startUpdateAll(self) -> bool:
+        """Install every pending update in one run (#514): flash each
+        firmware in BATCH_FIRMWARE_ORDER, then hand off to the app
+        self-updater, which quits and relaunches. A firmware failure stops
+        the run before anything else is touched. Research builds only."""
+        if self._app_config.get("clinicalMode", False):
+            return False   # clinical builds never update anything (#96, #386)
+        if self._state == RUNNING or self._running:
+            self.batchUpdateFinished.emit(False, "Cannot update during a scan.")
+            return False
+        if self.updateBusy:
+            self.batchUpdateFinished.emit(False, "An update is already in progress.")
+            return False
+        steps = self._batch_update_plan()
+        if not steps:
+            self.batchUpdateFinished.emit(False, "No updates available.")
+            return False
+        self._batch_update_running = True
+        self.updateBusyChanged.emit()
+        logger.info("Update all: %s", " -> ".join(steps))
+        threading.Thread(
+            target=self._batch_update_worker, args=(steps,), daemon=True
+        ).start()
+        return True
+
+    def _batch_update_worker(self, steps: list[str]) -> None:
+        ok, msg = True, ""
+        try:
+            for step in steps:
+                self.batchUpdateStep.emit(step)
+                if step == "app":
+                    # Firmware is written; the app install quits us, so the
+                    # devices get power-cycled after it relaunches.
+                    self._update_in_progress = True
+                    try:
+                        ok = bool(app_updater.apply_update(self, self._app_update_url))
+                    finally:
+                        self._update_in_progress = False
+                    msg = ("Installing the application update; it will relaunch."
+                           if ok else "Application update failed.")
+                    break
+                if self._state == RUNNING or self._running:
+                    ok, msg = False, "A scan started; update stopped."
+                    break
+                self._firmware_update_in_progress = step
+                self.updateBusyChanged.emit()
+                if not self._flash_device(step):
+                    ok, msg = False, (
+                        f"{self._device_label(step)} firmware update failed; "
+                        "the remaining updates were skipped.")
+                    break
+            else:
+                msg = "Firmware written. Power-cycle the devices to finish."
+        except Exception as e:                       # noqa: BLE001 - reported to UI
+            logger.exception("Update all failed")
+            ok, msg = False, str(e)
+        finally:
+            self._batch_update_running = False
+            self.updateBusyChanged.emit()
+            logger.info("Update all finished: ok=%s %s", ok, msg)
+            self.batchUpdateFinished.emit(ok, msg)
+
+    @staticmethod
+    def _device_label(device_key: str) -> str:
+        return {"console": "Console", "left": "Left sensor",
+                "right": "Right sensor"}.get(device_key, device_key)
 
     def update_state(self):
         """Update system state based on connection and configuration."""
@@ -6897,6 +7033,15 @@ class MotionConnector(QObject):
             return
         app_updater.check_for_updates(self)
 
+    def _on_app_update_available(self, version: str, url: str) -> None:
+        self._app_update_latest, self._app_update_url = version, url
+        self.appUpdateInfoChanged.emit()
+
+    def _on_app_update_withdrawn(self) -> None:
+        if self._app_update_url or self._app_update_latest:
+            self._app_update_latest, self._app_update_url = "", ""
+            self.appUpdateInfoChanged.emit()
+
     @pyqtSlot(str)
     def openDownloadUrl(self, url: str):
         """Open the download URL in the system browser."""
@@ -6912,10 +7057,11 @@ class MotionConnector(QObject):
         """
         if self._app_config.get("clinicalMode", False):
             return   # clinical builds never install app updates (#96, #386)
-        if getattr(self, "_update_in_progress", False):
+        if self._update_in_progress or self._batch_update_running:
             logger.info("Update already in progress; ignoring repeat request")
             return
         self._update_in_progress = True
+        self.updateBusyChanged.emit()
         t = threading.Thread(
             target=self._apply_update_worker, args=(download_url,), daemon=True
         )
@@ -6931,3 +7077,4 @@ class MotionConnector(QObject):
             # Cleared so a failed attempt can be retried (on success the app
             # is already quitting).
             self._update_in_progress = False
+            self.updateBusyChanged.emit()

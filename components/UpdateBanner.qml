@@ -3,29 +3,38 @@ import QtQuick.Controls 6.0
 import QtQuick.Layouts 6.0
 import OpenMotion 1.0
 
-/*  UpdateBanner — slides in below the header when a newer release is
- *  detected on GitHub.  Offers a "Download" button (opens browser) and
- *  a dismiss "✕".
+/*  UpdateBanner — slides in below the header whenever anything has an
+ *  update: the application (GitHub release check) and/or device firmware
+ *  (connect-time check). One banner for both (#514); "Review" asks the
+ *  host to open UpdatesModal, where each item can be updated on its own or
+ *  all at once. Research builds only — clinical builds never check (#96,
+ *  #386) and never show it.
  */
 Rectangle {
     id: banner
     width: parent.width
     height: visible ? 36 : 0
-    // Imperative latch: set true when an update is detected, false on
-    // dismiss. Visibility is the AND of "has been shown" and "not
-    // clinical mode" so a runtime flip of clinicalMode hides the banner
-    // even after it was already shown. Issue #96 follow-up.
-    property bool shown: false
-    visible: shown && !_clinicalMode
     clip: true
 
+    signal reviewRequested()
 
-    property string latestVersion: ""
-    property string downloadUrl: ""
-    // True from the moment Update is clicked until the download/install
-    // either fails or the app quits for the in-place upgrade.
-    property bool updating: false
-    property string statusText: "Update"
+    readonly property bool _clinicalMode: MotionInterface.appConfig.clinicalMode === true
+    readonly property bool _appAvail: MotionInterface.appUpdateAvailable
+    readonly property bool _fwAvail: MotionInterface.anyFirmwareUpdateAvailable
+    // Dismiss hides the current offer only; a fresh detection re-shows it.
+    property bool _dismissed: false
+    visible: !_clinicalMode && (_appAvail || _fwAvail) && !_dismissed
+
+    readonly property string summary: {
+        var parts = []
+        if (_appAvail) parts.push("Application " + MotionInterface.appUpdateLatest)
+        var fw = []
+        if (MotionInterface.consoleFirmwareUpdateAvailable) fw.push("console")
+        if (MotionInterface.leftSensorFirmwareUpdateAvailable) fw.push("left sensor")
+        if (MotionInterface.rightSensorFirmwareUpdateAvailable) fw.push("right sensor")
+        if (fw.length) parts.push("firmware (" + fw.join(", ") + ")")
+        return parts.join(" · ")
+    }
 
     color: AppTheme.accentInteractive
     radius: 0
@@ -39,48 +48,41 @@ Rectangle {
         spacing: 10
 
         Text {
-            text: "\u26A0"   // warning triangle
+            text: "⚠"   // warning triangle
             font.pixelSize: 14
             color: "#FFFFFF"
         }
 
         Text {
-            text: "A new version is available: <b>" + banner.latestVersion + "</b>"
+            text: "<b>Updates available:</b> " + banner.summary
             color: "#FFFFFF"
             font.pixelSize: 13
             textFormat: Text.RichText
+            elide: Text.ElideRight
             Layout.fillWidth: true
         }
 
         Rectangle {
-            width: downloadBtn.implicitWidth + 20
+            width: reviewBtn.implicitWidth + 20
             height: 24
             radius: 4
-            color: "#FFFFFF"
+            color: reviewArea.containsMouse ? "#E0E0E0" : "#FFFFFF"
 
             Text {
-                id: downloadBtn
+                id: reviewBtn
                 anchors.centerIn: parent
-                text: banner.updating ? banner.statusText : "Update"
+                text: "Review"
                 color: AppTheme.accentInteractive
                 font.pixelSize: 12
                 font.weight: Font.DemiBold
             }
 
             MouseArea {
+                id: reviewArea
                 anchors.fill: parent
-                enabled: !banner.updating
-                cursorShape: banner.updating ? Qt.ArrowCursor : Qt.PointingHandCursor
+                cursorShape: Qt.PointingHandCursor
                 hoverEnabled: true
-                // Guard against double-clicks spawning racing downloads; the
-                // connector also guards re-entry, this just reflects it in UI.
-                onClicked: {
-                    banner.updating = true
-                    banner.statusText = "Starting…"
-                    MotionInterface.applyUpdate(banner.downloadUrl)
-                }
-                onContainsMouseChanged: parent.color =
-                    (containsMouse && !banner.updating) ? "#E0E0E0" : "#FFFFFF"
+                onClicked: banner.reviewRequested()
             }
         }
 
@@ -100,41 +102,15 @@ Rectangle {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: banner.shown = false
+                onClicked: banner._dismissed = true
             }
         }
     }
 
-    // Clinical mode: clinical users shouldn't see update
-    // prompts. Skip the auto-check on launch and refuse to show the
-    // banner even if MotionInterface.checkForUpdates() is somehow
-    // triggered (e.g. via engineering-mode-only Settings row that
-    // shouldn't be reachable in clinical mode anyway). Issue #96.
-    readonly property bool _clinicalMode: MotionInterface.appConfig.clinicalMode === true
-
     Connections {
         target: MotionInterface
-        function onUpdateAvailable(version, url) {
-            if (banner._clinicalMode) return
-            banner.latestVersion = version
-            banner.downloadUrl = url
-            banner.shown = true
-        }
-        // Withdraw a stale offer: a re-check (e.g. after engineering mode is
-        // turned off, dropping beta back to stable) that finds nothing hides
-        // the banner. The initial up-to-date launch is a no-op — never shown.
-        function onUpdateNotAvailable() {
-            banner.shown = false
-        }
-        // Reflect download/install progress on the button.
-        function onUpdateProgress(message) {
-            banner.statusText = message
-        }
-        // Re-enable the button so a failed update can be retried.
-        function onUpdateCheckFailed(error) {
-            banner.updating = false
-            banner.statusText = "Update"
-        }
+        function onUpdateAvailable(version, url) { banner._dismissed = false }
+        function onFirmwareUpdateAvailable(deviceKey, current, latest) { banner._dismissed = false }
     }
 
     // Auto-check on creation (after a brief delay to let the app settle).
