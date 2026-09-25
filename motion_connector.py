@@ -2948,8 +2948,9 @@ class MotionConnector(QObject):
     @pyqtSlot("QVariantList", result=int)
     def deleteScans(self, session_ids):
         """Delete the given scan-DB sessions (CASCADE removes their
-        session_data). Returns the count actually deleted. The engineering-
-        password gate is enforced in QML before this is called."""
+        session_data). Returns the count actually deleted. The confirm gate
+        (engineering password on clinical builds) is enforced in QML before
+        this is called."""
         db_path = getattr(self._interface, "scan_db_path", None)
         if not db_path:
             return 0
