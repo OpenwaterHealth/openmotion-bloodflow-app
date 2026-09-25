@@ -89,19 +89,90 @@ ApplicationWindow {
         onTriggered: window._exitArmed = false
     }
 
-    // Fullscreen toggle (#608), shared by the title-bar button and F11.
+    // Window state changes (#608, #632). The title-bar buttons and F11
+    // go through these functions, never straight to show*(), because Qt
+    // mishandles this frameless window on Windows in two ways:
+    //   * showMinimized() replaces the state instead of adding to it, so
+    //     a maximized or fullscreen window came back from the taskbar as
+    //     a "normal" window of screen size, with Qt's normal geometry
+    //     overwritten, and the buttons could never shrink it again.
+    //   * FullScreen -> Maximized directly uses the native maximize,
+    //     after which showNormal() leaves the window maximized (and on
+    //     another monitor).
+    // So the window keeps its own normal geometry and pre-minimize
+    // state, and every return passes through showNormal() at that
+    // geometry before maximizing or going fullscreen again.
+    property bool _wasMaximizedBeforeFullScreen: false
+    property int _visibilityBeforeMinimize: Window.Windowed
+    property bool _restoreAfterMinimize: false
+    property rect _normalGeometry: Qt.rect(0, 0, 0, 0)
+
+    function _saveNormalGeometry() {
+        if (window.visibility === Window.Windowed)
+            window._normalGeometry = Qt.rect(window.x, window.y,
+                                             window.width, window.height)
+    }
+
+    function _showNormalAtSavedGeometry() {
+        window.showNormal()
+        var g = window._normalGeometry
+        if (g.width > 0 && g.height > 0) {
+            window.x = g.x
+            window.y = g.y
+            window.width = g.width
+            window.height = g.height
+        }
+    }
+
+    // Deferred a turn: issued in the same turn as showNormal() it lands
+    // among the resize events of leaving fullscreen and the window ends
+    // up normal at screen size.
+    function _showMaximizedLater() {
+        Qt.callLater(window.showMaximized)
+    }
+
+    function toggleMaximized() {
+        if (window.visibility === Window.Maximized) {
+            window._showNormalAtSavedGeometry()
+        } else {
+            window._saveNormalGeometry()
+            window.showMaximized()
+        }
+    }
+
+    function minimizeWindow() {
+        window._saveNormalGeometry()
+        window._visibilityBeforeMinimize = window.visibility
+        window._restoreAfterMinimize = true
+        window.showMinimized()
+    }
+
     // Leaving fullscreen returns to whichever state it was entered
     // from, so a maximized window comes back maximized.
-    property bool _wasMaximizedBeforeFullScreen: false
-
     function toggleFullScreen() {
         if (window.visibility === Window.FullScreen) {
-            if (window._wasMaximizedBeforeFullScreen) window.showMaximized()
-            else window.showNormal()
+            window._showNormalAtSavedGeometry()
+            if (window._wasMaximizedBeforeFullScreen) window._showMaximizedLater()
         } else {
             window._wasMaximizedBeforeFullScreen =
                 window.visibility === Window.Maximized
+            window._saveNormalGeometry()
             window.showFullScreen()
+        }
+    }
+
+    // Back from the taskbar: re-apply the state the window was
+    // minimized from.
+    onVisibilityChanged: {
+        if (!window._restoreAfterMinimize
+                || window.visibility === Window.Minimized)
+            return
+        window._restoreAfterMinimize = false
+        var target = window._visibilityBeforeMinimize
+        if (target === Window.Maximized || target === Window.FullScreen) {
+            window._showNormalAtSavedGeometry()
+            if (target === Window.Maximized) window._showMaximizedLater()
+            else window.showFullScreen()
         }
     }
 

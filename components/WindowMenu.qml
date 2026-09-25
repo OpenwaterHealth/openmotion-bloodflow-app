@@ -249,22 +249,15 @@ Rectangle {
             IconWindowButton {
                 buttonIcon: "\ue9e4" // Minimize icon
                 Layout.alignment: Qt.AlignHCenter
-                onClicked: {
-                    window.showMinimized(); // Minimize the window
-                }
+                // main.qml owns the state changes (#632).
+                onClicked: window.minimizeWindow()
             }
             // Maximize/Restore Button
             IconWindowButton {
                 // restore = size (two overlapping squares); maximize = up-square
                 buttonIcon: window.visibility === Window.Maximized ? "\ueacc" : "\ueb18"
                 Layout.alignment: Qt.AlignHCenter
-                onClicked: {
-                    if (window.visibility === Window.Maximized) {
-                        window.showNormal();
-                    } else {
-                        window.showMaximized();
-                    }
-                }
+                onClicked: window.toggleMaximized()
             }
             // Exit Button. Delegates to main.qml via closeRequested
             // so the close-while-busy warning (#75) can intercept.
