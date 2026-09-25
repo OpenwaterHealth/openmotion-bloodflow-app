@@ -40,7 +40,7 @@ from test_average_view_mode import (  # noqa: E402
 )
 
 import pytest  # noqa: E402
-from PyQt6.QtCore import QCoreApplication, QUrl, pyqtSlot  # noqa: E402
+from PyQt6.QtCore import QCoreApplication, QEvent, QUrl, pyqtSlot  # noqa: E402
 from PyQt6.QtQml import (  # noqa: E402
     QQmlComponent,
     QQmlEngine,
@@ -316,8 +316,14 @@ def viewer_factory():
 
     make.stub = stub
     yield make
+    # Destroy the viewers while their engine is still alive, and drain the
+    # deletes now. Left to a bare deleteLater, they outlive the engine into
+    # the next test module, whose first event pump then crashed on them
+    # (access violation in test_plot_viewer_autoscale after this module's
+    # per-plot test had pumped refits).
     for obj in created:
         obj.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     del engine
     del stub
 
