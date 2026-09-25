@@ -819,7 +819,8 @@ Rectangle {
     // with scan duration; 3 s amortizes that work without making the
     // y-axis feel unresponsive (a 3-second delay between bound adjustments
     // is hard to notice during live monitoring). Per-plot mode (#591) fits
-    // only the visible window, which is cheap, so it evaluates every
+    // only the visible window, which is cheap (and stays cheap zoomed
+    // out: long windows are subsampled, #614), so it evaluates every
     // 0.5 s (= _perPlotEvalSec, the lag math depends on it) and lets
     // the smoothed target follow rather than snap.
     Timer {
