@@ -1652,11 +1652,16 @@ Rectangle {
                     id: popupColumn
                     spacing: 8
                     padding: 12
-                    // One label column for every row, so the switches line
-                    // up whatever the label lengths.
+                    // One label column for every row, and one switch column
+                    // as wide as the widest switch, each switch centered in
+                    // it, so the switches share a center line whatever the
+                    // label and option lengths.
                     readonly property real labelWidth: Math.max(
                         viewLabel.implicitWidth, scaleLabel.implicitWidth,
                         metricsLabel.implicitWidth)
+                    readonly property real selectorWidth: Math.max(
+                        viewModeSelector.width, scaleSelector.width,
+                        metricsSelector.width)
 
                     // Research view mode (#606): Individual (one plot per
                     // camera) | Aggregate (one plot per mirrored camera
@@ -1671,24 +1676,30 @@ Rectangle {
                         Text {
                             id: viewLabel
                             width: popupColumn.labelWidth
-                            anchors.verticalCenter: viewModeSelector.verticalCenter
+                            anchors.verticalCenter: viewModeSlot.verticalCenter
                             text: "View"
                             color: AppTheme.textSecondary
                             font.pixelSize: 12
                             font.family: "Roboto Mono"
                         }
-                        PopupSegmented {
-                            id: viewModeSelector
-                            Accessible.name: "View"
-                            options: [
-                                { value: "individual", label: "Individual" },
-                                { value: "aggregate",  label: "Aggregate" },
-                                { value: "average",    label: "Average" }
-                            ]
-                            current: viewer.researchViewMode
-                            onPicked: function(value) {
-                                MotionInterface.setConfig("plotViewMode", value)
-                                console.info("[Plot] view mode → " + value)
+                        Item {
+                            id: viewModeSlot
+                            width: popupColumn.selectorWidth
+                            height: viewModeSelector.height
+                            PopupSegmented {
+                                id: viewModeSelector
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                Accessible.name: "View"
+                                options: [
+                                    { value: "individual", label: "Individual" },
+                                    { value: "aggregate",  label: "Aggregate" },
+                                    { value: "average",    label: "Average" }
+                                ]
+                                current: viewer.researchViewMode
+                                onPicked: function(value) {
+                                    MotionInterface.setConfig("plotViewMode", value)
+                                    console.info("[Plot] view mode → " + value)
+                                }
                             }
                         }
                     }
@@ -1704,22 +1715,28 @@ Rectangle {
                         Text {
                             id: scaleLabel
                             width: popupColumn.labelWidth
-                            anchors.verticalCenter: scaleSelector.verticalCenter
+                            anchors.verticalCenter: scaleSlot.verticalCenter
                             text: "Scale"
                             color: AppTheme.textSecondary
                             font.pixelSize: 12
                             font.family: "Roboto Mono"
                         }
-                        PopupSegmented {
-                            id: scaleSelector
-                            Accessible.name: "Scale"
-                            options: [
-                                { value: "fixed",   label: "Fixed" },
-                                { value: "global",  label: "Global" },
-                                { value: "perPlot", label: "Per Plot" }
-                            ]
-                            current: viewer.scaleMode
-                            onPicked: function(value) { viewer.setScaleMode(value) }
+                        Item {
+                            id: scaleSlot
+                            width: popupColumn.selectorWidth
+                            height: scaleSelector.height
+                            PopupSegmented {
+                                id: scaleSelector
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                Accessible.name: "Scale"
+                                options: [
+                                    { value: "fixed",   label: "Fixed" },
+                                    { value: "global",  label: "Global" },
+                                    { value: "perPlot", label: "Per Plot" }
+                                ]
+                                current: viewer.scaleMode
+                                onPicked: function(value) { viewer.setScaleMode(value) }
+                            }
                         }
                     }
 
@@ -1733,22 +1750,28 @@ Rectangle {
                         Text {
                             id: metricsLabel
                             width: popupColumn.labelWidth
-                            anchors.verticalCenter: metricsSelector.verticalCenter
+                            anchors.verticalCenter: metricsSlot.verticalCenter
                             text: "Metrics"
                             color: AppTheme.textSecondary
                             font.pixelSize: 12
                             font.family: "Roboto Mono"
                         }
-                        PopupSegmented {
-                            id: metricsSelector
-                            Accessible.name: "Metrics"
-                            options: [
-                                { value: "bfi_bvi",       label: "BFI / BVI" },
-                                { value: "mean_contrast", label: "Mean / Contrast" }
-                            ]
-                            current: viewer.displayMode
-                            onPicked: function(value) {
-                                viewer.displayModeToggleRequested(value === "bfi_bvi")
+                        Item {
+                            id: metricsSlot
+                            width: popupColumn.selectorWidth
+                            height: metricsSelector.height
+                            PopupSegmented {
+                                id: metricsSelector
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                Accessible.name: "Metrics"
+                                options: [
+                                    { value: "bfi_bvi",       label: "BFI / BVI" },
+                                    { value: "mean_contrast", label: "Mean / Contrast" }
+                                ]
+                                current: viewer.displayMode
+                                onPicked: function(value) {
+                                    viewer.displayModeToggleRequested(value === "bfi_bvi")
+                                }
                             }
                         }
                     }
