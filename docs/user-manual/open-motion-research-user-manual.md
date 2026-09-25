@@ -437,8 +437,7 @@ prompt, and the scans are removed only after the password issued by Openwater is
 
 After **Load**, the plots show the recorded scan with a **Viewing** badge naming it
 (label · date and time). All plot features (§7) work the same way on a replay. When it is
-shown, the red **← Back to live scan** pill returns to the live view. A scan recorded in
-clinical mode replays in the clinical layout (one averaged plot per side).
+shown, the red **← Back to live scan** pill returns to the live view.
 
 ![Replaying a recorded scan](img/rs-replay.png)
 *The 2-minute scan loaded from History, with the window set to 5 minutes so the whole scan
