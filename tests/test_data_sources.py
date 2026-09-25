@@ -1327,6 +1327,83 @@ def test_live_source_windowed_cell_bounds_include_cached_db_tail():
     assert src.compute_bounds_for_cell("left", 0, "bfi")["yMin"] > 40.0
 
 
+# ── fit cost stays flat when zoomed out (#614) ──────────────────────────
+
+
+def test_percentile_pair_matches_numpy_percentile():
+    """The partition-based percentile is np.percentile's default linear
+    method, only without its ~100 us per-call overhead."""
+    from data_sources import _percentile_pair
+    rng = np.random.default_rng(614)
+    for n in (4, 5, 17, 100, 2399, 2400, 5000):
+        for dup in (False, True):
+            v = (rng.standard_normal(n) * 3.0 + 7.0).astype(np.float32)
+            if dup:
+                v = np.round(v)
+            for q in ((2.0, 98.0), (0.0, 100.0), (25.0, 75.0)):
+                assert _percentile_pair(v, *q) == pytest.approx(
+                    tuple(np.percentile(v, q)), rel=1e-6, abs=1e-6), (n, dup, q)
+
+
+def test_fit_step_is_constant_while_a_window_slides():
+    """The subsample stride is keyed on the window length, rounded to the
+    ms, so it never flips while a fixed-length window slides — even at
+    the standard lengths, where tHi - windowSeconds is a hair short."""
+    from data_sources import _fit_step
+    for seconds, step in ((5, 1), (15, 1), (60, 1), (90, 1), (120, 2),
+                          (300, 5), (600, 10)):
+        steps = {_fit_step(t - seconds, t) for t in np.arange(0.0, 900.0, 0.0371)}
+        assert steps == {step}, seconds
+
+
+def _long_cell(seconds):
+    src = ScanDataSource(plot_t0=0.0)
+    buf = src.get_or_create_buffer("left", 0, "bfi")
+    rng = np.random.default_rng(0)
+    for i in range(int(seconds * 40)):
+        # ~1 Hz pulse on a slow drift, plus noise.
+        v = 5.0 + math.sin(i / 40.0 * 2 * math.pi) + i / 40.0 / seconds + 0.1 * rng.standard_normal()
+        buf.append(t=i * 0.025, v=v, frame_id=i)
+    return src, buf
+
+
+def test_long_window_fit_is_subsampled_and_matches_the_full_fit():
+    """A 10 min window is fitted from at most two minutes' worth of
+    samples, and the result is the full fit within a sliver of the axis
+    — on a steady 60 bpm pulse, whose period (40 samples) a fixed-offset
+    stride of 10 would alias to four phases and miss the peaks."""
+    from data_sources import _fit_step, _FIT_MAX_SAMPLES
+    src, buf = _long_cell(600)
+    lo, hi = 0.0, 600.0
+    used = buf.window_finite_values(lo, hi, _fit_step(lo, hi))
+    assert _FIT_MAX_SAMPLES <= used.size < 2 * _FIT_MAX_SAMPLES
+    fit = src.compute_bounds_for_cell("left", 0, "bfi", lo, hi)
+    full = src._padded_percentile_bounds([buf.window_finite_values(lo, hi)], 2.0, 98.0, 0.25)
+    span = full["yMax"] - full["yMin"]
+    assert abs(fit["yMin"] - full["yMin"]) < 0.01 * span
+    assert abs(fit["yMax"] - full["yMax"]) < 0.01 * span
+
+
+def test_windows_up_to_a_minute_are_fitted_in_full():
+    from data_sources import _fit_step
+    src, buf = _long_cell(120)
+    for lo, hi in ((30.0, 45.0), (10.0, 70.0)):
+        assert _fit_step(lo, hi) == 1
+        full = src._padded_percentile_bounds([buf.window_finite_values(lo, hi)], 2.0, 98.0, 0.25)
+        assert src.compute_bounds_for_cell("left", 0, "bfi", lo, hi) == pytest.approx(full)
+
+
+def test_subsample_is_index_aligned_so_a_sliding_window_keeps_its_samples():
+    """Sliding the window by one frame must not reshuffle which samples a
+    subsampled fit uses: consecutive windows share all but their edges."""
+    src, buf = _long_cell(700)
+    step = 5
+    a = buf.window_finite_values(100.0, 400.0, step)
+    b = buf.window_finite_values(100.025, 400.025, step)
+    shared = np.intersect1d(a, b).size
+    assert shared >= min(a.size, b.size) - 1
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ScanDataSource.value_at (Phase 2b-ii — hover tooltip)
 # ─────────────────────────────────────────────────────────────────────────────

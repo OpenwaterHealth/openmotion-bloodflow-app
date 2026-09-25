@@ -30,6 +30,45 @@ logger = logging.getLogger("openmotion.bloodflow-app.data_sources")
 _MAX_CAPACITY = 72000       # ≈ 30 min @ 40 Hz; ring-trim above this.
 _INITIAL_CAPACITY = _MAX_CAPACITY
 
+# Per-plot autoscale (#591) fits every cell to its visible window twice a
+# second and again on every pan/zoom, so its cost must not grow with the
+# zoom (#614: a 5-10 min window made the whole UI slow). Up to a minute
+# of samples is fitted in full; a longer window is subsampled to between
+# one and two minutes' worth (see _fit_step).
+_NOMINAL_HZ = 40.0
+_FIT_MAX_SAMPLES = 2400
+_GOLDEN_FRAC = (math.sqrt(5.0) - 1.0) / 2.0   # _CameraBuffer.window_finite_values
+
+
+def _fit_step(t_lo: float, t_hi: float) -> int:
+    """Subsample stride for a windowed fit of [t_lo, t_hi]. Keyed on the
+    window length (like window_decimated's stride), never the sample
+    count, so it stays constant while a window of fixed length slides and
+    the fit does not reshuffle its samples at every evaluation. Rounded
+    to the millisecond: the viewer's tHi - windowSeconds comes back a
+    hair short of windowSeconds, which would flip the stride at the
+    standard 1/2/5/10 min lengths."""
+    expected = round(float(t_hi) - float(t_lo), 3) * _NOMINAL_HZ
+    return max(1, int(expected // _FIT_MAX_SAMPLES))
+
+
+def _percentile_pair(values: np.ndarray, q_lo: float, q_hi: float) -> tuple[float, float]:
+    """np.percentile(values, [q_lo, q_hi]) with the default linear method,
+    from one np.partition. np.percentile carries ~100 us of fixed cost per
+    call, which dominated the 32 per-cell fits of every per-plot
+    evaluation (#614). `values` must be non-empty and finite."""
+    n = values.size
+    ks = [(n - 1) * (q / 100.0) for q in (q_lo, q_hi)]
+    idx = sorted({min(int(math.floor(k)) + d, n - 1) for k in ks for d in (0, 1)})
+    part = np.partition(values, idx)
+    out = []
+    for k in ks:
+        i = int(math.floor(k))
+        a = float(part[i])
+        b = float(part[min(i + 1, n - 1)])
+        out.append(a + (b - a) * (k - i))
+    return out[0], out[1]
+
 # ── BVI display low-pass (issues #228, #552) ────────────────────────────
 # The live display applies a 1-pole IIR low-pass to the BVI stream at
 # LiveScanSource ingest. The cutoff is the compiled bviLowPassCutoffHz
@@ -203,15 +242,31 @@ class _CameraBuffer:
             i_hi = int(np.searchsorted(t_slice, t_hi, side="right"))
             return i_lo, i_hi
 
-    def window_finite_values(self, t_lo: float, t_hi: float) -> np.ndarray:
+    def window_finite_values(self, t_lo: float, t_hi: float, step: int = 1) -> np.ndarray:
         """Finite values whose timestamps fall in [t_lo, t_hi], as a fresh
         array (empty when the window holds none). Per-plot autoscale
         (#591) fits the visible window with this instead of the whole
-        buffer. Same lock discipline as window_decimated."""
+        buffer. Same lock discipline as window_decimated.
+
+        step > 1 keeps one sample per block of `step` (#614). Blocks sit
+        at absolute indices and the pick within each is a function of
+        the block's index alone, so a sliding window only gains and loses
+        samples at its edges, as the unsubsampled one does. The pick is
+        a golden-ratio sequence rather than a fixed offset: every step-th
+        sample of a steady pulse (60 bpm at stride 10 = 4 phases per
+        beat) would miss its peaks."""
         with self._lock:
             i_lo, i_hi = self.window_indices(t_lo, t_hi)
-            slice_v = self.v[i_lo:i_hi]
-            return slice_v[np.isfinite(slice_v)]
+            if step <= 1:
+                slice_v = self.v[i_lo:i_hi]
+                return slice_v[np.isfinite(slice_v)]
+            k = np.arange(i_lo // step, -(-i_hi // step), dtype=np.int64)
+            pick = k * _GOLDEN_FRAC
+            pick -= np.floor(pick)        # frac; np's float % is ~9x slower
+            idx = k * step + (pick * step).astype(np.int64)
+            idx = idx[(idx >= i_lo) & (idx < i_hi)]
+            vals = self.v[idx]
+            return vals[np.isfinite(vals)]
 
     def window_decimated(
         self,
@@ -705,8 +760,11 @@ class ScanDataSource(QObject):
         only the samples inside that window count: the viewer passes the
         window the cell is drawing, so the axis fits what is on screen
         rather than the whole scan (slow BVI drift used to balloon it
-        20x past the visible trace within a few minutes). Same neutral
-        fallback when fewer than 4 finite samples qualify."""
+        20x past the visible trace within a few minutes). A window
+        longer than a minute is fitted from a stride subsample (#614,
+        _fit_step), so the cost stays flat however far the plot is
+        zoomed out. Same neutral fallback when fewer than 4 finite
+        samples qualify."""
         return self._padded_percentile_bounds(
             self._cell_chunks(side, int(cam_id), metric, t_lo, t_hi),
             2.0, 98.0, 0.25)
@@ -720,7 +778,8 @@ class ScanDataSource(QObject):
             return []
         if t_lo is None or t_hi is None:
             return [self._finite_values(buf)]
-        return [buf.window_finite_values(float(t_lo), float(t_hi))]
+        return [buf.window_finite_values(float(t_lo), float(t_hi),
+                                         _fit_step(t_lo, t_hi))]
 
     @pyqtSlot(str, result="QVariantMap")
     def compute_bounds_for_side_average(self, metric: str) -> dict:
@@ -752,8 +811,7 @@ class ScanDataSource(QObject):
         if combined.size < 4:
             return {"yMin": 0.0, "yMax": 1.0}
 
-        lo = float(np.percentile(combined, percentile_lo))
-        hi = float(np.percentile(combined, percentile_hi))
+        lo, hi = _percentile_pair(combined, percentile_lo, percentile_hi)
 
         if lo == hi:
             lo -= 0.5
@@ -1128,7 +1186,9 @@ class LiveScanSource(ScanDataSource):
         if dbuf is None:
             return chunks
         split = float(self.buffers[(side, cam_id, metric)].t[0])
-        chunks.append(dbuf.window_finite_values(float(t_lo), min(split, float(t_hi))))
+        # The whole window's stride, so both parts are sampled alike.
+        chunks.append(dbuf.window_finite_values(
+            float(t_lo), min(split, float(t_hi)), _fit_step(t_lo, t_hi)))
         return chunks
 
     @pyqtSlot(str, int, str, float, result=float)
