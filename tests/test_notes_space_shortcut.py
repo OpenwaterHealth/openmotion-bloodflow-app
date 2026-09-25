@@ -384,3 +384,26 @@ def test_untouched_notes_show_the_footer_once(page, opened):
     assert page.notes_text() == "earlier" + FOOTER
     page.key(Qt.Key.Key_Escape)
     assert page.stub.scanNotes == "earlier" + FOOTER
+
+
+def test_scan_started_and_ended_under_open_notes_gets_its_footer(page):
+    """Notes opened from the icon bar just after Start, before
+    startCapture resets scanNotes to "", then typed into and left open
+    until the scan ends. The new scan's footer no longer extends the
+    notes the modal loaded, but it still has to land (bench, #618)."""
+    page.stub.scanNotes = "earlier"
+    QMetaObject.invokeMethod(page.button_panel(), "notesClicked")
+    page.pump()
+    QTest.keyClick(page.view, Qt.Key.Key_End,
+                   Qt.KeyboardModifier.ControlModifier)
+    page.type_text(" carry")
+
+    page.start_scan()
+    page.stub.scanNotes = ""  # startCapture: each scan starts empty
+    page.stub.finish_scan_on_sdk_thread(FOOTER)
+    page.pump()
+
+    assert page.current_label() == "Session Notes"
+    assert page.notes_text() == "earlier carry" + FOOTER
+    page.key(Qt.Key.Key_Escape)
+    assert page.stub.scanNotes == "earlier carry" + FOOTER
