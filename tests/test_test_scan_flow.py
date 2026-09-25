@@ -25,6 +25,7 @@ def connector(monkeypatch):
     from motion_connector import MotionConnector
 
     fake_iface = MagicMock()
+    fake_iface.scan_db_path = None  # a MagicMock path becomes a DB file in cwd (#620)
     fake_iface.console = MagicMock()
     fake_iface.left = MagicMock()
     fake_iface.right = MagicMock()
