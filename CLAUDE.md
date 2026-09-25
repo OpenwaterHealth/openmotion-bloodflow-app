@@ -343,6 +343,7 @@ Consequences to remember:
 ## Gotchas
 
 - **`motion_connector.py` is ~6,800 lines** — the file is doing too much. Don't add to it without considering extraction; recent precedent is `motion_config.py` (May 2025).
+- **Plot trace pens stay at one device pixel** (`PlotCell._tracePenWidth`, #616). QPainter has a fast stroker only for pens of at most 1 device px; the old 1.5 px trace pen went through the general stroker and cost ~270 ms per 8-cell repaint on a 3440 px screen (vs ~6 ms), holding the plots to ~2 repaints/s and starving every other control. Canvas scales by the device pixel ratio, so the width is `0.99 / devicePixelRatio`, not `1`. The bolder 1.5 px look comes from stroking each trace twice, the second pass shifted right by half a pen width (both passes stay on the fast stroker). Don't widen the pen for looks without re-measuring at full-screen size.
 - **Cross-thread signals:** 135+ signals; several (e.g. `_calibrationCompleteSignal`, `safetyTripDuringCaptureRequested`) fire from USB I/O / scanner worker threads. Use `Qt.QueuedConnection` or you'll race QML.
 - **PyInstaller libusb mirror** (`openwater.spec` lines 61–95): if bundled app fails USB enumeration, the runtime hook can't find vendored libusb DLLs. Check the spec's mirror step.
 - **`laser_params.json` is not "tunable":** it ships inside the SDK (`omotion/data/laser_params.json`), not this repo; editing values risks laser-off, wrong pulse widths, safety failures. Treat as locked baseline.
