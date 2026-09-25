@@ -426,8 +426,8 @@ Rectangle {
 
     SettingsModal {
         id: settingsModal
-        // Audit Log: the password gate lives in SettingsModal; on success
-        // close Settings first so toggle() sees current === null and goes
+        // Audit Log: View Logs has no password in any build (#703).
+        // Close Settings first so toggle() sees current === null and goes
         // straight to logsModal.open() (no redundant close), then open the
         // ModalManager-governed LogsModal.
         onLogsRequested: {
