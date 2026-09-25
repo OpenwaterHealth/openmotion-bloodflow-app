@@ -11,12 +11,17 @@ held focus, accepted the next Space as text, and the shortcut never fired
 again until the operator clicked back into the app. BloodFlow now hands
 focus back to the plot viewer whenever the last modal closes.
 
+The same harness covers a scan ending while the operator is still typing
+in the modal (#617): the connector's end-of-scan footer and the unsaved
+text must both survive.
+
 Unit-marked: no app launch, no hardware, offscreen Qt platform.
 """
 
 import contextlib
 import os
 import sys
+import threading
 from pathlib import Path
 
 # A QGuiApplication must exist before any QML Quick item is created, and
@@ -66,6 +71,7 @@ class _StubMotionInterface(QObject):
     _neverEmitted = pyqtSignal()
     triggerStateChanged = pyqtSignal()
     scanNotesChanged = pyqtSignal()
+    scanNotesReady = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -108,6 +114,20 @@ class _StubMotionInterface(QObject):
     @pyqtSlot(str, str, int, bool)
     def notify(self, message, level, duration_ms, dismissable):
         pass
+
+    def finish_scan_on_sdk_thread(self, footer):
+        """What the connector's scan-completion handler does to the notes,
+        from a worker thread as the SDK runs it: append the footer to the
+        stripped notes, then emit scanNotesChanged and scanNotesReady.
+        Both arrive queued on the GUI thread; nothing is delivered until
+        the test pumps events."""
+        def run():
+            self._scan_notes = self._scan_notes.strip() + footer
+            self.scanNotesChanged.emit()
+            self.scanNotesReady.emit()
+        worker = threading.Thread(target=run)
+        worker.start()
+        worker.join()
 
 
 @contextlib.contextmanager
@@ -152,6 +172,15 @@ class _Page:
                 return item
             stack.extend(item.childItems())
         raise AssertionError("no ButtonPanel in BloodFlow.qml")
+
+    def notes_text(self):
+        stack = [self.notes]
+        while stack:
+            item = stack.pop()
+            if item.metaObject().className().startswith("TextArea"):
+                return item.property("text")
+            stack.extend(item.childItems())
+        raise AssertionError("no TextArea in NotesModal.qml")
 
     def pump(self, ms=50):
         QTest.qWait(ms)
@@ -283,3 +312,98 @@ def test_switching_modals_keeps_the_new_modals_focus(page):
 def test_space_does_nothing_outside_a_scan(page):
     page.key(Qt.Key.Key_Space)
     assert page.current_label() is None
+
+
+# ── A scan that ends under an open Notes modal (#617) ─────────────────
+# At scan end the connector appends the duration / data-gap footer to
+# scanNotes on the SDK thread and queues scanNotesReady, whose handler
+# calls notesModal.open(). The modal used to reload from scanNotes there,
+# throwing away whatever the operator had typed since opening it.
+
+FOOTER = "\n---\nScan completed — duration: 00:01:23"
+
+
+def test_scan_ending_under_open_notes_keeps_typing_and_footer(page):
+    page.start_scan()
+    _open_with_space(page)
+    page.type_text("note1")
+    page.key(Qt.Key.Key_Escape)
+    _open_with_space(page)
+    page.type_text("mid-note")
+
+    page.stub.finish_scan_on_sdk_thread(FOOTER)
+    page.pump()
+
+    # Still open, the operator's text kept, the footer shown below it.
+    assert page.current_label() == "Session Notes"
+    assert page.notes_text().endswith(" - mid-note" + FOOTER)
+
+    # The cursor stayed where the operator was typing, above the footer.
+    page.type_text(" more")
+    page.key(Qt.Key.Key_Escape)
+
+    notes = page.stub.scanNotes
+    assert notes.endswith(" - mid-note more" + FOOTER)
+    assert notes.count(FOOTER) == 1
+    assert notes.splitlines()[0].endswith(" - note1")
+
+
+def test_notes_closed_before_scan_notes_ready_keep_the_footer(page):
+    """The operator closes the modal after the SDK thread appended the
+    footer but before the queued scanNotesReady reached the GUI thread:
+    close() must not save the pre-footer text over the footer."""
+    page.start_scan()
+    _open_with_space(page)
+    page.type_text("mid-note")
+
+    page.stub.finish_scan_on_sdk_thread(FOOTER)
+    QMetaObject.invokeMethod(page.notes, "close")  # no event pump
+    assert page.stub.scanNotes.endswith(" - mid-note" + FOOTER)
+
+    page.pump()  # scanNotesReady → open() shows what was saved
+    assert page.current_label() == "Session Notes"
+    assert page.notes_text() == page.stub.scanNotes
+
+
+@pytest.mark.parametrize("opened", ["before_scan_end", "before_ready"])
+def test_untouched_notes_show_the_footer_once(page, opened):
+    """No typing to keep: the modal shows exactly the connector's notes,
+    including when it opened after the footer landed but before
+    scanNotesReady did."""
+    page.stub.scanNotes = "earlier"
+    page.start_scan()
+    if opened == "before_scan_end":
+        QMetaObject.invokeMethod(page.button_panel(), "notesClicked")
+        page.stub.finish_scan_on_sdk_thread(FOOTER)
+    else:
+        page.stub.finish_scan_on_sdk_thread(FOOTER)
+        QMetaObject.invokeMethod(page.button_panel(), "notesClicked")
+    page.pump()
+
+    assert page.current_label() == "Session Notes"
+    assert page.notes_text() == "earlier" + FOOTER
+    page.key(Qt.Key.Key_Escape)
+    assert page.stub.scanNotes == "earlier" + FOOTER
+
+
+def test_scan_started_and_ended_under_open_notes_gets_its_footer(page):
+    """Notes opened from the icon bar just after Start, before
+    startCapture resets scanNotes to "", then typed into and left open
+    until the scan ends. The new scan's footer no longer extends the
+    notes the modal loaded, but it still has to land (bench, #618)."""
+    page.stub.scanNotes = "earlier"
+    QMetaObject.invokeMethod(page.button_panel(), "notesClicked")
+    page.pump()
+    QTest.keyClick(page.view, Qt.Key.Key_End,
+                   Qt.KeyboardModifier.ControlModifier)
+    page.type_text(" carry")
+
+    page.start_scan()
+    page.stub.scanNotes = ""  # startCapture: each scan starts empty
+    page.stub.finish_scan_on_sdk_thread(FOOTER)
+    page.pump()
+
+    assert page.current_label() == "Session Notes"
+    assert page.notes_text() == "earlier carry" + FOOTER
+    page.key(Qt.Key.Key_Escape)
+    assert page.stub.scanNotes == "earlier carry" + FOOTER
