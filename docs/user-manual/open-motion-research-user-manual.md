@@ -120,7 +120,7 @@ The round badge at the top of the left toolbar shows the system state:
 | Grey circle, chain-link icon | `Disconnected` | The console or both sensor modules are not connected. Scanning is disabled. |
 | Green circle, dimmed label | `Start` | Connected; a sensor module is still initializing. Wait a few seconds. |
 | Green circle, play icon | `Start` | Ready to scan. |
-| Yellow circle | `Start` | Start was pressed; the system is finishing the previous step and configuring the cameras before the scan begins. |
+| Yellow circle | `Start` | Start was pressed; the system is finishing the previous step before the scan begins (normally a few seconds). |
 | Red circle, stop icon | `Stop` | A scan is running. Press to stop it. |
 
 ### 2.6 Console indicator light
@@ -229,8 +229,7 @@ application starts come from Settings → Default Camera Configuration (§10).
 ## 5. Checking contact quality
 
 Press **Check** (not available during a scan) to check sensor contact without recording.
-The laser is on during the check, which usually takes about 10 seconds — up to about a
-minute the first time after the sensor modules are powered up. The check tests **all
+The laser is on during the check, which takes about 10 seconds. The check tests **all
 eight cameras** on each connected sensor, whatever is selected in Scan Settings.
 
 ![Contact-quality check result](img/rs-check.png)
@@ -264,8 +263,8 @@ matters.
    scan) are a reasonable starting point.
 2. Run **Check** (§5) and re-seat the sensors until the cameras you plan to record are
    green.
-3. Press **Start**. The scan starts immediately: the badge turns yellow while the cameras
-   are configured, then red (**Stop**), and the header clock starts counting.
+3. Press **Start**. The scan starts immediately: the badge may turn yellow for a moment,
+   then red (**Stop**), and the header clock starts counting.
 
 ![Scan running](img/rs-scanning.png)
 *A 2-minute timed scan on four cameras of the right sensor, 26 seconds in. Bench capture —
