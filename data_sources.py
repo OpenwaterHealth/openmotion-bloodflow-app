@@ -1567,8 +1567,9 @@ def load_csv_scan_buffers(csv_path: str, derive_side_average: bool = False) -> d
 
     The History → Export CSV / SDK ``materialize_corrected_csv`` output is
     the same per-cam wide format ``_load_corrected_csv_into`` already parses
-    (frame_id, timestamp_s, bfi/bvi/mean/contrast per camera; trailing temp/
-    quality columns are ignored). Used to feed a ``PastScanSource`` straight
+    (frame_id, timestamp_s, bfi/bvi/mean/contrast per camera; trailing temp
+    and status columns — ``correction_status`` / ``cq_*``, or the older
+    ``quality_*`` — are ignored). Used to feed a ``PastScanSource`` straight
     from a CSV — no ``scans.db`` involvement — e.g. the bundled sample scan
     shown in the replay viewer when no device is connected at boot (#314).
 
