@@ -3207,6 +3207,14 @@ class MotionConnector(QObject):
     def appConfig(self):
         return self._app_config
 
+    @pyqtProperty('QVariantMap', constant=True)
+    def defaultConfig(self):
+        """The compiled baseline (config/app_config.py + dev launch flags)
+        that the settings table diffs against. QML "Reset" buttons read
+        their targets here (#630), so a reset lands on exactly the value a
+        fresh install shows and its persisted row is deleted, not rewritten."""
+        return self._baseline_config
+
     def _effective_config_json(self) -> str:
         """The running config as pretty JSON, for the debug bundle (there is
         no config file to copy any more — this is what the app actually
