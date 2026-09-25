@@ -13,6 +13,9 @@ Item {
     property var source: null            // ScanDataSource (Python QObject) or null
     property string side: "left"
     property int    camId: 0
+    // Top-left identity label. The viewer overrides it for the Aggregate
+    // view's pair streams (#621), whose camId is not a camera number.
+    property string label: cell.side.toUpperCase() + " " + (cell.camId + 1)
     property real   windowSeconds: 15
 
     // Time-axis state — when followLive=true, the cell tracks the
@@ -308,7 +311,7 @@ Item {
             // SideAveragingStage in clinical mode — hide the label there;
             // the large side panel next to the plot already names the side.
             visible: cell.camId !== -1
-            text: cell.side.toUpperCase() + " " + (cell.camId + 1)
+            text: cell.label
             color: AppTheme.textSecondary
             font.pixelSize: 11
             font.family: "Roboto Mono"
