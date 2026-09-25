@@ -601,4 +601,4 @@ def test_view_buttons_are_hidden_in_clinical():
     idx = qml.index("id: viewModeRow")
     row = qml[idx:idx + 200]
     assert "visible: !viewer.clinicalMode && !viewer.effectiveClinical" in row
-    assert 'MotionInterface.setConfig("plotViewMode", modelData.value)' in qml
+    assert 'MotionInterface.setConfig("plotViewMode", value)' in qml
