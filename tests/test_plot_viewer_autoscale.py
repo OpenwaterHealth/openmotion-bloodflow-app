@@ -46,6 +46,7 @@ from pathlib import Path
 # environment is untouched (see test_plot_viewer_masks.py).
 from PyQt6.QtCore import (  # noqa: E402
     QCoreApplication,
+    QEvent,
     QMetaObject,
     QObject,
     QUrl,
@@ -260,8 +261,14 @@ def viewer_factory():
 
     yield make
 
+    # Destroy the viewers while their engine is still alive, and drain the
+    # deletes now. Left to a bare deleteLater, they outlive the engine into
+    # the next test module, and after this module's per-plot pumping the
+    # first event pump there crashed on them (access violation; found when
+    # test_aggregate_view_mode's per-plot test ran after this module).
     for obj in created:
         obj.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     del engine
     del stub
 
