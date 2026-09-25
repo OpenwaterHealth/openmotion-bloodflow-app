@@ -270,6 +270,19 @@ def test_metrics_switch_requests_the_display_pair(menu_viewer):
     assert req["bfiBvi"] == [False]
 
 
+def test_switches_share_one_center_line(menu_viewer):
+    """Each switch sits centered in a slot as wide as the widest one, so
+    all three line up on one center whatever their option lengths."""
+    viewer, _stub, _req = menu_viewer
+    seg = list(_segmented(viewer).values())
+    widths = [s.property("width") for s in seg]
+    assert len(set(widths)) == 3                   # genuinely different
+    slots = [s.parentItem() for s in seg]
+    assert {sl.property("width") for sl in slots} == {max(widths)}
+    for s, sl in zip(seg, slots):
+        assert s.property("x") + s.property("width") / 2             == pytest.approx(sl.property("width") / 2)
+
+
 def test_no_on_off_switches_left_but_the_profiler():
     """Static: the only PopupPillSwitch instance is the Profiler's."""
     qml = PLOT_VIEWER_QML.read_text(encoding="utf-8")
