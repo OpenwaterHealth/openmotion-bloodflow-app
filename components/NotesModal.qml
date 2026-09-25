@@ -70,14 +70,17 @@ Item {
         root._loadedNotes = theirs
         if (theirs === base) return
         if (notesArea.text === base) { notesArea.text = theirs; return }
+        // Otherwise keep the operator's text and add the connector's part.
+        // Usually that extends the loaded notes. If a new scan reset them to
+        // "" under the modal (the only other writer), all of scanNotes is
+        // new: nothing on close() mid-scan, the new scan's footer at its end.
         var kept = base.trim()
-        // Any other change (a new scan's reset to "" is the only one) keeps
-        // the operator's text, as close() always did.
-        if (!theirs.startsWith(kept)) return
+        var added = theirs.startsWith(kept) ? theirs.slice(kept.length) : theirs
+        if (added === "") return
         // Inserting at the end drags a cursor sitting there along with it;
         // put it back where the operator was typing, above the footer.
         var cursor = notesArea.cursorPosition
-        notesArea.insert(notesArea.length, theirs.slice(kept.length))
+        notesArea.insert(notesArea.length, added)
         notesArea.cursorPosition = cursor
     }
 
