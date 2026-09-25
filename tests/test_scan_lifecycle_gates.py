@@ -10,6 +10,7 @@ pytestmark = pytest.mark.unit
 @pytest.fixture
 def connector(tmp_path):
     iface = MagicMock()
+    iface.scan_db_path = None  # a MagicMock path becomes a DB file in cwd (#620)
     iface.console = MagicMock()
     iface.left = MagicMock()
     iface.right = MagicMock()

@@ -17,7 +17,9 @@ import importlib
 import inspect
 import json
 import platform
+import re
 import socket
+import sqlite3
 import time
 import subprocess
 import sys
@@ -847,6 +849,51 @@ def _isolate_writable_root(request, tmp_path, monkeypatch):
 
     monkeypatch.setattr(app_paths, "DATA_ROOT_OVERRIDE", tmp_path / "_app_paths_root")
     yield
+
+
+# str() of any unittest.mock object: "<MagicMock name='mock.x' id='140…'>".
+_MOCK_REPR_RE = re.compile(r"<\w*Mock\b.*?\bid='\d+'>")
+
+
+@pytest.fixture(autouse=True)
+def _refuse_mock_db_paths(request, monkeypatch):
+    """Fail a unit test whose code opens SQLite at a path built from a mock
+    (issue #620).
+
+    A connector built around a bare ``MagicMock()`` interface hands the
+    truthy ``interface.scan_db_path`` mock to AuditLog, which str()s it
+    and opens ``<MagicMock name='mock.scan_db_path' id=...>`` as a real
+    database file in the cwd: one stray file in the repo root per test
+    on macOS/Linux. On Windows ``<``/``>`` are illegal in file names, the
+    open fails, AuditLog's fail-soft handler swallows it, and nothing
+    shows. Refusing the open here keeps the file from being created on
+    every platform, and failing at teardown gets past that fail-soft
+    handler. Fix the test by setting ``scan_db_path = None`` (or a
+    tmp_path file) on the mock interface.
+    """
+    if request.node.get_closest_marker("unit") is None:
+        yield
+        return
+    real_connect = sqlite3.connect
+    refused = []
+
+    def _connect(database, *args, **kwargs):
+        if _MOCK_REPR_RE.search(str(database)):
+            refused.append(str(database))
+            raise sqlite3.OperationalError(
+                f"refused mock-derived database path {str(database)!r} (#620)"
+            )
+        return real_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", _connect)
+    yield
+    if refused:
+        pytest.fail(
+            "test opened SQLite at a path built from a mock (set "
+            "scan_db_path = None or a tmp_path file on the mock "
+            f"interface, #620): {sorted(set(refused))}",
+            pytrace=False,
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────
