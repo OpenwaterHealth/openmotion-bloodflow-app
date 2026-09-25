@@ -581,9 +581,13 @@ Rectangle {
     // bindings below; mean/contrast keep the legacy palette (no config
     // keys exist for them). Every color is passed through the theme's
     // readability guard so a palette tuned for one mode (e.g. white BFI
-    // on dark) doesn't render invisible in the other.
-    property color bfiColor: "#E74C3C"
-    property color bviColor: "#3498DB"
+    // on dark) doesn't render invisible in the other. BloodFlow.qml binds
+    // both from the Settings modal; unbound (standalone renders) they fall
+    // back to the compiled defaults in config/app_config.py (#630), with
+    // the same literals for a host without MotionInterface.defaultConfig.
+    readonly property var _defaultConfig: MotionInterface.defaultConfig || ({})
+    property color bfiColor: _defaultConfig.bfiColor !== undefined ? _defaultConfig.bfiColor : "#ffffff"
+    property color bviColor: _defaultConfig.bviColor !== undefined ? _defaultConfig.bviColor : "#3437db"
     readonly property color bfiInk: AppTheme.readableInk(viewer.bfiColor)
     readonly property color bviInk: AppTheme.readableInk(viewer.bviColor)
 
