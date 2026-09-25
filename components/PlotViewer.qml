@@ -142,7 +142,13 @@ Rectangle {
     // zoom, window length, back to live, display-mode flip, new source
     // — since that is new content, not the same window sliding; and
     // also when the window has NOT moved since the last evaluation
-    // (scan stopped, view paused): the fresh fit is then final.
+    // (scan stopped, view paused): the fresh fit is then final. A new
+    // source starts with no previous range at all, so each cell's first
+    // real fit snaps too (#613), and while a live scan is younger than
+    // the window an OUTWARD move is adopted at once: the fitted set is
+    // still growing, so a wider fit is new data, not jitter (inward
+    // moves keep the lag). Without that the first few samples' narrow
+    // fit clipped the beats for the scan's first ~2 s.
     //
     // The new range is applied directly at each 0.5 s evaluation. An
     // earlier revision also glided the shown range toward it in the
@@ -161,14 +167,15 @@ Rectangle {
 
     // Next target range for one metric: the fresh fit itself when
     // snapping, else the asymmetric first-order lag from the previous
-    // target. The exact neutral fallback (no usable samples in the
-    // window) holds the previous target rather than collapsing the axis
-    // to 0..1 while a camera is covered.
-    function _followRange(prev, f, snap) {
+    // target (outward moves adopted at once when growNow). The exact
+    // neutral fallback (no usable samples in the window) holds the
+    // previous target rather than collapsing the axis to 0..1 while a
+    // camera is covered.
+    function _followRange(prev, f, snap, growNow) {
         if (f.yMin === 0 && f.yMax === 1) return prev
         if (snap || !prev) return [f.yMin, f.yMax]
         var dt = viewer._perPlotEvalSec
-        var aUp = dt / (viewer._perPlotTauUpSec + dt)
+        var aUp = growNow ? 1 : dt / (viewer._perPlotTauUpSec + dt)
         var aDown = dt / (viewer._perPlotTauDownSec + dt)
         var lo = prev[0] + ((f.yMin < prev[0]) ? aUp : aDown) * (f.yMin - prev[0])
         var hi = prev[1] + ((f.yMax > prev[1]) ? aUp : aDown) * (f.yMax - prev[1])
@@ -424,6 +431,9 @@ Rectangle {
                     && w.tHi === viewer._lastFitWindow.tHi)
                 snap = true
             viewer._lastFitWindow = w
+            // Scan time starts at 0, so a window reaching below it is
+            // still filling: outward moves are adopted at once (#613).
+            var growNow = w.tLo < 0
             // Targets and shown ranges are per metric pair: a BFI/BVI ↔
             // Mean/Contrast flip starts over (snap), it does not glide
             // from a BVI range to a contrast range.
@@ -439,8 +449,8 @@ Rectangle {
                 var fs = src.compute_bounds_for_cell(c.side, c.camId, pair.secondary, w.tLo, w.tHi)
                 if (!_validBounds(fp) || !_validBounds(fs)) continue
                 var prev = prevTargets[key]
-                var p = _followRange(prev ? [prev.pMin, prev.pMax] : null, fp, snap)
-                var s = _followRange(prev ? [prev.sMin, prev.sMax] : null, fs, snap)
+                var p = _followRange(prev ? [prev.pMin, prev.pMax] : null, fp, snap, growNow)
+                var s = _followRange(prev ? [prev.sMin, prev.sMax] : null, fs, snap, growNow)
                 if (!p || !s) continue   // neutral fit on a brand-new cell: nothing to show yet
                 targets[key] = { pMin: p[0], pMax: p[1], sMin: s[0], sMax: s[1] }
             }
@@ -789,6 +799,15 @@ Rectangle {
         // are already hidden by the delegate's live-only binding.
         if (viewer.scanSource && viewer.scanSource.live === true)
             viewer._lostCameras = ({})
+        // A new source is new content: no per-plot range carries over.
+        // A scan starts with no samples, so the refit below got only
+        // neutral fits and each cell held the PREVIOUS source's range;
+        // the 0.5 s evaluations then lagged away from it for seconds,
+        // with the traces off-axis meanwhile (#613). With no previous
+        // range, a cell's first real fit snaps.
+        viewer._cellTargets = ({})
+        viewer._cellTargetsPair = ""
+        viewer._lastFitWindow = null
         // Re-fit y-axis to the new source's data immediately, otherwise
         // a past scan loaded with very different value ranges would draw
         // off-axis until the next autoscale tick.
