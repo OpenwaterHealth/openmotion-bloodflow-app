@@ -35,8 +35,15 @@ Item {
     // edits or persists it.
     readonly property bool clinicalMode: MotionInterface.appConfig.clinicalMode === true
     property int    plotWindowSec:     15
-    property color  bfiColor:          "#E74C3C"
-    property color  bviColor:          "#3498DB"
+    // Trace-color defaults (#630) come from the compiled bfiColor /
+    // bviColor in config/app_config.py, via MotionInterface.defaultConfig.
+    // The literals are the same values, for a host without that property
+    // (offscreen test stubs); keep them in step with app_config.py.
+    readonly property var   _defaultConfig:  MotionInterface.defaultConfig || ({})
+    readonly property color defaultBfiColor: _defaultConfig.bfiColor !== undefined ? _defaultConfig.bfiColor : "#ffffff"
+    readonly property color defaultBviColor: _defaultConfig.bviColor !== undefined ? _defaultConfig.bviColor : "#3437db"
+    property color  bfiColor:          defaultBfiColor
+    property color  bviColor:          defaultBviColor
     // BVI display low-pass switch (#552) — research-only. The cutoff
     // itself is the compiled bviLowPassCutoffHz constant; this only
     // gates it, and the connector applies a change mid-scan.
@@ -110,8 +117,8 @@ Item {
         showBfiBvi         = clinicalMode ? true : (cfg.showBfiBvi !== undefined ? cfg.showBfiBvi : true)
         autoScale          = cfg.autoScale          !== undefined ? cfg.autoScale          : false
         plotWindowSec      = cfg.plotWindowSec      !== undefined ? cfg.plotWindowSec      : 15
-        bfiColor           = cfg.bfiColor           !== undefined ? cfg.bfiColor           : "#E74C3C"
-        bviColor           = cfg.bviColor           !== undefined ? cfg.bviColor           : "#3498DB"
+        bfiColor           = cfg.bfiColor           !== undefined ? cfg.bfiColor           : defaultBfiColor
+        bviColor           = cfg.bviColor           !== undefined ? cfg.bviColor           : defaultBviColor
         bviLowPassEnabled  = cfg.bviLowPassEnabled  !== undefined ? cfg.bviLowPassEnabled  : true
         // Persisted bounds are untrusted (#229) — sanitizeBoundPair
         // supplies the per-metric defaults for missing/garbage values
@@ -851,9 +858,10 @@ Item {
                         Text { text: "BVI"; color: root.colTextSec; font.pixelSize: 12 }
                         Item { Layout.fillWidth: true }
                         ActionButton {
+                            objectName: "traceColorResetButton"
                             text: "Reset"
                             Layout.preferredWidth: 70
-                            onClicked: { root.bfiColor = "#E74C3C"; root.bviColor = "#3498DB" }
+                            onClicked: { root.bfiColor = root.defaultBfiColor; root.bviColor = root.defaultBviColor }
                         }
                     }
                 }

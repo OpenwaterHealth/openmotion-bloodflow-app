@@ -37,7 +37,7 @@ from PyQt6.QtCore import (  # noqa: E402
     pyqtSignal,
     pyqtSlot,
 )
-from PyQt6.QtGui import QGuiApplication  # noqa: E402
+from PyQt6.QtGui import QColor, QGuiApplication  # noqa: E402
 
 if QCoreApplication.instance() is None:
     _qt_app = QGuiApplication([sys.argv[0], "-platform", "offscreen"])
@@ -51,6 +51,8 @@ from PyQt6.QtQml import (  # noqa: E402
     qmlRegisterSingletonInstance,
 )
 from PyQt6.QtQuick import QQuickWindow  # noqa: E402
+
+from config.app_config import APP_CONFIG  # noqa: E402
 
 pytestmark = pytest.mark.unit
 
@@ -81,6 +83,8 @@ class _StubMotionInterface(QObject):
         self._write_telemetry_csv = False
         self.sensor_debug_flag_calls: list[tuple] = []
         self._histo_stall_test = False
+        self._default_config: dict = {}
+        self._trace_colors: dict = {}
 
     # ── Mode flags (the gates under test) ────────────────────────────
     def setFlags(self, clinical: bool, engineering: bool):
@@ -100,6 +104,14 @@ class _StubMotionInterface(QObject):
         self._alt_exposure_us = int(exposure_us)
         self.appConfigChanged.emit()
 
+    def setDefaultConfig(self, defaults: dict):
+        self._default_config = dict(defaults)
+        self.appConfigChanged.emit()
+
+    def setTraceColors(self, colors: dict):
+        self._trace_colors = dict(colors)
+        self.appConfigChanged.emit()
+
     @pyqtProperty("QVariantMap", notify=appConfigChanged)
     def appConfig(self):
         return {
@@ -113,7 +125,14 @@ class _StubMotionInterface(QObject):
             "altCameraExposureUs": getattr(self, "_alt_exposure_us", 648),
             "writeTelemetryCsv": self._write_telemetry_csv,
             "debugHistoStallTest": self._histo_stall_test,
+            **self._trace_colors,
         }
+
+    # The connector's is constant (the compiled baseline); the stub's
+    # notifies so a test can swap it, e.g. to {} for a host without it.
+    @pyqtProperty("QVariantMap", notify=appConfigChanged)
+    def defaultConfig(self):
+        return self._default_config
 
     # ── open()/close() dependencies ──────────────────────────────────
     @pyqtProperty(str, notify=_neverEmitted)
@@ -568,3 +587,93 @@ def test_close_never_persists_clinical_mode(modal_factory):
     saved = stub.saved_configs[-1]
     assert "clinicalMode" not in saved
     assert "plotWindowSec" in saved  # sanity: the payload is the real one
+
+
+# ── Trace colors (#630) ────────────────────────────────────────────────
+
+_TRACE_KEYS = ("bfiColor", "bviColor")
+# An operator-picked pair, as if stored by an earlier session.
+_PICKED_COLORS = {"bfiColor": "#e74c3c", "bviColor": "#2ecc71"}
+
+
+def _hex(color):
+    """#rrggbb of a QML color property (a QColor) or a config string."""
+    return QColor(color).name()
+
+
+def test_trace_color_reset_restores_the_compiled_defaults(modal_factory):
+    """#630: Reset used to set BFI to red (#E74C3C, a stale literal)
+    while config/app_config.py ships white. It must land on the compiled
+    values, read through MotionInterface.defaultConfig, and close() must
+    save exactly those strings, so the settings table deletes the stored
+    row (persistable_diff) instead of keeping a color."""
+    stub = modal_factory.stub
+    stub.setFlags(clinical=False, engineering=True)
+    stub.setDefaultConfig({k: APP_CONFIG[k] for k in _TRACE_KEYS})
+    stub.setTraceColors(_PICKED_COLORS)
+    stub.saved_configs.clear()
+    modal = modal_factory()
+    try:
+        _invoke(modal, "open")
+        for key in _TRACE_KEYS:
+            assert _hex(modal.property(key)) == _PICKED_COLORS[key]
+
+        reset = modal.findChild(QObject, "traceColorResetButton")
+        assert reset is not None
+        _invoke(reset, "click")
+        for key in _TRACE_KEYS:
+            assert _hex(modal.property(key)) == _hex(APP_CONFIG[key]), key
+
+        _invoke(modal, "close")
+        saved = stub.saved_configs[-1]
+        for key in _TRACE_KEYS:
+            assert saved[key] == APP_CONFIG[key], key
+    finally:
+        stub.setTraceColors({})
+        stub.setDefaultConfig({})
+
+
+def test_trace_color_fallbacks_match_app_config(modal_factory):
+    """#630: on a host without MotionInterface.defaultConfig and with no
+    stored color, the modal's literal fallbacks apply, both when loading
+    and on Reset. They must equal config/app_config.py, or the two drift
+    apart again."""
+    stub = modal_factory.stub
+    stub.setFlags(clinical=False, engineering=True)
+    stub.setDefaultConfig({})
+    stub.setTraceColors({})
+    modal = modal_factory()
+    _invoke(modal, "open")
+    try:
+        for key in _TRACE_KEYS:
+            assert _hex(modal.property(key)) == _hex(APP_CONFIG[key]), key
+
+        for key, picked in _PICKED_COLORS.items():
+            modal.setProperty(key, QColor(picked))
+        _invoke(modal.findChild(QObject, "traceColorResetButton"), "click")
+        for key in _TRACE_KEYS:
+            assert _hex(modal.property(key)) == _hex(APP_CONFIG[key]), key
+    finally:
+        _invoke(modal, "close")
+
+
+def test_connector_exposes_the_baseline_as_default_config(tmp_path):
+    """#630: the real MotionInterface.defaultConfig is the baseline the
+    settings table diffs against, not the effective appConfig (which
+    carries the operator's stored colors), and it reaches QML through
+    the meta-object as a map."""
+    from unittest.mock import MagicMock
+
+    from motion_connector import MotionConnector
+
+    iface = MagicMock()
+    iface.is_device_connected.return_value = (False, False, False)
+    iface.scan_workflow.running = False
+    iface.scan_workflow.config_running = False
+    iface.scan_db_path = None          # audit log is a no-op
+    baseline = {k: APP_CONFIG[k] for k in _TRACE_KEYS}
+    c = MotionConnector(interface=iface, app_config=dict(_PICKED_COLORS),
+                        baseline_config=baseline, data_dir=str(tmp_path),
+                        config_dir="config")
+    assert c.property("defaultConfig") == baseline
+    assert c.property("appConfig") == _PICKED_COLORS
