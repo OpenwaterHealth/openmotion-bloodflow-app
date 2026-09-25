@@ -23,7 +23,11 @@ per camera, then assert:
     inward slow) while a window change snaps it; the range is applied
     directly (no per-frame glide: that forced 30 Hz repaints of every
     cell and made the UI sluggish), so per-plot mode must not keep the
-    paint tick running while idle.
+    paint tick running while idle;
+  - #613: a new source (scan start) inherits no range from the previous
+    one, so a cell's first real fit snaps instead of lagging away from
+    the previous scan's range with the traces off-axis; and while the
+    window is still filling (tLo < 0) outward moves are adopted at once.
 
 Unit-marked: no app launch, no hardware, offscreen Qt platform.
 """
@@ -95,6 +99,7 @@ class _StubLiveSource(QObject):
         self.cell_calls = []
         self.window_calls = []   # (t_lo, t_hi) per per-cell call (#591)
         self.offset = 0.0        # added to every per-cell range (settling tests)
+        self.neutral = False     # True: no usable samples yet (fresh scan, #613)
 
     @pyqtProperty(bool, notify=_neverEmitted)
     def live(self):
@@ -135,6 +140,8 @@ class _StubLiveSource(QObject):
     def compute_bounds_for_cell(self, side, cam_id, metric, t_lo=None, t_hi=None):
         self.cell_calls.append((side, int(cam_id), metric))
         self.window_calls.append((t_lo, t_hi))
+        if self.neutral:
+            return {"yMin": 0.0, "yMax": 1.0}
         y_min, y_max = _cell_range(side, int(cam_id), metric)
         return {"yMin": y_min + self.offset, "yMax": y_max + self.offset}
 
@@ -551,6 +558,72 @@ def test_per_plot_neutral_fit_holds_the_axis(live_viewer):
         assert _ranges(viewer)[KEY] == before
     finally:
         src.compute_bounds_for_cell = real
+
+
+def test_new_source_does_not_inherit_the_previous_range(live_viewer):
+    """#613: a scan starts on a fresh source with no samples, so the
+    source-change refit sees only neutral fits. Those used to hold the
+    PREVIOUS source's ranges, and every Timer evaluation then lagged
+    away from them — the new scan's traces sat off-axis for seconds.
+    The first real fit on the new source must snap."""
+    viewer, src, stub = live_viewer
+    stub.setConfig("autoScalePerPlot", True)
+    old = _target(viewer)
+    new_src = _StubLiveSource()
+    new_src.neutral = True                   # scan just started: no samples
+    stub.setScanSource(new_src)
+    new_src.neutral = False                  # first frames arrive,
+    new_src.offset = 50.0                    # on a very different range
+    _slide(viewer, 1)                        # live window sliding
+    _tick(viewer)                            # a lagging (Timer) evaluation
+    first = _target(viewer)
+    want = _cell_range(*KEY, "bfi") + _cell_range(*KEY, "bvi")
+    for i in range(4):
+        assert first[i] == pytest.approx(want[i] + 50.0), i
+        assert first[i] != pytest.approx(old[i]), i
+
+
+def test_outward_moves_are_immediate_while_the_window_fills(live_viewer):
+    """#613: in a live scan younger than the window (tLo < 0) the fitted
+    set grows rather than slides, so a wider fit is adopted at once
+    instead of clipping the early beats; inward moves keep the lag."""
+    viewer, src, stub = live_viewer
+    stub.setConfig("autoScalePerPlot", True)
+    viewer.setProperty("liveEdgeSnapshot", 4.0)     # 4 s into a 15 s window
+    _refit(viewer)
+    t0 = _target(viewer)
+    src.offset = 0.5                                # whole fit moves up
+    viewer.setProperty("liveEdgeSnapshot", 4.5)
+    _tick(viewer)
+    t1 = _target(viewer)
+    dt = float(viewer.property("_perPlotEvalSec"))
+    a_dn = dt / (float(viewer.property("_perPlotTauDownSec")) + dt)
+    assert t1[1] == pytest.approx(t0[1] + 0.5)              # pMax: outward, at once
+    assert t1[0] == pytest.approx(t0[0] + a_dn * 0.5, rel=1e-3)  # pMin: inward, lagged
+    # Once the window is full the outward lag is back (the lag test
+    # above covers it at LIVE_EDGE; this pins the boundary).
+    viewer.setProperty("liveEdgeSnapshot", 15.5)
+    src.offset = 1.0
+    _tick(viewer)
+    t2 = _target(viewer)
+    assert t2[1] < t1[1] + 0.5 - 1e-6
+
+
+def test_trace_pen_is_at_most_one_device_pixel(live_viewer):
+    """#616: QPainter strokes a pen of at most one device pixel with its
+    fast stroker; the old 1.5 px trace pen cost ~270 ms per 8-cell
+    repaint on a 3440 px screen (vs ~6 ms), which held the plots to ~2
+    repaints/s and starved every other control. Canvas scales by the
+    device pixel ratio, so the width must be in device pixels."""
+    viewer, src, stub = live_viewer
+    for c in _plot_cells(viewer):
+        width = float(c.property("_tracePenWidth"))
+        dpr = c.window().devicePixelRatio() if c.window() else 1.0
+        assert 0.0 < width * dpr <= 1.0
+    qml = (REPO_ROOT / "components" / "PlotCell.qml").read_text(encoding="utf-8")
+    start = qml.index("function _drawTrace")
+    body = qml[start:qml.index("return pts.length", start)]
+    assert "ctx.lineWidth = cell._tracePenWidth" in body
 
 
 def test_global_mode_ignores_window_changes(live_viewer):
