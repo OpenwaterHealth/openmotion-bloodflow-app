@@ -272,11 +272,13 @@ def test_metrics_switch_requests_the_display_pair(menu_viewer):
 
 def test_switches_share_one_center_line(menu_viewer):
     """Each switch sits centered in a slot as wide as the widest one, so
-    all three line up on one center whatever their option lengths."""
+    they all line up on one center whatever their option lengths (the
+    three above plus Statistics, #635)."""
     viewer, _stub, _req = menu_viewer
     seg = list(_segmented(viewer).values())
     widths = [s.property("width") for s in seg]
-    assert len(set(widths)) == 3                   # genuinely different
+    assert len(seg) == 4
+    assert len(set(widths)) == 4                   # genuinely different
     slots = [s.parentItem() for s in seg]
     assert {sl.property("width") for sl in slots} == {max(widths)}
     for s, sl in zip(seg, slots):
