@@ -88,6 +88,10 @@ APP_CONFIG = {
     # averaged plot per module, clinical-style). Display-only; clinical
     # builds ignore it.
     "plotViewMode": "individual",
+    # Statistics pane beside the plots (#635), from the plot's ⋯ menu: live
+    # and 0.5 Hz low-passed values per plot plus the left − right
+    # differential. Display-only; clinical builds ignore it.
+    "showStatistics": False,
     "darkMode": True,
     "max_calibration_time_sec": 600,
     "calibration_scan_duration_sec": 15,
@@ -219,7 +223,7 @@ PREFERENCE_KEYS = frozenset({
     "meanMin", "meanMax", "contrastMin", "contrastMax",
     "bfiColor", "bviColor", "plotWindowSec",
     "autoScale", "autoScalePerPlot", "showAxisLabels", "plotViewMode",
-    "bviLowPassEnabled",
+    "showStatistics", "bviLowPassEnabled",
     "darkMode", "liquidGlass",
     # Research data output. Persisting these is harmless in a clinical
     # build: the scan-start gate is (!clinicalMode || engineeringMode), and

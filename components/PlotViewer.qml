@@ -65,9 +65,10 @@ Rectangle {
 
     // ── Inputs ─────────────────────────────────────────────────────────
     property bool clinicalMode: false   // honored in Phase 2b-ii
-    // Per-cell top-left value labels. Off whenever the large side panels
-    // show the same numbers (clinical, and the research Average view).
-    property bool showCellValues: !viewer.averageView
+    // Per-cell top-left value labels. Off whenever the same numbers are
+    // shown elsewhere: the large side panels (clinical, and the research
+    // Average view) or the Statistics pane.
+    property bool showCellValues: !viewer.averageView && !viewer.statsActive
     // Y-axis tick labels (max/mid/min per metric). Always on: the ⋯ popup
     // toggle was removed (#622), and binding this to the persisted
     // appConfig.showAxisLabels without it would strand anyone who had
@@ -134,6 +135,15 @@ Rectangle {
     readonly property bool aggregateView: viewer.researchViewMode === "aggregate"
     readonly property bool averageView: viewer.effectiveClinical || viewer.researchAverage
     onResearchViewModeChanged: viewer._recomputeAutoscale()
+    // Statistics pane (#635): the ⋯ popup's Statistics switch writes
+    // showStatistics through MotionInterface.setConfig. While on, the
+    // StatisticsPanel column sits right of the plots and the per-cell value
+    // labels (and the Average view's side panels) give way to it.
+    // Research-only, with the View row's gate: never in a clinical build,
+    // nor while replaying a clinical scan.
+    readonly property bool statsActive:
+        !viewer.clinicalMode && !viewer.effectiveClinical
+        && MotionInterface.appConfig.showStatistics === true
     // Per-plot ranges, keyed "side:camId" → { pMin, pMax, sMin, sMax }
     // for the current display pair. Rebuilt as a whole object by
     // _recomputeAutoscale so the cell bindings re-evaluate (mutating a
@@ -376,9 +386,12 @@ Rectangle {
         return (p >= 0 && p < 4) ? [p, 7 - p] : null
     }
 
-    // A cell's camera label: "LEFT 3", or "LEFT 1+8" for a pair. The
-    // hover tooltip passes compact=true for "L3" / "L1+8".
+    // A cell's camera label: "LEFT 3", "LEFT 1+8" for a pair, or "LEFT
+    // AVG" for the side average. The hover tooltip passes compact=true
+    // for "L3" / "L1+8" / "L AVG".
     function _cellLabel(side, camId, compact) {
+        if (camId === -1)
+            return (compact ? side.charAt(0).toUpperCase() : side.toUpperCase()) + " AVG"
         var s = compact ? side.charAt(0).toUpperCase() : side.toUpperCase() + " "
         var pair = viewer._aggregatePair(camId)
         return pair ? s + (pair[0] + 1) + "+" + (pair[1] + 1) : s + (camId + 1)
@@ -485,9 +498,21 @@ Rectangle {
     // Clinical readout column gate — the whole 250 px column collapses when
     // no side has active cameras, not just its individual panels (#298):
     // an empty-but-visible column would push the "No active cameras
-    // selected" placeholder off the canvas center (issue #487).
+    // selected" placeholder off the canvas center (issue #487). The
+    // Statistics pane replaces it: it shows the same side-average numbers.
     readonly property bool _showClinicalPanels:
-        viewer.averageView && viewer._activeCellModel.length > 0
+        viewer.averageView && !viewer.statsActive
+        && viewer._activeCellModel.length > 0
+
+    // Statistics pane column (#635): shown with the grid, i.e. not over the
+    // "No active cameras selected" placeholder. The overlays that belong to
+    // the plots (back-to-live pill, hover tooltip, bottom-right controls)
+    // are anchored to the viewer's right edge, so they move left by the
+    // pane plus the row spacing to stay over the plots.
+    readonly property bool _showStatsPanel:
+        viewer.statsActive && viewer._activeCellModel.length > 0
+    readonly property real _statsInsetPx:
+        viewer._showStatsPanel ? statsPanel.width + 8 : 0
 
     // ── Autoscale recompute (shared by Timer + displayMode change) ────
     // Global mode writes _auto* — the derived primaryYMin/Max bindings
@@ -1126,6 +1151,10 @@ Rectangle {
                         side: modelData.side
                         camId: modelData.camId
                         label: viewer._cellLabel(modelData.side, modelData.camId, false)
+                        // An averaged cell leaves naming its side to the
+                        // large side panel beside it, unless the
+                        // Statistics pane has replaced those panels.
+                        showLabel: modelData.camId !== -1 || !viewer._showClinicalPanels
                         windowSeconds: viewer.windowSeconds
                         followLive: viewer.followLive
                         windowStartT: viewer.windowStartT
@@ -1174,6 +1203,24 @@ Rectangle {
                     font.family: "Roboto Mono"
                 }
             }
+
+            // Statistics pane (#635), right of the plots. Fixed width
+            // (fillWidth explicitly false, as for the clinical column).
+            StatisticsPanel {
+                id: statsPanel
+                visible: viewer._showStatsPanel
+                Layout.fillWidth: false
+                Layout.fillHeight: true
+                Layout.preferredWidth: implicitWidth
+                host: viewer
+                source: viewer.scanSource
+                cells: viewer._activeCellModel
+                primaryMetric: viewer._displayPair.primary
+                secondaryMetric: viewer._displayPair.secondary
+                primaryColor: viewer._traceColorForMetric(viewer._displayPair.primary)
+                secondaryColor: viewer._traceColorForMetric(viewer._displayPair.secondary)
+                readoutT: viewer.liveEdgeSnapshot
+            }
         }
 
         PlotScrubber {
@@ -1219,7 +1266,7 @@ Rectangle {
                            + (viewer._showBackToLive
                               ? backToLiveOverlay.height + viewer._overlayMarginPx
                               : 0)
-        anchors.rightMargin: viewer._overlayEdgeMarginPx
+        anchors.rightMargin: viewer._overlayEdgeMarginPx + viewer._statsInsetPx
         color: AppTheme.overlayBgSolid
         border.color: AppTheme.borderSubtle
         border.width: 1
@@ -1245,15 +1292,9 @@ Rectangle {
                     viewer.scanSource.value_at(c.side, c.camId, primMetric, t))
                 var sv = viewer.clampForDisplay(secMetric,
                     viewer.scanSource.value_at(c.side, c.camId, secMetric, t))
-                // Clinical mode uses camId=-1 for the side-averaged stream;
-                // (c.camId + 1) would render "L0"/"R0" instead of the
-                // cell's own "LEFT AVG" / "RIGHT AVG" label. Aggregate
-                // pairs read "L1+8".
-                var label = c.camId === -1
-                    ? c.side.charAt(0).toUpperCase() + " AVG"
-                    : viewer._cellLabel(c.side, c.camId, true)
                 rows.push({
-                    label: label,
+                    // "L3", "L1+8" (Aggregate) or "L AVG" (side average).
+                    label: viewer._cellLabel(c.side, c.camId, true),
                     pVal: pv, pColor: primColor,
                     sVal: sv, sColor: secColor,
                 })
@@ -1356,7 +1397,7 @@ Rectangle {
         anchors.top: parent.top
         anchors.right: parent.right
         anchors.topMargin: viewer._overlayEdgeMarginPx
-        anchors.rightMargin: viewer._overlayEdgeMarginPx
+        anchors.rightMargin: viewer._overlayEdgeMarginPx + viewer._statsInsetPx
         z: 6
         color: AppTheme.overlayBg
         border.color: AppTheme.accentRed
@@ -1448,14 +1489,15 @@ Rectangle {
     // menu of the canonical zoom options when clicked. The three-dot
     // button to its right opens a popup of segmented switches (#622):
     // research view mode (#606, #621), scale (fixed / global / per-plot,
-    // #452) and metric pair, plus the dev-only profiler switch.
+    // #452), metric pair and the Statistics pane (#635), plus the dev-only
+    // profiler switch.
     Row {
         id: bottomRightOverlay
         visible: viewer.scanSource !== null
         spacing: 8
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        anchors.rightMargin: viewer._overlayEdgeMarginPx
+        anchors.rightMargin: viewer._overlayEdgeMarginPx + viewer._statsInsetPx
         anchors.bottomMargin: viewer._overlayBottomMarginPx
         z: 6
 
@@ -1658,10 +1700,10 @@ Rectangle {
                     // label and option lengths.
                     readonly property real labelWidth: Math.max(
                         viewLabel.implicitWidth, scaleLabel.implicitWidth,
-                        metricsLabel.implicitWidth)
+                        metricsLabel.implicitWidth, statsLabel.implicitWidth)
                     readonly property real selectorWidth: Math.max(
                         viewModeSelector.width, scaleSelector.width,
-                        metricsSelector.width)
+                        metricsSelector.width, statsSelector.width)
 
                     // Research view mode (#606): Individual (one plot per
                     // camera) | Aggregate (one plot per mirrored camera
@@ -1771,6 +1813,42 @@ Rectangle {
                                 current: viewer.displayMode
                                 onPicked: function(value) {
                                     viewer.displayModeToggleRequested(value === "bfi_bvi")
+                                }
+                            }
+                        }
+                    }
+
+                    // Statistics pane (#635): Off | On. Same gate as the
+                    // View row (viewer.statsActive).
+                    Row {
+                        id: statsRow
+                        visible: !viewer.clinicalMode && !viewer.effectiveClinical
+                        spacing: 10
+                        Text {
+                            id: statsLabel
+                            width: popupColumn.labelWidth
+                            anchors.verticalCenter: statsSlot.verticalCenter
+                            text: "Statistics"
+                            color: AppTheme.textSecondary
+                            font.pixelSize: 12
+                            font.family: "Roboto Mono"
+                        }
+                        Item {
+                            id: statsSlot
+                            width: popupColumn.selectorWidth
+                            height: statsSelector.height
+                            PopupSegmented {
+                                id: statsSelector
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                Accessible.name: "Statistics"
+                                options: [
+                                    { value: "off", label: "Off" },
+                                    { value: "on",  label: "On" }
+                                ]
+                                current: viewer.statsActive ? "on" : "off"
+                                onPicked: function(value) {
+                                    MotionInterface.setConfig("showStatistics", value === "on")
+                                    console.info("[Plot] statistics → " + value)
                                 }
                             }
                         }
