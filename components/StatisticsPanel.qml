@@ -31,15 +31,77 @@ Rectangle {
     // plot rate would not be readable anyway.
     readonly property int refreshMs: 100
 
-    // ── Layout constants ───────────────────────────────────────────────
+    // ── Sizing ─────────────────────────────────────────────────────────
+    // The numbers are as large as lets every line (the two header lines,
+    // the section titles and the rows) fit the pane's height without
+    // scrolling, between _minFontPx and _maxFontPx: 16 cameras on a short
+    // window get the small end (and scroll if even that does not fit),
+    // the Average view's few rows the large end. Line pitch and column
+    // widths follow the font, so the pane widens with it.
+    readonly property int _minFontPx: 14
+    readonly property int _maxFontPx: 22
     readonly property real _pad: 12
-    readonly property real _labelWidth: 80
-    readonly property real _valueWidth: 52
-    readonly property real _groupGap: 8
-    // Fixed so a label whose "−" falls back to another font's taller line
-    // does not stretch its row.
-    readonly property real _rowHeight: 16
+    readonly property real _sectionGap: 10
+    readonly property int _lineCount: {
+        var n = 2
+        for (var i = 0; i < panel.model.length; i++)
+            n += 1 + panel.model[i].rows.length
+        return n
+    }
+    readonly property int _fontPx: {
+        // Everything but the lines: padding, divider + its margins, and
+        // the gaps between sections.
+        var fixed = 2 * panel._pad + 9
+            + panel._sectionGap * Math.max(0, panel.model.length - 1)
+        var pitch = (panel.height - fixed) / Math.max(1, panel._lineCount)
+        return Math.max(panel._minFontPx,
+                        Math.min(panel._maxFontPx, Math.floor(pitch / 1.5)))
+    }
+    // Fixed per line, also so a label whose "−" falls back to another
+    // font's taller line does not stretch its row.
+    readonly property real _rowHeight: Math.floor(panel._fontPx * 1.5)
+    readonly property int _labelFontPx: Math.round(panel._fontPx * 0.85)
+    readonly property int _captionFontPx: Math.round(panel._fontPx * 0.72)
+    readonly property real _groupGap: Math.round(panel._fontPx * 0.9)
+    // Inset of the text from its stripe's edges.
+    readonly property real _cellPad: Math.round(panel._fontPx * 0.35)
+    // Measured, not assumed: the app's "Roboto Mono" is not bundled, so
+    // the text falls back to the platform font.
+    readonly property real _valueWidth:
+        Math.ceil(valueMetrics.advanceWidth + panel._fontPx * 0.5 + panel._cellPad)
+    readonly property real _labelWidth:
+        Math.ceil(labelMetrics.advanceWidth + panel._fontPx * 0.6 + panel._cellPad)
     implicitWidth: 2 * _pad + _labelWidth + 4 * _valueWidth + _groupGap
+
+    // Lining, equal-width digits so the columns line up and read as a
+    // table: "Roboto Mono" is not bundled, and some platform fallbacks
+    // default to old-style figures that dip below the baseline.
+    readonly property var _figureFeatures: ({ "lnum": 1, "tnum": 1 })
+
+    // The widest number a column holds (a signed three-digit mean
+    // differential; BFI/BVI stay within ±10.00).
+    TextMetrics {
+        id: valueMetrics
+        font.family: "Roboto Mono"
+        font.pixelSize: panel._fontPx
+        font.weight: Font.Medium
+        font.features: panel._figureFeatures
+        text: "+000.00"
+    }
+    TextMetrics {
+        id: labelMetrics
+        font.family: "Roboto Mono"
+        font.pixelSize: panel._labelFontPx
+        text: {
+            var longest = ""
+            for (var i = 0; i < panel.model.length; i++) {
+                var rows = panel.model[i].rows
+                for (var j = 0; j < rows.length; j++)
+                    if (rows[j].label.length > longest.length) longest = rows[j].label
+            }
+            return longest
+        }
+    }
 
     color: AppTheme.plotCellBg
     border.color: AppTheme.borderSubtle
@@ -174,53 +236,56 @@ Rectangle {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.margins: panel._pad
-        spacing: 4
-
-        Text {
-            text: "STATISTICS"
-            color: AppTheme.textSecondary
-            font.pixelSize: 11
-            font.weight: Font.DemiBold
-            font.family: "Roboto Mono"
-        }
 
         // Metric names, each over its Live | low-pass column pair.
         Row {
-            Item { width: panel._labelWidth; height: 1 }
+            Item { width: panel._labelWidth; height: panel._rowHeight }
             Text {
                 width: 2 * panel._valueWidth
+                height: panel._rowHeight
+                leftPadding: panel._cellPad
+                rightPadding: panel._cellPad
                 horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
                 text: panel.primaryMetric.toUpperCase()
                 color: panel.primaryColor
-                font.pixelSize: 12
+                font.pixelSize: panel._fontPx
                 font.weight: Font.DemiBold
                 font.family: "Roboto Mono"
             }
-            Item { width: panel._groupGap; height: 1 }
+            Item { width: panel._groupGap; height: panel._rowHeight }
             Text {
                 width: 2 * panel._valueWidth
+                height: panel._rowHeight
+                leftPadding: panel._cellPad
+                rightPadding: panel._cellPad
                 horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
                 text: panel.secondaryMetric.toUpperCase()
                 color: panel.secondaryColor
-                font.pixelSize: 12
+                font.pixelSize: panel._fontPx
                 font.weight: Font.DemiBold
                 font.family: "Roboto Mono"
             }
         }
         Row {
-            Item { width: panel._labelWidth; height: 1 }
+            Item { width: panel._labelWidth; height: panel._rowHeight }
             Repeater {
                 model: ["Live", panel.lpfCutoffHz + " Hz", "Live", panel.lpfCutoffHz + " Hz"]
                 delegate: Text {
                     width: panel._valueWidth + (index === 2 ? panel._groupGap : 0)
+                    height: panel._rowHeight
+                    rightPadding: panel._cellPad
                     horizontalAlignment: Text.AlignRight
+                    verticalAlignment: Text.AlignVCenter
                     text: modelData
                     color: AppTheme.textTertiary
-                    font.pixelSize: 10
+                    font.pixelSize: panel._captionFontPx
                     font.family: "Roboto Mono"
                 }
             }
         }
+        Item { width: 1; height: 4 }
         Rectangle {
             width: parent.width
             height: 1
@@ -247,7 +312,7 @@ Rectangle {
         Column {
             id: sectionsColumn
             width: body.width
-            spacing: 10
+            spacing: panel._sectionGap
 
             Repeater {
                 model: panel.model
@@ -255,44 +320,64 @@ Rectangle {
                     id: section
                     readonly property var sectionData: modelData
                     width: sectionsColumn.width
-                    spacing: 2
 
                     Text {
+                        height: panel._rowHeight
+                        verticalAlignment: Text.AlignVCenter
                         text: section.sectionData.title
                         color: AppTheme.textSecondary
-                        font.pixelSize: 11
+                        font.pixelSize: panel._labelFontPx
                         font.weight: Font.DemiBold
                         font.family: "Roboto Mono"
                     }
                     Repeater {
                         model: section.sectionData.rows
-                        delegate: Row {
+                        delegate: Item {
                             id: statRow
                             readonly property var rowData: modelData
                             // Re-read on every poll (_snapshot) in place.
                             readonly property var values: panel.rowValues(rowData)
-                            Text {
-                                width: panel._labelWidth
-                                height: panel._rowHeight
-                                verticalAlignment: Text.AlignVCenter
-                                text: statRow.rowData.label
-                                color: AppTheme.textSecondary
-                                font.pixelSize: 11
-                                font.family: "Roboto Mono"
+                            width: section.width
+                            height: panel._rowHeight
+
+                            // Zebra stripe: keeps the eye on one row across
+                            // the four columns.
+                            Rectangle {
+                                anchors.fill: parent
+                                radius: 3
+                                color: index % 2 === 0
+                                    ? Qt.alpha(AppTheme.textPrimary, 0.06)
+                                    : "transparent"
                             }
-                            Repeater {
-                                model: 4
-                                delegate: Text {
-                                    objectName: "statValue"
-                                    width: panel._valueWidth + (index === 2 ? panel._groupGap : 0)
+                            Row {
+                                anchors.fill: parent
+                                Text {
+                                    width: panel._labelWidth
                                     height: panel._rowHeight
+                                    leftPadding: panel._cellPad
                                     verticalAlignment: Text.AlignVCenter
-                                    horizontalAlignment: Text.AlignRight
-                                    text: panel._fmt(statRow.values[index],
-                                                     section.sectionData.diff)
-                                    color: AppTheme.textPrimary
-                                    font.pixelSize: 11
+                                    text: statRow.rowData.label
+                                    color: AppTheme.textSecondary
+                                    font.pixelSize: panel._labelFontPx
                                     font.family: "Roboto Mono"
+                                }
+                                Repeater {
+                                    model: 4
+                                    delegate: Text {
+                                        objectName: "statValue"
+                                        width: panel._valueWidth + (index === 2 ? panel._groupGap : 0)
+                                        height: panel._rowHeight
+                                        rightPadding: panel._cellPad
+                                        verticalAlignment: Text.AlignVCenter
+                                        horizontalAlignment: Text.AlignRight
+                                        text: panel._fmt(statRow.values[index],
+                                                         section.sectionData.diff)
+                                        color: AppTheme.textPrimary
+                                        font.pixelSize: panel._fontPx
+                                        font.weight: Font.Medium
+                                        font.family: "Roboto Mono"
+                                        font.features: panel._figureFeatures
+                                    }
                                 }
                             }
                         }
