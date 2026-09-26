@@ -389,6 +389,31 @@ def test_individual_rows_and_mirrored_differentials(stats_viewer):
             (_bvi("left", c) - _bvi("right", o),) * 2, abs=1e-5)
 
 
+def test_text_is_as_large_as_fits_the_pane(stats_viewer):
+    """The font grows until every line fills the pane's height, within
+    its bounds, and the columns widen with it. (The layout sets the
+    pane's height in the app; this harness has no window, so the test
+    sets it.)"""
+    viewer, stub, show = stats_viewer
+    show(_scan_source())
+    stub.setConfig("showStatistics", True)
+    panel = _panel(viewer)
+    lo, hi = panel.property("_minFontPx"), panel.property("_maxFontPx")
+    # 2 header lines + 3 section titles + 8 + 8 + 8 rows.
+    assert panel.property("_lineCount") == 29
+    panel.setProperty("height", 300)
+    assert panel.property("_fontPx") == lo        # too short: floor, scrolls
+    panel.setProperty("height", 820)
+    font = panel.property("_fontPx")
+    assert lo < font < hi
+    fixed = 2 * 12 + 9 + 2 * 10                   # padding, divider, gaps
+    assert 29 * panel.property("_rowHeight") <= 820 - fixed
+    width = panel.property("width")
+    stub.setConfig("plotViewMode", "average")     # 2 + 3 titles + 3 rows
+    assert panel.property("_fontPx") == hi
+    assert panel.property("width") > width
+
+
 def test_a_refresh_updates_the_rows_in_place(stats_viewer):
     """Polling at 10 Hz must not rebuild the rows (a new model array would
     make the Repeaters recreate every Text each time): the same Text items
