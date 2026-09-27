@@ -210,7 +210,14 @@ def test_prepare_debug_bundle_creates_zip_and_logs(tmp_path):
     logs = tmp_path / "logs"
     logs.mkdir()
     (logs / "open-motion-x.log").write_text("hello", encoding="utf-8")
-    c = _connector(tmp_path, scan_db_path=db)
+    support_email = "operator-support@example.test"
+    c = _connector(
+        tmp_path,
+        scan_db_path=db,
+        app_config={"engineeringMode": False, "support_email": support_email},
+    )
+    notifications = []
+    c.notificationRequested.connect(notifications.append)
     # Don't spawn a real file-explorer process during the test.
     c._reveal_in_explorer = lambda p: None
     # Call the worker body directly — the prepareDebugLogBundle slot is
@@ -223,6 +230,14 @@ def test_prepare_debug_bundle_creates_zip_and_logs(tmp_path):
     assert any(n.startswith("logs/") for n in names)
     assert "system_info.txt" in names
     assert "debug_bundle_created" in _types(c)
+    success_toast = next(
+        notification for notification in notifications
+        if notification["tag"] == "debug-bundle"
+        and notification["type"] == "success"
+    )
+    assert success_toast["text"].endswith(
+        f"Please email this file to {support_email}."
+    )
 
 
 # ── Filtered entries + event types (#226) ───────────────────────────────
