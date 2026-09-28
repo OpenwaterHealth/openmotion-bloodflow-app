@@ -1,15 +1,18 @@
 """
-Unit tests for the low-storage scan guard (issue #506).
+Unit tests for the low-storage checks (issue #506).
 
 What this exercises
 -------------------
-  - ``utils.disk_space`` — the pure helpers: free-space query (including a
-    not-yet-created data root), the scan-size estimate, the start
-    shortfall and the mid-scan floor decision.
-  - ``MotionConnector._storage_allows_scan`` — the pre-scan gate that
-    refuses a scan with the E-305 modal before any scan state is touched.
-  - ``MotionConnector._abort_scan_low_storage`` and the watchdog hook in
-    ``_on_dropout_check`` — the mid-scan stop with the E-306 modal.
+  - ``utils.disk_space`` — the free-space query (including a not-yet-
+    created data root) and the ``below`` threshold decision.
+  - ``MotionConnector.check_startup_storage`` — E-107 critical modal at
+    startup under ``minFreeDiskMb`` (1 GB).
+  - ``MotionConnector.checkStorageForScan`` — the Start-button gate (also
+    the startCapture backstop): E-305 critical modal under 1 GB.
+  - ``MotionConnector._on_dropout_check`` → ``_check_scan_storage`` — a
+    running scan gets ONE warning toast when free space drops under 1 GB,
+    and is stopped gracefully with a warning toast (no modal) under
+    ``scanStopFreeDiskMb`` (100 MB).
 
 Connector methods are called unbound on a fake connector, same pattern as
 tests/test_scan_stall_watchdog.py.
@@ -54,43 +57,12 @@ def test_free_bytes_returns_none_when_query_fails(monkeypatch, tmp_path):
     assert disk_space.free_bytes(str(tmp_path)) is None
 
 
-def test_estimate_db_only_scales_with_duration_and_cameras():
-    one = disk_space.estimate_scan_bytes(60, 1)
-    assert one == disk_space.DB_BYTES_PER_CAMERA_S * 60
-    assert disk_space.estimate_scan_bytes(60, 16) == 16 * one
-    assert disk_space.estimate_scan_bytes(60, 0) == 0
-
-
-def test_estimate_raw_csv_contract():
-    base = disk_space.estimate_scan_bytes(100, 1, raw_csv_max_s=0)
-    raw_rate = disk_space.RAW_CSV_BYTES_PER_CAMERA_S
-    # None = raw for the whole scan.
-    assert disk_space.estimate_scan_bytes(100, 1, None) == base + raw_rate * 100
-    # A cap shorter than the scan bounds the raw part...
-    assert disk_space.estimate_scan_bytes(100, 1, 30) == base + raw_rate * 30
-    # ...and one longer than the scan does not inflate it.
-    assert disk_space.estimate_scan_bytes(100, 1, 999) == base + raw_rate * 100
-
-
-def test_estimate_auto_export_adds_a_db_sized_copy():
-    base = disk_space.estimate_scan_bytes(100, 2)
-    assert disk_space.estimate_scan_bytes(100, 2, auto_export=True) == 2 * base
-
-
-def test_start_shortfall():
-    assert disk_space.start_shortfall(2000, 500, 1000) is None
-    assert disk_space.start_shortfall(1500, 500, 1000) is None  # exactly fits
-    assert disk_space.start_shortfall(1200, 500, 1000) == 300
-    # Unknown free space never blocks.
-    assert disk_space.start_shortfall(None, 500, 1000) is None
-
-
-def test_below_floor():
-    assert disk_space.below_floor(100, 256) is True
-    assert disk_space.below_floor(256, 256) is True
-    assert disk_space.below_floor(257, 256) is False
-    assert disk_space.below_floor(None, 256) is False
-    assert disk_space.below_floor(0, 0) is False  # disabled
+def test_below():
+    assert disk_space.below(1023 * MB, 1024) is True
+    assert disk_space.below(1024 * MB, 1024) is False
+    assert disk_space.below(None, 1024) is False   # unknown never blocks
+    assert disk_space.below(0, 0) is False         # disabled
+    assert disk_space.below(0, -1) is False
 
 
 # ── fake connector ──────────────────────────────────────────────────────
@@ -105,23 +77,23 @@ class _Signal:
 
 
 class _FakeConnector:
-    """Just the attributes the storage-guard methods touch."""
+    """Just the attributes the storage checks touch."""
 
-    _storage_allows_scan = MotionConnector._storage_allows_scan
+    check_startup_storage = MotionConnector.check_startup_storage
+    checkStorageForScan = MotionConnector.checkStorageForScan
+    _storage_detail = MotionConnector._storage_detail
     _storage_check_due = MotionConnector._storage_check_due
-    _abort_scan_low_storage = MotionConnector._abort_scan_low_storage
+    _check_scan_storage = MotionConnector._check_scan_storage
+    _stop_scan_low_storage = MotionConnector._stop_scan_low_storage
     _dismiss_dropout_toasts = MotionConnector._dismiss_dropout_toasts
     _note_scan_abort = MotionConnector._note_scan_abort
-    _auto_export_enabled = MotionConnector._auto_export_enabled
 
     def __init__(self, data_root):
         self._data_root = data_root
-        self._app_config = {"clinicalMode": False, "engineeringMode": False}
-        self._write_raw_csv = False
-        self._raw_csv_duration_sec = None
-        self._scan_min_free_disk_mb = 1024.0
-        self._scan_stop_free_disk_mb = 256.0
+        self._min_free_disk_mb = 1024.0
+        self._scan_stop_free_disk_mb = 100.0
         self._storage_next_check_mono = 0.0
+        self._storage_warned = False
         self._scan_abort_notified = False
         self._scan_abort_code = None
         self._scan_abort_reason = ""
@@ -131,6 +103,7 @@ class _FakeConnector:
         self.captureLog = _Signal()
         self.notificationDismissByTagRequested = _Signal()
         self.criticals = []
+        self.toasts = []
         self.stop_calls = 0
 
     def _scan_elapsed_str(self):
@@ -138,6 +111,11 @@ class _FakeConnector:
 
     def _raise_critical(self, code, detail=""):
         self.criticals.append((code, detail))
+
+    def notify(self, text, type_="info", duration_ms=4000,
+               dismissible=True, tag=""):
+        self.toasts.append((text, type_, duration_ms, tag))
+        return len(self.toasts)
 
     def stopCapture(self):
         self.stop_calls += 1
@@ -158,106 +136,130 @@ def free_space(monkeypatch):
     return state
 
 
-# ── pre-scan gate (E-305) ───────────────────────────────────────────────
+@pytest.fixture
+def fake(tmp_path):
+    return _FakeConnector(str(tmp_path))
 
 
-def test_start_allowed_with_ample_space(free_space, tmp_path):
-    fake = _FakeConnector(str(tmp_path))
-    assert MotionConnector._storage_allows_scan(fake, 3600, 0xFF, 0xFF)
+def _tick(fake):
+    """One watchdog tick with the poll rate limit cleared."""
+    fake._storage_next_check_mono = 0.0
+    MotionConnector._on_dropout_check(fake)
+
+
+# ── 1. startup (E-107) ──────────────────────────────────────────────────
+
+
+def test_startup_under_1gb_raises_e107(free_space, fake):
+    free_space["free"] = 900 * MB
+    fake.check_startup_storage()
+    assert len(fake.criticals) == 1
+    code, detail = fake.criticals[0]
+    assert code == "E-107"
+    assert "900 MB free" in detail
+
+
+def test_startup_with_space_or_unknown_is_silent(free_space, monkeypatch, fake):
+    fake.check_startup_storage()
+    monkeypatch.setattr(disk_space, "free_bytes", lambda _p: None)
+    fake.check_startup_storage()
     assert fake.criticals == []
 
 
-def test_start_refused_below_reserve_raises_e305(free_space, tmp_path):
-    free_space["free"] = 900 * MB  # under the 1024 MB reserve alone
-    fake = _FakeConnector(str(tmp_path))
-    assert not MotionConnector._storage_allows_scan(fake, 60, 0xC3, 0xC3)
-    assert len(fake.criticals) == 1
-    code, detail = fake.criticals[0]
-    assert code == "E-305"
-    assert "900 MB free" in detail
-    assert "1024 MB reserve" in detail
+# ── 4. Start button (E-305) ─────────────────────────────────────────────
+
+
+def test_start_under_1gb_raises_e305_and_refuses(free_space, fake):
+    free_space["free"] = 1000 * MB
+    assert fake.checkStorageForScan() is False
+    assert [c[0] for c in fake.criticals] == ["E-305"]
+    assert "1000 MB free" in fake.criticals[0][1]
     # A refusal is not a scan abort: nothing started, nothing to record.
     assert fake._scan_abort_code is None
     assert fake.stop_calls == 0
 
 
-def test_raw_csv_estimate_can_refuse_a_long_research_scan(free_space, tmp_path):
-    # 5 GB free: fine for an hour DB-only, not with raw CSVs on 16 cameras
-    # (~9 GB estimated).
-    free_space["free"] = 5 * 1024 * MB
-    fake = _FakeConnector(str(tmp_path))
-    assert MotionConnector._storage_allows_scan(fake, 3600, 0xFF, 0xFF)
-    fake._write_raw_csv = True
-    assert not MotionConnector._storage_allows_scan(fake, 3600, 0xFF, 0xFF)
-    assert fake.criticals[-1][0] == "E-305"
-
-
-def test_clinical_build_ignores_stale_raw_csv_toggle(free_space, tmp_path):
-    """Raw CSVs are never written on a plain clinical build (#43), so a
-    stale writeRawCsv toggle must not inflate the estimate either."""
-    free_space["free"] = 5 * 1024 * MB
-    fake = _FakeConnector(str(tmp_path))
-    fake._app_config["clinicalMode"] = True
-    fake._write_raw_csv = True
-    assert MotionConnector._storage_allows_scan(fake, 3600, 0xFF, 0xFF)
-
-
-def test_start_gate_disabled_and_unknown_free_never_block(
-        free_space, monkeypatch, tmp_path):
-    free_space["free"] = 1 * MB
-    fake = _FakeConnector(str(tmp_path))
-    fake._scan_min_free_disk_mb = 0
-    assert MotionConnector._storage_allows_scan(fake, 60, 0xFF, 0xFF)
-
-    fake._scan_min_free_disk_mb = 1024.0
-    monkeypatch.setattr(disk_space, "free_bytes", lambda _p: None)
-    assert MotionConnector._storage_allows_scan(fake, 60, 0xFF, 0xFF)
+def test_start_allowed_at_or_above_1gb(free_space, fake):
+    free_space["free"] = 1024 * MB
+    assert fake.checkStorageForScan() is True
     assert fake.criticals == []
 
 
-# ── mid-scan stop (E-306) ───────────────────────────────────────────────
+def test_start_disabled_or_unknown_never_blocks(free_space, monkeypatch, fake):
+    free_space["free"] = 1 * MB
+    fake._min_free_disk_mb = 0
+    assert fake.checkStorageForScan() is True
+    fake._min_free_disk_mb = 1024.0
+    monkeypatch.setattr(disk_space, "free_bytes", lambda _p: None)
+    assert fake.checkStorageForScan() is True
+    assert fake.criticals == []
 
 
-def test_abort_low_storage_raises_e306_and_stops_capture(tmp_path):
-    fake = _FakeConnector(str(tmp_path))
-    MotionConnector._abort_scan_low_storage(fake, 200 * MB)
-
-    assert fake._scan_abort_notified is True
-    assert fake.stop_calls == 1
-    assert fake.criticals == [
-        ("E-306", "200 MB free on the data drive (scan elapsed 00:02:05)")]
-    assert fake._scan_abort_code == "E-306"
-    # The modal supersedes per-camera dropout toasts (#489 pattern).
-    assert [c[0] for c in fake.notificationDismissByTagRequested.calls] == [
-        "dropout_left_2"]
-    (msg,) = fake.captureLog.calls[0]
-    assert "almost full" in msg and "[00:02:05]" in msg
+# ── 2. mid-scan warning at 1 GB ─────────────────────────────────────────
 
 
-def test_watchdog_stops_scan_at_floor_even_with_trigger_off(
-        free_space, tmp_path):
-    free_space["free"] = 100 * MB
-    fake = _FakeConnector(str(tmp_path))
-    MotionConnector._on_dropout_check(fake)
-    assert fake.stop_calls == 1
-    assert fake.criticals[0][0] == "E-306"
+def test_scan_warns_once_when_crossing_1gb(free_space, fake):
+    free_space["free"] = 2048 * MB
+    _tick(fake)
+    assert fake.toasts == []
 
-    # One-shot: later ticks don't stack a second modal.
-    fake._storage_next_check_mono = 0.0
-    MotionConnector._on_dropout_check(fake)
-    assert fake.stop_calls == 1
+    free_space["free"] = 900 * MB
+    _tick(fake)
+    assert len(fake.toasts) == 1
+    text, type_, duration_ms, tag = fake.toasts[0]
+    assert type_ == "warning"
+    assert "900 MB free" in text
+    assert duration_ms == 0  # sticky until dismissed
+    assert tag == motion_connector._LOW_STORAGE_TOAST_TAG
 
-
-def test_watchdog_leaves_scan_running_above_floor(free_space, tmp_path):
-    free_space["free"] = 300 * MB
-    fake = _FakeConnector(str(tmp_path))
-    MotionConnector._on_dropout_check(fake)
+    # Still under 1 GB on later ticks: no repeat.
+    free_space["free"] = 800 * MB
+    _tick(fake)
+    assert len(fake.toasts) == 1
     assert fake.stop_calls == 0
     assert fake.criticals == []
 
 
-def test_watchdog_polls_storage_at_most_every_interval(
-        monkeypatch, tmp_path):
+# ── 3. mid-scan stop at 100 MB ──────────────────────────────────────────
+
+
+def test_scan_stops_under_100mb_with_toast_not_modal(free_space, fake):
+    free_space["free"] = 90 * MB
+    _tick(fake)
+
+    assert fake.stop_calls == 1
+    assert fake.criticals == []  # graceful stop, no critical modal
+    assert fake._scan_abort_notified is True
+    assert fake._scan_abort_code == "E-306"  # scan_ended audit cause
+    text, type_, duration_ms, tag = fake.toasts[-1]
+    assert type_ == "warning"
+    assert text.startswith("Scan stopped")
+    assert "almost full" in text and "90 MB free" in text
+    assert tag == motion_connector._LOW_STORAGE_TOAST_TAG
+    # Per-camera dropout toasts are superseded (#489 pattern).
+    assert [c[0] for c in fake.notificationDismissByTagRequested.calls] == [
+        "dropout_left_2"]
+
+    # One-shot: later ticks don't stop again.
+    _tick(fake)
+    assert fake.stop_calls == 1
+
+
+def test_scan_keeps_running_at_100mb_and_above(free_space, fake):
+    free_space["free"] = 100 * MB
+    _tick(fake)
+    assert fake.stop_calls == 0
+
+
+def test_storage_check_runs_even_with_trigger_off(free_space, fake):
+    """The pipeline writes during the whole capture, not just trigger-ON."""
+    fake._trigger_state = "OFF"
+    free_space["free"] = 50 * MB
+    _tick(fake)
+    assert fake.stop_calls == 1
+
+
+def test_watchdog_polls_storage_at_most_every_interval(monkeypatch, fake):
     calls = []
 
     def counting_free(path):
@@ -267,7 +269,6 @@ def test_watchdog_polls_storage_at_most_every_interval(
     monkeypatch.setattr(disk_space, "free_bytes", counting_free)
     now = {"t": 1000.0}
     monkeypatch.setattr(motion_connector.time, "monotonic", lambda: now["t"])
-    fake = _FakeConnector(str(tmp_path))
 
     MotionConnector._on_dropout_check(fake)       # first tick checks
     now["t"] += 1.0

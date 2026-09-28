@@ -50,6 +50,16 @@ identities could not be read.
 **What to do:** Power-cycle the sensor and reconnect. If only some cameras are
 affected, the camera board may need service.
 
+### E-107 — Storage almost full
+The drive that stores scan data has less than 1 GB free. Scans cannot be started
+until space is freed. Checked once at app launch, against `minFreeDiskMb`
+(default 1024 MB); the modal detail shows the free space and the data folder. A
+free-space query that fails raises nothing.
+
+**What to do:** Free up space on the data drive (or export and remove old
+scans) before starting a scan — no restart needed, Start re-checks. Contact
+support if the drive should not be full.
+
 ## E-2xx — Laser safety
 
 ### E-201 — Laser safety monitor unresponsive
@@ -106,27 +116,15 @@ device while not scanning, does not raise this.
 new scan. If it keeps happening, contact support.
 
 ### E-305 — Not enough storage to start scan
-The drive that stores scan data does not have enough free space for this scan,
-so the scan was not started and the laser did not fire. Checked at scan start:
-free space on the data drive must cover the scan's estimated output (per-camera
-database rows, plus raw CSVs and the scan-end CSV export when those are enabled,
-over the scan duration) plus a `scanMinFreeDiskMb` reserve (default 1024 MB).
-The modal detail shows the free space, the estimate and the reserve. A
-free-space query that fails does not block the scan.
+The drive that stores scan data has less than 1 GB free, so the scan was not
+started and the laser did not fire. Checked when **Start** is pressed — before
+the clinical pre-scan contact check — and again when the capture itself starts,
+against `minFreeDiskMb` (default 1024 MB). A free-space query that fails does
+not block the scan.
 
 **What to do:** Free up space on the data drive (or export and remove old
 scans), then start the scan again. Contact support if the drive should not be
 full.
-
-### E-306 — Storage almost full during scan
-The drive that stores scan data was nearly full, so the scan was stopped before
-storage ran out. Data captured up to that point was saved. While a scan runs the
-app re-checks free space every 5 s and stops the scan once it falls to
-`scanStopFreeDiskMb` (default 256 MB) — the remaining space lets the scan
-database finalize cleanly instead of failing on a full disk.
-
-**What to do:** Free up space on the data drive (or export and remove old
-scans) before starting another scan.
 
 ## Startup warnings (connection watchdog)
 
@@ -155,6 +153,24 @@ Tunable in [`config/app_config.json`](../config/app_config.json):
 
 Disconnects that happen *after* startup are handled by the normal connection
 status UI, not by this watchdog.
+
+## Storage warnings (during a scan)
+
+While a scan runs the app re-checks free space on the data drive every 5 s.
+Both conditions are **yellow warning toasts** that stay until dismissed, not the
+critical modal:
+
+- **Below 1 GB free** (`minFreeDiskMb`) → shown once per scan: `"Storage is
+  running low: <n> MB free on the data drive. The scan will stop automatically
+  at 100 MB."` The scan keeps running.
+- **E-306 — below 100 MB free** (`scanStopFreeDiskMb`) → the scan is stopped
+  gracefully, exactly like pressing Stop, and the toast replaces the warning:
+  `"Scan stopped: the data drive is almost full (<n> MB free). Data captured so
+  far was saved. Free up space before the next scan."` The remaining space lets
+  the scan database finish writing. E-306 appears in the app log and as the
+  audit log's `scan_ended` abort code.
+
+Either threshold set to `0` or below disables its checks.
 
 ## Contacting support
 
