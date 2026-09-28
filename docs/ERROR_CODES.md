@@ -43,12 +43,19 @@ The laser may not operate correctly until this is resolved.
 **What to do:** Power-cycle the console and reconnect. If it persists, contact
 support — the console firmware or config may need attention.
 
-### E-105 — Camera power-on failed
-The sensor could not power on its cameras during initialization, so camera
-identities could not be read.
+### E-105 — Camera power failed
+The sensor could not power its cameras, so they cannot capture. Raised when the
+sensor refuses the camera power-on command, either during sensor initialization
+(camera identities could not be read) or when the cameras are powered up to
+start a scan or a contact-quality check (the scan or check does not start; the
+laser does not fire). The modal detail names the sensor side.
 
-**What to do:** Power-cycle the sensor and reconnect. If only some cameras are
-affected, the camera board may need service.
+A camera that loses power *during* a scan is not reported as E-105: the app
+cannot tell a power loss from other data-path stalls, so it surfaces as a
+per-camera "connection lost" toast, or E-303 if every camera stops.
+
+**What to do:** Power-cycle the sensor and reconnect. If it persists, or only
+some cameras are affected, the camera board may need service — contact support.
 
 ### E-107 — Storage almost full
 The drive that stores scan data has less than 1 GB free. Scans cannot be started
