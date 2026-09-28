@@ -48,10 +48,11 @@ def test_lookup_unknown_code_returns_generic_fallback():
 
 def test_expected_catalog_codes_present():
     expected = {
-        "E-101", "E-102", "E-103", "E-105",
+        "E-101", "E-102", "E-103", "E-105", "E-107",
         "E-201", "E-202", "E-203",
-        "E-301", "E-302", "E-303", "E-304",
+        "E-301", "E-302", "E-303", "E-304", "E-305",
     }
     # E-104/E-106 are intentionally absent: the connection watchdog surfaces
-    # them as warning toasts, not via this critical-modal registry.
+    # them as warning toasts, not via this critical-modal registry; E-306
+    # (low-storage scan stop, #506) is likewise a warning toast.
     assert expected == set(error_codes.ERROR_CODES.keys())

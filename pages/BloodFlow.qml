@@ -239,6 +239,10 @@ Rectangle {
                 // has been appended to scanNotes. Opening it here would
                 // race the append and pop an empty modal.
             } else {
+                // Low-storage gate (#506): under 1 GB free on the data
+                // drive the connector raises the E-305 critical modal and
+                // nothing starts — not even the clinical pre-scan check.
+                if (!MotionInterface.checkStorageForScan()) return
                 if (bloodFlow.clinicalMode) {
                     clinicalStartPending = true
                     contactQualityModal.preScanMode = true
