@@ -220,4 +220,25 @@ QtObject {
         if (dark && lum < 0.16) return Qt.color("#E8E8EC")
         return col
     }
+
+    // Text drawn in a trace's color (plot value / axis labels) needs more
+    // contrast than a 1 px line does: a saturated dark trace color such as
+    // the default BVI blue reads fine as a line but its small numbers
+    // blur into the dark cell. Blend such colors toward white (dark mode)
+    // or black (light mode) until they clear a minimum luminance, keeping
+    // the hue so the number still matches its trace.
+    function readableTextInk(c) {
+        var col = readableInk(c)
+        var lum = 0.299 * col.r + 0.587 * col.g + 0.114 * col.b
+        if (dark && lum < 0.55) {
+            var k = (0.55 - lum) / (1 - lum)
+            return Qt.rgba(col.r + (1 - col.r) * k, col.g + (1 - col.g) * k,
+                           col.b + (1 - col.b) * k, 1)
+        }
+        if (!dark && lum > 0.40) {
+            var s = 0.40 / lum
+            return Qt.rgba(col.r * s, col.g * s, col.b * s, 1)
+        }
+        return col
+    }
 }

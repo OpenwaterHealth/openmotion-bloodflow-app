@@ -5,7 +5,9 @@ import OpenMotion 1.0
 // on a ScanDataSource. The cell tracks the live edge of the source
 // and renders the last `windowSeconds` of samples, strided to at most
 // 2 * width samples per paint. Y-axis tick labels (max/mid/min) render
-// per metric: primary on the left edge, secondary on the right.
+// per metric: primary on the left edge, secondary on the right. They are
+// QML Text items over the canvas, not canvas text, so every label in the
+// cell shares one font and the primary top tick can join the label block.
 Item {
     id: cell
 
@@ -94,7 +96,8 @@ Item {
     onYMaxChanged: traceCanvas.requestPaint()
     onSecondaryYMinChanged: traceCanvas.requestPaint()
     onSecondaryYMaxChanged: traceCanvas.requestPaint()
-    onShowAxisLabelsChanged: traceCanvas.requestPaint()
+    // (Axis tick labels are QML Text items below, bound to the bounds
+    // directly, so they need no repaint.)
     // Note: cursorT changes do NOT trigger a direct repaint — that
     // would spam paints on every mouse-move event. Instead the viewer
     // sets _dirty on cursorAt() so the next paintThrottle tick
@@ -117,33 +120,14 @@ Item {
         return v.toFixed(span >= 100 ? 0 : span >= 2 ? 1 : 2)
     }
 
-    // Y-axis tick labels — primary bounds down the left edge, secondary
-    // down the right, colored to match their traces. Drawn even when no
-    // source is bound so an idle grid still shows its scale. Skipped for
-    // very narrow cells alongside the midline gridline.
-    function _drawAxisLabels(ctx, w, h) {
-        if (w < 60) return
-        // Context2D validates font families strictly (unlike Text, which
-        // silently falls back), so an unregistered "Roboto Mono" warns on
-        // every paint. Keep it as the preferred family but add a generic
-        // monospace fallback to satisfy the parser and silence the spam.
-        ctx.font = "9px 'Roboto Mono', monospace"
-        var midY = Math.floor(h / 2)
-        var span = cell.yMax - cell.yMin
-        ctx.fillStyle = cell.traceColor
-        ctx.textAlign = "left"
-        ctx.fillText(_fmtAxis(cell.yMax, span), 2, 9)
-        ctx.fillText(_fmtAxis((cell.yMin + cell.yMax) / 2, span), 2, midY - 3)
-        ctx.fillText(_fmtAxis(cell.yMin, span), 2, h - 3)
-        if (cell.secondaryMetric.length > 0) {
-            span = cell.secondaryYMax - cell.secondaryYMin
-            ctx.fillStyle = cell.secondaryColor
-            ctx.textAlign = "right"
-            ctx.fillText(_fmtAxis(cell.secondaryYMax, span), w - 2, 9)
-            ctx.fillText(_fmtAxis((cell.secondaryYMin + cell.secondaryYMax) / 2, span), w - 2, midY - 3)
-            ctx.fillText(_fmtAxis(cell.secondaryYMin, span), w - 2, h - 3)
-        }
-    }
+    // Label sizing: larger text wherever the cell has room for it; the
+    // compact sizes keep a dense grid on a small window from colliding.
+    readonly property bool _compactLabels: width < 180 || height < 140
+    readonly property int _axisFontPx: _compactLabels ? 10 : 12
+    readonly property color _primaryInk: AppTheme.readableTextInk(traceColor)
+    readonly property color _secondaryInk: AppTheme.readableTextInk(secondaryColor)
+    readonly property color _labelBacking: Qt.rgba(AppTheme.plotCellBg.r, AppTheme.plotCellBg.g,
+                                                   AppTheme.plotCellBg.b, 0.9)
 
     // Trace pen: one DEVICE pixel wide, never more. QPainter strokes a
     // pen of at most 1 device px with its fast cosmetic stroker; a wider
@@ -236,7 +220,6 @@ Item {
             }
 
             if (!cell.source) {
-                if (cell.showAxisLabels) cell._drawAxisLabels(ctx, width, height)
                 if (profOn) cell.panZoomTarget.recordCellPaint(Date.now() - profT0, 0)
                 return
             }
@@ -292,30 +275,53 @@ Item {
                 ctx.stroke()
             }
 
-            // Last so the tick labels stay readable over the traces.
-            if (cell.showAxisLabels) cell._drawAxisLabels(ctx, width, height)
-
             if (profOn) cell.panZoomTarget.recordCellPaint(Date.now() - profT0, profPts)
         }
     }
 
-    // Cell label — top-left, camera identity plus per-metric range labels
-    // colored to match each trace. When secondaryMetric is empty, only
-    // the primary metric row is shown.
+    // Translucent rounded backing behind the label block so a trace
+    // running through the top of the cell does not cut across the
+    // numbers. Cell-background colored: invisible unless a trace is behind.
+    // One shape for the whole block (top tick included), so it has no
+    // stair-step between rows of different widths.
+    Rectangle {
+        visible: labelColumn.implicitHeight > 0
+        x: labelColumn.x - 4
+        y: labelColumn.y - 3
+        width: labelColumn.implicitWidth + 8
+        height: labelColumn.implicitHeight + 6
+        radius: 8
+        color: cell._labelBacking
+    }
+
+    // Cell label — top-left: the primary axis's top tick, camera identity,
+    // then the live per-metric values colored to match each trace. When
+    // secondaryMetric is empty, only the primary metric row is shown.
     Column {
+        id: labelColumn
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.margins: 8
-        // Clear the primary metric's top tick label in the corner above —
-        // but only when it's drawn; reclaim the space when axis labels are off.
-        anchors.topMargin: cell.showAxisLabels ? 18 : 8
+        anchors.topMargin: cell.showAxisLabels ? 4 : 8
         spacing: 1
 
+        // Primary Y-axis top tick. Lives here rather than on the canvas
+        // with the other ticks so it shares the block's backing.
+        Text {
+            id: topTickLabel
+            visible: cell._ticksVisible
+            text: cell._fmtAxis(cell.yMax, cell.yMax - cell.yMin)
+            color: cell._primaryInk
+            font.pixelSize: cell._axisFontPx
+            font.bold: true
+            font.family: "Roboto Mono"
+            bottomPadding: 2
+        }
         Text {
             visible: cell.showLabel
             text: cell.label
-            color: AppTheme.textSecondary
-            font.pixelSize: 11
+            color: AppTheme.textPrimary
+            font.pixelSize: cell._compactLabels ? 11 : 13
             font.family: "Roboto Mono"
         }
         Text {
@@ -335,8 +341,9 @@ Item {
                 return cell.metric.toUpperCase() + "  "
                        + (isFinite(v) ? v.toFixed(2) : "--")
             }
-            color: cell.traceColor
-            font.pixelSize: 10
+            color: cell._primaryInk
+            font.pixelSize: cell._compactLabels ? 11 : 13
+            font.bold: true
             font.family: "Roboto Mono"
         }
         Text {
@@ -350,10 +357,97 @@ Item {
                 return cell.secondaryMetric.toUpperCase() + "  "
                        + (isFinite(v) ? v.toFixed(2) : "--")
             }
-            color: cell.secondaryColor
-            font.pixelSize: 10
+            color: cell._secondaryInk
+            font.pixelSize: cell._compactLabels ? 11 : 13
+            font.bold: true
             font.family: "Roboto Mono"
         }
+    }
+
+    // Y-axis tick label on a translucent rounded backing: the backing is
+    // cell-background colored, so it only shows where a trace passes
+    // behind the number. An inline component cannot see the file's ids,
+    // so everything cell-dependent comes in as a property.
+    component AxisTick: Rectangle {
+        property alias text: tickText.text
+        property alias ink: tickText.color
+        property int px: 12
+        // Offset from the item's top to the text baseline, for placing a
+        // tick by baseline.
+        readonly property real textBaseline: tickText.y + tickText.baselineOffset
+        width: tickText.implicitWidth + 8
+        height: tickText.implicitHeight + 2
+        radius: height * 0.4
+        Text {
+            id: tickText
+            x: 4
+            y: 1
+            font.pixelSize: parent.px
+            font.bold: true
+            font.family: "Roboto Mono"
+        }
+    }
+
+    readonly property bool _ticksVisible: showAxisLabels && width >= 60
+    readonly property bool _secondaryTicksVisible: _ticksVisible && secondaryMetric.length > 0
+    readonly property real _secondarySpan: secondaryYMax - secondaryYMin
+    // Midline ticks hang just below the gridline, which keeps the left one
+    // clear of the label block above it in all but the shortest cells.
+    readonly property real _midTickY: Math.floor(height / 2) + 3
+    readonly property real _bottomBaseline: height - 4
+
+    // Secondary top tick, level with the primary one in the label block.
+    AxisTick {
+        id: secondaryTopTick
+        visible: cell._secondaryTicksVisible
+        anchors.right: parent.right
+        anchors.rightMargin: 4
+        y: labelColumn.y + topTickLabel.y + topTickLabel.baselineOffset - textBaseline
+        px: cell._axisFontPx
+        color: cell._labelBacking
+        ink: cell._secondaryInk
+        text: cell._fmtAxis(cell.secondaryYMax, cell._secondarySpan)
+    }
+    AxisTick {
+        x: 4
+        y: cell._midTickY
+        // In a short cell the label block reaches past the midline; leave
+        // this tick out there rather than half-hide it behind the block.
+        visible: cell._ticksVisible
+                 && labelColumn.y + labelColumn.implicitHeight + 4 < y
+        px: cell._axisFontPx
+        color: cell._labelBacking
+        ink: cell._primaryInk
+        text: cell._fmtAxis((cell.yMin + cell.yMax) / 2, cell.yMax - cell.yMin)
+    }
+    AxisTick {
+        x: 4
+        y: cell._bottomBaseline - textBaseline
+        visible: cell._ticksVisible
+        px: cell._axisFontPx
+        color: cell._labelBacking
+        ink: cell._primaryInk
+        text: cell._fmtAxis(cell.yMin, cell.yMax - cell.yMin)
+    }
+    AxisTick {
+        anchors.right: parent.right
+        anchors.rightMargin: 4
+        y: cell._midTickY
+        visible: cell._secondaryTicksVisible
+        px: cell._axisFontPx
+        color: cell._labelBacking
+        ink: cell._secondaryInk
+        text: cell._fmtAxis((cell.secondaryYMin + cell.secondaryYMax) / 2, cell._secondarySpan)
+    }
+    AxisTick {
+        anchors.right: parent.right
+        anchors.rightMargin: 4
+        y: cell._bottomBaseline - textBaseline
+        visible: cell._secondaryTicksVisible
+        px: cell._axisFontPx
+        color: cell._labelBacking
+        ink: cell._secondaryInk
+        text: cell._fmtAxis(cell.secondaryYMin, cell._secondarySpan)
     }
 
     // Camera temperature — top-right, orange, dev mode only. Reads the
@@ -368,15 +462,14 @@ Item {
                                         cell.liveEdgeSnapshot)
         }
         visible: cell.showTemperature && cell.width >= 80 && isFinite(tempC)
-        anchors.top: parent.top
+        // Below the secondary top tick when it is drawn, else in the corner.
+        anchors.top: secondaryTopTick.visible ? secondaryTopTick.bottom : parent.top
         anchors.right: parent.right
         anchors.margins: 8
-        // Clear the secondary metric's top tick label in the corner above —
-        // but only when it's drawn; reclaim the space when axis labels are off.
-        anchors.topMargin: cell.showAxisLabels ? 18 : 8
+        anchors.topMargin: secondaryTopTick.visible ? 3 : 8
         text: isFinite(tempC) ? tempC.toFixed(1) + "°C" : ""
         color: AppTheme.readableInk(AppTheme.accentOrange)
-        font.pixelSize: 10
+        font.pixelSize: cell._compactLabels ? 11 : 12
         font.family: "Roboto Mono"
     }
 
