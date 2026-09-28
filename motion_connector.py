@@ -3898,6 +3898,18 @@ class MotionConnector(QObject):
             logger.exception("loadPastScan failed for label %r", session_label)
             self.pastScanLoadFinished.emit(session_label, False)
 
+    @staticmethod
+    def _write_export_notes(csv_path: str, session: dict) -> str:
+        """Write the scan's notes next to an exported CSV as
+        ``<csv stem>_notes.txt`` (#644) — notes otherwise live only in
+        scans.db and would not leave the machine with the CSV. Written
+        even when the scan has no notes, so every export is a consistent
+        pair. Returns the notes path; raises on a write failure."""
+        notes_path = os.path.splitext(csv_path)[0] + "_notes.txt"
+        with open(notes_path, "w", encoding="utf-8", newline="") as f:
+            f.write(session.get("session_notes") or "")
+        return notes_path
+
     @pyqtSlot(int, str)
     def exportScanCsv(self, session_id: int, output_path: str) -> None:
         """Export a scan's session_data to a corrected-format CSV, on a
@@ -3943,6 +3955,7 @@ class MotionConnector(QObject):
                 str(db_path), int(session_id), output_path,
                 include_quality=True,
             )
+            self._write_export_notes(output_path, session)
             logger.info(
                 "exportScanCsv: exported %r (sid=%d) → %s",
                 session.get("session_label"), session_id, output_path,
@@ -4011,6 +4024,7 @@ class MotionConnector(QObject):
                             str(db_path), sid, out_path,
                             include_quality=True,
                         )
+                        self._write_export_notes(out_path, session)
                         result["exported"] += 1
                         logger.info(
                             "exportScansToFolder: exported %r (sid=%d) -> %s",
@@ -4084,6 +4098,9 @@ class MotionConnector(QObject):
                 include_quality=True,
             )
             os.replace(tmp_path, out_path)
+            # Runs after _persist_scan_notes, so the notes (incl. the
+            # scan-end footer) are already in the session row read above.
+            self._write_export_notes(out_path, session)
             logger.info("Auto-export: %r (sid=%d) -> %s",
                         session_label, session["id"], out_path)
             return True, out_path
