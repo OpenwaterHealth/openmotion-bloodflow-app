@@ -1208,14 +1208,16 @@ Rectangle {
                 }
             }
 
-            // Statistics pane (#635), right of the plots. Fixed width
-            // (fillWidth explicitly false, as for the clinical column).
+            // Statistics pane (#635), right of the plots. Sized by its own
+            // content (fillWidth explicitly false, as for the clinical
+            // column), within 40% of the viewer so the plots keep the rest.
             StatisticsPanel {
                 id: statsPanel
                 visible: viewer._showStatsPanel
                 Layout.fillWidth: false
                 Layout.fillHeight: true
                 Layout.preferredWidth: implicitWidth
+                maxWidth: viewer.width * 0.4
                 host: viewer
                 source: viewer.scanSource
                 cells: viewer._activeCellModel
