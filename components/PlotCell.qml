@@ -16,6 +16,11 @@ Item {
     // Top-left identity label. The viewer overrides it for the Aggregate
     // view's pair streams (#621), whose camId is not a camera number.
     property string label: cell.side.toUpperCase() + " " + (cell.camId + 1)
+    // cam_id = -1 is the side-averaged stream (clinical, and the research
+    // Average view): hidden by default, since the large side panel next to
+    // the plot names the side. The viewer shows it when those panels are
+    // off (the Statistics pane replaces them, #635).
+    property bool showLabel: cell.camId !== -1
     property real   windowSeconds: 15
 
     // Time-axis state — when followLive=true, the cell tracks the
@@ -307,10 +312,7 @@ Item {
         spacing: 1
 
         Text {
-            // cam_id = -1 is the side-averaged stream fed by the SDK's
-            // SideAveragingStage in clinical mode — hide the label there;
-            // the large side panel next to the plot already names the side.
-            visible: cell.camId !== -1
+            visible: cell.showLabel
             text: cell.label
             color: AppTheme.textSecondary
             font.pixelSize: 11
