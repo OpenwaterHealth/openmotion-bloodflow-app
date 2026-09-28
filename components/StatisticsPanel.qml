@@ -4,12 +4,13 @@ import OpenMotion 1.0
 
 // Statistics pane (#635) — the column right of the plot grid while the ⋯
 // menu's Statistics switch is on (PlotViewer.statsActive). One row per
-// plot the current view draws, grouped by module: the plotted pair's
-// latest value ("Live", the number the cell's value label shows when the
-// pane is off) and the same stream through a 0.5 Hz low-pass. Below them
-// the LEFT − RIGHT differential for every plot whose opposite-side plot
-// is drawn too. Display-only; the numbers come from
-// ScanDataSource.statistics_at.
+// plot the current view draws, grouped by module. For each metric of the
+// plotted pair: the latest value ("Live", the number the cell's value
+// label shows when the pane is off), its average over the last 5 s, and
+// its peak-to-peak (the 5 s rolling max − min, averaged over the last
+// 5 s; see data_sources.window_stats). Below them the LEFT − RIGHT
+// differential for every plot whose opposite-side plot is drawn too.
+// Display-only; the numbers come from ScanDataSource.statistics_at.
 Rectangle {
     id: panel
 
@@ -26,18 +27,30 @@ Rectangle {
     // pane refreshes at its own rate instead of on every paint.
     property real readoutT: 0.0
 
-    readonly property real lpfCutoffHz: 0.5
-    // ~1 ms per poll with 16 cameras; numbers repainting at the 30 Hz
+    // Upper bound on the pane's width (the viewer passes a share of its
+    // own): the font shrinks, within its bounds, before the pane crowds
+    // the plots.
+    property real maxWidth: Infinity
+
+    readonly property real windowSec: 5.0
+    // ~2.6 ms per poll with 16 cameras; numbers repainting at the 30 Hz
     // plot rate would not be readable anyway.
     readonly property int refreshMs: 100
+    // Per metric, left to right; rowValues returns them in this order.
+    readonly property var _columns: [
+        { field: "",     caption: "Live" },
+        { field: "_avg", caption: panel.windowSec + " s avg" },
+        { field: "_p2p", caption: "Peak-to-peak" }
+    ]
 
     // ── Sizing ─────────────────────────────────────────────────────────
     // The numbers are as large as lets every line (the two header lines,
     // the section titles and the rows) fit the pane's height without
-    // scrolling, between _minFontPx and _maxFontPx: 16 cameras on a short
-    // window get the small end (and scroll if even that does not fit),
-    // the Average view's few rows the large end. Line pitch and column
-    // widths follow the font, so the pane widens with it.
+    // scrolling and the pane stay within maxWidth, between _minFontPx and
+    // _maxFontPx: 16 cameras on a short window get the small end (and
+    // scroll if even that does not fit), the Average view's few rows the
+    // large end. Line pitch and column widths follow the font, so the
+    // pane widens with it.
     readonly property int _minFontPx: 14
     readonly property int _maxFontPx: 22
     readonly property real _pad: 12
@@ -54,8 +67,9 @@ Rectangle {
         var fixed = 2 * panel._pad + 9
             + panel._sectionGap * Math.max(0, panel.model.length - 1)
         var pitch = (panel.height - fixed) / Math.max(1, panel._lineCount)
-        return Math.max(panel._minFontPx,
-                        Math.min(panel._maxFontPx, Math.floor(pitch / 1.5)))
+        var byWidth = (panel.maxWidth - 2 * panel._pad) / panel._widthPerPx
+        return Math.max(panel._minFontPx, Math.min(
+            panel._maxFontPx, Math.floor(pitch / 1.5), Math.floor(byWidth)))
     }
     // Fixed per line, also so a label whose "−" falls back to another
     // font's taller line does not stretch its row.
@@ -65,13 +79,21 @@ Rectangle {
     readonly property real _groupGap: Math.round(panel._fontPx * 0.9)
     // Inset of the text from its stripe's edges.
     readonly property real _cellPad: Math.round(panel._fontPx * 0.35)
-    // Measured, not assumed: the app's "Roboto Mono" is not bundled, so
-    // the text falls back to the platform font.
-    readonly property real _valueWidth:
-        Math.ceil(valueMetrics.advanceWidth + panel._fontPx * 0.5 + panel._cellPad)
-    readonly property real _labelWidth:
-        Math.ceil(labelMetrics.advanceWidth + panel._fontPx * 0.6 + panel._cellPad)
-    implicitWidth: 2 * _pad + _labelWidth + 4 * _valueWidth + _groupGap
+    // Widths per px of font size. Measured, not assumed (the app's "Roboto
+    // Mono" is not bundled, so the text falls back to the platform font),
+    // once at 100 px: text widths scale with the pixel size, and a fixed
+    // reference keeps _fontPx's width bound free of a loop through itself.
+    // A column fits its widest number or its caption (at 0.72 of the
+    // font), plus a gap and the stripe inset.
+    readonly property real _columnPerPx:
+        Math.max(valueMetrics.advanceWidth, 0.72 * captionMetrics.advanceWidth) / 100
+        + 0.5 + 0.35
+    readonly property real _labelPerPx:
+        0.85 * labelMetrics.advanceWidth / 100 + 0.6 + 0.35
+    readonly property real _widthPerPx: _labelPerPx + 6 * _columnPerPx + 0.9
+    readonly property real _valueWidth: Math.ceil(panel._columnPerPx * panel._fontPx)
+    readonly property real _labelWidth: Math.ceil(panel._labelPerPx * panel._fontPx)
+    implicitWidth: 2 * _pad + _labelWidth + 6 * _valueWidth + _groupGap
 
     // Lining, equal-width digits so the columns line up and read as a
     // table: "Roboto Mono" is not bundled, and some platform fallbacks
@@ -83,15 +105,27 @@ Rectangle {
     TextMetrics {
         id: valueMetrics
         font.family: "Roboto Mono"
-        font.pixelSize: panel._fontPx
+        font.pixelSize: 100
         font.weight: Font.Medium
         font.features: panel._figureFeatures
         text: "+000.00"
     }
     TextMetrics {
+        id: captionMetrics
+        font.family: "Roboto Mono"
+        font.pixelSize: 100
+        text: {
+            var longest = ""
+            for (var i = 0; i < panel._columns.length; i++)
+                if (panel._columns[i].caption.length > longest.length)
+                    longest = panel._columns[i].caption
+            return longest
+        }
+    }
+    TextMetrics {
         id: labelMetrics
         font.family: "Roboto Mono"
-        font.pixelSize: panel._labelFontPx
+        font.pixelSize: 100
         text: {
             var longest = ""
             for (var i = 0; i < panel.model.length; i++) {
@@ -118,7 +152,7 @@ Rectangle {
     }
 
     // ── Data ───────────────────────────────────────────────────────────
-    // "side:camId" → { <metric>: live, <metric>_lpf: low-passed }.
+    // "side:camId" → { <metric>: live, <metric>_avg, <metric>_p2p }.
     property var _snapshot: ({})
 
     function poll() {
@@ -130,7 +164,7 @@ Rectangle {
         panel._snapshot = (panel.source && keys.length > 0)
             ? panel.source.statistics_at(
                   keys, [panel.primaryMetric, panel.secondaryMetric],
-                  panel.readoutT, panel.lpfCutoffHz)
+                  panel.readoutT, panel.windowSec)
             : ({})
     }
 
@@ -197,26 +231,32 @@ Rectangle {
         return sections
     }
 
-    // One row's numbers from the latest poll: [primary, primary low-passed,
-    // secondary, secondary low-passed], clamped for display like every
-    // other readout. A differential row subtracts its opposite plot's
-    // displayed numbers, so it is the difference of the two rows above it.
+    // One row's numbers from the latest poll, _columns for the primary
+    // metric then for the secondary. Live and average are clamped for
+    // display like every other readout of the metric; peak-to-peak is a
+    // span, not a reading, so it is not. A differential row subtracts its
+    // opposite plot's displayed numbers, so it is the difference of the
+    // two rows above it.
     function rowValues(row) {
-        var metrics = [panel.primaryMetric, panel.primaryMetric,
-                       panel.secondaryMetric, panel.secondaryMetric]
         var out = []
-        for (var i = 0; i < 4; i++) {
-            var field = metrics[i] + (i % 2 === 1 ? "_lpf" : "")
-            var v = panel._shown(row.key, metrics[i], field)
-            if (row.oppKey) v -= panel._shown(row.oppKey, metrics[i], field)
-            out.push(v)
+        var metrics = [panel.primaryMetric, panel.secondaryMetric]
+        for (var m = 0; m < metrics.length; m++) {
+            for (var c = 0; c < panel._columns.length; c++) {
+                var field = metrics[m] + panel._columns[c].field
+                var v = panel._shown(row.key, metrics[m], field)
+                if (row.oppKey) v -= panel._shown(row.oppKey, metrics[m], field)
+                out.push(v)
+            }
         }
         return out
     }
 
     function _shown(key, metric, field) {
         var r = panel._snapshot[key]
-        return panel._clamp(metric, r ? r[field] : NaN)
+        var v = r ? r[field] : NaN
+        return field === metric + "_p2p"
+            ? (v === undefined || v === null ? NaN : v)
+            : panel._clamp(metric, v)
     }
 
     // Two decimals like the cell labels; a differential carries its sign
@@ -237,11 +277,11 @@ Rectangle {
         anchors.right: parent.right
         anchors.margins: panel._pad
 
-        // Metric names, each over its Live | low-pass column pair.
+        // Metric names, each centered over its group of columns.
         Row {
             Item { width: panel._labelWidth; height: panel._rowHeight }
             Text {
-                width: 2 * panel._valueWidth
+                width: panel._columns.length * panel._valueWidth
                 height: panel._rowHeight
                 leftPadding: panel._cellPad
                 rightPadding: panel._cellPad
@@ -255,7 +295,7 @@ Rectangle {
             }
             Item { width: panel._groupGap; height: panel._rowHeight }
             Text {
-                width: 2 * panel._valueWidth
+                width: panel._columns.length * panel._valueWidth
                 height: panel._rowHeight
                 leftPadding: panel._cellPad
                 rightPadding: panel._cellPad
@@ -271,14 +311,15 @@ Rectangle {
         Row {
             Item { width: panel._labelWidth; height: panel._rowHeight }
             Repeater {
-                model: ["Live", panel.lpfCutoffHz + " Hz", "Live", panel.lpfCutoffHz + " Hz"]
+                model: panel._columns.concat(panel._columns)
                 delegate: Text {
-                    width: panel._valueWidth + (index === 2 ? panel._groupGap : 0)
+                    width: panel._valueWidth
+                           + (index === panel._columns.length ? panel._groupGap : 0)
                     height: panel._rowHeight
                     rightPadding: panel._cellPad
                     horizontalAlignment: Text.AlignRight
                     verticalAlignment: Text.AlignVCenter
-                    text: modelData
+                    text: modelData.caption
                     color: AppTheme.textTertiary
                     font.pixelSize: panel._captionFontPx
                     font.family: "Roboto Mono"
@@ -362,10 +403,11 @@ Rectangle {
                                     font.family: "Roboto Mono"
                                 }
                                 Repeater {
-                                    model: 4
+                                    model: 2 * panel._columns.length
                                     delegate: Text {
                                         objectName: "statValue"
-                                        width: panel._valueWidth + (index === 2 ? panel._groupGap : 0)
+                                        width: panel._valueWidth
+                                               + (index === panel._columns.length ? panel._groupGap : 0)
                                         height: panel._rowHeight
                                         rightPadding: panel._cellPad
                                         verticalAlignment: Text.AlignVCenter

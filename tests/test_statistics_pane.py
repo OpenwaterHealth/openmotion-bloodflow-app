@@ -2,21 +2,23 @@
 Issue #635 — the plot viewer's Statistics pane.
 
 A Statistics switch in the plot's ⋯ menu adds a pane right of the plots:
-one row per plot the current view draws, grouped LEFT / RIGHT, each with
-the plotted pair's live value and the same stream through a 0.5 Hz
-low-pass, then the LEFT − RIGHT differential against the opposite side's
-plot. The modules are rotated 180° on the body, so camera N faces camera
-9 − N (L1 ↔ R8); Aggregate pairs face the same pair (L1+8 ↔ R1+8) and the
-Average view pairs L ↔ R. While the pane is on, the per-cell value labels
-(and the Average view's side panels) are off.
+one row per plot the current view draws, grouped LEFT / RIGHT. For each
+metric of the plotted pair it shows the live value, the average over the
+last 5 s, and the peak-to-peak: the rolling 5 s max − min at each sample,
+averaged over the last 5 s. Then the LEFT − RIGHT differential against
+the opposite side's plot. The modules are rotated 180° on the body, so
+camera N faces camera 9 − N (L1 ↔ R8); Aggregate pairs face the same pair
+(L1+8 ↔ R1+8) and the Average view pairs L ↔ R. While the pane is on,
+the per-cell value labels (and the Average view's side panels) are off.
 
 Covered here:
-  - the low-pass: lowpass_last against a running IIR (NaN samples hold the
-    state), its window length, and statistics_at on past and live sources;
+  - window_stats (average and peak-to-peak) against a brute-force
+    reference over uneven timestamps and NaN gaps, and statistics_at on
+    past and live sources;
   - PlotViewer.qml with a real PastScanSource: gating (research only), the
     cell labels / side panels giving way, the pane's rows and differentials
     in the Individual, Aggregate and Average views, a missing opposite
-    plot, display clamping, the ⋯ switch and the overlay inset;
+    plot, display clamping, sizing, the ⋯ switch and the overlay inset;
   - the config key.
 
 Unit-marked: no app launch, no hardware, offscreen Qt platform.
@@ -59,63 +61,78 @@ from data_sources import (  # noqa: E402
     PastScanSource,
     _CameraBuffer,
     _add_derived_side_averages,
-    bvi_lpf_alpha,
-    lowpass_last,
-    lowpass_window_sec,
+    window_stats,
 )
 
 pytestmark = pytest.mark.unit
 
 NAN = float("nan")
 HZ = 40.0
-ALPHA = bvi_lpf_alpha(0.5)
 
 
-def _running_iir(values, alpha):
-    """Reference: the filter run sample by sample, as _bvi_lpf does."""
-    y = None
-    for x in values:
-        if not math.isfinite(x):
-            continue
-        y = x if y is None else y + alpha * (x - y)
-    return NAN if y is None else y
+def _brute_stats(t, v, now, w):
+    """Reference: the definitions spelled out sample by sample."""
+    def finite(x):
+        return x[np.isfinite(x)]
+    recent = (t >= now - w) & (t <= now)
+    vals = finite(v[recent])
+    avg = vals.mean() if vals.size else NAN
+    ranges = []
+    for ti in t[recent]:
+        win = finite(v[(t >= ti - w) & (t <= ti)])
+        if win.size:
+            ranges.append(win.max() - win.min())
+    return avg, (float(np.mean(ranges)) if ranges else NAN)
 
 
-# ── The low-pass ────────────────────────────────────────────────────────
+def _same(a, b):
+    return (math.isnan(a) and math.isnan(b)) or a == pytest.approx(b, abs=1e-9)
 
 
-def test_lowpass_last_matches_the_running_filter_across_nan_gaps():
+# ── Average and peak-to-peak ────────────────────────────────────────────
+
+
+def test_window_stats_match_the_definitions():
+    """Uneven sample spacing, NaN gaps, windows reaching before the first
+    sample (a young scan) and readout times between samples."""
     rng = np.random.default_rng(635)
-    x = 5.0 + np.sin(np.arange(400) / 7.0) + rng.normal(0.0, 0.3, 400)
-    x[[0, 50, 51, 52, 300]] = np.nan
-    assert lowpass_last(x, ALPHA) == pytest.approx(_running_iir(x, ALPHA), rel=1e-12)
+    for _ in range(150):
+        n = int(rng.integers(1, 700))
+        t = np.cumsum(rng.uniform(0.01, 0.05, n))
+        v = rng.normal(5.0, 1.0, n)
+        v[rng.random(n) < 0.1] = np.nan
+        now = float(rng.uniform(t[0], t[-1] + 0.1))
+        w = float(rng.choice([0.5, 2.0, 5.0]))
+        got = window_stats(t, v, now, w)
+        ref = _brute_stats(t, v, now, w)
+        assert _same(got[0], ref[0]) and _same(got[1], ref[1]), (got, ref)
 
 
-@pytest.mark.parametrize("values, expected", [
-    ([], NAN),
-    ([NAN, NAN], NAN),
-    ([3.0], 3.0),
-    ([NAN, 2.0, NAN], 2.0),
-])
-def test_lowpass_last_edge_cases(values, expected):
-    got = lowpass_last(np.array(values, dtype=float), ALPHA)
-    if math.isnan(expected):
-        assert math.isnan(got)
-    else:
-        assert got == pytest.approx(expected)
+def test_peak_to_peak_of_a_pulse_is_its_full_swing():
+    """A 1.2 Hz pulse of amplitude 1 around 4: every 5 s window holds
+    whole beats, so the peak-to-peak is 2 and the average is 4."""
+    t = np.arange(0.0, 20.0, 1 / HZ)
+    avg, p2p = window_stats(t, 4.0 + np.sin(2 * np.pi * 1.2 * t), t[-1], 5.0)
+    assert avg == pytest.approx(4.0, abs=0.01)
+    assert p2p == pytest.approx(2.0, abs=0.01)
 
 
-def test_lowpass_last_with_the_filter_off_is_the_last_finite_value():
-    assert lowpass_last(np.array([1.0, 4.0, NAN]), 1.0) == 4.0
+@pytest.mark.parametrize("values", [[NAN, NAN], []])
+def test_window_stats_with_nothing_finite(values):
+    t = np.arange(len(values)) / HZ
+    avg, p2p = window_stats(t, np.array(values, dtype=float), 1.0, 5.0)
+    assert math.isnan(avg) and math.isnan(p2p)
 
 
-def test_window_is_long_enough_to_forget_the_seed():
-    """The windowed filter is seeded with the window's first sample; the
-    window must be long enough that the seed no longer shows."""
-    window = lowpass_window_sec(ALPHA)
-    n = round(window * HZ)              # samples the window always holds
-    assert (1.0 - ALPHA) ** (n - 1) < 1e-6
-    assert 4.0 < window < 5.0           # 0.5 Hz: ~4.6 s of samples
+def test_older_samples_feed_the_peak_to_peak_but_not_the_average():
+    """The average covers the last window only; the peak-to-peak's early
+    ranges reach one more window back (10 s of data for 5 s windows)."""
+    t = np.arange(0.0, 10.0, 1 / HZ)
+    v = np.where(t < 7.0, 100.0, 1.0)
+    avg, p2p = window_stats(t, v, t[-1], 2.0)
+    assert avg == pytest.approx(1.0)                 # last 2 s: all 1.0
+    assert p2p > 40.0                                # ranges spanning the step
+    assert p2p == pytest.approx(_brute_stats(t, v, t[-1], 2.0)[1])
 
 
 def _buf(values, t0=0.0):
@@ -125,26 +142,23 @@ def _buf(values, t0=0.0):
     return b
 
 
-def test_statistics_at_matches_a_filter_run_from_scan_start():
-    """20 s of a pulsing trace: the windowed low-pass at the live edge
-    equals the filter run over the whole scan (to float32 storage)."""
+def test_statistics_at_reads_the_window_ending_at_t():
     t = np.arange(800) / HZ
-    bfi = 4.0 + np.sin(2 * np.pi * 1.2 * t) + 0.02 * t
+    bfi = 4.0 + np.sin(2 * np.pi * 1.2 * t)
     src = PastScanSource(scan_db=None, session_id=1, preloaded_buffers={
         ("left", 2, "bfi"): _buf(bfi),
         ("left", 2, "bvi"): _buf(np.full(800, 3.0)),
     })
     try:
         edge = src.liveEdge
-        out = src.statistics_at(["left:2", "right:5"], ["bfi", "bvi"], edge, 0.5)
+        out = src.statistics_at(["left:2", "right:5"], ["bfi", "bvi"], edge, 5.0)
         row = out["left:2"]
-        stored = src.buffers[("left", 2, "bfi")].v[:800].astype(float)
-        assert row["bfi_lpf"] == pytest.approx(_running_iir(stored, ALPHA), abs=1e-5)
+        buf = src.buffers[("left", 2, "bfi")]
+        ref = _brute_stats(buf.t[:800], buf.v[:800].astype(float), edge, 5.0)
+        assert (row["bfi_avg"], row["bfi_p2p"]) == pytest.approx(ref, abs=1e-9)
         assert row["bfi"] == pytest.approx(src.value_at("left", 2, "bfi", edge))
-        # The slow filter visibly smooths the 1.2 Hz pulse away from the
-        # latest sample; a constant stream passes through unchanged.
-        assert abs(row["bfi_lpf"] - row["bfi"]) > 0.05
-        assert row["bvi_lpf"] == pytest.approx(3.0)
+        assert row["bfi_p2p"] == pytest.approx(2.0, abs=0.01)
+        assert (row["bvi_avg"], row["bvi_p2p"]) == pytest.approx((3.0, 0.0))
         # A cell with no stream reads NaN rather than disappearing.
         assert all(math.isnan(v) for v in out["right:5"].values())
     finally:
@@ -158,25 +172,27 @@ def test_statistics_at_parses_derived_cam_ids_and_skips_bad_keys():
     })
     try:
         out = src.statistics_at(["left:-1", "right:8", "junk", "left:x"],
-                                ["bfi"], src.liveEdge, 0.5)
+                                ["bfi"], src.liveEdge, 5.0)
         assert set(out) == {"left:-1", "right:8"}
-        assert out["left:-1"]["bfi_lpf"] == pytest.approx(2.0)
+        assert out["left:-1"]["bfi_avg"] == pytest.approx(2.0)
         assert out["right:8"]["bfi"] == pytest.approx(6.0)
     finally:
         src.release()
 
 
 def test_statistics_at_on_a_live_source_reads_the_displayed_stream():
+    """A 1 → 3 step halfway through 5 s: the 5 s average is 2, and the
+    rolling range is 0 before the step and 2 after, so peak-to-peak 1."""
     src = LiveScanSource(plot_t0=0.0)
     try:
         for i in range(200):
             src.append_uncorrected("right", 7, i, i / HZ,
                                    bfi=1.0 if i < 100 else 3.0, bvi=2.0)
-        out = src.statistics_at(["right:7"], ["bfi", "bvi"], src.liveEdge, 0.5)
-        assert out["right:7"]["bfi"] == pytest.approx(3.0)
-        # 100 samples after a 1 → 3 step: 1 + 2 (1 - (1 - a)^100).
-        expected = 1.0 + 2.0 * (1.0 - (1.0 - ALPHA) ** 100)
-        assert out["right:7"]["bfi_lpf"] == pytest.approx(expected, abs=1e-6)
+        out = src.statistics_at(["right:7"], ["bfi", "bvi"], src.liveEdge, 5.0)
+        row = out["right:7"]
+        assert row["bfi"] == pytest.approx(3.0)
+        assert row["bfi_avg"] == pytest.approx(2.0)
+        assert row["bfi_p2p"] == pytest.approx(1.0)
     finally:
         src.release()
 
@@ -375,18 +391,40 @@ def test_individual_rows_and_mirrored_differentials(stats_viewer):
     assert list(s) == ["LEFT", "RIGHT", "LEFT − RIGHT"]
     assert [r[0] for r in s["LEFT"]] == [f"L{c + 1}" for c in range(8)]
     assert [r[0] for r in s["RIGHT"]] == [f"R{c + 1}" for c in range(8)]
-    for c, (_label, bfi, bfi_lpf, bvi, bvi_lpf) in enumerate(s["LEFT"]):
-        assert (bfi, bfi_lpf) == pytest.approx((_left_bfi(c),) * 2, abs=1e-5)
-        assert (bvi, bvi_lpf) == pytest.approx((_bvi("left", c),) * 2, abs=1e-5)
+    # Per metric: live, 5 s average, peak-to-peak. Constant streams: the
+    # average is the value and the peak-to-peak 0.
+    for c, (_label, *v) in enumerate(s["LEFT"]):
+        assert v == pytest.approx([_left_bfi(c), _left_bfi(c), 0.0,
+                                   _bvi("left", c), _bvi("left", c), 0.0], abs=1e-5)
     # Camera N faces camera 9 − N: L1 − R8, L2 − R7, …, L8 − R1.
     diffs = s["LEFT − RIGHT"]
     assert [r[0] for r in diffs] == [f"L{c + 1} − R{8 - c}" for c in range(8)]
-    for c, (_label, dbfi, dbfi_lpf, dbvi, dbvi_lpf) in enumerate(diffs):
-        o = 7 - c
-        assert (dbfi, dbfi_lpf) == pytest.approx(
-            (_left_bfi(c) - _right_bfi(o),) * 2, abs=1e-5)
-        assert (dbvi, dbvi_lpf) == pytest.approx(
-            (_bvi("left", c) - _bvi("right", o),) * 2, abs=1e-5)
+    for c, (_label, *v) in enumerate(diffs):
+        dbfi = _left_bfi(c) - _right_bfi(7 - c)
+        dbvi = _bvi("left", c) - _bvi("right", 7 - c)
+        assert v == pytest.approx([dbfi, dbfi, 0.0, dbvi, dbvi, 0.0], abs=1e-5)
+
+
+def test_peak_to_peak_column_and_its_differential(stats_viewer):
+    """L1 swings 1 ↔ 3 every sample (peak-to-peak 2, average 2) against a
+    steady R8: the differential's peak-to-peak is +2. Captions name the
+    columns."""
+    viewer, stub, show = stats_viewer
+    show(PastScanSource(scan_db=None, session_id=1, preloaded_buffers={
+        ("left", 0, "bfi"): _buf([1.0, 3.0] * 200),
+        ("left", 0, "bvi"): _buf([2.0] * 400),
+        ("right", 7, "bfi"): _buf([2.5] * 400),
+        ("right", 7, "bvi"): _buf([2.0] * 400),
+    }))
+    stub.setConfig("showStatistics", True)
+    s = _sections(viewer)
+    # (An inclusive 5 s window at 40 Hz holds 201 samples, so the
+    # alternating average is a hair above 2.)
+    assert s["LEFT"][0][1:4] == pytest.approx([3.0, 2.0, 2.0], abs=0.01)
+    assert s["RIGHT"][0][1:4] == pytest.approx([2.5, 2.5, 0.0])
+    assert s["LEFT − RIGHT"][0][1:4] == pytest.approx([0.5, -0.5, 2.0], abs=0.01)
+    captions = [c["caption"] for c in _variant(_panel(viewer).property("_columns"))]
+    assert captions == ["Live", "5 s avg", "Peak-to-peak"]
 
 
 def test_text_is_as_large_as_fits_the_pane(stats_viewer):
@@ -395,6 +433,7 @@ def test_text_is_as_large_as_fits_the_pane(stats_viewer):
     pane's height in the app; this harness has no window, so the test
     sets it.)"""
     viewer, stub, show = stats_viewer
+    viewer.setProperty("width", 4000)             # width no constraint yet
     show(_scan_source())
     stub.setConfig("showStatistics", True)
     panel = _panel(viewer)
@@ -412,6 +451,13 @@ def test_text_is_as_large_as_fits_the_pane(stats_viewer):
     stub.setConfig("plotViewMode", "average")     # 2 + 3 titles + 3 rows
     assert panel.property("_fontPx") == hi
     assert panel.property("width") > width
+    # Kept within 40% of the viewer: the font gives way first. The budget
+    # is picked from the pane's own per-px width, since this harness's
+    # font metrics are not the app's (no font directory offscreen).
+    budget = 2 * 12 + panel.property("_widthPerPx") * (lo + 2.5)
+    viewer.setProperty("width", budget / 0.4)
+    assert panel.property("_fontPx") == lo + 2
+    assert panel.property("width") <= budget + 1
 
 
 def test_a_refresh_updates_the_rows_in_place(stats_viewer):
@@ -429,7 +475,7 @@ def test_a_refresh_updates_the_rows_in_place(stats_viewer):
     viewer.setProperty("liveEdgeSnapshot", 2.0)
     QMetaObject.invokeMethod(panel, "poll")
     before = _value_texts(panel)
-    assert len(before) == 3 * 4           # L1, R8 and L1 − R8
+    assert len(before) == 3 * 6           # L1, R8 and L1 − R8
     viewer.setProperty("liveEdgeSnapshot", 9.0)
     QMetaObject.invokeMethod(panel, "poll")
     after = _value_texts(panel)
@@ -473,7 +519,7 @@ def test_average_view_pairs_the_sides_and_drops_the_side_panels(stats_viewer):
             - np.mean([_bvi("right", c) for c in range(8)]))
     [(label, *values)] = s["LEFT − RIGHT"]
     assert label == "L − R"
-    assert values == pytest.approx([dbfi, dbfi, dbvi, dbvi], abs=1e-5)
+    assert values == pytest.approx([dbfi, dbfi, 0.0, dbvi, dbvi, 0.0], abs=1e-5)
 
 
 def test_differentials_only_where_the_opposite_plot_exists(stats_viewer):
@@ -496,7 +542,8 @@ def test_single_sided_scan_has_no_differential_section(stats_viewer):
 
 def test_values_are_clamped_for_display_and_diffs_use_the_shown_numbers(stats_viewer):
     """BFI above the display ceiling (10) shows as 10, like the cell
-    labels, and the differential is taken between the shown numbers."""
+    labels, live and averaged, and the differential is taken between the
+    shown numbers."""
     viewer, stub, show = stats_viewer
     show(_scan_source(left_bfi=lambda c: 14.0, right_bfi=lambda c: 9.0))
     stub.setConfig("showStatistics", True)
