@@ -71,11 +71,13 @@ _STARTUP = [
     ),
     _e(
         "E-105", "startup",
-        "Camera power-on failed",
-        "The sensor could not power on its cameras during initialization, so "
-        "camera identities could not be read.",
-        "Power-cycle the sensor and reconnect. If only some cameras are "
-        "affected, the camera board may need service.",
+        "Camera power failed",
+        "The sensor could not power its cameras, so they cannot capture. "
+        "This can happen while the sensor initializes or when cameras are "
+        "powered up to start a scan or check.",
+        "Power-cycle the sensor and reconnect. If it persists, or only some "
+        "cameras are affected, the camera board may need service — contact "
+        "support.",
     ),
     _e(
         "E-107", "startup",
