@@ -12,6 +12,10 @@ ApplicationWindow {
     visible: true
     width: 1200
     height: 800
+    // Floor for native edge resizing / snapping (issue #642); matches the
+    // bottom-right grip's clamp below.
+    minimumWidth: 800
+    minimumHeight: 600
     flags: Qt.FramelessWindowHint | Qt.Window | Qt.CustomizeWindowHint | Qt.WindowTitleHint
     color: "transparent"
 
