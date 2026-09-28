@@ -47,8 +47,15 @@ Rectangle {
         cursorShape: Qt.SizeAllCursor
         onPressed: function(mouse) {
             if (mouse.button === Qt.LeftButton) {
-                window.startSystemMove(); // Allow window dragging
+                window.startSystemMove(); // Allow window dragging (snaps on Windows, #642)
             }
+        }
+        // Double-click the title bar to maximize / restore, like a native one.
+        onDoubleClicked: {
+            if (window.visibility === Window.Maximized)
+                window.showNormal();
+            else
+                window.showMaximized();
         }
     }
 

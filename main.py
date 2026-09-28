@@ -551,6 +551,12 @@ def main():
             resource_path("assets", "images", "favicon.ico"),
         )
 
+        # Frameless windows don't snap on Windows; put the frame styles
+        # back without drawing a native frame (issue #642).
+        from utils.win_snap import enable_window_snap
+
+        enable_window_snap(app, int(engine.rootObjects()[0].winId()))
+
     # wait=False: the QML window is already visible at this point (main.qml's
     # ApplicationWindow is `visible: true`) and Qt's event loop hasn't started
     # yet (app.exec() is below) — a blocking wait here starves Explorer's
