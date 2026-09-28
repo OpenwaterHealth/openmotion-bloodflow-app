@@ -105,6 +105,29 @@ device while not scanning, does not raise this.
 **What to do:** Check the USB cables and power, reconnect the system, and start a
 new scan. If it keeps happening, contact support.
 
+### E-305 — Not enough storage to start scan
+The drive that stores scan data does not have enough free space for this scan,
+so the scan was not started and the laser did not fire. Checked at scan start:
+free space on the data drive must cover the scan's estimated output (per-camera
+database rows, plus raw CSVs and the scan-end CSV export when those are enabled,
+over the scan duration) plus a `scanMinFreeDiskMb` reserve (default 1024 MB).
+The modal detail shows the free space, the estimate and the reserve. A
+free-space query that fails does not block the scan.
+
+**What to do:** Free up space on the data drive (or export and remove old
+scans), then start the scan again. Contact support if the drive should not be
+full.
+
+### E-306 — Storage almost full during scan
+The drive that stores scan data was nearly full, so the scan was stopped before
+storage ran out. Data captured up to that point was saved. While a scan runs the
+app re-checks free space every 5 s and stops the scan once it falls to
+`scanStopFreeDiskMb` (default 256 MB) — the remaining space lets the scan
+database finalize cleanly instead of failing on a full disk.
+
+**What to do:** Free up space on the data drive (or export and remove old
+scans) before starting another scan.
+
 ## Startup warnings (connection watchdog)
 
 A one-shot check armed at app launch flags expected devices that never showed

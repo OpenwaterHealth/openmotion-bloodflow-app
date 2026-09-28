@@ -64,7 +64,7 @@ import error_codes
 import bug_report
 from nan_gap_tracker import NanGapTracker, gap_note_line
 from utils.resource_path import resource_path
-from utils import app_paths, config_store, log_tail
+from utils import app_paths, config_store, disk_space, log_tail
 
 # The app self-updater is compiled out of clinical builds (#543, tracker
 # M-02): openwater.spec excludes ``app_updater`` when CLINICAL_MODE is
@@ -233,6 +233,12 @@ def _rearm_dropped_camera(
         f"after being marked Connection Lost — re-arming the dropout "
         f"watchdog and resuming display."
     )
+
+
+# Mid-scan free-space poll period (issue #506). At the worst measured write
+# rate (16 cameras with raw CSVs, ~2.6 MB/s) this spends ~13 MB of the
+# stop floor between polls.
+_STORAGE_CHECK_INTERVAL_S = 5.0
 
 
 def _scan_data_stall_decision(
@@ -1062,6 +1068,14 @@ class MotionConnector(QObject):
         # comfortably above cameraDropoutThresholdSec (per-camera toast) and
         # the sensor warmup window. <= 0 disables the abort.
         self._scan_data_stall_timeout_sec = float(cfg.get("scanDataStallTimeoutSec", 3.0))
+        # Low-storage guard (issue #506): free MB the data drive must keep
+        # beyond a scan's estimated output to start it (E-305), and the
+        # floor at which a running scan is stopped (E-306). <= 0 disables.
+        self._scan_min_free_disk_mb = float(cfg.get("scanMinFreeDiskMb", 1024))
+        self._scan_stop_free_disk_mb = float(cfg.get("scanStopFreeDiskMb", 256))
+        # Next monotonic time the running scan re-checks free space; the
+        # 1 Hz watchdog polls it every _STORAGE_CHECK_INTERVAL_S.
+        self._storage_next_check_mono = 0.0
 
         # Camera dropout watchdog state — reset at start of each scan.
         # _camera_last_seen is refreshed on every FRAME ARRIVAL for the
@@ -4574,6 +4588,11 @@ class MotionConnector(QObject):
             self.captureLog.emit(f"Failed to create data dir: {e}")
             return False
 
+        if not self._storage_allows_scan(
+            duration_sec, left_camera_mask, right_camera_mask,
+        ):
+            return False
+
         self._capture_stop = threading.Event()
         # Each new scan starts with a fresh notes buffer
         self._scan_notes = ""
@@ -4652,6 +4671,7 @@ class MotionConnector(QObject):
             | ({"left"} if left_camera_mask else set())
             | ({"right"} if right_camera_mask else set())
         )
+        self._storage_next_check_mono = 0.0
         self._dropout_timer.start()
 
         # NaN-gap tracker — fresh per scan (same lifecycle as the watchdog).
@@ -5686,6 +5706,16 @@ class MotionConnector(QObject):
         """1 Hz watchdog: emit cameraDropoutDetected for any camera silent > threshold."""
         if not self._capture_running:
             return
+        # Low-storage stop (issue #506). Ahead of the trigger-state gate
+        # below: the pipeline writes scans.db for the whole capture, not
+        # only while the trigger is ON.
+        if not self._scan_abort_notified and self._storage_check_due():
+            free = disk_space.free_bytes(self._data_root)
+            if disk_space.below_floor(
+                free, int(self._scan_stop_free_disk_mb * disk_space.MB),
+            ):
+                self._abort_scan_low_storage(free)
+                return
         # Also bail when the trigger is OFF. _capture_running only
         # flips false in _on_complete after the post-scan cleanup
         # finishes, so between trigger-stop and that flip there's a
@@ -5863,6 +5893,87 @@ class MotionConnector(QObject):
         )
         self._note_scan_abort("E-303", detail)
         self._raise_critical("E-303", detail=detail)
+        self.stopCapture()
+
+    def _storage_allows_scan(
+        self, duration_sec: float, left_mask: int, right_mask: int,
+    ) -> bool:
+        """Pre-scan free-space gate (issue #506). Returns False — after
+        raising the E-305 modal — when the data drive cannot hold this
+        scan's estimated output plus the scanMinFreeDiskMb reserve. Runs
+        before any scan state is touched, so a refusal leaves nothing to
+        unwind; the laser has not fired. A failed free-space query never
+        blocks (the mid-scan floor still protects the drive)."""
+        if self._scan_min_free_disk_mb <= 0:
+            return True
+        n_cameras = (bin(int(left_mask) & 0xFF).count("1")
+                     + bin(int(right_mask) & 0xFF).count("1"))
+        raw_allowed = (not self._app_config.get("clinicalMode", False)
+                       or self._app_config.get("engineeringMode", False))
+        raw_max_s = (self._raw_csv_duration_sec
+                     if (raw_allowed and self._write_raw_csv) else 0)
+        estimate = disk_space.estimate_scan_bytes(
+            duration_sec, n_cameras, raw_max_s,
+            auto_export=self._auto_export_enabled(),
+        )
+        free = disk_space.free_bytes(self._data_root)
+        shortfall = disk_space.start_shortfall(
+            free, estimate,
+            int(self._scan_min_free_disk_mb * disk_space.MB),
+        )
+        if shortfall is None:
+            if free is not None:
+                logger.info(
+                    "Storage check: %.0f MB free, scan needs ~%.0f MB + "
+                    "%.0f MB reserve", free / disk_space.MB,
+                    estimate / disk_space.MB, self._scan_min_free_disk_mb,
+                )
+            return True
+        detail = (
+            f"{free / disk_space.MB:.0f} MB free on the data drive; this "
+            f"scan needs about {estimate / disk_space.MB:.0f} MB plus a "
+            f"{self._scan_min_free_disk_mb:.0f} MB reserve"
+        )
+        logger.warning("startCapture refused: %s (data root %s)",
+                       detail, self._data_root)
+        self.captureLog.emit(f"Scan not started: {detail}.")
+        self._raise_critical("E-305", detail=detail)
+        return False
+
+    def _storage_check_due(self) -> bool:
+        """Rate-limit the mid-scan free-space query (issue #506) to one
+        every _STORAGE_CHECK_INTERVAL_S; the first watchdog tick of a scan
+        always checks."""
+        now = time.monotonic()
+        if now < self._storage_next_check_mono:
+            return False
+        self._storage_next_check_mono = now + _STORAGE_CHECK_INTERVAL_S
+        return True
+
+    def _abort_scan_low_storage(self, free: Optional[int]) -> None:
+        """Stop the running scan because the data drive is nearly full
+        (issue #506). Twin of _abort_scan_data_stall: one-shot guard,
+        capture-log line, E-306 critical modal, then stopCapture() — the
+        pipeline finalizes scans.db in the space the floor kept free and
+        captureFinished returns the scan flow to idle.
+        """
+        self._scan_abort_notified = True
+        self._dismiss_dropout_toasts()
+        elapsed_str = self._scan_elapsed_str()
+        free_mb = (free or 0) / disk_space.MB
+        msg = (
+            f"[{elapsed_str}] Data drive almost full ({free_mb:.0f} MB "
+            f"free, stop floor {self._scan_stop_free_disk_mb:.0f} MB). "
+            f"Stopping the scan; data captured so far is saved."
+        )
+        logger.error(msg)
+        self.captureLog.emit(msg)
+        detail = (
+            f"{free_mb:.0f} MB free on the data drive "
+            f"(scan elapsed {elapsed_str})"
+        )
+        self._note_scan_abort("E-306", detail)
+        self._raise_critical("E-306", detail=detail)
         self.stopCapture()
 
     def _abort_scan_device_disconnect(self, name: str) -> None:

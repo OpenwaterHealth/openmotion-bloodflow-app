@@ -144,6 +144,25 @@ _SCAN = [
         "Check the USB cables and power, reconnect the system, and start a "
         "new scan. If it keeps happening, contact support.",
     ),
+    _e(
+        "E-305", "scan",
+        "Not enough storage to start scan",
+        "The drive that stores scan data does not have enough free space "
+        "for this scan, so the scan was not started and the laser did not "
+        "fire.",
+        "Free up space on the data drive (or export and remove old scans), "
+        "then start the scan again. Contact support if the drive should "
+        "not be full.",
+    ),
+    _e(
+        "E-306", "scan",
+        "Storage almost full during scan",
+        "The drive that stores scan data was nearly full, so the scan was "
+        "stopped before storage ran out. Data captured up to that point "
+        "was saved.",
+        "Free up space on the data drive (or export and remove old scans) "
+        "before starting another scan.",
+    ),
 ]
 
 
