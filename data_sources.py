@@ -714,7 +714,7 @@ class ScanDataSource(QObject):
     def dateTime(self) -> str:
         """The scan's date/time for the viewer badge (issue #245), formatted
         as ``YYYY-MM-DD HH:MM:SS`` like the History list; "" when unknown. The
-        viewer trims it to minutes for display. See ``userLabel``."""
+        viewer shows it whole, seconds included (#456). See ``userLabel``."""
         return self._date_time
 
     @pyqtProperty(float)
