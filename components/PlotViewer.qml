@@ -400,12 +400,33 @@ Rectangle {
     // Connection Lost badge key: a pair cell shows it when either of its
     // cameras is lost — the trace is then one camera, not the pair.
     function _cellLost(side, camId) {
+        if (camId === -1) return viewer._lostOnSide(side).length > 0
         var pair = viewer._aggregatePair(camId)
         var ids = pair ? pair : [camId]
         for (var i = 0; i < ids.length; i++) {
             if (viewer._lostCameras[side + ":" + ids[i]] === true) return true
         }
         return false
+    }
+
+    // The side-averaged plot (cam_id -1, issue #585) stands for every
+    // camera on its side, so it badges while any of them is offline —
+    // including one that never started. Its trace keeps going from the
+    // other cameras, so the badge names the offline ones instead of
+    // saying the plot lost its connection.
+    function _lostOnSide(side) {
+        var ids = []
+        for (var c = 0; c < 8; c++) {
+            if (viewer._lostCameras[side + ":" + c] === true) ids.push(c + 1)
+        }
+        return ids
+    }
+
+    function _cellLostText(side, camId) {
+        if (camId !== -1) return "CONNECTION LOST"
+        var ids = viewer._lostOnSide(side)
+        return (ids.length === 1 ? "CAMERA " : "CAMERAS ")
+            + ids.join(", ") + " OFFLINE"
     }
 
     // ── Grid model ─────────────────────────────────────────────────────
@@ -1188,6 +1209,8 @@ Rectangle {
                         connectionLost: viewer.scanSource !== null
                             && viewer.scanSource.live === true
                             && viewer._cellLost(modelData.side, modelData.camId)
+                        connectionLostText: viewer._cellLostText(
+                            modelData.side, modelData.camId)
                     }
                 }
             }
