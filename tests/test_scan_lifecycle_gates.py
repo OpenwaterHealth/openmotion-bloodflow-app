@@ -131,3 +131,63 @@ def test_start_configure_refused_while_config_running(connector):
     assert ok is False
     connector._interface.start_configure_camera_sensors.assert_not_called()
     assert seen == [(False, "Camera configuration already in progress")]
+
+
+# --- #342: camera power-on refusal at configure time -> E-105 ---------------
+
+from types import SimpleNamespace  # noqa: E402
+
+from motion_connector import _camera_power_failure_side  # noqa: E402
+
+# Exact shape of the SDK error (ScanWorkflow.start_configure_camera_sensors
+# wraps the power-on RuntimeError in "Error setting camera power for ...").
+_SDK_POWER_ERR = ("Error setting camera power for right: Failed to power on "
+                  "cameras on right (mask 0x99).")
+
+
+@pytest.mark.parametrize("err, side", [
+    (_SDK_POWER_ERR, "right"),
+    ("Failed to power on cameras on left (mask 0xFF).", "left"),
+    # The wrapper prefix alone also wraps comm exceptions: not a power fault.
+    ("Error setting camera power for left: USB timeout", None),
+    ("Empty camera masks (left & right)", None),
+    ("Canceled", None),
+    ("", None),
+    (None, None),
+])
+def test_camera_power_failure_side(err, side):
+    assert _camera_power_failure_side(err) == side
+
+
+def _finish_config(connector, ok, error):
+    critical, finished = [], []
+    connector.criticalErrorRaised.connect(
+        lambda code, *rest: critical.append((code, rest[-1])))
+    connector.configFinished.connect(lambda o, e: finished.append((o, e)))
+    connector._config_running = True
+    connector._on_config_finished(SimpleNamespace(ok=ok, error=error))
+    return critical, finished
+
+
+def test_config_power_on_refusal_raises_e105(connector):
+    critical, finished = _finish_config(connector, False, _SDK_POWER_ERR)
+
+    assert [c[0] for c in critical] == ["E-105"]
+    assert critical[0][1].startswith("right sensor")
+    # The scan flow still gets its failure so the runner unwinds.
+    assert finished == [(False, _SDK_POWER_ERR)]
+
+
+def test_config_other_failure_does_not_raise_e105(connector):
+    critical, finished = _finish_config(
+        connector, False, "FPGA program failed on left camera 3")
+
+    assert critical == []
+    assert finished == [(False, "FPGA program failed on left camera 3")]
+
+
+def test_config_success_does_not_raise(connector):
+    critical, finished = _finish_config(connector, True, "")
+
+    assert critical == []
+    assert finished == [(True, "")]
