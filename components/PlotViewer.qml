@@ -1437,11 +1437,11 @@ Rectangle {
     // History list renders, so the badge can't disagree with the clicked row.
     readonly property string _scanBadgeLabel:
         (viewer.scanSource && viewer.scanSource.userLabel) || ""
-    readonly property string _scanBadgeDate: {
-        var d = (viewer.scanSource && viewer.scanSource.dateTime) || ""
-        // Trim "YYYY-MM-DD HH:MM:SS" → "YYYY-MM-DD HH:MM" for a tighter badge.
-        return d.length >= 16 ? d.substring(0, 16) : d
-    }
+    // Full "YYYY-MM-DD HH:MM:SS", seconds included (#456): operators match
+    // the loaded scan against their acquisition records to the second, and
+    // the History list shows the same string.
+    readonly property string _scanBadgeDate:
+        (viewer.scanSource && viewer.scanSource.dateTime) || ""
     readonly property string _scanBadgeText:
         viewer._scanBadgeLabel.length > 0
             ? (viewer._scanBadgeLabel + " · " + viewer._scanBadgeDate)
@@ -1468,11 +1468,17 @@ Rectangle {
         border.color: AppTheme.borderSubtle
         border.width: 1
 
+        // Never wider than the viewer: a long operator label elides so the
+        // date/time (the part being cross-checked, #456) always stays whole.
+        readonly property real _maxRowWidth:
+            Math.max(0, viewer.width - 2 * viewer._overlayEdgeMarginPx - 28)
+
         Row {
             id: scanBadgeRow
             anchors.centerIn: parent
             spacing: 8
             Text {
+                id: scanBadgeViewing
                 anchors.verticalCenter: parent.verticalCenter
                 text: "Viewing"
                 color: AppTheme.textTertiary
@@ -1480,8 +1486,23 @@ Rectangle {
                 font.family: "Roboto Mono"
             }
             Text {
+                id: scanBadgeLabelText
+                visible: viewer._scanBadgeLabel.length > 0
                 anchors.verticalCenter: parent.verticalCenter
-                text: viewer._scanBadgeText
+                width: Math.max(0, Math.min(implicitWidth,
+                    scanBadge._maxRowWidth - scanBadgeViewing.implicitWidth
+                    - scanBadgeDateText.implicitWidth - scanBadgeRow.spacing * 2))
+                text: viewer._scanBadgeLabel + " ·"
+                elide: Text.ElideRight
+                color: AppTheme.textPrimary
+                font.pixelSize: 13
+                font.weight: Font.DemiBold
+                font.family: "Roboto Mono"
+            }
+            Text {
+                id: scanBadgeDateText
+                anchors.verticalCenter: parent.verticalCenter
+                text: viewer._scanBadgeDate
                 color: AppTheme.textPrimary
                 font.pixelSize: 13
                 font.weight: Font.DemiBold
