@@ -77,6 +77,16 @@ scan was stopped.
 **What to do:** Remove any obstruction, let the system settle, and start a new
 scan. If it trips repeatedly, stop and contact support.
 
+### E-203 — Laser safety trip
+The laser-safety monitor tripped while no scan was running and the laser was
+shut off. The safety interlock stays latched until the console is power-cycled.
+Raised for a trip at any time outside a scan (idle, the preflight signal-quality
+check, test/calibrate); a trip during a scan raises E-202 instead. The
+persistent laser-safety toast stays up until the monitor reports clear.
+
+**What to do:** Power-cycle the console and reconnect before starting a scan. If
+it trips again, stop and contact support.
+
 ## E-3xx — Scan / capture
 
 ### E-301 — Scan aborted before start

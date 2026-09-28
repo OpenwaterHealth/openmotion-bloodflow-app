@@ -5025,6 +5025,22 @@ class MotionConnector(QObject):
         self._raise_critical("E-202")
         QTimer.singleShot(5000, self.stopCapture)
 
+    def _surface_safety_trip(self, fault_detail: str) -> None:
+        """Raise the blocking modal for a laser-safety FPGA trip (#431).
+
+        Called once per trip, on the transition into ``safetyFailure``. A
+        trip during a scan goes through ``_on_safety_trip_during_capture``
+        (E-202, which also cancels the scan); a trip at any other time —
+        idle, preflight signal-quality check, test/calibrate — raises E-203.
+        Before #431 that second case showed only the persistent toast, which
+        an operator can miss.
+        """
+        if self._capture_running:
+            if not self._safety_cancel_scheduled:
+                self.safetyTripDuringCaptureRequested.emit()
+        else:
+            self._raise_critical("E-203", detail=fault_detail)
+
     @pyqtSlot(str)
     def _on_scan_worker_failed(self, detail: str):
         """Main-thread handler for an async scan-worker abort (#213).
@@ -5196,8 +5212,7 @@ class MotionConnector(QObject):
                     # which surfaced via the dev-mode safety toast.
                     self._laserOn = False
                     self.laserStateChanged.emit()
-                    if self._capture_running and not self._safety_cancel_scheduled:
-                        self.safetyTripDuringCaptureRequested.emit()
+                    self._surface_safety_trip(fault_detail)
         except Exception as e:
             logger.error(f"readSafetyStatus failed: {e}")
             self.safetyFailure = True
