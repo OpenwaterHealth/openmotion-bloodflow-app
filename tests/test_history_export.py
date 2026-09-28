@@ -222,3 +222,40 @@ def test_export_scan_csv_slot_invalid_inputs_signal_false(tmp_path):
     c.exportScanCsv(-1, str(tmp_path / "x.csv"))
     c.exportScanCsv(1, "")
     assert results == [(False, str(tmp_path / "x.csv")), (False, "")]
+
+
+def test_export_scan_csv_writes_correction_status_and_cq_columns(tmp_path):
+    """#589: the History export carries one camera-tagged correction_status
+    column plus per-camera cq_l1..cq_r8 contact quality, not the old
+    per-camera quality_* columns. Unmocked — real DB, real SDK export."""
+    import csv
+
+    db_path = str(tmp_path / "scans.db")
+    db = ScanDatabase(db_path=db_path)
+    sid = db.create_session(
+        session_label="scanA", session_start=1.0, session_notes=None,
+        session_meta={"data_semantics": "final",
+                      "sdk_flags": {"reduced_mode": False,
+                                    "left_camera_mask": 0x03,
+                                    "right_camera_mask": 0}},
+    )
+    db.insert_session_data_rows([
+        {"session_id": sid, "cam_id": cam, "side": 0, "frame_id": 10,
+         "timestamp_s": 0.25, "bfi": 4.0, "bvi": 6.0,
+         "correction_status": status, "contact_quality": cq}
+        for cam, status, cq in ((0, "", "ok"),
+                                (1, "ts_corrected", "poor_contact"))
+    ])
+    db.close()
+
+    c = _connector(tmp_path, scan_db_path=db_path)
+    out = str(tmp_path / "scanA_export.csv")
+    assert c._export_scan_csv_sync(sid, out) is True
+
+    with open(out, newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    assert not any(k.startswith("quality_") for k in rows[0])
+    assert rows[0]["correction_status"] == "l2:ts_corrected"
+    assert rows[0]["cq_l1"] == "ok"
+    assert rows[0]["cq_l2"] == "poor_contact"
+    assert rows[0]["cq_l3"] == ""           # outside the scan mask
