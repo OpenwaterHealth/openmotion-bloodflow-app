@@ -36,10 +36,10 @@ def _connector(tmp_path, scan_db_path=None, settings_store=None,
     )
 
 
-def _session(db_path, label):
+def _session(db_path, label, notes=None):
     db = ScanDatabase(db_path=db_path)
     sid = db.create_session(session_label=label, session_start=1.0,
-                            session_notes=None, session_meta={})
+                            session_notes=notes, session_meta={})
     db.close()
     return sid
 
@@ -93,6 +93,18 @@ def test_exports_finished_scan_into_data_dir(tmp_path, materialize):
     assert materialize[0][2] == {"include_quality": True}  # same as History
     assert os.path.isfile(expected)
     assert not os.path.exists(expected + ".partial")
+
+
+def test_auto_export_writes_notes_sidecar(tmp_path, materialize):
+    """#644: the scan's notes land beside the auto-exported CSV."""
+    db_path = str(tmp_path / "scans.db")
+    _session(db_path, "scanA", notes="Scan duration: 60.0 s\n")
+    c = _connector(tmp_path, scan_db_path=db_path, autoExportCsv=True)
+    out = os.path.join(c._data_root, "scanA_export.csv")
+    assert c._auto_export_scan_csv_sync("scanA", out) == (True, out)
+    with open(os.path.join(c._data_root, "scanA_export_notes.txt"),
+              encoding="utf-8") as fh:
+        assert fh.read() == "Scan duration: 60.0 s\n"
 
 
 @pytest.mark.parametrize("cfg", [
