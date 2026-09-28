@@ -1546,11 +1546,15 @@ Rectangle {
                 // Match the bottom-right settings popup's visual style
                 // — same translucent dark card, subtle border, rounded
                 // corners — so the two corner overlays read as parts
-                // of the same control system. Keeping the default
-                // MenuItem contentItem (instead of overriding it) so
-                // implicitWidth resolves correctly; a custom Text
-                // contentItem leaves the menu zero-width and the items
-                // un-clickable.
+                // of the same control system.
+                //
+                // Item text and hover fill come from AppTheme, not the
+                // Controls style (#538): main.py pins Material *Dark*
+                // app-wide, so the default MenuItem text is always white
+                // and vanished on this card in the Light theme. The items
+                // keep an explicit implicitWidth so the menu still sizes
+                // (a bare Text contentItem once left it zero-width and
+                // the items un-clickable).
                 padding: 6
                 implicitWidth: 120
                 background: Rectangle {
@@ -1562,9 +1566,26 @@ Rectangle {
                 Repeater {
                     model: viewer._windowOptions
                     MenuItem {
+                        id: windowOptionItem
                         text: modelData.label
                         font.family: "Roboto Mono"
                         font.pixelSize: 13
+                        implicitWidth: 108
+                        implicitHeight: 36
+                        leftPadding: 12
+                        rightPadding: 12
+                        contentItem: Text {
+                            text: windowOptionItem.text
+                            font: windowOptionItem.font
+                            color: AppTheme.textPrimary
+                            verticalAlignment: Text.AlignVCenter
+                            elide: Text.ElideRight
+                        }
+                        background: Rectangle {
+                            radius: 4
+                            color: windowOptionItem.highlighted || windowOptionItem.down
+                                   ? AppTheme.bgHover : "transparent"
+                        }
                         onTriggered: viewer._windowSecondsRequested(modelData.value)
                     }
                 }
