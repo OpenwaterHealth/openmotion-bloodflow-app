@@ -273,6 +273,42 @@ def _scan_data_stall_decision(
     return stalled if stalled > timeout_sec else None
 
 
+def _never_started_cameras(
+    camera_masks: dict,
+    last_seen: dict,
+    dropped: set,
+    streaming_since: float | None,
+    trigger_on_mono: float | None,
+    now_mono: float,
+    threshold_sec: float,
+) -> list:
+    """Mask-enabled cameras that have not delivered a single frame
+    (issue #585).
+
+    The per-camera dropout pass walks ``last_seen``, which gains an entry
+    on a camera's first frame, so a camera that never starts is invisible
+    to it. The clock for "never started" is the later of the moment the
+    scan was first seen streaming (``streaming_since``: some camera has
+    delivered) and the current trigger-ON edge. Until some camera
+    delivers, nothing is returned: a scan with no data at all belongs to
+    the whole-scan stall abort (E-303, issue #248), not to 16 per-camera
+    toasts. Returns ``(side, cam_id)`` keys not already in ``dropped``.
+    """
+    if streaming_since is None or trigger_on_mono is None:
+        return []
+    if now_mono - max(streaming_since, trigger_on_mono) <= threshold_sec:
+        return []
+    out = []
+    for side in ("left", "right"):
+        mask = int(camera_masks.get(side, 0) or 0) & 0xFF
+        for cam_id in range(8):
+            key = (side, cam_id)
+            if (mask >> cam_id) & 1 and key not in last_seen \
+                    and key not in dropped:
+                out.append(key)
+    return out
+
+
 def _should_abort_on_disconnect(
     name: str,
     capture_running: bool,
@@ -1092,7 +1128,11 @@ class MotionConnector(QObject):
         # streaming unlit frames (covered sensor) is NOT a dropout.
         # Dropped cameras re-arm automatically when frames resume
         # (_rearm_dropped_camera), so the set holds currently-silent
-        # cameras, not a permanent per-scan record.
+        # cameras, not a permanent per-scan record. A mask-enabled camera
+        # that never delivers joins the set too (issue #585), via the
+        # scan's masks and the moment the scan was first seen streaming.
+        self._capture_camera_masks: dict[str, int] = {}
+        self._camera_streaming_since: float | None = None
         self._camera_last_seen: dict[tuple[str, int], float] = {}
         self._camera_last_temp: dict[tuple[str, int], float] = {}
         self._camera_dropped: set[tuple[str, int]] = set()
@@ -4684,6 +4724,11 @@ class MotionConnector(QObject):
         self._camera_last_seen = {}
         self._camera_last_temp = {}
         self._camera_dropped = set()
+        # Never-started detection (issue #585): which cameras this scan
+        # expects, and when the scan was first seen streaming.
+        self._capture_camera_masks = {
+            "left": int(left_camera_mask), "right": int(right_camera_mask)}
+        self._camera_streaming_since = None
         self._scan_abort_notified = False
         self._scan_abort_code = None
         self._scan_abort_reason = ""
@@ -5810,6 +5855,42 @@ class MotionConnector(QObject):
                     drop_t = src.last_sample_t(side, cam_id)
                     if math.isfinite(drop_t):
                         src.mark_dropped(side=side, cam_id=cam_id, t=drop_t)
+
+        # ── Cameras that never started (issue #585) ───────────────────
+        # The loop above only sees cameras that delivered at least once.
+        # A mask-enabled camera that never sent a frame is offline too:
+        # same dropped set / signal / toast tag, so the plot badges (per
+        # camera and on the averaged side plot) and the toast dismissal
+        # treat it exactly like a dropout. No plot marker — there is no
+        # trace to end. A late first frame re-arms it through the sink's
+        # _rearm_dropped_camera, like any recovered camera.
+        if self._camera_streaming_since is None and self._camera_last_seen:
+            self._camera_streaming_since = now
+        for key in _never_started_cameras(
+            self._capture_camera_masks,
+            self._camera_last_seen,
+            self._camera_dropped,
+            self._camera_streaming_since,
+            self._trigger_on_mono,
+            now,
+            threshold,
+        ):
+            side, cam_id = key
+            elapsed_str = self._scan_elapsed_str()
+            logger.warning(
+                f"[{elapsed_str}] Camera {side.upper()} {cam_id + 1} offline: "
+                f"enabled for this scan but never delivered a frame "
+                f"(>{threshold:.0f} s after the other cameras started)."
+            )
+            self.notify(
+                f"Camera {side.upper()} {cam_id + 1} never started"
+                f" — no data from it since the scan began",
+                type_="warning",
+                duration_ms=30000,
+                tag=f"dropout_{side}_{cam_id}",
+            )
+            self._camera_dropped.add(key)
+            self.cameraDropoutDetected.emit(side, cam_id, elapsed_str)
 
         # ── All-camera stall (issue #248) ─────────────────────────────
         # Per-camera dropouts above are informational (fail-soft: the
