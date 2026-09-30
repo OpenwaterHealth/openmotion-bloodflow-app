@@ -306,6 +306,23 @@ def _disconnect_toast_text(name: str) -> str:
 _SIDE_NAMES = ("left", "right")
 
 
+# The SDK's configure step (ScanWorkflow.start_configure_camera_sensors)
+# fails with "Failed to power on cameras on <side> (mask 0x..)" when the
+# sensor refuses the camera power-on command it sends before FPGA
+# programming. Matched narrowly: the step's wrapper prefix ("Error setting
+# camera power for <side>:") also wraps comm exceptions, which are not a
+# power fault.
+_CAMERA_POWER_ON_FAILED_RE = re.compile(
+    r"Failed to power on cameras on (left|right)\b")
+
+
+def _camera_power_failure_side(error: str) -> Optional[str]:
+    """Side ("left"/"right") of a camera power-on refusal named in a
+    configure error, else None (#342: routes it to E-105)."""
+    m = _CAMERA_POWER_ON_FAILED_RE.search(error or "")
+    return m.group(1) if m else None
+
+
 class _LivePlotSink:
     """Subscribes to the 'live' pipeline channel and feeds per-frame samples
     into the LiveScanSource backing the PlotViewer, for each active camera.
@@ -1590,7 +1607,10 @@ class MotionConnector(QObject):
                             "Could not power on cameras on %s sensor for ID cache fill",
                             side,
                         )
-                        self._raise_critical("E-105", detail=f"{side} sensor")
+                        self._raise_critical(
+                            "E-105",
+                            detail=f"{side} sensor: camera power-on refused "
+                                   f"during initialization")
                         refresh_cache()  # try anyway in case some cameras are already on
                 elif refresh_cache:
                     refresh_cache()  # fallback: fill cache without power cycle (may get zeros for off cameras)
@@ -6291,7 +6311,17 @@ class MotionConnector(QObject):
         if not self._config_running:
             return
         self._config_running = False
-        self.configFinished.emit(bool(result.ok), result.error or "")
+        err = result.error or ""
+        if not result.ok:
+            side = _camera_power_failure_side(err)
+            if side is not None:
+                # Same fault as the connect-time power-on refusal: surface
+                # it as E-105, not only as the scan-failed toast (#342).
+                self._raise_critical(
+                    "E-105",
+                    detail=f"{side} sensor: camera power-on refused before "
+                           f"scan/check configuration")
+        self.configFinished.emit(bool(result.ok), err)
 
     @pyqtSlot(str)
     def querySensorAccelerometer(self, target: str):
