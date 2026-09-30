@@ -353,7 +353,7 @@ def test_past_scan_config_overrides_live_mask_selection(viewer_factory):
 
 # ── Issue #245 — "Viewing" badge names the replayed scan ───────────────
 # The viewer shows a top-center badge identifying the loaded past scan
-# (user label · date trimmed to minutes). It is hidden during live
+# (user label · full date/time, seconds included — #456). It is hidden during live
 # monitoring and when no scan is loaded.
 
 
@@ -365,7 +365,7 @@ def test_viewing_badge_names_loaded_past_scan(viewer_factory):
             user_label="Patient A", date_time="2026-06-23 11:19:35")
         viewer_factory.stub.setScanSource(past)
         assert viewer.property("_showScanBadge") is True
-        assert viewer.property("_scanBadgeText") == "Patient A · 2026-06-23 11:19"
+        assert viewer.property("_scanBadgeText") == "Patient A · 2026-06-23 11:19:35"
     finally:
         viewer_factory.stub.setScanSource(None)
 
@@ -378,7 +378,7 @@ def test_viewing_badge_collapses_to_date_when_unlabeled(viewer_factory):
             user_label="", date_time="2026-06-23 11:19:35")
         viewer_factory.stub.setScanSource(past)
         assert viewer.property("_showScanBadge") is True
-        assert viewer.property("_scanBadgeText") == "2026-06-23 11:19"
+        assert viewer.property("_scanBadgeText") == "2026-06-23 11:19:35"
     finally:
         viewer_factory.stub.setScanSource(None)
 
