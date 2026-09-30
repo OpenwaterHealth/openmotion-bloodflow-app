@@ -8,10 +8,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # ── Configuration ─────────────────────────────────────────────────────
-APP_NAME="Open-Motion"
-# The .app bundle's name (Finder, /Applications, the menu bar). The executable
-# inside Contents/MacOS keeps APP_NAME. Must match BUNDLE_NAME in the spec below.
-BUNDLE_NAME="Open-Motion Research"
+# Must match APP_NAME in the spec heredoc below. It contains a space, so keep
+# every path built from it quoted.
+APP_NAME="Open-Motion Research"
 BUNDLE_ID="com.openwaterhealth.bloodflow"
 ICON_SRC="assets/images/favicon.png"
 SPEC_FILE="openwater_macos.spec"
@@ -71,9 +70,7 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 from PyInstaller.building.build_main import Analysis, PYZ, EXE, COLLECT, BUNDLE
 
-APP_NAME = "Open-Motion"
-# The .app bundle's name; the executable in Contents/MacOS stays APP_NAME.
-BUNDLE_NAME = "Open-Motion Research"
+APP_NAME = "Open-Motion Research"
 ENTRY = "main.py"
 ICNS_FILE = "build/AppIcon.icns"
 
@@ -200,12 +197,12 @@ coll = COLLECT(
 
 app = BUNDLE(
     coll,
-    name=f"{BUNDLE_NAME}.app",
+    name=f"{APP_NAME}.app",
     icon=ICNS_FILE,
     bundle_identifier="com.openwaterhealth.bloodflow",
     info_plist={
-        "CFBundleName": BUNDLE_NAME,
-        "CFBundleDisplayName": BUNDLE_NAME,
+        "CFBundleName": APP_NAME,
+        "CFBundleDisplayName": APP_NAME,
         "CFBundleShortVersionString": os.environ.get("OPENMOTION_VERSION")
             or os.popen("python version.py 2>/dev/null").read().strip() or "0.0.0",
         "CFBundleVersion": os.environ.get("OPENMOTION_VERSION")
@@ -223,16 +220,16 @@ SPEC_EOF
 # Clear previous output first: PyInstaller's -y overwrite can trip over
 # framework symlinks left by an earlier build (FileExistsError on
 # Versions/Current/* inside Qt .frameworks).
-rm -rf "${DIST_DIR}/${APP_NAME}" "${DIST_DIR}/${BUNDLE_NAME}.app"
+rm -rf "${DIST_DIR}/${APP_NAME}" "${DIST_DIR}/${APP_NAME}.app"
 
 python -m PyInstaller --noconfirm --clean "$SPEC_FILE" 2>&1 | tail -5
-echo "  ✓ Built ${DIST_DIR}/${BUNDLE_NAME}.app"
+echo "  ✓ Built ${DIST_DIR}/${APP_NAME}.app"
 
 # ── Step 4: Code-sign the .app bundle ─────────────────────────────────
 echo ""
 echo "▸ Step 4/5: Signing .app bundle …"
 
-APP_PATH="${DIST_DIR}/${BUNDLE_NAME}.app"
+APP_PATH="${DIST_DIR}/${APP_NAME}.app"
 
 # Strip any quarantine / provenance attributes that would block launch
 xattr -cr "$APP_PATH"
@@ -276,7 +273,7 @@ mkdir -p "$DMG_STAGING"
 
 # Copy .app into staging and strip quarantine xattrs so the DMG copy is clean
 cp -R "$APP_PATH" "$DMG_STAGING/"
-xattr -cr "$DMG_STAGING/${BUNDLE_NAME}.app" 2>/dev/null || true
+xattr -cr "$DMG_STAGING/${APP_NAME}.app" 2>/dev/null || true
 
 # Create Applications symlink
 ln -s /Applications "$DMG_STAGING/Applications"
@@ -357,7 +354,7 @@ tell application "Finder"
         try
             set background picture of viewOptions to file ".background:background.png"
         end try
-        set position of item "${BUNDLE_NAME}.app" of container window to {170, 200}
+        set position of item "${APP_NAME}.app" of container window to {170, 200}
         set position of item "Applications" of container window to {490, 200}
         close
         open
@@ -392,7 +389,7 @@ echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║  ✓ Build complete!                                          "
 echo "║                                                              "
-echo "║  App:  ${DIST_DIR}/${BUNDLE_NAME}.app                          "
+echo "║  App:  ${DIST_DIR}/${APP_NAME}.app                          "
 echo "║  DMG:  ${DMG_FINAL}                                         "
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
