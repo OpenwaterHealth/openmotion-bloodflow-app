@@ -174,16 +174,22 @@ def _open_combo_in_view(modal, object_name):
 def test_wheel_outside_closes_dropdown_and_scrolls_page(modal, object_name):
     combo, popup, flick = _open_combo_in_view(modal, object_name)
     y_before = flick.property("contentY")
+    # Wheel UP: _open_combo_in_view leaves the combo ~60 px below the top,
+    # so there is always room above. A downward wheel can land with the
+    # page already at its end (a combo near the bottom of Settings, whose
+    # height depends on the flags of whichever stub the process-wide
+    # MotionInterface singleton resolved to) and then scroll nothing.
+    assert y_before > 0
 
     # Over the Settings page, left of the combo row (the card margin),
     # a little below the combo — outside both the combo and its list.
     x = _scene_x(flick) + 8
     y = _scene_y(combo) + combo.height() + 20
-    _wheel(modal.window_, x, y, dy=-120)
+    _wheel(modal.window_, x, y, dy=120)
 
     assert popup.property("visible") is False, \
         "dropdown stayed open after a wheel outside it (#478)"
-    assert flick.property("contentY") > y_before, \
+    assert flick.property("contentY") < y_before, \
         "the wheel did not scroll the Settings page"
 
 
