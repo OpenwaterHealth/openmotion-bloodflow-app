@@ -22,6 +22,9 @@ Item {
     // See HistoryModal.qml for the original fix.
     readonly property int iconBarInset: 104
 
+    // The StyledCombo dropdown currently open, if any (#478).
+    property var _openComboPopup: null
+
     // ── Settings values — initialised from live config on creation ──────────
     property int    defaultLeftMaskIndex:  4
     property int    defaultRightMaskIndex: 4
@@ -306,6 +309,13 @@ Item {
             color: root.colTextSec
         }
         popup: Popup {
+            id: styledComboPopup
+            // Tracked so the modal's wheel catcher can close it (#478).
+            onAboutToShow: root._openComboPopup = styledComboPopup
+            onAboutToHide: {
+                if (root._openComboPopup === styledComboPopup)
+                    root._openComboPopup = null
+            }
             y: styledComboCtrl.height
             width: styledComboCtrl.width
             implicitHeight: styledComboCtrl.maxPopupHeight > 0
@@ -2073,6 +2083,23 @@ Item {
 
         Keys.onReleased: function(event) {
             if (event.key === Qt.Key_Escape) { root.close(); event.accepted = true }
+        }
+    }
+
+    // Close an open dropdown when the wheel turns outside it (#478).
+    // Popup.closePolicy only reacts to presses/releases outside, never to
+    // the wheel, so without this the list stayed open (and rode along)
+    // while the page scrolled. Enabled only while a StyledCombo is open;
+    // the wheel is left unaccepted so it still reaches the Settings
+    // ScrollView (or the backdrop) underneath. A wheel over the open list
+    // never gets here — the popup sits in the window overlay above us.
+    MouseArea {
+        anchors.fill: parent
+        enabled: root._openComboPopup !== null
+        acceptedButtons: Qt.NoButton
+        onWheel: function(wheel) {
+            root._openComboPopup.close()
+            wheel.accepted = false
         }
     }
 
