@@ -34,13 +34,14 @@ class _RecorderLiveSource:
         self.dropped.append({"side": side, "cam_id": cam_id, "t": t})
 
 
-def _connector(clinical_mode=False):
+def _connector(clinical_mode=False, engineering_mode=False):
     conn = SimpleNamespace(
         _camera_temp_alert_threshold_c=100.0,
         _camera_dropped=set(),
         _camera_last_seen={},
         _camera_last_temp={},
-        _app_config={"clinicalMode": clinical_mode},
+        _app_config={"clinicalMode": clinical_mode,
+                     "engineeringMode": engineering_mode},
         captureLog=_Signal(),
         recovered=[],
         notified=[],
@@ -261,8 +262,8 @@ def test_live_plot_sink_passes_temp_for_light_frames():
     assert src.appended[0]["temp"] == pytest.approx(54.3, abs=1e-4)
 
 
-def _over_temp_batch(temp_c=112.0, frame_type="light"):
-    """One row from LEFT camera 3 (cam_id 2) at ``temp_c``."""
+def _over_temp_batch(temp_c=112.0, frame_type="light", side_idx=0, cam_id=2):
+    """One row from one camera (default LEFT camera 3, cam_id 2) at ``temp_c``."""
     batch = SimpleNamespace(
         bfi_live=np.zeros((1, 2, 8), dtype=np.float32),
         bvi_live=np.zeros((1, 2, 8), dtype=np.float32),
@@ -272,19 +273,20 @@ def _over_temp_batch(temp_c=112.0, frame_type="light"):
         frame_type=np.array([frame_type], dtype="<U8"),
         timestamp_s=np.array([0.5], dtype=np.float64),
         abs_frame_ids=np.array([1], dtype=np.int64),
-        side_ids=np.array([0], dtype=np.int8),
-        cam_ids=np.array([2], dtype=np.int8),
+        side_ids=np.array([side_idx], dtype=np.int8),
+        cam_ids=np.array([cam_id], dtype=np.int8),
     )
-    batch.bfi_live[0, 0, 2] = 0.3
-    batch.bvi_live[0, 0, 2] = 5.0
+    batch.bfi_live[0, side_idx, cam_id] = 0.3
+    batch.bvi_live[0, side_idx, cam_id] = 5.0
     return batch
 
 
 def test_over_temp_fires_a_toast_not_just_a_log_line():
     """Crossing cameraTempAlertThresholdC must raise an on-screen toast.
     captureLog alone only reaches the app log (its QML terminus is
-    console.log), so the operator saw nothing during the scan."""
-    conn = _connector()
+    console.log), so the operator saw nothing during the scan.
+    Engineering mode keeps the per-camera toast (#110)."""
+    conn = _connector(engineering_mode=True)
     sink, _ = _make_sink(conn)
 
     sink.consume("live", _over_temp_batch(temp_c=112.0))
@@ -315,8 +317,8 @@ def test_over_temp_toast_suppressed_in_clinical_mode():
 
 def test_over_temp_toast_fires_once_per_camera_per_scan():
     """The _temp_alerted latch must gate the toast too — at 40 Hz an
-    unlatched toast would re-fire on every frame."""
-    conn = _connector()
+    unlatched toast would re-fire on every frame. (Engineering mode.)"""
+    conn = _connector(engineering_mode=True)
     sink, _ = _make_sink(conn)
 
     for _ in range(5):
@@ -327,6 +329,69 @@ def test_over_temp_toast_fires_once_per_camera_per_scan():
     # A new scan re-arms the latch.
     sink.on_scan_start(None)
     sink.consume("live", _over_temp_batch(temp_c=112.0))
+    assert len(conn.notified) == 2
+
+
+def test_engineering_mode_toasts_each_camera_that_crosses():
+    """Engineering mode keeps per-camera detail: a second hot camera
+    gets its own toast (#110 leaves this behavior unchanged)."""
+    conn = _connector(engineering_mode=True)
+    sink, _ = _make_sink(conn)
+
+    sink.consume("live", _over_temp_batch(temp_c=112.0, side_idx=0, cam_id=2))
+    sink.consume("live", _over_temp_batch(temp_c=108.0, side_idx=1, cam_id=5))
+
+    assert [t["tag"] for t in conn.notified] == ["temp_left_2", "temp_right_5"]
+
+
+def test_non_engineering_warns_once_per_scan_with_airflow_advice():
+    """#110: outside engineering mode, the FIRST camera to cross raises one
+    toast telling the user to check the sensor airflow (SPEC-18); later
+    cameras in the same scan raise nothing on screen."""
+    conn = _connector()
+    sink, _ = _make_sink(conn)
+
+    sink.consume("live", _over_temp_batch(temp_c=112.0, side_idx=0, cam_id=2))
+    sink.consume("live", _over_temp_batch(temp_c=108.0, side_idx=1, cam_id=5))
+    sink.consume("live", _over_temp_batch(temp_c=115.0, side_idx=0, cam_id=0))
+
+    assert len(conn.notified) == 1
+    toast = conn.notified[0]
+    assert toast["type"] == "warning"
+    assert toast["durationMs"] == 5000
+    assert "112" in toast["text"]
+    assert "airflow" in toast["text"]
+    assert "SPEC-18" in toast["text"]
+    # No per-camera naming in the operator text.
+    assert "LEFT" not in toast["text"] and "RIGHT" not in toast["text"]
+
+
+def test_non_engineering_still_logs_every_camera_crossing():
+    """The log is the audit trail: every camera's first crossing is logged
+    with full per-camera detail even when only one toast is shown."""
+    conn = _connector()
+    sink, _ = _make_sink(conn)
+
+    sink.consume("live", _over_temp_batch(temp_c=112.0, side_idx=0, cam_id=2))
+    sink.consume("live", _over_temp_batch(temp_c=108.0, side_idx=1, cam_id=5))
+
+    logged = [c[0] for c in conn.captureLog.calls]
+    assert len(logged) == 2
+    assert "Camera 3 (left)" in logged[0] and "112.0" in logged[0]
+    assert "Camera 6 (right)" in logged[1] and "108.0" in logged[1]
+
+
+def test_non_engineering_airflow_warning_rearms_each_scan():
+    """The once-per-scan flag resets at scan start."""
+    conn = _connector()
+    sink, _ = _make_sink(conn)
+
+    for cam_id in range(4):
+        sink.consume("live", _over_temp_batch(temp_c=112.0, cam_id=cam_id))
+    assert len(conn.notified) == 1
+
+    sink.on_scan_start(None)
+    sink.consume("live", _over_temp_batch(temp_c=112.0, cam_id=6))
     assert len(conn.notified) == 2
 
 
