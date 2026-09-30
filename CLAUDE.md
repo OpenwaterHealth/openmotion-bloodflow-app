@@ -484,8 +484,9 @@ that commit list:
 2. **Known Issues** — currently-open bugs a tester could hit in this build.
    Never list unimplemented/future features here. Cross-check each candidate
    against the merge log first — a ticket can still show "open" on the board
-   after its fix merged, since tickets stay in **In review** through
-   pre-release validation (see the board process in [../CLAUDE.md](../CLAUDE.md)).
+   after its fix merged, since only Varun's verification moves it to Done:
+   it sits in **In review** until a `dev`/`rc` build ships it, then in
+   **In QA** while he tests (see the board process in [../CLAUDE.md](../CLAUDE.md)).
    **Always confirm the candidate list with Ethan before publishing** — the
    backlog accumulates duplicates, stale hardware-specific reports, and
    test-infra-only bugs that don't belong in a test-team-facing note.
