@@ -113,6 +113,22 @@ def test_tracked_macos_spec_matches_build_script():
     tracked = (_REPO_ROOT / "openwater_macos.spec").read_text(encoding="utf-8")
     assert tracked == _macos_spec_source()
 
+
+def test_macos_app_bundle_is_named_open_motion_research():
+    """The Mac app ships as "Open-Motion Research.app".
+
+    build_macos.sh signs, stages and positions the bundle by its own
+    APP_NAME, so it has to agree with the name the spec hands BUNDLE().
+    """
+    script = (_REPO_ROOT / "build_macos.sh").read_text(encoding="utf-8")
+    assert '\nAPP_NAME="Open-Motion Research"\n' in script
+    assert 'APP_PATH="${DIST_DIR}/${APP_NAME}.app"' in script
+
+    source = _macos_spec_source()
+    assert '\nAPP_NAME = "Open-Motion Research"\n' in source
+    assert 'name=f"{APP_NAME}.app"' in source
+    assert '"CFBundleName": APP_NAME' in source
+
 def _spec_source(spec: str) -> str:
     return (
         (_REPO_ROOT / "openwater.spec").read_text(encoding="utf-8")
