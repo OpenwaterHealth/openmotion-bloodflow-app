@@ -176,8 +176,17 @@ Why session-only for the engineering/debug flags: the engineering unlock is per
 session, so nothing it enables may outlive the session that authorized it.
 `portableMode` is **derived**, not configured: a frozen Windows build is
 "installed" when its exe lives in the directory the MSI registered at
-`HKLM\Software\Openwater\Open-Motion\InstallDir`, else "portable" — so the
+`HKLM\Software\Openwater\<ProductName>\InstallDir`, else "portable" — so the
 portable zip and the installer share one byte-identical exe per variant.
+**Installer paths and keys are per variant** (#586): Clinical →
+`...\Openwater\Open-Motion` + `HKLM\Software\Openwater\Open-Motion`, Research →
+`...\Openwater\Open-Motion Research` + `HKLM\Software\Openwater\Open-Motion Research`
+(`Program Files (x86)` / WOW6432Node: the MSI is 32-bit). `app.wxs` components
+use `Guid="*"`, derived from the key path, so any folder or HKLM key shared by
+the two variants gives both MSIs the same component GUID and Windows Installer
+then keeps an uninstalled variant's shortcuts alive while the other is
+installed. Derive every new path/key from `$(var.ProductName)`
+(`tests/test_app_paths.py` guards this).
 
 **Build variant is a compile-time stamp.** `scripts/build_common.ps1
 Set-BuildVariant` rewrites `CLINICAL_MODE = True|False` before PyInstaller
