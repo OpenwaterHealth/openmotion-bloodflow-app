@@ -5,6 +5,8 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 from PyInstaller.building.build_main import Analysis, PYZ, EXE, COLLECT, BUNDLE
 
 APP_NAME = "Open-Motion"
+# The .app bundle's name; the executable in Contents/MacOS stays APP_NAME.
+BUNDLE_NAME = "Open-Motion Research"
 ENTRY = "main.py"
 ICNS_FILE = "build/AppIcon.icns"
 
@@ -131,11 +133,12 @@ coll = COLLECT(
 
 app = BUNDLE(
     coll,
-    name=f"{APP_NAME}.app",
+    name=f"{BUNDLE_NAME}.app",
     icon=ICNS_FILE,
     bundle_identifier="com.openwaterhealth.bloodflow",
     info_plist={
-        "CFBundleDisplayName": APP_NAME,
+        "CFBundleName": BUNDLE_NAME,
+        "CFBundleDisplayName": BUNDLE_NAME,
         "CFBundleShortVersionString": os.environ.get("OPENMOTION_VERSION")
             or os.popen("python version.py 2>/dev/null").read().strip() or "0.0.0",
         "CFBundleVersion": os.environ.get("OPENMOTION_VERSION")
