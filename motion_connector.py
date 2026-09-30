@@ -64,7 +64,7 @@ import error_codes
 import bug_report
 from nan_gap_tracker import NanGapTracker, gap_note_line
 from utils.resource_path import resource_path
-from utils import app_paths, config_store, log_tail
+from utils import app_paths, config_store, disk_space, log_tail
 
 # The app self-updater is compiled out of clinical builds (#543, tracker
 # M-02): openwater.spec excludes ``app_updater`` when CLINICAL_MODE is
@@ -235,6 +235,16 @@ def _rearm_dropped_camera(
     )
 
 
+# Mid-scan free-space poll period (issue #506). At the worst measured write
+# rate (16 cameras with raw CSVs, ~2.6 MB/s) this spends ~13 MB of the
+# 100 MB stop threshold between polls.
+_STORAGE_CHECK_INTERVAL_S = 5.0
+
+# Toast tag shared by the mid-scan low-storage warning and the stop notice,
+# so the stop replaces the warning instead of stacking under it (#506).
+_LOW_STORAGE_TOAST_TAG = "low_storage"
+
+
 def _scan_data_stall_decision(
     now_mono: float,
     trigger_on_mono: float | None,
@@ -295,6 +305,23 @@ def _disconnect_toast_text(name: str) -> str:
 _SIDE_NAMES = ("left", "right")
 
 
+# The SDK's configure step (ScanWorkflow.start_configure_camera_sensors)
+# fails with "Failed to power on cameras on <side> (mask 0x..)" when the
+# sensor refuses the camera power-on command it sends before FPGA
+# programming. Matched narrowly: the step's wrapper prefix ("Error setting
+# camera power for <side>:") also wraps comm exceptions, which are not a
+# power fault.
+_CAMERA_POWER_ON_FAILED_RE = re.compile(
+    r"Failed to power on cameras on (left|right)\b")
+
+
+def _camera_power_failure_side(error: str) -> Optional[str]:
+    """Side ("left"/"right") of a camera power-on refusal named in a
+    configure error, else None (#342: routes it to E-105)."""
+    m = _CAMERA_POWER_ON_FAILED_RE.search(error or "")
+    return m.group(1) if m else None
+
+
 class _LivePlotSink:
     """Subscribes to the 'live' pipeline channel and feeds per-frame samples
     into the LiveScanSource backing the PlotViewer, for each active camera.
@@ -329,6 +356,9 @@ class _LivePlotSink:
         self._plot_t0 = plot_t0
         self._live_source = live_source
         self._temp_alerted: dict[tuple[str, int], bool] = {}
+        # Outside engineering mode the operator gets ONE over-temp toast per
+        # scan — the first camera to cross — with airflow advice (#110).
+        self._temp_airflow_warned = False
         # Records every arriving frame so the scan-complete handler can
         # report sustained DELIVERY gaps in the notes footer. Optional so
         # the sink works standalone (tests, future callers).
@@ -342,6 +372,7 @@ class _LivePlotSink:
 
     def on_scan_start(self, meta) -> None:
         self._temp_alerted.clear()
+        self._temp_airflow_warned = False
 
     def consume(self, channel: str, payload) -> None:
         if channel == "live_side":
@@ -361,6 +392,9 @@ class _LivePlotSink:
         # popup for one. Clinical builds still get the capture-log + app-log
         # line below, so the event stays in the record either way.
         temp_toast_enabled = not connector._app_config.get("clinicalMode", False)
+        # Engineering mode toasts every camera that crosses; everyone else
+        # gets a single airflow warning per scan (#110).
+        temp_toast_per_camera = connector._app_config.get("engineeringMode", False)
         now_mono = time.monotonic()
 
         low_light_rt = getattr(batch, "low_light_rt", None)
@@ -452,7 +486,7 @@ class _LivePlotSink:
                         # from this runner thread — it emits a signal that
                         # is delivered queued onto the GUI thread, same as
                         # _on_camera_dropout_recovered below.
-                        if temp_toast_enabled:
+                        if temp_toast_enabled and temp_toast_per_camera:
                             connector.notify(
                                 f"Camera {side.upper()} {cam_id + 1} temperature "
                                 f"{temp_c:.1f}°C — above {threshold:.0f}°C threshold. "
@@ -460,6 +494,18 @@ class _LivePlotSink:
                                 type_="warning",
                                 duration_ms=5000,
                                 tag=f"temp_{side}_{cam_id}",
+                            )
+                        elif temp_toast_enabled and not self._temp_airflow_warned:
+                            # One warning per scan, on the first camera
+                            # to cross; later cameras are log-only (#110).
+                            self._temp_airflow_warned = True
+                            connector.notify(
+                                f"A sensor camera is running hot "
+                                f"({temp_c:.0f} °C). Check that the sensor's "
+                                f"airflow is not blocked (SPEC-18).",
+                                type_="warning",
+                                duration_ms=5000,
+                                tag="temp_airflow",
                             )
 
                 # Non-finite BFI/BVI: row-addressed LIGHT rows are appended
@@ -1062,6 +1108,18 @@ class MotionConnector(QObject):
         # comfortably above cameraDropoutThresholdSec (per-camera toast) and
         # the sensor warmup window. <= 0 disables the abort.
         self._scan_data_stall_timeout_sec = float(cfg.get("scanDataStallTimeoutSec", 3.0))
+        # Low-storage checks (issue #506), MB free on the data drive. Under
+        # minFreeDiskMb: critical error at startup (E-107) and on Start
+        # (E-305), one warning toast per running scan. Under
+        # scanStopFreeDiskMb: the running scan is stopped (E-306 toast).
+        # <= 0 disables the respective checks.
+        self._min_free_disk_mb = float(cfg.get("minFreeDiskMb", 1024))
+        self._scan_stop_free_disk_mb = float(cfg.get("scanStopFreeDiskMb", 100))
+        # Next monotonic time the running scan re-checks free space; the
+        # 1 Hz watchdog polls it every _STORAGE_CHECK_INTERVAL_S.
+        self._storage_next_check_mono = 0.0
+        # True once this scan has shown the low-storage warning toast.
+        self._storage_warned = False
 
         # Camera dropout watchdog state — reset at start of each scan.
         # _camera_last_seen is refreshed on every FRAME ARRIVAL for the
@@ -1559,7 +1617,10 @@ class MotionConnector(QObject):
                             "Could not power on cameras on %s sensor for ID cache fill",
                             side,
                         )
-                        self._raise_critical("E-105", detail=f"{side} sensor")
+                        self._raise_critical(
+                            "E-105",
+                            detail=f"{side} sensor: camera power-on refused "
+                                   f"during initialization")
                         refresh_cache()  # try anyway in case some cameras are already on
                 elif refresh_cache:
                     refresh_cache()  # fallback: fill cache without power cycle (may get zeros for off cameras)
@@ -3124,7 +3185,7 @@ class MotionConnector(QObject):
         })
         self.notify(
             "Debug logs saved to " + path
-            + ". Please email this file to support@openwater.cc.",
+            + ". Please email this file to " + self._support_email + ".",
             type_="success", duration_ms=0, dismissible=True,
             tag="debug-bundle",
         )
@@ -3867,6 +3928,18 @@ class MotionConnector(QObject):
             logger.exception("loadPastScan failed for label %r", session_label)
             self.pastScanLoadFinished.emit(session_label, False)
 
+    @staticmethod
+    def _write_export_notes(csv_path: str, session: dict) -> str:
+        """Write the scan's notes next to an exported CSV as
+        ``<csv stem>_notes.txt`` (#644) — notes otherwise live only in
+        scans.db and would not leave the machine with the CSV. Written
+        even when the scan has no notes, so every export is a consistent
+        pair. Returns the notes path; raises on a write failure."""
+        notes_path = os.path.splitext(csv_path)[0] + "_notes.txt"
+        with open(notes_path, "w", encoding="utf-8", newline="") as f:
+            f.write(session.get("session_notes") or "")
+        return notes_path
+
     @pyqtSlot(int, str)
     def exportScanCsv(self, session_id: int, output_path: str) -> None:
         """Export a scan's session_data to a corrected-format CSV, on a
@@ -3912,6 +3985,7 @@ class MotionConnector(QObject):
                 str(db_path), int(session_id), output_path,
                 include_quality=True,
             )
+            self._write_export_notes(output_path, session)
             logger.info(
                 "exportScanCsv: exported %r (sid=%d) → %s",
                 session.get("session_label"), session_id, output_path,
@@ -3980,6 +4054,7 @@ class MotionConnector(QObject):
                             str(db_path), sid, out_path,
                             include_quality=True,
                         )
+                        self._write_export_notes(out_path, session)
                         result["exported"] += 1
                         logger.info(
                             "exportScansToFolder: exported %r (sid=%d) -> %s",
@@ -4053,6 +4128,9 @@ class MotionConnector(QObject):
                 include_quality=True,
             )
             os.replace(tmp_path, out_path)
+            # Runs after _persist_scan_notes, so the notes (incl. the
+            # scan-end footer) are already in the session row read above.
+            self._write_export_notes(out_path, session)
             logger.info("Auto-export: %r (sid=%d) -> %s",
                         session_label, session["id"], out_path)
             return True, out_path
@@ -4574,6 +4652,11 @@ class MotionConnector(QObject):
             self.captureLog.emit(f"Failed to create data dir: {e}")
             return False
 
+        # Backstop for the Start-button check (checkStorageForScan): space
+        # can run out between the click and here (clinical pre-scan check).
+        if not self.checkStorageForScan():
+            return False
+
         self._capture_stop = threading.Event()
         # Each new scan starts with a fresh notes buffer
         self._scan_notes = ""
@@ -4652,6 +4735,8 @@ class MotionConnector(QObject):
             | ({"left"} if left_camera_mask else set())
             | ({"right"} if right_camera_mask else set())
         )
+        self._storage_next_check_mono = 0.0
+        self._storage_warned = False
         self._dropout_timer.start()
 
         # NaN-gap tracker — fresh per scan (same lifecycle as the watchdog).
@@ -4996,6 +5081,22 @@ class MotionConnector(QObject):
         self._raise_critical("E-202")
         QTimer.singleShot(5000, self.stopCapture)
 
+    def _surface_safety_trip(self, fault_detail: str) -> None:
+        """Raise the blocking modal for a laser-safety FPGA trip (#431).
+
+        Called once per trip, on the transition into ``safetyFailure``. A
+        trip during a scan goes through ``_on_safety_trip_during_capture``
+        (E-202, which also cancels the scan); a trip at any other time —
+        idle, preflight signal-quality check, test/calibrate — raises E-203.
+        Before #431 that second case showed only the persistent toast, which
+        an operator can miss.
+        """
+        if self._capture_running:
+            if not self._safety_cancel_scheduled:
+                self.safetyTripDuringCaptureRequested.emit()
+        else:
+            self._raise_critical("E-203", detail=fault_detail)
+
     @pyqtSlot(str)
     def _on_scan_worker_failed(self, detail: str):
         """Main-thread handler for an async scan-worker abort (#213).
@@ -5167,8 +5268,7 @@ class MotionConnector(QObject):
                     # which surfaced via the dev-mode safety toast.
                     self._laserOn = False
                     self.laserStateChanged.emit()
-                    if self._capture_running and not self._safety_cancel_scheduled:
-                        self.safetyTripDuringCaptureRequested.emit()
+                    self._surface_safety_trip(fault_detail)
         except Exception as e:
             logger.error(f"readSafetyStatus failed: {e}")
             self.safetyFailure = True
@@ -5686,6 +5786,12 @@ class MotionConnector(QObject):
         """1 Hz watchdog: emit cameraDropoutDetected for any camera silent > threshold."""
         if not self._capture_running:
             return
+        # Low-storage stop (issue #506). Ahead of the trigger-state gate
+        # below: the pipeline writes scans.db for the whole capture, not
+        # only while the trigger is ON.
+        if not self._scan_abort_notified and self._storage_check_due():
+            if self._check_scan_storage():
+                return
         # Also bail when the trigger is OFF. _capture_running only
         # flips false in _on_complete after the post-scan cleanup
         # finishes, so between trigger-stop and that flip there's a
@@ -5863,6 +5969,105 @@ class MotionConnector(QObject):
         )
         self._note_scan_abort("E-303", detail)
         self._raise_critical("E-303", detail=detail)
+        self.stopCapture()
+
+    def _storage_detail(self, free: Optional[int]) -> str:
+        return (f"{(free or 0) / disk_space.MB:.0f} MB free on the data "
+                f"drive ({self._data_root})")
+
+    def check_startup_storage(self) -> None:
+        """Startup free-space check (issue #506): raise the E-107 critical
+        modal when the data drive has under minFreeDiskMb free. Called
+        once by main.py after the QML window has loaded."""
+        free = disk_space.free_bytes(self._data_root)
+        if free is not None:
+            logger.info("Startup storage check: %.0f MB free on %s",
+                        free / disk_space.MB, self._data_root)
+        if disk_space.below(free, self._min_free_disk_mb):
+            self._raise_critical("E-107", detail=self._storage_detail(free))
+
+    @pyqtSlot(result=bool)
+    def checkStorageForScan(self) -> bool:
+        """Start-button free-space check (issue #506). Returns False —
+        after raising the E-305 critical modal — when the data drive has
+        under minFreeDiskMb free; the scan (and its pre-scan contact
+        check) must not start. A failed free-space query never blocks:
+        the mid-scan stop still protects the drive."""
+        free = disk_space.free_bytes(self._data_root)
+        if not disk_space.below(free, self._min_free_disk_mb):
+            return True
+        detail = self._storage_detail(free)
+        logger.warning("Scan start refused: %s", detail)
+        self.captureLog.emit(f"Scan not started: {detail}.")
+        self._raise_critical("E-305", detail=detail)
+        return False
+
+    def _storage_check_due(self) -> bool:
+        """Rate-limit the mid-scan free-space query (issue #506) to one
+        every _STORAGE_CHECK_INTERVAL_S; the first watchdog tick of a scan
+        always checks."""
+        now = time.monotonic()
+        if now < self._storage_next_check_mono:
+            return False
+        self._storage_next_check_mono = now + _STORAGE_CHECK_INTERVAL_S
+        return True
+
+    def _check_scan_storage(self) -> bool:
+        """Mid-scan free-space check (issue #506), from the 1 Hz watchdog.
+        Under scanStopFreeDiskMb the scan is stopped (returns True); under
+        minFreeDiskMb the operator gets one warning toast per scan."""
+        free = disk_space.free_bytes(self._data_root)
+        if disk_space.below(free, self._scan_stop_free_disk_mb):
+            self._stop_scan_low_storage(free)
+            return True
+        if not self._storage_warned and disk_space.below(
+                free, self._min_free_disk_mb):
+            self._storage_warned = True
+            free_mb = free / disk_space.MB
+            logger.warning(
+                "[%s] Data drive below %.0f MB free (%.0f MB) during scan",
+                self._scan_elapsed_str(), self._min_free_disk_mb, free_mb)
+            self.notify(
+                f"Storage is running low: {free_mb:.0f} MB free on the data "
+                f"drive. The scan will stop automatically at "
+                f"{self._scan_stop_free_disk_mb:.0f} MB.",
+                type_="warning", duration_ms=0,
+                tag=_LOW_STORAGE_TOAST_TAG,
+            )
+        return False
+
+    def _stop_scan_low_storage(self, free: Optional[int]) -> None:
+        """Stop the running scan because the data drive is nearly full
+        (issue #506). A graceful stop, not a fault modal: a warning toast
+        says why, then stopCapture() — the pipeline finalizes scans.db in
+        the space the threshold kept free and captureFinished returns the
+        scan flow to idle exactly like a user Stop. Shares the one-shot
+        abort guard with E-303/E-304 and records E-306 for the scan_ended
+        audit event.
+        """
+        self._scan_abort_notified = True
+        self._dismiss_dropout_toasts()
+        elapsed_str = self._scan_elapsed_str()
+        free_mb = (free or 0) / disk_space.MB
+        msg = (
+            f"[{elapsed_str}] Data drive almost full ({free_mb:.0f} MB "
+            f"free, stop threshold {self._scan_stop_free_disk_mb:.0f} MB). "
+            f"Stopping the scan; data captured so far is saved."
+        )
+        logger.error(msg)
+        self.captureLog.emit(msg)
+        self._note_scan_abort(
+            "E-306",
+            f"{free_mb:.0f} MB free on the data drive "
+            f"(scan elapsed {elapsed_str})",
+        )
+        self.notify(
+            f"Scan stopped: the data drive is almost full ({free_mb:.0f} MB "
+            f"free). Data captured so far was saved. Free up space before "
+            f"the next scan.",
+            type_="warning", duration_ms=0,
+            tag=_LOW_STORAGE_TOAST_TAG,
+        )
         self.stopCapture()
 
     def _abort_scan_device_disconnect(self, name: str) -> None:
@@ -6110,7 +6315,17 @@ class MotionConnector(QObject):
         if not self._config_running:
             return
         self._config_running = False
-        self.configFinished.emit(bool(result.ok), result.error or "")
+        err = result.error or ""
+        if not result.ok:
+            side = _camera_power_failure_side(err)
+            if side is not None:
+                # Same fault as the connect-time power-on refusal: surface
+                # it as E-105, not only as the scan-failed toast (#342).
+                self._raise_critical(
+                    "E-105",
+                    detail=f"{side} sensor: camera power-on refused before "
+                           f"scan/check configuration")
+        self.configFinished.emit(bool(result.ok), err)
 
     @pyqtSlot(str)
     def querySensorAccelerometer(self, target: str):

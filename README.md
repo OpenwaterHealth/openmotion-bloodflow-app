@@ -48,7 +48,7 @@ source .venv/bin/activate
 ./build_macos.sh
 ```
 
-Produces `dist/Open-Motion.app` and a DMG installer in `dist/`.
+Produces `dist/Open-Motion Research.app` and a DMG installer in `dist/`.
 
 > **Note:** macOS support is still a work in progress. The app builds and launches,
 > but end-to-end device communication with the console and sensor modules is not yet

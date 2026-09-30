@@ -43,12 +43,29 @@ The laser may not operate correctly until this is resolved.
 **What to do:** Power-cycle the console and reconnect. If it persists, contact
 support — the console firmware or config may need attention.
 
-### E-105 — Camera power-on failed
-The sensor could not power on its cameras during initialization, so camera
-identities could not be read.
+### E-105 — Camera power failed
+The sensor could not power its cameras, so they cannot capture. Raised when the
+sensor refuses the camera power-on command, either during sensor initialization
+(camera identities could not be read) or when the cameras are powered up to
+start a scan or a contact-quality check (the scan or check does not start; the
+laser does not fire). The modal detail names the sensor side.
 
-**What to do:** Power-cycle the sensor and reconnect. If only some cameras are
-affected, the camera board may need service.
+A camera that loses power *during* a scan is not reported as E-105: the app
+cannot tell a power loss from other data-path stalls, so it surfaces as a
+per-camera "connection lost" toast, or E-303 if every camera stops.
+
+**What to do:** Power-cycle the sensor and reconnect. If it persists, or only
+some cameras are affected, the camera board may need service — contact support.
+
+### E-107 — Storage almost full
+The drive that stores scan data has less than 1 GB free. Scans cannot be started
+until space is freed. Checked once at app launch, against `minFreeDiskMb`
+(default 1024 MB); the modal detail shows the free space and the data folder. A
+free-space query that fails raises nothing.
+
+**What to do:** Free up space on the data drive (or export and remove old
+scans) before starting a scan — no restart needed, Start re-checks. Contact
+support if the drive should not be full.
 
 ## E-2xx — Laser safety
 
@@ -66,6 +83,16 @@ scan was stopped.
 
 **What to do:** Remove any obstruction, let the system settle, and start a new
 scan. If it trips repeatedly, stop and contact support.
+
+### E-203 — Laser safety trip
+The laser-safety monitor tripped while no scan was running and the laser was
+shut off. The safety interlock stays latched until the console is power-cycled.
+Raised for a trip at any time outside a scan (idle, the preflight signal-quality
+check, test/calibrate); a trip during a scan raises E-202 instead. The
+persistent laser-safety toast stays up until the monitor reports clear.
+
+**What to do:** Power-cycle the console and reconnect before starting a scan. If
+it trips again, stop and contact support.
 
 ## E-3xx — Scan / capture
 
@@ -105,6 +132,17 @@ device while not scanning, does not raise this.
 **What to do:** Check the USB cables and power, reconnect the system, and start a
 new scan. If it keeps happening, contact support.
 
+### E-305 — Not enough storage to start scan
+The drive that stores scan data has less than 1 GB free, so the scan was not
+started and the laser did not fire. Checked when **Start** is pressed — before
+the clinical pre-scan contact check — and again when the capture itself starts,
+against `minFreeDiskMb` (default 1024 MB). A free-space query that fails does
+not block the scan.
+
+**What to do:** Free up space on the data drive (or export and remove old
+scans), then start the scan again. Contact support if the drive should not be
+full.
+
 ## Startup warnings (connection watchdog)
 
 A one-shot check armed at app launch flags expected devices that never showed
@@ -132,6 +170,24 @@ Tunable in [`config/app_config.json`](../config/app_config.json):
 
 Disconnects that happen *after* startup are handled by the normal connection
 status UI, not by this watchdog.
+
+## Storage warnings (during a scan)
+
+While a scan runs the app re-checks free space on the data drive every 5 s.
+Both conditions are **yellow warning toasts** that stay until dismissed, not the
+critical modal:
+
+- **Below 1 GB free** (`minFreeDiskMb`) → shown once per scan: `"Storage is
+  running low: <n> MB free on the data drive. The scan will stop automatically
+  at 100 MB."` The scan keeps running.
+- **E-306 — below 100 MB free** (`scanStopFreeDiskMb`) → the scan is stopped
+  gracefully, exactly like pressing Stop, and the toast replaces the warning:
+  `"Scan stopped: the data drive is almost full (<n> MB free). Data captured so
+  far was saved. Free up space before the next scan."` The remaining space lets
+  the scan database finish writing. E-306 appears in the app log and as the
+  audit log's `scan_ended` abort code.
+
+Either threshold set to `0` or below disables its checks.
 
 ## Contacting support
 

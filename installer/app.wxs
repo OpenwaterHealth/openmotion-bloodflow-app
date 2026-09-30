@@ -11,9 +11,18 @@
                   DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
+    <!-- Every path and registry key a component is keyed on is per variant
+         (ProductName: "Open-Motion" / "Open-Motion Research"), issue #586.
+         Guid="*" derives each component GUID from its key path, so when both
+         variants installed to one folder and keyed on one HKLM key they got
+         identical component GUIDs. Windows Installer ref-counts components by
+         GUID: uninstalling one variant with the other still present left its
+         desktop and Start-menu shortcuts behind, and the two products fought
+         over one Open-Motion.exe. Clinical keeps the original folder and key
+         (so its GUIDs are unchanged); Research moved next to it. -->
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="VENDORFOLDER" Name="Openwater">
-        <Directory Id="APPFOLDER" Name="Open-Motion" />
+        <Directory Id="APPFOLDER" Name="$(var.ProductName)" />
       </Directory>
     </StandardDirectory>
 
@@ -54,15 +63,16 @@
         <ShortcutProperty Key="System.AppUserModel.ID" Value="Openwater.OpenMotion.1" />
       </Shortcut>
       <RemoveFolder Id="RemoveAppShortcutFolder" On="uninstall" />
-      <RegistryValue Root="HKLM" Key="Software\Openwater\Open-Motion"
+      <RegistryValue Root="HKLM" Key="Software\Openwater\$(var.ProductName)"
                      Name="installed" Type="integer" Value="1" KeyPath="yes" />
       <!-- Install-mode marker (#546): the app derives "installed vs portable"
-           from this at launch (utils/app_paths.py) — an exe living in this
+           from this at launch (utils/app_paths.py, which reads the key of
+           both variants) — an exe living in this
            directory keeps its writable state per user under
            %LOCALAPPDATA%\Openwater (#581); the
            byte-identical exe in the portable zip keeps it next to itself.
            HKLM, so only an administrator can write it. -->
-      <RegistryValue Root="HKLM" Key="Software\Openwater\Open-Motion"
+      <RegistryValue Root="HKLM" Key="Software\Openwater\$(var.ProductName)"
                      Name="InstallDir" Type="string" Value="[APPFOLDER]" />
     </Component>
 
@@ -76,7 +86,7 @@
                 WorkingDirectory="APPFOLDER">
         <ShortcutProperty Key="System.AppUserModel.ID" Value="Openwater.OpenMotion.1" />
       </Shortcut>
-      <RegistryValue Root="HKLM" Key="Software\Openwater\Open-Motion"
+      <RegistryValue Root="HKLM" Key="Software\Openwater\$(var.ProductName)"
                      Name="desktopShortcut" Type="integer" Value="1" KeyPath="yes" />
     </Component>
   </Package>

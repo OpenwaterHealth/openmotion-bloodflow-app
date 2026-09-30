@@ -129,6 +129,66 @@ def bvi_lpf_alpha(cutoff_hz: float) -> float:
 # allocation cost is fine and consistent across the scan.
 
 
+# ── Statistics pane (#635) ──────────────────────────────────────────────
+# The plot viewer's Statistics pane shows, per plotted stream, the latest
+# value, its average over the trailing window (5 s, set by the pane), and
+# its peak-to-peak: at each sample in that window, the max - min of the
+# stream over the window ending there, and those ranges averaged. Windows
+# are in time, not samples, so a dropped frame shortens a window rather
+# than stretching it; non-finite samples are skipped. A scan younger than
+# the windows uses what it has. Evaluated on demand from the buffers, so
+# a live scan, a replay and a pane switched on mid-scan read alike.
+
+
+def _rolling_range(t: np.ndarray, v: np.ndarray, window_s: float,
+                   first: int) -> np.ndarray:
+    """For each i >= first: max - min of the finite v[j] with
+    t[i] - window_s <= t[j] <= t[i] (NaN when there are none). `t` must
+    be non-decreasing. Range queries on sparse tables (level k holds the
+    max / min of v[j : j + 2**k]), so each window costs two lookups."""
+    finite = np.isfinite(v)
+    maxs = [np.where(finite, v, -np.inf)]
+    mins = [np.where(finite, v, np.inf)]
+    k = 1
+    while (1 << k) <= v.size:
+        h = 1 << (k - 1)
+        maxs.append(np.maximum(maxs[-1][:-h], maxs[-1][h:]))
+        mins.append(np.minimum(mins[-1][:-h], mins[-1][h:]))
+        k += 1
+    hi = np.arange(first, v.size)
+    lo = np.searchsorted(t, t[hi] - window_s, side="left")
+    level = np.log2(hi - lo + 1).astype(np.int64)   # floor: lengths >= 1
+    out = np.empty(hi.size)
+    for k in np.unique(level):
+        sel = level == k
+        a, b = lo[sel], hi[sel] - (1 << int(k)) + 1
+        out[sel] = (np.maximum(maxs[k][a], maxs[k][b])
+                    - np.minimum(mins[k][a], mins[k][b]))
+    out[~np.isfinite(out)] = np.nan   # no finite sample: -inf - inf
+    return out
+
+
+def window_stats(t: np.ndarray, v: np.ndarray, t_now: float,
+                 window_s: float) -> tuple[float, float]:
+    """(average, peak-to-peak) of one stream at t_now, from its samples
+    (t, v) covering at least [t_now - 2 * window_s, t_now]: the average
+    of the finite samples in the last window_s, and the average over
+    those same samples of the rolling window_s range. NaN for either
+    when it has nothing finite to average."""
+    first = int(np.searchsorted(t, t_now - window_s, side="left"))
+    last = int(np.searchsorted(t, t_now, side="right"))
+    t, v = t[:last], v[:last]
+    recent = v[first:]
+    recent = recent[np.isfinite(recent)]
+    avg = float(recent.mean()) if recent.size else float("nan")
+    if first >= v.size:
+        return avg, float("nan")
+    ranges = _rolling_range(t, v, window_s, first)
+    ranges = ranges[np.isfinite(ranges)]
+    p2p = float(ranges.mean()) if ranges.size else float("nan")
+    return avg, p2p
+
+
 class _CameraBuffer:
     """Append-only growable buffer for one (side, cam_id, metric) stream.
 
@@ -654,7 +714,7 @@ class ScanDataSource(QObject):
     def dateTime(self) -> str:
         """The scan's date/time for the viewer badge (issue #245), formatted
         as ``YYYY-MM-DD HH:MM:SS`` like the History list; "" when unknown. The
-        viewer trims it to minutes for display. See ``userLabel``."""
+        viewer shows it whole, seconds included (#456). See ``userLabel``."""
         return self._date_time
 
     @pyqtProperty(float)
@@ -724,6 +784,42 @@ class ScanDataSource(QObject):
         if buf is None:
             return float("nan")
         return buf.value_near(t)
+
+    @pyqtSlot("QVariantList", "QVariantList", float, float, result="QVariantMap")
+    def statistics_at(self, cells, metrics, t: float, window_s: float) -> dict:
+        """Statistics pane (#635), one call per refresh: for each cell key
+        (``"side:camId"``, as the viewer's cell model spells it) and each
+        metric, ``row[metric]`` is value_at(t), the number the cell's value
+        label shows, and ``row[metric + "_avg"]`` / ``row[metric + "_p2p"]``
+        the stream's window_stats at t. Missing streams read NaN.
+
+        The window stats read only the in-memory buffer: the pane asks at
+        the live edge, which is always in memory."""
+        nan = float("nan")
+        out = {}
+        for key in cells:
+            side, _, cam = str(key).partition(":")
+            try:
+                cam_id = int(cam)
+            except ValueError:
+                continue
+            row = {}
+            for metric in metrics:
+                metric = str(metric)
+                row[metric] = self.value_at(side, cam_id, metric, t)
+                avg, p2p = nan, nan
+                buf = self.buffers.get((side, cam_id, metric))
+                if buf is not None:
+                    with buf._lock:
+                        i_lo, i_hi = buf.window_indices(t - 2 * window_s, t)
+                        ts = buf.t[i_lo:i_hi].copy()
+                        vs = buf.v[i_lo:i_hi].astype(np.float64)
+                    if ts.size:
+                        avg, p2p = window_stats(ts, vs, t, window_s)
+                row[metric + "_avg"] = avg
+                row[metric + "_p2p"] = p2p
+            out[str(key)] = row
+        return out
 
     @pyqtSlot(str, int, result=float)
     def dropped_at_for(self, side: str, cam_id: int) -> float:

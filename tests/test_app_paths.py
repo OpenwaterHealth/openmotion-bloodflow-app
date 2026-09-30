@@ -72,9 +72,27 @@ def test_frozen_exe_in_registered_dir_is_installed(tmp_path, monkeypatch):
     exe_dir = tmp_path / "Program Files" / "Openwater" / "Open-Motion"
     exe_dir.mkdir(parents=True)
     monkeypatch.setattr(sys, "executable", str(exe_dir / "Open-Motion.exe"))
-    monkeypatch.setattr(app_paths, "installed_dir", lambda: exe_dir)
+    monkeypatch.setattr(app_paths, "installed_dirs", lambda: [exe_dir])
     assert app_paths.is_installed_exe() is True
     assert app_paths.portable_mode() is False
+
+
+@pytest.mark.unit
+def test_either_variant_install_dir_counts_as_installed(tmp_path, monkeypatch):
+    """#586: Clinical and Research install to their own folders, each with
+    its own InstallDir marker; with both installed, each exe must still find
+    the one that names its own folder."""
+    monkeypatch.setattr(app_paths, "PORTABLE_MODE_OVERRIDE", None)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "platform", "win32")
+    clinical = tmp_path / "Openwater" / "Open-Motion"
+    research = tmp_path / "Openwater" / "Open-Motion Research"
+    for d in (clinical, research):
+        d.mkdir(parents=True)
+    monkeypatch.setattr(app_paths, "installed_dirs", lambda: [clinical, research])
+    for d in (clinical, research):
+        monkeypatch.setattr(sys, "executable", str(d / "Open-Motion.exe"))
+        assert app_paths.portable_mode() is False
 
 
 @pytest.mark.unit
@@ -86,59 +104,102 @@ def test_frozen_exe_elsewhere_is_portable(tmp_path, monkeypatch):
     zip_dir.mkdir(parents=True)
     monkeypatch.setattr(sys, "executable", str(zip_dir / "Open-Motion.exe"))
     # a different install elsewhere on the same machine must not claim us
-    monkeypatch.setattr(app_paths, "installed_dir", lambda: tmp_path / "Program Files" / "Open-Motion")
+    monkeypatch.setattr(app_paths, "installed_dirs", lambda: [tmp_path / "Program Files" / "Open-Motion"])
     assert app_paths.portable_mode() is True
     # ...and no registration at all is portable too
-    monkeypatch.setattr(app_paths, "installed_dir", lambda: None)
+    monkeypatch.setattr(app_paths, "installed_dirs", lambda: [])
     assert app_paths.portable_mode() is True
+
+
+def _fake_winreg(present):
+    """A winreg stand-in. ``present`` maps (subkey, view) -> InstallDir."""
+    import types
+
+    mod = types.SimpleNamespace(
+        HKEY_LOCAL_MACHINE=1, KEY_READ=0x1, REG_SZ=1,
+        KEY_WOW64_64KEY=0x100, KEY_WOW64_32KEY=0x200, opened=[],
+    )
+
+    class _Key:
+        def __init__(self, value):
+            self.value = value
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def open_key(_root, sub, _reserved, access):
+        view = access & ~mod.KEY_READ
+        mod.opened.append((sub, view))
+        if (sub, view) not in present:
+            raise FileNotFoundError(sub)
+        return _Key(present[(sub, view)])
+
+    mod.OpenKey = open_key
+    mod.QueryValueEx = lambda key, _name: (key.value, mod.REG_SZ)
+    return mod
 
 
 @pytest.mark.unit
-def test_installed_dir_finds_the_marker_in_either_registry_view(monkeypatch):
+def test_installed_dirs_finds_the_marker_in_either_registry_view(monkeypatch):
     """#577: the app MSI is a 32-bit package, so its InstallDir marker lives
     under WOW6432Node. Reading only the 64-bit view made every installed build
     think it was portable and crash writing logs\\ into Program Files."""
-    import types
-
+    clinical_key = r"Software\Openwater\Open-Motion"
     target = r"C:\Program Files (x86)\Openwater\Open-Motion"
-
-    def fake_winreg(present_in):
-        mod = types.SimpleNamespace(
-            HKEY_LOCAL_MACHINE=1, KEY_READ=0x1, REG_SZ=1,
-            KEY_WOW64_64KEY=0x100, KEY_WOW64_32KEY=0x200, opened=[],
-        )
-
-        class _Key:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc):
-                return False
-
-        def open_key(_root, _sub, _reserved, access):
-            view = access & ~mod.KEY_READ
-            mod.opened.append(view)
-            if view not in present_in:
-                raise FileNotFoundError(view)
-            return _Key()
-
-        mod.OpenKey = open_key
-        mod.QueryValueEx = lambda _key, _name: (target, mod.REG_SZ)
-        return mod
-
     monkeypatch.setattr(sys, "platform", "win32")
-    only_32 = fake_winreg({0x200})
+
+    only_32 = _fake_winreg({(clinical_key, 0x200): target})
     monkeypatch.setitem(sys.modules, "winreg", only_32)
-    assert app_paths.installed_dir() == Path(target)
-    assert only_32.opened == [0x100, 0x200]  # 64-bit view first, explicitly
+    assert app_paths.installed_dirs() == [Path(target)]
+    # 64-bit view first, explicitly
+    assert only_32.opened[:2] == [(clinical_key, 0x100), (clinical_key, 0x200)]
 
-    only_64 = fake_winreg({0x100})
+    only_64 = _fake_winreg({(clinical_key, 0x100): target})
     monkeypatch.setitem(sys.modules, "winreg", only_64)
-    assert app_paths.installed_dir() == Path(target)
-    assert only_64.opened == [0x100]
+    assert app_paths.installed_dirs() == [Path(target)]
+    assert (clinical_key, 0x200) not in only_64.opened
 
-    monkeypatch.setitem(sys.modules, "winreg", fake_winreg(set()))
-    assert app_paths.installed_dir() is None
+    monkeypatch.setitem(sys.modules, "winreg", _fake_winreg({}))
+    assert app_paths.installed_dirs() == []
+
+
+@pytest.mark.unit
+def test_installed_dirs_reads_both_variant_keys(monkeypatch):
+    """#586: each variant's MSI writes its own HKLM key, so the Clinical and
+    Research products never share a component."""
+    clinical = r"C:\Program Files (x86)\Openwater\Open-Motion"
+    research = r"C:\Program Files (x86)\Openwater\Open-Motion Research"
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setitem(sys.modules, "winreg", _fake_winreg({
+        (r"Software\Openwater\Open-Motion", 0x200): clinical,
+        (r"Software\Openwater\Open-Motion Research", 0x200): research,
+    }))
+    assert app_paths.installed_dirs() == [Path(clinical), Path(research)]
+
+
+@pytest.mark.unit
+def test_installer_keys_every_component_per_variant():
+    """#586: WiX derives each Guid="*" component GUID from its key path. Any
+    component keyed on a fixed folder or registry key gets the same GUID in
+    the Clinical and Research MSIs, and Windows Installer then keeps it (and
+    the uninstalled product's shortcuts) alive while the other variant is
+    installed. Every install folder and HKLM key must carry ProductName, and
+    app_paths must read the keys the MSI writes."""
+    import re
+
+    wxs = (Path(__file__).resolve().parent.parent / "installer" / "app.wxs").read_text(encoding="utf-8")
+    app_folder = re.search(r'<Directory Id="APPFOLDER" Name="([^"]+)"', wxs).group(1)
+    assert app_folder == "$(var.ProductName)"
+    keys = set(re.findall(r'<RegistryValue\s+Root="HKLM"\s+Key="([^"]+)"', wxs))
+    assert keys == {r"Software\Openwater\$(var.ProductName)"}
+    ps1 = (Path(__file__).resolve().parent.parent / "installer" / "build_installer.ps1").read_text(encoding="utf-8")
+    products = re.findall(r'ProductName\s*=\s*"([^"]+)"', ps1)
+    assert sorted(products) == ["Open-Motion", "Open-Motion Research"]
+    for product in products:
+        assert rf"Software\Openwater\{product}" in app_paths._INSTALL_REG_KEYS
 
 
 @pytest.mark.unit
@@ -312,15 +373,15 @@ def test_frozen_macos_never_yields_a_windows_path(tmp_path, monkeypatch):
 
 @pytest.mark.unit
 def test_frozen_macos_portable_stays_outside_the_app_bundle(tmp_path, monkeypatch):
-    """Writing inside Open-Motion.app invalidates its code signature, so the
-    portable layout cannot apply on macOS."""
+    """Writing inside Open-Motion Research.app invalidates its code signature,
+    so the portable layout cannot apply on macOS."""
     _override(monkeypatch, None)
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "platform", "darwin")
     _fake_home(monkeypatch, tmp_path)
-    bundle = tmp_path / "Open-Motion.app" / "Contents" / "MacOS"
+    bundle = tmp_path / "Open-Motion Research.app" / "Contents" / "MacOS"
     bundle.mkdir(parents=True)
-    monkeypatch.setattr(sys, "executable", str(bundle / "Open-Motion"), raising=False)
+    monkeypatch.setattr(sys, "executable", str(bundle / "Open-Motion Research"), raising=False)
 
     root = app_paths.writable_root(portable=True)
 

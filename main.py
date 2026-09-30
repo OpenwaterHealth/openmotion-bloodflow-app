@@ -38,7 +38,7 @@ from PyQt6.QtQml import (
     qmlRegisterSingletonInstance,
     qmlRegisterSingletonType,
 )
-from PyQt6.QtCore import qInstallMessageHandler, QtMsgType, QUrl
+from PyQt6.QtCore import qInstallMessageHandler, QtMsgType, QTimer, QUrl
 
 from motion_connector import MotionConnector
 from motion_config import DEFAULT_TRIGGER_OVERRIDES
@@ -551,6 +551,12 @@ def main():
             resource_path("assets", "images", "favicon.ico"),
         )
 
+        # Frameless windows don't snap on Windows; put the frame styles
+        # back without drawing a native frame (issue #642).
+        from utils.win_snap import enable_window_snap
+
+        enable_window_snap(app, int(engine.rootObjects()[0].winId()))
+
     # wait=False: the QML window is already visible at this point (main.qml's
     # ApplicationWindow is `visible: true`) and Qt's event loop hasn't started
     # yet (app.exec() is below) — a blocking wait here starves Explorer's
@@ -559,6 +565,11 @@ def main():
     # take ~5s normally, well past the old 2s cap, so this reliably blocked on
     # any hardware-attached launch. Already-attached devices still reach the
     # UI via the same _on_handle_state_changed signal path as any hotplug.
+    # Low-storage check (issue #506): E-107 critical modal when the data
+    # drive is nearly full. Deferred to the first event-loop turn so the
+    # QML modal is listening when it fires.
+    QTimer.singleShot(0, connector.check_startup_storage)
+
     logger.info("Starting Motion monitoring...")
     motion_interface.start(wait=False)
 

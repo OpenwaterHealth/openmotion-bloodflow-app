@@ -65,14 +65,17 @@ Rectangle {
 
     // ── Inputs ─────────────────────────────────────────────────────────
     property bool clinicalMode: false   // honored in Phase 2b-ii
-    // Per-cell top-left value labels. Off whenever the large side panels
-    // show the same numbers (clinical, and the research Average view).
-    property bool showCellValues: !viewer.averageView
-    // Y-axis tick labels (max/mid/min per metric). Config is the single
-    // source of truth: the ⋯ popup toggle (hidden in clinical mode) writes
-    // through MotionInterface.setConfig, which persists it to the scans.db settings table
-    // and notifies appConfigChanged — this binding then updates.
-    property bool showAxisLabels: MotionInterface.appConfig.showAxisLabels === true
+    // Per-cell top-left value labels. Off whenever the same numbers are
+    // shown elsewhere: the large side panels (clinical, and the research
+    // Average view) or the Statistics pane.
+    property bool showCellValues: !viewer.averageView && !viewer.statsActive
+    // Y-axis tick labels (max/mid/min per metric). Always on: the ⋯ popup
+    // toggle was removed (#622), and binding this to the persisted
+    // appConfig.showAxisLabels without it would strand anyone who had
+    // switched labels off. Flip it here to hide them; to offer the toggle
+    // again, bind it back to appConfig.showAxisLabels (still a persisted
+    // preference) and restore the popup row that writes it.
+    property bool showAxisLabels: true
     // displayMode pair selector — driven externally (BloodFlow.qml binds
     // it from settingsModal.showBfiBvi). "bfi_bvi" overlays BFI+BVI on
     // each cell; "mean_contrast" overlays Mean+Contrast.
@@ -83,15 +86,34 @@ Rectangle {
     property bool autoScale: true
     // autoScalePerPlot (#452) — research-only refinement of autoScale:
     // each cell fits its own camera's trace instead of every cell
-    // sharing one range per metric. Config is the source of truth (same
-    // pattern as showAxisLabels): the ⋯ popup switch writes it through
-    // MotionInterface.setConfig. Clinical never autoscales at all, so
-    // the flag is forced off there regardless of what the settings
-    // table holds.
+    // sharing one range per metric. Config is the source of truth: the
+    // ⋯ popup's Scale switch writes it through MotionInterface.setConfig.
+    // Clinical never autoscales at all, so the flag is forced off there
+    // regardless of what the settings table holds.
     property bool autoScalePerPlot:
         !viewer.effectiveClinical
         && MotionInterface.appConfig.autoScalePerPlot === true
     readonly property bool perPlotActive: viewer.autoScale && viewer.autoScalePerPlot
+
+    // The ⋯ popup's Scale switch (#622) shows the two flags as one
+    // three-way mode: "fixed" (autoscale off: the manual bounds from
+    // Settings), "global" (one autoscaled range per metric) or "perPlot"
+    // (each plot fits its own trace).
+    readonly property string scaleMode: !viewer.autoScale ? "fixed"
+        : (viewer.autoScalePerPlot ? "perPlot" : "global")
+
+    // Writes a Scale choice back: the per-plot flag straight to config,
+    // autoscale through the host, which shares it with the Settings modal
+    // (autoScaleToggleRequested). Per-plot goes first so switching on
+    // autoscale never fits once in the mode being left. Fixed leaves the
+    // per-plot flag as it was.
+    function setScaleMode(mode) {
+        var on = mode !== "fixed"
+        if (on && viewer.autoScalePerPlot !== (mode === "perPlot"))
+            MotionInterface.setConfig("autoScalePerPlot", mode === "perPlot")
+        if (viewer.autoScale !== on) viewer.autoScaleToggleRequested(on)
+        console.info("[Plot] scale → " + mode)
+    }
     // Research view mode (#606): the ⋯ popup's Individual | Aggregate |
     // Average buttons write plotViewMode through MotionInterface.setConfig
     // (same pattern as autoScalePerPlot). Average draws the clinical
@@ -113,6 +135,15 @@ Rectangle {
     readonly property bool aggregateView: viewer.researchViewMode === "aggregate"
     readonly property bool averageView: viewer.effectiveClinical || viewer.researchAverage
     onResearchViewModeChanged: viewer._recomputeAutoscale()
+    // Statistics pane (#635): the ⋯ popup's Statistics switch writes
+    // showStatistics through MotionInterface.setConfig. While on, the
+    // StatisticsPanel column sits right of the plots and the per-cell value
+    // labels (and the Average view's side panels) give way to it.
+    // Research-only, with the View row's gate: never in a clinical build,
+    // nor while replaying a clinical scan.
+    readonly property bool statsActive:
+        !viewer.clinicalMode && !viewer.effectiveClinical
+        && MotionInterface.appConfig.showStatistics === true
     // Per-plot ranges, keyed "side:camId" → { pMin, pMax, sMin, sMax }
     // for the current display pair. Rebuilt as a whole object by
     // _recomputeAutoscale so the cell bindings re-evaluate (mutating a
@@ -355,9 +386,12 @@ Rectangle {
         return (p >= 0 && p < 4) ? [p, 7 - p] : null
     }
 
-    // A cell's camera label: "LEFT 3", or "LEFT 1+8" for a pair. The
-    // hover tooltip passes compact=true for "L3" / "L1+8".
+    // A cell's camera label: "LEFT 3", "LEFT 1+8" for a pair, or "LEFT
+    // AVG" for the side average. The hover tooltip passes compact=true
+    // for "L3" / "L1+8" / "L AVG".
     function _cellLabel(side, camId, compact) {
+        if (camId === -1)
+            return (compact ? side.charAt(0).toUpperCase() : side.toUpperCase()) + " AVG"
         var s = compact ? side.charAt(0).toUpperCase() : side.toUpperCase() + " "
         var pair = viewer._aggregatePair(camId)
         return pair ? s + (pair[0] + 1) + "+" + (pair[1] + 1) : s + (camId + 1)
@@ -464,9 +498,21 @@ Rectangle {
     // Clinical readout column gate — the whole 250 px column collapses when
     // no side has active cameras, not just its individual panels (#298):
     // an empty-but-visible column would push the "No active cameras
-    // selected" placeholder off the canvas center (issue #487).
+    // selected" placeholder off the canvas center (issue #487). The
+    // Statistics pane replaces it: it shows the same side-average numbers.
     readonly property bool _showClinicalPanels:
-        viewer.averageView && viewer._activeCellModel.length > 0
+        viewer.averageView && !viewer.statsActive
+        && viewer._activeCellModel.length > 0
+
+    // Statistics pane column (#635): shown with the grid, i.e. not over the
+    // "No active cameras selected" placeholder. The overlays that belong to
+    // the plots (back-to-live pill, hover tooltip, bottom-right controls)
+    // are anchored to the viewer's right edge, so they move left by the
+    // pane plus the row spacing to stay over the plots.
+    readonly property bool _showStatsPanel:
+        viewer.statsActive && viewer._activeCellModel.length > 0
+    readonly property real _statsInsetPx:
+        viewer._showStatsPanel ? statsPanel.width + 8 : 0
 
     // ── Autoscale recompute (shared by Timer + displayMode change) ────
     // Global mode writes _auto* — the derived primaryYMin/Max bindings
@@ -1109,6 +1155,10 @@ Rectangle {
                         side: modelData.side
                         camId: modelData.camId
                         label: viewer._cellLabel(modelData.side, modelData.camId, false)
+                        // An averaged cell leaves naming its side to the
+                        // large side panel beside it, unless the
+                        // Statistics pane has replaced those panels.
+                        showLabel: modelData.camId !== -1 || !viewer._showClinicalPanels
                         windowSeconds: viewer.windowSeconds
                         followLive: viewer.followLive
                         windowStartT: viewer.windowStartT
@@ -1157,6 +1207,26 @@ Rectangle {
                     font.family: "Roboto Mono"
                 }
             }
+
+            // Statistics pane (#635), right of the plots. Sized by its own
+            // content (fillWidth explicitly false, as for the clinical
+            // column), within 40% of the viewer so the plots keep the rest.
+            StatisticsPanel {
+                id: statsPanel
+                visible: viewer._showStatsPanel
+                Layout.fillWidth: false
+                Layout.fillHeight: true
+                Layout.preferredWidth: implicitWidth
+                maxWidth: viewer.width * 0.4
+                host: viewer
+                source: viewer.scanSource
+                cells: viewer._activeCellModel
+                primaryMetric: viewer._displayPair.primary
+                secondaryMetric: viewer._displayPair.secondary
+                primaryColor: viewer._traceColorForMetric(viewer._displayPair.primary)
+                secondaryColor: viewer._traceColorForMetric(viewer._displayPair.secondary)
+                readoutT: viewer.liveEdgeSnapshot
+            }
         }
 
         PlotScrubber {
@@ -1202,7 +1272,7 @@ Rectangle {
                            + (viewer._showBackToLive
                               ? backToLiveOverlay.height + viewer._overlayMarginPx
                               : 0)
-        anchors.rightMargin: viewer._overlayEdgeMarginPx
+        anchors.rightMargin: viewer._overlayEdgeMarginPx + viewer._statsInsetPx
         color: AppTheme.overlayBgSolid
         border.color: AppTheme.borderSubtle
         border.width: 1
@@ -1228,15 +1298,9 @@ Rectangle {
                     viewer.scanSource.value_at(c.side, c.camId, primMetric, t))
                 var sv = viewer.clampForDisplay(secMetric,
                     viewer.scanSource.value_at(c.side, c.camId, secMetric, t))
-                // Clinical mode uses camId=-1 for the side-averaged stream;
-                // (c.camId + 1) would render "L0"/"R0" instead of the
-                // cell's own "LEFT AVG" / "RIGHT AVG" label. Aggregate
-                // pairs read "L1+8".
-                var label = c.camId === -1
-                    ? c.side.charAt(0).toUpperCase() + " AVG"
-                    : viewer._cellLabel(c.side, c.camId, true)
                 rows.push({
-                    label: label,
+                    // "L3", "L1+8" (Aggregate) or "L AVG" (side average).
+                    label: viewer._cellLabel(c.side, c.camId, true),
                     pVal: pv, pColor: primColor,
                     sVal: sv, sColor: secColor,
                 })
@@ -1316,8 +1380,8 @@ Rectangle {
     // settingsModal — Autoscale and BFI/BVI ↔ Mean/Contrast persist in
     // app config and are also reachable from the Settings modal, so the
     // bottom-right popup switches just request changes; BloodFlow.qml
-    // applies them to settingsModal which then flows back into the
-    // viewer's `autoScale` / `displayMode` bindings.
+    // applies them to settingsModal, which then flows back into the
+    // viewer's `autoScale` / `displayMode` bindings, and persists them.
     signal autoScaleToggleRequested(bool enabled)
     signal displayModeToggleRequested(bool bfiBviMode)
 
@@ -1339,7 +1403,7 @@ Rectangle {
         anchors.top: parent.top
         anchors.right: parent.right
         anchors.topMargin: viewer._overlayEdgeMarginPx
-        anchors.rightMargin: viewer._overlayEdgeMarginPx
+        anchors.rightMargin: viewer._overlayEdgeMarginPx + viewer._statsInsetPx
         z: 6
         color: AppTheme.overlayBg
         border.color: AppTheme.accentRed
@@ -1373,11 +1437,11 @@ Rectangle {
     // History list renders, so the badge can't disagree with the clicked row.
     readonly property string _scanBadgeLabel:
         (viewer.scanSource && viewer.scanSource.userLabel) || ""
-    readonly property string _scanBadgeDate: {
-        var d = (viewer.scanSource && viewer.scanSource.dateTime) || ""
-        // Trim "YYYY-MM-DD HH:MM:SS" → "YYYY-MM-DD HH:MM" for a tighter badge.
-        return d.length >= 16 ? d.substring(0, 16) : d
-    }
+    // Full "YYYY-MM-DD HH:MM:SS", seconds included (#456): operators match
+    // the loaded scan against their acquisition records to the second, and
+    // the History list shows the same string.
+    readonly property string _scanBadgeDate:
+        (viewer.scanSource && viewer.scanSource.dateTime) || ""
     readonly property string _scanBadgeText:
         viewer._scanBadgeLabel.length > 0
             ? (viewer._scanBadgeLabel + " · " + viewer._scanBadgeDate)
@@ -1404,11 +1468,17 @@ Rectangle {
         border.color: AppTheme.borderSubtle
         border.width: 1
 
+        // Never wider than the viewer: a long operator label elides so the
+        // date/time (the part being cross-checked, #456) always stays whole.
+        readonly property real _maxRowWidth:
+            Math.max(0, viewer.width - 2 * viewer._overlayEdgeMarginPx - 28)
+
         Row {
             id: scanBadgeRow
             anchors.centerIn: parent
             spacing: 8
             Text {
+                id: scanBadgeViewing
                 anchors.verticalCenter: parent.verticalCenter
                 text: "Viewing"
                 color: AppTheme.textTertiary
@@ -1416,8 +1486,23 @@ Rectangle {
                 font.family: "Roboto Mono"
             }
             Text {
+                id: scanBadgeLabelText
+                visible: viewer._scanBadgeLabel.length > 0
                 anchors.verticalCenter: parent.verticalCenter
-                text: viewer._scanBadgeText
+                width: Math.max(0, Math.min(implicitWidth,
+                    scanBadge._maxRowWidth - scanBadgeViewing.implicitWidth
+                    - scanBadgeDateText.implicitWidth - scanBadgeRow.spacing * 2))
+                text: viewer._scanBadgeLabel + " ·"
+                elide: Text.ElideRight
+                color: AppTheme.textPrimary
+                font.pixelSize: 13
+                font.weight: Font.DemiBold
+                font.family: "Roboto Mono"
+            }
+            Text {
+                id: scanBadgeDateText
+                anchors.verticalCenter: parent.verticalCenter
+                text: viewer._scanBadgeDate
                 color: AppTheme.textPrimary
                 font.pixelSize: 13
                 font.weight: Font.DemiBold
@@ -1429,16 +1514,17 @@ Rectangle {
     // ── Bottom-right overlay: window-seconds pill + three-dot menu ────
     // Window-seconds pill shows the current zoom and opens a dropdown
     // menu of the canonical zoom options when clicked. The three-dot
-    // button to its right opens a popup with the research view-mode
-    // buttons (#606, #621) and switches for display mode, autoscale
-    // (+ per-plot scale, #452), axis labels, and (dev-only) profiler.
+    // button to its right opens a popup of segmented switches (#622):
+    // research view mode (#606, #621), scale (fixed / global / per-plot,
+    // #452), metric pair and the Statistics pane (#635), plus the dev-only
+    // profiler switch.
     Row {
         id: bottomRightOverlay
         visible: viewer.scanSource !== null
         spacing: 8
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        anchors.rightMargin: viewer._overlayEdgeMarginPx
+        anchors.rightMargin: viewer._overlayEdgeMarginPx + viewer._statsInsetPx
         anchors.bottomMargin: viewer._overlayBottomMarginPx
         z: 6
 
@@ -1481,11 +1567,15 @@ Rectangle {
                 // Match the bottom-right settings popup's visual style
                 // — same translucent dark card, subtle border, rounded
                 // corners — so the two corner overlays read as parts
-                // of the same control system. Keeping the default
-                // MenuItem contentItem (instead of overriding it) so
-                // implicitWidth resolves correctly; a custom Text
-                // contentItem leaves the menu zero-width and the items
-                // un-clickable.
+                // of the same control system.
+                //
+                // Item text and hover fill come from AppTheme, not the
+                // Controls style (#538): main.py pins Material *Dark*
+                // app-wide, so the default MenuItem text is always white
+                // and vanished on this card in the Light theme. The items
+                // keep an explicit implicitWidth so the menu still sizes
+                // (a bare Text contentItem once left it zero-width and
+                // the items un-clickable).
                 padding: 6
                 implicitWidth: 120
                 background: Rectangle {
@@ -1497,9 +1587,26 @@ Rectangle {
                 Repeater {
                     model: viewer._windowOptions
                     MenuItem {
+                        id: windowOptionItem
                         text: modelData.label
                         font.family: "Roboto Mono"
                         font.pixelSize: 13
+                        implicitWidth: 108
+                        implicitHeight: 36
+                        leftPadding: 12
+                        rightPadding: 12
+                        contentItem: Text {
+                            text: windowOptionItem.text
+                            font: windowOptionItem.font
+                            color: AppTheme.textPrimary
+                            verticalAlignment: Text.AlignVCenter
+                            elide: Text.ElideRight
+                        }
+                        background: Rectangle {
+                            radius: 4
+                            color: windowOptionItem.highlighted || windowOptionItem.down
+                                   ? AppTheme.bgHover : "transparent"
+                        }
                         onTriggered: viewer._windowSecondsRequested(modelData.value)
                     }
                 }
@@ -1508,10 +1615,10 @@ Rectangle {
 
         Rectangle {
             id: settingsMenuButton
-            // In clinical mode the popup's only rows (display mode +
-            // autoscale) are hidden and Cell values is gone, leaving the
-            // dev-only Profiler as the sole possible entry. Hide the
-            // button entirely when it would open an empty card.
+            // In clinical mode every research row (view, scale, metrics)
+            // is hidden, leaving the dev-only Profiler as the sole
+            // possible entry. Hide the button entirely when it would
+            // open an empty card.
             visible: !viewer.effectiveClinical
                      || MotionInterface.appConfig.engineeringMode === true
             width: 36
@@ -1538,7 +1645,7 @@ Rectangle {
             }
 
             // Popup opens UPWARD from the button so it doesn't cover
-            // the scrubber. Width tracks the longest switch row.
+            // the scrubber. Width tracks the widest row.
             Popup {
                 id: settingsPopup
                 parent: settingsMenuButton
@@ -1582,10 +1689,69 @@ Rectangle {
                     }
                 }
 
+                // Segmented "bubble" switch (#622): one pill per option in
+                // a rounded track, the selected one filled with the accent.
+                // options: [{ value, label }]; current: the selected value.
+                // A click on an unselected option emits picked(value); the
+                // caller writes the state and `current` follows it back.
+                component PopupSegmented: Rectangle {
+                    id: seg
+                    property var options: []
+                    property string current: ""
+                    signal picked(string value)
+                    width: segButtons.implicitWidth + 4
+                    height: 28
+                    radius: 14
+                    color: AppTheme.bgInput
+                    border.color: AppTheme.borderSoft
+                    border.width: 1
+                    Row {
+                        id: segButtons
+                        anchors.centerIn: parent
+                        Repeater {
+                            model: seg.options
+                            delegate: Rectangle {
+                                id: segButton
+                                readonly property bool selected: seg.current === modelData.value
+                                width: segLabel.implicitWidth + 24
+                                height: 24
+                                radius: 12
+                                color: selected ? AppTheme.accentInteractive : "transparent"
+                                Behavior on color { ColorAnimation { duration: 120 } }
+                                Accessible.role: Accessible.Button
+                                Accessible.name: modelData.label
+                                Text {
+                                    id: segLabel
+                                    anchors.centerIn: parent
+                                    text: modelData.label
+                                    color: segButton.selected ? "white" : AppTheme.textPrimary
+                                    font.pixelSize: 12
+                                    font.family: "Roboto Mono"
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: if (!segButton.selected) seg.picked(modelData.value)
+                                }
+                            }
+                        }
+                    }
+                }
+
                 contentItem: Column {
                     id: popupColumn
-                    spacing: 6
+                    spacing: 8
                     padding: 12
+                    // One label column for every row, and one switch column
+                    // as wide as the widest switch, each switch centered in
+                    // it, so the switches share a center line whatever the
+                    // label and option lengths.
+                    readonly property real labelWidth: Math.max(
+                        viewLabel.implicitWidth, scaleLabel.implicitWidth,
+                        metricsLabel.implicitWidth, statsLabel.implicitWidth)
+                    readonly property real selectorWidth: Math.max(
+                        viewModeSelector.width, scaleSelector.width,
+                        metricsSelector.width, statsSelector.width)
 
                     // Research view mode (#606): Individual (one plot per
                     // camera) | Aggregate (one plot per mirrored camera
@@ -1596,139 +1762,146 @@ Rectangle {
                     Row {
                         id: viewModeRow
                         visible: !viewer.clinicalMode && !viewer.effectiveClinical
-                        spacing: 8
+                        spacing: 10
                         Text {
-                            anchors.verticalCenter: viewModeSelector.verticalCenter
+                            id: viewLabel
+                            width: popupColumn.labelWidth
+                            anchors.verticalCenter: viewModeSlot.verticalCenter
                             text: "View"
                             color: AppTheme.textSecondary
                             font.pixelSize: 12
                             font.family: "Roboto Mono"
                         }
-                        Rectangle {
-                            id: viewModeSelector
-                            width: viewModeButtons.implicitWidth + 4
-                            height: 28
-                            radius: 14
-                            color: AppTheme.bgInput
-                            border.color: AppTheme.borderSoft
-                            border.width: 1
-                            Row {
-                                id: viewModeButtons
-                                anchors.centerIn: parent
-                                Repeater {
-                                    model: [
-                                        { value: "individual", label: "Individual" },
-                                        { value: "aggregate",  label: "Aggregate" },
-                                        { value: "average",    label: "Average" }
-                                    ]
-                                    delegate: Rectangle {
-                                        id: viewModeButton
-                                        readonly property bool selected:
-                                            viewer.researchViewMode === modelData.value
-                                        width: viewModeLabel.implicitWidth + 24
-                                        height: 24
-                                        radius: 12
-                                        color: selected ? AppTheme.accentInteractive : "transparent"
-                                        Behavior on color { ColorAnimation { duration: 120 } }
-                                        Accessible.role: Accessible.Button
-                                        Accessible.name: modelData.label + " view"
-                                        Text {
-                                            id: viewModeLabel
-                                            anchors.centerIn: parent
-                                            text: modelData.label
-                                            color: viewModeButton.selected ? "white" : AppTheme.textPrimary
-                                            font.pixelSize: 12
-                                            font.family: "Roboto Mono"
-                                        }
-                                        MouseArea {
-                                            anchors.fill: parent
-                                            cursorShape: Qt.PointingHandCursor
-                                            onClicked: {
-                                                if (viewModeButton.selected) return
-                                                MotionInterface.setConfig("plotViewMode", modelData.value)
-                                                console.info("[Plot] view mode → " + modelData.value)
-                                            }
-                                        }
-                                    }
+                        Item {
+                            id: viewModeSlot
+                            width: popupColumn.selectorWidth
+                            height: viewModeSelector.height
+                            PopupSegmented {
+                                id: viewModeSelector
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                Accessible.name: "View"
+                                options: [
+                                    { value: "individual", label: "Individual" },
+                                    { value: "aggregate",  label: "Aggregate" },
+                                    { value: "average",    label: "Average" }
+                                ]
+                                current: viewer.researchViewMode
+                                onPicked: function(value) {
+                                    MotionInterface.setConfig("plotViewMode", value)
+                                    console.info("[Plot] view mode → " + value)
                                 }
                             }
                         }
                     }
 
+                    // Y-axis scale (#622): Fixed | Global | Per Plot — see
+                    // viewer.scaleMode. Hidden in clinical mode: autoscale
+                    // is not offered there; the view always uses the
+                    // configured manual bounds.
                     Row {
-                        // Hidden in clinical mode — that view only
-                        // ever shows the BFI/BVI side averages, so the
-                        // Mean/Contrast alternative isn't offered there.
+                        id: scaleRow
                         visible: !viewer.effectiveClinical
-                        spacing: 8
-                        PopupPillSwitch {
-                            id: bfiBviSwitch
-                            checked: viewer.displayMode === "bfi_bvi"
-                            onToggled: viewer.displayModeToggleRequested(checked)
-                        }
+                        spacing: 10
                         Text {
-                            anchors.verticalCenter: bfiBviSwitch.verticalCenter
-                            text: bfiBviSwitch.checked ? "BFI / BVI" : "Mean / Contrast"
-                            color: AppTheme.textPrimary
+                            id: scaleLabel
+                            width: popupColumn.labelWidth
+                            anchors.verticalCenter: scaleSlot.verticalCenter
+                            text: "Scale"
+                            color: AppTheme.textSecondary
                             font.pixelSize: 12
                             font.family: "Roboto Mono"
                         }
+                        Item {
+                            id: scaleSlot
+                            width: popupColumn.selectorWidth
+                            height: scaleSelector.height
+                            PopupSegmented {
+                                id: scaleSelector
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                Accessible.name: "Scale"
+                                options: [
+                                    { value: "fixed",   label: "Fixed" },
+                                    { value: "global",  label: "Global" },
+                                    { value: "perPlot", label: "Per Plot" }
+                                ]
+                                current: viewer.scaleMode
+                                onPicked: function(value) { viewer.setScaleMode(value) }
+                            }
+                        }
                     }
+
+                    // Plotted metric pair. Hidden in clinical mode — that
+                    // view only ever shows the BFI/BVI side averages, so
+                    // the Mean/Contrast alternative isn't offered there.
                     Row {
-                        // Hidden in clinical mode — autoscale is
-                        // not offered there; the view always uses the
-                        // configured manual bounds.
+                        id: metricsRow
                         visible: !viewer.effectiveClinical
-                        spacing: 8
-                        PopupPillSwitch {
-                            id: autoScaleSwitch
-                            checked: viewer.autoScale
-                            onToggled: viewer.autoScaleToggleRequested(checked)
-                        }
+                        spacing: 10
                         Text {
-                            anchors.verticalCenter: autoScaleSwitch.verticalCenter
-                            text: "Autoscale"
-                            color: AppTheme.textPrimary
+                            id: metricsLabel
+                            width: popupColumn.labelWidth
+                            anchors.verticalCenter: metricsSlot.verticalCenter
+                            text: "Metrics"
+                            color: AppTheme.textSecondary
                             font.pixelSize: 12
                             font.family: "Roboto Mono"
                         }
+                        Item {
+                            id: metricsSlot
+                            width: popupColumn.selectorWidth
+                            height: metricsSelector.height
+                            PopupSegmented {
+                                id: metricsSelector
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                Accessible.name: "Metrics"
+                                options: [
+                                    { value: "bfi_bvi",       label: "BFI / BVI" },
+                                    { value: "mean_contrast", label: "Mean / Contrast" }
+                                ]
+                                current: viewer.displayMode
+                                onPicked: function(value) {
+                                    viewer.displayModeToggleRequested(value === "bfi_bvi")
+                                }
+                            }
+                        }
                     }
+
+                    // Statistics pane (#635): Off | On. Same gate as the
+                    // View row (viewer.statsActive).
                     Row {
-                        // Per-plot scale (#452) — research-only, and only
-                        // meaningful while autoscale is on, so it is
-                        // disclosed under that switch rather than shown
-                        // dead. Clinical never sees it (nor autoscale).
-                        visible: !viewer.effectiveClinical && viewer.autoScale
-                        spacing: 8
-                        PopupPillSwitch {
-                            id: perPlotSwitch
-                            checked: viewer.autoScalePerPlot
-                            onToggled: MotionInterface.setConfig("autoScalePerPlot", checked)
-                        }
+                        id: statsRow
+                        visible: !viewer.clinicalMode && !viewer.effectiveClinical
+                        spacing: 10
                         Text {
-                            anchors.verticalCenter: perPlotSwitch.verticalCenter
-                            text: perPlotSwitch.checked ? "Per-plot scale" : "Global scale"
-                            color: AppTheme.textPrimary
+                            id: statsLabel
+                            width: popupColumn.labelWidth
+                            anchors.verticalCenter: statsSlot.verticalCenter
+                            text: "Statistics"
+                            color: AppTheme.textSecondary
                             font.pixelSize: 12
                             font.family: "Roboto Mono"
                         }
-                    }
-                    Row {
-                        visible: !viewer.effectiveClinical
-                        spacing: 8
-                        PopupPillSwitch {
-                            id: axisLabelsSwitch
-                            checked: viewer.showAxisLabels
-                            onToggled: MotionInterface.setConfig("showAxisLabels", checked)
+                        Item {
+                            id: statsSlot
+                            width: popupColumn.selectorWidth
+                            height: statsSelector.height
+                            PopupSegmented {
+                                id: statsSelector
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                Accessible.name: "Statistics"
+                                options: [
+                                    { value: "off", label: "Off" },
+                                    { value: "on",  label: "On" }
+                                ]
+                                current: viewer.statsActive ? "on" : "off"
+                                onPicked: function(value) {
+                                    MotionInterface.setConfig("showStatistics", value === "on")
+                                    console.info("[Plot] statistics → " + value)
+                                }
+                            }
                         }
-                        Text {
-                            anchors.verticalCenter: axisLabelsSwitch.verticalCenter
-                            text: "Axis labels"
-                            color: AppTheme.textPrimary
-                            font.pixelSize: 12
-                            font.family: "Roboto Mono"
-                        }
                     }
+
                     Row {
                         visible: MotionInterface.appConfig.engineeringMode === true
                         spacing: 8

@@ -88,6 +88,10 @@ APP_CONFIG = {
     # averaged plot per module, clinical-style). Display-only; clinical
     # builds ignore it.
     "plotViewMode": "individual",
+    # Statistics pane beside the plots (#635), from the plot's ⋯ menu: live
+    # and 0.5 Hz low-passed values per plot plus the left − right
+    # differential. Display-only; clinical builds ignore it.
+    "showStatistics": False,
     "darkMode": True,
     "max_calibration_time_sec": 600,
     "calibration_scan_duration_sec": 15,
@@ -131,6 +135,13 @@ APP_CONFIG = {
     # Whole-scan data-stall watchdog (#248): abort with E-303 when no camera
     # delivers a frame for this long while the trigger is on; <= 0 disables.
     "scanDataStallTimeoutSec": 3,
+    # Low-storage checks (#506), MB free on the data drive. Under
+    # minFreeDiskMb: critical error at startup (E-107) and on Start
+    # (E-305), plus one warning toast per running scan. Under
+    # scanStopFreeDiskMb: the running scan is stopped gracefully with a
+    # warning toast (E-306). <= 0 disables the respective checks.
+    "minFreeDiskMb": 1024,
+    "scanStopFreeDiskMb": 100,
     # Console over-temp trip (C) pushed to the console user config on
     # connect; validated 1-60 before any write (motion_config.ensure_tec_trip).
     "tecTripTempC": 40,
@@ -198,6 +209,7 @@ CONSTANT_KEYS = frozenset({
     "cq_live_activate_frames", "cq_live_clear_frames",
     "cq_dark_threshold_per_camera", "cq_light_threshold_per_camera",
     "cameraTempAlertThresholdC", "scanDataStallTimeoutSec", "tecTripTempC",
+    "minFreeDiskMb", "scanStopFreeDiskMb",
     "powerOffUnusedCameras", "histoThrottle", "deferHistoSend",
     "commVerbose", "verboseCommandHandling",
     "support_email", "connectionTimeoutSec", "requireConsole", "minSensors",
@@ -219,7 +231,7 @@ PREFERENCE_KEYS = frozenset({
     "meanMin", "meanMax", "contrastMin", "contrastMax",
     "bfiColor", "bviColor", "plotWindowSec",
     "autoScale", "autoScalePerPlot", "showAxisLabels", "plotViewMode",
-    "bviLowPassEnabled",
+    "showStatistics", "bviLowPassEnabled",
     "darkMode", "liquidGlass",
     # Research data output. Persisting these is harmless in a clinical
     # build: the scan-start gate is (!clinicalMode || engineeringMode), and
