@@ -1,8 +1,12 @@
-"""Regression tests for Scan History duration rounding."""
+"""Regression tests for the Scan History duration column (#625).
+
+History must show the same whole seconds as the session-notes
+"duration:" line, which formats the same actual_duration_sec by
+truncating (int()), so 59.6 s reads 0:59 in both places, never 0:60.
+"""
 
 import json
 import re
-import sys
 from pathlib import Path
 
 import pytest
@@ -11,7 +15,6 @@ from PyQt6.QtQml import QJSEngine
 pytestmark = pytest.mark.unit
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT))
 HISTORY_QML = REPO_ROOT / "components" / "HistoryModal.qml"
 
 
@@ -57,13 +60,16 @@ def format_duration():
     [
         (0, "0:00"),
         (59.4, "0:59"),
-        (59.6, "1:00"),
-        (119.7, "2:00"),
+        (59.6, "0:59"),
+        (59.999, "0:59"),
+        (60, "1:00"),
+        (119.7, "1:59"),
+        (3600.5, "60:00"),
         (-1, "—"),
         (None, "—"),
     ],
 )
-def test_format_duration_rounds_total_seconds(
+def test_format_duration_truncates_like_session_notes(
     format_duration, seconds, expected
 ):
     assert format_duration(seconds) == expected
