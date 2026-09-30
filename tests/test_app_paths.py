@@ -312,15 +312,15 @@ def test_frozen_macos_never_yields_a_windows_path(tmp_path, monkeypatch):
 
 @pytest.mark.unit
 def test_frozen_macos_portable_stays_outside_the_app_bundle(tmp_path, monkeypatch):
-    """Writing inside Open-Motion.app invalidates its code signature, so the
-    portable layout cannot apply on macOS."""
+    """Writing inside Open-Motion Research.app invalidates its code signature,
+    so the portable layout cannot apply on macOS."""
     _override(monkeypatch, None)
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "platform", "darwin")
     _fake_home(monkeypatch, tmp_path)
-    bundle = tmp_path / "Open-Motion.app" / "Contents" / "MacOS"
+    bundle = tmp_path / "Open-Motion Research.app" / "Contents" / "MacOS"
     bundle.mkdir(parents=True)
-    monkeypatch.setattr(sys, "executable", str(bundle / "Open-Motion"), raising=False)
+    monkeypatch.setattr(sys, "executable", str(bundle / "Open-Motion Research"), raising=False)
 
     root = app_paths.writable_root(portable=True)
 

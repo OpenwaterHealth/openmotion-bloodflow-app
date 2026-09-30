@@ -8,7 +8,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # ── Configuration ─────────────────────────────────────────────────────
-APP_NAME="Open-Motion"
+# Must match APP_NAME in the spec heredoc below. It contains a space, so keep
+# every path built from it quoted.
+APP_NAME="Open-Motion Research"
 BUNDLE_ID="com.openwaterhealth.bloodflow"
 ICON_SRC="assets/images/favicon.png"
 SPEC_FILE="openwater_macos.spec"
@@ -68,7 +70,7 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 from PyInstaller.building.build_main import Analysis, PYZ, EXE, COLLECT, BUNDLE
 
-APP_NAME = "Open-Motion"
+APP_NAME = "Open-Motion Research"
 ENTRY = "main.py"
 ICNS_FILE = "build/AppIcon.icns"
 
@@ -210,6 +212,7 @@ app = BUNDLE(
     icon=ICNS_FILE,
     bundle_identifier="com.openwaterhealth.bloodflow",
     info_plist={
+        "CFBundleName": APP_NAME,
         "CFBundleDisplayName": APP_NAME,
         "CFBundleShortVersionString": os.environ.get("OPENMOTION_VERSION")
             or os.popen("python version.py 2>/dev/null").read().strip() or "0.0.0",
