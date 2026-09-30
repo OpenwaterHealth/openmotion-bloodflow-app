@@ -52,7 +52,7 @@ the dialog. You can also allow it under **System Settings → Privacy & Security
 Open Anyway**, or clear the quarantine flag:
 
 ```bash
-xattr -dr com.apple.quarantine /Applications/Open-Motion.app
+xattr -dr com.apple.quarantine "/Applications/Open-Motion Research.app"
 ```
 
 ## Using the app
@@ -199,7 +199,7 @@ The Setup installer needs WiX 5 and the .NET 8 SDK. Without them,
 ```bash
 brew install libusb
 pip install --upgrade "pyinstaller>=6.13"
-./build_macos.sh          # → dist/Open-Motion.app + dist/Open-Motion-Research-<version>-macOS.dmg
+./build_macos.sh          # → "dist/Open-Motion Research.app" + dist/Open-Motion-Research-<version>-macOS.dmg
 ```
 
 **Releases** are built by CI (`.github/workflows/release-build.yml`) when a
