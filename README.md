@@ -48,7 +48,7 @@ the dialog. You can also allow it under **System Settings → Privacy & Security
 Open Anyway**, or clear the quarantine flag:
 
 ```bash
-xattr -dr com.apple.quarantine /Applications/Open-Motion.app
+xattr -dr com.apple.quarantine "/Applications/Open-Motion Research.app"
 ```
 
 ## Using the app
@@ -63,9 +63,10 @@ xattr -dr com.apple.quarantine /Applications/Open-Motion.app
 - **Errors** show a stable code such as `E-104`. The
   [error code catalog](docs/ERROR_CODES.md) explains each code and what to do
   about it.
-- **Settings → About → Send Debug Logs** packages the app logs (no scan or
-  patient data) for a bug report. Error dialogs also have a **Contact Support**
-  button.
+- **Settings → About → Send Debug Logs** packages the last 48 hours of app
+  logs, the app configuration and system information for a bug report. The
+  logs include subject IDs but no scan data. Critical error dialogs also have
+  a **Contact Support** button.
 
 ### Where data and logs go
 
@@ -89,23 +90,32 @@ If that location isn't writable, the app falls back to `~/Documents/Open-Motion`
 
 ### Settings
 
-Most display options live in the in-app **Settings** panel and in the plot's
-⋯ menu. Your changes are saved in `scans.db` and persist across launches.
+Display options live in the in-app **Settings** panel and in the plot's ⋯
+menu. Your changes are saved in `scans.db` and persist across launches.
+
+**Settings panel**
 
 | Setting | Default | What it does |
 |---|---|---|
-| Left / right camera mask | `0x66` | Which of the 8 cameras on each sensor module are scanned |
-| Show BFI/BVI | on | Plot BFI/BVI (off plots raw mean/contrast) |
-| Plot window | 5 s | Width of the realtime plot window |
-| Autoscale | off | Fit the Y-axes to the data instead of the manual bounds |
-| Autoscale per plot | off | With Autoscale on, fit each camera's plot on its own instead of one shared range |
-| BFI / BVI bounds | 0–10 / 0–10 | Manual Y-axis range when autoscale is off |
-| Mean / contrast bounds | 0–200 / 0–0.7 | Manual Y-axis range for raw mean/contrast |
-| BFI / BVI color | `#ffffff` / `#3437db` | Trace colors |
+| Default Camera Configuration: Left / Right Sensor | `0x66` | Which of the 8 cameras on each sensor module are scanned |
+| Display mode | BFI / BVI | Plot BFI/BVI, or raw Mean / Contrast |
+| Time window | 5 s | Width of the realtime plot window (3, 5, 15 or 30 s) |
+| Auto-scale Y-axes | off | Fit the Y-axes to the data instead of the manual bounds |
 | BVI low-pass filter | on | Smooths the **displayed** BVI trace (20 Hz, 1-pole). Stored data is never filtered |
-| Axis labels | on | Show axis labels on the plots |
+| Trace colors | BFI `#ffffff`, BVI `#3437db` | Plot trace colors |
+| Manual Plot Bounds | BFI 0–10, BVI 0–10, Mean 0–200, Contrast 0–0.7 | Y-axis ranges used when autoscale is off |
+| Theme | Liquid Glass | Also Dark Mode or Light Mode |
 | Auto-export CSV | off | Write the same CSV as History → Export CSV to `data/` when each scan ends |
-| Write raw CSV | off | Also write raw histogram CSVs for each scan, optionally capped to a number of seconds |
+| Save raw CSV | off | Also write raw histogram CSVs for each scan. **Raw CSV duration** caps how many seconds are written |
+
+**Plot ⋯ menu**
+
+| Setting | Default | What it does |
+|---|---|---|
+| View | Individual | **Individual**: one plot per camera. **Aggregate**: one plot per mirrored camera pair (1+8, 2+7, 3+6, 4+5). **Average**: one averaged plot per sensor module |
+| Scale | Fixed | **Fixed** uses the manual bounds, **Global** fits one shared range per metric, **Per Plot** fits each plot to its own data |
+| Metrics | BFI / BVI | Same choice as Display mode in Settings |
+| Statistics | Off | A pane beside the plots with each plot's live and smoothed value and the left − right difference |
 
 All other values (thresholds, timings, firmware flags) are compiled into the app
 in [`config/app_config.py`](config/app_config.py) and change only with a new
@@ -154,8 +164,8 @@ Source runs accept a few developer flags. Packaged builds ignore them.
 | `--portable` | Label the run as a portable build |
 | `--config-override '{"key": value}'` | Override any compiled config value from `config/app_config.py` for this run |
 
-The app reads **no environment variables**. The flags above are the only way to
-change its behavior at launch. QML does not hot-reload, so restart the app
+The app reads **no environment variables**. Command-line flags are the only way
+to change its behavior at launch. QML does not hot-reload, so restart the app
 after editing a `.qml` file.
 
 ### Tests
@@ -176,7 +186,7 @@ fallback.
 ```powershell
 powershell -File scripts\build_nuitka.ps1 -Variant research   # → dist\research\Open-Motion\Open-Motion.exe
 python -m PyInstaller -y openwater.spec                       # PyInstaller fallback
-.\build_and_zip.ps1                                           # build + package the zip and Setup installer
+.\build_and_zip.ps1                                           # build + package every variant's zip and Setup installer
 ```
 
 The Setup installer needs WiX 5 and the .NET 8 SDK. Without them,
@@ -187,7 +197,7 @@ The Setup installer needs WiX 5 and the .NET 8 SDK. Without them,
 ```bash
 brew install libusb
 pip install --upgrade "pyinstaller>=6.13"
-./build_macos.sh          # → dist/Open-Motion.app + dist/Open-Motion-<version>-macOS.dmg
+./build_macos.sh          # → "dist/Open-Motion Research.app" + dist/Open-Motion-<version>-macOS.dmg
 ```
 
 **Releases** are built by CI (`.github/workflows/release-build.yml`) when a
