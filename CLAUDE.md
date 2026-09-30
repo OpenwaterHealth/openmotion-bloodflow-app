@@ -36,8 +36,13 @@ python -m PyInstaller -y openwater.spec # PyInstaller fallback → dist/Open-Mot
 ```bash
 brew install libusb                  # PyUSB backend; bundled from /opt/homebrew/lib
 pip install --upgrade "pyinstaller>=6.13"
-./build_macos.sh                     # → dist/Open-Motion.app + dist/Open-Motion-Research-<ver>-macOS.dmg
+./build_macos.sh                     # → "dist/Open-Motion Research.app" + dist/Open-Motion-Research-<ver>-macOS.dmg
 ```
+
+The bundle is `Open-Motion Research.app` (`BUNDLE_NAME`, set in both the script
+and the spec heredoc); the executable inside it and the DMG volume keep the
+plain `Open-Motion` (`APP_NAME`). The name has a space, so keep every bundle
+path in the script quoted.
 
 CI builds it too: the `build-macos` job in `release-build.yml` (macos-15, Apple
 Silicon) attaches the DMG to the **same** GitHub Release as the Windows
@@ -57,14 +62,14 @@ artifacts, so every tagged release carries one.
   macOS, so a "clinical" macOS session cannot start at all.
 - **`portableMode` does not apply.** Both variants write to
   `~/Library/Application Support/Openwater` (`utils/app_paths.py`); writing inside
-  `Open-Motion.app` would invalidate its code signature. That is where `logs/` and
+  `Open-Motion Research.app` would invalidate its code signature. That is where `logs/` and
   `data/` live on a Mac.
 - **PyInstaller 6.11.1 (the `requirements.txt` pin) does not work here** — it
   creates Qt framework symlinks twice and dies with `FileExistsError` on
   `Versions/Current/*`. CI overrides the pin for the macOS job only.
 - **Ad-hoc signed, not notarized** (`codesign --sign -`). A *downloaded* DMG is
   quarantined by Gatekeeper: first launch needs right-click → Open, or
-  `xattr -dr com.apple.quarantine /Applications/Open-Motion.app`. The `xattr -cr`
+  `xattr -dr com.apple.quarantine "/Applications/Open-Motion Research.app"`. The `xattr -cr`
   in the build script only cleans the build machine's copy.
 
 ## Layout
