@@ -564,7 +564,7 @@ Quote the error code when contacting support.
 | `E-102` | Sensor self-check unreadable | The sensor module connected but did not report its self-check result. | Power-cycle and reconnect. If it persists, update the sensor firmware or contact support. |
 | `E-103` | Console initialization failed | The console's laser-power configuration could not be applied. | Power-cycle the console and reconnect. If it persists, contact support. |
 | `E-104` | Console not detected | Startup check: no console found (yellow message, not a dialog). | Check the console USB cable and power. |
-| `E-105` | Camera power-on failed | The sensor module could not power on its cameras. | Power-cycle the sensor module and reconnect. If it persists, the module may need service. |
+| `E-105` | Camera power failed | The sensor module could not power its cameras, so they cannot capture. This can happen while the module starts up or when a scan or check starts. | Power-cycle the sensor module and reconnect. If it persists, or only some cameras are affected, the module may need service — contact support. |
 | `E-106` | Sensor not detected | Startup check: no sensor module found (yellow message, not a dialog). | Check the sensor USB cable and power. |
 | `E-201` | Laser safety monitor unresponsive | Laser safety could not be confirmed, so the laser was shut off as a precaution. | Power-cycle the system and reconnect. **Do not scan until this clears.** Contact support if it persists. |
 | `E-202` | Laser safety trip | The laser-safety monitor tripped during a scan. The laser was shut off and the scan stops about 5 seconds later. | Remove any obstruction, let the system settle, and start a new scan. If it trips repeatedly, stop and contact support. |
