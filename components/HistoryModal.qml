@@ -208,7 +208,9 @@ Item {
 
     function formatDuration(sec) {
         if (sec === undefined || sec === null || sec < 0) return "—"
-        var totalSeconds = Math.round(sec)
+        // Truncate, not round: the session-notes "duration:" line formats
+        // the same actual_duration_sec with int(), so both show 59.6 s as 0:59.
+        var totalSeconds = Math.floor(sec)
         var m = Math.floor(totalSeconds / 60)
         var s = totalSeconds % 60
         return m + ":" + (s < 10 ? "0" + s : s)
