@@ -5,7 +5,8 @@ import sys
 import pytest
 
 from config import app_config as compiled
-from utils import app_paths
+from utils import app_paths, config_store
+from utils.settings_store import SettingsStore
 
 
 def _root(monkeypatch, tmp_path):
@@ -276,3 +277,105 @@ def test_liquid_glass_config_override_still_wins(tmp_path, monkeypatch):
         overrides={"liquidGlass": False},
     )
     assert cfg["liquidGlass"] is False
+
+
+# --------------------------------------------------------------------------
+# A saved theme survives the glass default (#659)
+# --------------------------------------------------------------------------
+#
+# The settings table holds diffs against the baseline, and #604 moved the
+# Research liquidGlass baseline from False to True. These boot the way
+# main() does (compiled config, then the scans.db settings table) and read
+# the result the way the UI does.
+
+# Settings → Appearance → Theme (SettingsModal.qml themeCombo): what each
+# option writes through saveConfigs.
+_THEME_WRITES = {
+    "Dark Mode": {"darkMode": True, "liquidGlass": False},
+    "Light Mode": {"darkMode": False, "liquidGlass": False},
+    "Liquid Glass": {"darkMode": True, "liquidGlass": True},
+}
+
+
+def _theme(cfg):
+    """The Theme option whose writes match what AppTheme renders for
+    ``cfg`` (it reads darkMode !== false, liquidGlass === true); None for
+    a pair no option writes, which the selector mislabels "Liquid Glass"."""
+    rendered = {
+        "darkMode": cfg["darkMode"] is not False,
+        "liquidGlass": cfg["liquidGlass"] is True,
+    }
+    for name, writes in _THEME_WRITES.items():
+        if writes == rendered:
+            return name
+    return None
+
+
+def _boot(tmp_path, monkeypatch, *, clinical):
+    main, cfg = _config_with(tmp_path, monkeypatch, "win32", {"clinicalMode": clinical})
+    store = SettingsStore(tmp_path / "scans.db")
+    config_store.apply_saved_preferences(cfg, store.load())
+    return main, cfg, store
+
+
+def _persist(main, cfg, store):
+    """What MotionConnector._save_app_config does after a Settings write."""
+    to_save, to_delete = config_store.persistable_diff(cfg, main._APP_CONFIG_BASELINE)
+    if to_save:
+        store.save(to_save)
+    if to_delete:
+        store.delete(to_delete)
+
+
+@pytest.mark.unit
+def test_light_mode_saved_under_the_old_default_boots_light(tmp_path, monkeypatch):
+    """1.5.3's Research liquidGlass default was False, so choosing Light
+    left only darkMode=false in the table. Against the 1.5.4 default the
+    missing row resolved to glass over the light palette."""
+    SettingsStore(tmp_path / "scans.db").save({"darkMode": False})
+    _main, cfg, _store = _boot(tmp_path, monkeypatch, clinical=False)
+    assert _theme(cfg) == "Light Mode"
+
+
+@pytest.mark.unit
+def test_upgraded_light_mode_is_stored_explicitly_by_the_next_save(tmp_path, monkeypatch):
+    SettingsStore(tmp_path / "scans.db").save({"darkMode": False})
+    main, cfg, store = _boot(tmp_path, monkeypatch, clinical=False)
+    cfg["bfiMax"] = 5.0                     # any unrelated preference change
+    _persist(main, cfg, store)
+    assert store.load() == {"darkMode": False, "liquidGlass": False, "bfiMax": 5.0}
+
+    _main, cfg, _store = _boot(tmp_path, monkeypatch, clinical=False)
+    assert _theme(cfg) == "Light Mode"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("clinical, saved, expected", [
+    # never touched the theme: the variant default (#604)
+    (False, {}, "Liquid Glass"),
+    (True, {}, "Dark Mode"),
+    # picked Liquid Glass under the old Research default
+    (False, {"liquidGlass": True}, "Liquid Glass"),
+    # Light on a Clinical build, whose default never moved
+    (True, {"darkMode": False}, "Light Mode"),
+], ids=["research-untouched", "clinical-untouched", "research-glass",
+        "clinical-light"])
+def test_saved_theme_rows_resolve_to_the_chosen_theme(
+    tmp_path, monkeypatch, clinical, saved, expected,
+):
+    if saved:
+        SettingsStore(tmp_path / "scans.db").save(saved)
+    _main, cfg, _store = _boot(tmp_path, monkeypatch, clinical=clinical)
+    assert _theme(cfg) == expected
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("clinical", [False, True], ids=["research", "clinical"])
+@pytest.mark.parametrize("choice", list(_THEME_WRITES))
+def test_every_theme_choice_survives_a_restart(tmp_path, monkeypatch, clinical, choice):
+    main, cfg, store = _boot(tmp_path, monkeypatch, clinical=clinical)
+    cfg.update(_THEME_WRITES[choice])
+    _persist(main, cfg, store)
+
+    _main, cfg, _store = _boot(tmp_path, monkeypatch, clinical=clinical)
+    assert _theme(cfg) == choice
