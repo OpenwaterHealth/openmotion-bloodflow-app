@@ -357,6 +357,9 @@ class _LivePlotSink:
         self._plot_t0 = plot_t0
         self._live_source = live_source
         self._temp_alerted: dict[tuple[str, int], bool] = {}
+        # Outside engineering mode the operator gets ONE over-temp toast per
+        # scan — the first camera to cross — with airflow advice (#110).
+        self._temp_airflow_warned = False
         # Records every arriving frame so the scan-complete handler can
         # report sustained DELIVERY gaps in the notes footer. Optional so
         # the sink works standalone (tests, future callers).
@@ -370,6 +373,7 @@ class _LivePlotSink:
 
     def on_scan_start(self, meta) -> None:
         self._temp_alerted.clear()
+        self._temp_airflow_warned = False
 
     def consume(self, channel: str, payload) -> None:
         if channel == "live_side":
@@ -384,6 +388,9 @@ class _LivePlotSink:
         n = batch.bfi_live.shape[0]
         connector = self._connector
         threshold = connector._camera_temp_alert_threshold_c
+        # Engineering mode toasts every camera that crosses; everyone else
+        # gets a single airflow warning per scan (#110).
+        temp_toast_per_camera = connector._app_config.get("engineeringMode", False)
         now_mono = time.monotonic()
 
         low_light_rt = getattr(batch, "low_light_rt", None)
@@ -485,14 +492,27 @@ class _LivePlotSink:
                         # from this runner thread — it emits a signal that
                         # is delivered queued onto the GUI thread, same as
                         # _on_camera_dropout_recovered below.
-                        connector.notify(
-                            f"Camera {side.upper()} {cam_id + 1} temperature "
-                            f"{temp_c:.1f}°C — above {threshold:.0f}°C threshold. "
-                            f"Check the airflow around the sensor module.",
-                            type_="warning",
-                            duration_ms=5000,
-                            tag=f"temp_{side}_{cam_id}",
-                        )
+                        if temp_toast_per_camera:
+                            connector.notify(
+                                f"Camera {side.upper()} {cam_id + 1} temperature "
+                                f"{temp_c:.1f}°C — above {threshold:.0f}°C threshold. "
+                                f"Check the airflow around the sensor module.",
+                                type_="warning",
+                                duration_ms=5000,
+                                tag=f"temp_{side}_{cam_id}",
+                            )
+                        elif not self._temp_airflow_warned:
+                            # One warning per scan, on the first camera
+                            # to cross; later cameras are log-only (#110).
+                            self._temp_airflow_warned = True
+                            connector.notify(
+                                f"A sensor camera is running hot "
+                                f"({temp_c:.0f} °C). Check that the sensor's "
+                                f"airflow is not blocked (SPEC-18).",
+                                type_="warning",
+                                duration_ms=5000,
+                                tag="temp_airflow",
+                            )
 
                 # Non-finite BFI/BVI: row-addressed LIGHT rows are appended
                 # anyway (issue #418) — an unlit (covered / off-target)
