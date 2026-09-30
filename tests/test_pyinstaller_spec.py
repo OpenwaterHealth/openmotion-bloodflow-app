@@ -118,17 +118,16 @@ def test_macos_app_bundle_is_named_open_motion_research():
     """The Mac app ships as "Open-Motion Research.app".
 
     build_macos.sh signs, stages and positions the bundle by its own
-    BUNDLE_NAME, so it has to agree with the name the spec hands BUNDLE();
-    the executable inside Contents/MacOS keeps the plain Open-Motion name.
+    APP_NAME, so it has to agree with the name the spec hands BUNDLE().
     """
     script = (_REPO_ROOT / "build_macos.sh").read_text(encoding="utf-8")
-    assert '\nBUNDLE_NAME="Open-Motion Research"\n' in script
-    assert 'APP_PATH="${DIST_DIR}/${BUNDLE_NAME}.app"' in script
+    assert '\nAPP_NAME="Open-Motion Research"\n' in script
+    assert 'APP_PATH="${DIST_DIR}/${APP_NAME}.app"' in script
 
     source = _macos_spec_source()
-    assert '\nBUNDLE_NAME = "Open-Motion Research"\n' in source
-    assert 'name=f"{BUNDLE_NAME}.app"' in source
-    assert '"CFBundleName": BUNDLE_NAME' in source
+    assert '\nAPP_NAME = "Open-Motion Research"\n' in source
+    assert 'name=f"{APP_NAME}.app"' in source
+    assert '"CFBundleName": APP_NAME' in source
 
 def _spec_source(spec: str) -> str:
     return (
