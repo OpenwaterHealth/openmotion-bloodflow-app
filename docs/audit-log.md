@@ -141,7 +141,7 @@ packages the app's diagnostic logs for support, writing a zip to
 containing the app log files from the last 48 hours, `app_config.json`,
 and a `system_info.txt` (app/SDK version + host details). The file
 explorer opens with the zip selected, and a message shows the path —
-**email that zip to support@openwater.cc**. No data is sent
+**email that zip to support@openwater.health**. No data is sent
 automatically, and the bundle contains no scan data or patient
 information. The only trace in the audit log is the
 `debug_bundle_created` event recording that a bundle was made.
