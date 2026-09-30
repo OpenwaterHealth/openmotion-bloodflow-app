@@ -240,7 +240,7 @@ def writable_root(portable: bool | None = None) -> Path:
     if is_frozen():
         if sys.platform == "darwin":
             # macOS has no %LOCALAPPDATA%, and the portable layout can't apply
-            # either: writing inside Open-Motion.app invalidates its code
+            # either: writing inside Open-Motion Research.app invalidates its code
             # signature. Both variants use the standard per-user data location.
             root = _home_dir() / "Library" / "Application Support" / _APP_DIRNAME
         elif portable:
