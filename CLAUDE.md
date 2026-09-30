@@ -39,10 +39,11 @@ pip install --upgrade "pyinstaller>=6.13"
 ./build_macos.sh                     # → "dist/Open-Motion Research.app" + dist/Open-Motion-Research-<ver>-macOS.dmg
 ```
 
-The bundle is `Open-Motion Research.app` (`BUNDLE_NAME`, set in both the script
-and the spec heredoc); the executable inside it and the DMG volume keep the
-plain `Open-Motion` (`APP_NAME`). The name has a space, so keep every bundle
-path in the script quoted.
+`APP_NAME = "Open-Motion Research"` (set in both the script and the spec
+heredoc) names the `.app`, the executable inside it and the DMG volume. The DMG
+file name is spelled out separately as `Open-Motion-Research-<ver>-macOS.dmg`
+(#664), which `release-build.yml` globs. The name has a space, so keep every
+path built from it quoted.
 
 CI builds it too: the `build-macos` job in `release-build.yml` (macos-15, Apple
 Silicon) attaches the DMG to the **same** GitHub Release as the Windows

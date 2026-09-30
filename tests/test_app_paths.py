@@ -320,7 +320,7 @@ def test_frozen_macos_portable_stays_outside_the_app_bundle(tmp_path, monkeypatc
     _fake_home(monkeypatch, tmp_path)
     bundle = tmp_path / "Open-Motion Research.app" / "Contents" / "MacOS"
     bundle.mkdir(parents=True)
-    monkeypatch.setattr(sys, "executable", str(bundle / "Open-Motion"), raising=False)
+    monkeypatch.setattr(sys, "executable", str(bundle / "Open-Motion Research"), raising=False)
 
     root = app_paths.writable_root(portable=True)
 
