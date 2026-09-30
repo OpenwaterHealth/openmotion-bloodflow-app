@@ -142,7 +142,9 @@ def _load_app_config(
     # Liquid Glass is the Research default, solid Dark the Clinical one.
     # Derived from the effective variant (after the dev flag and the macOS
     # gate) rather than the compiled stamp, and written into the baseline
-    # below, so a saved theme is a diff against the right default.
+    # below, so a saved theme is a diff against the right default. A Light
+    # choice saved under the old False default is read back by
+    # config_store.apply_saved_preferences (#659).
     if "liquidGlass" not in dev_keys:
         cfg["liquidGlass"] = not cfg["clinicalMode"]
 
