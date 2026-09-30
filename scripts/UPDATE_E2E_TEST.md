@@ -47,7 +47,8 @@ log — you'll see the app's requests, confirming nothing goes to the internet.
 ## 3. Install the OLD bundle + run the test
 
 1. Double-click `Open-Motion-Research-Setup-1.3.0.exe` → SmartScreen "More info → Run
-   anyway" + UAC. Installs to `C:\Program Files\Openwater\Open-Motion\`.
+   anyway" + UAC. Installs to `C:\Program Files (x86)\Openwater\Open-Motion Research\`
+   (Research has its own folder since #586; Clinical uses `...\Openwater\Open-Motion\`).
 2. Launch **Open-Motion Research** from the Start menu.
 3. Within ~3 s the banner appears: *"A new version is available: 1.3.1."*
    (the server log shows `GET /releases/latest`).
