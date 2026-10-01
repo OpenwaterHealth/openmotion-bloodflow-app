@@ -239,6 +239,10 @@ Rectangle {
                 // has been appended to scanNotes. Opening it here would
                 // race the append and pop an empty modal.
             } else {
+                // Low-storage gate (#506): under 1 GB free on the data
+                // drive the connector raises the E-305 critical modal and
+                // nothing starts — not even the clinical pre-scan check.
+                if (!MotionInterface.checkStorageForScan()) return
                 if (bloodFlow.clinicalMode) {
                     clinicalStartPending = true
                     contactQualityModal.preScanMode = true
@@ -288,10 +292,18 @@ Rectangle {
         modals: [scanSettingsModal, notesModal, historyModal,
                  settingsModal, contactQualityModal, logsModal,
                  sampleScanOfferModal]
+        // Hiding an item does not take its keyboard focus away (#517). A
+        // modal closed while one of its text fields had focus left that
+        // invisible field holding it: it took every later Space as typed
+        // text, so the notes shortcut below worked once and then went dead
+        // until the operator clicked back into the app. Hand focus back to
+        // the viewer, where it starts, whenever the last modal closes.
+        onCurrentChanged: if (current === null) plotViewer.forceActiveFocus()
     }
 
     // Data viewer — fills remaining space to the right of ButtonPanel.
     PlotViewer {
+        id: plotViewer
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         anchors.left: buttonPanel.right
@@ -384,6 +396,8 @@ Rectangle {
     // the modal from onStartStopClicked or scanFinished races the
     // append because scanRunner.scanFinished fires synchronously from
     // cancel(), before the SDK has unwound and _on_complete has run.
+    // If the operator already has the modal open (Space mid-scan), open()
+    // keeps their unsaved text and adds the footer below it (#617).
     Connections {
         target: MotionInterface
         function onScanNotesReady() { notesModal.open() }

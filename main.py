@@ -38,7 +38,7 @@ from PyQt6.QtQml import (
     qmlRegisterSingletonInstance,
     qmlRegisterSingletonType,
 )
-from PyQt6.QtCore import qInstallMessageHandler, QtMsgType, QUrl
+from PyQt6.QtCore import qInstallMessageHandler, QtMsgType, QTimer, QUrl
 
 from motion_connector import MotionConnector
 from motion_config import DEFAULT_TRIGGER_OVERRIDES
@@ -551,6 +551,11 @@ def main():
     # take ~5s normally, well past the old 2s cap, so this reliably blocked on
     # any hardware-attached launch. Already-attached devices still reach the
     # UI via the same _on_handle_state_changed signal path as any hotplug.
+    # Low-storage check (issue #506): E-107 critical modal when the data
+    # drive is nearly full. Deferred to the first event-loop turn so the
+    # QML modal is listening when it fires.
+    QTimer.singleShot(0, connector.check_startup_storage)
+
     logger.info("Starting Motion monitoring...")
     motion_interface.start(wait=False)
 
