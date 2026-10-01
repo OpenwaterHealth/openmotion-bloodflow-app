@@ -288,10 +288,18 @@ Rectangle {
         modals: [scanSettingsModal, notesModal, historyModal,
                  settingsModal, contactQualityModal, logsModal,
                  sampleScanOfferModal]
+        // Hiding an item does not take its keyboard focus away (#517). A
+        // modal closed while one of its text fields had focus left that
+        // invisible field holding it: it took every later Space as typed
+        // text, so the notes shortcut below worked once and then went dead
+        // until the operator clicked back into the app. Hand focus back to
+        // the viewer, where it starts, whenever the last modal closes.
+        onCurrentChanged: if (current === null) plotViewer.forceActiveFocus()
     }
 
     // Data viewer — fills remaining space to the right of ButtonPanel.
     PlotViewer {
+        id: plotViewer
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         anchors.left: buttonPanel.right
