@@ -250,8 +250,7 @@ The laser is on during the check, which takes about 10 seconds. The check tests 
 eight cameras** on each connected sensor, whatever is selected in Scan Settings.
 
 ![Contact-quality check result](img/rs-check.png)
-*A check with problems: the left sensor was not in contact, and the right sensor had good
-contact on its top four cameras only.*
+*A check with good contact on every camera of both sensors.*
 
 | Border | Title | Meaning |
 |---|---|---|
@@ -286,8 +285,8 @@ matters.
    (§12.4).
 
 ![Scan running](img/rs-scanning.png)
-*A 2-minute timed scan on four cameras of the right sensor, 26 seconds in. Bench capture —
-the sensors were not on a subject, so the values are not physiological.*
+*A 2-minute timed scan on four cameras of the right sensor, 27 seconds in. Bench capture —
+the values are for illustration only.*
 
 During the scan:
 
@@ -396,9 +395,16 @@ two is recorded or has a valid reading, the plot shows that camera alone. Only p
 at least one recorded camera are shown — for example, the Middle pattern gives the 2+7
 and 3+6 plots on each module.
 
+![Aggregate view](img/rs-aggregate.png)
+*Aggregate view with the Middle pattern on both sensors: the 3+6 and 2+7 pairs of each
+module.*
+
 **Average** shows one plot per module, left above right, each averaging all of that
 module's recorded cameras. A panel beside each plot shows `LEFT` or `RIGHT` and the
 current values in large type.
+
+![Average view](img/rs-average.png)
+*Average view: one plot per module, with its current values beside it.*
 
 ### 7.4 Statistics pane
 
@@ -411,6 +417,10 @@ the plots. It lists every plot shown, in three sections:
   `L2 − R7` (camera N faces camera 9 − N on the other module), `L1+8 − R1+8`, or `L − R`.
   A difference is listed only when both plots are shown, so a scan on one module has no
   difference section.
+
+![Statistics pane](img/rs-statistics.png)
+*The Statistics pane beside the Individual view: one row per camera, then the differences
+between mirrored cameras on the two modules.*
 
 For each metric (BFI and BVI, or MEAN and CONTRAST) the pane has three columns:
 
@@ -563,6 +573,7 @@ an open dropdown list.
 | **Audit Log** | **View Logs** opens the audit log — a machine-readable record of system events for auditors. The viewer filters by event type, date range and text and exports CSV. |
 
 ![Settings, About](img/rs-settings-4.png)
+*Settings, About. The versions and serial numbers depend on your system.*
 
 The **About** card lists:
 
