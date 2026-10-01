@@ -77,6 +77,15 @@ _STARTUP = [
         "Power-cycle the sensor and reconnect. If only some cameras are "
         "affected, the camera board may need service.",
     ),
+    _e(
+        "E-107", "startup",
+        "Storage almost full",
+        "The drive that stores scan data has less than 1 GB free. Scans "
+        "cannot be started until space is freed.",
+        "Free up space on the data drive (or export and remove old scans) "
+        "before starting a scan. Contact support if the drive should not "
+        "be full.",
+    ),
 ]
 
 # Note: E-104 (console not detected) and E-106 (sensor not detected) are NOT in
@@ -153,7 +162,22 @@ _SCAN = [
         "Check the USB cables and power, reconnect the system, and start a "
         "new scan. If it keeps happening, contact support.",
     ),
+    _e(
+        "E-305", "scan",
+        "Not enough storage to start scan",
+        "The drive that stores scan data has less than 1 GB free, so the "
+        "scan was not started and the laser did not fire.",
+        "Free up space on the data drive (or export and remove old scans), "
+        "then start the scan again. Contact support if the drive should "
+        "not be full.",
+    ),
 ]
+
+# Note: E-306 (scan stopped because the data drive is almost full) is NOT in
+# this registry either: it is a graceful stop announced with a warning toast
+# (MotionConnector._stop_scan_low_storage), not the critical modal. It is
+# recorded as the scan_ended audit abort code and documented in
+# docs/ERROR_CODES.md under "Storage warnings".
 
 
 ERROR_CODES: dict[str, CriticalError] = {
