@@ -41,14 +41,16 @@ Microsoft Edge, Google Chrome or Chromium for headless printing. Options:
 
 ## Screenshots
 
-`img/` holds 1200×800 dark-theme captures of the Research build against bench
-hardware. They cannot be generated in CI (they need the device), so refresh the
-affected ones by hand when the UI changes. The current set was captured on
-2026-09-25 from the 1.5.3 tag run from source (`python main.py --research`) against
-openmotion-sdk 1.12.0 (console fw 1.8.1, sensor fw 1.8.2); the Output Folder field in
-`rs-settings-1.png` / `rs-settings-2.png` is covered by an annotation because that run
-used a scratch data folder. The bench sensors were not on a subject, so BFI/BVI values
-are not physiological.
+`img/` holds 1200×800 captures of the Research build in its default **Liquid Glass** theme
+against bench hardware, plus four crops (`rs-patterns`, `rs-custom`, `rs-continuous`,
+`rs-dots-menu`). They cannot be generated in CI (they need the device), so refresh the
+affected ones by hand when the UI changes. The current set was captured on 2026-09-30 from
+the 1.5.4-dev.1 tag run from source (`python main.py --research`, fresh data folder) on a
+bench running development firmware (console 1.8.2-dev.2, sensors 1.8.2-rc.4), which is what
+`rs-settings-4.png` shows. The Output Folder field in `rs-settings-1.png` /
+`rs-settings-2.png` is covered by an annotation because that run used a scratch data folder.
+`rs-ready.png` is the unannotated source of `rs-anatomy.png`. Bench captures: the BFI/BVI
+values are for illustration only.
 
 The document is marked **draft**: a documentation preview, not a validated controlled
 document.
