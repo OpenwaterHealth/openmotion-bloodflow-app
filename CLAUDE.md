@@ -338,6 +338,27 @@ Consequences to remember:
   `PyInstaller.archive.readers.CArchiveReader(exe).toc` (typecodes `b` binary,
   `x` data, `z` the PYZ, `s` scripts) and open the `z` entry with
   `ZlibArchiveReader` for the module list.
+- **Nuitka blobs go in as COFF objects (#698).** `build_nuitka.ps1` sets
+  `NUITKA_RESOURCE_MODE=coff_obj` for its run, which is MSVC's (CI's) default
+  anyway. With zig the default was C23 `#embed`. The generated source names
+  the blob relatively, so it is identical in every build directory, while
+  zig's compile cache records the embedded file by absolute path. A local
+  build therefore got another build directory's compiled constants
+  (`main.dll`) and onefile payload back whenever that build's tree was still
+  on disk: a `-KeepStandalone` run, or a build running in another worktree.
+  The exe shipped the other build's constants and payload with no error,
+  and the exe size stayed exactly the same. In `coff_obj` mode Nuitka writes
+  the blob objects itself and no compiler cache is involved.
+  `scripts/check_nuitka_blobs.py` compares the finished exe and `main.dll`
+  with this build's `__payload.bin` / `__constant.bin` and fails the build
+  on a mismatch. Tests: `tests/test_check_nuitka_blobs.py`.
+- **Defender quarantines local Nuitka builds sometimes.** Its ML model
+  (`Program:Win32/Contebrew.A!ml`) intermittently deletes the unsigned
+  `main.dll` while Nuitka post-processes it. The build then fails after 5
+  attempts with "Failed to add resources to file ...main.dll ... error code
+  22". This hit both resource modes on 2026-10-02 and is not a build bug.
+  Rerun the build. Exclusions are Defender settings and the machine owner's
+  call. #579 signs `main.dll` on signed CI builds for the same reason.
 
 ## Gotchas
 

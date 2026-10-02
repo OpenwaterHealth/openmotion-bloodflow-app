@@ -111,6 +111,17 @@ if ($Jobs -gt 0) { $args += "--jobs=$Jobs" }
 # branch, so tell it not to; openwater.spec does the same with excludes=.
 if ($Variant -eq "clinical") { $args += "--nofollow-import-to=app_updater" }
 
+# Data blobs (the program's constants, the onefile payload) go in as COFF
+# objects that Nuitka writes itself (#698). That is MSVC's default, so CI is
+# unchanged. With zig, Nuitka's default is C23 #embed. The generated source
+# names the blob relatively, so it is the same in every build directory, but
+# zig's compile cache records the embedded file by absolute path. A build
+# therefore got another build directory's compiled blob back whenever that
+# build's blob was still on disk (a -KeepStandalone tree, a build running in
+# another worktree), and the exe shipped the other build's constants and
+# payload. scripts\check_nuitka_blobs.py below verifies the result.
+$prevResourceMode = $env:NUITKA_RESOURCE_MODE
+$env:NUITKA_RESOURCE_MODE = "coff_obj"
 $orig = Set-BuildVariant -Clinical ($Variant -eq "clinical")
 try {
     Write-Host "=== Nuitka ($Variant, $Version) -> $distPath ===" -ForegroundColor Cyan
@@ -118,6 +129,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Nuitka failed for variant '$Variant'" }
 } finally {
     Restore-ConfigModule -Text $orig
+    $env:NUITKA_RESOURCE_MODE = $prevResourceMode
 }
 
 $built = Join-Path $workPath "Open-Motion.exe"
@@ -128,17 +140,13 @@ if (-not (Test-Path $built)) { throw "Nuitka output missing: $built" }
 Invoke-AppPython -CondaEnv $CondaEnv -Arguments @("scripts\check_libusb.py", (Join-Path $workPath "main.dist"))
 if ($LASTEXITCODE -ne 0) { throw "libusb older than 1.0.30 in the '$Variant' payload (#669)" }
 Move-Item -LiteralPath $built -Destination (Join-Path $distPath "Open-Motion.exe") -Force
-if (-not $KeepStandalone) {
-    foreach ($d in @("main.dist", "main.onefile-build", "main.build")) {
-        $p = Join-Path $workPath $d
-        if (Test-Path $p) { Remove-Item -Recurse -Force $p }
-    }
-}
 # Qt window-class icon (#223): Nuitka, like PyInstaller, publishes the icon
 # group under integer id 1, which Qt's LoadImage(L"IDI_ICON1") never finds.
 # Add the named group now. Safe on a finished Nuitka onefile: its payload is
-# a PE resource, so UpdateResource rewrites the image consistently (verified
-# on a probe build); PyInstaller's appended overlay would not survive this.
+# linked into the image rather than appended after it, so UpdateResource
+# rewrites the image consistently (verified on a probe build, and the blob
+# check below re-reads the finished exe); PyInstaller's appended overlay would
+# not survive this.
 $target = Join-Path $distPath "Open-Motion.exe"
 $iconCode = @(
     "import sys; sys.path.insert(0, r'$(Join-Path $root 'scripts')')",
@@ -150,6 +158,18 @@ $iconCode = @(
 ) -join "; "
 Invoke-AppPython -CondaEnv $CondaEnv -Arguments @("-c", $iconCode)
 if ($LASTEXITCODE -ne 0) { throw "named icon group missing on $target (#223)" }
+
+# #698: the finished exe must hold this build's onefile payload, and main.dll
+# this build's constants. Checked on the final file, before the cleanup
+# below removes the blobs it compares against.
+Invoke-AppPython -CondaEnv $CondaEnv -Arguments @("scripts\check_nuitka_blobs.py", $workPath, $target)
+if ($LASTEXITCODE -ne 0) { throw "the '$Variant' exe carries another build's data (#698)" }
+if (-not $KeepStandalone) {
+    foreach ($d in @("main.dist", "main.onefile-build", "main.build")) {
+        $p = Join-Path $workPath $d
+        if (Test-Path $p) { Remove-Item -Recurse -Force $p }
+    }
+}
 
 $exe = Get-Item $target
 Write-Host ("[nuitka] built {0} ({1:N1} MB)" -f $exe.FullName, ($exe.Length / 1MB)) -ForegroundColor Green
