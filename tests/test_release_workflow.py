@@ -3,9 +3,11 @@
 rc and production builds must ship the exact openmotion-sdk release named in
 ``sdk-version.txt``, and every build generates a CycloneDX SBOM of the
 environment that was frozen and checks its SDK line against the pin (the
-public workflow no longer publishes that SBOM, #573). These tests pin the wiring in
-``release-build.yml`` and the two helper scripts it calls; the workflow itself
-only runs on GitHub, so this is the check that runs on every push.
+public workflow no longer publishes that SBOM, #573). The Windows build also
+creates its conda environment from the locked ``conda-win-64.lock`` (#681).
+These tests pin the wiring in ``release-build.yml``, its Windows composite
+action and the two helper scripts it calls; the workflow itself only runs on
+GitHub, so this is the check that runs on every push.
 """
 
 import json
@@ -157,6 +159,55 @@ def test_stale_hand_written_sbom_is_gone():
     """The generated per-release SBOM replaces the 0.4.3 snapshot that
     recorded omotion as 'latest'."""
     assert not (REPO_ROOT / "sbom.cdx.json").exists()
+
+
+# ------------------------------------------------ conda build env (#681)
+CONDA_LOCK = REPO_ROOT / "conda-win-64.lock"
+
+
+def _locked_packages() -> dict:
+    """{name: version} for every package URL in the lock, each with an md5."""
+    packages = {}
+    for line in CONDA_LOCK.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("https://"):
+            continue
+        url, _, md5 = line.partition("#")
+        assert re.fullmatch(r"[0-9a-f]{32}", md5), line
+        name, version, _build = url.rsplit("/", 1)[1].removesuffix(".conda").rsplit("-", 2)
+        packages[name] = version
+    return packages
+
+
+def test_conda_lock_pins_the_runtime_libraries():
+    """An explicit spec (no solve at build time) holding the versions the
+    ticket asked for: the Python patch level and the C libraries it ships."""
+    assert "\n@EXPLICIT\n" in CONDA_LOCK.read_text(encoding="utf-8")
+    packages = _locked_packages()
+    assert packages["python"] == "3.12.14"
+    assert packages["openssl"] == "3.5.9"
+    assert packages["libexpat"] == "2.8.5"
+    assert packages["sqlite"] == "3.53.4"
+    assert "pip" in packages
+
+
+def test_windows_build_creates_the_env_from_the_lock(windows_build):
+    assert "environment-file: conda-win-64.lock" in windows_build
+    assert "auto-update-conda: false" in windows_build
+    assert "auto-update-conda: true" not in windows_build
+    # setup-miniconda refuses python-version next to an explicit file, and a
+    # bare "3.12" resolved to whatever patch release was newest that day.
+    assert "python-version" not in windows_build
+    # pip comes from the lock too.
+    assert "pip install --upgrade pip" not in windows_build
+
+
+def test_windows_build_records_the_env_and_checks_it_against_the_lock(windows_build, release_workflow):
+    assert "conda list --explicit --md5" in windows_build
+    assert "::error::the omotion env does not match conda-win-64.lock" in windows_build
+    assert "${{ steps.condaenv.outputs.CONDA_EXPLICIT_PATH }}" in windows_build
+    # Release evidence handled like the SBOM (#573): exposed for the private
+    # Clinical pipeline, not published from this public repo.
+    assert "conda-explicit" not in release_workflow
 
 
 def test_release_builds_sign_rc_and_production_tags_or_explicit_dispatch(release_workflow, windows_build):

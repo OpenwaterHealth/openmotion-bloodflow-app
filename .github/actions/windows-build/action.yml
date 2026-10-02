@@ -53,6 +53,9 @@ outputs:
   sbom-path:
     description: "CycloneDX SBOM of the build environment (covers every variant: they are frozen from the same env)."
     value: ${{ steps.sbom.outputs.SBOM_PATH }}
+  conda-explicit-path:
+    description: "`conda list --explicit --md5` of the build environment, checked against conda-win-64.lock (release evidence, #681)."
+    value: ${{ steps.condaenv.outputs.CONDA_EXPLICIT_PATH }}
 
 runs:
   using: composite
@@ -112,12 +115,35 @@ runs:
         echo "::notice ::Building ${TAG} (channel=${CHANNEL}, sdk=${SDK_SOURCE})"
 
     # ── conda environment "omotion" ──────────────────────────────
+    # Created from the explicit lock file (#681): Python and the C libraries
+    # it brings (OpenSSL, libexpat, SQLite, …) at exact versions, builds and
+    # md5s, with no solve, so two builds of the same commit ship the same
+    # runtime. The base conda is not updated either. To move a pin, regenerate
+    # conda-win-64.lock (its header has the recipe).
     - name: Set up Miniconda
       uses: conda-incubator/setup-miniconda@v3
       with:
-        auto-update-conda: true
-        python-version: "3.12"
+        auto-update-conda: false
         activate-environment: omotion
+        environment-file: conda-win-64.lock
+
+    - name: Record the conda environment and check it against the lock
+      id: condaenv
+      shell: bash -el {0}
+      env:
+        TAG: ${{ steps.meta.outputs.TAG }}
+      run: |
+        conda activate omotion
+        OUT="Open-Motion-${TAG}-conda-explicit.txt"
+        conda list --explicit --md5 > "$OUT"
+        cat "$OUT"
+        # tr: the Windows checkout may give the lock CRLF line endings.
+        if ! diff <(grep -E '^https://' conda-win-64.lock | tr -d '\r' | sort) \
+                  <(grep -E '^https://' "$OUT" | tr -d '\r' | sort); then
+          echo "::error::the omotion env does not match conda-win-64.lock"
+          exit 1
+        fi
+        echo "CONDA_EXPLICIT_PATH=${OUT}" >> "$GITHUB_OUTPUT"
 
     - name: Install dependencies into omotion
       shell: bash -el {0}
@@ -125,7 +151,7 @@ runs:
         SDK_SOURCE: ${{ steps.meta.outputs.SDK_SOURCE }}
       run: |
         conda activate omotion
-        python -m pip install --upgrade pip
+        # pip comes from the lock; upgrading it here would undo the pin.
         SDK_PIN=$(tr -d '[:space:]' < sdk-version.txt)
         if [ "$SDK_SOURCE" = "next" ]; then
           echo "Dev/next-branch build — installing SDK from openmotion-sdk@next"
@@ -250,9 +276,9 @@ runs:
       uses: actions/cache@v4
       with:
         path: ~\AppData\Local\Nuitka\Nuitka\Cache
-        key: nuitka-${{ runner.os }}-${{ inputs.variants }}-${{ hashFiles('requirements.txt', 'sdk-version.txt') }}-${{ steps.meta.outputs.COMMIT }}
+        key: nuitka-${{ runner.os }}-${{ inputs.variants }}-${{ hashFiles('requirements.txt', 'sdk-version.txt', 'conda-win-64.lock') }}-${{ steps.meta.outputs.COMMIT }}
         restore-keys: |
-          nuitka-${{ runner.os }}-${{ inputs.variants }}-${{ hashFiles('requirements.txt', 'sdk-version.txt') }}-
+          nuitka-${{ runner.os }}-${{ inputs.variants }}-${{ hashFiles('requirements.txt', 'sdk-version.txt', 'conda-win-64.lock') }}-
           nuitka-${{ runner.os }}-${{ inputs.variants }}-
           nuitka-${{ runner.os }}-
 

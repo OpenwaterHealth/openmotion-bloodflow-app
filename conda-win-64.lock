@@ -1,0 +1,35 @@
+# Conda environment for the Windows release builds (#681). Every package is
+# pinned to an exact version, build and md5, and
+# .github/actions/windows-build/action.yml creates the "omotion" env from this
+# file with no solve, so two builds of the same commit get the same Python and
+# the same C libraries. The pins that matter are python 3.12.14, openssl 3.5.9,
+# libexpat 2.8.5 and sqlite 3.53.4; the rest is what conda resolved with them
+# on the defaults channel.
+#
+# To move a pin, re-resolve on win-64 and replace everything below @EXPLICIT:
+#   conda create -p <tmp> --override-channels -c defaults python=3.12.14 openssl=3.5.9 libexpat=2.8.5 sqlite=3.53.4 pip
+#   conda list -p <tmp> --explicit --md5
+# Same environment for a local build: conda create -n omotion --file conda-win-64.lock
+#
+# platform: win-64
+@EXPLICIT
+https://repo.anaconda.com/pkgs/main/win-64/ca-certificates-2026.9.25-haa95532_0.conda#5896471ca78631bfa6d3a8354a0aafc4
+https://repo.anaconda.com/pkgs/main/noarch/tzdata-2026c-he532380_0.conda#448fc60cd3fb615bf69e242f8aa22914
+https://repo.anaconda.com/pkgs/main/win-64/ucrt-10.0.22621.0-haa95532_0.conda#15e1b10231d7d236520501fcfb440f31
+https://repo.anaconda.com/pkgs/main/win-64/vc14_runtime-14.44.35208-h4927774_12.conda#061ea1cc93ee2dd574defcaa4e93c4e5
+https://repo.anaconda.com/pkgs/main/win-64/vc-14.3-h2df5915_12.conda#6737bfee92a331a876eadd8a2af7bc09
+https://repo.anaconda.com/pkgs/main/win-64/vs2015_runtime-14.44.35208-ha6b5a95_12.conda#74783ea081af58781a57cf9ec9b09008
+https://repo.anaconda.com/pkgs/main/win-64/bzip2-1.0.8-h2bbff1b_6.conda#33e784123d565c38e68945f07b461282
+https://repo.anaconda.com/pkgs/main/win-64/libexpat-2.8.5-hd7fb8db_1.conda#d10141d34cb68b4fd74b076145e64618
+https://repo.anaconda.com/pkgs/main/win-64/libffi-3.4.8-h42d73b9_3.conda#8e18977967bec00d09d85778525d661b
+https://repo.anaconda.com/pkgs/main/win-64/libzlib-1.3.2-h1c6eee0_0.conda#ffdad8ab74f765222bdf2e3473e12c76
+https://repo.anaconda.com/pkgs/main/win-64/openssl-3.5.9-hbb43b14_0.conda#c1c51e52fe981aef404be2250f1dfb18
+https://repo.anaconda.com/pkgs/main/win-64/sqlite-3.53.4-hee5a0db_0.conda#fc36e4a70e3cc8104ec96a4ca359d15b
+https://repo.anaconda.com/pkgs/main/win-64/xz-5.8.4-hb851c79_0.conda#b0c7a36026c7f0b764fc8118ff0bb4b4
+https://repo.anaconda.com/pkgs/main/win-64/zlib-1.3.2-h1c6eee0_0.conda#5885e2a4e16e0ba2f1792f3d61ef41f9
+https://repo.anaconda.com/pkgs/main/win-64/tk-8.6.15-hf199647_0.conda#ddff7b6a72958ef802f40a735e505474
+https://repo.anaconda.com/pkgs/main/win-64/python-3.12.14-hd7b1df3_0.conda#f875a8a8f6e72cb1d789cf186477762e
+https://repo.anaconda.com/pkgs/main/win-64/packaging-26.3-py312haa95532_0.conda#64105ca3fa7c8852e92de6439d9e2d29
+https://repo.anaconda.com/pkgs/main/win-64/setuptools-83.0.0-py312haa95532_0.conda#40f0f95bd18e8ee163fc450eee1a208d
+https://repo.anaconda.com/pkgs/main/win-64/wheel-0.47.0-py312haa95532_0.conda#2ea3bb96b968ed9249a3e4cb1c42b17a
+https://repo.anaconda.com/pkgs/main/noarch/pip-26.2.1-pyhc872135_0.conda#786f51293908e5aee1a57518e298d346
