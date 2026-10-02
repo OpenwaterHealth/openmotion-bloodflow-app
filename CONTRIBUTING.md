@@ -174,10 +174,10 @@ git push origin feature/<branch-name>
    * **Base branch:** `next`
    * **Target repository:** OpenwaterHealth/openmotion-bloodflow-app
 
-3. PR Title Format:
+3. PR Title Format: the same `<type>: <summary> (#<issue>)` form as a commit message (see [Commit Message Format](#commit-message-format)):
 
 ```
-[Issue #123] Add export validation
+feat: add export validation (#123)
 ```
 
 4. PR Description Must Include:
