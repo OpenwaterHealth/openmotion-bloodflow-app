@@ -88,6 +88,14 @@ $args = @(
     "--include-raw-dir=$sdkDir\dfu-util\win32=omotion\dfu-util\win32",
     "--include-raw-dir=$sdkDir\_vendor=omotion\_vendor",
     "--include-raw-dir=$sdkDir\_vendor\libusb\windows\x64=_vendor\libusb\windows\x64",
+    # #669: Nuitka's usb1 config pulls in the libusb1 wheel's own DLL (1.0.28
+    # in libusb1 3.3.1). Only the SDK's Linux/macOS hotplug provider imports
+    # usb1. Should anything load it here, its loader falls back to the bare
+    # libusb-1.0.dll name, which resolves to the SDK copy above. Every libusb
+    # that does ship is checked after the compile (scripts\check_libusb.py).
+    # Nuitka-Onefile then warns that usb1\libusb-1.0.dll is missing from the
+    # distribution folder: that is this exclusion, and expected.
+    "--noinclude-dlls=usb1/libusb*",
     # imports PyInstaller needed as hidden imports (entry points / lazy)
     "--include-package=keyring.backends", "--include-package=win32ctypes",
     "--include-package=sqlcipher3",
@@ -114,6 +122,11 @@ try {
 
 $built = Join-Path $workPath "Open-Motion.exe"
 if (-not (Test-Path $built)) { throw "Nuitka output missing: $built" }
+# #669: main.dist is exactly what the onefile packed, so check its libusb
+# copies before the cleanup below removes it. An SDK pin with older DLLs
+# fails the build here.
+Invoke-AppPython -CondaEnv $CondaEnv -Arguments @("scripts\check_libusb.py", (Join-Path $workPath "main.dist"))
+if ($LASTEXITCODE -ne 0) { throw "libusb older than 1.0.30 in the '$Variant' payload (#669)" }
 Move-Item -LiteralPath $built -Destination (Join-Path $distPath "Open-Motion.exe") -Force
 if (-not $KeepStandalone) {
     foreach ($d in @("main.dist", "main.onefile-build", "main.build")) {

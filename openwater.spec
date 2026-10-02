@@ -271,6 +271,36 @@ a = Analysis(
     optimize=0,
 )
 
+# ---------- libusb >= 1.0.30 only (#669) ----------
+# Every libusb the app ships comes from the SDK package. Two other copies
+# reach the Analysis, and neither is ever loaded:
+#  * the libusb1 wheel's hook adds usb1\libusb-1.0.dll (1.0.28 in libusb1
+#    3.3.1). Only the SDK's Linux/macOS hotplug provider imports usb1. If
+#    anything imported it here, its loader would fall back to the bare
+#    libusb-1.0.dll name, which resolves to the SDK's copy in the _vendor
+#    directories main.py registers.
+#  * the dependency scan of the SDK's dfu-util.exe / lsusb.exe resolves their
+#    libusb-1.0.dll import on the BUILD HOST's search path and adds whatever it
+#    finds at the bundle root (a 1.0.29 copy in System32 on one dev machine).
+#    The exes load the DLL beside them.
+# So both stay out, and every libusb-1.0.dll left in the payload must be
+# >= 1.0.30. An rc build pinned to an SDK release with older DLLs stops here.
+_OM_DIR = os.path.normcase(os.path.abspath(
+    list(_om_spec.submodule_search_locations)[0])) + os.sep
+
+
+def _foreign_libusb(entry):
+    return (os.path.basename(_norm(entry[0])).lower() == "libusb-1.0.dll"
+            and not os.path.normcase(os.path.abspath(entry[1])).startswith(_OM_DIR))
+
+
+a.binaries = [e for e in a.binaries if not _foreign_libusb(e)]
+sys.path.insert(0, os.path.join(SPECPATH, "scripts"))
+from check_libusb import check as _check_libusb
+_libusb_errors = _check_libusb((e[0], e[1]) for e in a.binaries + a.datas)
+if _libusb_errors:
+    raise SystemExit("[spec] FATAL: " + "; ".join(_libusb_errors))
+
 pyz = PYZ(a.pure)
 
 # ---------- Qt window-class icon (issue #223) ----------
@@ -288,7 +318,6 @@ pyz = PYZ(a.pure)
 # rewriting resources after that point truncates the appended archive and
 # produces an exe that cannot start.
 if sys.platform == "win32":
-    sys.path.insert(0, os.path.join(SPECPATH, "scripts"))
     from win_icon_resource import install_pyinstaller_hook, has_named_group_icon
     install_pyinstaller_hook()
 
