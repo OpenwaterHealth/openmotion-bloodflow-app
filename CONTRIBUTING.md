@@ -14,6 +14,22 @@ This document outlines the development workflow, branching strategy, communicati
 
 All work must be traceable to an existing GitHub Issue.
 
+## How a change flows
+
+```
+GitHub Issue
+  → feature/<issue-number>-short-description   (branched from the latest next)
+  → Pull Request into next                     (reviewed, then merged)
+  → next → main in a release PR                (maintainers, at release time)
+  → version tag on main
+```
+
+* `next` is the integration branch: every change lands there first, through a pull request. Never open a pull request against `main`. It only receives `next` when a release is cut.
+* Branch from the latest `next`: one issue per branch, named `feature/<issue-number>-short-description`.
+* Pre-release builds for testing (`X.Y.Z-dev.N`, `X.Y.Z-rc.N`) are tagged from `next`. A full release (`X.Y.Z`) is tagged on `main` after `next` has been merged into it.
+* Pull requests are merged with a merge commit, not squashed, so your commits land on `next` exactly as you wrote them. Keep them small, focused and well described.
+* Every commit must be signed off (`git commit -s`); see [Sign Off Every Commit](#sign-off-every-commit).
+
 ---
 
 # 🚀 Getting Started
@@ -113,6 +129,21 @@ Prefix suggestions:
 * `test`
 * `chore`
 
+## Sign Off Every Commit
+
+This repository enforces the [Developer Certificate of Origin](https://developercertificate.org/): every commit needs a `Signed-off-by:` line, and a pull request with an unsigned commit fails the DCO check. Commit with `-s`:
+
+```bash
+git commit -s -m "fix: correct acquisition null check (#145)"
+```
+
+To sign off commits you have already made on your branch:
+
+```bash
+git rebase --signoff next
+git push --force-with-lease origin feature/<branch-name>
+```
+
 ---
 
 # 🔄 Keeping Your Branch Updated
@@ -156,11 +187,13 @@ git push origin feature/<branch-name>
    * Testing performed
    * Screenshots (if UI-related)
 
-To auto-close an issue:
+Reference the issue with `Refs`:
 
 ```
-Closes #123
+Refs #123
 ```
+
+Don't use `Closes` or `Fixes`. An issue stays open after its pull request merges, until the change has been verified in a pre-release build, and the maintainers close it then.
 
 ---
 
