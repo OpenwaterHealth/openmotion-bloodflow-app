@@ -62,6 +62,9 @@ def _watchdog_self(src, *, plot_t0, last_seen, threshold=2.0):
         _camera_last_seen=dict(last_seen),
         _camera_dropped=set(),
         _camera_last_temp={},
+        # Never-started pass (issue #585) — no masks, so it stays idle.
+        _capture_camera_masks={},
+        _camera_streaming_since=None,
         _plot_t0=plot_t0,
         _current_scan_source=src,
         _scan_elapsed_str=lambda: "00:00:13",
