@@ -60,6 +60,19 @@ free-space query that fails raises nothing.
 scans) before starting a scan — no restart needed, Start re-checks. Contact
 support if the drive should not be full.
 
+### E-108 — Scan storage inaccessible
+The scan database in the data folder is not encrypted. This build stores
+patient data only in encrypted form, so it will not open that database and
+scans cannot be started. Checked at every launch of a clinical build, before
+anything opens `scans.db`; the modal detail shows the database path. A
+plaintext `scans.db` can be left in the data folder by a Research install or by
+a version before 1.5.0, and the app never converts it. The app stays open, but
+it never reads or writes that file: settings last for the session only, and
+pressing Start is refused with E-301.
+
+**What to do:** Do not delete or move the data folder: it may hold patient
+data. Contact support with the session log attached.
+
 ## E-2xx — Laser safety
 
 ### E-201 — Laser safety monitor unresponsive

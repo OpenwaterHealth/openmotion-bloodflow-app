@@ -5819,6 +5819,12 @@ class MotionConnector(QObject):
         if disk_space.below(free, self._min_free_disk_mb):
             self._raise_critical("E-107", detail=self._storage_detail(free))
 
+    def raise_startup_error(self, code: str, detail: str = "") -> None:
+        """Raise the critical modal for a condition main.py found before
+        the connector existed, e.g. a plaintext scans.db on a clinical
+        build (E-108, #683). Called once the QML window has loaded."""
+        self._raise_critical(code, detail=detail)
+
     @pyqtSlot(result=bool)
     def checkStorageForScan(self) -> bool:
         """Start-button free-space check (issue #506). Returns False —

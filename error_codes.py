@@ -86,6 +86,15 @@ _STARTUP = [
         "before starting a scan. Contact support if the drive should not "
         "be full.",
     ),
+    _e(
+        "E-108", "startup",
+        "Scan storage inaccessible",
+        "The scan database in the data folder is not encrypted. This build "
+        "stores patient data only in encrypted form, so it will not open "
+        "that database and scans cannot be started.",
+        "Do not delete or move the data folder: it may hold patient data. "
+        "Contact support with the session log attached.",
+    ),
 ]
 
 # Note: E-104 (console not detected) and E-106 (sensor not detected) are NOT in
