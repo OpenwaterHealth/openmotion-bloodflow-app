@@ -49,6 +49,20 @@ jobs:
         with:
           fetch-depth: 0
 
+      # ── user manual version gate (#371) ──────────────────────────
+      # The Research user manual states the app version its content
+      # describes. A production tag whose manual still documents an older
+      # version fails here, before any metered signing; dev/rc tags only
+      # warn. To pass: review docs/user-manual/ against the release, bump its
+      # "Application version" row and rebuild the committed PDF (AGENTS.md).
+      - name: Check the user manual documents this release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          strict=""
+          case "$GITHUB_REF_NAME" in *-*) ;; *) strict="--strict" ;; esac
+          python docs/user-manual/build_pdf.py --check-only --check-version "$GITHUB_REF_NAME" $strict
+
       # ── build + sign + package (Research only) ───────────────────
       # Signing policy (#443, #573): rc and production tags sign, plus a
       # manual run with sign=true; dev tags and branch pushes build UNSIGNED.
@@ -91,6 +105,24 @@ jobs:
         with:
           name: Open-Motion-Research-${{ steps.win.outputs.tag }}
           path: dist/research
+
+      # ── user manual PDF (Research only, #371) ────────────────────
+      # Rendered from the tagged sources with the tag stamped on the cover;
+      # uploaded as a workflow artifact on every run and attached to the
+      # GitHub Release on tags (asset list below).
+      - name: Build user manual PDF
+        shell: bash
+        env:
+          TAG: ${{ steps.win.outputs.tag }}
+        run: |
+          python docs/user-manual/build_pdf.py --version "$TAG" \
+            --out "build/manual/Open-Motion-Research-User-Manual-${TAG}.pdf"
+
+      - name: Upload user manual workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Open-Motion-Research-User-Manual-${{ steps.win.outputs.tag }}
+          path: build/manual/
 
       # ── build release notes ───────────────────────────────────────
       - name: Build release notes
@@ -148,10 +180,12 @@ jobs:
         run: |
           set -euo pipefail
           # Research only (#573). A production release carries the installer
-          # and no portable zip; dev and rc carry both.
+          # and no portable zip; dev and rc carry both. Every release carries
+          # the Research user manual PDF (#371).
           assets=(
             build/installer/Open-Motion-Research-Setup-*.exe
             resources/OpenMotionDriver-x64.zip
+            "build/manual/Open-Motion-Research-User-Manual-${TAG}.pdf"
           )
           if [ "$CHANNEL" != "prod" ]; then
             assets+=("Open-Motion-Research-${TAG}.zip")
