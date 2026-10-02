@@ -315,7 +315,9 @@ QML file against a tree holding only the kept modules (`tests/qml_import_probe.p
 fresh process). It is a plugin rather than `--noinclude-dlls` because Nuitka 4.2
 still scans an excluded DLL's dependencies, so every excluded QML plugin kept its
 Qt library in the bundle. On Qt 6.11.2 the trim takes 1,970 files (57 MB) out of
-the standalone tree and keeps 23 of its 71 Qt libraries. PyInstaller (the
+the standalone tree and keeps 23 of its 71 Qt libraries. The SDK's
+Linux/macOS dfu-util builds and the libusb `.a` / `.dll.a` / `.la` files are
+excluded by `--noinclude-data-files` in `build_nuitka.ps1`. PyInstaller (the
 dispatch fallback and macOS) still bundles all of PyQt6 via `collect_all`.
 
 **Runtime facts that differ from PyInstaller**, all absorbed by

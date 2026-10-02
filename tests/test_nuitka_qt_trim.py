@@ -311,3 +311,32 @@ BUILD_NUITKA = (REPO_ROOT / "scripts" / "build_nuitka.ps1").read_text(encoding="
 def test_build_nuitka_loads_the_plugin():
     assert '"--user-plugin=scripts\\nuitka_qt_trim.py"' in BUILD_NUITKA
     assert '"--include-qt-plugins=sensible,qml"' in BUILD_NUITKA
+
+
+@pytest.mark.parametrize(
+    "dest, dropped",
+    [
+        ("omotion/dfu-util/linux-amd64/dfu-util", True),
+        ("omotion/dfu-util/linux-amd64/dfu-util-static", True),
+        ("omotion/dfu-util/darwin-x86_64/dfu-util", True),
+        ("omotion/dfu-util/darwin-x86_64/libusb-1.0.a", True),
+        ("omotion/dfu-util/win64/libusb-1.0.a", True),
+        ("omotion/dfu-util/win64/libusb-1.0.dll.a", True),
+        ("omotion/dfu-util/win32/libusb-1.0.la", True),
+        ("omotion/dfu-util/win64/dfu-util.exe", False),
+        ("omotion/dfu-util/win64/libusb-1.0.dll", False),
+        ("omotion/dfu-util/win32/dfu-util.exe", False),
+        ("omotion/dfu-util/COPYING", False),
+        ("omotion/dfu-util/README-bin.txt", False),
+        ("omotion/models/10K3CG_R-T.csv", False),
+        ("omotion/nvcm/impl1_data.ied", False),
+    ],
+)
+def test_sdk_data_exclusions(dest, dropped):
+    """--noinclude-data-files matches with fnmatch on Nuitka's destination
+    path, normcased on Windows, so "*" also crosses directory separators."""
+    import fnmatch
+
+    patterns = re.findall(r'"--noinclude-data-files=(omotion/[^"]+)"', BUILD_NUITKA)
+    assert patterns, "build_nuitka.ps1 has no omotion data exclusions"
+    assert any(fnmatch.fnmatch(os.path.normpath(dest), p) for p in patterns) is dropped

@@ -87,6 +87,16 @@ $args = @(
     # entry mirrors libusb to the bundle root where the libusb1 wheel and
     # utils/libusb_paths.py look for it (same as openwater.spec).
     "--include-package=omotion", "--include-package-data=omotion",
+    # Package data would also carry the Linux and macOS dfu-util builds
+    # (extensionless binaries are data to Nuitka) and the libusb static and
+    # import libraries (.a, .dll.a, .la) of every platform (#680). None of
+    # that runs on Windows. The patterns match destination paths, so they
+    # cover the raw win64/win32 copies below too. The dfu-util license and
+    # README files stay.
+    "--noinclude-data-files=omotion/dfu-util/linux-amd64/*",
+    "--noinclude-data-files=omotion/dfu-util/darwin-x86_64/*",
+    "--noinclude-data-files=omotion/dfu-util/*.a",
+    "--noinclude-data-files=omotion/dfu-util/*.la",
     "--include-raw-dir=$sdkDir\dfu-util\win64=omotion\dfu-util\win64",
     "--include-raw-dir=$sdkDir\dfu-util\win32=omotion\dfu-util\win32",
     "--include-raw-dir=$sdkDir\_vendor=omotion\_vendor",
