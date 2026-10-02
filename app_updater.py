@@ -38,7 +38,7 @@ from utils.frozen import executable_path
 
 logger = logging.getLogger("openmotion.bloodflow-app.updater")
 
-GITHUB_REPO = "OpenwaterHealth/openmotion-bloodflow-app"
+GITHUB_REPO = "OpenwaterHealth/openmotion-research-desktop-app"
 
 # Publisher pin (#544). SHA-256 over the DER encoding of the signer's leaf
 # certificate, as Windows shows under "Thumbprint" only for SHA-1; the SHA-256

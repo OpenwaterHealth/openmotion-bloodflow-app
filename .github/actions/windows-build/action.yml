@@ -3,7 +3,7 @@ description: >
   Build, optionally sign, and package the Windows artifacts (portable zip +
   Setup bundle) for the requested variants from the repository checked out at
   the workspace root (fetch-depth 0). Shared by release-build.yml (Research,
-  public) and by the private openmotion-desktop-app-clinical workflows
+  public) and by the private openmotion-clinical-desktop-app workflows
   (Clinical, #573), which check this repo out at a tag and call it as a local
   action. That second caller runs in ANOTHER repository, so nothing in here may
   read GITHUB_REF / GITHUB_SHA to learn what is being built: pass `tag`.

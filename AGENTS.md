@@ -1,4 +1,4 @@
-# AGENTS.md — openmotion-bloodflow-app
+# AGENTS.md — openmotion-research-desktop-app
 
 Procedure docs that AI agents (and humans) should follow when doing
 release work in this repo. Repo structure / architecture lives in the
@@ -33,7 +33,7 @@ verification builds; they do **not** create a GitHub Release.
 
 This repo is public, so `release-build.yml` builds **Research only**.
 Clinical is built by the private
-`OpenwaterHealth/openmotion-desktop-app-clinical` repo (same build action,
+`OpenwaterHealth/openmotion-clinical-desktop-app` repo (same build action,
 checked out at the tag) and delivered to a Google Shared Drive.
 
 | Tag | Research → GitHub Release | Clinical → Google Drive |

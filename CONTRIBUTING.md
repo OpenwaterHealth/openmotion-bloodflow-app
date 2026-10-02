@@ -1,6 +1,6 @@
-# Contributing to openmotion-bloodflow-app
+# Contributing to openmotion-research-desktop-app
 
-Thank you for contributing to the **openmotion-bloodflow-app** project maintained by OpenwaterHealth.
+Thank you for contributing to the **openmotion-research-desktop-app** project maintained by OpenwaterHealth.
 
 This document outlines the development workflow, branching strategy, communication expectations, and pull request process.
 
@@ -39,14 +39,14 @@ GitHub Issue
 Fork the repository to your GitHub account, then:
 
 ```bash
-git clone https://github.com/<your-username>/openmotion-bloodflow-app.git
-cd openmotion-bloodflow-app
+git clone https://github.com/<your-username>/openmotion-research-desktop-app.git
+cd openmotion-research-desktop-app
 ```
 
 Add upstream:
 
 ```bash
-git remote add upstream https://github.com/OpenwaterHealth/openmotion-bloodflow-app.git
+git remote add upstream https://github.com/OpenwaterHealth/openmotion-research-desktop-app.git
 git fetch upstream
 ```
 
@@ -172,7 +172,7 @@ git push origin feature/<branch-name>
 2. Open a Pull Request:
 
    * **Base branch:** `next`
-   * **Target repository:** OpenwaterHealth/openmotion-bloodflow-app
+   * **Target repository:** OpenwaterHealth/openmotion-research-desktop-app
 
 3. PR Title Format: the same `<type>: <summary> (#<issue>)` form as a commit message (see [Commit Message Format](#commit-message-format)):
 
