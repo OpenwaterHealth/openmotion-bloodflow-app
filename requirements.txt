@@ -27,4 +27,11 @@ zstandard==0.23.0
 # omitting them produces a packaged app that dies with ModuleNotFoundError on
 # first launch. See omotion/db_key.py and db_open.py.
 keyring==25.6.0
-sqlcipher3==0.6.2
+# sqlcipher3 0.6.2 rebuilt against SQLCipher 4.19.0 and OpenSSL 3.5.9 (#682):
+# the PyPI wheel links SQLCipher 4.12.0 and OpenSSL 3.6.0, which reaches end
+# of life on 2026-11-01. One wheel for the release build's Python (3.12) and
+# one for the dev setup's (3.13); vendor/sqlcipher3/README.md says how they
+# are built. Windows only: the macOS build is research-only and never opens
+# an encrypted database.
+vendor/sqlcipher3/sqlcipher3-0.6.2+sqlcipher4.19.0.openssl3.5.9-cp312-cp312-win_amd64.whl ; sys_platform == "win32" and python_version == "3.12"
+vendor/sqlcipher3/sqlcipher3-0.6.2+sqlcipher4.19.0.openssl3.5.9-cp313-cp313-win_amd64.whl ; sys_platform == "win32" and python_version == "3.13"

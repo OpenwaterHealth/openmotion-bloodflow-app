@@ -87,6 +87,7 @@ artifacts, so every tagged release carries one.
 | `utils/frozen.py` | The one answer to "built executable?" and "which exe / where are resources?" for PyInstaller **and** Nuitka (#548). Nothing else may read `sys.frozen`, `sys._MEIPASS` or `sys.executable`. |
 | `scripts/build_nuitka.ps1` | Opt-in native compile (#548); same output path as the PyInstaller build. See "Native compile with Nuitka". |
 | `sdk-version.txt` | The one place the release SDK is pinned (#545): rc/prod CI builds install exactly this `openmotion-sdk` release and fail if the installed version differs; the per-release SBOM asserts the same line. Dev builds and the editable local setup ignore it. |
+| `vendor/sqlcipher3/` | The sqlcipher3 wheels `requirements.txt` installs on Windows (#682): 0.6.2 rebuilt against SQLCipher 4.19.0 + OpenSSL 3.5.9 by `.github/workflows/sqlcipher3-wheels.yml` from `pins.txt` and `conanfile.py`. See "Branching and releases" below and the README there. |
 | `tests/` | Hardware-in-loop pytest suite, ~23 files. Markers: `@pytest.mark.dev` (~1–2 min) and `@pytest.mark.release` (~6–8 min); both are run by hand against hardware since the automated HIL workflow was retired on 2026-09-18 (#571). CI runs none of them. |
 
 **Note:** the old `motion_singleton.py` no longer exists — connector logic was consolidated into `motion_connector.py` and registered as a QML singleton in `main.py`.
@@ -368,6 +369,22 @@ Consequences to remember:
   public workflow does not publish (same policy as the SBOM). To move a pin,
   regenerate the lock with the recipe in its header. The macOS job is not
   covered: it still uses `actions/setup-python` with `3.12`.
+- **sqlcipher3 is vendored, not from PyPI (#682):** `requirements.txt`
+  installs `vendor/sqlcipher3/sqlcipher3-0.6.2+sqlcipher4.19.0.openssl3.5.9-*.whl`
+  on Windows: sqlcipher3 0.6.2 rebuilt against SQLCipher 4.19.0 (SQLite
+  3.53.4) and a static OpenSSL 3.5.9. The PyPI wheel has 4.12.0 and 3.6.0,
+  and no newer wheel exists. There is one wheel each for cp312 (the release
+  build) and cp313 (the dev setup); any other Windows Python gets no
+  sqlcipher3 at all, and macOS never gets it. The Windows action fails the
+  build unless `vendor/sqlcipher3/check_sqlcipher.py` reads exactly the
+  versions in `vendor/sqlcipher3/pins.txt`. The wheels come from
+  `.github/workflows/sqlcipher3-wheels.yml` (runs on a push that changes the
+  pins). To bump: edit `pins.txt` (and the OpenSSL version in its
+  `conanfile.py`), push, then vendor the run's wheels and `SHA256SUMS`.
+  `vendor/sqlcipher3/README.md` has the steps, and
+  `tests/test_sqlcipher_rebuild.py` opens a scan DB that SQLCipher 4.12.0
+  wrote. A dev env set up before #682 still has the PyPI wheel; re-run
+  `pip install -r requirements.txt`.
 - **SBOM (#545):** each CI run generates a CycloneDX SBOM of the build
   environment (`cyclonedx-py environment` via `pipx`, then
   `scripts/stamp_sbom.py` sets the app name/tag and, on rc/prod, asserts the
