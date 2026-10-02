@@ -20,7 +20,7 @@ BUILD_DIR="build"
 # report "+dirty"), then git describe, then a placeholder.
 VERSION="${OPENMOTION_VERSION:-$(python version.py 2>/dev/null || echo "0.0.0")}"
 export OPENMOTION_VERSION="${VERSION}"   # let the spec's Info.plist use the same value
-DMG_NAME="Open-Motion-${VERSION}-macOS.dmg"
+DMG_NAME="Open-Motion-Research-${VERSION}-macOS.dmg"
 
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║  Building ${APP_NAME} v${VERSION} for macOS                 "

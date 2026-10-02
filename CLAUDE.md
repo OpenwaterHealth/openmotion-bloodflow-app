@@ -36,7 +36,7 @@ python -m PyInstaller -y openwater.spec # PyInstaller fallback → dist/Open-Mot
 ```bash
 brew install libusb                  # PyUSB backend; bundled from /opt/homebrew/lib
 pip install --upgrade "pyinstaller>=6.13"
-./build_macos.sh                     # → dist/Open-Motion.app + dist/Open-Motion-<ver>-macOS.dmg
+./build_macos.sh                     # → dist/Open-Motion.app + dist/Open-Motion-Research-<ver>-macOS.dmg
 ```
 
 CI builds it too: the `build-macos` job in `release-build.yml` (macos-15, Apple
