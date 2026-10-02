@@ -227,4 +227,4 @@ against `next`, and sign off every commit (`git commit -s`). See
 
 ## License
 
-[AGPL-3.0](LICENSE)
+[Apache-2.0](LICENSE)
