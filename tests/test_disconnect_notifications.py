@@ -74,6 +74,9 @@ def _watchdog_self(*, abort_notified, last_seen, toasts, aborts):
         _scan_data_stall_timeout_sec=15.0,
         _trigger_on_mono=0.0,
         _abort_scan_data_stall=lambda stalled_s: aborts.append(stalled_s),
+        # Low-storage guard (#506) — never due here; covered in
+        # tests/test_low_storage_guard.py.
+        _storage_check_due=lambda: False,
     )
 
 
