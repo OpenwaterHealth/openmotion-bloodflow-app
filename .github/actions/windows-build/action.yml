@@ -163,6 +163,16 @@ runs:
 
         pip install -r requirements.txt
 
+    # #682: requirements.txt installs the sqlcipher3 rebuilt against SQLCipher
+    # 4.19.0 and OpenSSL 3.5.9 from vendor/sqlcipher3/, not the PyPI wheel.
+    # Fail the build if the module that is about to be frozen reports
+    # anything but the versions in vendor/sqlcipher3/pins.txt.
+    - name: Check the bundled sqlcipher3 against vendor/sqlcipher3/pins.txt
+      shell: bash -el {0}
+      run: |
+        conda activate omotion
+        python vendor/sqlcipher3/check_sqlcipher.py
+
     - name: Check the bundled SDK against sdk-version.txt
       shell: bash -el {0}
       env:
