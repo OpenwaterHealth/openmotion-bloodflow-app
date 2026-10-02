@@ -359,6 +359,14 @@ Consequences to remember:
   build (`scripts/check_sdk_pin.py --enforce`) if the installed SDK differs.
   The local dev setup is unaffected: it still installs the SDK editable and
   bundles whatever is installed.
+- **Conda build env (#681):** the Windows composite action creates the
+  `omotion` env from `conda-win-64.lock`, an explicit spec (exact URL + md5 per
+  package, no solve): Python 3.12.14, OpenSSL 3.5.9, libexpat 2.8.5, SQLite
+  3.53.4. It then checks the env against the lock and exposes
+  `conda list --explicit --md5` as the `conda-explicit-path` output, which the
+  public workflow does not publish (same policy as the SBOM). To move a pin,
+  regenerate the lock with the recipe in its header. The macOS job is not
+  covered: it still uses `actions/setup-python` with `3.12`.
 - **SBOM (#545):** each CI run generates a CycloneDX SBOM of the build
   environment (`cyclonedx-py environment` via `pipx`, then
   `scripts/stamp_sbom.py` sets the app name/tag and, on rc/prod, asserts the
