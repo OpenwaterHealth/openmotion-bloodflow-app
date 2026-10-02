@@ -27,7 +27,7 @@ python -m PyInstaller -y openwater.spec # PyInstaller fallback → dist/Open-Mot
 # scripts/package_artifacts.ps1 -SkipInstaller forces portable-only.
 ```
 
-- Tested on **Python 3.13.5**; `requirements.txt` pins PyQt6 6.8.0, pandas, numpy, matplotlib, pyusb, libusb1, PyInstaller 6.11.1, flake8 7.1.1.
+- Tested on **Python 3.13.5**; `requirements.txt` pins PyQt6 6.11.0 (Qt 6.11.2, #680), pandas, numpy, matplotlib, pyusb, libusb1, PyInstaller 6.11.1, flake8 7.1.1.
 - No `pyproject.toml`; pure `requirements.txt`.
 - QML does **not** hot-reload — restart the app to pick up `.qml` changes.
 
