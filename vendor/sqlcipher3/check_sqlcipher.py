@@ -1,8 +1,8 @@
-"""Check the installed sqlcipher3 against vendor/sqlcipher3/pins.txt (#682).
+"""Check the installed sqlcipher3 against pins.txt next to this file (#682).
 
 The Windows build runs this right after installing requirements.txt:
 
-    python scripts/check_sqlcipher.py
+    python vendor/sqlcipher3/check_sqlcipher.py
 
 It fails the build unless the sqlcipher3 that will be frozen into the app is
 the rebuilt one: the package version carries the rebuild's local label, and
@@ -17,8 +17,7 @@ import importlib.metadata
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-PINS_FILE = REPO_ROOT / "vendor" / "sqlcipher3" / "pins.txt"
+PINS_FILE = Path(__file__).resolve().with_name("pins.txt")
 
 
 def read_pins(path: Path = PINS_FILE) -> dict[str, str]:

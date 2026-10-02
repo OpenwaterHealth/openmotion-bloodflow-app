@@ -1,7 +1,6 @@
 # Inputs of the sqlcipher3 rebuild (#682). One KEY=VALUE per line, no quotes:
 # .github/workflows/sqlcipher3-wheels.yml loads this file into its environment
-# and scripts/check_sqlcipher.py reads the expected versions from it. Change a
-# pin here (and the OpenSSL version in conanfile.py), push, and vendor the
+# and check_sqlcipher.py reads the expected versions from it. Change a pin here (and the OpenSSL version in conanfile.py), push, and vendor the
 # wheels the workflow builds; README.md has the steps.
 
 # sqlcipher3 source: coleifer/sqlcipher3 tag 0.6.2 (a lightweight tag)

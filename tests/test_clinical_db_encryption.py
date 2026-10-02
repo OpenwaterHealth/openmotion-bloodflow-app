@@ -288,7 +288,10 @@ def test_clinical_mode_cannot_change_at_runtime():
     assert cfg["clinicalMode"] is True
 
 
-_SKIP_DIRS = {"build", "dist", "docs", "tests", "investigations", "sandbox", "__pycache__"}
+# vendor/: build inputs of vendored third-party binaries (#682). Its tooling
+# imports sqlcipher3 to check the rebuilt module, never opens scans.db and is
+# never frozen into the app.
+_SKIP_DIRS = {"build", "dist", "docs", "tests", "investigations", "sandbox", "vendor", "__pycache__"}
 
 
 def _app_modules():

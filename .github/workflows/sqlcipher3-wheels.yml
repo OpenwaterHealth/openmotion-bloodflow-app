@@ -16,7 +16,7 @@ on:
       - vendor/sqlcipher3/pins.txt
       - vendor/sqlcipher3/conanfile.py
       - vendor/sqlcipher3/roundtrip.py
-      - scripts/check_sqlcipher.py
+      - vendor/sqlcipher3/check_sqlcipher.py
       - .github/workflows/sqlcipher3-wheels.yml
 
 permissions:
@@ -131,7 +131,7 @@ jobs:
         run: |
           python -m venv rebuilt
           rebuilt/Scripts/python -m pip install --no-deps sqlcipher3/dist/*.whl
-          rebuilt/Scripts/python scripts/check_sqlcipher.py
+          rebuilt/Scripts/python vendor/sqlcipher3/check_sqlcipher.py
 
       - name: Check OpenSSL's compiled-in paths
         run: |
