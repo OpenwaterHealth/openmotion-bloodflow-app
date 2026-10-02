@@ -74,7 +74,7 @@ installers — expected and internal-only.
 
 **Clinical never touches this repo's CI.** The repo is public, so a release
 asset, a workflow artifact and the Actions log are all world-readable. The
-private `OpenwaterHealth/openmotion-desktop-app-clinical` repo checks this
+private `OpenwaterHealth/openmotion-clinical-desktop-app` repo checks this
 one out at the tag, runs the same `.github/actions/windows-build` with
 `variants: clinical`, and uploads to a Shared Drive. `release-build.yml`'s
 `notify-clinical` job starts its pre-release workflow on dev/rc tags and
@@ -122,13 +122,13 @@ first, so installed apps learn the new pin before it is used.
    signing it must be **disabled** on the signing credential in the
    SSL.com portal, or cloud signing requests fail.
 4. **Create the GitHub secrets** — org-level, granted to
-   `openmotion-bloodflow-app` **and** `openmotion-sdk` (the driver build
+   `openmotion-research-desktop-app` **and** `openmotion-sdk` (the driver build
    uses the same cert):
 
    ```bash
-   gh secret set ES_USERNAME    --org OpenwaterHealth --visibility selected --repos "openmotion-bloodflow-app,openmotion-sdk"
-   gh secret set ES_PASSWORD    --org OpenwaterHealth --visibility selected --repos "openmotion-bloodflow-app,openmotion-sdk"
-   gh secret set ES_TOTP_SECRET --org OpenwaterHealth --visibility selected --repos "openmotion-bloodflow-app,openmotion-sdk"
+   gh secret set ES_USERNAME    --org OpenwaterHealth --visibility selected --repos "openmotion-research-desktop-app,openmotion-sdk"
+   gh secret set ES_PASSWORD    --org OpenwaterHealth --visibility selected --repos "openmotion-research-desktop-app,openmotion-sdk"
+   gh secret set ES_TOTP_SECRET --org OpenwaterHealth --visibility selected --repos "openmotion-research-desktop-app,openmotion-sdk"
    ```
 
    `ES_USERNAME`/`ES_PASSWORD` are the SSL.com account login; the TOTP

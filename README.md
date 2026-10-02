@@ -15,7 +15,7 @@ imported as `omotion`.
 ## Download
 
 Prebuilt **Research** builds are published on the
-[Releases page](https://github.com/OpenwaterHealth/openmotion-bloodflow-app/releases).
+[Releases page](https://github.com/OpenwaterHealth/openmotion-research-desktop-app/releases).
 These are the only builds this repository publishes.
 
 | File | Platform | Notes |
@@ -140,9 +140,9 @@ You need Python 3.12 or later (the app is tested on 3.13), plus libusb on macOS
 and Linux. Clone this repo and `openmotion-sdk` side by side:
 
 ```bash
-git clone https://github.com/OpenwaterHealth/openmotion-bloodflow-app.git
+git clone https://github.com/OpenwaterHealth/openmotion-research-desktop-app.git
 git clone https://github.com/OpenwaterHealth/openmotion-sdk.git
-cd openmotion-bloodflow-app
+cd openmotion-research-desktop-app
 
 python -m venv .venv
 .venv\Scripts\activate          # Windows

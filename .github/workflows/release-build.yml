@@ -10,7 +10,7 @@ name: Build & Release
 #   X.Y.Z          installer only, SIGNED                nothing automatic; the signed installer
 #                                                        is a manual run in the private repo
 #
-# Clinical builds live in the private OpenwaterHealth/openmotion-desktop-app-clinical
+# Clinical builds live in the private OpenwaterHealth/openmotion-clinical-desktop-app
 # repository, which checks this repo out at the tag and runs the same
 # .github/actions/windows-build. The notify-clinical job below only pokes it
 # on dev/rc tags; it never waits for it, so the two are not in lockstep.
@@ -206,7 +206,7 @@ jobs:
           # command: that one first resolves the repo's default branch over
           # GraphQL, which a token holding only Actions: write cannot read
           # (1.5.3-dev.3: "Resource not accessible by personal access token").
-          DISPATCH=repos/OpenwaterHealth/openmotion-desktop-app-clinical/actions/workflows/clinical-prerelease.yml/dispatches
+          DISPATCH=repos/OpenwaterHealth/openmotion-clinical-desktop-app/actions/workflows/clinical-prerelease.yml/dispatches
           if ! gh api -X POST "$DISPATCH" -f ref=main -f "inputs[tag]=$TAG"; then
             echo "::warning::could not start the Clinical build for ${TAG}; run clinical-prerelease.yml by hand"
           fi
