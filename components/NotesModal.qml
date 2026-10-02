@@ -21,8 +21,17 @@ Item {
     // See HistoryModal.qml for the original fix.
     readonly property int iconBarInset: 104
 
+    // MotionInterface.scanNotes as this modal last loaded or saved it: the
+    // base for merging in what the connector wrote while the modal was
+    // open (#617).
+    property string _loadedNotes: ""
+
     function open() {
+        // Already open: a scan ended under the operator (scanNotesReady).
+        // Keep what they are typing and add the connector's footer.
+        if (root.visible) { root._mergeConnectorNotes(); return }
         notesArea.text = MotionInterface.scanNotes
+        root._loadedNotes = notesArea.text
         root.visible = true
         notesArea.forceActiveFocus()
     }
@@ -32,6 +41,7 @@ Item {
     // is parked after the timestamp, ready for the operator to type.
     function openWithTimestamp(stamp) {
         var existing = MotionInterface.scanNotes
+        root._loadedNotes = existing
         var prefix = existing.length > 0 ? existing.replace(/\s+$/, "") + "\n" : ""
         notesArea.text = prefix + "[" + stamp + "] - "
         root.visible = true
@@ -39,9 +49,39 @@ Item {
         notesArea.cursorPosition = notesArea.text.length
     }
     function close() {
+        root._mergeConnectorNotes()
         MotionInterface.scanNotes = notesArea.text
+        root._loadedNotes = notesArea.text
         MotionInterface.notify("Note saved.", "success", 4000, true)
         root.visible = false
+    }
+
+    // The connector changes scanNotes behind an open modal at scan end: on
+    // the SDK thread it appends the duration / data-gap footer to
+    // scanNotes.strip(), then queues scanNotesReady. Reloading would drop
+    // the operator's unsaved typing, and saving over it would drop the
+    // footer, so append what the connector added to the text in the box.
+    // Runs on both open() (the queued signal) and close() (the operator got
+    // there first). Reads the property rather than waiting on its signals,
+    // so the order the queued signals arrive in doesn't matter.
+    function _mergeConnectorNotes() {
+        var theirs = MotionInterface.scanNotes
+        var base = root._loadedNotes
+        root._loadedNotes = theirs
+        if (theirs === base) return
+        if (notesArea.text === base) { notesArea.text = theirs; return }
+        // Otherwise keep the operator's text and add the connector's part.
+        // Usually that extends the loaded notes. If a new scan reset them to
+        // "" under the modal (the only other writer), all of scanNotes is
+        // new: nothing on close() mid-scan, the new scan's footer at its end.
+        var kept = base.trim()
+        var added = theirs.startsWith(kept) ? theirs.slice(kept.length) : theirs
+        if (added === "") return
+        // Inserting at the end drags a cursor sitting there along with it;
+        // put it back where the operator was typing, above the footer.
+        var cursor = notesArea.cursorPosition
+        notesArea.insert(notesArea.length, added)
+        notesArea.cursorPosition = cursor
     }
 
     // Dimmed backdrop
