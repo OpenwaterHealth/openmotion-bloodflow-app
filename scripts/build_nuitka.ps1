@@ -59,7 +59,10 @@ $args = @(
     # Qt plugins: the "sensible" set plus qml (the QtQuick / Controls module
     # tree and the qml plugin dir). Without an explicit qml the plugin only
     # warns that the bundled QML "is unlikely to work"; "all" doubled the size.
+    # The qt-trim user plugin then drops every QML module and Qt plugin the
+    # app does not use, and the Qt libraries only those link (#680).
     "--enable-plugin=pyqt6", "--include-qt-plugins=sensible,qml",
+    "--user-plugin=scripts\nuitka_qt_trim.py",
     # #579: sign the app's main.dll inside the payload before onefile packing,
     # so what the bootstrap extracts to %TEMP% at launch is signed too. A no-op
     # without CODESIGN_THUMBPRINT (local builds, dev tags, branch pushes).
