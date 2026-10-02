@@ -105,6 +105,15 @@ _SAFETY = [
         "Remove any obstruction, let the system settle, and start a new scan. "
         "If it trips repeatedly, stop and contact support.",
     ),
+    _e(
+        "E-203", "safety",
+        "Laser safety trip",
+        "The laser-safety monitor tripped while no scan was running and the "
+        "laser was shut off. The safety interlock stays latched until the "
+        "console is power-cycled.",
+        "Power-cycle the console and reconnect before starting a scan. If it "
+        "trips again, stop and contact support.",
+    ),
 ]
 
 # --- E-3xx: scan / capture ---------------------------------------------------
