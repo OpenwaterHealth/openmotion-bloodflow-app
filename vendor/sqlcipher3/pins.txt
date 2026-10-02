@@ -1,0 +1,30 @@
+# Inputs of the sqlcipher3 rebuild (#682). One KEY=VALUE per line, no quotes:
+# .github/workflows/sqlcipher3-wheels.yml loads this file into its environment
+# and scripts/check_sqlcipher.py reads the expected versions from it. Change a
+# pin here (and the OpenSSL version in conanfile.py), push, and vendor the
+# wheels the workflow builds; README.md has the steps.
+
+# sqlcipher3 source: coleifer/sqlcipher3 tag 0.6.2 (a lightweight tag)
+SQLCIPHER3_VERSION=0.6.2
+SQLCIPHER3_COMMIT=14fc2632676b20011e0bba64fdda49763a2dd2ec
+
+# SQLCipher source the amalgamation is generated from: sqlcipher/sqlcipher
+SQLCIPHER_TAG=v4.19.0
+SQLCIPHER_COMMIT=c4b275a47932888216bade83aff2bbc73df0ff85
+
+# The SQLCipher release sqlcipher3 0.6.2 vendored. The workflow regenerates
+# it with the same recipe and requires a byte-identical match, which proves
+# the recipe is the one upstream used.
+UPSTREAM_SQLCIPHER_TAG=v4.12.0
+UPSTREAM_SQLCIPHER_COMMIT=ab223bd801ec225d1497a077da08777d21d1266d
+
+# Build tools, pinned so a rebuild resolves the same way
+CONAN_VERSION=2.33.0
+SETUPTOOLS_VERSION=84.0.0
+
+# What the built module must report. The wheel's version carries them as a
+# local label so pip, the SBOM and `pip show` all name the real libraries.
+SQLCIPHER_VERSION=4.19.0
+SQLITE_VERSION=3.53.4
+OPENSSL_VERSION=3.5.9
+PACKAGE_VERSION=0.6.2+sqlcipher4.19.0.openssl3.5.9

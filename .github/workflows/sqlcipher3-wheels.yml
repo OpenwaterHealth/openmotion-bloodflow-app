@@ -1,0 +1,170 @@
+name: sqlcipher3 wheels
+
+# Builds the sqlcipher3 wheels that the Windows app build installs (#682), from
+# the pins in vendor/sqlcipher3/pins.txt. The SQLCipher amalgamation is
+# regenerated from its git tag with sqlcipher3's own vendor/update script, and
+# OpenSSL is built by conan from vendor/sqlcipher3/conanfile.py. The extension
+# is compiled with MSVC on a hosted runner. The wheels are only an artifact of
+# this run: nothing ships until someone vendors them into vendor/sqlcipher3/
+# (the README there has the steps). A push that changes the pins rebuilds
+# them; workflow_dispatch reruns them from main.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - vendor/sqlcipher3/pins.txt
+      - vendor/sqlcipher3/conanfile.py
+      - vendor/sqlcipher3/roundtrip.py
+      - scripts/check_sqlcipher.py
+      - .github/workflows/sqlcipher3-wheels.yml
+
+permissions:
+  contents: read
+
+jobs:
+  amalgamation:
+    name: SQLCipher amalgamation
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load the pins
+        run: grep -E '^[A-Z0-9_]+=' vendor/sqlcipher3/pins.txt | tr -d '\r' >> "$GITHUB_ENV"
+
+      - name: Fetch sqlcipher3 at the pinned commit
+        run: |
+          git clone --quiet https://github.com/coleifer/sqlcipher3 sqlcipher3
+          git -C sqlcipher3 checkout --quiet --detach "$SQLCIPHER3_COMMIT"
+          test "$(git -C sqlcipher3 rev-parse "${SQLCIPHER3_VERSION}^{commit}")" = "$SQLCIPHER3_COMMIT"
+
+      # vendor/update clones SQLCipher only when vendor/sqlcipher is missing,
+      # so placing the pinned tag there first makes it build that one.
+      - name: Reproduce the amalgamation sqlcipher3 ships (recipe check)
+        run: |
+          amalgamate() {  # <tag> <commit>: leaves sqlite3.[ch] in sqlcipher3/vendor
+            rm -rf sqlcipher3/vendor/sqlcipher
+            git clone --quiet --depth 1 --branch "$1" https://github.com/sqlcipher/sqlcipher sqlcipher3/vendor/sqlcipher
+            test "$(git -C sqlcipher3/vendor/sqlcipher rev-parse HEAD)" = "$2"
+            (cd sqlcipher3/vendor && ./update)
+          }
+          declare -f amalgamate > amalgamate.sh
+          amalgamate "$UPSTREAM_SQLCIPHER_TAG" "$UPSTREAM_SQLCIPHER_COMMIT"
+          # Byte-identical to the files upstream committed, or the recipe is
+          # not the one that built the PyPI wheel.
+          git -C sqlcipher3 diff --stat --exit-code -- vendor/sqlite3.c vendor/sqlite3.h
+
+      - name: Generate the SQLCipher ${{ env.SQLCIPHER_TAG }} amalgamation
+        run: |
+          source amalgamate.sh
+          amalgamate "$SQLCIPHER_TAG" "$SQLCIPHER_COMMIT"
+          mkdir amalgamation
+          cp sqlcipher3/vendor/sqlite3.c sqlcipher3/vendor/sqlite3.h amalgamation/
+          cd amalgamation
+          grep -E "^#define SQLITE_VERSION +\"${SQLITE_VERSION}\"$" sqlite3.h
+          grep -E "^#define CIPHER_VERSION_NUMBER ${SQLCIPHER_VERSION}$" sqlite3.c
+          sha256sum sqlite3.c sqlite3.h | tee SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sqlcipher-amalgamation
+          path: amalgamation/
+          if-no-files-found: error
+
+  wheel:
+    name: wheel (Python ${{ matrix.python }})
+    needs: amalgamation
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.12 = the release build (conda-win-64.lock); 3.13 = the dev setup.
+        python: ["3.12", "3.13"]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load the pins
+        run: grep -E '^[A-Z0-9_]+=' vendor/sqlcipher3/pins.txt | tr -d '\r' >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Fetch sqlcipher3 at the pinned commit
+        run: |
+          git -c core.autocrlf=false clone --quiet https://github.com/coleifer/sqlcipher3 sqlcipher3
+          git -C sqlcipher3 checkout --quiet --detach "$SQLCIPHER3_COMMIT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sqlcipher-amalgamation
+          path: amalgamation
+
+      - name: Apply the rebuild inputs
+        run: |
+          (cd amalgamation && sha256sum -c SHA256SUMS)
+          cp amalgamation/sqlite3.c amalgamation/sqlite3.h sqlcipher3/vendor/
+          cp vendor/sqlcipher3/conanfile.py sqlcipher3/conanfile.py
+          grep -q "openssl/${OPENSSL_VERSION}'" sqlcipher3/conanfile.py
+          sed -i "s/^VERSION = '${SQLCIPHER3_VERSION}'\$/VERSION = '${PACKAGE_VERSION}'/" sqlcipher3/setup.py
+          sed -i "s/^version = \"${SQLCIPHER3_VERSION}\"\$/version = \"${PACKAGE_VERSION}\"/" sqlcipher3/pyproject.toml
+          grep -qx "VERSION = '${PACKAGE_VERSION}'" sqlcipher3/setup.py
+          grep -qx "version = \"${PACKAGE_VERSION}\"" sqlcipher3/pyproject.toml
+          git -C sqlcipher3 diff --stat
+
+      # setup.py runs `conan install` on the conanfile and links the static
+      # libcrypto it builds. The non-default OpenSSL options in conanfile.py
+      # mean conancenter has no prebuilt binary: OpenSSL is compiled here.
+      - name: Build the wheel
+        working-directory: sqlcipher3
+        run: |
+          python -m pip install "conan==${CONAN_VERSION}" "setuptools==${SETUPTOOLS_VERSION}"
+          python -m pip wheel --no-build-isolation --no-deps --wheel-dir dist .
+          conan profile show
+          conan list "openssl/${OPENSSL_VERSION}:*" --format=json > dist/conan-openssl.json
+          cat dist/conan-openssl.json
+
+      - name: Check the wheel's versions
+        run: |
+          python -m venv rebuilt
+          rebuilt/Scripts/python -m pip install --no-deps sqlcipher3/dist/*.whl
+          rebuilt/Scripts/python scripts/check_sqlcipher.py
+
+      - name: Check OpenSSL's compiled-in paths
+        run: |
+          rebuilt/Scripts/python - <<'EOF'
+          import glob, re, sys
+          pyd, = glob.glob("rebuilt/Lib/site-packages/sqlcipher3/_sqlite3*.pyd")
+          data = open(pyd, "rb").read()
+          for name in (b"OPENSSLDIR", b"ENGINESDIR", b"MODULESDIR"):
+              print(re.search(name + rb': "[^"]*"', data).group(0).decode())
+          openssldir = re.search(rb'OPENSSLDIR: "([^"]*)"', data).group(1)
+          if openssldir != rb"C:\Program Files\Common Files\SSL":
+              print(f"::error ::OPENSSLDIR is {openssldir!r}, not the conanfile.py value")
+              sys.exit(1)
+          EOF
+
+      # A database written by the PyPI wheel (SQLCipher 4.12.0) must open with
+      # the rebuilt one, and the reverse, so a rollback to a build that still
+      # ships the PyPI wheel can read what this one wrote.
+      - name: Databases cross the upgrade in both directions
+        run: |
+          python -m venv pypi
+          pypi/Scripts/python -m pip install "sqlcipher3==${SQLCIPHER3_VERSION}"
+          pypi/Scripts/python vendor/sqlcipher3/roundtrip.py write old.db
+          rebuilt/Scripts/python vendor/sqlcipher3/roundtrip.py read old.db
+          rebuilt/Scripts/python vendor/sqlcipher3/roundtrip.py write new.db
+          pypi/Scripts/python vendor/sqlcipher3/roundtrip.py read new.db
+
+      - name: Record the wheel
+        working-directory: sqlcipher3/dist
+        run: sha256sum *.whl | tee SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sqlcipher3-cp${{ matrix.python }}-win_amd64
+          path: sqlcipher3/dist/
+          if-no-files-found: error
