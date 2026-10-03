@@ -27,7 +27,7 @@ python -m PyInstaller -y openwater.spec # PyInstaller fallback → dist/Open-Mot
 # scripts/package_artifacts.ps1 -SkipInstaller forces portable-only.
 ```
 
-- Tested on **Python 3.13.5**; `requirements.txt` pins PyQt6 6.8.0, pandas, numpy, matplotlib, pyusb, libusb1, PyInstaller 6.11.1, flake8 7.1.1.
+- Tested on **Python 3.13.5**; `requirements.txt` pins PyQt6 6.11.0 (Qt 6.11.2, #680), pandas, numpy, matplotlib, pyusb, libusb1, PyInstaller 6.11.1, flake8 7.1.1.
 - No `pyproject.toml`; pure `requirements.txt`.
 - QML does **not** hot-reload — restart the app to pick up `.qml` changes.
 
@@ -300,6 +300,26 @@ first signed release should be submitted to Microsoft's false-positive portal
 (antivirus dislikes fresh onefile bootstraps), and the runner's VC++ runtime
 DLLs must be bundled (MSVC finds them; zig does not, so a local zig build
 relies on the target's installed runtime).
+
+**Only the Qt the app uses is bundled (#680).** `--include-qt-plugins=sensible,qml`
+on its own ships Qt's whole QML tree (Quick 3D, PDF, Multimedia, WebSockets, every
+Controls style, ...), every plugin in the sensible families, and the Qt libraries
+those link. The `qt-trim` user plugin (`scripts/nuitka_qt_trim.py`) drops
+everything outside two allow-lists. `QML_MODULES` holds the app's QML imports, the
+Material style `main.py` pins, and their dependencies (17 modules). `QT_PLUGINS`
+holds qwindows, qoffscreen, qico and qmodernwindowsstyle. The plugin reads the
+installed wheel, so modules a Qt upgrade adds stay out. It stops the build when a
+kept module needs one that is not kept. **Importing a new Qt QML module, loading a
+new image format or an SVG, or using QtNetwork means adding it there.**
+`tests/test_nuitka_qt_trim.py` fails on an unlisted import and compiles every app
+QML file against a tree holding only the kept modules (`tests/qml_import_probe.py`,
+fresh process). It is a plugin rather than `--noinclude-dlls` because Nuitka 4.2
+still scans an excluded DLL's dependencies, so every excluded QML plugin kept its
+Qt library in the bundle. On Qt 6.11.2 the trim takes 1,970 files (57 MB) out of
+the standalone tree and keeps 23 of its 71 Qt libraries. The SDK's
+Linux/macOS dfu-util builds and the libusb `.a` / `.dll.a` / `.la` files are
+excluded by `--noinclude-data-files` in `build_nuitka.ps1`. PyInstaller (the
+dispatch fallback and macOS) still bundles all of PyQt6 via `collect_all`.
 
 **Runtime facts that differ from PyInstaller**, all absorbed by
 `utils/frozen.py` (use it, never `sys.frozen` / `sys._MEIPASS` /

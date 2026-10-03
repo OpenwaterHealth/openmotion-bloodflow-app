@@ -59,7 +59,10 @@ $args = @(
     # Qt plugins: the "sensible" set plus qml (the QtQuick / Controls module
     # tree and the qml plugin dir). Without an explicit qml the plugin only
     # warns that the bundled QML "is unlikely to work"; "all" doubled the size.
+    # The qt-trim user plugin then drops every QML module and Qt plugin the
+    # app does not use, and the Qt libraries only those link (#680).
     "--enable-plugin=pyqt6", "--include-qt-plugins=sensible,qml",
+    "--user-plugin=scripts\nuitka_qt_trim.py",
     # #579: sign the app's main.dll inside the payload before onefile packing,
     # so what the bootstrap extracts to %TEMP% at launch is signed too. A no-op
     # without CODESIGN_THUMBPRINT (local builds, dev tags, branch pushes).
@@ -84,6 +87,16 @@ $args = @(
     # entry mirrors libusb to the bundle root where the libusb1 wheel and
     # utils/libusb_paths.py look for it (same as openwater.spec).
     "--include-package=omotion", "--include-package-data=omotion",
+    # Package data would also carry the Linux and macOS dfu-util builds
+    # (extensionless binaries are data to Nuitka) and the libusb static and
+    # import libraries (.a, .dll.a, .la) of every platform (#680). None of
+    # that runs on Windows. The patterns match destination paths, so they
+    # cover the raw win64/win32 copies below too. The dfu-util license and
+    # README files stay.
+    "--noinclude-data-files=omotion/dfu-util/linux-amd64/*",
+    "--noinclude-data-files=omotion/dfu-util/darwin-x86_64/*",
+    "--noinclude-data-files=omotion/dfu-util/*.a",
+    "--noinclude-data-files=omotion/dfu-util/*.la",
     "--include-raw-dir=$sdkDir\dfu-util\win64=omotion\dfu-util\win64",
     "--include-raw-dir=$sdkDir\dfu-util\win32=omotion\dfu-util\win32",
     "--include-raw-dir=$sdkDir\_vendor=omotion\_vendor",
