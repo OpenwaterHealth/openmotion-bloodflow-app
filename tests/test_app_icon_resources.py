@@ -8,6 +8,7 @@ tests lock down both halves of the fix: the icon asset itself, and the build
 wiring that publishes the named resource.
 """
 
+import re
 import struct
 import subprocess
 import sys
@@ -61,8 +62,12 @@ def test_favicon_ico_is_reproducible_from_the_generator(tmp_path):
     The generator hand-splices the ICO directory; this catches a regression in
     that arithmetic, and catches someone regenerating the asset with a plain
     Pillow ``Image.save(..., format="ICO")``.
+
+    The bytes depend on Pillow's PNG encoder, which changes between releases
+    (12.x re-encodes the 256 px frame), so they only hold for the Pillow that
+    requirements.txt pins (#696).
     """
-    pytest.importorskip("PIL")
+    PIL = pytest.importorskip("PIL")
 
     work = tmp_path / "repo"
     (work / "assets" / "images").mkdir(parents=True)
@@ -75,10 +80,28 @@ def test_favicon_ico_is_reproducible_from_the_generator(tmp_path):
         check=True, capture_output=True,
     )
 
+    pinned = _pinned_pillow()
     assert (work / "assets" / "images" / "favicon.ico").read_bytes() == \
         ICO_PATH.read_bytes(), (
-            "regenerating favicon.ico no longer reproduces the committed file"
+            "regenerating favicon.ico no longer reproduces the committed file "
+            f"(installed Pillow {PIL.__version__}, requirements.txt pins "
+            f"{pinned}). If they differ, run pip install -r requirements.txt. "
+            "If you bumped the pin, rerun scripts/make_app_icon.py and commit "
+            "the icon."
         )
+
+
+def _pinned_pillow():
+    reqs = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")
+    match = re.search(r"^Pillow==(\S+)$", reqs, re.MULTILINE | re.IGNORECASE)
+    return match.group(1) if match else None
+
+
+@pytest.mark.unit
+def test_pillow_is_pinned_exactly():
+    """The committed favicon.ico is only reproducible with one Pillow
+    release, so the pin must not loosen into a range or disappear (#696)."""
+    assert _pinned_pillow(), "requirements.txt must pin Pillow==<version>"
 
 
 @pytest.mark.unit

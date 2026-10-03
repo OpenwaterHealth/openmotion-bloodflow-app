@@ -11,6 +11,13 @@ pyserial==3.5
 crcmod==1.7
 numpy==2.2.5
 matplotlib==3.10.1
+# Build-time only: the app never imports it, and neither bundle carries it.
+# scripts/make_app_icon.py writes favicon.ico with it, and matplotlib needs
+# it. Pinned because tests/test_app_icon_resources.py checks the committed
+# icon is byte for byte what the generator writes, and Pillow's PNG encoder
+# output changes between releases (#696). After bumping it, rerun
+# scripts/make_app_icon.py and commit the result.
+Pillow==12.3.0
 pyusb==1.3.1
 libusb1==3.3.1
 keyboard==0.13.5
