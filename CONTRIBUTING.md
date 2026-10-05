@@ -34,21 +34,25 @@ GitHub Issue
 
 # 🚀 Getting Started
 
-## 1. Fork & Clone
+## 1. Get the Code
 
-Fork the repository to your GitHub account, then:
+**With write access** to `OpenwaterHealth/openmotion-bloodflow-app` (Openwater team members): clone the repository directly and push your feature branches to it. No fork is needed.
+
+```bash
+git clone https://github.com/OpenwaterHealth/openmotion-bloodflow-app.git
+cd openmotion-bloodflow-app
+```
+
+**Without write access** (outside contributors): fork the repository to your GitHub account, clone your fork, and add the main repository as `upstream`:
 
 ```bash
 git clone https://github.com/<your-username>/openmotion-bloodflow-app.git
 cd openmotion-bloodflow-app
-```
-
-Add upstream:
-
-```bash
 git remote add upstream https://github.com/OpenwaterHealth/openmotion-bloodflow-app.git
 git fetch upstream
 ```
+
+The commands below are written for a direct clone, where `origin` is the main repository. From a fork, pull `next` from `upstream` instead, and push your feature branch to your fork (`origin`).
 
 ---
 
@@ -56,13 +60,12 @@ git fetch upstream
 
 ## Always Branch from `next`
 
-Before starting work:
+Before starting work, update `next` and branch from it:
 
 ```bash
 git checkout next
-git fetch upstream
-git merge upstream/next
-git push origin next
+git pull origin next        # from a fork: git pull upstream next
+git checkout -b feature/<issue-number>-short-description
 ```
 
 ## Feature Branch Naming Convention
@@ -152,7 +155,7 @@ Before opening a PR:
 
 ```bash
 git checkout next
-git pull upstream next
+git pull origin next        # from a fork: git pull upstream next
 git checkout feature/<branch-name>
 git merge next
 ```
@@ -163,7 +166,7 @@ Resolve conflicts locally before submitting your PR.
 
 # 🔁 Pull Request Process
 
-1. Push your branch:
+1. Push your branch (to the main repository from a direct clone, or to your fork):
 
 ```bash
 git push origin feature/<branch-name>
@@ -172,7 +175,7 @@ git push origin feature/<branch-name>
 2. Open a Pull Request:
 
    * **Base branch:** `next`
-   * **Target repository:** OpenwaterHealth/openmotion-bloodflow-app
+   * **Target repository:** OpenwaterHealth/openmotion-bloodflow-app (from a fork, choose it as the base repository)
 
 3. PR Title Format: the same `<type>: <summary> (#<issue>)` form as a commit message (see [Commit Message Format](#commit-message-format)):
 
