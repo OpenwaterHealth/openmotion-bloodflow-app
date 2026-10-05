@@ -64,7 +64,7 @@ import error_codes
 import bug_report
 from nan_gap_tracker import NanGapTracker, gap_note_line
 from utils.resource_path import resource_path
-from utils import app_paths, config_store, disk_space, log_tail
+from utils import app_paths, config_store, disk_space, log_tail, operator_auth
 from config.app_config import APP_CONFIG as _COMPILED_APP_CONFIG
 
 # The app self-updater is compiled out of clinical builds (#543, tracker
@@ -125,6 +125,17 @@ _ENGINEERING_PASSWORD = "OpenwaterHealth"
 def engineering_password_matches(pw) -> bool:
     """Return True iff ``pw`` equals the engineering-mode password."""
     return isinstance(pw, str) and pw == _ENGINEERING_PASSWORD
+
+
+# ── Operator re-authentication (#703) ────────────────────────────────────
+# Deleting scans and the audit log need the operator's own Windows
+# password (utils/operator_auth), checked here in Python so a direct slot
+# call can't skip the prompt. A successful check grants one scope for a
+# while: "delete" is used up by the next deleteScans; "audit" lasts while
+# the Logs modal is open and expires after this long idle.
+_OPERATOR_GRANT_TTL_S = {"delete": 120.0, "audit": 900.0}
+# Patched by tests; the grant clock only.
+_grant_clock = time.monotonic
 
 
 # Camera-mask → human config name, mirroring ScanSettingsModal's
@@ -1061,6 +1072,9 @@ class MotionConnector(QObject):
             self._audit.log("settings_store_unavailable", {
                 "path": self._settings_store.path,
             })
+        # Operator grants (#703): scope -> (operator account, expiry on
+        # _grant_clock). Only authorizeOperator adds to it.
+        self._operator_grants: dict[str, tuple[str, float]] = {}
 
         # Unpack operational settings from config
         self._force_laser_fail            = bool(cfg.get("forceLaserFail", False))
@@ -2971,11 +2985,80 @@ class MotionConnector(QObject):
                 exc_info=True)
             return {"sampleCount": 0}
 
+    # ── Operator re-authentication (#703) ────────────────────────────────
+    def _verify_operator(self, password) -> bool:
+        """The operator's own Windows password; the engineering password
+        where the OS check isn't available (macOS, Research-only)."""
+        if operator_auth.supported():
+            return operator_auth.verify_password(password)
+        return engineering_password_matches(password)
+
+    def _grant_operator(self, scope: str, operator: str) -> None:
+        self._operator_grants[scope] = (
+            operator, _grant_clock() + _OPERATOR_GRANT_TTL_S[scope])
+
+    def _operator_for(self, scope: str, *, consume: bool) -> Optional[str]:
+        """The operator holding an unexpired ``scope`` grant, else None.
+        ``consume`` drops a delete grant; an audit grant slides instead."""
+        grant = self._operator_grants.get(scope)
+        if grant is None:
+            return None
+        operator, expiry = grant
+        if _grant_clock() >= expiry:
+            del self._operator_grants[scope]
+            return None
+        if consume:
+            del self._operator_grants[scope]
+        else:
+            self._grant_operator(scope, operator)
+        return operator
+
+    @pyqtSlot(result=str)
+    def operatorAccount(self) -> str:
+        """The account the operator credential prompt asks for."""
+        return operator_auth.current_account()
+
+    @pyqtSlot(result=bool)
+    def operatorUsesWindowsAccount(self) -> bool:
+        """True when the prompt checks the Windows account password (the
+        prompt wording depends on it)."""
+        return operator_auth.supported()
+
+    @pyqtSlot(str, str, result=bool)
+    def authorizeOperator(self, password: str, scope: str) -> bool:
+        """Check the operator credential and, on success, grant ``scope``
+        ("delete" or "audit"). Every attempt is audited with the account."""
+        if scope not in _OPERATOR_GRANT_TTL_S:
+            logger.warning("authorizeOperator: unknown scope %r", scope)
+            return False
+        operator = operator_auth.current_account()
+        if not self._verify_operator(password):
+            logger.info("[Connector] Operator credential refused (%s)", scope)
+            self._audit.log("operator_auth_failed",
+                            {"operator": operator, "scope": scope})
+            return False
+        self._grant_operator(scope, operator)
+        self._audit.log("operator_authenticated",
+                        {"operator": operator, "scope": scope})
+        return True
+
+    @pyqtSlot()
+    def endAuditLogSession(self) -> None:
+        """Drop the audit grant; LogsModal calls this when it closes."""
+        self._operator_grants.pop("audit", None)
+
     @pyqtSlot("QVariantList", result=int)
     def deleteScans(self, session_ids):
         """Delete the given scan-DB sessions (CASCADE removes their
-        session_data). Returns the count actually deleted. The engineering-
-        password gate is enforced in QML before this is called."""
+        session_data). Returns the count actually deleted. Refused unless
+        authorizeOperator granted "delete" just before; the grant is used
+        up, so every delete needs its own prompt (#703)."""
+        operator = self._operator_for("delete", consume=True)
+        if operator is None:
+            logger.warning("deleteScans refused: no operator credential")
+            self._audit.log("scan_delete_refused",
+                            {"reason": "no operator credential"})
+            return 0
         db_path = getattr(self._interface, "scan_db_path", None)
         if not db_path:
             return 0
@@ -3010,15 +3093,20 @@ class MotionConnector(QObject):
         self._audit.log("scan_deleted", {
             "session_ids": _ids,
             "count": deleted,
+            "operator": operator,
         })
         return deleted
 
     # ── Audit log (QML-facing) ───────────────────────────────────────────
+    # Every slot here needs the "audit" operator grant (#703); without it
+    # reads return nothing and the export is refused.
     @pyqtSlot(result="QVariantList")
     @pyqtSlot(int, result="QVariantList")
     def auditLogEntries(self, limit: int = 500):
         """Audit-log rows (newest first) for the Logs modal. Pure read —
         does not itself log, so refreshing never double-logs."""
+        if self._operator_for("audit", consume=False) is None:
+            return []
         try:
             return self._audit.query(int(limit))
         except Exception:
@@ -3034,6 +3122,8 @@ class MotionConnector(QObject):
         across event type + details), ``limit`` (int, default 500).
         Empty/invalid values are ignored. Pure read — does not itself
         log, so refreshing never double-logs."""
+        if self._operator_for("audit", consume=False) is None:
+            return []
         try:
             from audit_log import parse_date_bound
             f = dict(filters or {})
@@ -3052,6 +3142,8 @@ class MotionConnector(QObject):
     def auditEventTypes(self):
         """Distinct event types present in the audit log (sorted), for
         the Logs modal's filter dropdown (#226)."""
+        if self._operator_for("audit", consume=False) is None:
+            return []
         try:
             return self._audit.distinct_event_types()
         except Exception:
@@ -3062,24 +3154,35 @@ class MotionConnector(QObject):
     def recordAuditLogViewed(self):
         """Record that the audit log was opened. Called once from
         LogsModal.open()."""
+        operator = self._operator_for("audit", consume=False)
+        if operator is None:
+            return
         try:
             n = self._audit.count()
         except Exception:
             n = 0
-        self._audit.log("audit_log_viewed", {"entry_count": n})
+        self._audit.log("audit_log_viewed",
+                        {"entry_count": n, "operator": operator})
 
     @pyqtSlot(str, result=str)
     def exportAuditLogCsv(self, dest_path: str) -> str:
         """Export the full audit log to CSV. Accepts a plain path or a
         file:// URL. Records an ``audit_log_exported`` event. Returns the
-        written path, or '' on failure."""
+        written path, or '' on failure or without the audit grant."""
         if not dest_path:
+            return ""
+        operator = self._operator_for("audit", consume=False)
+        if operator is None:
+            logger.warning("exportAuditLogCsv refused: no operator credential")
+            self._audit.log("audit_log_export_refused",
+                            {"reason": "no operator credential"})
             return ""
         path = dest_path.replace("file:///", "").replace("file://", "")
         try:
             n = self._audit.export_csv(path)
             self._audit.log(
-                "audit_log_exported", {"dest": path, "row_count": n}
+                "audit_log_exported",
+                {"dest": path, "row_count": n, "operator": operator},
             )
             logger.info("exportAuditLogCsv: wrote %d rows -> %s", n, path)
             return path

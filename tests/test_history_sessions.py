@@ -221,6 +221,8 @@ def test_delete_scans_removes_session_and_cascades(tmp_path):
         db_path, "20260612_093000_drop", 200.0, 205.0, 0x5A, 0x5A)
     _insert_rows(db_path, drop, 5)
     c = _connector(tmp_path, db_path)
+    # Deletion needs the operator credential (#703).
+    c._grant_operator("delete", "test-operator")
 
     removed = c.deleteScans([drop])
     assert removed == 1

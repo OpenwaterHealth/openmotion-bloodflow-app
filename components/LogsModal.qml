@@ -35,7 +35,12 @@ Item {
         refresh()
         root.visible = true
     }
-    function close() { root.visible = false }
+    // Every close path (button, Esc, backdrop, ModalManager) comes through
+    // here, and the operator's audit access ends with the modal (#703).
+    function close() {
+        root.visible = false
+        MotionInterface.endAuditLogSession()
+    }
 
     function refresh() {
         try {

@@ -71,6 +71,7 @@ class _StubMotionInterface(QObject):
         super().__init__(parent)
         self.filter_calls = []          # every map handed to the slot
         self.viewed_count = 0
+        self.audit_sessions_ended = 0
         self.event_types = ["scan_started", "system_startup"]
 
     @pyqtProperty("QVariantMap", notify=_neverEmitted)
@@ -84,6 +85,10 @@ class _StubMotionInterface(QObject):
     @pyqtSlot()
     def recordAuditLogViewed(self):
         self.viewed_count += 1
+
+    @pyqtSlot()
+    def endAuditLogSession(self):
+        self.audit_sessions_ended += 1
 
     @pyqtSlot(result="QVariantList")
     def auditEventTypes(self):
@@ -184,6 +189,16 @@ def test_open_records_view_and_loads_filtered_entries(modal_factory):
     assert modal.property("filtersActive") is False
     # Event types for the dropdown come from the connector.
     assert list(modal.property("eventTypes")) == stub.event_types
+
+
+def test_closing_ends_the_audit_session(modal_factory):
+    """#703: the operator's audit grant lasts only while the modal is open."""
+    modal = modal_factory()
+    stub = modal_factory.stub
+    _call(modal, "open")
+    before = stub.audit_sessions_ended
+    _call(modal, "close")
+    assert stub.audit_sessions_ended == before + 1
 
 
 def test_event_type_filter_is_passed_to_slot(modal_factory):

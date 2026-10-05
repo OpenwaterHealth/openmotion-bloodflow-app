@@ -617,13 +617,19 @@ Item {
         }
     }
 
-    // Reused engineering-password prompt for delete confirmation.
+    // Delete confirmation: the operator's own credential (#703). The
+    // connector checks it and grants exactly one deleteScans call.
     PasswordPromptModal {
         id: deletePrompt
         title: "Confirm Delete"
-        description: "Enter the engineering password to permanently delete the "
-                     + "selected scan(s) from the database. This cannot be undone."
+        description: (MotionInterface.operatorUsesWindowsAccount()
+                      ? "Enter the Windows password for "
+                        + MotionInterface.operatorAccount()
+                      : "Enter the password")
+                     + " to permanently delete the selected scan(s) from the "
+                     + "database. This cannot be undone."
         confirmLabel: "Delete"
+        submitHandler: function(pw) { return MotionInterface.authorizeOperator(pw, "delete") }
         onAccepted: root.doDelete()
     }
 

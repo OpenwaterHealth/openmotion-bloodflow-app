@@ -41,8 +41,12 @@ EV_CALIBRATION_ENDED = "calibration_ended"
 EV_SETTINGS_CHANGED = "settings_changed"
 EV_SCAN_VIEWED = "scan_viewed"
 EV_SCAN_DELETED = "scan_deleted"
+EV_SCAN_DELETE_REFUSED = "scan_delete_refused"
 EV_AUDIT_LOG_VIEWED = "audit_log_viewed"
 EV_AUDIT_LOG_EXPORTED = "audit_log_exported"
+EV_AUDIT_LOG_EXPORT_REFUSED = "audit_log_export_refused"
+EV_OPERATOR_AUTHENTICATED = "operator_authenticated"
+EV_OPERATOR_AUTH_FAILED = "operator_auth_failed"
 EV_DEBUG_BUNDLE_CREATED = "debug_bundle_created"
 
 # CSV export column order.

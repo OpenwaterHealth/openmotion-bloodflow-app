@@ -16,12 +16,16 @@ def _connector(tmp_path, scan_db_path=None, app_config=None):
     iface.scan_workflow.config_running = False
     iface.scan_db_path = scan_db_path
     iface.get_sdk_version.return_value = "9.9.9"
-    return MotionConnector(
+    c = MotionConnector(
         interface=iface,
         app_config=app_config or {"engineeringMode": False},
         data_dir=str(tmp_path),
         config_dir="config",
     )
+    # The audit-log slots need the operator credential (#703, covered in
+    # test_operator_credential.py); these tests start already authorized.
+    c._grant_operator("audit", "test-operator")
+    return c
 
 
 def _types(c):
@@ -184,6 +188,7 @@ def test_delete_scans_logs_scan_deleted(tmp_path):
                             session_meta={})
     db.close()
     c = _connector(tmp_path, scan_db_path=db_path)
+    c._grant_operator("delete", "test-operator")
     c.deleteScans([sid])
     ev = [e for e in c.auditLogEntries()
           if e["event_type"] == "scan_deleted"]

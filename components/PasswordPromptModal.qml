@@ -5,7 +5,10 @@ import OpenMotion 1.0
 
 // Reusable password prompt modal. Checks against the engineering password
 // and emits accepted() on success. Caller sets title, description, and
-// confirmLabel to customise the appearance.
+// confirmLabel to customise the appearance. A caller that sets
+// submitHandler (a function taking the password, returning true on
+// success) replaces the engineering check, e.g. the operator credential
+// for scan deletion and the audit log (#703).
 Item {
     id: root
     anchors.fill: parent
@@ -16,6 +19,7 @@ Item {
     property string title: "Password Required"
     property string description: "Enter the password to continue."
     property string confirmLabel: "Confirm"
+    property var submitHandler: null
 
     signal accepted()
 
@@ -30,7 +34,10 @@ Item {
     }
 
     function _submit() {
-        if (MotionInterface.checkEngineeringPassword(pwField.text)) {
+        var ok = root.submitHandler
+                 ? root.submitHandler(pwField.text)
+                 : MotionInterface.checkEngineeringPassword(pwField.text)
+        if (ok) {
             root.accepted()
             root.close()
         } else {

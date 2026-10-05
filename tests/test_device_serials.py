@@ -57,7 +57,7 @@ def test_console_serial_cached_notified_and_audited(tmp_path):
 
     assert c.consoleSerialNumber == "WWW04Q40005"
     assert fired, "deviceIdentityChanged should fire so QML rebinds"
-    stats = [e for e in c.auditLogEntries()
+    stats = [e for e in c._audit.query()
              if e["event_type"] == "device_stats"]
     assert json.loads(stats[0]["details"])["serial"] == "WWW04Q40005"
 

@@ -91,12 +91,18 @@ Item {
     // BloodFlow.qml opens the (ModalManager-governed) LogsModal in response.
     signal logsRequested()
 
-    // Password gate for the audit Logs viewer.
+    // Gate for the audit Logs viewer: the operator's own credential
+    // (#703). The connector grants audit access until LogsModal closes.
     PasswordPromptModal {
         id: logsPasswordModal
         title: "Audit Log"
-        description: "Enter the password to view the audit log."
+        description: (MotionInterface.operatorUsesWindowsAccount()
+                      ? "Enter the Windows password for "
+                        + MotionInterface.operatorAccount()
+                      : "Enter the password")
+                     + " to view the audit log."
         confirmLabel: "View Logs"
+        submitHandler: function(pw) { return MotionInterface.authorizeOperator(pw, "audit") }
         onAccepted: root.logsRequested()
     }
 

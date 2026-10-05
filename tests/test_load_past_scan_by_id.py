@@ -161,7 +161,7 @@ def test_load_past_scan_audits_label_and_id(tmp_path, monkeypatch):
 
     c.loadPastScan(sid, DUP_LABEL)
 
-    ev = [e for e in c.auditLogEntries()
+    ev = [e for e in c._audit.query()
           if e["event_type"] == "scan_viewed"]
     assert ev
     details = json.loads(ev[0]["details"])
