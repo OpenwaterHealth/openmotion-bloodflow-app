@@ -1,4 +1,8 @@
-# Open-Motion
+# Open-Motion Research
+
+> **For Research Use Only. Not for use in diagnostic procedures.**
+> Every build published from this repository is the Open-Motion **Research**
+> application.
 
 Desktop application for the Openwater **Open-Motion** system: an optical speckle
 imaging device that measures blood flow and blood volume non-invasively. The app
