@@ -65,6 +65,7 @@ import bug_report
 from nan_gap_tracker import NanGapTracker, gap_note_line
 from utils.resource_path import resource_path
 from utils import app_paths, config_store, disk_space, log_tail
+from config.app_config import APP_CONFIG as _COMPILED_APP_CONFIG
 
 # The app self-updater is compiled out of clinical builds (#543, tracker
 # M-02): openwater.spec excludes ``app_updater`` when CLINICAL_MODE is
@@ -366,11 +367,6 @@ class _LivePlotSink:
         n = batch.bfi_live.shape[0]
         connector = self._connector
         threshold = connector._camera_temp_alert_threshold_c
-        # Over-temp toast is Research-only: a clinical operator has no action
-        # to take on a chip-temperature reading and shouldn't get a mid-scan
-        # popup for one. Clinical builds still get the capture-log + app-log
-        # line below, so the event stays in the record either way.
-        temp_toast_enabled = not connector._app_config.get("clinicalMode", False)
         now_mono = time.monotonic()
 
         low_light_rt = getattr(batch, "low_light_rt", None)
@@ -456,21 +452,30 @@ class _LivePlotSink:
                         )
                         connector.captureLog.emit(msg)
                         logger.warning(msg)
+                        # Every build, clinical included (#702): the
+                        # operator sees it and the audit log records it.
+                        # AuditLog is thread-safe and the latch above
+                        # limits this to one write per camera per scan.
+                        connector._audit.log("camera_over_temperature", {
+                            "side": side,
+                            "camera": cam_id + 1,
+                            "temp_c": round(temp_c, 1),
+                            "threshold_c": threshold,
+                        })
                         # captureLog only reaches the app log (its QML
                         # terminus is console.log), so the operator sees
                         # nothing on screen without this. notify() is safe
                         # from this runner thread — it emits a signal that
                         # is delivered queued onto the GUI thread, same as
                         # _on_camera_dropout_recovered below.
-                        if temp_toast_enabled:
-                            connector.notify(
-                                f"Camera {side.upper()} {cam_id + 1} temperature "
-                                f"{temp_c:.1f}°C — above {threshold:.0f}°C threshold. "
-                                f"Check the airflow around the sensor module.",
-                                type_="warning",
-                                duration_ms=5000,
-                                tag=f"temp_{side}_{cam_id}",
-                            )
+                        connector.notify(
+                            f"Camera {side.upper()} {cam_id + 1} temperature "
+                            f"{temp_c:.1f}°C — above {threshold:.0f}°C threshold. "
+                            f"Check the airflow around the sensor module.",
+                            type_="warning",
+                            duration_ms=5000,
+                            tag=f"temp_{side}_{cam_id}",
+                        )
 
                 # Non-finite BFI/BVI: row-addressed LIGHT rows are appended
                 # anyway (issue #418) — an unlit (covered / off-target)
@@ -1059,7 +1064,11 @@ class MotionConnector(QObject):
 
         # Unpack operational settings from config
         self._force_laser_fail            = bool(cfg.get("forceLaserFail", False))
-        self._camera_temp_alert_threshold_c = float(cfg.get("cameraTempAlertThresholdC", 105.0))
+        # One threshold, compiled in config/app_config.py (#702): no
+        # literal fallback here to drift from it.
+        self._camera_temp_alert_threshold_c = float(cfg.get(
+            "cameraTempAlertThresholdC",
+            _COMPILED_APP_CONFIG["cameraTempAlertThresholdC"]))
         self._camera_dropout_threshold_sec = float(cfg.get("cameraDropoutThresholdSec", 2.0))
         # Whole-scan data-stall watchdog (issue #248): if NO selected camera
         # delivers a frame for this long while the trigger is ON, the scan is
