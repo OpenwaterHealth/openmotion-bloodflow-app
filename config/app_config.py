@@ -120,6 +120,8 @@ APP_CONFIG = {
     # Research build with engineering mode unlocked.
     "downloadBetaUpdates": False,
     "forceLaserFail": False,
+    # Camera over-temperature alert (C): warning toast plus an audit-log
+    # entry, once per camera per scan, in every build (#702).
     "cameraTempAlertThresholdC": 110,
     # Whole-scan data-stall watchdog (#248): abort with E-303 when no camera
     # delivers a frame for this long while the trigger is on; <= 0 disables.
