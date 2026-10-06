@@ -527,7 +527,7 @@ Item {
                     text: "🗑  Delete" + (root.checkedCount > 0 ? "  (" + root.checkedCount + ")" : "")
                     Layout.preferredWidth: 132; Layout.preferredHeight: 36
                     // Don't allow deleting while a scan is running (could be the
-                    // in-flight session). The password prompt still guards it.
+                    // in-flight session). The confirm prompt still guards it.
                     enabled: root.checkedCount > 0 && MotionInterface.state !== 4
                     hoverEnabled: enabled
                     contentItem: Text {
@@ -617,12 +617,19 @@ Item {
         }
     }
 
-    // Reused engineering-password prompt for delete confirmation.
+    // "Are you sure?" before a delete, in every build. No password (#703):
+    // the requirement is a confirmation step, not authentication.
     PasswordPromptModal {
         id: deletePrompt
+        objectName: "deleteScansPrompt"
         title: "Confirm Delete"
-        description: "Enter the engineering password to permanently delete the "
-                     + "selected scan(s) from the database. This cannot be undone."
+        requirePassword: false
+        description: {
+            var n = root.checkedCount
+            return "Are you sure you want to permanently delete "
+                   + (n === 1 ? "this scan" : "these " + n + " scans")
+                   + " from the database? This cannot be undone."
+        }
         confirmLabel: "Delete"
         onAccepted: root.doDelete()
     }

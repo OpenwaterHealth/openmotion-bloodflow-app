@@ -87,18 +87,9 @@ Item {
         )
     }
 
-    // Emitted when the user enters the correct password for the audit log.
-    // BloodFlow.qml opens the (ModalManager-governed) LogsModal in response.
+    // Emitted by "View Logs"; BloodFlow.qml opens the (ModalManager-
+    // governed) LogsModal in response. No password in any build (#703).
     signal logsRequested()
-
-    // Password gate for the audit Logs viewer.
-    PasswordPromptModal {
-        id: logsPasswordModal
-        title: "Audit Log"
-        description: "Enter the password to view the audit log."
-        confirmLabel: "View Logs"
-        onAccepted: root.logsRequested()
-    }
 
     // ── Lifecycle ───────────────────────────────────────────────────────────
     function _loadFromConfig() {
@@ -951,14 +942,15 @@ Item {
                     FieldRow {
                         label: "Logs"
                         ActionButton {
+                            objectName: "viewAuditLogButton"
                             text: "View Logs"
                             Layout.preferredWidth: 130
-                            onClicked: logsPasswordModal.open()
+                            onClicked: root.logsRequested()
                         }
                         Item { Layout.fillWidth: true }
                     }
                     Text {
-                        text: "Password-protected, machine-readable record of system "
+                        text: "Machine-readable record of system "
                               + "events for auditors. Open the viewer to browse entries "
                               + "or export them as CSV."
                         color: root.colTextMuted

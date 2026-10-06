@@ -51,11 +51,13 @@ from PyQt6.QtQml import (  # noqa: E402
     qmlRegisterSingletonInstance,
 )
 from PyQt6.QtQuick import QQuickWindow  # noqa: E402
+from PyQt6.QtTest import QSignalSpy  # noqa: E402
 
 pytestmark = pytest.mark.unit
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SETTINGS_MODAL_QML = REPO_ROOT / "components" / "SettingsModal.qml"
+PASSWORD_PROMPT_QML = REPO_ROOT / "components" / "PasswordPromptModal.qml"
 
 
 class _StubMotionInterface(QObject):
@@ -81,6 +83,7 @@ class _StubMotionInterface(QObject):
         self._write_telemetry_csv = False
         self.sensor_debug_flag_calls: list[tuple] = []
         self._histo_stall_test = False
+        self.password_checks: list[str] = []
 
     # ── Mode flags (the gates under test) ────────────────────────────
     def setFlags(self, clinical: bool, engineering: bool):
@@ -159,6 +162,11 @@ class _StubMotionInterface(QObject):
     @pyqtSlot(str, str, int, bool, str)
     def notify(self, text, kind, ms, sticky, tag):
         pass
+
+    @pyqtSlot(str, result=bool)
+    def checkEngineeringPassword(self, pw):
+        self.password_checks.append(pw)
+        return pw == "right"
 
     # ── Referenced by bindings; neutral values ────────────────────────
     @pyqtProperty(bool, notify=_neverEmitted)
@@ -255,7 +263,25 @@ def modal_factory():
         created.append(obj)
         return obj
 
+    with _basic_controls_style():
+        prompt_component = QQmlComponent(
+            engine, QUrl.fromLocalFile(str(PASSWORD_PROMPT_QML))
+        )
+    if prompt_component.isError():
+        raise RuntimeError(
+            "PasswordPromptModal.qml failed to compile:\n"
+            + "\n".join(e.toString() for e in prompt_component.errors())
+        )
+
+    def make_prompt():
+        obj = prompt_component.create()
+        assert obj is not None, "PasswordPromptModal.qml failed to instantiate"
+        obj.setParentItem(window.contentItem())
+        created.append(obj)
+        return obj
+
     make.stub = stub
+    make.prompt = make_prompt
     yield make
     for obj in created:
         obj.setParentItem(None)
@@ -515,6 +541,68 @@ def test_histo_stall_test_switch_drives_live_flag_push(modal_factory):
         ("debugHistoStallTest", False),
     ]
     assert _control_visible(modal, "histoStallTestWarning") is False
+
+
+def _spy(obj, signature):
+    """QSignalSpy on a QML-declared signal (no Python bound signal)."""
+    mo = obj.metaObject()
+    idx = mo.indexOfSignal(signature)
+    assert idx >= 0, f"no signal {signature}"
+    return QSignalSpy(obj, mo.method(idx))
+
+
+@pytest.mark.parametrize("clinical", [False, True], ids=["research", "clinical"])
+def test_audit_log_opens_without_a_password(modal_factory, clinical):
+    """#703: View Logs opens the audit log straight away in every build;
+    there is no password prompt for it at all."""
+    stub = modal_factory.stub
+    stub.setFlags(clinical=clinical, engineering=False)
+    stub.password_checks.clear()
+    modal = modal_factory()
+    button = modal.findChild(QObject, "viewAuditLogButton")
+    assert button is not None
+    assert modal.findChild(QObject, "auditLogPasswordPrompt") is None
+    requested = _spy(modal, "logsRequested()")
+
+    _invoke(modal, "open")
+    try:
+        _invoke(button, "click")
+        assert len(requested) == 1
+        assert stub.password_checks == []
+    finally:
+        _invoke(modal, "close")
+
+
+def test_prompt_without_password_is_a_plain_confirm(modal_factory):
+    """requirePassword: false (the delete confirm) hides the field and
+    accepts on Confirm without consulting the password check."""
+    stub = modal_factory.stub
+    stub.password_checks.clear()
+    prompt = modal_factory.prompt()
+    prompt.setProperty("requirePassword", False)
+    accepted = _spy(prompt, "accepted()")
+
+    _invoke(prompt, "open")
+    _invoke(prompt, "_submit")
+    assert len(accepted) == 1
+    assert stub.password_checks == []
+    assert prompt.property("visible") is False
+
+
+def test_prompt_with_password_still_checks_it(modal_factory):
+    """Default (clinical) behavior is unchanged: the password is checked
+    and a wrong one keeps the prompt open."""
+    stub = modal_factory.stub
+    stub.password_checks.clear()
+    prompt = modal_factory.prompt()
+    accepted = _spy(prompt, "accepted()")
+
+    _invoke(prompt, "open")
+    _invoke(prompt, "_submit")            # empty field -> wrong
+    assert len(accepted) == 0
+    assert stub.password_checks == [""]
+    assert prompt.property("visible") is True
+    _invoke(prompt, "close")
 
 
 def test_close_never_persists_clinical_mode(modal_factory):

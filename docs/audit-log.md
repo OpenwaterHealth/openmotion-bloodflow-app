@@ -12,12 +12,10 @@ read or export it.
 
 1. Open **Settings** (gear icon).
 2. Scroll to the **Audit Log** section and click **View Logs**.
-3. Enter the access password when prompted.
 
-> The password is the same one used for other protected actions in the app
-> (e.g. starting a calibration or deleting scans). Ask your system
-> administrator if you don't have it. The audit log is read-only from the
-> UI — there is no way to edit or delete individual entries through the app.
+> No password is needed, in any build. Opening the log is itself recorded
+> (`audit_log_viewed`). The audit log is read-only from the UI — there is
+> no way to edit or delete individual entries through the app.
 
 The viewer lists entries **newest first**, with three columns:
 

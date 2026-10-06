@@ -78,6 +78,7 @@ artifacts, so every tagged release carries one.
 | `pages/BloodFlow.qml` | Main scan page: patient info, sensor config, trigger. The only page `main.qml` loads. |
 | `components/PlotViewer.qml` | Real-time + replay BFI/BVI plot viewer (pan/zoom DVR, autoscale). |
 | `components/SettingsModal.qml` | Settings overlay (opened from BloodFlow — there is no `pages/Settings.qml`). |
+| `components/HistoryModal.qml` / `LogsModal.qml` | Scan history and the audit log. **Neither is password-protected in any build** (requirement, #703): Delete asks an "are you sure" confirm (`PasswordPromptModal` with `requirePassword: false`) and is audited (`scan_deleted`); Settings → Audit Log → View Logs opens the log directly. Don't add a password back without a requirement change. |
 | `pages/scan/` | `ScanRunner.qml` plus task QMLs: `CaptureDataTask`, `ContactQualityCheckTask`, `FlashSensorsTask`, `SetTriggerTask`. Newer orchestration suite. |
 | `components/` | 25 reusable QML components — `SettingsModal`, `ContactQualityModal`, `CameraDot`, `TestResultsWindow`, etc. |
 | `config/app_config.py` | **Compiled** app config (#546): the ~80 flags / thresholds the JSON used to carry, same keys and order, each in one of four tiers (`CONSTANT_KEYS` / `SESSION_KEYS` / `PREFERENCE_KEYS` / `STATE_KEYS`). `CLINICAL_MODE` at the top is stamped per variant by the build. `config/tec_params.py` holds the TEC DAC setpoints. There is no JSON config any more, shipped or writable. |
