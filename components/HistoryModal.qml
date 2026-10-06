@@ -527,7 +527,7 @@ Item {
                     text: "🗑  Delete" + (root.checkedCount > 0 ? "  (" + root.checkedCount + ")" : "")
                     Layout.preferredWidth: 132; Layout.preferredHeight: 36
                     // Don't allow deleting while a scan is running (could be the
-                    // in-flight session). The password prompt still guards it.
+                    // in-flight session). The confirm prompt still guards it.
                     enabled: root.checkedCount > 0 && MotionInterface.state !== 4
                     hoverEnabled: enabled
                     contentItem: Text {
@@ -617,16 +617,22 @@ Item {
         }
     }
 
-    // Delete confirmation: the operator's own credential (#703). The
-    // connector checks it and grants exactly one deleteScans call.
+    // Delete confirmation. Clinical builds ask for the operator's own
+    // credential (#703): the connector checks it and grants exactly one
+    // deleteScans call. Research builds get a plain confirm (#455; the
+    // delete is still irreversible).
     PasswordPromptModal {
         id: deletePrompt
+        objectName: "deleteScansPrompt"
         title: "Confirm Delete"
-        description: (MotionInterface.operatorUsesWindowsAccount()
-                      ? "Enter the Windows password for "
-                        + MotionInterface.operatorAccount()
-                      : "Enter the password")
-                     + " to permanently delete the selected scan(s) from the "
+        requirePassword: MotionInterface.operatorCredentialRequired()
+        description: (requirePassword
+                      ? (MotionInterface.operatorUsesWindowsAccount()
+                         ? "Enter the Windows password for "
+                           + MotionInterface.operatorAccount()
+                         : "Enter the password")
+                        + " to permanently delete the selected scan(s) from the "
+                      : "Permanently delete the selected scan(s) from the ")
                      + "database. This cannot be undone."
         confirmLabel: "Delete"
         submitHandler: function(pw) { return MotionInterface.authorizeOperator(pw, "delete") }

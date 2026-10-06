@@ -1,8 +1,9 @@
 """Operator credential for scan deletion and the audit log (#703).
 
-The check runs in Python, so calling deleteScans() or the audit-log slots
-directly (bypassing the QML prompt) is refused too. Windows' LogonUserW is
-stubbed: these tests never submit a real credential.
+Clinical builds only. The check runs in Python, so calling deleteScans() or
+the audit-log slots directly (bypassing the QML prompt) is refused too. A
+Research build only confirms (#455) and records the logged-in account.
+Windows' LogonUserW is stubbed: these tests never submit a real credential.
 """
 import json
 import os
@@ -43,7 +44,7 @@ def clock(monkeypatch):
     return now
 
 
-def _connector(tmp_path):
+def _connector(tmp_path, clinical=True):
     iface = MagicMock()
     iface.is_device_connected.return_value = (False, False, False)
     iface.scan_workflow.running = False
@@ -52,7 +53,7 @@ def _connector(tmp_path):
     iface.get_sdk_version.return_value = "9.9.9"
     return MotionConnector(
         interface=iface,
-        app_config={"engineeringMode": False},
+        app_config={"engineeringMode": False, "clinicalMode": clinical},
         data_dir=str(tmp_path),
         config_dir="config",
     )
@@ -110,13 +111,50 @@ def test_the_shared_password_is_not_an_operator_credential(tmp_path, windows_aut
     assert c.authorizeOperator(_ENGINEERING_PASSWORD, "delete") is False
 
 
-def test_without_the_os_check_the_engineering_password_is_used(tmp_path, monkeypatch):
-    # macOS (Research-only) has no OS check here; it keeps the old prompt.
+def test_without_the_os_check_every_credential_is_refused(tmp_path, monkeypatch):
+    # Clinical builds are Windows-only; with no OS check there is no
+    # fallback password either.
     monkeypatch.setattr(operator_auth, "supported", lambda: False)
     c = _connector(tmp_path)
     assert c.operatorUsesWindowsAccount() is False
     assert c.authorizeOperator("wrong", "delete") is False
-    assert c.authorizeOperator(_ENGINEERING_PASSWORD, "delete") is True
+    assert c.authorizeOperator(_ENGINEERING_PASSWORD, "delete") is False
+    assert c._operator_grants == {}
+
+
+def test_only_clinical_builds_require_the_credential(tmp_path):
+    assert _connector(tmp_path).operatorCredentialRequired() is True
+    assert _connector(tmp_path, clinical=False).operatorCredentialRequired() is False
+
+
+# ── Research builds: confirm only (#455) ────────────────────────────────
+
+def test_research_delete_needs_no_credential_and_names_the_account(tmp_path, windows_auth):
+    a, b = _session(tmp_path, "A"), _session(tmp_path, "B")
+    c = _connector(tmp_path, clinical=False)
+
+    assert c.deleteScans([a]) == 1
+    assert c.deleteScans([b]) == 1
+
+    assert _session_ids(tmp_path) == []
+    assert windows_auth == [], "no OS check on Research"
+    assert [e["operator"] for e in _events(c, "scan_deleted")] == [ACCOUNT, ACCOUNT]
+    assert _events(c, "scan_delete_refused") == []
+
+
+def test_research_audit_log_opens_without_a_credential(tmp_path, windows_auth):
+    c = _connector(tmp_path, clinical=False)
+    dest = str(tmp_path / "audit.csv")
+
+    c.recordAuditLogViewed()
+    assert c.filteredAuditLogEntries({})
+    assert c.auditEventTypes()
+    assert c.exportAuditLogCsv(dest) == dest
+
+    assert os.path.exists(dest)
+    assert windows_auth == []
+    assert _events(c, "audit_log_viewed")[0]["operator"] == ACCOUNT
+    assert _events(c, "audit_log_exported")[0]["operator"] == ACCOUNT
 
 
 # ── deleteScans ─────────────────────────────────────────────────────────

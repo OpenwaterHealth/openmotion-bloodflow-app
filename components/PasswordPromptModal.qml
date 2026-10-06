@@ -8,7 +8,8 @@ import OpenMotion 1.0
 // confirmLabel to customise the appearance. A caller that sets
 // submitHandler (a function taking the password, returning true on
 // success) replaces the engineering check, e.g. the operator credential
-// for scan deletion and the audit log (#703).
+// for scan deletion and the audit log (#703). With requirePassword false
+// it is a plain confirm dialog: no field, Confirm emits accepted() directly.
 Item {
     id: root
     anchors.fill: parent
@@ -20,6 +21,7 @@ Item {
     property string description: "Enter the password to continue."
     property string confirmLabel: "Confirm"
     property var submitHandler: null
+    property bool requirePassword: true
 
     signal accepted()
 
@@ -27,16 +29,18 @@ Item {
         pwField.text = ""
         errorLabel.visible = false
         root.visible = true
-        pwField.forceActiveFocus()
+        if (requirePassword) pwField.forceActiveFocus()
+        else panel.forceActiveFocus()
     }
     function close() {
         root.visible = false
     }
 
     function _submit() {
-        var ok = root.submitHandler
-                 ? root.submitHandler(pwField.text)
-                 : MotionInterface.checkEngineeringPassword(pwField.text)
+        var ok = !root.requirePassword
+                 || (root.submitHandler
+                     ? root.submitHandler(pwField.text)
+                     : MotionInterface.checkEngineeringPassword(pwField.text))
         if (ok) {
             root.accepted()
             root.close()
@@ -63,6 +67,7 @@ Item {
 
     // Panel
     Rectangle {
+        id: panel
         width: 360
         height: contentCol.implicitHeight + 48
         radius: 14
@@ -97,6 +102,7 @@ Item {
 
             TextField {
                 id: pwField
+                visible: root.requirePassword
                 Layout.fillWidth: true
                 Layout.preferredHeight: 38
                 echoMode: TextInput.Password

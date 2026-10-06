@@ -91,10 +91,12 @@ Item {
     // BloodFlow.qml opens the (ModalManager-governed) LogsModal in response.
     signal logsRequested()
 
-    // Gate for the audit Logs viewer: the operator's own credential
-    // (#703). The connector grants audit access until LogsModal closes.
+    // Gate for the audit Logs viewer on clinical builds: the operator's own
+    // credential (#703). The connector grants audit access until LogsModal
+    // closes. Research builds open the viewer directly (#455).
     PasswordPromptModal {
         id: logsPasswordModal
+        objectName: "auditLogPasswordPrompt"
         title: "Audit Log"
         description: (MotionInterface.operatorUsesWindowsAccount()
                       ? "Enter the Windows password for "
@@ -957,14 +959,19 @@ Item {
                     FieldRow {
                         label: "Logs"
                         ActionButton {
+                            objectName: "viewAuditLogButton"
                             text: "View Logs"
                             Layout.preferredWidth: 130
-                            onClicked: logsPasswordModal.open()
+                            // Password-gated on clinical builds only.
+                            onClicked: root.clinicalMode ? logsPasswordModal.open()
+                                                         : root.logsRequested()
                         }
                         Item { Layout.fillWidth: true }
                     }
                     Text {
-                        text: "Password-protected, machine-readable record of system "
+                        text: (root.clinicalMode ? "Password-protected, machine-readable"
+                                                 : "Machine-readable")
+                              + " record of system "
                               + "events for auditors. Open the viewer to browse entries "
                               + "or export them as CSV."
                         color: root.colTextMuted

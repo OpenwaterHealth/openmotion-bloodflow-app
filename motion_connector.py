@@ -128,11 +128,12 @@ def engineering_password_matches(pw) -> bool:
 
 
 # ── Operator re-authentication (#703) ────────────────────────────────────
-# Deleting scans and the audit log need the operator's own Windows
-# password (utils/operator_auth), checked here in Python so a direct slot
-# call can't skip the prompt. A successful check grants one scope for a
-# while: "delete" is used up by the next deleteScans; "audit" lasts while
-# the Logs modal is open and expires after this long idle.
+# In a clinical build, deleting scans and the audit log need the operator's
+# own Windows password (utils/operator_auth), checked here in Python so a
+# direct slot call can't skip the prompt. A successful check grants one
+# scope for a while: "delete" is used up by the next deleteScans; "audit"
+# lasts while the Logs modal is open and expires after this long idle. A
+# Research build only confirms (#455).
 _OPERATOR_GRANT_TTL_S = {"delete": 120.0, "audit": 900.0}
 # Patched by tests; the grant clock only.
 _grant_clock = time.monotonic
@@ -2986,12 +2987,21 @@ class MotionConnector(QObject):
             return {"sampleCount": 0}
 
     # ── Operator re-authentication (#703) ────────────────────────────────
+    def _operator_credential_required(self) -> bool:
+        """Clinical builds only. A Research build deletes scans and opens
+        the audit log after a plain confirm (#455), so no grant is needed
+        there and the audit trail names the logged-in account."""
+        return self._app_config.get("clinicalMode", False) is True
+
+    @pyqtSlot(result=bool)
+    def operatorCredentialRequired(self) -> bool:
+        """QML: ask for the operator credential (clinical) or just confirm."""
+        return self._operator_credential_required()
+
     def _verify_operator(self, password) -> bool:
-        """The operator's own Windows password; the engineering password
-        where the OS check isn't available (macOS, Research-only)."""
-        if operator_auth.supported():
-            return operator_auth.verify_password(password)
-        return engineering_password_matches(password)
+        """The operator's own Windows password. Clinical builds are
+        Windows-only; anywhere else the check is refused."""
+        return operator_auth.verify_password(password)
 
     def _grant_operator(self, scope: str, operator: str) -> None:
         self._operator_grants[scope] = (
@@ -2999,7 +3009,10 @@ class MotionConnector(QObject):
 
     def _operator_for(self, scope: str, *, consume: bool) -> Optional[str]:
         """The operator holding an unexpired ``scope`` grant, else None.
-        ``consume`` drops a delete grant; an audit grant slides instead."""
+        ``consume`` drops a delete grant; an audit grant slides instead.
+        A Research build needs no grant: it is the logged-in account."""
+        if not self._operator_credential_required():
+            return operator_auth.current_account()
         grant = self._operator_grants.get(scope)
         if grant is None:
             return None
@@ -3050,9 +3063,10 @@ class MotionConnector(QObject):
     @pyqtSlot("QVariantList", result=int)
     def deleteScans(self, session_ids):
         """Delete the given scan-DB sessions (CASCADE removes their
-        session_data). Returns the count actually deleted. Refused unless
-        authorizeOperator granted "delete" just before; the grant is used
-        up, so every delete needs its own prompt (#703)."""
+        session_data). Returns the count actually deleted. In a clinical
+        build it is refused unless authorizeOperator granted "delete" just
+        before; the grant is used up, so every delete needs its own prompt
+        (#703). A Research build only confirms in QML (#455)."""
         operator = self._operator_for("delete", consume=True)
         if operator is None:
             logger.warning("deleteScans refused: no operator credential")
@@ -3098,8 +3112,9 @@ class MotionConnector(QObject):
         return deleted
 
     # ── Audit log (QML-facing) ───────────────────────────────────────────
-    # Every slot here needs the "audit" operator grant (#703); without it
-    # reads return nothing and the export is refused.
+    # In a clinical build every slot here needs the "audit" operator grant
+    # (#703); without it reads return nothing and the export is refused. A
+    # Research build opens the audit log directly (#455).
     @pyqtSlot(result="QVariantList")
     @pyqtSlot(int, result="QVariantList")
     def auditLogEntries(self, limit: int = 500):
