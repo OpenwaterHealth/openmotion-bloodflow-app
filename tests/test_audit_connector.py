@@ -129,6 +129,7 @@ def test_run_calibration_logs_started(tmp_path):
     c._consoleConnected = True
     c._leftSensorConnected = True
     c._interface.start_calibration.return_value = True
+    c._app_config["engineeringMode"] = True   # Calibrate is engineering-only (#706)
     c.runCalibration("left")
     ev = [e for e in c.auditLogEntries()
           if e["event_type"] == "calibration_started"]

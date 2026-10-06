@@ -265,7 +265,10 @@ def test_every_variant_build_entry_point_keeps_the_open_motion_folder():
     workflow = (_REPO_ROOT / ".github" / "actions" / "windows-build" / "action.yml").read_text(encoding="utf-8")
     assert '--distpath "dist/${variant}/Open-Motion"' in workflow
     common = (_REPO_ROOT / "scripts" / "build_common.ps1").read_text(encoding="utf-8")
-    assert 'Join-Path (Join-Path $DistRoot $Variant) "Open-Motion"' in common
+    # dist\<variant>\Open-Motion, or dist\clinical-service\Open-Motion for
+    # the clinical service tool (#706)
+    assert '$outName = if ($Service) { "$Variant-service" } else { $Variant }' in common
+    assert 'Join-Path (Join-Path $DistRoot $outName) "Open-Motion"' in common
     assert "Remove-Item -Recurse -Force $distPath" in common
     bundles = (_REPO_ROOT / "scripts" / "build_update_test_bundles.ps1").read_text(encoding="utf-8")
     assert "--distpath dist\\research\\Open-Motion" in bundles

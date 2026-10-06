@@ -248,6 +248,19 @@ runs:
         Write-Host "Signing as: $($cert.Subject)  [$($cert.Thumbprint)]"
         "CODESIGN_THUMBPRINT=$($cert.Thumbprint)" >> $env:GITHUB_ENV
 
+    # #706: CI never builds the clinical service tool (a clinical build with
+    # the engineering unlock compiled in). That is a local build only
+    # (build_nuitka.ps1 -Variant clinical -Service), so a committed
+    # SERVICE_BUILD = True must never reach a released clinical artifact.
+    - name: Refuse a service-tool stamp
+      shell: bash
+      run: |
+        grep -n "^SERVICE_BUILD = " config/app_config.py
+        if ! grep -Eq "^SERVICE_BUILD = False[[:space:]]*$" config/app_config.py; then
+          echo "::error::config/app_config.py must have SERVICE_BUILD = False; CI does not build the clinical service tool (#706)"
+          exit 1
+        fi
+
     # PyInstaller is the fallback only (compiler=pyinstaller) since Nuitka
     # became the default on 2026-09-17 (#548).
     - name: Build with PyInstaller (one build per variant)

@@ -40,6 +40,7 @@ from PyQt6.QtQml import (
 )
 from PyQt6.QtCore import qInstallMessageHandler, QtMsgType, QTimer, QUrl
 
+from config.app_config import SERVICE_BUILD
 from motion_connector import MotionConnector
 from motion_config import DEFAULT_TRIGGER_OVERRIDES
 from omotion import MotionInterface, db_open
@@ -485,8 +486,15 @@ def main():
     app.setWindowIcon(_app_icon())
 
     # Set application properties for Windows taskbar. Display name reflects
-    # the build variant: clinicalMode=false is the Research distribution.
-    app_display_name = "Open-Motion" if app_config.get("clinicalMode", False) else "Open-Motion Research"
+    # the build variant: clinicalMode=false is the Research distribution,
+    # and the clinical service tool (#706) names itself so it can't pass
+    # for a patient build.
+    if not app_config.get("clinicalMode", False):
+        app_display_name = "Open-Motion Research"
+    elif SERVICE_BUILD:
+        app_display_name = "Open-Motion Service"
+    else:
+        app_display_name = "Open-Motion"
     app.setApplicationName(app_display_name)
     app.setApplicationVersion(APP_VERSION)
     app.setOrganizationName("Openwater")

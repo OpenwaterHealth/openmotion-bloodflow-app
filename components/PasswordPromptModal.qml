@@ -3,10 +3,14 @@ import QtQuick.Controls 6.0
 import QtQuick.Layouts 6.0
 import OpenMotion 1.0
 
-// Reusable password prompt modal. Checks against the engineering password
-// and emits accepted() on success. Caller sets title, description, and
-// confirmLabel to customise the appearance. With requirePassword false it
-// is a plain confirm dialog: no field, Confirm emits accepted() directly.
+// Reusable password prompt modal. The caller sets submitHandler, a function
+// taking the password and returning true on success (the check itself
+// always runs in Python, e.g. MotionInterface.unlockEngineeringMode), and
+// title, description and confirmLabel for the wording. accepted() fires on
+// success. There is no default check: without a submitHandler every
+// password is refused, so the connector needs no password slot (#706).
+// With requirePassword false it is a plain confirm dialog: no field,
+// Confirm emits accepted() directly.
 Item {
     id: root
     anchors.fill: parent
@@ -17,6 +21,7 @@ Item {
     property string title: "Password Required"
     property string description: "Enter the password to continue."
     property string confirmLabel: "Confirm"
+    property var submitHandler: null
     property bool requirePassword: true
 
     signal accepted()
@@ -33,8 +38,10 @@ Item {
     }
 
     function _submit() {
-        if (!requirePassword
-                || MotionInterface.checkEngineeringPassword(pwField.text)) {
+        var ok = !root.requirePassword
+                 || (root.submitHandler ? root.submitHandler(pwField.text) === true
+                                        : false)
+        if (ok) {
             root.accepted()
             root.close()
         } else {

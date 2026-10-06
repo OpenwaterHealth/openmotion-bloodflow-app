@@ -47,26 +47,39 @@ function Get-ConfigModulePath {
 }
 
 function Set-BuildVariant {
-    # Stamp CLINICAL_MODE into config/app_config.py BEFORE PyInstaller runs.
-    # Returns the ORIGINAL module text so the caller can restore it
-    # (Restore-ConfigModule) in a finally block - the repo value is the
-    # Research default and must never be committed flipped.
+    # Stamp CLINICAL_MODE and SERVICE_BUILD into config/app_config.py BEFORE
+    # PyInstaller runs. Returns the ORIGINAL module text so the caller can
+    # restore it (Restore-ConfigModule) in a finally block - the repo values
+    # are the Research default and must never be committed flipped.
+    # -Service (clinical only, #706) keeps the engineering-mode unlock in a
+    # clinical build: the clinical service tool. Every other clinical build
+    # has the unlock compiled out.
     param(
         [Parameter(Mandatory)][bool]$Clinical,
+        [bool]$Service = $false,
         [string]$ModulePath = (Get-ConfigModulePath)
     )
+    if ($Service -and -not $Clinical) {
+        throw "-Service is a clinical build option; a Research build always has the engineering unlock"
+    }
     if (-not (Test-Path $ModulePath)) { throw "config module not found at $ModulePath" }
     $orig = [System.IO.File]::ReadAllText($ModulePath)
     # (?=\r?$): a .NET multiline '$' matches before "\n" only, so a CRLF
     # checkout (the GitHub Windows runner, autocrlf=true) never matched and
     # the first Nuitka CI build died here (#548). The lookahead keeps the
     # original line ending untouched.
-    $stamp = '(?m)^CLINICAL_MODE = (True|False)(?=\r?$)'
-    if ($orig -notmatch $stamp) {
-        throw "CLINICAL_MODE stamp line not found in $ModulePath"
+    $new = $orig
+    foreach ($s in @(
+        @{ Name = "CLINICAL_MODE"; On = $Clinical },
+        @{ Name = "SERVICE_BUILD"; On = $Service }
+    )) {
+        $stamp = "(?m)^$($s.Name) = (True|False)(?=\r?$)"
+        if ($new -notmatch $stamp) {
+            throw "$($s.Name) stamp line not found in $ModulePath"
+        }
+        $val = if ($s.On) { "True" } else { "False" }
+        $new = [regex]::Replace($new, $stamp, "$($s.Name) = $val")
     }
-    $val = if ($Clinical) { "True" } else { "False" }
-    $new = [regex]::Replace($orig, $stamp, "CLINICAL_MODE = $val")
     [System.IO.File]::WriteAllText($ModulePath, $new, (New-Object System.Text.UTF8Encoding $false))
     return $orig
 }
@@ -127,17 +140,23 @@ function Invoke-VariantBuild {
     # build\<variant>), restore the stamp. The Open-Motion\ folder is kept so
     # the portable zip and the MSI harvest have the same shape as before
     # #547; it now holds exactly one file.
+    # -Service (clinical only, #706) builds the clinical service tool into
+    # dist\clinical-service\Open-Motion instead. Nothing packages it: it is
+    # handed out as the bare exe, never zipped or installed with the
+    # clinical artifacts.
     param(
         [Parameter(Mandatory)][ValidateSet("clinical", "research")][string]$Variant,
+        [switch]$Service,
         [string]$SpecFile = "openwater.spec",
         [string]$DistRoot = "dist",
         [string]$WorkRoot = "build",
         [string]$CondaEnv = "ow-motion"
     )
-    $orig = Set-BuildVariant -Clinical ($Variant -eq "clinical")
+    $orig = Set-BuildVariant -Clinical ($Variant -eq "clinical") -Service $Service.IsPresent
     try {
-        $distPath = Join-Path (Join-Path $DistRoot $Variant) "Open-Motion"
-        $workPath = Join-Path $WorkRoot $Variant
+        $outName = if ($Service) { "$Variant-service" } else { $Variant }
+        $distPath = Join-Path (Join-Path $DistRoot $outName) "Open-Motion"
+        $workPath = Join-Path $WorkRoot $outName
         # Start from an empty dist directory: a stale onedir tree (_internal\)
         # from an older build would otherwise ride along into the zip and the
         # MSI next to the onefile exe (the spec refuses that too).

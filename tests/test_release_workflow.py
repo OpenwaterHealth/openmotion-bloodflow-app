@@ -302,7 +302,8 @@ def test_nuitka_is_the_default_compiler_with_pyinstaller_as_dispatch_fallback(wo
     assert "--standalone" in script and "--onefile" in script and "--deployment" in script
     assert '"--onefile-tempdir-spec=' not in script, "a static extraction dir recreates V-07"
     assert "--include-qt-plugins=sensible,qml" in script
-    assert 'Join-Path (Join-Path $DistRoot $Variant) "Open-Motion"' in script
+    assert '$outName = if ($Service) { "$Variant-service" } else { $Variant }' in script
+    assert 'Join-Path (Join-Path $DistRoot $outName) "Open-Motion"' in script
     # clinical must not carry the self-updater (#543): Nuitka follows the
     # conditional import statically, so the build tells it not to.
     assert '"--nofollow-import-to=app_updater"' in script

@@ -76,12 +76,19 @@ Item {
 
     signal settingsChanged()
 
-    // Password gate for the Calibrate action.
+    // Confirm before Calibrate. No second password: Calibrate sits in the
+    // engineering card, so the engineering unlock is its gate, re-checked
+    // in Python by runCalibration (#706).
     PasswordPromptModal {
-        id: calibrationPasswordModal
+        id: calibrationConfirmModal
         title: "Calibration"
-        description: "Enter the password to start calibration."
+        description: {
+            var t = calibrationTargetCombo.currentText.toLowerCase()
+            return "Calibrate " + (t === "both" ? "both sensors" : "the " + t + " sensor")
+                   + "? This writes a new calibration to the console."
+        }
         confirmLabel: "Calibrate"
+        requirePassword: false
         onAccepted: MotionInterface.runCalibration(
             calibrationTargetCombo.currentText.toLowerCase()
         )
@@ -1271,7 +1278,7 @@ Item {
                                   && calibrationTargetCombo.count > 0
                                   && !MotionInterface.calibrationRunning
                                   && !MotionInterface.testScanRunning
-                            onClicked: calibrationPasswordModal.open()
+                            onClicked: calibrationConfirmModal.open()
                         }
 
                         ActionButton {

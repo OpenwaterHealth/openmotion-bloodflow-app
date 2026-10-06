@@ -15,9 +15,10 @@ Rectangle {
     // close-while-busy warning before tearing down (issue #75).
     signal closeRequested()
 
-    // Emitted on double-click of the logo. main.qml owns the behavior
-    // (opens the engineering-unlock prompt) — this component stays dumb.
-    signal logoDoubleClicked()
+    // The logo item. The engineering-unlock prompt, where the build has one
+    // (#706), puts its own double-click area on it; this component has no
+    // double-click handler of its own.
+    readonly property Item logoItem: logo
 
     // Properties to configure the logo
     property string logoSource: "" // Default to no logo
@@ -59,6 +60,7 @@ Rectangle {
 
         // Logo
         Rectangle {
+            id: logo
             width: 185
             height: 42
             color: "transparent" // No background color
@@ -115,15 +117,6 @@ Rectangle {
                     }
                 }
             }
-
-            // Double-click → engineering-mode unlock prompt (eng gate).
-            // Sits above the header drag MouseArea so only the logo area
-            // captures the double-click; the rest of the bar still drags.
-            MouseArea {
-                anchors.fill: parent
-                acceptedButtons: Qt.LeftButton
-                onDoubleClicked: windowMenu.logoDoubleClicked()
-            }
         }
 
         // Session info bar (replaces old title + version block)
@@ -168,6 +161,25 @@ Rectangle {
                         id: betaLabel
                         anchors.centerIn: parent
                         text: "BETA"
+                        color: "#FFFFFF"
+                        font.pixelSize: 10
+                        font.weight: Font.Bold
+                        font.letterSpacing: 1
+                    }
+                }
+
+                // The clinical service tool (#706): a clinical build with
+                // the engineering unlock compiled in. Never a patient build.
+                Rectangle {
+                    visible: MotionInterface.serviceBuild === true
+                    width: serviceLabel.implicitWidth + 12
+                    height: serviceLabel.implicitHeight + 4
+                    radius: 4
+                    color: "#C0392B"
+                    Text {
+                        id: serviceLabel
+                        anchors.centerIn: parent
+                        text: "SERVICE"
                         color: "#FFFFFF"
                         font.pixelSize: 10
                         font.weight: Font.Bold

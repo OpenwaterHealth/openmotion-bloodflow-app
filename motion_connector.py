@@ -81,6 +81,22 @@ else:
         import app_updater
     except ImportError:   # excluded from this bundle
         app_updater = None
+
+# The engineering-mode unlock is compiled out of clinical builds the same
+# way (#706): openwater.spec / build_nuitka.ps1 leave ``engineering_unlock``
+# (and EngineeringUnlockModal.qml) out of a clinical bundle unless it is
+# stamped SERVICE_BUILD, and this import is skipped on the same constants.
+# Without the module nothing can turn engineeringMode on. A source run
+# with ``--clinical`` still has it and relies on the runtime check in
+# _engineering_unlock_available().
+from config.app_config import SERVICE_BUILD as _SERVICE_BUILD
+if _CLINICAL_BUILD and not _SERVICE_BUILD:
+    engineering_unlock = None
+else:
+    try:
+        import engineering_unlock
+    except ImportError:   # excluded from this bundle
+        engineering_unlock = None
 from data_sources import (
     LiveScanSource, PastScanSource, ScanDataSource, buffers_are_empty,
     effective_bvi_lpf_cutoff, load_csv_scan_buffers,
@@ -114,17 +130,8 @@ _RGB_LED_BLUE = 3
 _RGB_LED_GREEN = 2
 _ERROR_LED_BLINK_MS = 500  # on/off half-period, matches firmware Error_Handler
 
-# ── Engineering-mode unlock ──────────────────────────────────────────────
-# Hardcoded engineering-mode password. Double-clicking the Openwater logo
-# opens a prompt; entering this value sets engineeringMode=true (persisted).
-# This is the ONLY place the literal is defined. The check lives in Python
-# (not QML) so the literal never ships inside readable QML text.
-_ENGINEERING_PASSWORD = "OpenwaterHealth"
-
-
-def engineering_password_matches(pw) -> bool:
-    """Return True iff ``pw`` equals the engineering-mode password."""
-    return isinstance(pw, str) and pw == _ENGINEERING_PASSWORD
+# The engineering-mode password lives in engineering_unlock.py, which a
+# clinical bundle doesn't carry (#706).
 
 
 # Camera-mask → human config name, mirroring ScanSettingsModal's
@@ -994,7 +1001,8 @@ class MotionConnector(QObject):
     # on disconnect (#529). Notify for the *SerialNumber properties behind
     # Settings → About.
     deviceIdentityChanged = pyqtSignal()
-    # Firmware autoupdate (engineeringMode only)
+    # Firmware autoupdate (Research builds only; engineering mode adds only
+    # the beta channel)
     firmwareUpdateInfoChanged = pyqtSignal()                # notify for the properties below
     firmwareUpdateAvailable = pyqtSignal(str, str, str)     # deviceKey, current, latest
     firmwareUpdateProgress = pyqtSignal(str, str, int, str) # deviceKey, stage, percent(-1=indeterminate), msg
@@ -1252,7 +1260,7 @@ class MotionConnector(QObject):
         self._device_serials: dict[str, str] = {
             "console": "", "left": "", "right": "",
         }
-        # Firmware autoupdate state (engineeringMode only).
+        # Firmware autoupdate state (Research builds only).
         self._firmware_latest: dict[str, str] = {"console": "", "left": "", "right": ""}
         self._firmware_update_available: dict[str, bool] = {
             "console": False, "left": False, "right": False,
@@ -2971,6 +2979,58 @@ class MotionConnector(QObject):
                 exc_info=True)
             return {"sampleCount": 0}
 
+    # ── Engineering-mode unlock (#706) ───────────────────────────────────
+    def _engineering_unlock_available(self) -> bool:
+        """True when this build carries the unlock: a Research build or the
+        clinical service build. A ``--clinical`` source run counts as
+        clinical, so it behaves like the shipped clinical exe."""
+        if engineering_unlock is None:
+            return False
+        return _SERVICE_BUILD or not self._app_config.get("clinicalMode", False)
+
+    @pyqtProperty(bool, constant=True)
+    def engineeringUnlockAvailable(self) -> bool:
+        """main.qml loads EngineeringUnlockModal.qml only when True; a
+        clinical bundle doesn't carry that file."""
+        return self._engineering_unlock_available()
+
+    @pyqtProperty(bool, constant=True)
+    def serviceBuild(self) -> bool:
+        """The clinical service tool (SERVICE_BUILD stamp): a clinical build
+        that keeps the engineering unlock. The header labels it."""
+        return bool(_SERVICE_BUILD and self._app_config.get("clinicalMode", False))
+
+    @pyqtSlot(str, result=bool)
+    def unlockEngineeringMode(self, password: str) -> bool:
+        """Turn engineering mode on for this session once the engineering
+        password checks out (engineering_unlock). This is the only way to
+        turn it on (setConfig / saveConfigs refuse True), and a build
+        without the unlock refuses every call. Every attempt is audited."""
+        if not self._engineering_unlock_available():
+            logger.warning("[Connector] Engineering unlock refused: "
+                           "this build has no engineering unlock")
+            self._audit.log("engineering_unlock_refused",
+                            {"reason": "not available in this build"})
+            return False
+        return engineering_unlock.unlock(self, password)
+
+    def _refuse_engineering_mode_write(self, source: str) -> None:
+        logger.warning("[Connector] %s refused engineeringMode=true: only "
+                       "unlockEngineeringMode turns engineering mode on", source)
+        self._audit.log("config_write_refused", {
+            "source": source, "keys": ["engineeringMode"],
+            "reason": "engineering unlock required",
+        })
+
+    def _require_engineering_mode(self, action: str) -> bool:
+        """Calibrate and Test are engineering actions. The UI hides them,
+        and this refuses a direct slot call without engineering mode."""
+        if self._app_config.get("engineeringMode") is True:
+            return True
+        logger.warning("[Connector] %s refused: engineering mode is off", action)
+        self._audit.log("engineering_action_refused", {"action": action})
+        return False
+
     @pyqtSlot("QVariantList", result=int)
     def deleteScans(self, session_ids):
         """Delete the given scan-DB sessions (CASCADE removes their
@@ -3279,19 +3339,6 @@ class MotionConnector(QObject):
         self._audit.log("config_write_refused",
                         {"source": source, "keys": keys})
 
-    @pyqtSlot(str, result=bool)
-    def checkEngineeringPassword(self, pw: str) -> bool:
-        """Return True if ``pw`` matches the engineering-mode password.
-
-        Comparison lives in Python so the literal is not present in
-        shipped QML source. QML calls this from the unlock modal and,
-        on True, sets engineeringMode via setConfig.
-        """
-        ok = engineering_password_matches(pw)
-        if not ok:
-            logger.info("[Connector] Engineering unlock attempt failed")
-        return ok
-
     @pyqtSlot(str, 'QVariant')
     def setConfig(self, key: str, value):
         """Update a single config key, persist to disk, and notify QML."""
@@ -3303,6 +3350,11 @@ class MotionConnector(QObject):
             value = value.toVariant()
         if config_store.tier_of(key) is None or config_store.refused_keys([key]):
             self._refuse_config_write([key], "setConfig")
+            return
+        # Engineering mode can be switched off here ("Disable engineering
+        # mode") but only unlockEngineeringMode switches it on (#706).
+        if key == "engineeringMode" and value is not False:
+            self._refuse_engineering_mode_write("setConfig")
             return
         old = self._app_config.get(key)
         self._app_config[key] = value
@@ -3333,6 +3385,9 @@ class MotionConnector(QObject):
         if refused:
             self._refuse_config_write(refused, "saveConfigs")
             configs = {k: v for k, v in configs.items() if k not in refused}
+        if "engineeringMode" in configs and configs["engineeringMode"] is not False:
+            self._refuse_engineering_mode_write("saveConfigs")
+            del configs["engineeringMode"]
         changes = {}
         for k, v in configs.items():
             old = self._app_config.get(k)
@@ -6611,10 +6666,16 @@ class MotionConnector(QObject):
         with only one static phantom need to calibrate one side at a time.
         Camera mask is still ``0xFF`` per side (every camera on the chosen
         sensor); the app config's leftMask/rightMask still don't apply.
+
+        Refused without engineering mode (#706): Calibrate lives in the
+        engineering card, and the unlock is its only gate.
         """
         from omotion import CalibrationRequest
 
         if self._calibration_status == "running":
+            return
+
+        if not self._require_engineering_mode("calibrate"):
             return
 
         if not self._consoleConnected:
@@ -6718,11 +6779,15 @@ class MotionConnector(QObject):
         ``target`` selects which side(s) to test: ``"left"``,
         ``"right"``, or ``"both"`` (default). Issue #117 — test stations
         with only one static phantom need to test one side at a time.
+
+        Refused without engineering mode, like runCalibration (#706).
         """
         from omotion import CalibrationRequest
 
         # Mutual exclusion with the Calibrate flow.
         if self._test_scan_status == "running":
+            return
+        if not self._require_engineering_mode("test_scan"):
             return
         if self._calibration_status == "running":
             self.captureLog.emit(

@@ -65,6 +65,10 @@ plus a small JSON `details` payload. The app records the following events:
 | `calibration_override_accepted` | At the pre-write gate, the operator authorised overwriting the console calibration despite below-threshold scan means/contrast. | `target`, `cameras_below_threshold` |
 | `calibration_override_declined` | The operator declined at the pre-write gate; the console kept its existing calibration and nothing was written. | `target`, `cameras_below_threshold` |
 | `settings_changed` | A setting is changed and saved. | `changes` — only the keys that actually changed, each as `{ "old": …, "new": … }` |
+| `engineering_mode_unlocked` | Engineering mode is unlocked with the engineering password (Research builds and the clinical service tool only). | — |
+| `engineering_unlock_failed` | An engineering unlock is attempted with a wrong password. | — |
+| `engineering_unlock_refused` | An engineering unlock is attempted in a build that has none (a clinical build). | `reason` |
+| `engineering_action_refused` | Calibrate or Test is called without engineering mode. | `action` (`calibrate`/`test_scan`) |
 | `scan_viewed` | A past scan is opened in the viewer. | `label` |
 | `scan_deleted` | One or more scans are deleted. | `session_ids`, `count` |
 | `audit_log_viewed` | The audit log itself is opened. | `entry_count` |

@@ -53,6 +53,7 @@ def test_initial_test_scan_state_is_idle(connector):
 
 
 def test_run_test_scan_refused_when_console_disconnected(connector):
+    connector._app_config["engineeringMode"] = True   # Test is engineering-only (#706)
     connector._consoleConnected = False
     seen = []
     connector.captureLog.connect(lambda m: seen.append(m))
@@ -62,6 +63,7 @@ def test_run_test_scan_refused_when_console_disconnected(connector):
 
 
 def test_run_test_scan_refused_when_calibration_running(connector):
+    connector._app_config["engineeringMode"] = True
     connector._calibration_status = "running"
     seen = []
     connector.captureLog.connect(lambda m: seen.append(m))
@@ -70,9 +72,18 @@ def test_run_test_scan_refused_when_calibration_running(connector):
 
 
 def test_run_test_scan_starts_workflow(connector):
+    connector._app_config["engineeringMode"] = True
     connector.runTestScan("both")
     assert connector._test_scan_status == "running"
     connector._interface.start_test_scan.assert_called_once()
+
+
+def test_run_test_scan_refused_without_engineering_mode(connector):
+    # #706: Test lives in the engineering card; a direct call without the
+    # unlock is refused before anything starts.
+    connector.runTestScan("both")
+    assert connector._test_scan_status == ""
+    connector._interface.start_test_scan.assert_not_called()
 
 
 def test_on_test_scan_complete_passes_builds_rows(connector):

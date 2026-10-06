@@ -7,6 +7,12 @@
 #
 #   powershell -File scripts\build_nuitka.ps1 -Variant research
 #   powershell -File scripts\build_nuitka.ps1 -Variant clinical -Version 1.6.0
+#   powershell -File scripts\build_nuitka.ps1 -Variant clinical -Service
+#
+# -Service (clinical only, #706) builds the clinical service tool: a clinical
+# build that keeps the engineering-mode unlock, into
+# dist\clinical-service\Open-Motion\Open-Motion.exe. package_artifacts.ps1
+# never picks it up, and CI never builds it.
 #
 # Why Nuitka: the PyInstaller exe carries the app as bytecode in an archive
 # that any .pyc decompiler reads (tracker M-09 / M-14); Nuitka compiles every
@@ -24,6 +30,7 @@ param(
     [string]$WorkRoot   = "build",
     [string]$CondaEnv   = "ow-motion",
     [int]$Jobs          = 0,
+    [switch]$Service,         # clinical service tool (#706); clinical only
     [switch]$KeepStandalone   # leave build\<variant>-nuitka\main.dist for inspection
 )
 $ErrorActionPreference = "Stop"
@@ -31,12 +38,16 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
+if ($Service -and $Variant -ne "clinical") {
+    throw "-Service is a clinical build option; a Research build always has the engineering unlock"
+}
 if (-not $Version) { $Version = (Get-BuildVersion).Full }
 $numeric = Get-NumericVersion -Version $Version
 if ($numeric -notmatch '^\d+(\.\d+){0,3}$') { $numeric = "0.0.0" }
 
-$distPath = Join-Path (Join-Path $DistRoot $Variant) "Open-Motion"
-$workPath = Join-Path $WorkRoot "$Variant-nuitka"
+$outName = if ($Service) { "$Variant-service" } else { $Variant }
+$distPath = Join-Path (Join-Path $DistRoot $outName) "Open-Motion"
+$workPath = Join-Path $WorkRoot "$outName-nuitka"
 if (Test-Path $distPath) { Remove-Item -Recurse -Force $distPath }
 New-Item -ItemType Directory -Force $distPath | Out-Null
 if (-not $KeepStandalone -and (Test-Path $workPath)) { Remove-Item -Recurse -Force $workPath }
@@ -123,6 +134,13 @@ if ($Jobs -gt 0) { $args += "--jobs=$Jobs" }
 # is False, but Nuitka follows the import statically regardless of the
 # branch, so tell it not to; openwater.spec does the same with excludes=.
 if ($Variant -eq "clinical") { $args += "--nofollow-import-to=app_updater" }
+# Nor the engineering-mode unlock (#706), unless this is the service tool:
+# the Python module (imported on the same compiled constants) and its QML
+# prompt, so a clinical bundle carries neither the check nor the dialog.
+if ($Variant -eq "clinical" -and -not $Service) {
+    $args += "--nofollow-import-to=engineering_unlock"
+    $args += "--noinclude-data-files=components/EngineeringUnlockModal.qml"
+}
 
 # Data blobs (the program's constants, the onefile payload) go in as COFF
 # objects that Nuitka writes itself (#698). That is MSVC's default, so CI is
@@ -135,9 +153,9 @@ if ($Variant -eq "clinical") { $args += "--nofollow-import-to=app_updater" }
 # payload. scripts\check_nuitka_blobs.py below verifies the result.
 $prevResourceMode = $env:NUITKA_RESOURCE_MODE
 $env:NUITKA_RESOURCE_MODE = "coff_obj"
-$orig = Set-BuildVariant -Clinical ($Variant -eq "clinical")
+$orig = Set-BuildVariant -Clinical ($Variant -eq "clinical") -Service $Service.IsPresent
 try {
-    Write-Host "=== Nuitka ($Variant, $Version) -> $distPath ===" -ForegroundColor Cyan
+    Write-Host "=== Nuitka ($outName, $Version) -> $distPath ===" -ForegroundColor Cyan
     Invoke-AppPython -CondaEnv $CondaEnv -Arguments $args
     if ($LASTEXITCODE -ne 0) { throw "Nuitka failed for variant '$Variant'" }
 } finally {

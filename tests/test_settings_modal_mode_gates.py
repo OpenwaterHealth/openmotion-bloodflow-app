@@ -163,6 +163,8 @@ class _StubMotionInterface(QObject):
     def notify(self, text, kind, ms, sticky, tag):
         pass
 
+    # Tripwire: the real connector has no such slot since #706, so the
+    # prompt must never call it.
     @pyqtSlot(str, result=bool)
     def checkEngineeringPassword(self, pw):
         self.password_checks.append(pw)
@@ -589,18 +591,19 @@ def test_prompt_without_password_is_a_plain_confirm(modal_factory):
     assert prompt.property("visible") is False
 
 
-def test_prompt_with_password_still_checks_it(modal_factory):
-    """Default (clinical) behavior is unchanged: the password is checked
-    and a wrong one keeps the prompt open."""
+def test_prompt_with_password_refuses_without_a_handler(modal_factory):
+    """#706: the prompt has no built-in password check any more. Without a
+    submitHandler it refuses and stays open, never calling a password slot
+    (the connector has none)."""
     stub = modal_factory.stub
     stub.password_checks.clear()
     prompt = modal_factory.prompt()
     accepted = _spy(prompt, "accepted()")
 
     _invoke(prompt, "open")
-    _invoke(prompt, "_submit")            # empty field -> wrong
+    _invoke(prompt, "_submit")
     assert len(accepted) == 0
-    assert stub.password_checks == [""]
+    assert stub.password_checks == []
     assert prompt.property("visible") is True
     _invoke(prompt, "close")
 
