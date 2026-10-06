@@ -62,7 +62,8 @@ xattr -dr com.apple.quarantine "/Applications/Open-Motion Research.app"
   and scrub real BFI/BVI traces in the plot viewer. Nothing loads unless you
   accept.
 - **History → Export CSV** exports any stored scan. By default the app writes no
-  per-scan CSV files; everything is kept in the local scan database.
+  per-scan CSV files; everything is kept in the local scan database. Turn on
+  **Settings → Data Output → Auto-export CSV** to export each scan when it ends.
 - **Errors** show a stable code such as `E-104`. The
   [error code catalog](docs/ERROR_CODES.md) explains each code and what to do
   about it.
@@ -107,17 +108,18 @@ menu. Your changes are saved in `scans.db` and persist across launches.
 | BVI low-pass filter | on | Smooths the **displayed** BVI trace (20 Hz, 1-pole). Stored data is never filtered |
 | Trace colors | BFI `#ffffff`, BVI `#3437db` | Plot trace colors |
 | Manual Plot Bounds | BFI 0–10, BVI 0–10, Mean 0–200, Contrast 0–0.7 | Y-axis ranges used when autoscale is off |
-| Theme | Dark Mode (Liquid Glass on macOS) | Also Liquid Glass or Light Mode |
+| Theme | Liquid Glass | Also Dark Mode or Light Mode |
+| Auto-export CSV | off | Write the same CSV as History → Export CSV to `data/` when each scan ends |
 | Save raw CSV | off | Also write raw histogram CSVs for each scan. **Raw CSV duration** caps how many seconds are written |
 
 **Plot ⋯ menu**
 
 | Setting | Default | What it does |
 |---|---|---|
-| BFI / BVI ↔ Mean / Contrast | BFI / BVI | Same choice as Display mode in Settings |
-| Autoscale | off | Same as Auto-scale Y-axes in Settings |
-| Per-plot scale | off (global) | Shown while Autoscale is on: fit each plot to its own data instead of one shared range per metric |
-| Axis labels | on | Show the Y-axis values on each plot |
+| View | Individual | **Individual**: one plot per camera. **Aggregate**: one plot per mirrored camera pair (1+8, 2+7, 3+6, 4+5). **Average**: one averaged plot per sensor module |
+| Scale | Fixed | **Fixed** uses the manual bounds, **Global** fits one shared range per metric, **Per Plot** fits each plot to its own data |
+| Metrics | BFI / BVI | Same choice as Display mode in Settings |
+| Statistics | Off | A pane beside the plots with each plot's live and smoothed value and the left − right difference |
 
 All other values (thresholds, timings, firmware flags) are compiled into the app
 in [`config/app_config.py`](config/app_config.py) and change only with a new
