@@ -27,10 +27,10 @@ import OpenMotion 1.0
  *      stopScanRequested()  — user clicked "Stop scan" (live-scan footer)
  *      continueRequested()  — user clicked "Continue"  (live-scan footer)
  *      dismissed()          — modal closed by any button
- *      forceDismissed()     — engineering Force Dismiss clicked; fires
- *                             alongside dismissed(). BloodFlow uses it to
- *                             keep the live-scan modal suppressed for the
- *                             rest of the scan (#492).
+ *      forceDismissed()     — "Hide for this scan" (cqForceDismissBtn)
+ *                             clicked; fires alongside dismissed().
+ *                             BloodFlow uses it to keep the live-scan modal
+ *                             suppressed for the rest of the scan (#492).
  */
 Item {
     id: root
@@ -77,6 +77,7 @@ Item {
     property var entries: []
 
     readonly property bool engineeringMode: !!(MotionInterface.appConfig && MotionInterface.appConfig.engineeringMode)
+    readonly property bool clinicalMode: !!(MotionInterface.appConfig && MotionInterface.appConfig.clinicalMode)
 
     signal stopScanRequested()
     signal continueRequested()
@@ -617,28 +618,44 @@ Item {
                     onClicked: { root.close(); root.retestRequested() }
                 }
 
-                // Engineering-mode escape hatch: bypass all contact-quality
-                // gates. Sticky during a live scan (#492) — the extra
-                // forceDismissed() signal lets BloodFlow suppress live
-                // re-opens until the scan ends. ESC (also engineering-gated)
-                // stays a one-shot dismiss for when you still want the next
-                // warning.
+                // Force Dismiss ("Hide for this scan"): bypass all
+                // contact-quality gates. Sticky during a live scan (#492) —
+                // the extra forceDismissed() signal lets BloodFlow suppress
+                // live re-opens until the scan ends; outside a scan it is a
+                // one-shot dismiss. Always offered in Research builds
+                // (#709); a clinical build keeps it behind the engineering
+                // unlock, the same gate as raw CSVs (#234). ESC
+                // (engineering-gated) stays a one-shot dismiss for when you
+                // still want the next warning.
                 Button {
                     objectName: "cqForceDismissBtn"
-                    visible: root.engineeringMode
-                    text: "Force Dismiss"
+                    visible: !root.clinicalMode || root.engineeringMode
+                    text: "Hide for this scan"
+                    // Worded to hold outside a scan too, where nothing
+                    // re-opens the modal and the click is a plain dismiss.
+                    readonly property string helpText:
+                        "Closes this notice. If a scan is running, contact-quality "
+                        + "warnings stay hidden until it ends. The next scan warns again."
                     hoverEnabled: true
                     Layout.preferredHeight: 45
+                    // An explicit ToolTip (not the attached one) so the
+                    // text can wrap instead of running wider than the panel;
+                    // x re-centers it, the default centers on implicitWidth.
+                    ToolTip {
+                        visible: parent.hovered
+                        delay: 500
+                        text: parent.helpText
+                        width: Math.min(implicitWidth, 320)
+                        x: (parent.width - width) / 2
+                    }
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 12
-                        color: parent.hovered ? "#FFFFFF" : "#E8A020"
+                        color: parent.hovered ? "#FFFFFF" : AppTheme.textSecondary
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? "#B8740F" : AppTheme.bgInput
-                        radius: 4
-                        border.color: parent.hovered ? "#E8A020" : "#E8A020"
-                        border.width: 1
+                        color: parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput
+                        radius: 4; border.color: parent.hovered ? AppTheme.accentInteractive : AppTheme.borderSoft; border.width: 1
                     }
                     onClicked: { root.close(); root.forceDismissed(); root.dismissed() }
                 }
