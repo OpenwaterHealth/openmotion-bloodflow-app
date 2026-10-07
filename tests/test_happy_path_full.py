@@ -27,15 +27,33 @@ a failure points at the specific feature that broke:
   13. Scan runs the full configured duration and reports completion.
   14. Scan output files (canonical CSV + scans.db) land on disk, and the
       canonical CSV carries the user label from step 3.
-  15. Post-scan Session Notes modal is dismissed.
-  16. History modal opens.
-  17. The scan just captured is listed in History's table.
-  18. The scan loads into the embedded PlotViewer via "Load in viewer →".
-  19. History modal closes itself once the scan loads.
-  20. The PlotViewer is showing the loaded scan and the app survived it.
-  21. Settings modal opens.
-  22. Settings modal closes.
-  23. The app is still alive and responsive at the end of the sweep.
+  15. Post-scan Session Notes modal: a post-scan note is typed, the modal
+      is dismissed, and the connector reports the notes persisted.
+  16. scans.db holds the session's notes: the post-scan note and the
+      "Scan completed — duration" line (see Known deviation below).
+  17. History modal opens.
+  18. The scan just captured is listed in History's table.
+  19. The scan row is selected and "Export CSV" writes
+      ``<label>_export.csv`` through the native Save dialog.
+  20. The export carries the per-camera columns and ~40 rows/s for the
+      whole scan.
+  21. The scan loads into the embedded PlotViewer via the Load button.
+  22. History modal closes itself once the scan loads.
+  23. The viewer reports the loaded scan ('[Plot] loaded past scan' with
+      the session label and a live edge matching the scan duration).
+  24. Settings modal opens (About-card firmware captured for the report).
+  25. Settings modal closes.
+  26. The app is still alive and responsive at the end of the sweep.
+
+Known deviation (recorded, not failed)
+--------------------------------------
+A note typed BEFORE Start (step 9) is discarded: the connector clears its
+notes buffer at every scan start and, before the first scan of a launch,
+has no DB session to save into — yet the modal still toasts "Note saved."
+(verified 2026-09-30 on Open-Motion Research 1.5.2: only notes typed
+during or after the scan reach ``sessions.session_notes``). Step 16 asserts the
+post-scan note and logs a DEVIATION warning when the step-9 note is
+absent, so the sweep stays green while the defect is tracked.
 
 Each numbered step is its own ``test_NN_*`` method in a single
 ``@pytest.mark.incremental`` class, so the first failure short-circuits
@@ -62,7 +80,10 @@ Preconditions
   power cycling.
 """
 
+import csv
 import re
+import sqlite3
+import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
@@ -72,8 +93,15 @@ import pytest
 
 from conftest import (
     SLEEP,
+    _resolve_app_version,
+    _running_app_exe_path,
+    get_clipboard,
     log,
+    read_about_card_firmware,
+    read_about_card_serials,
     read_combobox_values,
+    record_firmware_versions,
+    record_serial_numbers,
     require_focus,
     uia_window,
     wait_for_combobox,
@@ -156,16 +184,39 @@ RE_SCAN_STARTED = re.compile(r"Full scan started:.*?duration=(\d+)s")
 # keys off the log; open/closed state is confirmed via those buttons.
 RE_HISTORY_OPENED = re.compile(r"\[History\] opened\D+(\d+) scan")
 
+# Every Notes-modal close toasts "Note saved." (logged as a Toast line);
+# the connector logs "Scan notes saved to DB session '<label>'" only when
+# a DB session exists to write into (i.e. during/after a scan).
+RE_NOTE_SAVED = re.compile(r"Toast #\d+ \[success\].*Note saved\.")
+RE_NOTES_PERSISTED = re.compile(r"Scan notes saved to DB session '([^']+)'")
+
+# History → Export CSV: "exportScanCsv: exported '<label>' (sid=N) → <path>".
+RE_EXPORTED = re.compile(r"exportScanCsv: exported '([^']+)'.*?→\s*(\S.*?)\s*$")
+
+# Past-scan load lands in the viewer with one summary line:
+# "[Plot] loaded past scan '<label>' (session_id=N) source=db: buffers=B
+#  samples=S liveEdge=T.TTT gridMasks=..."
+RE_PLOT_LOADED = re.compile(
+    r"\[Plot\] loaded past scan '([^']+)'.*?samples=(\d+).*?liveEdge=([\d.]+)"
+)
+
+# The SDK's nominal capture rate; the export row count is checked against it.
+NOMINAL_SAMPLE_HZ = 40.0
+
 # Shared state across the incremental steps. pytest builds a fresh class
 # instance per test method, so per-test ``self.x`` doesn't persist — keep
 # cross-step data in a module-level dict instead.
 STATE: dict = {
     "subject_label": "",     # user label typed in step 3
+    "prescan_note":  "",     # note typed in step 9 (before Start)
+    "postscan_note": "",     # note typed in step 15 (after the scan)
+    "db_session":    "",     # scans.db session_label of the captured scan
     "files_before":  set(),  # data-dir listing snapshot taken at scan start
     "scan_seconds":  None,   # duration the app reported at completion
     "scan_started_sec": None,  # duration the backend logged at scan start
     "duration_hms":  f"00:{SCAN_DURATION_MIN:02d}:00",  # configured scan duration
     "history_scan_count": None,  # scan count History logged when opened
+    "export_path":   None,   # Path of the History → Export CSV file
 }
 
 # NOTE: the JSON + Markdown run report is produced by conftest's autouse
@@ -264,6 +315,186 @@ def _click_history_button(substr: str) -> str:
     return ""
 
 
+def _history_button_name(substr: str) -> str:
+    """Name of the History footer Button containing ``substr``, or ""."""
+    try:
+        for e in uia_window().descendants(control_type="Button"):
+            nm = (e.element_info.name or e.window_text() or "")
+            if substr.lower() in nm.lower():
+                return nm
+    except Exception:
+        pass
+    return ""
+
+
+def _select_latest_history_row() -> str:
+    """Click the top History row and confirm it took: the Load button
+    relabels from "Load in viewer →" to 'Load "<scan>" →'.
+
+    History rows are NOT exposed via UIA on this build (only the footer
+    Buttons are), so the top row is selected by a click anchored to the
+    app-window rect — a last-resort calibrated coordinate (STYLE_GUIDE §6,
+    tier 3), correlated against the live modal layout. Returns the Load
+    button's relabelled name, or "" when the row click did not register."""
+    r = uia_window().rectangle()
+    w, h = r.right - r.left, r.bottom - r.top
+    # First data row sits ~0.22 across and ~0.275 down from the modal's
+    # top-left (the modal is a centred overlay that scales with the window).
+    row_x, row_y = int(r.left + 0.223 * w), int(r.top + 0.275 * h)
+    log.info(f"  selecting latest History row at ({row_x}, {row_y})")
+    pyautogui.click(row_x, row_y)
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        nm = _history_button_name("Load")
+        if nm and ("“" in nm or '"' in nm):
+            return nm
+        time.sleep(0.3)
+    return ""
+
+
+def _clear_clipboard() -> None:
+    """Empty the clipboard so a stale host clipboard can't masquerade as
+    the Notes text when Ctrl+C silently fails (same guard as test_notes)."""
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command", "Set-Clipboard -Value ''"],
+            check=False, timeout=5,
+        )
+    except Exception as e:
+        log.warning(f"  _clear_clipboard failed: {e}")
+
+
+def _read_notes_textarea(attempts: int = 3) -> str:
+    """Select-all + copy the focused Notes textarea and return its text.
+
+    The textarea is not readable over UIA; the clipboard is the only
+    channel. Retries because focus can lag the modal open by a beat, in
+    which case Ctrl+A selects nothing. Collapses the selection to the end
+    afterwards so a follow-up keystroke doesn't replace the note."""
+    require_focus()
+    for _ in range(attempts):
+        _clear_clipboard()
+        time.sleep(0.1)
+        pyautogui.hotkey("ctrl", "a")
+        time.sleep(0.3)
+        pyautogui.hotkey("ctrl", "c")
+        time.sleep(0.5)
+        clip = get_clipboard() or ""
+        if clip.strip():
+            pyautogui.press("end")
+            return clip
+        time.sleep(0.5)
+    return ""
+
+
+def _last_db_session_from_log() -> str:
+    """The most recent "Scan notes saved to DB session '<label>'" label."""
+    log_path = find_app_log()
+    if not log_path:
+        return ""
+    try:
+        text = Path(log_path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    ids = RE_NOTES_PERSISTED.findall(text)
+    return ids[-1] if ids else ""
+
+
+def _db_session_notes(session_label: str) -> str | None:
+    """``sessions.session_notes`` for ``session_label`` from scans.db,
+    read-only; None when the row or the DB is missing."""
+    db = _resolve_data_dir() / "scans.db"
+    if not db.exists():
+        log.warning(f"  scans.db not found at {db}")
+        return None
+    try:
+        con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+        try:
+            row = con.execute(
+                "SELECT session_notes FROM sessions WHERE session_label = ?",
+                (session_label,),
+            ).fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error as e:
+        log.warning(f"  scans.db read failed: {e}")
+        return None
+    return row[0] if row else None
+
+
+def _accept_save_dialog(title: str = "Export Scan CSV", timeout: float = 15.0) -> bool:
+    """Accept the native Windows Save dialog the History export opens,
+    keeping its default file name, and answer Yes to an overwrite prompt.
+
+    The dialog is a classic ``#32770`` common dialog titled after the QML
+    FileDialog. The UIA backend does NOT list it as a top-level window
+    (it hangs under the app window in the accessibility tree — verified
+    2026-09-30), so it is found through the Win32 backend, with the
+    UIA child lookup as a fallback. Returns False when no dialog
+    appeared within ``timeout``."""
+    from pywinauto import Desktop
+    win32 = Desktop(backend="win32")
+
+    def _find_dialog(rx: re.Pattern):
+        """Win32 #32770 dialog wrapper whose title matches, else the UIA
+        child of the app window (as a wrapper), else None."""
+        try:
+            for w in win32.windows(class_name="#32770"):
+                if rx.match(w.window_text() or ""):
+                    return w
+        except Exception as e:
+            log.warning(f"  win32 dialog scan failed: {e}")
+        try:
+            child = uia_window().child_window(title_re=rx.pattern, control_type="Window")
+            if child.exists(timeout=0.5):
+                return child.wrapper_object()
+        except Exception:
+            pass
+        return None
+
+    def _press_button(dlg, names: tuple[str, ...], fallback_keys) -> None:
+        """Click the dialog button whose text (sans '&') is in ``names``;
+        else send ``fallback_keys`` to the focused dialog."""
+        try:
+            dlg.set_focus()
+            time.sleep(0.3)
+            for b in dlg.descendants():
+                try:
+                    if (b.window_text() or "").replace("&", "").strip() in names:
+                        b.click_input()
+                        return
+                except Exception:
+                    continue
+        except Exception as e:
+            log.warning(f"  dialog button lookup failed: {e}")
+        fallback_keys()
+
+    dlg = None
+    deadline = time.time() + timeout
+    rx_title = re.compile(rf"(?i)^{re.escape(title)}$")
+    while time.time() < deadline and dlg is None:
+        dlg = _find_dialog(rx_title)
+        if dlg is None:
+            time.sleep(0.5)
+    if dlg is None:
+        return False
+    log.info(f"  '{title}' dialog up — saving with the default file name")
+    _press_button(dlg, ("Save",), lambda: pyautogui.press("enter"))
+    # A prior export of the same scan leaves the file in place; Windows
+    # then asks "…already exists. Do you want to replace it?" (Yes/No),
+    # another #32770 titled "Confirm Save As".
+    rx_confirm = re.compile(r"(?i)^Confirm Save As$")
+    deadline = time.time() + 6
+    while time.time() < deadline:
+        prompt = _find_dialog(rx_confirm)
+        if prompt is not None:
+            _press_button(prompt, ("Yes",), lambda: pyautogui.hotkey("alt", "y"))
+            log.info("  overwrite prompt answered Yes")
+            break
+        time.sleep(0.5)
+    return True
+
+
 def _open_panel_verified(label: str, is_open, what: str, tries: int = 2, settle: int = 8):
     """Click a sidebar panel button and VERIFY the expected UI actually opened.
 
@@ -309,25 +540,42 @@ def _select_sensor(side: str, combobox_index: int, option: str = SENSOR_OPTION):
     idx = SENSOR_OPTIONS.index(option)
     log.info(f"  {label}: selecting '{option}' (index {idx})")
 
-    focus_combobox_by_label(label)
-    pyautogui.hotkey("alt", "down")   # open the popup
-    time.sleep(0.5)
-    pyautogui.press("home")           # jump to the first item
-    time.sleep(0.2)
-    for _ in range(idx):
-        pyautogui.press("down")
-        time.sleep(0.15)
-    pyautogui.press("return")         # confirm
-    time.sleep(SLEEP)
+    # Up to three attempts: on a fresh launch the first keyboard walk
+    # sometimes lands while the picker's popup is still settling and the
+    # value stays put (seen 2026-09-30 on 1.5.2 ~40 s after launch). Each
+    # attempt starts by closing any stray popup so the walk begins from a
+    # known state.
+    actual = None
+    for attempt in range(1, 4):
+        if attempt > 1:
+            log.warning(f"  {label}: still '{actual}' after attempt {attempt - 1}; retrying")
+            require_focus()
+            pyautogui.press("escape")  # close a stray popup
+            time.sleep(SLEEP)
+            if not _scan_settings_open():
+                # Escape reached the modal instead and closed it — reopen.
+                _open_panel_verified("Scan Settings", _scan_settings_open, "Scan Settings")
+        focus_combobox_by_label(label)
+        pyautogui.hotkey("alt", "down")   # open the popup
+        time.sleep(0.8)
+        pyautogui.press("home")           # jump to the first item
+        time.sleep(0.3)
+        for _ in range(idx):
+            pyautogui.press("down")
+            time.sleep(0.15)
+        pyautogui.press("return")         # confirm
+        time.sleep(SLEEP)
 
-    values = read_combobox_values()
-    assert len(values) > combobox_index, (
-        f"Expected at least {combobox_index + 1} ComboBox(es) in Scan "
-        f"Settings, found {len(values)} — Qt accessibility bridge may not "
-        f"be exposing the modal's sensor pickers on this runner."
-    )
-    actual = values[combobox_index]
-    assert actual == option, f"{side} sensor: expected '{option}', got '{actual}'"
+        values = read_combobox_values()
+        assert len(values) > combobox_index, (
+            f"Expected at least {combobox_index + 1} ComboBox(es) in Scan "
+            f"Settings, found {len(values)} — Qt accessibility bridge may not "
+            f"be exposing the modal's sensor pickers on this runner."
+        )
+        actual = values[combobox_index]
+        if actual == option:
+            break
+    assert actual == option, f"{side} sensor: expected '{option}', got '{actual}' after 3 attempts"
     log.info(f"  {side} sensor set to '{actual}'.")
 
 
@@ -447,6 +695,14 @@ class TestHappyPathFull:
     def test_01_app_ready(self, app):
         """App is launched and the console + sensors are CONNECTED (READY)."""
         assert is_app_alive(), "Bloodflow app window is not present at start."
+        # Several installed builds coexist on the bench and the ``app``
+        # fixture attaches to whatever is already running (else the newest
+        # exe on disk), so put the build under test on the record.
+        try:
+            log.info(f"  build under test: {_resolve_app_version()} — "
+                     f"{_running_app_exe_path() or '(exe path unknown)'}")
+        except Exception as e:
+            log.warning(f"  could not resolve the running build: {e}")
         log_path = find_app_log()
         assert log_path, "could not locate the bloodflow app log."
         # If the device is already connected we may have missed the line;
@@ -591,19 +847,39 @@ class TestHappyPathFull:
         )
 
     def test_09_add_session_note(self, app):
-        """Session Notes modal opens and accepts a typed note."""
+        """Session Notes modal opens and accepts a typed note — read back
+        through the clipboard to prove the keystrokes landed in the
+        textarea (the textarea is not readable over UIA)."""
         click_panel("Notes")
         require_focus()
         note = f"Happy-path sweep {datetime.now():%Y-%m-%d %H:%M:%S}"
         log.info(f"  typing note: '{note}'")
         pyautogui.typewrite(note, interval=0.03)
         time.sleep(SLEEP)
+        STATE["prescan_note"] = note
+        got = _read_notes_textarea()
+        assert note in got, (
+            f"Typed note '{note}' did not land in the Notes textarea "
+            f"(read back: '{got[:80]}'). The modal did not take keyboard "
+            f"focus, or the Notes click landed off the button."
+        )
+        log.info("  note read back from the textarea OK.")
 
     def test_10_close_notes(self, app):
-        """Notes modal closes (Escape)."""
+        """Notes modal closes (Escape) and the app toasts 'Note saved.'."""
+        log_path = find_app_log()
+        start_off = log_size(log_path) if log_path else 0
         require_focus()
         pyautogui.press("escape")
         time.sleep(SLEEP)
+        if log_path:
+            line = wait_for_pattern(RE_NOTE_SAVED, log_path, start_off, 6)
+            assert line, (
+                "No 'Note saved.' toast was logged within 6s of closing the "
+                "Notes modal — the modal may not have closed, or the note "
+                "was not committed."
+            )
+            log.info("  'Note saved.' toast logged.")
 
     def test_11_contact_quality_check(self, app):
         """Contact-quality Check runs and its result modal is dismissed.
@@ -819,13 +1095,74 @@ class TestHappyPathFull:
         )
         log.info(f"  scans.db present and updated {age:.0f}s ago.")
 
-    def test_15_close_post_scan_notes(self, app):
-        """Auto-opened post-scan Session Notes modal is dismissed."""
+    def test_15_post_scan_note_and_close(self, app):
+        """Auto-opened post-scan Session Notes modal accepts a note, is
+        dismissed, and the connector persists the notes to the DB session
+        ('Scan notes saved to DB session' + 'Note saved.' toast)."""
+        require_focus()
+        note = f"Post-scan note {datetime.now():%Y-%m-%d %H:%M:%S}"
+        log.info(f"  typing post-scan note: '{note}'")
+        # Caret to the end so the note doesn't land inside the duration line
+        # the connector appended.
+        pyautogui.hotkey("ctrl", "end")
+        pyautogui.press("enter")
+        pyautogui.typewrite(note, interval=0.03)
+        time.sleep(SLEEP)
+        STATE["postscan_note"] = note
+        got = _read_notes_textarea()
+        assert note in got, (
+            f"Post-scan note '{note}' did not land in the Notes textarea "
+            f"(read back: '{got[:80]}')."
+        )
+        log_path = find_app_log()
+        start_off = log_size(log_path) if log_path else 0
         require_focus()
         pyautogui.press("escape")
         time.sleep(SLEEP)
+        if log_path:
+            line = wait_for_pattern(RE_NOTES_PERSISTED, log_path, start_off, 6)
+            assert line, (
+                "No 'Scan notes saved to DB session' line within 6s of "
+                "closing the post-scan Notes modal — the note was not "
+                "persisted."
+            )
+            m = RE_NOTES_PERSISTED.search(line)
+            STATE["db_session"] = m.group(1) if m else ""
+            log.info(f"  notes persisted to DB session '{STATE['db_session']}'.")
 
-    def test_16_open_history(self, app):
+    def test_16_notes_persisted_in_db(self, app):
+        """scans.db holds the session's notes: the post-scan note (step 15)
+        and the 'Scan completed — duration' line. The pre-scan note (step
+        9) is checked too, but its absence is a recorded DEVIATION, not a
+        failure — the connector discards notes typed before Start (see the
+        module docstring)."""
+        session = STATE.get("db_session") or _last_db_session_from_log()
+        assert session, "no DB session label known for the captured scan"
+        STATE["db_session"] = session
+        notes = _db_session_notes(session)
+        assert notes is not None, (
+            f"scans.db has no row for session '{session}' — the scan was "
+            f"not recorded to the database."
+        )
+        log.info(f"  session '{session}' notes: {notes!r}")
+        assert STATE["postscan_note"] in notes, (
+            f"Post-scan note '{STATE['postscan_note']}' is not in "
+            f"scans.db session_notes for '{session}': {notes!r}"
+        )
+        assert re.search(r"Scan (completed|stopped)\s*\S*\s*duration: \d\d:\d\d:\d\d", notes), (
+            f"No 'Scan completed — duration: HH:MM:SS' line in session_notes "
+            f"for '{session}': {notes!r}"
+        )
+        if STATE["prescan_note"] and STATE["prescan_note"] not in notes:
+            log.warning(
+                f"  DEVIATION: pre-scan note '{STATE['prescan_note']}' (step 9, "
+                f"toasted 'Note saved.') is NOT in session_notes — the "
+                f"connector clears the notes buffer at scan start."
+            )
+        else:
+            log.info("  pre-scan note present in session_notes.")
+
+    def test_17_open_history(self, app):
         """History opens from the sidebar.
 
         Verified two ways (the modal's title/rows are NOT in the UIA tree
@@ -854,7 +1191,7 @@ class TestHappyPathFull:
             "open (the History click may have landed off the button)."
         )
 
-    def test_17_scan_listed(self, app):
+    def test_18_scan_listed(self, app):
         """History lists at least one scan (the one just captured is recorded).
 
         The scan count comes from the '[History] opened — N scan(s)' log line;
@@ -868,38 +1205,98 @@ class TestHappyPathFull:
         )
         log.info(f"  History lists {n} scan(s).")
 
-    def test_18_load_in_viewer(self, app):
-        """Select the latest scan row, then load it into the PlotViewer.
+    def test_19_export_csv(self, app):
+        """Select the latest scan row and export it: 'Export CSV' opens
+        the native 'Export Scan CSV' Save dialog, the default file name is
+        accepted, and the connector logs the export with its path.
 
-        'Load in viewer' is disabled until a row is actively clicked (the
-        default highlight isn't enough — verified live). History rows are
-        NOT exposed via UIA on this build (only the footer Buttons are), so
-        the top row is selected by a click anchored to the app-window rect
-        — a last-resort calibrated coordinate (STYLE_GUIDE §6, tier 3),
-        correlated against the live modal layout. The button itself is
-        UIA-addressable and clicked by substring.
+        The row click is verified by the Load button relabelling to
+        'Load "<scan>" →' (Export CSV is disabled until a row is checked).
         """
-        r = uia_window().rectangle()
-        w, h = r.right - r.left, r.bottom - r.top
-        # First data row sits ~0.22 across and ~0.275 down from the modal's
-        # top-left (the modal is a centred overlay that scales with the window).
-        row_x, row_y = int(r.left + 0.223 * w), int(r.top + 0.275 * h)
-        log.info(f"  selecting latest History row at ({row_x}, {row_y})")
-        pyautogui.click(row_x, row_y)
-        time.sleep(0.5)
-
-        # Once a row is selected the button relabels from "Load in viewer →"
-        # to 'Load "<scan-name>" →', so match on the stable "Load" prefix.
-        name = _click_history_button("Load")
+        name = _select_latest_history_row()
         assert name, (
-            "No 'Load ...' button found in the open History modal after "
-            "selecting a row — expected the load button next to Export CSV / "
-            "Delete (the row selection may not have registered)."
+            "History row click did not register (Load button still reads "
+            "'Load in viewer') — cannot export without a selected row."
         )
-        log.info(f"  invoked History load button '{name.strip()}'.")
+        log.info(f"  row selected: Load button reads '{name.strip()}'.")
+        log_path = find_app_log()
+        start_off = log_size(log_path) if log_path else 0
+        clicked = _click_history_button("Export CSV")
+        assert clicked, "No 'Export CSV' button found in the open History modal."
+        assert _accept_save_dialog(), (
+            "The 'Export Scan CSV' Save dialog did not appear within 15s of "
+            "clicking Export CSV."
+        )
+        assert log_path, "could not locate the bloodflow app log."
+        line = wait_for_pattern(RE_EXPORTED, log_path, start_off, 60)
+        assert line, (
+            "No 'exportScanCsv: exported' line in the app log within 60s of "
+            "accepting the Save dialog — the export did not run."
+        )
+        m = RE_EXPORTED.search(line)
+        label, path = m.group(1), m.group(2).strip()
+        log.info(f"  exported '{label}' → {path}")
+        assert label == STATE["db_session"], (
+            f"Export was of session '{label}', but the scan just captured is "
+            f"'{STATE['db_session']}' — the wrong History row was selected."
+        )
+        STATE["export_path"] = Path(path)
+
+    def test_20_export_file_valid(self, app):
+        """The exported CSV is on disk, carries the user label in its name,
+        has the per-camera columns, and holds ~40 rows/s for the whole
+        scan duration."""
+        path = STATE["export_path"]
+        deadline = time.time() + 20
+        size = -1
+        while time.time() < deadline:
+            if path.exists() and path.stat().st_size == size and size > 0:
+                break
+            size = path.stat().st_size if path.exists() else -1
+            time.sleep(1)
+        assert path.exists() and path.stat().st_size > 0, f"export file missing/empty: {path}"
+
+        def _norm(s: str) -> str:
+            return "".join(c for c in s if c.isalnum()).upper()
+
+        assert _norm(STATE["subject_label"]) in _norm(path.name), (
+            f"export file name '{path.name}' does not carry the user label "
+            f"'{STATE['subject_label']}' set in step 3."
+        )
+        with path.open(newline="", encoding="utf-8") as fh:
+            reader = csv.reader(fh)
+            header = next(reader)
+            rows = sum(1 for _ in reader)
+        for col in ("frame_id", "timestamp_s", "bfi_l1", "bfi_l8", "bvi_l1", "bvi_r8"):
+            assert col in header, f"export header lacks '{col}': {header[:12]}…"
+        expected = SCAN_DURATION_SEC * NOMINAL_SAMPLE_HZ
+        log.info(f"  export: {rows} rows, {len(header)} columns "
+                 f"(expected ≈ {expected:.0f} rows at {NOMINAL_SAMPLE_HZ:.0f} Hz).")
+        assert 0.80 * expected <= rows <= 1.05 * expected, (
+            f"export has {rows} rows; expected ≈ {expected:.0f} for a "
+            f"{SCAN_DURATION_SEC}s scan at {NOMINAL_SAMPLE_HZ:.0f} Hz "
+            f"(80–105 % band). Frames were dropped or the export is truncated."
+        )
+
+    def test_21_load_in_viewer(self, app):
+        """Load the selected scan into the PlotViewer.
+
+        The row selected in step 19 is still active, so the button reads
+        'Load "<scan>" →'; match on the stable "Load" prefix and pixel-click
+        it (these QML buttons ignore the UIA InvokePattern)."""
+        name = _history_button_name("Load")
+        if not name or not ("“" in name or '"' in name):
+            name = _select_latest_history_row()
+        assert name, (
+            "No relabelled 'Load \"<scan>\"' button in the open History "
+            "modal — the row selection did not register."
+        )
+        name = _click_history_button("Load")
+        assert name, "No 'Load ...' button found in the open History modal."
+        log.info(f"  clicked History load button '{name.strip()}'.")
         time.sleep(SLEEP)
 
-    def test_19_history_closed_by_load(self, app):
+    def test_22_history_closed_by_load(self, app):
         """History closes itself once the scan loads (footer buttons vanish)."""
         deadline = time.time() + 8
         while time.time() < deadline and _history_open():
@@ -909,15 +1306,33 @@ class TestHappyPathFull:
             "viewer' — expected the modal to close once the scan loaded."
         )
 
-    def test_20_plot_loaded(self, app):
-        """The scan loaded into the PlotViewer and the app survived it."""
+    def test_23_plot_loaded(self, app):
+        """The viewer reports the loaded scan: the connector's
+        '[Plot] loaded past scan' line names the captured session and its
+        live edge matches the scan duration (backend truth — the plot
+        cells are not readable over UIA)."""
         assert is_app_alive(), (
             "App window is gone after loading the scan into the PlotViewer."
         )
-        log.info("  PlotViewer loaded the scan; app still responsive.")
+        log_path = find_app_log()
+        assert log_path, "could not locate the bloodflow app log."
+        text = Path(log_path).read_text(encoding="utf-8", errors="replace")
+        hits = RE_PLOT_LOADED.findall(text)
+        assert hits, "No '[Plot] loaded past scan' line in the app log."
+        label, samples, edge = hits[-1]
+        edge = float(edge)
+        log.info(f"  viewer loaded '{label}': samples={samples} liveEdge={edge:.3f}s")
+        assert label == STATE["db_session"], (
+            f"Viewer loaded '{label}', expected the captured scan "
+            f"'{STATE['db_session']}'."
+        )
+        assert abs(edge - SCAN_DURATION_SEC) <= 10, (
+            f"Loaded scan's live edge is {edge:.1f}s; expected ≈ "
+            f"{SCAN_DURATION_SEC}s — the viewer holds a truncated scan."
+        )
 
-    def test_21_open_settings(self, app):
-        """Settings modal opens from the sidebar gear."""
+    def test_24_open_settings(self, app):
+        """Settings modal opens from the sidebar gear; About card firmware versions are read into the report."""
         click_panel("Settings")
         time.sleep(SLEEP)
         # SettingsModal is fingerprinted by its "Time window" text /
@@ -925,13 +1340,52 @@ class TestHappyPathFull:
         # just assert the app survived opening it.
         assert is_app_alive(), "App closed when opening Settings."
 
-    def test_22_close_settings(self, app):
+        # Read Console FW / Left Sensor FW / Right Sensor FW off the About
+        # card and hand them to the HIL report header. Best-effort: the
+        # Qt accessibility bridge sometimes drops Text elements, and the
+        # report writer falls back to the app log's connect-time device
+        # stats when nothing was recorded here — so a miss is a warning,
+        # not a failure of the happy path.
+        fw = read_about_card_firmware(timeout=10.0)
+        if fw:
+            record_firmware_versions(fw, source="Settings → About")
+            STATE["firmware"] = fw
+            log.info(
+                f"  About card — Console FW: {fw.get('console', '?')}, "
+                f"Left Sensor FW: {fw.get('left', '?')}, "
+                f"Right Sensor FW: {fw.get('right', '?')}"
+            )
+        else:
+            log.warning(
+                "  About card firmware rows not exposed via UIA; report "
+                "will use the app log's device stats instead."
+            )
+        # Same for the serial numbers ("Console SN" / "Left Sensor SN" /
+        # "Right Sensor SN"): recorded for the report header when the card
+        # is readable, else the report falls back to the app log's
+        # connect-time "serial=" lines.
+        sn = read_about_card_serials(timeout=10.0)
+        if sn:
+            record_serial_numbers(sn, source="Settings → About")
+            STATE["serials"] = sn
+            log.info(
+                f"  About card — Console SN: {sn.get('console', '?')}, "
+                f"Left Sensor SN: {sn.get('left', '?')}, "
+                f"Right Sensor SN: {sn.get('right', '?')}"
+            )
+        else:
+            log.warning(
+                "  About card serial rows not exposed via UIA; report "
+                "will use the app log's connect-time serials instead."
+            )
+
+    def test_25_close_settings(self, app):
         """Settings modal closes (Escape)."""
         require_focus()
         pyautogui.press("escape")
         time.sleep(SLEEP)
 
-    def test_23_app_still_alive(self, app):
+    def test_26_app_still_alive(self, app):
         """After the full sweep the app is still alive and responsive."""
         assert is_app_alive(), (
             "App window is gone at the end of the happy-path sweep."

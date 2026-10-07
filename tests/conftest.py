@@ -17,6 +17,7 @@ import importlib
 import inspect
 import json
 import platform
+import re
 import socket
 import time
 import subprocess
@@ -173,6 +174,14 @@ FORCED_APP_CONFIG: dict = {}
 
 def pytest_collection_finish(session):
     """Gather FORCE_APP_CONFIG from modules with selected tests."""
+    global _REPORT_UNIT_ONLY
+
+    # Remember whether this session touches the app at all: the report
+    # header must not guess an app version / firmware / serials from
+    # whatever exe or log happens to be newest on disk when only unit
+    # tests ran.
+    _REPORT_UNIT_ONLY = _all_collected_are_unit(session)
+
     if session.config.option.collectonly:
         return
     forced: dict = {}
@@ -875,6 +884,231 @@ _REPORT_SESSION_START: datetime | None = None
 # (test cleanup or a crash may have killed it by then).
 _REPORT_APP_VERSION: str | None = None
 
+# True when every collected test is ``unit``-marked (set in
+# pytest_collection_finish): the session never launches or attaches to
+# the app, so the report header says so instead of resolving a version
+# from the newest exe on disk and device stats from the newest log.
+_REPORT_UNIT_ONLY: bool = False
+
+# Per-device firmware versions as shown on Settings → About ("Console FW",
+# "Left Sensor FW", "Right Sensor FW"). Filled by ``record_firmware_versions``
+# from a test that has the Settings modal open (test_happy_path_full's
+# test_21_open_settings). If no test recorded them, the report writer falls
+# back to the app log's connect-time device stats.
+_REPORT_FIRMWARE: dict[str, str] = {}
+_REPORT_FIRMWARE_SOURCE: str = ""
+
+_ABOUT_FW_LABELS: dict[str, str] = {
+    "console": "Console FW",
+    "left":    "Left Sensor FW",
+    "right":   "Right Sensor FW",
+}
+_FW_VALUE_RE = re.compile(r"^(v?\d+(?:\.\d+)+\S*|Not connected|—)$")
+
+# Per-device serial numbers as shown on Settings → About ("Console SN",
+# "Left Sensor SN", "Right Sensor SN"). Same flow as the firmware rows:
+# a test with the Settings modal open records them via
+# ``record_serial_numbers``; otherwise the report writer parses the app
+# log's connect-time device stats ("Console: … serial=WWW04Q40010" and the
+# "LEFT SENSOR" / "RIGHT SENSOR" blocks' "serial   = …" line).
+_REPORT_SERIALS: dict[str, str] = {}
+_REPORT_SERIALS_SOURCE: str = ""
+
+_ABOUT_SN_LABELS: dict[str, str] = {
+    "console": "Console SN",
+    "left":    "Left Sensor SN",
+    "right":   "Right Sensor SN",
+}
+# A programmed serial (e.g. WWW04Q40010, WWWA4Q40013L) or the card's
+# placeholder texts.
+_SN_VALUE_RE = re.compile(r"^([A-Z0-9][A-Z0-9\-]{4,}|Not connected|Not programmed|—)$")
+
+
+def read_about_card_firmware(timeout: float = 10.0) -> dict[str, str]:
+    """Read the firmware versions off the Settings → About card via UIA.
+
+    The Settings modal must already be open. Each ``DeviceRow`` renders
+    a label Text ("Console FW" / "Left Sensor FW" / "Right Sensor FW")
+    followed by a value Text (the version string, or "Not connected"),
+    so we walk the window's descendants in tree order and take the first
+    version-shaped Text after each label. Polls up to ``timeout`` because
+    the Qt accessibility bridge can lag the modal by a couple of seconds.
+
+    Returns ``{"console": ..., "left": ..., "right": ...}`` with only the
+    rows that were found; an empty dict when UIA exposed none of them.
+    """
+    found = _read_about_card_rows(_ABOUT_FW_LABELS, _FW_VALUE_RE, timeout, "firmware")
+    log.info(f"  About card firmware: {found or 'not exposed by UIA'}")
+    return found
+
+
+def read_about_card_serials(timeout: float = 10.0) -> dict[str, str]:
+    """Read the device serial numbers off the Settings → About card via
+    UIA ("Console SN" / "Left Sensor SN" / "Right Sensor SN" rows). Same
+    contract as ``read_about_card_firmware``: only the rows found, empty
+    when the bridge exposes none of them."""
+    found = _read_about_card_rows(_ABOUT_SN_LABELS, _SN_VALUE_RE, timeout, "serials")
+    log.info(f"  About card serials: {found or 'not exposed by UIA'}")
+    return found
+
+
+def _read_about_card_rows(labels: dict[str, str], value_re: re.Pattern,
+                          timeout: float, what: str) -> dict[str, str]:
+    """Shared About-card reader: walk the window's UIA descendants in tree
+    order and take the first value-shaped Text after each row label."""
+    deadline = time.monotonic() + timeout
+    found: dict[str, str] = {}
+    while time.monotonic() < deadline:
+        texts: list[str] = []
+        try:
+            ensure_visible()
+            for elem in uia_window().descendants():
+                try:
+                    txt = (elem.window_text() or "").strip()
+                except Exception:
+                    continue
+                if txt:
+                    texts.append(txt)
+        except Exception as e:
+            log.warning(f"  read About card {what}: UIA walk failed: {e}")
+            texts = []
+        for key, label in labels.items():
+            if key in found:
+                continue
+            for i, txt in enumerate(texts):
+                if txt != label:
+                    continue
+                for nxt in texts[i + 1:i + 4]:
+                    if value_re.match(nxt):
+                        found[key] = nxt
+                        break
+                if key in found:
+                    break
+        if len(found) == len(labels):
+            break
+        time.sleep(1)
+    return found
+
+
+def record_firmware_versions(versions: dict[str, str],
+                             source: str = "Settings → About") -> None:
+    """Store firmware versions for the HIL report header."""
+    global _REPORT_FIRMWARE_SOURCE
+    if not versions:
+        return
+    _REPORT_FIRMWARE.update(versions)
+    _REPORT_FIRMWARE_SOURCE = source
+    log.info(f"  firmware versions recorded for report ({source}): {versions}")
+
+
+def _firmware_from_app_log() -> dict[str, str]:
+    """Fallback: parse connect-time device stats out of the newest app log.
+
+    Console:  ``Console: firmware=1.8.1  hw_id=...``
+    Sensors:  ``LEFT SENSOR`` / ``RIGHT SENSOR`` block header followed by
+              ``  firmware = 1.8.2``.
+    The LAST occurrence wins so a reconnect mid-run reports the live device.
+    """
+    try:
+        from hil_helpers import find_app_log    # noqa: PLC0415 (lazy: circular)
+        path = find_app_log()
+    except Exception as e:
+        log.warning(f"  _firmware_from_app_log: no app log: {e}")
+        return {}
+    if not path:
+        return {}
+    out: dict[str, str] = {}
+    side: str | None = None
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            m = re.search(r"Console: firmware=(\S+)", line)
+            if m:
+                out["console"] = m.group(1)
+                continue
+            s = line.strip()
+            if s == "LEFT SENSOR":
+                side = "left"
+            elif s == "RIGHT SENSOR":
+                side = "right"
+            elif side and s.startswith("firmware ="):
+                out[side] = s.split("=", 1)[1].strip()
+                side = None
+    except Exception as e:
+        log.warning(f"  _firmware_from_app_log: parse failed: {e}")
+    return out
+
+
+def record_serial_numbers(serials: dict[str, str],
+                          source: str = "Settings → About") -> None:
+    """Store device serial numbers for the HIL report header."""
+    global _REPORT_SERIALS_SOURCE
+    if not serials:
+        return
+    _REPORT_SERIALS.update(serials)
+    _REPORT_SERIALS_SOURCE = source
+    log.info(f"  serial numbers recorded for report ({source}): {serials}")
+
+
+def _serials_from_app_log() -> dict[str, str]:
+    """Fallback: parse connect-time serial numbers out of the newest app log.
+
+    Console:  ``Console: firmware=1.8.1  hw_id=…  serial=WWW04Q40010``
+    Sensors:  ``LEFT SENSOR`` / ``RIGHT SENSOR`` block header followed by
+              ``  serial   = WWWA4Q40013L``.
+    The LAST occurrence wins so a reconnect mid-run reports the live device.
+    """
+    try:
+        from hil_helpers import find_app_log    # noqa: PLC0415 (lazy: circular)
+        path = find_app_log()
+    except Exception as e:
+        log.warning(f"  _serials_from_app_log: no app log: {e}")
+        return {}
+    if not path:
+        return {}
+    out: dict[str, str] = {}
+    side: str | None = None
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            m = re.search(r"Console: firmware=\S+.*?\bserial=(\S+)", line)
+            if m:
+                out["console"] = m.group(1)
+                continue
+            s = line.strip()
+            if s == "LEFT SENSOR":
+                side = "left"
+            elif s == "RIGHT SENSOR":
+                side = "right"
+            elif side and s.startswith("serial"):
+                out[side] = s.split("=", 1)[1].strip()
+                side = None
+    except Exception as e:
+        log.warning(f"  _serials_from_app_log: parse failed: {e}")
+    return out
+
+
+def _report_get_serials() -> tuple[dict[str, str], str]:
+    """Serial numbers for the report: About-card reading if a test
+    recorded one, else the app log, else 'unknown' per device."""
+    if _REPORT_SERIALS:
+        serials, source = dict(_REPORT_SERIALS), _REPORT_SERIALS_SOURCE
+    else:
+        serials, source = _serials_from_app_log(), "app log"
+    if not serials:
+        source = "unavailable"
+    return ({k: serials.get(k, "unknown") for k in _ABOUT_SN_LABELS}, source)
+
+
+def _report_get_firmware() -> tuple[dict[str, str], str]:
+    """Firmware versions for the report: About-card reading if a test
+    recorded one, else the app log, else 'unknown' per device."""
+    if _REPORT_FIRMWARE:
+        versions, source = dict(_REPORT_FIRMWARE), _REPORT_FIRMWARE_SOURCE
+    else:
+        versions, source = _firmware_from_app_log(), "app log"
+    if not versions:
+        source = "unavailable"
+    return ({k: versions.get(k, "unknown") for k in _ABOUT_FW_LABELS}, source)
+
 
 def _running_app_exe_path() -> str:
     """Find the .exe path of the bloodflow process that's currently running.
@@ -1041,13 +1275,28 @@ def _report_get_app_version() -> str:
 
 def _report_get_environment() -> dict:
     """Environment snapshot for the report header."""
+    if _REPORT_UNIT_ONLY:
+        # Unit-only session: nothing was launched or attached, so don't
+        # guess from whatever exe / log is newest on disk.
+        na = "no app under test"
+        app_version = "n/a (unit-only session)"
+        fw, fw_source = {k: "n/a" for k in _ABOUT_FW_LABELS}, na
+        sn, sn_source = {k: "n/a" for k in _ABOUT_SN_LABELS}, na
+    else:
+        app_version = _report_get_app_version()
+        fw, fw_source = _report_get_firmware()
+        sn, sn_source = _report_get_serials()
     return {
         "tester":         os.environ.get("TESTER_NAME", getpass.getuser()),
         "hostname":       socket.gethostname(),
         "os":             f"{platform.system()} {platform.release()} "
                           f"({platform.version()})",
         "python_version": sys.version.split()[0],
-        "app_version":    _report_get_app_version(),
+        "app_version":    app_version,
+        "firmware":       fw,
+        "firmware_source": fw_source,
+        "serials":        sn,
+        "serials_source": sn_source,
     }
 
 
@@ -1275,6 +1524,14 @@ def _write_hil_report() -> None:
         f"- **OS:** {env['os']}",
         f"- **Python:** {env['python_version']}",
         f"- **App version:** {env['app_version']}",
+        f"- **Console FW:** {env['firmware']['console']}",
+        f"- **Left Sensor FW:** {env['firmware']['left']}",
+        f"- **Right Sensor FW:** {env['firmware']['right']}",
+        f"- **Firmware source:** {env['firmware_source']}",
+        f"- **Console SN:** {env['serials']['console']}",
+        f"- **Left Sensor SN:** {env['serials']['left']}",
+        f"- **Right Sensor SN:** {env['serials']['right']}",
+        f"- **Serial source:** {env['serials_source']}",
         "",
         "## Summary",
         "",
