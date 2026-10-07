@@ -252,6 +252,14 @@ _STORAGE_CHECK_INTERVAL_S = 5.0
 # so the stop replaces the warning instead of stacking under it (#506).
 _LOW_STORAGE_TOAST_TAG = "low_storage"
 
+# Startup connection watchdog (E-104/E-106). When its deadline finds a
+# device still mid-handshake, it checks once more this much later (#667):
+# a sensor powered on just before the deadline spends ~2 s in CONNECTING,
+# and the SDK monitor connects devices one at a time, so two sensors
+# arriving together take ~4.5 s.
+_CONNECTION_WATCHDOG_CONNECTING_GRACE_SEC = 10
+_CONNECTION_WATCHDOG_TOAST_TAG = "connection-watchdog"
+
 
 def _scan_data_stall_decision(
     now_mono: float,
@@ -1054,6 +1062,9 @@ class MotionConnector(QObject):
         self._connection_timeout_sec = float(cfg.get("connectionTimeoutSec", 12))
         self._require_console = bool(cfg.get("requireConsole", True))
         self._min_sensors = int(cfg.get("minSensors", 1))
+        # True while the watchdog's E-104/E-106 toast may still be up, so a
+        # device that connects afterwards can take it down (#667).
+        self._connection_watchdog_toast_up = False
 
         self._interface = interface
         self._scan_workflow = self._interface.scan_workflow
@@ -1227,6 +1238,12 @@ class MotionConnector(QObject):
             "console": bool(console_connected),
             "left": bool(left_sensor_connected),
             "right": bool(right_sensor_connected),
+        }
+        # Per-device "SDK state is CONNECTING" (mid-handshake), kept from the
+        # same events as the flags above so the startup watchdog reads one
+        # consistent snapshot (#667).
+        self._device_connecting: dict[str, bool] = {
+            "console": False, "left": False, "right": False,
         }
         self._config_running = False
         # Per-side count of connect-time sensor inits scheduled or running
@@ -1637,7 +1654,15 @@ class MotionConnector(QObject):
                 self._check_connection_watchdog,
             )
 
-    def _check_connection_watchdog(self) -> None:
+    def _connection_shortfall(self) -> tuple[bool, int, bool]:
+        """``(console_missing, n_sensors, sensors_missing)`` from the cached
+        connection flags, against ``requireConsole`` / ``minSensors``."""
+        console_missing = self._require_console and not self._consoleConnected
+        n_sensors = (int(bool(self._leftSensorConnected))
+                     + int(bool(self._rightSensorConnected)))
+        return console_missing, n_sensors, n_sensors < self._min_sensors
+
+    def _check_connection_watchdog(self, final: bool = False) -> None:
         """Warn about devices that never connected within the startup timeout.
 
         One-shot: reads the current cached connection state. A missing console
@@ -1646,14 +1671,36 @@ class MotionConnector(QObject):
         modal, since the fix is usually just "plug it in". If *both* are
         missing the toast collapses to a plain "System not found". Disconnects
         that happen *after* startup are handled by the connection-status UI.
+
+        A device still CONNECTING at the deadline is not missing yet (#667):
+        QA powered the system on after launching the app, and E-106 fired
+        while the sensor was mid-handshake. The check then runs once more
+        (``final``) after ``_CONNECTION_WATCHDOG_CONNECTING_GRACE_SEC`` and
+        reports whatever is still not connected, connecting or not, so a
+        device that keeps failing its handshake (CONNECTING -> DISCONNECTED
+        -> CONNECTING ...) is still reported.
         """
         try:
-            console_missing = self._require_console and not self._consoleConnected
-            n_sensors = (int(bool(self._leftSensorConnected))
-                         + int(bool(self._rightSensorConnected)))
-            sensors_missing = n_sensors < self._min_sensors
+            console_missing, n_sensors, sensors_missing = (
+                self._connection_shortfall())
             if not console_missing and not sensors_missing:
                 return
+
+            if not final:
+                expected = ((["console"] if console_missing else [])
+                            + (["left", "right"] if sensors_missing else []))
+                connecting = [n for n in expected
+                              if self._device_connecting.get(n)]
+                if connecting:
+                    logger.info(
+                        "Connection watchdog: %s still connecting at the "
+                        "deadline — checking again in %d s",
+                        ", ".join(connecting),
+                        _CONNECTION_WATCHDOG_CONNECTING_GRACE_SEC)
+                    QTimer.singleShot(
+                        _CONNECTION_WATCHDOG_CONNECTING_GRACE_SEC * 1000,
+                        lambda: self._check_connection_watchdog(final=True))
+                    return
 
             if console_missing and sensors_missing:
                 logger.warning(
@@ -1674,12 +1721,32 @@ class MotionConnector(QObject):
             # Single (tagged) yellow toast — never blocks the UI like the
             # critical modal. Auto-dismisses after 10 s so it doesn't nag while
             # the user explores the no-device sample scan (#314); the user can
-            # still dismiss it early via the ✕.
+            # still dismiss it early via the ✕, and it comes down by itself
+            # once the missing devices connect (_withdraw_connection_watchdog_toast).
             self.notify(msg, "warning", duration_ms=10000, dismissible=True,
-                        tag="connection-watchdog")
+                        tag=_CONNECTION_WATCHDOG_TOAST_TAG)
+            self._connection_watchdog_toast_up = True
             self._maybe_offer_sample_scan()
         except Exception:
             logger.exception("connection watchdog check failed")
+
+    def _withdraw_connection_watchdog_toast(self) -> None:
+        """Take the watchdog's E-104/E-106 toast down once nothing it warned
+        about is missing any more (#667). It used to stay up for its full
+        10 s after the device connected, which read as a disconnection.
+
+        A "System not found" toast stays up when only the console comes
+        back: its advice to check the sensor still applies."""
+        if not self._connection_watchdog_toast_up:
+            return
+        console_missing, _n_sensors, sensors_missing = (
+            self._connection_shortfall())
+        if console_missing or sensors_missing:
+            return
+        self._connection_watchdog_toast_up = False
+        logger.info("Connection watchdog: the devices it warned about have "
+                    "connected — withdrawing its warning")
+        self.dismissNotification(_CONNECTION_WATCHDOG_TOAST_TAG)
 
     def _maybe_offer_sample_scan(self) -> None:
         """Offer the bundled sample scan when the watchdog found nothing.
@@ -2099,6 +2166,9 @@ class MotionConnector(QObject):
                         "firmware update", name)
             return
 
+        if name in self._device_connecting:
+            self._device_connecting[name] = (new == ConnectionState.CONNECTING)
+
         if name == "console":
             self._consoleConnected = is_now_connected
             if is_now_connected:
@@ -2233,6 +2303,7 @@ class MotionConnector(QObject):
             # (issue #489): during a console power-cycle the cards kept
             # saying 'disconnected' after the devices were already back.
             self.dismissNotification(f"disconnect_{name}")
+            self._withdraw_connection_watchdog_toast()
             self.signalConnected.emit(name, "")
             self._audit.log("device_connected",
                             {"device": name, "reason": str(reason)})

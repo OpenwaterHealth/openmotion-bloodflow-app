@@ -179,6 +179,11 @@ within `connectionTimeoutSec` (default 12 s) after launch:
 
 The codes E-104/E-106 still appear in the app log for support traceability.
 
+A device that is still connecting (mid-handshake) when the timeout expires is
+not reported yet: the check runs once more 10 s later and reports whatever is
+still not connected then. The toast comes down by itself as soon as the devices
+it warned about connect; otherwise it auto-dismisses after 10 s.
+
 Tunable in [`config/app_config.json`](../config/app_config.json):
 
 - `connectionTimeoutSec` (default `12`) — grace period before the check runs;
