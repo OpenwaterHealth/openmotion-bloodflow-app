@@ -38,8 +38,8 @@ Rectangle {
     // In clinical mode, Start first runs a contact-quality preflight check.
     property bool clinicalStartPending: false
     // Prevent CQ callbacks from re-opening the modal. Set while a stop/cancel
-    // is in flight, and by the engineering Force Dismiss button for the rest
-    // of the running scan (#492). Reset at the scan boundaries (beginScanNow /
+    // is in flight, and by the CQ modal's Force Dismiss ("Hide for this
+    // scan") button for the rest of the running scan (#492). Reset at the scan boundaries (beginScanNow /
     // scanRunner.onScanFinished), so the next scan warns again.
     property bool suppressLiveCqModal: false
 
@@ -476,7 +476,7 @@ Rectangle {
             clinicalStartPending = false
         }
         onForceDismissed: {
-            // Engineering Force Dismiss is sticky (#492): suppress live CQ
+            // Force Dismiss ("Hide for this scan") is sticky (#492): suppress live CQ
             // re-opens for the remainder of this scan. Outside a scan
             // (quick check / pre-scan gate) nothing re-opens the modal, so
             // there is nothing to suppress — and the flag must not leak
