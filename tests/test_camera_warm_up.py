@@ -47,6 +47,7 @@ class _FakeSensor:
 
 def _make_iface():
     iface = MagicMock()
+    iface.scan_db_path = None  # a MagicMock path becomes a DB file in cwd (#620)
     iface.is_device_connected.return_value = (False, False, False)
     iface.scan_workflow.running = False
     iface.scan_workflow.config_running = False
