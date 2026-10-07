@@ -1079,7 +1079,7 @@ class MotionConnector(QObject):
         # Low-storage checks (issue #506), MB free on the data drive. Under
         # minFreeDiskMb: critical error at startup (E-107) and on Start
         # (E-305), one warning toast per running scan. Under
-        # scanStopFreeDiskMb: the running scan is stopped (E-306 toast).
+        # scanStopFreeDiskMb: the running scan is stopped (E-306 modal).
         # <= 0 disables the respective checks.
         self._min_free_disk_mb = float(cfg.get("minFreeDiskMb", 1024))
         self._scan_stop_free_disk_mb = float(cfg.get("scanStopFreeDiskMb", 100))
@@ -5886,15 +5886,16 @@ class MotionConnector(QObject):
 
     def _stop_scan_low_storage(self, free: Optional[int]) -> None:
         """Stop the running scan because the data drive is nearly full
-        (issue #506). A graceful stop, not a fault modal: a warning toast
-        says why, then stopCapture() — the pipeline finalizes scans.db in
-        the space the threshold kept free and captureFinished returns the
-        scan flow to idle exactly like a user Stop. Shares the one-shot
-        abort guard with E-303/E-304 and records E-306 for the scan_ended
-        audit event.
+        (issue #506). Twin of _abort_scan_data_stall: capture-log line,
+        the E-306 critical modal, then stopCapture() — the pipeline
+        finalizes scans.db in the space the threshold kept free. Shares
+        the one-shot abort guard with E-303/E-304. The modal is the
+        notification, so it supersedes the earlier "running low" toast
+        and any per-camera dropout toasts.
         """
         self._scan_abort_notified = True
         self._dismiss_dropout_toasts()
+        self.notificationDismissByTagRequested.emit(_LOW_STORAGE_TOAST_TAG)
         elapsed_str = self._scan_elapsed_str()
         free_mb = (free or 0) / disk_space.MB
         msg = (
@@ -5904,18 +5905,9 @@ class MotionConnector(QObject):
         )
         logger.error(msg)
         self.captureLog.emit(msg)
-        self._note_scan_abort(
-            "E-306",
-            f"{free_mb:.0f} MB free on the data drive "
-            f"(scan elapsed {elapsed_str})",
-        )
-        self.notify(
-            f"Scan stopped: the data drive is almost full ({free_mb:.0f} MB "
-            f"free). Data captured so far was saved. Free up space before "
-            f"the next scan.",
-            type_="warning", duration_ms=0,
-            tag=_LOW_STORAGE_TOAST_TAG,
-        )
+        detail = f"{self._storage_detail(free)}; scan elapsed {elapsed_str}"
+        self._note_scan_abort("E-306", detail)
+        self._raise_critical("E-306", detail=detail)
         self.stopCapture()
 
     def _abort_scan_device_disconnect(self, name: str) -> None:

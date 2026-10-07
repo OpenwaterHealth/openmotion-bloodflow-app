@@ -127,8 +127,8 @@ APP_CONFIG = {
     # Low-storage checks (#506), MB free on the data drive. Under
     # minFreeDiskMb: critical error at startup (E-107) and on Start
     # (E-305), plus one warning toast per running scan. Under
-    # scanStopFreeDiskMb: the running scan is stopped gracefully with a
-    # warning toast (E-306). <= 0 disables the respective checks.
+    # scanStopFreeDiskMb: the running scan is stopped gracefully with
+    # the E-306 critical modal. <= 0 disables the respective checks.
     "minFreeDiskMb": 1024,
     "scanStopFreeDiskMb": 100,
     # Console over-temp trip (C) pushed to the console user config on

@@ -149,6 +149,19 @@ not block the scan.
 scans), then start the scan again. Contact support if the drive should not be
 full.
 
+### E-306 — Scan stopped: storage almost full
+The drive that stores scan data dropped below 100 MB free during the scan, so
+the scan was stopped before the drive filled up. Data captured so far was saved.
+Checked every 5 s while a scan runs, against `scanStopFreeDiskMb` (default
+100 MB). The scan is stopped gracefully, like pressing Stop. The remaining space
+lets the scan database finish writing. The modal replaces the "Storage is
+running low" warning toast (see [Storage warnings](#storage-warnings-during-a-scan)),
+and its detail shows the free space, the data folder and the scan time elapsed.
+
+**What to do:** Free up space on the data drive (or export and remove old
+scans) before starting another scan. Contact support if the drive should not be
+full.
+
 ## Startup warnings (connection watchdog)
 
 A one-shot check armed at app launch flags expected devices that never showed
@@ -180,18 +193,14 @@ status UI, not by this watchdog.
 ## Storage warnings (during a scan)
 
 While a scan runs the app re-checks free space on the data drive every 5 s.
-Both conditions are **yellow warning toasts** that stay until dismissed, not the
-critical modal:
 
-- **Below 1 GB free** (`minFreeDiskMb`) → shown once per scan: `"Storage is
-  running low: <n> MB free on the data drive. The scan will stop automatically
-  at 100 MB."` The scan keeps running.
-- **E-306 — below 100 MB free** (`scanStopFreeDiskMb`) → the scan is stopped
-  gracefully, exactly like pressing Stop, and the toast replaces the warning:
-  `"Scan stopped: the data drive is almost full (<n> MB free). Data captured so
-  far was saved. Free up space before the next scan."` The remaining space lets
-  the scan database finish writing. E-306 appears in the app log and as the
-  audit log's `scan_ended` abort code.
+- **Below 1 GB free** (`minFreeDiskMb`) → a **yellow warning toast**, shown once
+  per scan and kept until dismissed: `"Storage is running low: <n> MB free on
+  the data drive. The scan will stop automatically at 100 MB."` The scan keeps
+  running.
+- **Below 100 MB free** (`scanStopFreeDiskMb`) → the scan is stopped and the
+  [E-306](#e-306--scan-stopped-storage-almost-full) critical modal replaces the
+  toast. E-306 is also the audit log's `scan_ended` abort code.
 
 Either threshold set to `0` or below disables its checks.
 

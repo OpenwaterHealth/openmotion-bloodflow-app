@@ -7,7 +7,7 @@ unit-testable. The connector applies two thresholds (config/app_config.py):
     startup (E-107) and when Start is pressed (E-305), and a running scan
     gets a one-time warning toast;
   - ``scanStopFreeDiskMb`` (100 MB): under it a running scan is stopped
-    gracefully with a warning toast (E-306), leaving room for scans.db to
+    gracefully with a critical error (E-306), leaving room for scans.db to
     finalize instead of failing on a full disk.
 """
 
