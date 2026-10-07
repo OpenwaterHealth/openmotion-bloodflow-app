@@ -371,5 +371,10 @@ def test_main_qml_loads_the_unlock_only_when_the_build_has_it():
         r'\s*source: active \? "components/EngineeringUnlockModal\.qml" : ""',
         qml)
     menu = (REPO_ROOT / "components" / "WindowMenu.qml").read_text(encoding="utf-8")
-    assert "onDoubleClicked" not in menu
+    # The header's only double-click is the title bar's maximize / restore
+    # (#642). Nothing in WindowMenu opens the unlock; the loaded prompt
+    # covers the logo with its own area.
+    assert menu.count("onDoubleClicked") == 1
+    handler = menu.split("onDoubleClicked", 1)[1].split("}", 1)[0]
+    assert "showMaximized" in handler and "open" not in handler
     assert "logoDoubleClicked" not in menu
