@@ -1367,10 +1367,12 @@ Rectangle {
     // for the LEFT/RIGHT/TOP edges (anchored to viewer's edges) the
     // total margin is outer-layout-margin + rim-margin. The BOTTOM
     // edge is further inset by the scrubber area (scrubber height +
-    // ColumnLayout.spacing).
+    // ColumnLayout.spacing) while the scrubber is shown. With no scan
+    // source it is hidden and the grid reaches down into its strip, so
+    // the bottom-right controls (shown before a scan, #708) drop with it.
     readonly property real _overlayMarginPx: 12      // rim margin (inside grid)
     readonly property real _outerLayoutMarginPx: 12  // ColumnLayout.anchors.margins
-    readonly property real _scrubberAreaPx: 28 + 8   // scrubber height + Layout.spacing
+    readonly property real _scrubberAreaPx: scrubber.visible ? 28 + 8 : 0
     // Convenience: full edge margin from viewer.{right,top,left}.
     readonly property real _overlayEdgeMarginPx: _outerLayoutMarginPx + _overlayMarginPx
     // Convenience: full bottom margin from viewer.bottom.
@@ -1518,9 +1520,14 @@ Rectangle {
     // research view mode (#606, #621), scale (fixed / global / per-plot,
     // #452), metric pair and the Statistics pane (#635), plus the dev-only
     // profiler switch.
+    //
+    // Shown with or without a scan source (#708), so the window and the
+    // display options can be set before the first scan: both edit viewer
+    // and config state that outlives the source (onScanSourceChanged
+    // leaves windowSeconds alone), and every refit they trigger is a no-op
+    // until a source is bound.
     Row {
         id: bottomRightOverlay
-        visible: viewer.scanSource !== null
         spacing: 8
         anchors.right: parent.right
         anchors.bottom: parent.bottom
