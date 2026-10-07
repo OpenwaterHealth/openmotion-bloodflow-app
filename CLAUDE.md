@@ -180,12 +180,17 @@ Set-BuildVariant` rewrites `CLINICAL_MODE = True|False` before PyInstaller
 runs, one build per variant into `dist\<variant>\Open-Motion`
 (`Invoke-VariantBuild`); CI does the same with `sed`. The repo value is
 `False` (Research) and must never be committed flipped. `SERVICE_BUILD`
-(#706, repo value `False`, same rule) is stamped only by a local
+(#706, repo value `False`, same rule) is stamped only at build time by
 `build_nuitka.ps1 -Variant clinical -Service` / `Invoke-VariantBuild
 -Service`: the **clinical service tool**, a clinical build that keeps the
 engineering unlock, labelled "Open-Motion Service" with a SERVICE badge in
-the header, into `dist\clinical-service\Open-Motion`. Nothing packages it,
-and CI refuses to build with the stamp set. **Source runs**
+the header, into `dist\clinical-service\Open-Motion`. **It is never
+code-signed.** In CI only the private clinical repo builds it, through the
+windows-build action's `service-tool` input: that run refuses `sign` and
+`codesign-thumbprint`, blanks `CODESIGN_THUMBPRINT`, checks the exe is
+`NotSigned`, and packages `Open-Motion-Service-<tag>.zip` only (no
+installer). The public release workflow never asks for it, and a committed
+`SERVICE_BUILD = True` fails every CI build. **Source runs**
 override anything with dev flags: `--clinical` / `--research`, `--portable`,
 `--data-root <dir>`, and `--config-override '{"key": value, …}'` (any
 compiled key, constants included). A frozen build drops all of them.

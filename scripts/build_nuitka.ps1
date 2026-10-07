@@ -12,7 +12,8 @@
 # -Service (clinical only, #706) builds the clinical service tool: a clinical
 # build that keeps the engineering-mode unlock, into
 # dist\clinical-service\Open-Motion\Open-Motion.exe. package_artifacts.ps1
-# never picks it up, and CI never builds it.
+# never picks it up. In CI it is built only by the windows-build action's
+# service-tool input, which keeps it unsigned and zips it (no installer).
 #
 # Why Nuitka: the PyInstaller exe carries the app as bytecode in an archive
 # that any .pyc decompiler reads (tracker M-09 / M-14); Nuitka compiles every

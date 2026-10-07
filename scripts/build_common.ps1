@@ -141,9 +141,9 @@ function Invoke-VariantBuild {
     # the portable zip and the MSI harvest have the same shape as before
     # #547; it now holds exactly one file.
     # -Service (clinical only, #706) builds the clinical service tool into
-    # dist\clinical-service\Open-Motion instead. Nothing packages it: it is
-    # handed out as the bare exe, never zipped or installed with the
-    # clinical artifacts.
+    # dist\clinical-service\Open-Motion instead. package_artifacts.ps1 never
+    # picks it up; the windows-build action's service-tool run zips it
+    # (unsigned, no installer).
     param(
         [Parameter(Mandatory)][ValidateSet("clinical", "research")][string]$Variant,
         [switch]$Service,

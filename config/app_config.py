@@ -41,11 +41,11 @@ import sys
 CLINICAL_MODE = False
 
 # A clinical build normally has the engineering-mode unlock compiled out
-# (#706). SERVICE_BUILD = True keeps it in: the clinical service tool, made
-# only by a local `build_nuitka.ps1 -Variant clinical -Service` (or
-# Invoke-VariantBuild -Service). CI never stamps it, and the repo value must
-# stay False. It has no effect on a Research build, which always carries the
-# unlock.
+# (#706). SERVICE_BUILD = True keeps it in: the clinical service tool,
+# stamped only at build time by `build_nuitka.ps1 -Variant clinical -Service`
+# (or Invoke-VariantBuild -Service), which CI runs only for the windows-build
+# action's unsigned service-tool build. The repo value must stay False. It has
+# no effect on a Research build, which always carries the unlock.
 SERVICE_BUILD = False
 
 # ── Tier names ─────────────────────────────────────────────────────────────

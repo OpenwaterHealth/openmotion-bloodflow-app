@@ -286,16 +286,79 @@ def test_nuitka_build_leaves_the_unlock_out_of_a_clinical_bundle():
     assert "Set-BuildVariant -Clinical ($Variant -eq \"clinical\") -Service $Service.IsPresent" in ps1
 
 
-def test_ci_refuses_a_service_stamp():
-    action = (REPO_ROOT / ".github" / "actions" / "windows-build" / "action.yml"
-              ).read_text(encoding="utf-8")
-    assert "name: Refuse a service-tool stamp" in action
-    assert '^SERVICE_BUILD = False[[:space:]]*$' in action
-    code = "\n".join(line for line in action.splitlines()
+def _action_text():
+    path = REPO_ROOT / ".github" / "actions" / "windows-build" / "action.yml"
+    return path.read_text(encoding="utf-8")
+
+
+def _steps(text):
+    """name -> block text for each step of the composite action (plain
+    text, like the other workflow tests: no YAML dependency)."""
+    body = text.split("\n  steps:\n", 1)[1]
+    # Comments introducing the NEXT step would otherwise trail each block.
+    body = "\n".join(line for line in body.splitlines()
                      if not line.lstrip().startswith("#"))
-    assert "build_nuitka.ps1" in code
-    assert not re.search(r"build_nuitka\.ps1[^\n]*-Service", code), \
-        "CI must never build the service tool"
+    blocks = re.split(r"\n(?=    - name: )", "\n" + body)
+    out = {}
+    for block in blocks:
+        m = re.match(r"    - name: (.+)", block)
+        if m:
+            out[m.group(1).strip()] = block
+    return out
+
+
+def _if(block):
+    m = re.search(r"^      if: (.+)$", block, re.M)
+    return m.group(1).strip() if m else None
+
+
+def test_ci_refuses_a_committed_service_stamp():
+    guard = _steps(_action_text())["Refuse a service-tool stamp"]
+    assert _if(guard) is None, "the repo-value guard runs on every build"
+    assert '^SERVICE_BUILD = False[[:space:]]*$' in guard
+
+
+def test_regular_ci_builds_never_stamp_the_service_tool():
+    steps = _steps(_action_text())
+    for name in ("Build with Nuitka (one build per variant)",
+                 "Build with PyInstaller (one build per variant)"):
+        assert "inputs.service-tool != 'true'" in _if(steps[name]), name
+        assert "-Service" not in steps[name], name
+
+
+def test_service_tool_ci_build_is_never_signed():
+    """The private clinical repo builds the service tool through the action's
+    service-tool input (#706). Every signing path is closed for that run."""
+    text = _action_text()
+    steps = _steps(text)
+    assert re.search(r'  service-tool:\n    description: .*\n    default: "false"', text)
+    assert "  service-zip:\n" in text
+
+    check = steps["Check a service-tool request"]
+    assert _if(check) == "inputs.service-tool == 'true'"
+    assert next(iter(steps)) == "Check a service-tool request", "refuse before anything runs"
+    assert '[ "$SIGN" = "true" ] || [ -n "$THUMB" ]' in check
+
+    assert "inputs.service-tool != 'true'" in _if(steps["Set up eSigner CKA (EV code signing)"])
+
+    build = steps["Build the clinical service tool with Nuitka (unsigned)"]
+    assert _if(build) == "inputs.service-tool == 'true'"
+    assert 'CODESIGN_THUMBPRINT: ""' in build
+    assert "build_nuitka.ps1 -Variant clinical -Service" in build
+
+    unsigned = steps["The service tool must be unsigned"]
+    assert "Get-AuthenticodeSignature" in unsigned
+    assert "-ne 'NotSigned'" in unsigned
+
+    package = steps["Package artifacts (zip + installer per variant)"]
+    assert "inputs.service-tool != 'true'" in _if(package), "no installer, no signing"
+    zip_step = steps["Package the clinical service tool (zip, unsigned)"]
+    assert "Open-Motion-Service-$env:TAG.zip" in zip_step
+    assert "CODESIGN_THUMBPRINT" not in zip_step
+
+    # The public release workflow never asks for it.
+    release = (REPO_ROOT / ".github" / "workflows" / "release-build.yml").read_text(encoding="utf-8")
+    assert "service-tool" not in release
 
 
 def test_main_qml_loads_the_unlock_only_when_the_build_has_it():
