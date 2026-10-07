@@ -180,13 +180,17 @@ _SCAN = [
         "then start the scan again. Contact support if the drive should "
         "not be full.",
     ),
+    _e(
+        "E-306", "scan",
+        "Scan stopped: storage almost full",
+        "The drive that stores scan data dropped below 100 MB free during "
+        "the scan, so the scan was stopped before the drive filled up. Data "
+        "captured so far was saved.",
+        "Free up space on the data drive (or export and remove old scans) "
+        "before starting another scan. Contact support if the drive should "
+        "not be full.",
+    ),
 ]
-
-# Note: E-306 (scan stopped because the data drive is almost full) is NOT in
-# this registry either: it is a graceful stop announced with a warning toast
-# (MotionConnector._stop_scan_low_storage), not the critical modal. It is
-# recorded as the scan_ended audit abort code and documented in
-# docs/ERROR_CODES.md under "Storage warnings".
 
 
 ERROR_CODES: dict[str, CriticalError] = {

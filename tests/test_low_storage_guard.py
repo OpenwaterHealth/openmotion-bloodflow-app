@@ -11,7 +11,7 @@ What this exercises
     the startCapture backstop): E-305 critical modal under 1 GB.
   - ``MotionConnector._on_dropout_check`` → ``_check_scan_storage`` — a
     running scan gets ONE warning toast when free space drops under 1 GB,
-    and is stopped gracefully with a warning toast (no modal) under
+    and is stopped gracefully with the E-306 critical modal under
     ``scanStopFreeDiskMb`` (100 MB).
 
 Connector methods are called unbound on a fake connector, same pattern as
@@ -223,26 +223,33 @@ def test_scan_warns_once_when_crossing_1gb(free_space, fake):
 # ── 3. mid-scan stop at 100 MB ──────────────────────────────────────────
 
 
-def test_scan_stops_under_100mb_with_toast_not_modal(free_space, fake):
+def test_scan_stops_under_100mb_with_e306_modal(free_space, fake):
+    free_space["free"] = 900 * MB
+    _tick(fake)                       # the one-time warning toast
+    assert len(fake.toasts) == 1
+
     free_space["free"] = 90 * MB
     _tick(fake)
 
     assert fake.stop_calls == 1
-    assert fake.criticals == []  # graceful stop, no critical modal
+    assert len(fake.criticals) == 1
+    code, detail = fake.criticals[0]
+    assert code == "E-306"
+    assert "90 MB free" in detail and fake._data_root in detail
+    assert "00:02:05" in detail       # scan time elapsed
     assert fake._scan_abort_notified is True
     assert fake._scan_abort_code == "E-306"  # scan_ended audit cause
-    text, type_, duration_ms, tag = fake.toasts[-1]
-    assert type_ == "warning"
-    assert text.startswith("Scan stopped")
-    assert "almost full" in text and "90 MB free" in text
-    assert tag == motion_connector._LOW_STORAGE_TOAST_TAG
-    # Per-camera dropout toasts are superseded (#489 pattern).
-    assert [c[0] for c in fake.notificationDismissByTagRequested.calls] == [
-        "dropout_left_2"]
+    assert fake._scan_abort_reason == detail
+    # The modal is the notification: no new toast, and it supersedes the
+    # low-storage warning and per-camera dropout toasts (#489 pattern).
+    assert len(fake.toasts) == 1
+    assert sorted(c[0] for c in fake.notificationDismissByTagRequested.calls) == [
+        "dropout_left_2", motion_connector._LOW_STORAGE_TOAST_TAG]
 
-    # One-shot: later ticks don't stop again.
+    # One-shot: later ticks don't stop or raise again.
     _tick(fake)
     assert fake.stop_calls == 1
+    assert len(fake.criticals) == 1
 
 
 def test_scan_keeps_running_at_100mb_and_above(free_space, fake):
