@@ -320,6 +320,44 @@ def test_force_dismiss_visibility_follows_build_and_engineering(
         cq_harness.stub.setFlags(False, True)
 
 
+def _visible_footer_order(modal):
+    """Texts of the shown footer buttons, left to right as laid out."""
+    _qt_app.processEvents()     # let the RowLayout place its children
+    shown = [b for b in _footer_buttons(modal) if b.property("visible")]
+    return [b.property("text") for b in sorted(shown, key=lambda b: b.property("x"))]
+
+
+def test_live_footer_puts_continue_after_hide_for_this_scan(cq_harness):
+    """Continue resumes the scan, so it sits last, at the right edge, with
+    "Hide for this scan" before it (Ethan, 2026-10-07)."""
+    cq_harness.stub.setFlags(False, False)     # Research, no engineering
+    try:
+        modal = cq_harness(in_window=True)
+        _show_live_warning(modal)
+        assert _visible_footer_order(modal) == [
+            "Stop scan", "Hide for this scan", "Continue"]
+        modal.setProperty("visible", False)
+    finally:
+        cq_harness.stub.setFlags(False, True)
+
+
+def test_quick_check_footer_order_is_unchanged(cq_harness):
+    """Outside a live scan there is no Continue; Hide stays last."""
+    cq_harness.stub.setFlags(False, False)
+    try:
+        modal = cq_harness(in_window=True)
+        QMetaObject.invokeMethod(modal, "reset", Q_ARG("QVariant", False))
+        QMetaObject.invokeMethod(
+            modal, "addWarning",
+            Q_ARG("QVariant", "L1"), Q_ARG("QVariant", "contact"),
+            Q_ARG("QVariant", "Poor contact"), Q_ARG("QVariant", 12.0))
+        assert _visible_footer_order(modal) == [
+            "Dismiss", "Retest", "Hide for this scan"]
+        modal.setProperty("visible", False)
+    finally:
+        cq_harness.stub.setFlags(False, True)
+
+
 def test_force_dismiss_reads_as_a_user_facing_control(cq_modal):
     """#709: plain-language label, plus help text that says how long the
     hide lasts — and stays true outside a scan, where the click is a
