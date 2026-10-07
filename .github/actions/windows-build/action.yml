@@ -7,6 +7,8 @@ description: >
   (Clinical, #573), which check this repo out at a tag and call it as a local
   action. That second caller runs in ANOTHER repository, so nothing in here may
   read GITHUB_REF / GITHUB_SHA to learn what is being built: pass `tag`.
+  With service-tool 'true' it instead builds only the clinical service tool
+  (#706), never signed, as a portable zip.
 
 inputs:
   tag:
@@ -39,6 +41,9 @@ inputs:
   codesign-thumbprint:
     description: "Manual fallback for a runner with a local cert; the eSigner step overrides it."
     default: ""
+  service-tool:
+    description: "'true' to build ONLY the clinical service tool (#706): the clinical variant with the engineering unlock compiled in (SERVICE_BUILD). Never Authenticode-signed: refuses sign / codesign-thumbprint. Nuitka only. Packaged as Open-Motion-Service-<tag>.zip, no installer. Needs variants: clinical."
+    default: "false"
 
 outputs:
   tag:
@@ -56,10 +61,41 @@ outputs:
   conda-explicit-path:
     description: "`conda list --explicit --md5` of the build environment, checked against conda-win-64.lock (release evidence, #681)."
     value: ${{ steps.condaenv.outputs.CONDA_EXPLICIT_PATH }}
+  service-zip:
+    description: "service-tool builds only: path of the unsigned Open-Motion-Service-<tag>.zip."
+    value: ${{ steps.servicezip.outputs.SERVICE_ZIP }}
 
 runs:
   using: composite
   steps:
+    # ── clinical service tool (#706): never signed ───────────────
+    # The service tool is a clinical build that keeps the engineering
+    # unlock. It goes only to Openwater service staff and must never carry
+    # the EV signature: a signed copy would pass Windows' publisher checks
+    # as a genuine Openwater product. So a service-tool run refuses every
+    # way of signing, up front.
+    - name: Check a service-tool request
+      if: inputs.service-tool == 'true'
+      shell: bash
+      env:
+        SIGN: ${{ inputs.sign }}
+        THUMB: ${{ inputs.codesign-thumbprint }}
+        VARIANTS: ${{ inputs.variants }}
+        COMPILER: ${{ inputs.compiler }}
+      run: |
+        if [ "$SIGN" = "true" ] || [ -n "$THUMB" ]; then
+          echo "::error::the clinical service tool is never code-signed (#706): call it with sign false and no codesign-thumbprint"
+          exit 1
+        fi
+        if [ "$(echo $VARIANTS)" != "clinical" ]; then
+          echo "::error::service-tool builds only the clinical variant: pass variants 'clinical' (got '$VARIANTS')"
+          exit 1
+        fi
+        if [ "$COMPILER" = "pyinstaller" ]; then
+          echo "::error::service-tool is a Nuitka build only"
+          exit 1
+        fi
+
     # ── what is being built ──────────────────────────────────────
     - name: Resolve version, channel and SDK source
       id: meta
@@ -210,7 +246,7 @@ runs:
     # against a store thumbprint. When the es-* inputs are empty this warns
     # and the build ships unsigned.
     - name: Set up eSigner CKA (EV code signing)
-      if: inputs.sign == 'true'
+      if: inputs.sign == 'true' && inputs.service-tool != 'true'
       shell: pwsh
       env:
         ES_USERNAME: ${{ inputs.es-username }}
@@ -248,10 +284,23 @@ runs:
         Write-Host "Signing as: $($cert.Subject)  [$($cert.Thumbprint)]"
         "CODESIGN_THUMBPRINT=$($cert.Thumbprint)" >> $env:GITHUB_ENV
 
+    # #706: the repo value of SERVICE_BUILD stays False. The clinical service
+    # tool is built only by stamping it at build time (build_nuitka.ps1
+    # -Service, below, when service-tool is 'true'), so a committed
+    # SERVICE_BUILD = True must never reach a regular clinical artifact.
+    - name: Refuse a service-tool stamp
+      shell: bash
+      run: |
+        grep -n "^SERVICE_BUILD = " config/app_config.py
+        if ! grep -Eq "^SERVICE_BUILD = False[[:space:]]*$" config/app_config.py; then
+          echo "::error::config/app_config.py must have SERVICE_BUILD = False; the service tool is stamped at build time only (#706)"
+          exit 1
+        fi
+
     # PyInstaller is the fallback only (compiler=pyinstaller) since Nuitka
     # became the default on 2026-09-17 (#548).
     - name: Build with PyInstaller (one build per variant)
-      if: inputs.compiler == 'pyinstaller'
+      if: inputs.compiler == 'pyinstaller' && inputs.service-tool != 'true'
       shell: bash -el {0}
       env:
         VARIANTS: ${{ inputs.variants }}
@@ -286,14 +335,14 @@ runs:
       uses: actions/cache@v4
       with:
         path: ~\AppData\Local\Nuitka\Nuitka\Cache
-        key: nuitka-${{ runner.os }}-${{ inputs.variants }}-${{ hashFiles('requirements.txt', 'sdk-version.txt', 'conda-win-64.lock') }}-${{ steps.meta.outputs.COMMIT }}
+        key: nuitka-${{ runner.os }}-${{ inputs.service-tool == 'true' && 'clinical-service' || inputs.variants }}-${{ hashFiles('requirements.txt', 'sdk-version.txt', 'conda-win-64.lock') }}-${{ steps.meta.outputs.COMMIT }}
         restore-keys: |
-          nuitka-${{ runner.os }}-${{ inputs.variants }}-${{ hashFiles('requirements.txt', 'sdk-version.txt', 'conda-win-64.lock') }}-
-          nuitka-${{ runner.os }}-${{ inputs.variants }}-
+          nuitka-${{ runner.os }}-${{ inputs.service-tool == 'true' && 'clinical-service' || inputs.variants }}-${{ hashFiles('requirements.txt', 'sdk-version.txt', 'conda-win-64.lock') }}-
+          nuitka-${{ runner.os }}-${{ inputs.service-tool == 'true' && 'clinical-service' || inputs.variants }}-
           nuitka-${{ runner.os }}-
 
     - name: Build with Nuitka (one build per variant)
-      if: inputs.compiler != 'pyinstaller'
+      if: inputs.compiler != 'pyinstaller' && inputs.service-tool != 'true'
       shell: bash -el {0}
       env:
         VARIANTS: ${{ inputs.variants }}
@@ -308,7 +357,32 @@ runs:
         done
         git diff --exit-code -- config/app_config.py
 
+    # The clinical service tool (#706): build_nuitka.ps1 -Service stamps
+    # SERVICE_BUILD for this build only. CODESIGN_THUMBPRINT is forced empty,
+    # so the payload-signing plugin (#579) leaves main.dll unsigned; the exe
+    # is then checked to carry no signature at all.
+    - name: Build the clinical service tool with Nuitka (unsigned)
+      if: inputs.service-tool == 'true'
+      shell: bash -el {0}
+      env:
+        CODESIGN_THUMBPRINT: ""
+      run: |
+        conda activate omotion
+        python -m nuitka --version
+        powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build_nuitka.ps1 -Variant clinical -Service
+        git diff --exit-code -- config/app_config.py
+
+    - name: The service tool must be unsigned
+      if: inputs.service-tool == 'true'
+      shell: pwsh
+      run: |
+        $exe = "dist\clinical-service\Open-Motion\Open-Motion.exe"
+        $sig = Get-AuthenticodeSignature $exe
+        Write-Host "$exe : $($sig.Status)"
+        if ($sig.Status -ne 'NotSigned') { throw "$exe must not be signed (#706); status is $($sig.Status)" }
+
     - name: Install WiX v5
+      if: inputs.service-tool != 'true'
       shell: pwsh
       run: |
         # Pin to 5.0.2 — the last MIT-licensed WiX. v6/v7 require accepting the
@@ -345,6 +419,7 @@ runs:
 
     # ── package ──────────────────────────────────────────────────
     - name: Package artifacts (zip + installer per variant)
+      if: inputs.service-tool != 'true'
       shell: pwsh
       env:
         # env.CODESIGN_THUMBPRINT is exported by the eSigner CKA step above;
@@ -359,3 +434,19 @@ runs:
           powershell -NoProfile -File scripts\package_artifacts.ps1 -SkipBuild -Version $env:TAG -Variants $variant
           if ($LASTEXITCODE -ne 0) { throw "package_artifacts failed for $variant" }
         }
+
+    # Service tool (#706): the portable zip only. No installer, so it never
+    # registers itself where a clinical install lives, and no signing.
+    - name: Package the clinical service tool (zip, unsigned)
+      id: servicezip
+      if: inputs.service-tool == 'true'
+      shell: pwsh
+      env:
+        TAG: ${{ steps.meta.outputs.TAG }}
+      run: |
+        . .\scripts\build_common.ps1
+        $zip = "Open-Motion-Service-$env:TAG.zip"
+        New-PortableZip -DistDir "dist\clinical-service\Open-Motion" -OutZip $zip
+        if (-not (Test-Path $zip)) { throw "service-tool zip missing: $zip" }
+        Write-Host "[service-tool] $zip ($([math]::Round((Get-Item $zip).Length / 1MB, 1)) MB)"
+        "SERVICE_ZIP=$zip" >> $env:GITHUB_OUTPUT

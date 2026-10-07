@@ -142,9 +142,6 @@ ApplicationWindow {
                 window._exitArmed = true
                 exitDisarmTimer.restart()
             }
-
-            // Hidden engineering-mode entry point.
-            onLogoDoubleClicked: engineeringUnlockModal.open()
         }
 
         // Update available banner (slides in below header)
@@ -155,7 +152,7 @@ ApplicationWindow {
             anchors.right: parent.right
         }
 
-        // Firmware update banner (engineeringMode only)
+        // Firmware update banner (Research builds only)
         FirmwareUpdateBanner {
             id: firmwareUpdateBanner
             anchors.top: updateBanner.bottom
@@ -185,9 +182,17 @@ ApplicationWindow {
             }
         }
 
-        // Engineering-mode unlock prompt (opened by logo double-click).
-        EngineeringUnlockModal {
-            id: engineeringUnlockModal
+        // Engineering-mode unlock (#706). Loaded, never instantiated by
+        // type: a clinical bundle doesn't carry EngineeringUnlockModal.qml,
+        // and the connector reports engineeringUnlockAvailable false there.
+        // The loaded prompt puts its own double-click area on the logo.
+        Loader {
+            id: engineeringUnlockLoader
+            anchors.fill: parent
+            z: 10000
+            active: MotionInterface.engineeringUnlockAvailable === true
+            source: active ? "components/EngineeringUnlockModal.qml" : ""
+            onLoaded: item.logoItem = headerMenu.logoItem
         }
     }
 

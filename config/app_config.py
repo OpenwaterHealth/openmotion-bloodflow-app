@@ -15,6 +15,9 @@ Every key belongs to exactly one tier, declared in the sets at the bottom:
              it, reset to the compiled value at every launch, never written
              anywhere. The engineering unlock is per session, so nothing it
              enables may outlive the session that authorized it.
+             ``engineeringMode`` itself is turned on only by the connector's
+             ``unlockEngineeringMode`` (#706); a ``setConfig`` of True is
+             refused like a constant.
 * PREFERENCE operator preferences that survive a relaunch. Persisted in the
              ``settings`` table of ``scans.db`` (SQLCipher-encrypted and
              HMAC-protected in clinical builds), never in a plaintext file.
@@ -36,6 +39,14 @@ import sys
 # Stamped per artifact by scripts/build_common.ps1 (regex on this exact
 # line). Source runs may override it with --clinical / --research.
 CLINICAL_MODE = False
+
+# A clinical build normally has the engineering-mode unlock compiled out
+# (#706). SERVICE_BUILD = True keeps it in: the clinical service tool,
+# stamped only at build time by `build_nuitka.ps1 -Variant clinical -Service`
+# (or Invoke-VariantBuild -Service), which CI runs only for the windows-build
+# action's unsigned service-tool build. The repo value must stay False. It has
+# no effect on a Research build, which always carries the unlock.
+SERVICE_BUILD = False
 
 # ── Tier names ─────────────────────────────────────────────────────────────
 CONSTANT = "constant"

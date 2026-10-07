@@ -40,26 +40,50 @@ def test_beta_enabled_matrix(tmp_path, clinical, eng, beta, expected):
 
 # ── Refresh / withdraw on engineering-mode or beta-toggle change ──────────
 
-def test_eng_mode_change_refreshes_both_updaters_in_research(tmp_path):
+@pytest.fixture
+def eng_pw():
+    """The engineering password: only unlockEngineeringMode turns engineering
+    mode on (#706)."""
+    import engineering_unlock
+    return engineering_unlock._ENGINEERING_PASSWORD
+
+
+def test_eng_mode_change_refreshes_both_updaters_in_research(tmp_path, eng_pw):
     c = _connector(tmp_path, clinicalMode=False, engineeringMode=False,
                    downloadBetaUpdates=False)
     fw, app = [], []
     c._refresh_firmware_update_check = lambda: fw.append(1)
     c.checkForUpdates = lambda: app.append(1)
-    c.setConfig("engineeringMode", True)
+    assert c.unlockEngineeringMode(eng_pw) is True
     assert fw == [1], "firmware detection must re-run on engineering-mode change"
     assert app == [1], "app updater must re-check on engineering-mode change"
 
 
-def test_eng_mode_change_makes_no_network_call_in_clinical(tmp_path):
+def test_eng_mode_change_makes_no_network_call_in_clinical_service_build(
+        tmp_path, eng_pw, monkeypatch):
+    # Only the clinical service tool can turn engineering mode on in a
+    # clinical build (#706); it still makes no outbound app-update call.
+    monkeypatch.setattr(motion_connector, "_SERVICE_BUILD", True)
     c = _connector(tmp_path, clinicalMode=True, engineeringMode=False,
                    downloadBetaUpdates=False)
     fw, app = [], []
     c._refresh_firmware_update_check = lambda: fw.append(1)
     c.checkForUpdates = lambda: app.append(1)
-    c.setConfig("engineeringMode", True)
+    assert c.unlockEngineeringMode(eng_pw) is True
     assert fw == [1], "the refresh hook must fire on engineering-mode change"
     assert app == [], "clinical build must not make an outbound app-update call"
+
+
+def test_plain_clinical_build_cannot_change_eng_mode_at_all(tmp_path, eng_pw):
+    c = _connector(tmp_path, clinicalMode=True, engineeringMode=False,
+                   downloadBetaUpdates=False)
+    fw, app = [], []
+    c._refresh_firmware_update_check = lambda: fw.append(1)
+    c.checkForUpdates = lambda: app.append(1)
+    assert c.unlockEngineeringMode(eng_pw) is False
+    c.setConfig("engineeringMode", True)
+    assert c._app_config["engineeringMode"] is False
+    assert fw == [] and app == []
 
 
 # ── _select_release: newest non-draft from a GitHub /releases list ────────
@@ -201,12 +225,14 @@ def test_eng_off_withdraws_firmware_offer(tmp_path, monkeypatch):
 
 
 def test_saveconfigs_refreshes_both_updaters(tmp_path):
-    c = _connector(tmp_path, clinicalMode=False, engineeringMode=False,
+    # engineeringMode=True can't go through saveConfigs any more (#706);
+    # the beta toggle drives the same refresh hook.
+    c = _connector(tmp_path, clinicalMode=False, engineeringMode=True,
                    downloadBetaUpdates=False)
     fw, app = [], []
     c._refresh_firmware_update_check = lambda: fw.append(1)
     c.checkForUpdates = lambda: app.append(1)
-    c.saveConfigs({"engineeringMode": True})
+    c.saveConfigs({"downloadBetaUpdates": True})
     assert fw == [1]
     assert app == [1]
 
