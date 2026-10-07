@@ -282,6 +282,20 @@ Item {
                     border.color: AppTheme.borderSubtle
                     border.width: 1
 
+                    // The card is opaque to input: clicks, wheel and hover
+                    // stop here instead of reaching whatever it covers.
+                    // Without this, History's "Export CSV" / "Load in
+                    // viewer" stayed clickable under the "Exported to…"
+                    // toast (#661). Declared before contentRow so the close
+                    // button's MouseArea stays on top of it.
+                    MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        acceptedButtons: Qt.AllButtons
+                        cursorShape: Qt.ArrowCursor
+                        onWheel: function(wheel) { wheel.accepted = true }
+                    }
+
                     // Hovering anywhere on the toast pauses the auto-dismiss timer.
                     HoverHandler {
                         id: toastHover
