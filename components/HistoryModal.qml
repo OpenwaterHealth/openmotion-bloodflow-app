@@ -158,7 +158,7 @@ Item {
 
     function requestDelete() {
         if (checkedCount <= 0) return
-        deletePrompt.open()
+        deleteConfirm.open()
     }
 
     function requestExport() {
@@ -619,11 +619,11 @@ Item {
 
     // "Are you sure?" before a delete, in every build. No password (#703):
     // the requirement is a confirmation step, not authentication.
-    PasswordPromptModal {
-        id: deletePrompt
-        objectName: "deleteScansPrompt"
+    ConfirmModal {
+        id: deleteConfirm
+        objectName: "deleteScansConfirm"
         title: "Confirm Delete"
-        requirePassword: false
+        destructive: true
         description: {
             var n = root.checkedCount
             return "Are you sure you want to permanently delete "

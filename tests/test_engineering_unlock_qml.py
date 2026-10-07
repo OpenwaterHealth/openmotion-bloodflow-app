@@ -9,8 +9,9 @@ MotionInterface singleton and pins the QML -> Python contract:
 - it brings its own double-click area and puts it on the header logo, so a
   build without the file has no logo double-click handler;
 - PasswordPromptModal has no built-in password any more: without a
-  submitHandler every password is refused; requirePassword false makes it
-  a plain confirm (Calibrate).
+  submitHandler every password is refused;
+- ConfirmModal is the plain "are you sure?" dialog (Calibrate, Delete): no
+  field, confirm accepts, cancel doesn't.
 
 Unit-marked: no app launch, no hardware, offscreen Qt platform.
 """
@@ -203,7 +204,24 @@ def test_password_prompt_uses_the_submit_handler(qml):
     assert _submit(modal, "ok") is True
 
 
-def test_confirm_mode_accepts_without_a_password(qml):
-    modal = qml("import QtQuick 6.0\nPasswordPromptModal { requirePassword: false }\n")
-    assert _password_field(modal).property("visible") is False
-    assert _submit(modal) is True
+# ── ConfirmModal (plain "are you sure?", e.g. Calibrate and Delete) ───────
+
+def test_confirm_modal_has_no_password_field(qml):
+    modal = qml('import QtQuick 6.0\nConfirmModal { description: "Sure?" }\n')
+    assert not [c for c in modal.findChildren(QObject)
+                if c.metaObject().indexOfProperty("echoMode") >= 0]
+
+
+def test_confirm_modal_confirm_accepts_and_cancel_does_not(qml):
+    modal = qml('import QtQuick 6.0\nConfirmModal { description: "Sure?" }\n')
+    accepted = []
+    modal.accepted.connect(lambda: accepted.append(1))
+
+    QMetaObject.invokeMethod(modal, "open")
+    QMetaObject.invokeMethod(modal, "close")        # Cancel / Esc / backdrop
+    assert accepted == []
+
+    QMetaObject.invokeMethod(modal, "open")
+    QMetaObject.invokeMethod(modal, "confirm")
+    assert accepted == [1]
+    assert qml.stub.unlock_calls == []

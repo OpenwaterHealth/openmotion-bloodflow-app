@@ -3,48 +3,33 @@ import QtQuick.Controls 6.0
 import QtQuick.Layouts 6.0
 import OpenMotion 1.0
 
-// Reusable password prompt modal. The caller sets submitHandler, a function
-// taking the password and returning true on success (the check itself
-// always runs in Python, e.g. MotionInterface.unlockEngineeringMode), and
-// title, description and confirmLabel for the wording. accepted() fires on
-// success. There is no default check: without a submitHandler every
-// password is refused, so the connector needs no password slot (#706).
-// For a plain "are you sure?" step use ConfirmModal instead.
+// Reusable "are you sure?" dialog: title, message, Cancel and a confirm
+// button. accepted() fires on confirm; Cancel, Escape or a click outside
+// closes it without. destructive colours the confirm button red (Delete).
+// Same look as PasswordPromptModal, which is for real password checks only.
 Item {
     id: root
     anchors.fill: parent
     visible: false
     z: 10000
 
-
-    property string title: "Password Required"
-    property string description: "Enter the password to continue."
+    property string title: "Are you sure?"
+    property string description: ""
     property string confirmLabel: "Confirm"
-    property var submitHandler: null
+    property bool destructive: false
 
     signal accepted()
 
     function open() {
-        pwField.text = ""
-        errorLabel.visible = false
         root.visible = true
-        pwField.forceActiveFocus()
+        panel.forceActiveFocus()
     }
     function close() {
         root.visible = false
     }
-
-    function _submit() {
-        var ok = root.submitHandler ? root.submitHandler(pwField.text) === true
-                                    : false
-        if (ok) {
-            root.accepted()
-            root.close()
-        } else {
-            errorLabel.visible = true
-            pwField.text = ""
-            pwField.forceActiveFocus()
-        }
+    function confirm() {
+        root.accepted()
+        root.close()
     }
 
     // Backdrop — click outside closes.
@@ -63,6 +48,7 @@ Item {
 
     // Panel
     Rectangle {
+        id: panel
         width: 360
         height: contentCol.implicitHeight + 48
         radius: 14
@@ -89,41 +75,11 @@ Item {
 
             Text {
                 text: root.description
+                visible: root.description !== ""
                 color: AppTheme.textSecondary
                 font.pixelSize: 13
                 wrapMode: Text.WordWrap
                 Layout.fillWidth: true
-            }
-
-            TextField {
-                id: pwField
-                Layout.fillWidth: true
-                Layout.preferredHeight: 38
-                echoMode: TextInput.Password
-                placeholderText: ""
-                color: AppTheme.textPrimary
-                placeholderTextColor: AppTheme.textSecondary
-                font.pixelSize: 14
-                verticalAlignment: TextInput.AlignVCenter
-                leftPadding: 10
-                rightPadding: 10
-                topPadding: 0
-                bottomPadding: 0
-                background: Rectangle {
-                    color: AppTheme.bgInput
-                    radius: 4
-                    border.color: pwField.activeFocus ? AppTheme.accentInteractive : AppTheme.borderSoft
-                    border.width: 1
-                }
-                onAccepted: root._submit()
-            }
-
-            Text {
-                id: errorLabel
-                text: "Incorrect password"
-                color: AppTheme.accentRed
-                font.pixelSize: 12
-                visible: false
             }
 
             RowLayout {
@@ -151,7 +107,9 @@ Item {
                 Button {
                     text: root.confirmLabel
                     Layout.preferredHeight: 32
-                    onClicked: root._submit()
+                    onClicked: root.confirm()
+                    readonly property color base: root.destructive ? AppTheme.accentRed
+                                                                   : AppTheme.accentInteractive
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 13
                         color: "#FFFFFF"
@@ -159,7 +117,7 @@ Item {
                         verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? Qt.lighter(AppTheme.accentInteractive, 1.1) : AppTheme.accentInteractive
+                        color: parent.hovered ? Qt.lighter(parent.base, 1.1) : parent.base
                         radius: 4
                     }
                 }

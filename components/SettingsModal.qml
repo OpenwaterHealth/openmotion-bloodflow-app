@@ -79,8 +79,9 @@ Item {
     // Confirm before Calibrate. No second password: Calibrate sits in the
     // engineering card, so the engineering unlock is its gate, re-checked
     // in Python by runCalibration (#706).
-    PasswordPromptModal {
+    ConfirmModal {
         id: calibrationConfirmModal
+        objectName: "calibrationConfirm"
         title: "Calibration"
         description: {
             var t = calibrationTargetCombo.currentText.toLowerCase()
@@ -88,7 +89,6 @@ Item {
                    + "? This writes a new calibration to the console."
         }
         confirmLabel: "Calibrate"
-        requirePassword: false
         onAccepted: MotionInterface.runCalibration(
             calibrationTargetCombo.currentText.toLowerCase()
         )

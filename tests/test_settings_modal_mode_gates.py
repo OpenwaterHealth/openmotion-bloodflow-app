@@ -575,20 +575,24 @@ def test_audit_log_opens_without_a_password(modal_factory, clinical):
         _invoke(modal, "close")
 
 
-def test_prompt_without_password_is_a_plain_confirm(modal_factory):
-    """requirePassword: false (the delete confirm) hides the field and
-    accepts on Confirm without consulting the password check."""
+def test_calibrate_confirm_is_a_plain_confirm_dialog(modal_factory):
+    """#706: Calibrate asks "are you sure" through ConfirmModal; there is no
+    password field and confirming never consults a password check."""
     stub = modal_factory.stub
     stub.password_checks.clear()
-    prompt = modal_factory.prompt()
-    prompt.setProperty("requirePassword", False)
-    accepted = _spy(prompt, "accepted()")
+    modal = modal_factory()
+    confirm = modal.findChild(QObject, "calibrationConfirm")
+    assert confirm is not None
+    assert not [c for c in confirm.findChildren(QObject)
+                if c.metaObject().indexOfProperty("echoMode") >= 0]
+    assert confirm.property("description").startswith("Calibrate ")
+    accepted = _spy(confirm, "accepted()")
 
-    _invoke(prompt, "open")
-    _invoke(prompt, "_submit")
+    _invoke(confirm, "open")
+    _invoke(confirm, "confirm")
     assert len(accepted) == 1
     assert stub.password_checks == []
-    assert prompt.property("visible") is False
+    assert confirm.property("visible") is False
 
 
 def test_prompt_with_password_refuses_without_a_handler(modal_factory):

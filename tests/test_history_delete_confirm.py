@@ -106,14 +106,18 @@ def history():
 
 
 def _prompt(history):
-    p = history.findChild(QObject, "deleteScansPrompt")
-    assert p is not None, "deleteScansPrompt not found"
+    p = history.findChild(QObject, "deleteScansConfirm")
+    assert p is not None, "deleteScansConfirm not found"
     return p
 
 
-def test_delete_prompt_has_no_password_field(history):
+def test_delete_prompt_is_a_confirm_dialog_without_a_password_field(history):
     prompt = _prompt(history)
-    assert prompt.property("requirePassword") is False
+    # ConfirmModal, not PasswordPromptModal: no text field anywhere in it.
+    assert prompt.property("submitHandler") is None
+    assert not [c for c in prompt.findChildren(QObject)
+                if c.metaObject().indexOfProperty("echoMode") >= 0]
+    assert prompt.property("destructive") is True
     assert "password" not in prompt.property("description").lower()
 
 
@@ -132,6 +136,16 @@ def test_confirming_never_checks_a_password(history):
     accepted = []
     prompt.accepted.connect(lambda: accepted.append(1))
     QMetaObject.invokeMethod(prompt, "open")
-    QMetaObject.invokeMethod(prompt, "_submit")
+    QMetaObject.invokeMethod(prompt, "confirm")
     assert accepted == [1]
     assert history.stub.password_checks == []
+
+
+def test_cancelling_deletes_nothing(history):
+    from PyQt6.QtCore import QMetaObject
+    prompt = _prompt(history)
+    accepted = []
+    prompt.accepted.connect(lambda: accepted.append(1))
+    QMetaObject.invokeMethod(prompt, "open")
+    QMetaObject.invokeMethod(prompt, "close")
+    assert accepted == []
