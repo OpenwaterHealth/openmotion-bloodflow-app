@@ -3,8 +3,9 @@
 BloodFlow.qml can't be instantiated standalone (it needs the whole app), so
 its handler contracts are pinned as source-structure assertions. The modal
 itself compiles fine in a bare engine, so its signal contract — including the
-#492 Force Dismiss behavior — is exercised for real in an offscreen QML
-harness (pattern: test_critical_error_modal_footer.py).
+#492 Force Dismiss behavior — and the #709 build/engineering gate on that
+button are exercised for real in an offscreen QML harness (pattern:
+test_critical_error_modal_footer.py).
 """
 
 import contextlib
@@ -19,6 +20,7 @@ from pathlib import Path
 # is passed via argv, NOT via QT_QPA_PLATFORM, so the process environment is
 # untouched (see test_logs_modal_filters.py).
 from PyQt6.QtCore import (  # noqa: E402
+    Q_ARG,
     QCoreApplication,
     QMetaObject,
     QObject,
@@ -40,6 +42,7 @@ from PyQt6.QtQml import (  # noqa: E402
     qmlRegisterSingletonInstance,
     qmlRegisterSingletonType,
 )
+from PyQt6.QtQuick import QQuickWindow  # noqa: E402
 
 pytestmark = pytest.mark.unit
 
@@ -107,11 +110,26 @@ class _StubMotionInterface(QObject):
     """Minimal MotionInterface stand-in covering every member the
     ContactQualityModal.qml tree (and AppTheme.qml) references."""
 
+    appConfigChanged = pyqtSignal()
     _neverEmitted = pyqtSignal()
 
-    @pyqtProperty("QVariantMap", notify=_neverEmitted)
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._clinical = False
+        self._engineering = True
+
+    def setFlags(self, clinical: bool, engineering: bool):
+        self._clinical = bool(clinical)
+        self._engineering = bool(engineering)
+        self.appConfigChanged.emit()
+
+    @pyqtProperty("QVariantMap", notify=appConfigChanged)
     def appConfig(self):
-        return {"engineeringMode": True, "darkMode": True}
+        return {
+            "engineeringMode": self._engineering,
+            "clinicalMode": self._clinical,
+            "darkMode": True,
+        }
 
     @pyqtProperty(bool, notify=_neverEmitted)
     def leftSensorConnected(self):
@@ -139,8 +157,12 @@ def _basic_controls_style():
 
 
 @pytest.fixture(scope="module")
-def cq_modal():
-    """Compile ContactQualityModal.qml once for this module."""
+def cq_harness():
+    """Compile ContactQualityModal.qml once for this module; hand out
+    instances. ``make(in_window=True)`` parents the instance into a shown
+    offscreen window — effective item visibility only resolves there (an
+    unattached item tree reads visible=false everywhere). The stub is
+    shared, so tests flip the mode flags through ``make.stub.setFlags``."""
     stub = _StubMotionInterface()
     qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MotionInterface", stub)
     qmlRegisterSingletonType(
@@ -155,18 +177,39 @@ def cq_modal():
             "ContactQualityModal.qml failed to compile:\n"
             + "\n".join(e.toString() for e in component.errors())
         )
-    obj = component.create()
-    if obj is None:
-        raise RuntimeError(
-            "ContactQualityModal.qml failed to instantiate:\n"
-            + "\n".join(e.toString() for e in component.errors())
-        )
 
-    yield obj
+    window = QQuickWindow()
+    window.resize(1400, 820)
+    window.show()
+    created = []
 
-    obj.deleteLater()
+    def make(in_window=False):
+        obj = component.create()
+        if obj is None:
+            raise RuntimeError(
+                "ContactQualityModal.qml failed to instantiate:\n"
+                + "\n".join(e.toString() for e in component.errors())
+            )
+        if in_window:
+            obj.setParentItem(window.contentItem())
+        created.append(obj)
+        return obj
+
+    make.stub = stub
+    yield make
+
+    for obj in created:
+        obj.setParentItem(None)
+        obj.deleteLater()
+    window.close()
     del engine
     del stub
+
+
+@pytest.fixture(scope="module")
+def cq_modal(cq_harness):
+    """One shared, unparented instance for the signal-contract tests."""
+    return cq_harness()
 
 
 def _is_quick_button(obj):
@@ -231,3 +274,58 @@ def test_no_other_footer_button_emits_force_dismissed(cq_modal):
         assert counts["root"] > before, b.property("text")
 
     assert counts["force"] == 0
+
+
+# ── Force Dismiss availability + look (#709) ────────────────────────────────
+
+def _show_live_warning(modal):
+    """Drive the modal through its public API into the live-scan
+    poor-contact state BloodFlow produces on a mid-scan latch (reset(true)
+    + addWarning), where the footer is up for every build variant."""
+    QMetaObject.invokeMethod(modal, "reset", Q_ARG("QVariant", True))
+    QMetaObject.invokeMethod(
+        modal, "addWarning",
+        Q_ARG("QVariant", "L1"), Q_ARG("QVariant", "contact"),
+        Q_ARG("QVariant", "Poor contact"), Q_ARG("QVariant", 12.0))
+    assert modal.property("state_") == "warnings"
+    assert modal.property("visible") is True
+
+
+@pytest.mark.parametrize(
+    "clinical, engineering, expected",
+    [
+        (False, False, True),   # Research build: always offered (#709)
+        (False, True, True),
+        (True, False, False),   # plain clinical build: hidden, as before
+        (True, True, True),     # clinical + engineering unlock
+    ],
+)
+def test_force_dismiss_visibility_follows_build_and_engineering(
+        cq_harness, clinical, engineering, expected):
+    """#709: the button is gated ``!clinicalMode || engineeringMode`` (the
+    #234 raw-CSV pattern) instead of engineering mode alone."""
+    cq_harness.stub.setFlags(clinical, engineering)
+    try:
+        modal = cq_harness(in_window=True)
+        _show_live_warning(modal)
+        btn = modal.findChild(QObject, "cqForceDismissBtn")
+        assert btn is not None
+        assert btn.property("visible") is expected
+        # The rest of the live footer is unaffected by the gate.
+        stop = [b for b in _footer_buttons(modal)
+                if b.property("text") == "Stop scan"]
+        assert len(stop) == 1 and stop[0].property("visible") is True
+        modal.setProperty("visible", False)
+    finally:
+        cq_harness.stub.setFlags(False, True)
+
+
+def test_force_dismiss_reads_as_a_user_facing_control(cq_modal):
+    """#709: plain-language label, plus help text that says how long the
+    hide lasts — and stays true outside a scan, where the click is a
+    one-shot dismiss."""
+    btn = cq_modal.findChild(QObject, "cqForceDismissBtn")
+    assert btn.property("text") == "Hide for this scan"
+    help_text = btn.property("helpText")
+    assert "If a scan is running" in help_text
+    assert "The next scan warns again" in help_text
