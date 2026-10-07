@@ -561,28 +561,6 @@ Item {
                     }
                     onClicked: { root.stopScanRequested(); root.close(); root.dismissed() }
                 }
-                Button {
-                    visible: !root.preScanMode && root.liveScan && (root.state_ === "warnings" || root.state_ === "ok")
-                    enabled: root.liveScanDismissable
-                    text: "Continue"
-                    hoverEnabled: enabled
-                    Layout.preferredHeight: 45
-                    contentItem: Text {
-                        text: parent.text; font.pixelSize: 12
-                        color: !parent.enabled ? AppTheme.textDisabled
-                              : (parent.hovered ? "#FFFFFF" : AppTheme.textSecondary)
-                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-                    }
-                    background: Rectangle {
-                        color: !parent.enabled ? AppTheme.bgCard
-                              : (parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput)
-                        radius: 4
-                        border.color: !parent.enabled ? AppTheme.borderSubtle
-                                    : (parent.hovered ? AppTheme.accentInteractive : AppTheme.borderSoft)
-                        border.width: 1
-                    }
-                    onClicked: { root.continueRequested(); root.close(); root.dismissed() }
-                }
 
                 // Quick-check / OK / error footer
                 Button {
@@ -658,6 +636,31 @@ Item {
                         radius: 4; border.color: parent.hovered ? AppTheme.accentInteractive : AppTheme.borderSoft; border.width: 1
                     }
                     onClicked: { root.close(); root.forceDismissed(); root.dismissed() }
+                }
+
+                // Live-scan Continue: last, so the action that resumes the scan
+                // sits at the right edge, after "Hide for this scan".
+                Button {
+                    visible: !root.preScanMode && root.liveScan && (root.state_ === "warnings" || root.state_ === "ok")
+                    enabled: root.liveScanDismissable
+                    text: "Continue"
+                    hoverEnabled: enabled
+                    Layout.preferredHeight: 45
+                    contentItem: Text {
+                        text: parent.text; font.pixelSize: 12
+                        color: !parent.enabled ? AppTheme.textDisabled
+                              : (parent.hovered ? "#FFFFFF" : AppTheme.textSecondary)
+                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle {
+                        color: !parent.enabled ? AppTheme.bgCard
+                              : (parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput)
+                        radius: 4
+                        border.color: !parent.enabled ? AppTheme.borderSubtle
+                                    : (parent.hovered ? AppTheme.accentInteractive : AppTheme.borderSoft)
+                        border.width: 1
+                    }
+                    onClicked: { root.continueRequested(); root.close(); root.dismissed() }
                 }
             }
         }
