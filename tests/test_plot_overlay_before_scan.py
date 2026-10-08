@@ -3,18 +3,21 @@ Issue #708 — the plot's bottom-right controls before a scan starts.
 
 The time-window pill and the ⋯ settings button used to appear only once
 a scan source was bound, so the window and the display options could not
-be set until data was already streaming. They now show from app start:
+be set until data was already streaming. They now show as soon as the
+(still blank) plots are up:
 
-  - the row is visible with no source; the ⋯ button keeps its clinical
-    gate (hidden in clinical unless engineering mode is on), the pill
-    shows in every mode;
+  - the row is visible with no source once the plot grid shows; on the
+    "No active cameras selected" placeholder (no sensor connected, or no
+    camera selected) it stays hidden so it doesn't crowd that screen;
+  - the ⋯ button keeps its clinical gate (hidden in clinical unless
+    engineering mode is on), the pill shows in every mode;
   - the pill's menu opens and a window picked with no source sticks, and
     the first scan opens at that window (live-follow or paused);
   - the ⋯ popup opens with no source, every switch in it is a no-op
     (no refit, no warning) until a source is bound, and the choices
     apply to the first scan;
   - geometry: with the scrubber hidden the row keeps the usual 12 px rim
-    above the plots, and it clears the empty-state placeholder;
+    above the plots;
   - no QML warnings on any of these paths (Qt messages are captured from
     load on).
 
@@ -407,20 +410,38 @@ def test_controls_keep_the_rim_margin_above_the_plots(h):
     assert gap() == pytest.approx(12)
 
 
-@pytest.mark.parametrize("size", [VIEW_SIZE, (560, 420)])
-def test_controls_clear_the_empty_state(h, size):
-    """No device: the "No active cameras selected" placeholder fills the
-    viewer; the row stays clear of it, and of the (hidden) scan badge."""
-    h.stub.setSensorsConnected(False)
-    h.view.resize(*size)
-    _pump()
-    text = next(o for o in _all_objects(h.root)
+def _placeholder(h):
+    return next(o for o in _all_objects(h.root)
                 if isinstance(o, QQuickItem)
                 and o.property("text") == "No active cameras selected")
-    assert text.isVisible()
-    row = _scene_rect(h.item("bottomRightOverlay"))
-    assert h.item("bottomRightOverlay").isVisible()
-    assert not _scene_rect(text).intersects(row)
-    assert QRectF(0, 0, *size).contains(row)
+
+
+def test_controls_hidden_until_a_sensor_brings_the_plots_up(h):
+    """No device: the "No active cameras selected" placeholder fills the
+    viewer and the controls stay off it. Connecting a sensor brings up the
+    blank grid, and the controls with it."""
+    h.stub.setSensorsConnected(False)
+    _pump()
+    assert _placeholder(h).isVisible()
+    assert not h.item("grid").isVisible()
+    assert not h.item("bottomRightOverlay").isVisible()
     assert not h.item("scanBadge").isVisible()
+    h.stub.setSensorsConnected(True)
+    _pump()
+    assert h.item("grid").isVisible()
+    assert h.item("bottomRightOverlay").isVisible()
+    assert h.warnings() == []
+
+
+def test_controls_hidden_when_no_camera_is_selected(h):
+    """Sensors connected but both masks empty: the same placeholder, so
+    the same rule."""
+    h.root.setProperty("leftMask", 0)
+    h.root.setProperty("rightMask", 0)
+    _pump()
+    assert _placeholder(h).isVisible()
+    assert not h.item("bottomRightOverlay").isVisible()
+    h.root.setProperty("leftMask", SIDE_MASK)
+    _pump()
+    assert h.item("bottomRightOverlay").isVisible()
     assert h.warnings() == []
