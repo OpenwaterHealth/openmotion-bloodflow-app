@@ -84,6 +84,7 @@ artifacts, so every tagged release carries one.
 | `engineering_unlock.py` | The engineering-mode unlock (#706). **Compiled out of clinical builds** like `app_updater.py`: `motion_connector.py` imports it only when `CLINICAL_MODE` is False or `SERVICE_BUILD` is True, and `openwater.spec` / `scripts/build_nuitka.ps1` leave it and `components/EngineeringUnlockModal.qml` out of any other clinical bundle. `main.qml` loads that QML through a `Loader` gated on `MotionInterface.engineeringUnlockAvailable`, and the loaded prompt puts its own double-click area on the header logo (`WindowMenu.logoItem`), so a clinical exe has no unlock module, no prompt and no logo double-click handler. **Two rules:** a clinical build has no engineering toggle unless it is the service tool, and Research (plus the service tool) keeps the plaintext engineering password. The literal is defined only here, so a clinical exe doesn't carry it; `unlockEngineeringMode(password)` checks it in Python (`hmac.compare_digest`), sets `engineeringMode` and audits `engineering_mode_unlocked` / `engineering_unlock_failed`. `setConfig` / `saveConfigs` refuse `engineeringMode = True` in every build (only False, the "Disable engineering mode" button, gets through), and `runCalibration` / `runTestScan` refuse without engineering mode. A `--clinical` source run still has the module and relies on the runtime `clinicalMode` check, like the updater. |
 | `pages/BloodFlow.qml` | Main scan page: patient info, sensor config, trigger. The only page `main.qml` loads. |
 | `components/PlotViewer.qml` | Real-time + replay BFI/BVI plot viewer (pan/zoom DVR, autoscale). |
+| `components/UpdateBanner.qml` + `components/UpdatesModal.qml` | Unified updates UX (#514): one banner for app **and** firmware offers; "Review" (or the first detection of a new item+version, deferred while a scan/check runs) raises `UpdatesModal` at z 10500 above every page modal. Per-item Update, or **Update all** → connector `startUpdateAll`, which flashes firmware sensors-first (`BATCH_FIRMWARE_ORDER` = left, right, console), stops at the first failure, then runs the app install (quits + relaunches). A flashed device drops out of the offer until its power-cycle reconnect. Research-only like both updaters. |
 | `components/SettingsModal.qml` | Settings overlay (opened from BloodFlow — there is no `pages/Settings.qml`). |
 | `components/HistoryModal.qml` / `LogsModal.qml` | Scan history and the audit log. **Neither is password-protected in any build** (requirement, #703): Delete asks an "are you sure" confirm (`components/ConfirmModal.qml`, the generic confirm dialog; `PasswordPromptModal` is for real password checks only) and is audited (`scan_deleted`); Settings → Audit Log → View Logs opens the log directly. Don't add a password back without a requirement change. |
 | `pages/scan/` | `ScanRunner.qml` plus task QMLs: `CaptureDataTask`, `ContactQualityCheckTask`, `FlashSensorsTask`, `SetTriggerTask`. Newer orchestration suite. |
@@ -502,6 +503,21 @@ that commit list:
 
 Keep the raw commit list / compare-diff link below the curated sections —
 it's the audit trail, not something to delete.
+
+### In-app "What's new" notes (issue #597)
+
+The app shows a "What's new" modal the first time it launches after an
+upgrade. Its content is **bundled**, not fetched: `resources/whats_new.md`,
+one `## X.Y.Z` section per release, newest first (authoring rules in the
+file's header comment; `- [research]` bullets are dropped from Clinical).
+**Add the section before tagging the first rc of a release** — a build
+whose version has no section shows no modal at all. Pre-release suffixes
+share the base section, so testers see it once across dev/rc/final. The
+last dismissed version is the STATE key `whatsNewSeenVersion`; a fresh
+install (no `scans.db` yet) records it silently. Logic in `whats_new.py`,
+UI in `components/WhatsNewModal.qml` (reopenable from Settings →
+Application → "What's new"). The file is bundled by `openwater.spec`, the
+`build_macos.sh` heredoc and `scripts/build_nuitka.ps1` — keep all three.
 
 ## "Start here" by task
 
