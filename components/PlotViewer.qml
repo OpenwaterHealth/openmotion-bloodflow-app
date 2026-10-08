@@ -1525,9 +1525,13 @@ Rectangle {
     // display options can be set before the first scan: both edit viewer
     // and config state that outlives the source (onScanSourceChanged
     // leaves windowSeconds alone), and every refit they trigger is a no-op
-    // until a source is bound.
+    // until a source is bound. Shown only with the plot grid, though: on
+    // the "No active cameras selected" placeholder (no sensor connected,
+    // or no camera selected) there are no plots to set up yet, and the
+    // controls would only crowd that screen.
     Row {
         id: bottomRightOverlay
+        visible: grid.visible
         spacing: 8
         anchors.right: parent.right
         anchors.bottom: parent.bottom
