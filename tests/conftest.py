@@ -809,6 +809,11 @@ def _check_app_alive(request):
         yield
         return
     request.getfixturevalue("app")
+    if request.node.get_closest_marker("sdk_direct") is not None:
+        # The class closed the app on purpose so the SDK can own the USB
+        # devices (console_bench.console_free); it relaunches it at teardown.
+        yield
+        return
     global _app_dead_after
     if _app_dead_after is not None:
         pytest.fail(
