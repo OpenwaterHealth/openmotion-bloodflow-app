@@ -260,6 +260,9 @@ _LOW_STORAGE_TOAST_TAG = "low_storage"
 _CONNECTION_WATCHDOG_CONNECTING_GRACE_SEC = 10
 _CONNECTION_WATCHDOG_TOAST_TAG = "connection-watchdog"
 
+# The SDK's stable device handles, by MotionInterface attribute name.
+_DEVICES = ("console", "left", "right")
+
 
 def _scan_data_stall_decision(
     now_mono: float,
@@ -885,11 +888,11 @@ class MotionConnector(QObject):
     signalDisconnected = pyqtSignal(str, str)  # (descriptor, port)
 
     connectionStatusChanged = pyqtSignal()  # 🔹 New signal for connection updates
-    # Notify for ``sensorInitBusy`` (issue #303): a connect-time sensor init
-    # (debug flags, camera power/ID cache, info reads) is scheduled or
-    # running. The drain-side emit fires on the init worker thread; Qt
-    # auto-queues the cross-thread delivery to QML/main-thread consumers.
-    sensorInitBusyChanged = pyqtSignal()
+    # Notify for ``deviceInitBusy`` (issues #303, #667): a device's
+    # connect-time bring-up is scheduled or running. The drain-side emit
+    # fires on the init worker thread; Qt auto-queues the cross-thread
+    # delivery to QML/main-thread consumers.
+    deviceInitBusyChanged = pyqtSignal()
     stateChanged = pyqtSignal()  # Signal to notify QML of state changes
     laserStateChanged = pyqtSignal()  # Signal to notify QML of laser state changes
     safetyFailureStateChanged = pyqtSignal()  # Signal to notify QML of safety
@@ -1240,13 +1243,18 @@ class MotionConnector(QObject):
             "right": bool(right_sensor_connected),
         }
         self._config_running = False
-        # Per-side count of connect-time sensor inits scheduled or running
-        # (issue #303). Guarded by _sensor_init_lock: +1 on the GUI thread
-        # when _schedule_sensor_init arms the init, -1 on the init worker
-        # thread when it drains (success OR failure). Non-zero blocks
-        # pipeline starts via _ensure_idle / sensorInitBusy.
-        self._sensor_init_pending: dict[str, int] = {"left": 0, "right": 0}
-        self._sensor_init_lock = threading.Lock()
+        # Connect-time bring-up, per device (see _schedule_device_init).
+        # _device_init_pending counts bring-ups scheduled or running, under
+        # _device_init_lock: +1 on the GUI thread when one is scheduled, -1
+        # on the worker when it drains (success OR failure). Non-zero blocks
+        # pipeline starts via _ensure_idle / deviceInitBusy (issue #303).
+        # _device_connect_gen counts CONNECTED events, so a bring-up left
+        # over from an earlier connection stops at its next step, and
+        # _device_init_run_locks runs one bring-up per device at a time.
+        self._device_init_pending: dict[str, int] = {n: 0 for n in _DEVICES}
+        self._device_init_lock = threading.Lock()
+        self._device_connect_gen: dict[str, int] = {n: 0 for n in _DEVICES}
+        self._device_init_run_locks = {n: threading.Lock() for n in _DEVICES}
         self._laserOn = False
         self._safetyFailure = False
         self._safety_unknown_streak = 0  # see SAFETY_UNKNOWN_STREAK_THRESHOLD
@@ -1454,7 +1462,7 @@ class MotionConnector(QObject):
     def _apply_sensor_debug_flags(self) -> None:
         """Re-push the recomputed debug-flag bitmask to every connected sensor.
 
-        Unlike ``_run_sensor_init``, this writes even when ``flags == 0`` so
+        Unlike ``_init_sensor``, this writes even when ``flags == 0`` so
         that turning the last flag off actually clears it on the firmware.
         Used by the live Settings → Engineering toggles (``setSensorDebugFlag``)
         so no reconnect/restart is needed.
@@ -1474,76 +1482,181 @@ class MotionConnector(QObject):
             if not sensor.set_debug_flags(flags):
                 logger.warning("Failed to set debug flags on %s sensor", side)
 
-    def _sensor_init_note(self, side: str, delta: int) -> None:
-        """Adjust the per-side init-in-flight counter (issue #303).
+    # --- CONNECT-TIME BRING-UP ---------------------------------------------
+    # Every device gets a command sequence once it reaches CONNECTED. It runs
+    # on a worker thread, never in the state-change slot: SDK state changes
+    # are queued to the GUI thread, and the console's sequence alone is
+    # ~3.7 s of UART round-trips. On the GUI thread that froze the app, and
+    # every queued state change and timer waited behind it (#667: the
+    # startup watchdog fired late and missed a sensor's CONNECTING event).
 
-        +1 when a connect-time init is scheduled (GUI thread), -1 when the
-        worker drains — success or failure alike, so a failed init can't
-        leak the busy state. Emits sensorInitBusyChanged only on the
-        busy/idle edge; the drain-side emission happens on the init worker
-        thread and Qt auto-queues it to main-thread/QML consumers.
+    def _device_init_note(self, name: str, delta: int) -> None:
+        """Adjust the per-device bring-up counter (issue #303).
+
+        +1 when a bring-up is scheduled (GUI thread), -1 when the worker
+        drains — success or failure alike, so a failed bring-up can't leak
+        the busy state. Emits deviceInitBusyChanged only on the busy/idle
+        edge; the drain-side emission happens on the worker thread and Qt
+        auto-queues it to main-thread/QML consumers.
         """
-        with self._sensor_init_lock:
-            before = any(v > 0 for v in self._sensor_init_pending.values())
-            new = self._sensor_init_pending.get(side, 0) + delta
-            self._sensor_init_pending[side] = max(0, new)
-            after = any(v > 0 for v in self._sensor_init_pending.values())
+        with self._device_init_lock:
+            before = any(v > 0 for v in self._device_init_pending.values())
+            new = self._device_init_pending.get(name, 0) + delta
+            self._device_init_pending[name] = max(0, new)
+            after = any(v > 0 for v in self._device_init_pending.values())
         if before != after:
-            self.sensorInitBusyChanged.emit()
+            self.deviceInitBusyChanged.emit()
 
-    @pyqtProperty(bool, notify=sensorInitBusyChanged)
-    def sensorInitBusy(self) -> bool:
-        """True while any sensor's connect-time init is scheduled/running
-        (issue #303). QML holds Start/Check disabled on this; _ensure_idle
-        refuses pipeline starts with it up. Re-engages on every sensor
-        (re)connect because _schedule_sensor_init re-runs then."""
-        with self._sensor_init_lock:
-            return any(v > 0 for v in self._sensor_init_pending.values())
+    @pyqtProperty(bool, notify=deviceInitBusyChanged)
+    def deviceInitBusy(self) -> bool:
+        """True while any device's connect-time bring-up is scheduled or
+        running (issue #303). QML holds Start/Check disabled on this;
+        _ensure_idle refuses pipeline starts with it up. Re-engages on every
+        (re)connect because _schedule_device_init re-runs then."""
+        with self._device_init_lock:
+            return any(v > 0 for v in self._device_init_pending.values())
 
-    def _schedule_sensor_init(self, side: str):
-        """Delay initial sensor commands to allow USB settle, then run
-        them on a daemon worker thread. The init sequence is a multi-
-        command USB conversation with a built-in 0.5 s camera-power
-        settle sleep — on the GUI thread it froze the app for >0.5 s on
-        every sensor (re)connect."""
-        # Raise the init-in-flight gate immediately at schedule time
-        # (issue #303) — a Start clicked during the 1 s settle delay or the
-        # init sequence itself collides with the connect-time USB
-        # conversation and can wedge a camera until DUT power-cycle.
-        self._sensor_init_note(side, +1)
+    def _schedule_device_init(self, name: str) -> None:
+        """Run ``name``'s connect-time bring-up on a worker thread.
+
+        The busy gate goes up now (issue #303): a Start clicked before or
+        during the bring-up collides with it. For the console that means a
+        scan before the laser registers are loaded; for a sensor, a camera
+        wedged until a DUT power-cycle. Sensors wait 1 s first for USB to
+        settle."""
+        gen = self._device_connect_gen[name]
+        self._device_init_note(name, +1)
+        delay_ms = 0 if name == "console" else 1000
         QTimer.singleShot(
-            1000, lambda: self._start_sensor_init_worker(side)
-        )
+            delay_ms, lambda: self._start_device_init_worker(name, gen))
 
-    def _start_sensor_init_worker(self, side: str) -> None:
-        """Spawn the init worker. Worker-safety: the SDK serializes
-        per-device command I/O (CommInterface._io_lock/_send_lock), every
-        signal emitted from the sequence queues to the main thread, and
-        _raise_critical is worker-safe by contract — same pattern as the
-        CQ-check and past-scan-load workers."""
+    def _start_device_init_worker(self, name: str, gen: int) -> None:
+        """Spawn the bring-up worker. Worker-safety: the SDK serializes
+        per-device command I/O (MotionUart._io_lock for the console,
+        CommInterface._io_lock/_send_lock for sensors), every signal
+        emitted from the sequence queues to the main thread, _raise_critical
+        is worker-safe by contract and the audit log takes its own lock —
+        same pattern as the CQ-check and past-scan-load workers."""
         threading.Thread(
-            target=self._run_sensor_init, args=(side,),
-            name=f"sensor-init-{side}", daemon=True,
+            target=self._run_device_init, args=(name, gen),
+            name=f"{name}-init", daemon=True,
         ).start()
 
-    def _run_sensor_init(self, side: str):
-        """Run the connect-time init sequence for one sensor. Called on
-        a sensor-init worker thread (see _start_sensor_init_worker);
-        unit tests call it synchronously. Never raises — an uncaught
-        exception on a plain worker thread would vanish to stderr."""
-        try:
-            self._run_sensor_init_impl(side)
-        except Exception:
-            logger.exception("sensor init failed for %s sensor", side)
-        finally:
-            # Drop the init-in-flight gate on success AND failure — a
-            # leaked busy state would lock Start/Check forever (issue #303).
-            self._sensor_init_note(side, -1)
+    def _run_device_init(self, name: str, gen: int) -> None:
+        """Run one bring-up, on its worker (unit tests call it directly).
 
-    def _run_sensor_init_impl(self, side: str):
-        if side == "left" and not self._leftSensorConnected:
-            return
-        if side == "right" and not self._rightSensorConnected:
+        One at a time per device: the bring-up for a newer connection waits
+        for the old one, which stops at its next step (_init_is_current).
+        Never raises — an uncaught exception on a plain worker thread would
+        vanish to stderr."""
+        started = time.monotonic()
+        try:
+            with self._device_init_run_locks[name]:
+                if name == "console":
+                    self._init_console(gen)
+                else:
+                    self._init_sensor(name, gen)
+        except Exception:
+            logger.exception("connect-time init failed for %s", name)
+        finally:
+            logger.info("Connect-time init for %s done in %.2f s", name,
+                        time.monotonic() - started)
+            # Drop the busy gate on success AND failure — a leaked busy
+            # state would lock Start/Check forever (issue #303).
+            self._device_init_note(name, -1)
+
+    def _init_is_current(self, name: str, gen: int) -> bool:
+        """True while the connection a bring-up was scheduled for is still
+        up: no newer CONNECTED event, and the SDK still reports the device
+        connected."""
+        if gen != self._device_connect_gen[name]:
+            return False
+        try:
+            return bool(getattr(self._interface, name).is_connected())
+        except Exception:
+            return False
+
+    def _init_console(self, gen: int) -> None:
+        """Console bring-up, once per connection: the laser-driver FPGA
+        registers and the TEC/fan settings do not survive a power cycle.
+
+        Each step stands alone, so one that fails cannot skip the laser
+        parameters after it. If the console disconnects mid-sequence the
+        rest is skipped; the disconnect has its own notice."""
+        steps = [
+            ("identity and calibration", self._interface.log_console_info),
+            ("TEC voltage", self._init_console_tec_voltage),
+            ("fan speed", self._init_console_fan),
+        ]
+        if self._console_debug_logging:
+            steps.append(("debug logging", self._init_console_debug_logging))
+        steps += [
+            ("laser parameters", lambda: self._init_console_laser(gen)),
+            ("TEC trip", lambda: self.apply_tec_trip_from_config(self._interface)),
+            ("device stats", lambda: self._log_device_stats("console")),
+        ]
+        for label, step in steps:
+            if not self._init_is_current("console", gen):
+                logger.info("Console init stopped before %s: the console "
+                            "disconnected", label)
+                return
+            try:
+                step()
+            except Exception as e:
+                logger.warning("Console init: %s failed: %s", label, e)
+
+    def _init_console_tec_voltage(self) -> None:
+        # EVT2 consoles (board-ID strap 1) need +1.16 V on the TEC DAC to
+        # hold the lasers at 25 C; DVT and beyond use TEC_VOLTAGE_DEFAULT
+        # from config/tec_params.py (issue #269).
+        voltage, why = select_tec_voltage(
+            self._interface.console, self._tec_voltage_params)
+        if self._interface.console.tec_voltage(voltage):
+            logger.info(f"Console TEC voltage set to {voltage}V ({why})")
+        else:
+            logger.error(
+                f"Failed to set console TEC voltage to {voltage}V ({why})")
+
+    def _init_console_fan(self) -> None:
+        if self._interface.console.set_fan_speed(fan_speed=100):
+            logger.info("Console fan speed set to 100%")
+            self._console_fan_on = True
+            self.consoleFanChanged.emit()
+        else:
+            logger.error("Failed to set console fan speed")
+
+    def _init_console_debug_logging(self) -> None:
+        # The flag is RAM-only on the MCU, so it resets across reconnects
+        # and power cycles. Only re-applied when on: the firmware default
+        # is off.
+        if self._interface.console.enable_usb_printf(True):
+            logger.info("Console debug logging re-enabled")
+        else:
+            logger.error("Failed to re-enable console debug logging")
+
+    def _init_console_laser(self, gen: int) -> None:
+        """Load the laser-driver registers (volatile across power cycles;
+        scans don't re-apply them). E-103 when they aren't loaded and the
+        console is still connected, since a scan would then run dark."""
+        try:
+            ok = self.set_laser_power_from_config(self._interface)
+        except Exception as e:
+            logger.error("Applying laser power params raised: %s", e)
+            ok = False
+        if ok:
+            logger.info("Laser power params applied from config")
+        elif self._init_is_current("console", gen):
+            logger.error("Failed to apply laser power params from config")
+            self._raise_critical(
+                "E-103", detail="laser power params not applied")
+        else:
+            logger.warning("Laser power params not applied: the console "
+                           "disconnected")
+
+    def _init_sensor(self, side: str, gen: int) -> None:
+        """Sensor bring-up: debug flags, I2C health, camera ID cache,
+        identity log."""
+        if not self._init_is_current(side, gen):
             return
 
         # Apply sensor debug flags (USB has had time to settle after connection)
@@ -1617,6 +1730,7 @@ class MotionConnector(QObject):
         # mirrors log_console_info on console connect and log_system_info at
         # startup — the three "log the configuration" calls.
         self._interface.log_sensor_info(side)
+        self._log_device_stats(side)
 
         self.connectionStatusChanged.emit()
 
@@ -1651,37 +1765,32 @@ class MotionConnector(QObject):
     def _sdk_state(self, name: str):
         """The SDK's live connection state for ``name`` (None if unreadable).
 
-        The cached ``_xxxConnected`` flags trail it: state changes are queued
-        to the GUI thread, and the console's connect-time setup holds that
-        thread for ~3.7 s. A sensor powered on with the console is
-        mid-handshake exactly then, and an overdue watchdog timer is delivered
-        before its queued CONNECTING event (#667)."""
+        The startup watchdog reads this rather than the connector's
+        ``_xxxConnected`` flags, which only catch up once the queued
+        state-change event is handled: a deadline that fires while the GUI
+        thread is busy would otherwise miss a device the SDK already reports
+        CONNECTING or CONNECTED (#667)."""
         try:
             return getattr(self._interface, name).state
         except Exception:
             return None
 
-    def _device_up(self, name: str) -> bool:
-        """Connected by either account: the cached flag, or the SDK's live
-        state while its CONNECTED event is still queued."""
+    def _sdk_connected(self, name: str) -> bool:
         from omotion import ConnectionState
-        cached = {"console": self._consoleConnected,
-                  "left": self._leftSensorConnected,
-                  "right": self._rightSensorConnected}[name]
-        return bool(cached) or self._sdk_state(name) == ConnectionState.CONNECTED
+        return self._sdk_state(name) == ConnectionState.CONNECTED
 
     def _connection_shortfall(self) -> tuple[bool, int, bool]:
-        """``(console_missing, n_sensors, sensors_missing)`` against
-        ``requireConsole`` / ``minSensors``, per ``_device_up``."""
-        console_missing = self._require_console and not self._device_up("console")
-        n_sensors = (int(self._device_up("left"))
-                     + int(self._device_up("right")))
+        """``(console_missing, n_sensors, sensors_missing)`` from the SDK's
+        live states, against ``requireConsole`` / ``minSensors``."""
+        console_missing = self._require_console and not self._sdk_connected("console")
+        n_sensors = (int(self._sdk_connected("left"))
+                     + int(self._sdk_connected("right")))
         return console_missing, n_sensors, n_sensors < self._min_sensors
 
     def _check_connection_watchdog(self, final: bool = False) -> None:
         """Warn about devices that never connected within the startup timeout.
 
-        One-shot: reads the current connection state. A missing console
+        One-shot: reads the SDK's live device states. A missing console
         (E-104) and/or too few sensors (E-106) are non-blocking — they surface
         as a single yellow warning toast (bottom-right), not the critical
         modal, since the fix is usually just "plug it in". If *both* are
@@ -1695,11 +1804,6 @@ class MotionConnector(QObject):
         reports whatever is still not connected, connecting or not, so a
         device that keeps failing its handshake (CONNECTING -> DISCONNECTED
         -> CONNECTING ...) is still reported.
-
-        Both checks read the SDK's live state (``_sdk_state``), not only the
-        event-fed flags: a deadline that comes due during the console's
-        connect-time setup fires right after it, with the sensor's CONNECTING
-        event still queued.
         """
         try:
             from omotion import ConnectionState
@@ -1800,8 +1904,7 @@ class MotionConnector(QObject):
             logger.info(
                 "[Plot] sample scan offer suppressed — a device is connected "
                 "(console=%s left=%s right=%s)",
-                self._consoleConnected, self._leftSensorConnected,
-                self._rightSensorConnected)
+                *(self._sdk_connected(n) for n in _DEVICES))
             return
         if self._current_scan_source is not None:
             logger.info(
@@ -2192,188 +2295,10 @@ class MotionConnector(QObject):
 
         if name == "console":
             self._consoleConnected = is_now_connected
-            if is_now_connected:
-                # Record connection time for safety grace period
-                self._console_connected_at = time.monotonic()
-                # Race-guard: by the time this slot fires we observe
-                # CONNECTED, but the console can disconnect again before
-                # any of these calls return — particularly during the
-                # post-power-cycle reconnect storm where a single
-                # PermissionError on the COM port immediately drives
-                # CONNECTED -> DISCONNECTING. Without the try/except,
-                # tec_voltage / set_fan_speed raise
-                # "ValueError: Motion Console not connected" out of the
-                # Qt slot, which propagates as an unhandled Python
-                # exception and terminates the app process.
-                try:
-                    self._interface.log_console_info()
-                    # EVT2 consoles (board-ID strap 1) need +1.16 V on the
-                    # TEC DAC to hold the lasers at 25 C; DVT and beyond use
-                    # TEC_VOLTAGE_DEFAULT from config/tec_params.py (issue #269).
-                    tec_voltage, tec_reason = select_tec_voltage(
-                        self._interface.console, self._tec_voltage_params
-                    )
-                    if self._interface.console.tec_voltage(tec_voltage):
-                        logger.info(
-                            f"Console TEC voltage set to {tec_voltage}V "
-                            f"({tec_reason})"
-                        )
-                    else:
-                        logger.error(
-                            f"Failed to set console TEC voltage to "
-                            f"{tec_voltage}V ({tec_reason})"
-                        )
-                    if self._interface.console.set_fan_speed(fan_speed=100):
-                        logger.info("Console fan speed set to 100%")
-                        self._console_fan_on = True
-                        self.consoleFanChanged.emit()
-                    else:
-                        logger.error("Failed to set console fan speed")
-                    # Re-apply the console debug-log flag — it is RAM-only on
-                    # the MCU, so it resets across reconnects/power-cycles.
-                    # Default-off needs no action (firmware default is off).
-                    if self._console_debug_logging:
-                        # Optional debug-logging re-apply must never abort the
-                        # safety-critical laser-power application that follows.
-                        # Guard it independently (e.g. an omotion build lacking
-                        # console.enable_usb_printf would otherwise raise
-                        # AttributeError and skip set_laser_power_from_config,
-                        # leaving the laser dark — its FPGA drive registers are
-                        # volatile and reloaded only here).
-                        try:
-                            if self._interface.console.enable_usb_printf(True):
-                                logger.info("Console debug logging re-enabled")
-                            else:
-                                logger.error("Failed to re-enable console debug logging")
-                        except Exception as e:  # noqa: BLE001
-                            logger.warning(
-                                "Console debug logging re-apply failed; "
-                                "continuing connect-time setup: %s", e
-                            )
-                    # Apply laser-power params once per console connect —
-                    # the FPGA registers are volatile across power cycles,
-                    # so every (re)connect needs them. Scans no longer
-                    # re-apply per run (was SetTriggerLaserTask + the
-                    # issue-#108 cold-start guards).
-                    if self.set_laser_power_from_config(self._interface):
-                        logger.info("Laser power params applied from config")
-                    else:
-                        logger.error("Failed to apply laser power params from config")
-                        self._raise_critical(
-                            "E-103", detail="laser power params not applied")
-                    # Push the configured TEC over-temp trip (tecTripTempC, °C)
-                    # into the console user config. Read-modify-write that
-                    # preserves calibration + OPT/EE keys; non-fatal on a bad
-                    # value or write failure (device keeps its existing trip).
-                    self.apply_tec_trip_from_config(self._interface)
-                except Exception as e:
-                    logger.warning(
-                        f"Console connect-time setup interrupted "
-                        f"(probably mid-flight disconnect): {e}"
-                    )
-            elif is_now_lost:
-                # Clear connection timestamp on disconnect
-                self._console_connected_at = None
-                # A dead console can't be driving the laser trigger, and it
-                # can't deliver the SDK's trigger-OFF event either (its
-                # stop_trigger raises during teardown). Close the trigger
-                # clock at detection time so the notes duration line and the
-                # header counter stop here instead of counting several more
-                # seconds of scan teardown (issue #201).
-                if self._trigger_state == "ON" or self._trigger_on_mono is not None:
-                    logger.warning(
-                        "Console lost while trigger ON — closing the trigger "
-                        "clock at disconnect detection (%s)", reason,
-                    )
-                    self._trigger_clock_close()
-                    self._trigger_state = "OFF"
-                    self.triggerStateChanged.emit()
-        elif name == "left":
-            if is_now_connected:
-                self._leftSensorConnected = True
-                self._schedule_sensor_init("left")
-            elif is_now_lost:
-                self._leftSensorConnected = False
-                self._last_fan_status["left"] = None
-                self.sensorFanChanged.emit()
-                try:
-                    if getattr(self._interface.left, "clear_id_cache", None):
-                        self._interface.left.clear_id_cache()
-                except Exception:
-                    logger.debug("clear_id_cache failed for left", exc_info=True)
-        elif name == "right":
-            if is_now_connected:
-                self._rightSensorConnected = True
-                self._schedule_sensor_init("right")
-            elif is_now_lost:
-                self._rightSensorConnected = False
-                self._last_fan_status["right"] = None
-                self.sensorFanChanged.emit()
-                try:
-                    if getattr(self._interface.right, "clear_id_cache", None):
-                        self._interface.right.clear_id_cache()
-                except Exception:
-                    logger.debug("clear_id_cache failed for right", exc_info=True)
-
         if is_now_connected:
-            logger.info("Handle %s -> CONNECTED (%s)", name, reason)
-            # Re-arm the first-loss edge (issue #489) — the next drop is a
-            # real one worth surfacing again.
-            self._device_was_connected[name] = True
-            # A '<device> disconnected' card must not outlive the reconnect
-            # (issue #489): during a console power-cycle the cards kept
-            # saying 'disconnected' after the devices were already back.
-            self.dismissNotification(f"disconnect_{name}")
-            self._withdraw_connection_watchdog_toast()
-            self.signalConnected.emit(name, "")
-            self._audit.log("device_connected",
-                            {"device": name, "reason": str(reason)})
-            self._log_device_stats(name)
+            self._on_device_connected(name, reason)
         elif is_now_lost:
-            logger.info(
-                "Handle %s -> DISCONNECTED (%s) and state is %s",
-                name, reason, self._state,
-            )
-            self.signalDisconnected.emit(name, "")
-            self._audit.log("device_disconnected",
-                            {"device": name, "reason": str(reason)})
-            # Drop the cached firmware version so System Information no
-            # longer reports a stale value for the unplugged device.
-            if name in self._firmware_versions and self._firmware_versions[name]:
-                self._firmware_versions[name] = ""
-                self.firmwareVersionsChanged.emit()
-            if self._device_serials.get(name):
-                self._device_serials[name] = ""
-                self.deviceIdentityChanged.emit()
-            if self._firmware_update_available.get(name):
-                self._firmware_update_available[name] = False
-                self._firmware_latest[name] = ""
-                self.firmwareUpdateInfoChanged.emit()
-            # Abort an in-flight FPGA flash / sensor-configure pipeline.
-            # The SDK does not subscribe to disconnect events for the
-            # configure-cameras flow (only start_scan does), so without
-            # this hand-off the QML flashTask waits on its 4-min watchdog
-            # and the Start button stays stuck on "Stop" through reconnect.
-            if self._config_running:
-                logger.warning(
-                    "Aborting in-flight camera configuration: %s disconnected",
-                    name,
-                )
-                try:
-                    self._interface.cancel_configure_camera_sensors()
-                except Exception as e:
-                    logger.debug("cancel_configure_camera_sensors raised: %s", e)
-                self._config_running = False
-                self.configFinished.emit(
-                    False, f"Device disconnected during sensor configuration ({name})"
-                )
-            # User-facing surfacing, gated on the first loss since the
-            # device last reached CONNECTED (issue #489) — the SDK monitor
-            # keeps retrying an absent device, and each failed retry ends in
-            # another CONNECTING -> DISCONNECTED event.
-            first_loss = self._device_was_connected.get(name, False)
-            self._device_was_connected[name] = False
-            self._surface_device_loss(name, first_loss, reason)
+            self._on_device_lost(name, reason)
         # CONNECTING / DISCONNECTING are intermediate; UI doesn't need to
         # fire a connect/disconnect signal for those, and emitting
         # connectionStatusChanged on every intermediate transition would
@@ -2383,6 +2308,111 @@ class MotionConnector(QObject):
         if is_now_connected or is_now_lost:
             self.connectionStatusChanged.emit()
             self.update_state()
+
+    def _on_device_connected(self, name: str, reason) -> None:
+        """Bookkeeping for a device that reached CONNECTED. No device I/O
+        here: this runs on the GUI thread, so the bring-up goes to a worker
+        (_schedule_device_init)."""
+        self._device_connect_gen[name] += 1
+        if name == "console":
+            # Start of the safety-status grace period (readSafetyStatus).
+            self._console_connected_at = time.monotonic()
+        elif name == "left":
+            self._leftSensorConnected = True
+        else:
+            self._rightSensorConnected = True
+        logger.info("Handle %s -> CONNECTED (%s)", name, reason)
+        # Before anything reacts to the connect: this raises the busy gate.
+        self._schedule_device_init(name)
+        # Re-arm the first-loss edge (issue #489) — the next drop is a
+        # real one worth surfacing again.
+        self._device_was_connected[name] = True
+        # A '<device> disconnected' card must not outlive the reconnect
+        # (issue #489): during a console power-cycle the cards kept
+        # saying 'disconnected' after the devices were already back.
+        self.dismissNotification(f"disconnect_{name}")
+        self._withdraw_connection_watchdog_toast()
+        self.signalConnected.emit(name, "")
+        self._audit.log("device_connected",
+                        {"device": name, "reason": str(reason)})
+
+    def _on_device_lost(self, name: str, reason) -> None:
+        """Bookkeeping and user-facing surfacing for a device that reached
+        DISCONNECTED."""
+        if name == "console":
+            self._console_connected_at = None
+            # A dead console can't be driving the laser trigger, and it
+            # can't deliver the SDK's trigger-OFF event either (its
+            # stop_trigger raises during teardown). Close the trigger
+            # clock at detection time so the notes duration line and the
+            # header counter stop here instead of counting several more
+            # seconds of scan teardown (issue #201).
+            if self._trigger_state == "ON" or self._trigger_on_mono is not None:
+                logger.warning(
+                    "Console lost while trigger ON — closing the trigger "
+                    "clock at disconnect detection (%s)", reason,
+                )
+                self._trigger_clock_close()
+                self._trigger_state = "OFF"
+                self.triggerStateChanged.emit()
+        else:
+            if name == "left":
+                self._leftSensorConnected = False
+            else:
+                self._rightSensorConnected = False
+            self._last_fan_status[name] = None
+            self.sensorFanChanged.emit()
+            try:
+                sensor = getattr(self._interface, name)
+                if getattr(sensor, "clear_id_cache", None):
+                    sensor.clear_id_cache()
+            except Exception:
+                logger.debug("clear_id_cache failed for %s", name, exc_info=True)
+
+        logger.info(
+            "Handle %s -> DISCONNECTED (%s) and state is %s",
+            name, reason, self._state,
+        )
+        self.signalDisconnected.emit(name, "")
+        self._audit.log("device_disconnected",
+                        {"device": name, "reason": str(reason)})
+        # Drop the cached firmware version so System Information no
+        # longer reports a stale value for the unplugged device.
+        if name in self._firmware_versions and self._firmware_versions[name]:
+            self._firmware_versions[name] = ""
+            self.firmwareVersionsChanged.emit()
+        if self._device_serials.get(name):
+            self._device_serials[name] = ""
+            self.deviceIdentityChanged.emit()
+        if self._firmware_update_available.get(name):
+            self._firmware_update_available[name] = False
+            self._firmware_latest[name] = ""
+            self.firmwareUpdateInfoChanged.emit()
+        # Abort an in-flight FPGA flash / sensor-configure pipeline.
+        # The SDK does not subscribe to disconnect events for the
+        # configure-cameras flow (only start_scan does), so without
+        # this hand-off the QML flashTask waits on its 4-min watchdog
+        # and the Start button stays stuck on "Stop" through reconnect.
+        if self._config_running:
+            logger.warning(
+                "Aborting in-flight camera configuration: %s disconnected",
+                name,
+            )
+            try:
+                self._interface.cancel_configure_camera_sensors()
+            except Exception as e:
+                logger.debug("cancel_configure_camera_sensors raised: %s", e)
+            self._config_running = False
+            self.configFinished.emit(
+                False, f"Device disconnected during sensor configuration ({name})"
+            )
+        # User-facing surfacing, gated on the first loss since the
+        # device last reached CONNECTED (issue #489) — the SDK monitor
+        # keeps retrying an absent device, and each failed retry ends in
+        # another CONNECTING -> DISCONNECTED event.
+        first_loss = self._device_was_connected.get(name, False)
+        self._device_was_connected[name] = False
+        self._surface_device_loss(name, first_loss, reason)
 
     def _log_device_stats(self, name: str) -> None:
         """Best-effort audit of a device's hardware + firmware IDs on
@@ -2407,8 +2437,8 @@ class MotionConnector(QObject):
             "device": name, "hardware_id": hwid, "firmware_version": fw,
             "serial": serial,
         })
-        # Cache for the Settings → System Information card. Fired from the
-        # SDK connection-monitor thread; the bound QML rows update via the
+        # Cache for the Settings → System Information card. Runs on the
+        # device's bring-up worker; the bound QML rows update via the
         # queued firmwareVersionsChanged emit.
         if name in self._firmware_versions:
             self._firmware_versions[name] = fw
@@ -2419,8 +2449,8 @@ class MotionConnector(QObject):
         """Re-read a device's programmed serial number, cache it for
         Settings → About (#529) and return it ("" when unprogrammed or
         unknown). Best-effort like _log_device_stats — identity reads never
-        block a connect. Runs on the SDK monitor thread at connect; the
-        emit queues to the main thread for QML."""
+        block a connect. Runs on the device's bring-up worker at connect;
+        the emit queues to the main thread for QML."""
         handle = getattr(self._interface, name, None)
         serial = ""
         try:
@@ -3543,7 +3573,7 @@ class MotionConnector(QObject):
         Mirrors the live ``setConsoleFan`` engineering toggle — no app restart
         or reconnect needed. Unknown keys are ignored. When no sensor is
         connected the value is still persisted and applies on the next
-        connect via ``_run_sensor_init``.
+        connect via ``_init_sensor``.
         """
         attr = self._SENSOR_DEBUG_FLAG_ATTRS.get(key)
         if attr is None:
@@ -3713,10 +3743,10 @@ class MotionConnector(QObject):
         """True when the console OR either sensor is currently connected.
 
         A lone sensor (no console) still counts as a device, so this gates
-        on the per-device connection state (``_device_up``) rather than the
-        DISCONNECTED FSM state (which reads DISCONNECTED for a single sensor
-        with no console)."""
-        return any(self._device_up(n) for n in ("console", "left", "right"))
+        on the SDK's per-device states rather than the DISCONNECTED FSM
+        state (which reads DISCONNECTED for a single sensor with no
+        console)."""
+        return any(self._sdk_connected(n) for n in _DEVICES)
 
     @pyqtSlot()
     def loadSampleScan(self) -> None:
@@ -5495,14 +5525,14 @@ class MotionConnector(QObject):
 
     def _ensure_idle(self) -> str | None:
         """Gate for pipeline-starting slots (capture / configure / check)."""
-        # Issue #303: the post-connect sensor init (debug flags, camera
-        # power masks, info reads) runs async for a few seconds after the
-        # handles report READY. A capture/CQ/configure started inside that
-        # window collides with the in-flight init — "Failed to program
-        # FPGA" on both sensors, camera wedged until power-cycle. The UI
-        # start gate polls isPipelineIdle and defers past this.
-        if self.sensorInitBusy:
-            return ("Sensors are still initializing — wait a few seconds "
+        # Issue #303: the connect-time bring-up runs async for a few
+        # seconds after the handles report READY. A capture/CQ/configure
+        # started inside that window collides with it: on a sensor,
+        # "Failed to program FPGA" and a camera wedged until power-cycle;
+        # on the console, a scan before the laser registers are loaded.
+        # The UI start gate polls isPipelineIdle and defers past this.
+        if self.deviceInitBusy:
+            return ("The system is still initializing — wait a few seconds "
                     "and try again")
         if self._cq_quick_running:
             return "Contact-quality check already in progress"
@@ -6764,6 +6794,11 @@ class MotionConnector(QObject):
         if not self._consoleConnected:
             self.captureLog.emit("⚠️ Cannot calibrate: console not connected.")
             return
+        if self.deviceInitBusy:
+            # The laser registers may not be loaded yet (_init_console).
+            self.captureLog.emit(
+                "⚠️ Cannot calibrate: the system is still initializing.")
+            return
 
         target = (target or "both").lower().strip()
         if target not in ("left", "right", "both"):
@@ -6882,6 +6917,11 @@ class MotionConnector(QObject):
             self.captureLog.emit(
                 "⚠️ Cannot run Test scan: console not connected."
             )
+            return
+        if self.deviceInitBusy:
+            # The laser registers may not be loaded yet (_init_console).
+            self.captureLog.emit(
+                "⚠️ Cannot run Test scan: the system is still initializing.")
             return
 
         target = (target or "both").lower().strip()

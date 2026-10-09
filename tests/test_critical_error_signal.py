@@ -12,8 +12,12 @@ pytestmark = pytest.mark.unit
 
 
 def _connector(tmp_path, app_config=None, connected=(True, True, True)):
+    from omotion import ConnectionState as S
     iface = MagicMock()
     iface.is_device_connected.return_value = connected
+    # The startup watchdog reads the handles' live SDK state.
+    for name, up in zip(("console", "left", "right"), connected):
+        getattr(iface, name).state = S.CONNECTED if up else S.DISCONNECTED
     iface.scan_workflow.running = False
     iface.scan_workflow.config_running = False
     iface.scan_db_path = None
@@ -237,8 +241,7 @@ def _timers(monkeypatch):
 
 def _sdk_state(conn, name, state):
     """The SDK's own state change, before its queued event reaches the
-    connector: the GUI thread is busy, e.g. in the console's connect-time
-    setup."""
+    connector because the GUI thread is busy."""
     getattr(conn._interface, name).state = state
 
 

@@ -4,7 +4,7 @@ Unlike ``histoCmp``/``sensorDebugLogging`` (live Settings -> Developer
 toggles), ``deferHistoSend`` is config-only: it is read from the app config at
 construction into ``_send_data_defer`` and folded into the sensor debug-flag
 bitmask by ``_compute_sensor_debug_flags``, which is pushed to each sensor at
-connect via ``_run_sensor_init``. The firmware bit moves the per-frame
+connect via ``_init_sensor``. The firmware bit moves the per-frame
 histogram send out of the FSIN ISR into the main loop (sensor-fw#68).
 """
 
@@ -60,10 +60,10 @@ def test_combines_with_histo_cmp(tmp_path):
 
 def test_pushed_to_connected_sensor_at_init(tmp_path):
     # Config-only flags have no live-toggle path: they reach the firmware via
-    # the connect-time _run_sensor_init push, so that is what we exercise here.
+    # the connect-time _init_sensor push, so that is what we exercise here.
     c, iface = _connector(tmp_path, {"deferHistoSend": True})
     c._leftSensorConnected = True
 
-    c._run_sensor_init("left")
+    c._run_device_init("left", c._device_connect_gen["left"])
 
     iface.left.set_debug_flags.assert_called_once_with(DEBUG_FLAG_SEND_DEFER)

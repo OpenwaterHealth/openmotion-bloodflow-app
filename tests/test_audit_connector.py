@@ -113,6 +113,8 @@ def test_connect_logs_device_connected_and_stats(tmp_path):
         handle, ConnectionState.DISCONNECTED, ConnectionState.CONNECTED,
         "found",
     )
+    # The connect-time bring-up (a worker in the app) logs the stats.
+    c._run_device_init("console", c._device_connect_gen["console"])
     t = _types(c)
     assert "device_connected" in t
     assert "device_stats" in t

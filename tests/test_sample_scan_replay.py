@@ -172,8 +172,13 @@ def test_past_scan_source_from_csv_serves_replay_points(tmp_path):
 
 def _connector(tmp_path, *, console, left, right, scan_db_path=None,
                app_config=None):
+    from omotion import ConnectionState
     iface = MagicMock()
     iface.is_device_connected.return_value = (console, left, right)
+    # The startup watchdog and its offer gate read the handles' live state.
+    for name, up in (("console", console), ("left", left), ("right", right)):
+        getattr(iface, name).state = (ConnectionState.CONNECTED if up
+                                      else ConnectionState.DISCONNECTED)
     iface.scan_workflow.running = False
     iface.scan_workflow.config_running = False
     iface.scan_db_path = scan_db_path
