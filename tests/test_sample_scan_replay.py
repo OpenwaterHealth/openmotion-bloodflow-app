@@ -455,6 +455,21 @@ def test_watchdog_no_offer_when_any_device_is_connected(
     assert offers == []
 
 
+def test_watchdog_no_offer_when_the_sdk_reports_a_device_connected(tmp_path):
+    """A console the SDK reports CONNECTED counts even while its CONNECTED
+    event is still queued behind a busy GUI thread (#667): the rig gets the
+    E-106 sensor warning, not a sample-dataset offer."""
+    from omotion import ConnectionState
+    c = _connector(tmp_path, console=False, left=False, right=False,
+                   app_config={"clinicalMode": False})
+    c._interface.console.state = ConnectionState.CONNECTED
+    offers = _offers(c)
+
+    c._check_connection_watchdog()
+
+    assert offers == []
+
+
 def test_watchdog_no_offer_when_a_source_is_already_bound(tmp_path):
     """Something already showing (e.g. a past scan the user opened from
     History during the 12 s window) is never clobbered by the offer."""

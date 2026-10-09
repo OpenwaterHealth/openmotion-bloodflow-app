@@ -235,7 +235,17 @@ def _timers(monkeypatch):
     return timers
 
 
+def _sdk_state(conn, name, state):
+    """The SDK's own state change, before its queued event reaches the
+    connector: the GUI thread is busy, e.g. in the console's connect-time
+    setup."""
+    getattr(conn._interface, name).state = state
+
+
 def _state_event(conn, name, old, new, reason="poll_arrived"):
+    """A state change the connector has handled. The SDK sets its state
+    before it emits, so the live state already reads ``new``."""
+    _sdk_state(conn, name, new)
     handle = MagicMock()
     handle.name = name
     conn._on_handle_state_changed_impl(handle, old, new, reason)
@@ -273,6 +283,48 @@ def test_watchdog_defers_while_sensor_connecting_qa_sequence(tmp_path, monkeypat
 
     assert [n for n in notifs if n["tag"] == "connection-watchdog"] == []
     assert len(_watchdog_rechecks(timers)) == 1  # the re-check is final
+
+
+def test_watchdog_defers_on_sdk_connecting_before_its_event_arrives(
+        tmp_path, monkeypatch):
+    """The 1.5.4-dev.4 QA failure (#667): the console's connect-time setup
+    held the GUI thread ~3.7 s, the left sensor went CONNECTING in the SDK
+    inside that window, and the overdue deadline ran before the queued
+    CONNECTING event. The connector's own flags still said "missing"; the
+    SDK's live state says "connecting", so the check waits."""
+    from omotion import ConnectionState as S
+    conn = _connector(tmp_path, connected=(True, False, False))
+    timers = _timers(monkeypatch)
+    notifs = _notifs(conn)
+
+    _sdk_state(conn, "left", S.CONNECTING)
+    conn._check_connection_watchdog()
+
+    assert notifs == []
+    rechecks = _watchdog_rechecks(timers)
+    assert len(rechecks) == 1
+
+    _state_event(conn, "left", S.DISCONNECTED, S.CONNECTING)
+    _state_event(conn, "left", S.CONNECTING, S.CONNECTED, "ping_ok")
+    rechecks[0]()
+
+    assert [n for n in notifs if n["tag"] == "connection-watchdog"] == []
+
+
+def test_watchdog_counts_sdk_connected_before_its_event_arrives(
+        tmp_path, monkeypatch):
+    """A sensor the SDK already reports CONNECTED is not missing, even with
+    its CONNECTED event still queued: no warning and no re-check."""
+    from omotion import ConnectionState as S
+    conn = _connector(tmp_path, connected=(True, False, False))
+    timers = _timers(monkeypatch)
+    notifs = _notifs(conn)
+
+    _sdk_state(conn, "right", S.CONNECTED)
+    conn._check_connection_watchdog()
+
+    assert notifs == []
+    assert _watchdog_rechecks(timers) == []
 
 
 def test_watchdog_recheck_reports_sensor_that_failed_to_connect(

@@ -1239,12 +1239,6 @@ class MotionConnector(QObject):
             "left": bool(left_sensor_connected),
             "right": bool(right_sensor_connected),
         }
-        # Per-device "SDK state is CONNECTING" (mid-handshake), kept from the
-        # same events as the flags above so the startup watchdog reads one
-        # consistent snapshot (#667).
-        self._device_connecting: dict[str, bool] = {
-            "console": False, "left": False, "right": False,
-        }
         self._config_running = False
         # Per-side count of connect-time sensor inits scheduled or running
         # (issue #303). Guarded by _sensor_init_lock: +1 on the GUI thread
@@ -1654,18 +1648,40 @@ class MotionConnector(QObject):
                 self._check_connection_watchdog,
             )
 
+    def _sdk_state(self, name: str):
+        """The SDK's live connection state for ``name`` (None if unreadable).
+
+        The cached ``_xxxConnected`` flags trail it: state changes are queued
+        to the GUI thread, and the console's connect-time setup holds that
+        thread for ~3.7 s. A sensor powered on with the console is
+        mid-handshake exactly then, and an overdue watchdog timer is delivered
+        before its queued CONNECTING event (#667)."""
+        try:
+            return getattr(self._interface, name).state
+        except Exception:
+            return None
+
+    def _device_up(self, name: str) -> bool:
+        """Connected by either account: the cached flag, or the SDK's live
+        state while its CONNECTED event is still queued."""
+        from omotion import ConnectionState
+        cached = {"console": self._consoleConnected,
+                  "left": self._leftSensorConnected,
+                  "right": self._rightSensorConnected}[name]
+        return bool(cached) or self._sdk_state(name) == ConnectionState.CONNECTED
+
     def _connection_shortfall(self) -> tuple[bool, int, bool]:
-        """``(console_missing, n_sensors, sensors_missing)`` from the cached
-        connection flags, against ``requireConsole`` / ``minSensors``."""
-        console_missing = self._require_console and not self._consoleConnected
-        n_sensors = (int(bool(self._leftSensorConnected))
-                     + int(bool(self._rightSensorConnected)))
+        """``(console_missing, n_sensors, sensors_missing)`` against
+        ``requireConsole`` / ``minSensors``, per ``_device_up``."""
+        console_missing = self._require_console and not self._device_up("console")
+        n_sensors = (int(self._device_up("left"))
+                     + int(self._device_up("right")))
         return console_missing, n_sensors, n_sensors < self._min_sensors
 
     def _check_connection_watchdog(self, final: bool = False) -> None:
         """Warn about devices that never connected within the startup timeout.
 
-        One-shot: reads the current cached connection state. A missing console
+        One-shot: reads the current connection state. A missing console
         (E-104) and/or too few sensors (E-106) are non-blocking — they surface
         as a single yellow warning toast (bottom-right), not the critical
         modal, since the fix is usually just "plug it in". If *both* are
@@ -1679,8 +1695,14 @@ class MotionConnector(QObject):
         reports whatever is still not connected, connecting or not, so a
         device that keeps failing its handshake (CONNECTING -> DISCONNECTED
         -> CONNECTING ...) is still reported.
+
+        Both checks read the SDK's live state (``_sdk_state``), not only the
+        event-fed flags: a deadline that comes due during the console's
+        connect-time setup fires right after it, with the sensor's CONNECTING
+        event still queued.
         """
         try:
+            from omotion import ConnectionState
             console_missing, n_sensors, sensors_missing = (
                 self._connection_shortfall())
             if not console_missing and not sensors_missing:
@@ -1690,7 +1712,7 @@ class MotionConnector(QObject):
                 expected = ((["console"] if console_missing else [])
                             + (["left", "right"] if sensors_missing else []))
                 connecting = [n for n in expected
-                              if self._device_connecting.get(n)]
+                              if self._sdk_state(n) == ConnectionState.CONNECTING]
                 if connecting:
                     logger.info(
                         "Connection watchdog: %s still connecting at the "
@@ -2137,8 +2159,10 @@ class MotionConnector(QObject):
         try:
             self._on_handle_state_changed_impl(handle, old, new, reason)
         except Exception as e:
-            # Top-level safety net: this slot is invoked from the SDK
-            # connection-monitor thread via Qt signals. Any uncaught
+            # Top-level safety net: the SDK emits from its
+            # connection-monitor thread, and Qt queues the call to this
+            # slot onto the GUI thread (so it runs late whenever the GUI
+            # thread is busy, e.g. in console connect setup). Any uncaught
             # exception here propagates as "Unhandled Python exception"
             # at the Qt boundary and terminates the bloodflow process.
             # Log loudly and swallow — the worst case is a stale UI
@@ -2165,9 +2189,6 @@ class MotionConnector(QObject):
             logger.info("Ignoring expected DFU disconnect for %s during "
                         "firmware update", name)
             return
-
-        if name in self._device_connecting:
-            self._device_connecting[name] = (new == ConnectionState.CONNECTING)
 
         if name == "console":
             self._consoleConnected = is_now_connected
@@ -3692,11 +3713,10 @@ class MotionConnector(QObject):
         """True when the console OR either sensor is currently connected.
 
         A lone sensor (no console) still counts as a device, so this gates
-        on the raw connection flags rather than the DISCONNECTED FSM state
-        (which reads DISCONNECTED for a single sensor with no console)."""
-        return bool(self._consoleConnected
-                    or self._leftSensorConnected
-                    or self._rightSensorConnected)
+        on the per-device connection state (``_device_up``) rather than the
+        DISCONNECTED FSM state (which reads DISCONNECTED for a single sensor
+        with no console)."""
+        return any(self._device_up(n) for n in ("console", "left", "right"))
 
     @pyqtSlot()
     def loadSampleScan(self) -> None:
