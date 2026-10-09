@@ -99,6 +99,15 @@ def find_export_csv(session_label: str | None = None) -> Path | None:
         if root.is_dir():
             found.extend(root.glob("*/Open-Motion/data/*_export.csv"))
             found.extend(root.glob("*/data/*_export.csv"))
+    # Only per-camera scan exports (bfi_l1 … columns) can feed the oracle;
+    # Clinical exports carry side averages only, so skip them.
+    def _per_camera(p: Path) -> bool:
+        try:
+            with p.open(encoding="utf-8", errors="replace") as f:
+                return "bfi_l1" in f.readline().split(",")
+        except OSError:
+            return False
+    found = [p for p in found if _per_camera(p)]
     if not found:
         return None
     if session_label:
