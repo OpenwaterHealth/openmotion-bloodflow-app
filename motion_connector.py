@@ -4119,7 +4119,7 @@ class MotionConnector(QObject):
                 return False
             materialize_corrected_csv(
                 str(db_path), int(session_id), output_path,
-                include_quality=True,
+                include_status=True,
             )
             self._write_export_notes(output_path, session)
             logger.info(
@@ -4188,7 +4188,7 @@ class MotionConnector(QObject):
                             folder, f"{label}_export.csv")
                         materialize_corrected_csv(
                             str(db_path), sid, out_path,
-                            include_quality=True,
+                            include_status=True,
                         )
                         self._write_export_notes(out_path, session)
                         result["exported"] += 1
