@@ -602,3 +602,50 @@ def test_view_buttons_are_hidden_in_clinical():
     row = qml[idx:idx + 200]
     assert "visible: !viewer.clinicalMode && !viewer.effectiveClinical" in row
     assert 'MotionInterface.setConfig("plotViewMode", value)' in qml
+
+
+# ── Offline cameras behind the averaged plot (issue #585) ───────────────
+
+
+def _badges(viewer):
+    return sorted(
+        (o.property("side"), int(o.property("camId")),
+         o.property("connectionLostText"))
+        for o in _walk(viewer)
+        if o.metaObject().className().startswith("PlotCell")
+        and o.property("connectionLost")
+    )
+
+
+@pytest.mark.parametrize("clinical", [False, True])
+def test_averaged_plot_shows_which_cameras_are_offline(research_viewer,
+                                                       clinical):
+    """The averaged side plot (research Average view and the clinical
+    layout) is cam_id -1, which no camera key ever matched, so an offline
+    camera behind the average never showed. It now badges while any of
+    its side's cameras is offline, naming them: the average keeps
+    plotting from the rest, so 'CONNECTION LOST' would be wrong."""
+    viewer, src, stub = research_viewer
+    if clinical:
+        viewer.setProperty("clinicalMode", True)
+    else:
+        stub.setConfig("plotViewMode", "average")
+    assert viewer.property("averageView") is True
+    assert _badges(viewer) == []
+
+    viewer.setProperty("_lostCameras", {"left:2": True})
+    assert _badges(viewer) == [("left", -1, "CAMERA 3 OFFLINE")]
+
+    viewer.setProperty("_lostCameras",
+                       {"left:2": True, "left:6": True, "right:0": True})
+    assert _badges(viewer) == [("left", -1, "CAMERAS 3, 7 OFFLINE"),
+                               ("right", -1, "CAMERA 1 OFFLINE")]
+
+    viewer.setProperty("_lostCameras", {})
+    assert _badges(viewer) == []
+
+
+def test_individual_cells_keep_connection_lost(research_viewer):
+    viewer, src, stub = research_viewer
+    viewer.setProperty("_lostCameras", {"right:4": True})
+    assert _badges(viewer) == [("right", 4, "CONNECTION LOST")]
