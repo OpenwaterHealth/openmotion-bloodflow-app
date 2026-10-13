@@ -354,7 +354,15 @@ def _summarise(results, events, gap_packet: int) -> dict:
                             worst_offset=None, final_offset=None)
             continue
         _, _, ts0, _, abs0, _ = before[-1]
-        offsets = [(r[4] - abs0) - round((r[2] - ts0) / PERIOD_S) for r in accepted_after]
+        # A completed scan ends with the firmware's terminal laser-off frame,
+        # which carries the next frame id but a timestamp ~150 ms late (the
+        # pipeline's TimestampRepairStage calls it the "expected firmware
+        # stop artifact"). It is the stop, not drift: leave it out when more
+        # than one accepted frame follows the gap. Seen as a -5 on every
+        # camera of both 1.8.3-rc.1 sensors on 2026-10-13, offset 0 for the
+        # 2380 frames before it.
+        tracked = accepted_after[:-1] if len(accepted_after) > 1 else accepted_after
+        offsets = [(r[4] - abs0) - round((r[2] - ts0) / PERIOD_S) for r in tracked]
         out[cam] = dict(
             quarantined=len(quarantined_after),
             reasons=dict(reasons[cam]),

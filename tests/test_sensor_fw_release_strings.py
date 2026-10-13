@@ -44,7 +44,10 @@ import pytest
 
 from conftest import log
 from console_bench import close_app, relaunch_app, sensors_session
-from hil_helpers import click_panel, find_app_log, log_size, uia_window, wait_for_pattern, click_element_center
+from hil_helpers import (
+    click_element_center, click_panel, find_app_log, log_size, move_window_on_screen,
+    recalibrate_panel_buttons, uia_window, wait_for_pattern,
+)
 from conftest import SLEEP
 
 pytestmark = [pytest.mark.release, pytest.mark.sdk_direct]
@@ -328,6 +331,11 @@ class TestReleaseFirmwareAppScan:
 
     def test_05_app_scan_runs_two_minutes(self, app):
         log_path = STATE["log"]
+        from conftest import require_focus
+        move_window_on_screen()
+        require_focus()
+        pos = recalibrate_panel_buttons()      # the session's cached sidebar positions can be stale
+        log.info(f"  sidebar recalibrated: Start at {pos.get('Start')}")
         off = log_size(log_path)
         click_panel("Start")
         deadline, gate = time.time() + 240, False
