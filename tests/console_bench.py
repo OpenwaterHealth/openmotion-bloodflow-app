@@ -23,6 +23,7 @@ from conftest import (
     _from_source_mode,
     PROJECT_ROOT,
     ensure_visible,
+    get_app_window,
     log,
 )
 from hil_helpers import RE_CONNECTED, find_app_log, log_size, wait_for_pattern
@@ -39,9 +40,10 @@ def led_name(state) -> str:
     return LED_NAME.get(state, f"?{state}")
 
 
-def close_app(timeout: float = 15.0) -> int:
-    """Terminate every running Open-Motion process. Returns the count."""
-    killed = 0
+def _app_processes() -> list:
+    """Every running Open-Motion process: the onefile launcher, the app it
+    unpacked, or a from-source ``python main.py``."""
+    found = []
     for proc in psutil.process_iter(["name", "cmdline"]):
         try:
             name = (proc.info.get("name") or "").lower()
@@ -51,6 +53,42 @@ def close_app(timeout: float = 15.0) -> int:
                     continue
             elif name not in _APP_PROCESS_NAMES:
                 continue
+            found.append(proc)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return found
+
+
+def close_app(timeout: float = 15.0) -> int:
+    """Close the app the way an operator does — WM_CLOSE to its window — and
+    only terminate what is still alive after ``timeout``. Returns the number
+    of processes that were running.
+
+    The packaged app is a Nuitka onefile: a small launcher unpacks the app
+    into ``%TEMP%/onefile_<pid>_*`` and deletes that folder when the app
+    exits. Terminating both processes at once kills the launcher before it
+    can clean up, and nothing ever removes the 200 MB folder afterwards
+    (app#727) — one per run, which is how this suite filled the QA PC's
+    temp folder."""
+    procs = _app_processes()
+    if not procs:
+        return 0
+    try:
+        win = get_app_window()
+        if win is not None:
+            win.close()
+            log.info("  sent close to the app window")
+    except Exception as e:
+        log.warning(f"  graceful close failed ({e}); will terminate")
+    _, alive = psutil.wait_procs(procs, timeout=timeout)
+    if not alive:
+        log.info(f"  app closed cleanly ({len(procs)} process(es))")
+        time.sleep(3)   # let the USB handles release before the SDK opens them
+        return len(procs)
+    log.warning(f"  {len(alive)} Open-Motion process(es) still alive after {timeout:.0f} s — terminating")
+    killed = 0
+    for proc in alive:
+        try:
             proc.terminate()
             try:
                 proc.wait(timeout=timeout)
@@ -59,10 +97,9 @@ def close_app(timeout: float = 15.0) -> int:
             killed += 1
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
-    if killed:
-        log.info(f"  closed {killed} Open-Motion process(es)")
-        time.sleep(3)   # let the USB handles release before the SDK opens them
-    return killed
+    log.info(f"  terminated {killed} Open-Motion process(es)")
+    time.sleep(3)   # let the USB handles release before the SDK opens them
+    return len(procs)
 
 
 def relaunch_app(connect_timeout: int = APP_CONNECT_TIMEOUT) -> None:

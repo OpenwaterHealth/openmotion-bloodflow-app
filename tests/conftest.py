@@ -352,6 +352,19 @@ def ensure_visible():
     return False
 
 
+def _is_app_process(pid: int) -> bool:
+    """True when ``pid`` is the packaged app or a from-source ``python main.py``."""
+    try:
+        proc = psutil.Process(pid)
+        name = (proc.name() or "").lower()
+        if name in ("python.exe", "pythonw.exe"):
+            cmdline = " ".join(proc.cmdline()).lower()
+            return "main.py" in cmdline and "openmotion-bloodflow-app" in cmdline
+        return name in _APP_PROCESS_NAMES
+    except Exception:
+        return False
+
+
 def uia_window(retries: int = 3):
 
     for attempt in range(retries):
@@ -363,8 +376,9 @@ def uia_window(retries: int = 3):
             # (research). Match both in one snapshot query — the old
             # exact title="Open-Motion" lookup silently missed every
             # research-mode run.
+            # "Open-Motion Service" is the clinical service tool (#706).
             hits = desktop.windows(
-                title_re=r"(?i)^Open-Motion( Research)?$")
+                title_re=r"(?i)^Open-Motion( Research| Service)?$")
             if hits:
                 return desktop.window(title=hits[0].window_text())
         except Exception as e:
@@ -378,8 +392,11 @@ def uia_window(retries: int = 3):
                 hits = desktop.windows(title_re=f"(?i).*{kw}.*")
                 for win in hits:
                     title = win.window_text()
-                    # Skip File Explorer, browser tabs, etc.
-                    if "File Explorer" in title or "Chrome" in title:
+                    # Only a window owned by the app itself: a browser tab
+                    # titled "OpenMotion Feature/Bug Tracking", an editor or
+                    # a File Explorer folder match the keywords too, and the
+                    # suite then calibrates its clicks on the wrong window.
+                    if not _is_app_process(win.process_id()):
                         continue
                     if any(k in title.lower() for k in APP_KEYWORDS):
                         return desktop.window(title=title)
@@ -535,8 +552,19 @@ def require_focus():
     w = get_app_window()
     try:
         if not w.isActive:
-            w.activate()
-            time.sleep(1)
+            # SetForegroundWindow can refuse with error 1314 while another
+            # process holds the foreground lock (the terminal that started
+            # pytest, usually). A synthetic key press releases the lock.
+            for attempt in range(3):
+                try:
+                    w.activate()
+                except Exception as e:
+                    log.warning(f"  activate() refused ({e}); retrying after a key press")
+                    pyautogui.press("alt")
+                    time.sleep(0.5)
+                time.sleep(1)
+                if w.isActive:
+                    break
             if not w.isActive:
                 raise RuntimeError(
                     f"App window '{w.title}' is not the active foreground window"
