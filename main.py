@@ -48,6 +48,7 @@ from utils.single_instance import check_single_instance, cleanup_single_instance
 from version import get_version
 from utils.resource_path import resource_path
 from utils import app_paths, config_store, settings_store, startup_report
+from utils.onefile_cleanup import start_background_sweep
 
 
 APP_VERSION = get_version()
@@ -476,6 +477,11 @@ def main():
     )
 
     motion_interface.log_system_info()
+
+    # Delete the %TEMP% extraction folders earlier launches orphaned when
+    # their onefile launcher was killed (#727). Only after the
+    # single-instance check: no other instance may be running from one.
+    start_background_sweep()
 
     qInstallMessageHandler(qt_message_handler)
 

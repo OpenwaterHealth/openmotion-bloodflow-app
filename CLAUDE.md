@@ -315,6 +315,21 @@ first signed release should be submitted to Microsoft's false-positive portal
 DLLs must be bundled (MSVC finds them; zig does not, so a local zig build
 relies on the target's installed runtime).
 
+**A killed launcher orphans its extraction folder (#727).** Onefile runs as
+two `Open-Motion.exe` processes: the launcher unpacks the payload and is the
+only thing that ever deletes it, after the app (its child) exits. Kill the
+launcher first (End process tree, forced sign-out, power loss, the HIL
+harness) and ~200 MB stays in `%TEMP%`. The app also keeps running without
+it: Nuitka's child-side parent watchdog is compiled out in the DLL mode we
+ship (`main.dll`). `utils/onefile_cleanup.py` handles this on the next launch,
+on a background thread after the single-instance check. It removes a sibling
+`onefile_<pid>_*` folder only when the folder holds our `omotion`/`pages`/
+`components` dirs, that pid is gone or recycled, and its `main.dll` can be
+deleted. Windows refuses to delete a loaded DLL, but it does allow renaming
+the folder around it, so a rename is not a valid in-use probe. Both the
+marker dirs and Nuitka's default folder name are pinned by
+`tests/test_onefile_cleanup.py`.
+
 **Only the Qt the app uses is bundled (#680).** `--include-qt-plugins=sensible,qml`
 on its own ships Qt's whole QML tree (Quick 3D, PDF, Multimedia, WebSockets, every
 Controls style, ...), every plugin in the sensible families, and the Qt libraries
