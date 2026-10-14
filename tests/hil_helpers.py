@@ -291,6 +291,11 @@ def find_app_log() -> Path | None:
         project_root,  # when launched via OPENWATER_FROM_SOURCE
         home / "Documents" / "Open-Motion",
         home / "Documents" / "OpenMotion",
+        # Installed builds (MSI) keep their state per user under
+        # %LOCALAPPDATA%\Openwater (#581), not next to the exe. Without this
+        # root every log assertion watched a portable build's log while the
+        # installed Research 1.5.3 was the app on screen (2026-10-14).
+        Path(os.environ.get("LOCALAPPDATA", home / "AppData" / "Local")) / "Openwater",
     ]
     candidates: list[Path] = []
     for root in roots:

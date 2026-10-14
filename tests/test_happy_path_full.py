@@ -123,6 +123,15 @@ from hil_helpers import (
 
 pytestmark = pytest.mark.release
 
+# Seconds to wait for the "Note saved." toast after closing the Notes modal.
+# The toast lands ~1 s after Escape on every build seen so far (dev.4 and
+# the installed Research 1.5.3). The 2026-10-14 failures of this step were
+# NOT a slow toast: find_app_log() did not yet search %LOCALAPPDATA%\Openwater,
+# so the step tailed a stale portable dev.4 log while the installed build
+# wrote the toast elsewhere (fixed in hil_helpers.find_app_log). The window
+# is kept generous because the wait returns as soon as the line appears.
+NOTE_SAVED_TIMEOUT_SEC = 20
+
 # Scan Settings + Check are hidden in clinical mode; declare the forced
 # value so conftest passes it to a from-source launch as --config-override
 # (#546: the config is compiled in, there is no on-disk flag). Same pattern
@@ -873,9 +882,9 @@ class TestHappyPathFull:
         pyautogui.press("escape")
         time.sleep(SLEEP)
         if log_path:
-            line = wait_for_pattern(RE_NOTE_SAVED, log_path, start_off, 6)
+            line = wait_for_pattern(RE_NOTE_SAVED, log_path, start_off, NOTE_SAVED_TIMEOUT_SEC)
             assert line, (
-                "No 'Note saved.' toast was logged within 6s of closing the "
+                f"No 'Note saved.' toast was logged within {NOTE_SAVED_TIMEOUT_SEC}s of closing the "
                 "Notes modal — the modal may not have closed, or the note "
                 "was not committed."
             )
