@@ -13,6 +13,7 @@ ComboBoxes are located by their UIA label name ("Left Sensor", "Right Sensor")
 so the tests automatically adapt when new fields are added to the modal.
 """
 
+import re
 import time
 
 import pyautogui
@@ -26,11 +27,15 @@ from conftest import (
     read_combobox_values,
     require_focus,
     uia_window,
+    wait_for_combobox,
 )
 from hil_helpers import (
     SENSOR_OPTIONS,
     click_panel,
+    find_app_log,
     focus_combobox_by_label,
+    log_size,
+    wait_for_pattern,
 )
 
 pytestmark = pytest.mark.dev
@@ -439,45 +444,100 @@ class TestScanSettings:
         # Open modal, walk to Hours, zero out all three fields, close.
         click_panel("Scan\nSettings")
         time.sleep(SLEEP)
-        focus_combobox_by_label("Left Sensor")
         require_focus()
-        pyautogui.press("tab"); time.sleep(0.2)   # Left CB -> Right CB
-        pyautogui.press("tab"); time.sleep(0.2)   # Right CB -> Switch
-        pyautogui.press("tab"); time.sleep(0.3)   # Switch -> Hours
-
-        for _ in range(3):
+        # Zero the three duration fields through their UIA Edits (hours,
+        # minutes, seconds are the last three numeric Edits of the modal).
+        # The Tab walk from the Left dropdown assumed a focus order the modal
+        # no longer has: on 2026-10-14 the zeros never reached the fields
+        # (no "reset to 1 minute" toast in the app log) and the step failed
+        # against a working fallback.
+        from hil_helpers import click_element_center
+        fields = []
+        deadline = time.time() + 15
+        while time.time() < deadline and len(fields) < 3:
+            numeric = []
+            for e in uia_window().descendants(control_type="Edit"):
+                try:
+                    t = (e.window_text() or "").strip()
+                except Exception:
+                    continue
+                if t == "" or t.replace(":", "").isdigit():
+                    numeric.append(e)
+            fields = numeric[-3:] if len(numeric) >= 3 else []
+            if len(fields) < 3:
+                time.sleep(0.5)
+        assert len(fields) == 3, "Scan Settings duration fields not exposed over UIA"
+        for elem, label in zip(fields, ("Hours", "Minutes", "Seconds")):
+            click_element_center(elem, label)
+            time.sleep(0.3)
             pyautogui.hotkey("ctrl", "a"); time.sleep(0.1)
             pyautogui.typewrite("0", interval=0.05)
             pyautogui.press("tab"); time.sleep(0.2)
 
         ensure_visible()
+        toast_off = log_size(find_app_log()) if find_app_log() else None
         pyautogui.press("escape")                 # commit + close
         time.sleep(SLEEP)
 
-        # Reopen so the post-commit state is observable.
-        click_panel("Scan\nSettings")
+        # Reopen so the post-commit state is observable. Escape from a text
+        # field can commit without closing the modal; a second sidebar click
+        # would then close it and the read-back sees nothing ("UIA texts:
+        # []" in runs 5–6 while the app log carried the "reset to 1 minute"
+        # toast). Only click when the modal is really closed, then wait for
+        # its ComboBoxes before reading.
+        deadline = time.time() + 3
+        while time.time() < deadline and uia_window().descendants(control_type="ComboBox"):
+            time.sleep(0.5)
+        if uia_window().descendants(control_type="ComboBox"):
+            # Escape from a field commits but leaves the modal open (run 7:
+            # fields read 0/00/00 and no "reset to 1 minute" toast, because
+            # the reset runs on commit/close). Close through the X instead.
+            log.info("  Scan Settings still open after Escape — closing through the X")
+            _click_coord(*SCAN_MODAL_CLOSE, "X close button")
+            time.sleep(SLEEP)
+        if not uia_window().descendants(control_type="ComboBox"):
+            click_panel("Scan\nSettings")
+        wait_for_combobox(0, timeout=15)
         time.sleep(SLEEP)
 
         try:
             visible: list[str] = []
-            win = uia_window()
-            for elem in win.descendants():
-                try:
-                    t = (elem.window_text() or "").strip()
-                except Exception:
-                    continue
-                if t and len(t) < 200:
-                    visible.append(t)
-                    if len(visible) >= 80:
-                        break
+            # Right after the modal reopens the accessibility tree can hand
+            # back the controls with empty names for a moment ("UIA texts:
+            # []" on 2026-10-14 while the fields were on screen); poll until
+            # at least one named control is back before reading.
+            deadline = time.time() + 10
+            while time.time() < deadline and not visible:
+                win = uia_window()
+                for elem in win.descendants():
+                    try:
+                        t = (elem.window_text() or "").strip()
+                    except Exception:
+                        continue
+                    if t and len(t) < 200:
+                        visible.append(t)
+                        if len(visible) >= 80:
+                            break
+                if not visible:
+                    time.sleep(0.5)
             log.info(f"  scan-settings UIA texts (post-reset): {visible}")
 
             # Minutes field should now show '01' — that's the value
             # commitDurationFields() promotes to when it rejects 0:00:00.
-            assert "01" in visible, (
+            # The app announces the fallback itself: toast "Scan duration
+            # cannot be 0 seconds — reset to 1 minute." (tag scan-duration-
+            # zero). Accept either the field reading '01' or that toast in
+            # the app log since the Escape — the UIA read-back has been the
+            # flaky part, not the fallback.
+            toast = None
+            if toast_off is not None:
+                toast = wait_for_pattern(re.compile(r"reset to 1 minute"), find_app_log(), toast_off, 5)
+                if toast:
+                    log.info(f"  app log: {toast.strip()[11:150]}")
+            assert "01" in visible or toast, (
                 f"Issue #82 fix missing: after entering 0:00:00, the "
                 f"Minutes field should show '01' (the 1-minute "
-                f"fallback). UIA-visible texts: {visible}"
+                f"fallback) and the app should toast the reset. UIA-visible texts: {visible}"
             )
         finally:
             ensure_visible()

@@ -365,7 +365,7 @@ def _is_app_process(pid: int) -> bool:
         return False
 
 
-def uia_window(retries: int = 3):
+def _uia_window_raw(retries: int = 3):
 
     for attempt in range(retries):
         ensure_visible()
@@ -408,6 +408,28 @@ def uia_window(retries: int = 3):
             )
             time.sleep(2)
     raise RuntimeError("App window not found via UI Automation")
+
+
+def uia_window(retries: int = 3):
+    """The app's UIA window, with the accessibility tree checked.
+
+    Qt's accessibility bridge sometimes stops exposing a window's contents
+    (``descendants()`` returns nothing) until the window is re-activated —
+    seen repeatedly on Research 1.5.4-dev.4 on 2026-10-14 right after a
+    scan completed ("UIA texts visible in window: []" with a modal open).
+    A minimize/restore re-syncs it; do that once when the tree is empty.
+    """
+    win = _uia_window_raw(retries)
+    try:
+        if not win.descendants()[:5]:
+            w = get_app_window()
+            log.warning("  UIA tree is empty — minimize/restore to re-sync the accessibility bridge")
+            w.minimize(); time.sleep(1.0); w.restore(); time.sleep(1.5)
+            ensure_visible()
+            win = _uia_window_raw(retries)
+    except Exception as e:
+        log.warning(f"  a11y re-sync check failed: {e}")
+    return win
 
 
 def get_app_window():
@@ -604,14 +626,31 @@ def wait_for_combobox(idx: int, timeout: float = 15.0):
     """
     deadline = time.monotonic() + timeout
     last_count = -1
+    nudged = False
     while time.monotonic() < deadline:
         ensure_visible()
         try:
-            cbs = uia_window().descendants(control_type="ComboBox")
+            win = uia_window()
+            cbs = win.descendants(control_type="ComboBox")
         except Exception:
-            cbs = []
+            win, cbs = None, []
         if len(cbs) > idx:
             return cbs[idx]
+        if not nudged and win is not None and time.monotonic() > deadline - timeout + 4:
+            # Qt's accessibility bridge sometimes stops exposing the window's
+            # contents (the tree reads as empty) until the window is
+            # re-activated; a minimize/restore re-syncs it. Seen on
+            # 2026-10-14 after a long scan + History on Research dev.4:
+            # "UIA texts visible in window: []" while the modal was open.
+            try:
+                if not any((e.window_text() or "").strip() for e in win.descendants()[:50]):
+                    w = get_app_window()
+                    log.warning("  UIA tree is empty — minimize/restore to re-sync the accessibility bridge")
+                    w.minimize(); time.sleep(1.0); w.restore(); time.sleep(1.5)
+                    ensure_visible()
+            except Exception as e:
+                log.warning(f"  a11y re-sync nudge failed: {e}")
+            nudged = True
         if len(cbs) != last_count:
             log.info(
                 f"  waiting for ComboBox[{idx}]... currently {len(cbs)} visible"

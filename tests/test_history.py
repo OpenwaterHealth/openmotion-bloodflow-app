@@ -191,11 +191,28 @@ def _set_scan_duration(hours: int, minutes: int, seconds: int) -> None:
 
 def _wait_for_session_notes_modal(timeout: int) -> bool:
     """Poll UIA for the Session Notes modal (which opens automatically
-    when a scan completes)."""
+    when a scan completes).
+
+    Its title is a plain QML Text, which the accessibility bridge never
+    exposes, so the old "session notes" text match waited out its whole
+    budget on 1.5.4-dev.4 (2026-10-14) while the modal was on screen. The
+    modal's TextArea is a tall UIA Edit (~300 logical px; every other Edit
+    is ~34), which is what test_notes_space_focus and test_clinicalmode use.
+    """
+    import ctypes
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
             win = uia_window()
+            try:
+                dpi = ctypes.windll.user32.GetDpiForWindow(win.handle)
+                scale = dpi / 96.0 if dpi else 1.0
+            except Exception:
+                scale = 1.0
+            for e in win.descendants(control_type="Edit"):
+                r = e.rectangle()
+                if (r.bottom - r.top) / scale >= 200:
+                    return True
             for elem in win.descendants():
                 try:
                     text = (elem.window_text() or "").strip().lower()
@@ -296,7 +313,20 @@ def _history_text_present(needle: str) -> bool:
 
 
 def _is_history_open() -> bool:
-    """The History modal is up iff its 'Scan History' title is visible."""
+    """The History modal is up iff its controls are exposed over UIA.
+
+    The 'Scan History' title is a plain QML Text the accessibility bridge
+    never exposes, so the old check always said "closed" and the toggle
+    click in test_02 closed the modal test_01 had opened (2026-10-14 run 7:
+    "History modal not open — clicking the History panel" twice, then no
+    search field for test_03). Use the modal fingerprint (its 'Export CSV'
+    button) instead, with the title text as a fallback."""
+    from hil_helpers import visible_modals
+    try:
+        if "History" in visible_modals():
+            return True
+    except Exception:
+        pass
     return _history_text_present("Scan History")
 
 
@@ -352,7 +382,33 @@ class TestHistory:
         if rows:
             click_element_center(rows[0], "first history row")
             time.sleep(SLEEP)
-        click_by_name("Load in viewer →")
+        else:
+            # Rows are plain QML Text (not exposed over UIA) and the Load
+            # button is only rendered once a row is focused: locate the
+            # first row from the search Edit (34 px logical high, first row
+            # 73 logical px below it) — same as test_clinicalmode.
+            edits = [e.rectangle() for e in win.descendants(control_type="Edit")]
+            assert edits, "History search field not exposed over UIA; cannot locate rows"
+            search = min(edits, key=lambda r: r.top)
+            scale = (search.bottom - search.top) / 34.0
+            pyautogui.click(int(search.left + 10 * scale), int(search.bottom + 73 * scale))
+            log.info("  focused the first History row from the search field")
+            time.sleep(1.5)
+        # Once a row is focused the Button reads 'Load “<label>”  →', not the
+        # idle 'Load in viewer  →' (2026-10-14: exact match failed while
+        # test_aggregate_view clicked the same button by prefix). Match 'Load'.
+        from hil_helpers import click_element_center
+        deadline, clicked = time.time() + 10, None
+        while time.time() < deadline and not clicked:
+            for b in uia_window().descendants(control_type="Button"):
+                name = (b.window_text() or "").strip()
+                if name.startswith("Load") or name == "View in plot →":
+                    click_element_center(b, name)
+                    clicked = name
+                    break
+            time.sleep(0.5)
+        assert clicked, "no 'Load …' button in the History modal"
+        log.info(f"  clicked '{clicked}'")
         time.sleep(SLEEP)
 
     def test_04_history_closed_by_view(self, app):

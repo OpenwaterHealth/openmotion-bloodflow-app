@@ -417,6 +417,17 @@ class TestAggregateView:
     def test_01_load_latest_scan_in_viewer(self, app):
         """History → newest scan → Load replays it in the embedded
         PlotViewer (confirmed by the '[Plot] loaded past scan' log line)."""
+        # The View → Individual / Aggregate menu is #621, milestone 1.6.0
+        # (merged after 1.5.4 was scoped; PlotViewer.qml at 1.5.4-dev.4 has
+        # no "aggregate" at all). On a 1.5.x build the test has nothing to
+        # click; skip instead of failing the pixel probe (2026-10-14).
+        import re as _re
+        lp = find_app_log()
+        if lp:
+            head = lp.read_bytes()[:20000].decode("utf-8", errors="replace")
+            m = _re.search(r"Open-Motion (\d+)\.(\d+)\.", head)
+            if m and (int(m.group(1)), int(m.group(2))) < (1, 6):
+                pytest.skip(f"Aggregate view (#621) ships in 1.6.0; the app under test is {m.group(0).split()[1]}")
         label = load_latest_scan_in_viewer()
         STATE["session"] = label
         log.info(f"  loaded session: {label}")

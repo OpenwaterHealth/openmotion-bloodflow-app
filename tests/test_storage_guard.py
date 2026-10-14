@@ -144,7 +144,7 @@ def _remove_filler(n: int) -> None:
 
 
 def _remove_all_fillers() -> None:
-    for n in (1, 2):
+    for n in (1, 2, 3):
         try:
             _remove_filler(n)
         except OSError as e:
@@ -293,8 +293,14 @@ class TestStorageGuard:
         log.info("  Session Notes opened after Dismiss and closed with Escape")
 
     def test_06_start_refused_with_e305(self, app):
-        """With the drive still under 1 GB, Start is refused with E-305."""
-        assert _free_mb() < 1024, f"drive is at {_free_mb()} MB — not under 1 GB any more"
+        """With the drive under 1 GB, Start is refused with E-305."""
+        if _free_mb() >= 1024:
+            # Removing the small filler can leave more than 1 GB free (the
+            # drive's free space moves between steps): top up instead of
+            # failing on the precondition. Seen at 1042 MB on 2026-10-13.
+            log.info(f"  drive at {_free_mb()} MB after the E-306 step; adding filler3 to get under 1 GB")
+            _make_filler(3, WARN_TARGET_MB)
+        assert _free_mb() < 1024, f"drive is at {_free_mb()} MB — not under 1 GB"
         off = log_size(STATE["log"])
         click_panel("Start")
         refused = wait_for_pattern(RE_START_REFUSED, STATE["log"], off, 20)

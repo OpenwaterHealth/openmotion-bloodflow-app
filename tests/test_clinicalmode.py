@@ -22,6 +22,8 @@ Three classes:
 import time
 from datetime import datetime
 
+import re
+
 import pyautogui
 import pytest
 
@@ -37,11 +39,61 @@ from conftest import (
     wait_with_log,
 )
 from hil_helpers import (
+    click_element_center,
     click_panel,
+    find_app_log,
+    log_size,
     move_window_on_screen,
-    selected_scan_text,
     visible_modals,
+    wait_for_pattern,
 )
+
+# The History modal lost its scan-picker ComboBox in the History rework
+# (app #194): scans are plain-Text rows, invisible to UIA. The app logs
+# "[History] opened — N scan(s)" when the modal opens; the newest row sits a
+# fixed distance below the search field; the load action is a Button whose
+# text starts with "Load" ("Load in viewer  →", or "Load “<label>”  →" once a
+# row is focused).
+RE_HISTORY_OPENED = re.compile(r"\[History\] opened\D+(\d+) scan")
+_HISTORY: dict = {}
+
+
+def _open_history_and_count() -> int:
+    """Click History; return the scan count the app logged for the open."""
+    log_path = find_app_log()
+    assert log_path, "app log not found"
+    off = log_size(log_path)
+    click_panel("History")
+    line = wait_for_pattern(RE_HISTORY_OPENED, log_path, off, 15)
+    assert line, "no '[History] opened' line within 15 s of clicking History"
+    n = int(RE_HISTORY_OPENED.search(line).group(1))
+    _HISTORY["count"] = n
+    log.info(f"  History opened with {n} scan(s)")
+    return n
+
+
+def _select_newest_history_row() -> None:
+    """Click the first row: rows are plain Text, so locate it from the search
+    Edit (34 px logical high, first row 73 logical px below it)."""
+    edits = [e.rectangle() for e in uia_window().descendants(control_type="Edit")]
+    assert edits, "History search field not exposed over UIA; cannot locate rows"
+    search = min(edits, key=lambda r: r.top)
+    scale = (search.bottom - search.top) / 34.0
+    pyautogui.click(int(search.left + 10 * scale), int(search.bottom + 73 * scale))
+    time.sleep(1.5)
+
+
+def _click_load_in_viewer() -> str:
+    """Click the History load Button (its text starts with 'Load')."""
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        for b in uia_window().descendants(control_type="Button"):
+            name = (b.window_text() or "").strip()
+            if name.startswith("Load") or name == "View in plot →":
+                click_element_center(b, name)
+                return name
+        time.sleep(0.5)
+    pytest.fail("no 'Load …' button in the History modal")
 
 pytestmark = pytest.mark.release
 
@@ -536,19 +588,19 @@ class TestClinicalMode:
     # ── History: verify scan, open it in the embedded PlotViewer
 
     def test_17_open_history(self, app):
-        click_panel("History")
+        _open_history_and_count()
 
     def test_18_latest_scan_selected(self, app):
-        scan_text = selected_scan_text()
-        assert len(scan_text) > 0, (
-            "History ComboBox is empty — no scans found."
-        )
-        log.info(f"  Latest scan in ComboBox: '{scan_text}'")
+        """The scan just captured is listed; select the newest row."""
+        assert _HISTORY.get("count", 0) > 0, "History opened with no scans"
+        _select_newest_history_row()
+        log.info(f"  newest of {_HISTORY['count']} scan(s) selected")
 
     def test_19_view_in_plot(self, app):
-        """'View in plot →' loads the scan into the embedded PlotViewer
-        and closes the History modal itself."""
-        click_by_name("View in plot →")
+        """'Load in viewer' puts the scan into the embedded PlotViewer and
+        closes the History modal itself."""
+        name = _click_load_in_viewer()
+        log.info(f"  clicked '{name}'")
         time.sleep(SLEEP)
 
     def test_20_close_history(self, app):
@@ -617,19 +669,19 @@ class TestClinicalModeMouse:
     # ── History: verify scan, open it in the embedded PlotViewer
 
     def test_28_open_history(self, app):
-        click_panel("History")
+        _open_history_and_count()
 
     def test_29_latest_scan_selected(self, app):
-        scan_text = selected_scan_text()
-        assert len(scan_text) > 0, (
-            "History ComboBox is empty — no scans found."
-        )
-        log.info(f"  Latest scan in ComboBox: '{scan_text}'")
+        """The scan just captured is listed; select the newest row."""
+        assert _HISTORY.get("count", 0) > 0, "History opened with no scans"
+        _select_newest_history_row()
+        log.info(f"  newest of {_HISTORY['count']} scan(s) selected")
 
     def test_30_view_in_plot(self, app):
-        """'View in plot →' loads the scan into the embedded PlotViewer
-        and closes the History modal itself."""
-        click_by_name("View in plot →")
+        """'Load in viewer' puts the scan into the embedded PlotViewer and
+        closes the History modal itself."""
+        name = _click_load_in_viewer()
+        log.info(f"  clicked '{name}'")
         time.sleep(SLEEP)
 
     def test_31_close_history(self, app):

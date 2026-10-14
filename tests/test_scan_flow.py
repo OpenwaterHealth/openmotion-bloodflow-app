@@ -92,34 +92,40 @@ class TestScanFlow:
         click_panel("Scan\nSettings")
 
     def test_02_set_duration(self, app):
-        """Set scan duration to 2 minutes via Tab navigation."""
+        """Set scan duration to 2 minutes through the modal's Edit controls.
+
+        The old Tab walk assumed focus started before the User Label; on
+        1.5.4-dev.4 it starts inside it, so the "2" landed in Hours and the
+        scan ran for 7200 s (2026-10-14). The modal exposes its fields over
+        UIA as Edits: "User Label:" + its value, then Hours, Minutes, Seconds.
+        """
+        from hil_helpers import click_element_center
         require_focus()
-        pyautogui.press("tab")           # -> User Label
-        time.sleep(0.3)
-        pyautogui.press("tab")           # -> Left ComboBox
-        time.sleep(0.3)
-        pyautogui.press("tab")           # -> Right ComboBox
-        time.sleep(0.3)
-        pyautogui.press("tab")           # -> Switch (leave on Timed)
-        time.sleep(0.3)
-        pyautogui.press("tab")           # -> Hours
-        time.sleep(0.3)
-        pyautogui.hotkey("ctrl", "a")
-        time.sleep(0.1)
-        pyautogui.typewrite("0", interval=0.05)
-        time.sleep(0.3)
-        pyautogui.press("tab")           # -> Minutes
-        time.sleep(0.3)
-        pyautogui.hotkey("ctrl", "a")
-        time.sleep(0.1)
-        pyautogui.typewrite("2", interval=0.05)
-        time.sleep(0.5)
-        pyautogui.press("tab")           # -> Seconds
-        time.sleep(0.3)
-        pyautogui.hotkey("ctrl", "a")
-        time.sleep(0.1)
-        pyautogui.typewrite("0", interval=0.05)
-        time.sleep(0.5)
+        deadline = time.time() + 15
+        fields = []
+        while time.time() < deadline and len(fields) < 3:
+            edits = []
+            for e in uia_window().descendants(control_type="Edit"):
+                try:
+                    edits.append(((e.window_text() or "").strip(), e))
+                except Exception:
+                    continue
+            # the duration fields are the last three Edits (hours, minutes, seconds)
+            numeric = [e for t, e in edits if t.replace(":", "").strip().isdigit() or t == ""]
+            fields = numeric[-3:] if len(numeric) >= 3 else []
+            if len(fields) < 3:
+                time.sleep(0.5)
+        assert len(fields) == 3, f"Scan Settings duration fields not exposed over UIA ({[t for t, _ in edits]})"
+        for elem, value, label in zip(fields, ("0", str(SCAN_DURATION_MIN), "0"), ("Hours", "Minutes", "Seconds")):
+            click_element_center(elem, label)
+            time.sleep(0.3)
+            pyautogui.hotkey("ctrl", "a")
+            time.sleep(0.1)
+            pyautogui.typewrite(value, interval=0.05)
+            time.sleep(0.3)
+            pyautogui.press("tab")        # commit via focus-loss
+            time.sleep(0.3)
+        log.info(f"  duration set to 0:{SCAN_DURATION_MIN:02d}:00 through the UIA Edits")
 
     def test_03_close_scan_settings(self, app):
         require_focus()
@@ -168,7 +174,22 @@ class TestScanFlow:
     def test_12_view_in_plot(self, app):
         """'View in plot →' loads the scan into the embedded PlotViewer
         and closes the History modal itself."""
-        click_by_name("View in plot →")
+        # The History rework (app #194) renamed the action: the Button now
+        # reads "Load in viewer  →" (or "Load “<label>”  →" once a row is
+        # focused). Match by prefix; keep the old label for older builds.
+        deadline = time.time() + 10
+        clicked = None
+        while time.time() < deadline and not clicked:
+            for b in uia_window().descendants(control_type="Button"):
+                name = (b.window_text() or "").strip()
+                if name.startswith("Load") or name == "View in plot →":
+                    from hil_helpers import click_element_center
+                    click_element_center(b, name)
+                    clicked = name
+                    break
+            time.sleep(0.5)
+        assert clicked, "no 'Load …' / 'View in plot →' button in the History modal"
+        log.info(f"  clicked '{clicked}'")
         time.sleep(SLEEP)
 
     def test_13_close_history(self, app):

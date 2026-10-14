@@ -67,14 +67,17 @@ SENSOR_OPTIONS = [
 # (rx, ry) — used by ``conftest.click_sidebar``. These work consistently
 # across the UI test scripts without any per-machine calibration.
 # Layout below assumes non-reduced mode (Scan Settings + Check visible).
-SIDEBAR_START         = (0.019, 0.115)
-SIDEBAR_SCAN_SETTINGS = (0.019, 0.210)
-SIDEBAR_NOTES         = (0.019, 0.320)
-SIDEBAR_CHECK         = (0.019, 0.420)
-SIDEBAR_HISTORY       = (0.020, 0.820)
-SIDEBAR_SETTINGS      = (0.019, 0.920)
-# In reduced mode, Notes shifts up into the Scan Settings slot.
-SIDEBAR_NOTES_REDUCED = (0.019, 0.210)
+# Icon centres measured on the Research 1.5.4-dev.4 window at 1800x1200 on
+# 2026-10-14 (relative to the window's top-left; the icon column is at
+# 0.019 of the width). The previous values (0.115/0.210/0.320/0.420) put
+# "Scan Settings" a few px above its icon, so the modal never opened.
+SIDEBAR_START         = (0.019, 0.129)
+SIDEBAR_SCAN_SETTINGS = (0.019, 0.237)
+SIDEBAR_NOTES         = (0.019, 0.346)
+SIDEBAR_CHECK         = (0.019, 0.450)
+SIDEBAR_HISTORY       = (0.020, 0.817)
+SIDEBAR_SETTINGS      = (0.019, 0.921)
+SIDEBAR_NOTES_REDUCED = (0.019, 0.242)   # Clinical sidebar: Notes directly under Start (measured 2026-10-14, 1800x1200 window)
 
 # Height of the auto-update banner (components/UpdateBanner.qml line 13:
 # ``height: visible ? 36 : 0``). When the banner is shown, every
@@ -134,6 +137,20 @@ _PANEL_OUTER_BOTTOM = 8     # main.qml outer Item bottomMargin: 8
 # first click_panel() / get_panel_button_pos() call. Reset via
 # recalibrate_panel_buttons() if the window is resized or moved.
 _panel_button_cache: dict[str, tuple[int, int]] | None = None
+# Window placement (left, top, width, height) the cache was calibrated for.
+# The session fixture calibrates while the window is still settling, and
+# move_window_on_screen() moves it later; clicks from a stale cache land
+# beside the buttons (2026-10-13/14: every Notes/Start click missed after a
+# move from the second monitor).
+_panel_cache_rect: tuple[int, int, int, int] | None = None
+
+
+def _window_rect_now() -> tuple[int, int, int, int] | None:
+    try:
+        w = get_app_window()
+        return (int(w.left), int(w.top), int(w.width), int(w.height))
+    except Exception:
+        return None
 _PANEL_BUTTON_LABELS = (
     "Start", "Scan\nSettings", "Notes", "Check", "History", "Settings",
 )
@@ -340,6 +357,7 @@ def move_window_on_screen():
             w.moveTo(50, 50)
             time.sleep(1)
             log.info(f"  Window moved to ({w.left}, {w.top})")
+            # get_panel_button_pos() notices the new placement and recalibrates.
     except Exception as e:
         log.warning(f"  move_window_on_screen failed: {e}")
 
@@ -602,6 +620,24 @@ def panel_button_screen_pos(label: str) -> tuple[int, int] | None:
 # ─────────────────────────────────────────────
 # Per-machine panel button calibration
 # ─────────────────────────────────────────────
+def _running_build_is_clinical() -> bool:
+    """Variant of the app that is actually running, from the startup report
+    in its newest log ("Build variant:  Clinical" / "Clinical service tool").
+    The compiled config in the suite's source tree says Research whatever
+    exe is on screen, which put the Clinical Notes click on empty space."""
+    try:
+        lp = find_app_log()
+        if lp:
+            with open(lp, "rb") as fh:
+                head = fh.read(20000).decode("utf-8", errors="replace")
+            m = re.search(r"Build variant:[ 	]*(.+)", head)
+            if m:
+                return m.group(1).strip().lower().startswith("clinical")
+    except Exception as e:
+        log.warning(f"  variant from app log failed ({e}); using compiled config")
+    return bool(read_app_config_value("clinicalMode", False))
+
+
 def _calibrate_panel_buttons() -> dict[str, tuple[int, int]]:
     """Find each panel button's screen center for the current machine.
 
@@ -689,7 +725,7 @@ def _calibrate_panel_buttons() -> dict[str, tuple[int, int]]:
     # into the former Scan Settings slot — pick the right Notes coord
     # based on the current ``clinicalMode`` config value, matching how
     # ``panel_button_screen_pos`` handles the same case.
-    reduced = bool(read_app_config_value("clinicalMode", False))
+    reduced = _running_build_is_clinical()
     notes_pos = SIDEBAR_NOTES_REDUCED if reduced else SIDEBAR_NOTES
     label_to_sidebar = {
         "Start":          SIDEBAR_START,
@@ -728,24 +764,30 @@ def _calibrate_panel_buttons() -> dict[str, tuple[int, int]]:
 
 def calibrate_panel_buttons() -> dict[str, tuple[int, int]]:
     """Public: populate the cache and return the per-machine button map."""
-    global _panel_button_cache
+    global _panel_button_cache, _panel_cache_rect
     _panel_button_cache = _calibrate_panel_buttons()
+    _panel_cache_rect = _window_rect_now()
     return _panel_button_cache
 
 
 def recalibrate_panel_buttons() -> dict[str, tuple[int, int]]:
     """Public: wipe the cache and re-discover. Use after window moves
     or any state change that might invalidate cached rects."""
-    global _panel_button_cache
+    global _panel_button_cache, _panel_cache_rect
     _panel_button_cache = None
+    _panel_cache_rect = None
     return calibrate_panel_buttons()
 
 
 def get_panel_button_pos(label: str) -> tuple[int, int]:
     """Return cached center for ``label``, calibrating on first use."""
-    global _panel_button_cache
+    global _panel_button_cache, _panel_cache_rect
     if _panel_button_cache is None:
-        _panel_button_cache = _calibrate_panel_buttons()
+        calibrate_panel_buttons()
+    rect = _window_rect_now()
+    if rect is not None and rect != _panel_cache_rect:
+        log.info(f"  window moved/resized since calibration ({_panel_cache_rect} -> {rect}); recalibrating")
+        calibrate_panel_buttons()
     if label in _panel_button_cache:
         return _panel_button_cache[label]
     # One retry — maybe the window state changed since first calibration.
@@ -852,13 +894,17 @@ _TextFingerprints = tuple[str, ...]
 _ButtonFingerprints = tuple[str, ...]
 MODAL_FINGERPRINTS: dict[str, tuple[_TextFingerprints, _ButtonFingerprints]] = {
     # SettingsModal (gear icon)
-    "Settings":       (("Time window",), ("Run Calibration", "Check for Updates")),
+    # "View Logs" (Audit Log card) and "Send Debug Logs" (About card) are in
+    # every build; "Run Calibration" needs engineering mode and "Check for
+    # Updates" is compiled out of Clinical, so a Clinical Settings modal
+    # matched nothing before 2026-10-14.
+    "Settings":       (("Time window",), ("View Logs", "Send Debug Logs", "Run Calibration", "Check for Updates")),
     # ScanSettingsModal
     "ScanSettings":   (("Scan Settings", "Camera Configuration"), ()),
     # NotesModal
     "Notes":          (("Session Notes",), ()),
     # HistoryModal
-    "History":        (("Scan History",), ("Open Folder", "Refresh")),
+    "History":        (("Scan History",), ("Export CSV", "Open Folder", "Refresh")),
     # ContactQualityModal — title varies by state_; match all four
     # plus the buttons that only its preScanMode footer renders.
     "ContactQuality": (

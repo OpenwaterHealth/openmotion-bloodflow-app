@@ -101,7 +101,9 @@ SIDEBAR_SCAN_FALLBACK = (0.025, 0.225)
 # SDK marker line emitted at the exact moment the user describes
 # ("at the place of Start Triggering"). See
 # openmotion-sdk/omotion/ScanWorkflow.py line 800: ``_emit_log("Starting trigger...")``.
-RE_STARTING_TRIGGER = re.compile(r"Starting trigger")
+# The SDK stopped logging "Starting trigger" (not in any 2026-10 app log);
+# the stream start is the equivalent marker on current builds.
+RE_STARTING_TRIGGER = re.compile(r"Starting trigger|HISTO: Streaming started")
 
 
 # ─────────────────────────────────────────────
