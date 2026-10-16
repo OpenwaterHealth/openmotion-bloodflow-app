@@ -276,7 +276,7 @@ class TestStartupWatchdog:
             connected = [e for e in _sensor_events(lines, "CONNECTED") if e[0] >= t_on]
             t_deadline = (defer or warn or (t0 + timedelta(seconds=STATE["deadline_after_first_line"]), ""))[0]
             rel = lambda t: round((t - t_deadline).total_seconds(), 2)
-            sensor_deferred = bool(defer and re.search(r"(left|right)", RE_DEFER.search(defer[1]).group(1)))
+            sensor_deferred = bool(defer and re.search(r"\b(left|right)\b", RE_DEFER.search(defer[1]).group(1)))
             mid = [s for t, s in connecting
                    if t < t_deadline and not any(s2 == s and t2 <= t_deadline for t2, s2 in connected)]
             if sensor_deferred:
