@@ -28,8 +28,8 @@ These are the only builds this repository publishes.
 
 | File | Platform | Notes |
 |---|---|---|
-| `Open-Motion-Research-Setup-<version>.exe` | Windows 10/11 | Installer. It also installs the USB driver for the sensor modules. **Recommended.** |
-| `Open-Motion-Research-<version>.zip` | Windows 10/11 | Portable. Unzip it anywhere and run `Open-Motion.exe`. Install the [USB driver](#usb-drivers) separately. Pre-releases only. |
+| `Open-Motion-Research-Setup-<version>.exe` | Windows 11 | Installer. It also installs the USB driver for the sensor modules. **Recommended.** |
+| `Open-Motion-Research-<version>.zip` | Windows 11 | Portable. Unzip it anywhere and run `Open-Motion.exe`. Install the [USB driver](#usb-drivers) separately. Pre-releases only. |
 | `Open-Motion-<version>-macOS.dmg` | macOS (Apple Silicon) | See [macOS](#macos) below. |
 
 **Versions.** Tags such as `1.5.3` are full releases. `-rc.N` (release
