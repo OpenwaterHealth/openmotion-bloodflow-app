@@ -1,6 +1,6 @@
 """Connect-time camera warm-up (#494).
 
-_run_sensor_init_impl programs camera FPGAs + writes default registers while
+_init_sensor programs camera FPGAs + writes default registers while
 the init worker already has the cameras powered for the ID-cache fill, so the
 first Start press doesn't pay the one-time bring-up. Best-effort by contract:
 every failure path must fall through to today's behavior (scan-start
@@ -110,7 +110,7 @@ def test_exception_never_escapes_the_init_worker(connector):
 
 @pytest.fixture
 def init_connector(tmp_path, monkeypatch):
-    """Connector wired for _run_sensor_init_impl with a mocked warm-up."""
+    """Connector wired for _init_sensor with a mocked warm-up."""
     import motion_connector as mc
 
     monkeypatch.setattr(mc.time, "sleep", lambda *_: None)
@@ -138,13 +138,13 @@ def init_connector(tmp_path, monkeypatch):
 
 def test_init_warms_up_when_cameras_stay_powered(init_connector):
     connector, iface = init_connector(power_off_unused=False)
-    connector._run_sensor_init_impl("left")
+    connector._init_sensor("left", connector._device_connect_gen["left"])
     connector._warm_up_cameras.assert_called_once_with("left", iface.left)
     iface.left.disable_camera_power.assert_not_called()
 
 
 def test_init_skips_warm_up_when_powering_off_unused(init_connector):
     connector, iface = init_connector(power_off_unused=True)
-    connector._run_sensor_init_impl("left")
+    connector._init_sensor("left", connector._device_connect_gen["left"])
     connector._warm_up_cameras.assert_not_called()
     iface.left.disable_camera_power.assert_called_once_with(0xFF)
