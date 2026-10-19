@@ -30,6 +30,25 @@ from omotion.firmware_update import (
     check_latest,
     is_update_available,
 )
+try:
+    from omotion.firmware_update import UpdateInterruptedError
+except ImportError:
+    # An SDK without sdk#333 (the release pin in sdk-version.txt until it
+    # moves past it) never raises it. Drop this once the pin includes it.
+    class UpdateInterruptedError(Exception):
+        """Stand-in for the SDK's error; never raised by an older SDK."""
+
+        def __init__(self, message="", *, image_path=None, kind=None,
+                     dfu_serial=None, in_dfu=True, attempts=0):
+            super().__init__(message)
+            self.image_path = image_path
+            self.kind = kind
+            self.dfu_serial = dfu_serial
+            self.in_dfu = in_dfu
+            self.attempts = attempts
+
+import firmware_resume
+from utils.keep_awake import keep_system_awake
 
 from omotion.config import (
     DEBUG_FLAG_USB_PRINTF,
@@ -258,6 +277,9 @@ _LOW_STORAGE_TOAST_TAG = "low_storage"
 # and the SDK monitor connects devices one at a time, so two sensors
 # arriving together take ~4.5 s.
 _CONNECTION_WATCHDOG_CONNECTING_GRACE_SEC = 10
+# Startup check for a unit left waiting in DFU by an interrupted firmware
+# update (#737): early, so it is up before the sample-scan offer.
+_FIRMWARE_RESUME_PROBE_DELAY_MS = 3000
 _CONNECTION_WATCHDOG_TOAST_TAG = "connection-watchdog"
 
 # The SDK's stable device handles, by MotionInterface attribute name.
@@ -1018,6 +1040,13 @@ class MotionConnector(QObject):
     firmwareUpdateAvailable = pyqtSignal(str, str, str)     # deviceKey, current, latest
     firmwareUpdateProgress = pyqtSignal(str, str, int, str) # deviceKey, stage, percent(-1=indeterminate), msg
     firmwareUpdateFinished = pyqtSignal(str, bool, str)     # deviceKey, ok, msg
+    # Interrupted firmware update (#737): notify for firmwareResumeDevice /
+    # firmwareResumeMessage, set while a unit waits in update mode with
+    # incomplete firmware and the app can finish the write.
+    firmwareResumeChanged = pyqtSignal()
+    # The startup probe found a unit waiting in DFU: deviceKey ("" when the
+    # app has no record of the update), message. Research builds only.
+    firmwareResumeOffered = pyqtSignal(str, str)
 
     # App update signals
     updateAvailable = pyqtSignal(str, str)   # (latest_version, download_url)
@@ -1289,6 +1318,13 @@ class MotionConnector(QObject):
         self._firmware_check_lock = threading.Lock()         # guards check-then-add on _firmware_checking_kinds
         self._firmware_check_generation: int = 0
         self._firmware_update_in_progress: str | None = None # deviceKey being flashed
+        # Interrupted-update recovery (#737): the device whose update can be
+        # finished ("" for none) and what the operator must be told about it.
+        self._firmware_resume_device: str = ""
+        self._firmware_resume_message: str = ""
+        # The startup probe found a unit waiting in DFU; suppresses the
+        # sample-scan offer, which would bury the warning.
+        self._firmware_resume_offered = False
         # Track console connection time for safety grace period (issue #107 follow-up)
         self._console_connected_at: float | None = None
         # Real-time plot viewer source — assigned at scan start by startCapture.
@@ -1900,6 +1936,10 @@ class MotionConnector(QObject):
         if bool(self._app_config.get("clinicalMode", False)):
             logger.info("[Plot] sample scan offer suppressed — clinical build")
             return
+        if self._firmware_resume_offered:
+            logger.info("[Plot] sample scan offer suppressed — a unit is "
+                        "waiting in firmware update mode")
+            return
         if self._any_device_connected():
             logger.info(
                 "[Plot] sample scan offer suppressed — a device is connected "
@@ -2053,6 +2093,17 @@ class MotionConnector(QObject):
     @pyqtProperty(str, notify=firmwareUpdateInfoChanged)
     def rightSensorFirmwareLatest(self) -> str:
         return self._firmware_latest["right"]
+
+    @pyqtProperty(str, notify=firmwareResumeChanged)
+    def firmwareResumeDevice(self) -> str:
+        """Device key whose interrupted firmware update can be finished with
+        retryFirmwareUpdate ("" when none) (#737)."""
+        return self._firmware_resume_device
+
+    @pyqtProperty(str, notify=firmwareResumeChanged)
+    def firmwareResumeMessage(self) -> str:
+        """What the operator must know about that unit (do not power off)."""
+        return self._firmware_resume_message
 
     @pyqtProperty(bool, notify=consoleFanChanged)
     def consoleFanOn(self) -> bool:
@@ -2296,6 +2347,11 @@ class MotionConnector(QObject):
         if name == "console":
             self._consoleConnected = is_now_connected
         if is_now_connected:
+            if self._firmware_resume_device == name:
+                logger.info("%s connected with working firmware; dropping its "
+                            "interrupted-update state", name)
+                self._set_firmware_pending(None)
+                self._set_firmware_resume("", "")
             self._on_device_connected(name, reason)
         elif is_now_lost:
             self._on_device_lost(name, reason)
@@ -2576,7 +2632,8 @@ class MotionConnector(QObject):
     def startFirmwareUpdate(self, device_key: str) -> bool:
         """Download the latest firmware for device_key and flash it over DFU.
         Research-only (blocked in clinical builds); refused during a scan or
-        while another update runs (#386)."""
+        while another update runs (#386), and while another unit waits in
+        update mode for its interrupted update to be finished (#737)."""
         if device_key not in ("console", "left", "right"):
             return False
         if self._app_config.get("clinicalMode", False):
@@ -2589,6 +2646,12 @@ class MotionConnector(QObject):
             self.firmwareUpdateFinished.emit(
                 device_key, False, "Another firmware update is in progress.")
             return False
+        if self._firmware_resume_device and self._firmware_resume_device != device_key:
+            label = firmware_resume.DEVICE_LABELS[self._firmware_resume_device]
+            self.firmwareUpdateFinished.emit(
+                device_key, False,
+                f"Finish the interrupted {label} firmware update first.")
+            return False
         if not self._firmware_update_available.get(device_key, False):
             self.firmwareUpdateFinished.emit(
                 device_key, False, "No update available for this device.")
@@ -2599,12 +2662,42 @@ class MotionConnector(QObject):
         ).start()
         return True
 
+    @pyqtSlot(str, result=bool)
+    def retryFirmwareUpdate(self, device_key: str) -> bool:
+        """Finish an interrupted firmware update (#737).
+
+        The unit is waiting in update mode with incomplete firmware; this
+        rewrites it from the cached download with
+        ``FirmwareUpdater().update(None, ...)``, the SDK's resume-from-DFU
+        call. Research-only; refused during a scan or another update."""
+        if device_key not in ("console", "left", "right"):
+            return False
+        if self._app_config.get("clinicalMode", False):
+            return False   # firmware updates are disabled in clinical builds (#386)
+        if self._state == RUNNING or self._running:
+            self.firmwareUpdateFinished.emit(
+                device_key, False, "Cannot update firmware during a scan.")
+            return False
+        if self._firmware_update_in_progress is not None:
+            self.firmwareUpdateFinished.emit(
+                device_key, False, "Another firmware update is in progress.")
+            return False
+        record = self._firmware_pending()
+        if record is None or record["device"] != device_key:
+            self.firmwareUpdateFinished.emit(
+                device_key, False, "No interrupted update to finish for this device.")
+            return False
+        self._firmware_update_in_progress = device_key
+        threading.Thread(
+            target=self._firmware_resume_worker, args=(device_key, record),
+            daemon=True,
+        ).start()
+        return True
+
     def _firmware_update_worker(self, device_key: str) -> None:
-        import tempfile
         from omotion.firmware_update import FirmwareUpdater, download_firmware
 
-        ok, msg = False, ""
-        try:
+        def run(progress):
             kind = self._kind_for_device(device_key)
             self.firmwareUpdateProgress.emit(
                 device_key, "check", -1, "Checking latest release…")
@@ -2614,43 +2707,194 @@ class MotionConnector(QObject):
                 raise RuntimeError("Could not reach GitHub to fetch firmware.")
             self.firmwareUpdateProgress.emit(
                 device_key, "download", -1, f"Downloading {info.tag}…")
-            dest = Path(tempfile.gettempdir()) / "om-firmware"
+            # Kept under the data root, not %TEMP%: finishing an interrupted
+            # update after a restart needs the image that was being written.
+            dest = firmware_resume.cache_dir(self._data_root, kind, info.tag)
             bin_path = download_firmware(info, dest)
 
             handle = getattr(self._interface, device_key, None)
             if handle is None:
                 raise RuntimeError("Device handle unavailable.")
 
-            def _prog(p) -> None:
-                pct = p.percent if p.percent is not None else -1
-                # Emit a clean per-phase label — do NOT forward dfu-util's raw
-                # output line, which embeds an ASCII progress bar ("[===   ]")
-                # whose trailing text shifts as it fills and jitters in the UI.
-                label = {"erase": "Erasing", "download": "Writing"}.get(
-                    p.phase, str(p.phase).capitalize())
-                self.firmwareUpdateProgress.emit(device_key, p.phase, pct, label)
-
+            # Recorded before anything is written, so the next launch can
+            # finish the update if the app dies part-way through the write.
+            self._set_firmware_pending(firmware_resume.make_record(
+                device_key, kind, info.tag, bin_path))
             self.firmwareUpdateProgress.emit(
                 device_key, "flash", -1, "Entering DFU and flashing…")
-            result = FirmwareUpdater().update(handle, bin_path, progress_cb=_prog)
+            return FirmwareUpdater().update(handle, bin_path, progress_cb=progress)
+
+        self._run_firmware_flash(device_key, run, resuming=False)
+
+    def _firmware_resume_worker(self, device_key: str, record: dict) -> None:
+        from omotion.firmware_update import FirmwareUpdater
+
+        def run(progress):
+            self.firmwareUpdateProgress.emit(
+                device_key, "flash", -1, "Finishing the interrupted update…")
+            image = firmware_resume.image_for_resume(record, self._data_root)
+            return FirmwareUpdater().update(
+                None, image, progress_cb=progress,
+                kind=FirmwareKind(record["kind"]),
+                dfu_serial=record.get("dfu_serial"))
+
+        self._run_firmware_flash(device_key, run, resuming=True)
+
+    def _run_firmware_flash(self, device_key: str, run, *, resuming: bool) -> None:
+        """The part of an update (or its retry) every path shares.
+
+        Keeps the PC awake while ``run`` flashes, reports the outcome, and
+        keeps the pending-update record only while there is something left
+        to finish. That is after UpdateInterruptedError, or after a failed
+        retry: the unit may still be waiting in update mode."""
+        ok, msg = False, ""
+        keep_record = False
+        try:
+            with keep_system_awake(f"{device_key} firmware update"):
+                result = run(self._firmware_progress_cb(device_key))
             ok = bool(result.success)
-            # Phase 0 finding: dfu-util's leave does NOT reset the STM32 — the
-            # device hangs non-enumerating until a manual power-cycle, then
-            # reconnects (~20-30 s) and Task 7's connect-time check clears the
-            # banner. So success means "written; now power-cycle", not "done".
+            # A bare-metal sensor does not restart after the ROM loader's
+            # jump into new firmware, and a console may not either; success
+            # means "written; now power-cycle". The connect-time version
+            # check clears the banner once it is back.
             msg = ("Firmware written. Power-cycle the device now — it will "
                    "reconnect with the new version shortly.") if ok else \
-                  "dfu-util reported a failure."
+                  result.message
+        except UpdateInterruptedError as e:
+            keep_record = True
+            msg = self._firmware_interrupted(device_key, e)
         except Exception as e:                       # noqa: BLE001 - reported to UI
             logger.exception("Firmware update failed for %s", device_key)
             ok, msg = False, str(e)
+            keep_record = resuming
         finally:
+            if not keep_record:
+                self._set_firmware_pending(None)
+                self._set_firmware_resume("", "")
             self._firmware_update_in_progress = None
             # Force re-detection so the banner/card clear once the new version
             # is read back after the device re-enumerates.
             self._firmware_latest_by_kind.pop(
                 self._kind_for_device(device_key).value, None)
             self.firmwareUpdateFinished.emit(device_key, ok, msg)
+
+    def _firmware_progress_cb(self, device_key: str):
+        labels = {"erase": "Erasing", "download": "Writing", "verify": "Verifying"}
+
+        def _prog(p) -> None:
+            pct = p.percent if p.percent is not None else -1
+            # Byte and sector progress gets a clean per-phase label, so the
+            # line does not jitter as it fills. Announcements (a retry, the
+            # wait for the application, "power-cycle the unit now") carry
+            # no percent and are the sentence the operator has to read.
+            if p.percent is None and p.message:
+                label = p.message
+            else:
+                label = labels.get(p.phase, str(p.phase).capitalize())
+            self.firmwareUpdateProgress.emit(device_key, p.phase, pct, label)
+
+        return _prog
+
+    def _firmware_interrupted(self, device_key: str, e) -> str:
+        """The SDK gave up with the unit's firmware incomplete: keep what is
+        needed to finish it and tell the operator not to power it off."""
+        label = firmware_resume.DEVICE_LABELS[device_key]
+        previous = self._firmware_pending() or {}
+        kind = e.kind or self._kind_for_device(device_key)
+        self._set_firmware_pending(firmware_resume.make_record(
+            device_key, kind, previous.get("tag", ""),
+            e.image_path or previous.get("image", ""),
+            dfu_serial=e.dfu_serial or previous.get("dfu_serial"),
+            interrupted=True))
+        if e.in_dfu:
+            msg = (f"The {label} firmware update did not finish, and the {label} "
+                   "is waiting in update mode with incomplete firmware. Do not "
+                   "power it off or unplug it: press Retry to finish the update.")
+        else:
+            msg = (f"The {label} dropped off USB during the firmware update, and "
+                   "its firmware is incomplete. Do not power it off: reconnect "
+                   "its USB cable, then press Retry.")
+        logger.error("Firmware update for %s interrupted (%s): %s",
+                     device_key, "unit in DFU" if e.in_dfu else "unit off USB", e)
+        self._set_firmware_resume(device_key, msg)
+        return msg
+
+    def _firmware_pending(self) -> dict | None:
+        return firmware_resume.parse_record(
+            self._app_config.get(firmware_resume.PENDING_KEY))
+
+    def _set_firmware_pending(self, record: dict | None) -> None:
+        """Persist (or clear) the update-in-flight record (STATE tier)."""
+        if self._app_config.get(firmware_resume.PENDING_KEY) == record:
+            return
+        self._app_config[firmware_resume.PENDING_KEY] = record
+        try:
+            self._save_app_config()
+        except Exception:
+            logger.exception("Could not persist the firmware update record")
+
+    def _set_firmware_resume(self, device_key: str, message: str) -> None:
+        if (device_key, message) == (self._firmware_resume_device,
+                                     self._firmware_resume_message):
+            return
+        self._firmware_resume_device = device_key
+        self._firmware_resume_message = message
+        self.firmwareResumeChanged.emit()
+
+    def arm_firmware_resume_probe(self) -> None:
+        """Schedule the startup check for a unit left in update mode (#737).
+
+        Called by main.py at launch, not by the constructor, so a connector
+        built in a unit test never enumerates real USB."""
+        if self._app_config.get("clinicalMode", False):
+            return   # clinical builds never update firmware (#386)
+        QTimer.singleShot(_FIRMWARE_RESUME_PROBE_DELAY_MS, lambda: threading.Thread(
+            target=self._probe_interrupted_firmware_update,
+            name="fw-resume-probe", daemon=True,
+        ).start())
+
+    def _probe_interrupted_firmware_update(self) -> None:
+        """Startup: is a unit waiting in DFU (0483:DF11)? (#737)
+
+        A bare-metal unit only sits in the ROM loader at power-up if a
+        firmware write did not finish, and a power cycle would start the
+        half-written image. With a record of the update, offer to finish
+        it; without one, still warn the operator not to power the unit off.
+        Runs on a worker thread: USB enumeration must not stall the GUI."""
+        if self._app_config.get("clinicalMode", False):
+            return
+        if self._firmware_update_in_progress is not None:
+            return
+        serials = firmware_resume.waiting_dfu_serials()
+        if serials is None:
+            return
+        record = self._firmware_pending()
+        if not serials:
+            if record is not None:
+                logger.info("Firmware update record for the %s, but no unit is "
+                            "waiting in DFU; clearing it",
+                            firmware_resume.describe(record))
+                self._set_firmware_pending(None)
+            return
+        self._firmware_resume_offered = True
+        if record is not None and (record.get("dfu_serial") is None
+                                   or record["dfu_serial"] in serials):
+            label = firmware_resume.describe(record)
+            msg = (f"The last {label} firmware update did not finish. The "
+                   f"{label} is waiting in update mode with incomplete firmware. "
+                   "Do not power it off or unplug it: finish the update now.")
+            logger.warning("Startup: %d unit(s) waiting in DFU; offering to "
+                           "finish the interrupted %s update", len(serials), label)
+            self._set_firmware_resume(record["device"], msg)
+            self.firmwareResumeOffered.emit(record["device"], msg)
+        else:
+            msg = ("A unit is waiting in firmware update mode (USB DFU), and "
+                   "this computer has no record of an interrupted update for "
+                   "it. If its firmware update was interrupted, do not power "
+                   "it off; contact Openwater support.")
+            logger.warning("Startup: %d unit(s) waiting in DFU with no update "
+                           "record (serials %s)", len(serials), serials)
+            self.firmwareResumeOffered.emit("", msg)
 
     def update_state(self):
         """Update system state based on connection and configuration."""

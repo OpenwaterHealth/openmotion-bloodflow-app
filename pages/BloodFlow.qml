@@ -291,7 +291,7 @@ Rectangle {
         id: modalManager
         modals: [scanSettingsModal, notesModal, historyModal,
                  settingsModal, contactQualityModal, logsModal,
-                 sampleScanOfferModal]
+                 sampleScanOfferModal, firmwareResumeModal]
         // Hiding an item does not take its keyboard focus away (#517). A
         // modal closed while one of its text fields had focus left that
         // invisible field holding it: it took every later Space as typed
@@ -372,6 +372,15 @@ Rectangle {
         id: sampleScanOfferModal
     }
 
+    // A unit left waiting in firmware update mode by an interrupted write
+    // (#737). Raised by the connector's startup probe; research builds only.
+    // "Finish update" starts the retry and shows the Settings firmware card,
+    // where its progress is.
+    FirmwareResumeModal {
+        id: firmwareResumeModal
+        onFinishRequested: modalManager.toggle(settingsModal)
+    }
+
     // Spacebar during an active scan pops the Notes modal with a fresh
     // newline + [elapsed / wall-clock] timestamp, cursor ready to type.
     // Gated so it only fires mid-scan and never over another modal; once
@@ -407,6 +416,13 @@ Rectangle {
         // this launch (relaunch to be offered again).
         function onSampleScanOfferRequested() {
             if (!modalManager.current) sampleScanOfferModal.open()
+        }
+        // A unit is waiting in firmware update mode at startup (#737). Unlike
+        // the sample offer this is a "do not power it off" warning, so it
+        // replaces whatever modal is up (ModalManager closes it first).
+        function onFirmwareResumeOffered(deviceKey, message) {
+            modalManager.toggle(null)
+            firmwareResumeModal.openFor(deviceKey, message)
         }
         // Snap the header counter to the authoritative value on every
         // trigger edge. The OFF edge matters most: it carries the SDK
