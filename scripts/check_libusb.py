@@ -2,8 +2,9 @@
 
 libusb 1.0.30 fixes denial-of-service bugs that a malicious USB device can
 trigger with malformed descriptors. Every libusb-1.0.dll the app ships comes
-from the SDK: ``omotion/_vendor`` (loaded by pyusb, mirrored to the bundle
-root's ``_vendor``) and ``omotion/dfu-util/win*`` (loaded by dfu-util.exe).
+from the SDK's ``omotion/_vendor`` (loaded by pyusb, mirrored to the bundle
+root's ``_vendor``). SDKs before 1.14.0 also shipped ``omotion/dfu-util/win*``
+(loaded by dfu-util.exe); the check covers any copy wherever it sits.
 An rc build whose ``sdk-version.txt`` still pins an SDK release with older
 DLLs therefore fails here instead of shipping them.
 

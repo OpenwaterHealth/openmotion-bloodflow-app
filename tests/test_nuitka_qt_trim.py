@@ -313,30 +313,30 @@ def test_build_nuitka_loads_the_plugin():
     assert '"--include-qt-plugins=sensible,qml"' in BUILD_NUITKA
 
 
+def test_build_nuitka_copies_no_dfu_util():
+    """SDK 1.14.0 replaced its dfu-util tree with a pure-Python DFU (#739).
+    An --include-raw-dir naming a directory the SDK no longer has fails the
+    compile, so no build argument may refer to it."""
+    args = [ln for ln in BUILD_NUITKA.splitlines() if not ln.lstrip().startswith("#")]
+    assert not [ln for ln in args if "dfu-util" in ln]
+
+
 @pytest.mark.parametrize(
-    "dest, dropped",
+    "dest",
     [
-        ("omotion/dfu-util/linux-amd64/dfu-util", True),
-        ("omotion/dfu-util/linux-amd64/dfu-util-static", True),
-        ("omotion/dfu-util/darwin-x86_64/dfu-util", True),
-        ("omotion/dfu-util/darwin-x86_64/libusb-1.0.a", True),
-        ("omotion/dfu-util/win64/libusb-1.0.a", True),
-        ("omotion/dfu-util/win64/libusb-1.0.dll.a", True),
-        ("omotion/dfu-util/win32/libusb-1.0.la", True),
-        ("omotion/dfu-util/win64/dfu-util.exe", False),
-        ("omotion/dfu-util/win64/libusb-1.0.dll", False),
-        ("omotion/dfu-util/win32/dfu-util.exe", False),
-        ("omotion/dfu-util/COPYING", False),
-        ("omotion/dfu-util/README-bin.txt", False),
-        ("omotion/models/10K3CG_R-T.csv", False),
-        ("omotion/nvcm/impl1_data.ied", False),
+        "omotion/dfu/keys/console_bl_1.2.pem",
+        "omotion/dfu/keys/sensor_bl_legacy_1.1.0.pem",
+        "omotion/models/10K3CG_R-T.csv",
+        "omotion/nvcm/impl1_data.ied",
     ],
 )
-def test_sdk_data_exclusions(dest, dropped):
-    """--noinclude-data-files matches with fnmatch on Nuitka's destination
-    path, normcased on Windows, so "*" also crosses directory separators."""
+def test_sdk_data_is_kept(dest):
+    """The SDK reads these at runtime: the bootloader keys check a firmware
+    image before it is written. --noinclude-data-files matches with fnmatch
+    on Nuitka's destination path, normcased on Windows, so "*" also crosses
+    directory separators."""
     import fnmatch
 
+    assert '"--include-package-data=omotion"' in BUILD_NUITKA
     patterns = re.findall(r'"--noinclude-data-files=(omotion/[^"]+)"', BUILD_NUITKA)
-    assert patterns, "build_nuitka.ps1 has no omotion data exclusions"
-    assert any(fnmatch.fnmatch(os.path.normpath(dest), p) for p in patterns) is dropped
+    assert not any(fnmatch.fnmatch(os.path.normpath(dest), p) for p in patterns)

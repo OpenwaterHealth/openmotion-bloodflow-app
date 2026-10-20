@@ -345,10 +345,16 @@ QML file against a tree holding only the kept modules (`tests/qml_import_probe.p
 fresh process). It is a plugin rather than `--noinclude-dlls` because Nuitka 4.2
 still scans an excluded DLL's dependencies, so every excluded QML plugin kept its
 Qt library in the bundle. On Qt 6.11.2 the trim takes 1,970 files (57 MB) out of
-the standalone tree and keeps 23 of its 71 Qt libraries. The SDK's
-Linux/macOS dfu-util builds and the libusb `.a` / `.dll.a` / `.la` files are
-excluded by `--noinclude-data-files` in `build_nuitka.ps1`. PyInstaller (the
+the standalone tree and keeps 23 of its 71 Qt libraries. PyInstaller (the
 dispatch fallback and macOS) still bundles all of PyQt6 via `collect_all`.
+**SDK 1.14.0 has no `dfu-util` tree** (#739): firmware updates use its
+pure-Python `omotion.dfu`, which needs `cryptography` (pinned in
+`requirements.txt` to the SDK's own pin) and the bootloader public keys
+`omotion/dfu/keys/*.pem`, read through `importlib.resources`. Both builders ship
+those keys as ordinary package data, so never add an `omotion` data exclusion
+that matches them. A build can't install an SDK older than 1.14.0 any more:
+`--include-raw-dir` for the old `dfu-util\win64` would fail the compile, so the
+build script no longer names it.
 
 **Runtime facts that differ from PyInstaller**, all absorbed by
 `utils/frozen.py` (use it, never `sys.frozen` / `sys._MEIPASS` /
@@ -416,7 +422,7 @@ Consequences to remember:
 - **Cross-thread signals:** 135+ signals; several (e.g. `_calibrationCompleteSignal`, `safetyTripDuringCaptureRequested`) fire from USB I/O / scanner worker threads. Use `Qt.QueuedConnection` or you'll race QML.
 - **No device I/O in the state-change slot.** SDK `signal_state_changed` is a `pyqtSignal`, so `_on_handle_state_changed` runs queued on the GUI thread, not the SDK monitor thread. Connect-time device commands go in the bring-up worker (`_schedule_device_init` → `_init_console` / `_init_sensor`), which raises `deviceInitBusy` so Start/Check and Calibrate/Test wait for it. The console's sequence used to run inline and froze the app ~3.7 s per connect, delaying every queued event and timer behind it (#667, #721). Code that needs a device's current state while the GUI thread may be behind reads the SDK handle (`_sdk_state`), not the `_xxxConnected` flags.
 - **PyInstaller libusb mirror** (`openwater.spec` lines 61–95): if bundled app fails USB enumeration, the runtime hook can't find vendored libusb DLLs. Check the spec's mirror step.
-- **libusb ≥ 1.0.30 only (#669):** every `libusb-1.0.dll` the Windows build ships comes from the SDK (`omotion/_vendor` for pyusb, `omotion/dfu-util/win*` for `dfu-util.exe`). Both builders keep the libusb1 wheel's own `usb1\libusb-1.0.dll` out: `usb1` is only imported by the SDK's Linux/macOS hotplug provider, and its loader would fall back to the SDK copy anyway. The spec drops **every** `libusb-1.0.dll` whose source is outside the SDK package, because PyInstaller's dependency scan of `dfu-util.exe` / `lsusb.exe` also bundles whatever `libusb-1.0.dll` the build host's search path resolves (a 1.0.29 copy in `System32` on one dev machine) at the bundle root. Both run `scripts/check_libusb.py` on the exact payload (the spec on its Analysis TOC, `build_nuitka.ps1` on `main.dist`) and fail on an older DLL. So an rc whose `sdk-version.txt` pins an SDK release with old DLLs fails to build; release the SDK and bump the pin. The macOS spec refuses a Homebrew libusb older than 1.0.30. Tests: `tests/test_check_libusb.py`.
+- **libusb ≥ 1.0.30 only (#669):** every `libusb-1.0.dll` the Windows build ships comes from the SDK's `omotion/_vendor` (for pyusb; SDKs before 1.14.0 also shipped `omotion/dfu-util/win*` for `dfu-util.exe`). Both builders keep the libusb1 wheel's own `usb1\libusb-1.0.dll` out: `usb1` is only imported by the SDK's Linux/macOS hotplug provider, and its loader would fall back to the SDK copy anyway. The spec drops **every** `libusb-1.0.dll` whose source is outside the SDK package. That filter dates from the pre-1.14.0 SDKs, when PyInstaller's dependency scan of `dfu-util.exe` / `lsusb.exe` also bundled whatever `libusb-1.0.dll` the build host's search path resolved (a 1.0.29 copy in `System32` on one dev machine) at the bundle root. Both run `scripts/check_libusb.py` on the exact payload (the spec on its Analysis TOC, `build_nuitka.ps1` on `main.dist`) and fail on an older DLL. So an rc whose `sdk-version.txt` pins an SDK release with old DLLs fails to build; release the SDK and bump the pin. The macOS spec refuses a Homebrew libusb older than 1.0.30. Tests: `tests/test_check_libusb.py`.
 - **`laser_params.json` is not "tunable":** it ships inside the SDK (`omotion/data/laser_params.json`), not this repo; editing values risks laser-off, wrong pulse widths, safety failures. Treat as locked baseline.
 - **SDK is editable, not pinned to a wheel here** (unlike `openmotion-test-app`). Bumping the SDK requires no action; bugs in either repo are visible immediately.
 - **Don't track `docs/superpowers/`** — brainstorming specs, implementation plans, and session/status notes are local process artifacts, not repo deliverables. The directory is gitignored (#539 — it was not before, only `.superpowers/` was); keep it that way and never `git add -f` files under it into a PR.
