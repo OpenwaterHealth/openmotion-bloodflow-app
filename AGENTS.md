@@ -14,20 +14,24 @@ pre-release.
 
 | Tag form / branch    | Cut from | SDK source                                                | GitHub pre-release |
 |----------------------|----------|-----------------------------------------------------------|--------------------|
-| `X.Y.Z`              | `main`   | PyPI (`pip install --upgrade openmotion-sdk`)             | No                 |
-| `X.Y.Z-rc.N`         | `next`   | PyPI (`pip install --upgrade openmotion-sdk`)             | Yes                |
+| `X.Y.Z`              | `main`   | PyPI, pinned (`openmotion-sdk==<sdk-version.txt>`)        | No                 |
+| `X.Y.Z-rc.N`         | `next`   | PyPI, pinned (`openmotion-sdk==<sdk-version.txt>`)        | Yes                |
 | `X.Y.Z-dev.N`        | `next`   | source (`git+...openmotion-sdk.git@next`)                 | Yes                |
 | `refs/heads/next`    | `next`   | source (`git+...openmotion-sdk.git@next`)                 | n/a (no release)   |
 
 `next`-branch pushes also pull SDK from `@next` source — the bloodflow
 `next` branch tracks SDK API drift before any release, so it must
-always pair with SDK `next`; PyPI's latest stable can be API-behind
-(it lags the most recent connection-redesign / contact-quality merges).
+always pair with SDK `next`; PyPI's latest stable can be API-behind.
 
-`refs/heads/main` pushes and manual `workflow_dispatch` runs build
-against the latest SDK wheel from GitHub Releases (with a
-source-install of `main` as fallback). They are useful for
-verification builds; they do **not** create a GitHub Release.
+`refs/heads/main` pushes and manual `workflow_dispatch` runs (from any
+branch except `next`, which uses `@next`) install the pinned SDK, like
+rc and production tags. They are useful for verification builds; they
+do **not** create a GitHub Release.
+
+The pin is enforced: every build that installs it runs
+`scripts/check_sdk_pin.py --enforce`, which fails the build if the
+installed SDK differs from `sdk-version.txt`, and the SBOM step asserts
+the same. Builds that install `@next` only report the pin.
 
 ## What a tag publishes (#573)
 
@@ -53,27 +57,35 @@ For a given version `X.Y.Z` the natural progression is:
 1. `X.Y.Z-dev.N` on `next` — early iterations, validates the bloodflow
    app against in-flight SDK changes on `openmotion-sdk@next`.
 2. `X.Y.Z-rc.N` on `next` — hardening pass once the matching SDK
-   version is published to PyPI.
+   version is published to PyPI and pinned in `sdk-version.txt`.
 3. `X.Y.Z` on `main` — final release after `next` merges down.
+
+User-facing explanation of the three: README "Release types";
+contributor-facing: CONTRIBUTING "From Merge to Release". Keep them in
+step with this file.
 
 ## Release ordering — important
 
-For `-rc.N` and production tags the workflow installs the SDK with
-`pip install --upgrade openmotion-sdk` (unpinned), so it picks up
-whatever is on PyPI at that moment. If the SDK release lags, the
-bloodflow build silently picks up an older SDK.
+For `-rc.N` and production tags the workflow installs exactly
+`openmotion-sdk==<sdk-version.txt>` from PyPI. If that version is not on
+PyPI yet, the install fails. If `sdk-version.txt` still names an older
+SDK release, the pin check passes and the build ships that older SDK.
 
 **Order of operations for an RC or production release:**
 
-1. Cut and publish the matching SDK release in `openmotion-sdk` (its
-   `publish-pypi.yml` workflow handles PyPI upload).
+1. Cut and publish the matching SDK release in `openmotion-sdk`. Its
+   `publish-pypi.yml` workflow uploads to PyPI; if it did not start
+   after the SDK's GitHub Release was created, run it by hand:
+   `gh workflow run publish-pypi.yml -R OpenwaterHealth/openmotion-sdk -f tag=X.Y.Z`.
 2. Wait for PyPI to surface the new version
    (`pip index versions openmotion-sdk` or check
    <https://pypi.org/project/openmotion-sdk/>).
-3. Then cut the bloodflow `-rc.N` or production tag.
+3. Bump `sdk-version.txt` on `next` to that version (a normal PR).
+4. Then cut the bloodflow `-rc.N` or production tag.
 
-`-dev.N` tags do not have this constraint — they pin to
-`openmotion-sdk@next` directly, so PyPI is irrelevant.
+`-dev.N` tags do not have this constraint — they install
+`openmotion-sdk@next` directly, so PyPI is irrelevant and the pin is
+only reported, not enforced.
 
 ## Cutting a release — exact commands
 
@@ -92,7 +104,8 @@ git push origin next X.Y.Z-dev.N
 
 ### Release candidate on `next`
 
-(Only after the matching SDK version is live on PyPI.)
+(Only after `sdk-version.txt` on `next` names an SDK release that is
+live on PyPI.)
 
 ```bash
 git checkout next
@@ -103,8 +116,8 @@ git push origin next X.Y.Z-rc.N
 
 ### Production release on `main`
 
-(Typically after `next` is merged down to `main`. Only after the
-matching SDK version is live on PyPI.)
+(Typically after `next` is merged down to `main`. Only after
+`sdk-version.txt` names an SDK release that is live on PyPI.)
 
 ```bash
 git checkout main
@@ -115,14 +128,19 @@ git push origin main X.Y.Z
 
 ## What the workflow does on a tag push
 
-- Resolves SDK source per the table above.
+- Resolves SDK source per the table above and, on rc/production tags,
+  fails the build if the installed SDK differs from `sdk-version.txt`.
 - Stamps the tag (without leading `v`) into `version.py`'s
   `_FALLBACK_VERSION` so the frozen exe reports the right version.
-- Builds via PyInstaller (`openwater.spec`).
-- Zips `dist/` into `Open-Motion-<TAG>.zip` (and `Open-Motion-Research-<TAG>.zip`).
-- Uploads the zip both as a workflow artifact and as a GitHub Release
-  asset (the release is created automatically; pre-release flag is
-  derived from the tag form).
+- Builds the Research variant with Nuitka (`scripts/build_nuitka.ps1`);
+  a manual `workflow_dispatch` with `compiler=pyinstaller` uses
+  `openwater.spec` instead. The macOS job builds the DMG with PyInstaller.
+- Signs on rc and production tags (see `docs/SIGNING.md`).
+- Uploads the packaged `dist/research` tree as a workflow artifact, and
+  attaches the Setup installer, the driver zip and (dev/rc only) the
+  portable `Open-Motion-Research-<TAG>.zip` to the GitHub Release. The
+  release is created automatically, with the pre-release flag derived
+  from the tag form; the macOS job attaches the DMG to the same release.
 - Generates release notes from the git log since the previous tag.
 
 There is no built-in skip-CI for release tags. Don't push a tag unless
@@ -134,14 +152,12 @@ The SDK-source gate is plain bash. Simulate any tag locally:
 
 ```bash
 GITHUB_REF=refs/tags/1.0.4-rc.0 bash -c '
-  if [[ "$GITHUB_REF" == refs/tags/*-dev.* ]]; then
+  if [[ "$GITHUB_REF" == refs/tags/*-dev.* || "$GITHUB_REF" == refs/heads/next ]]; then
     echo "→ source @next"
-  elif [[ "$GITHUB_REF" =~ ^refs/tags/[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
-    echo "→ PyPI"
   else
-    echo "→ GitHub-release wheel (with source fallback)"
+    echo "→ PyPI openmotion-sdk==$(tr -d "[:space:]" < sdk-version.txt)"
   fi'
 ```
 
 For a fuller dry-run see `act` (Linux runner only — won't fully
-simulate the `windows-latest` PyInstaller step).
+simulate the `windows-latest` Nuitka build).
