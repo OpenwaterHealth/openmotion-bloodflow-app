@@ -84,6 +84,13 @@ hidden += [
     "usb", "usb.core", "usb.util", "usb.backend.libusb1",
     "requests", "urllib3", "charset_normalizer", "certifi", "idna",
     "base58", "pandas", "numpy", "matplotlib", "crcmod",
+    # firmware image signature check in omotion.dfu (SDK 1.14.0, #739);
+    # imported inside the check, so keep it listed like openwater.spec does
+    "cryptography", "cryptography.exceptions",
+    "cryptography.hazmat.primitives.hashes",
+    "cryptography.hazmat.primitives.serialization",
+    "cryptography.hazmat.primitives.asymmetric.ec",
+    "cryptography.hazmat.primitives.asymmetric.utils",
 ]
 
 # ── Bundle Homebrew libusb (matching current arch) ──
