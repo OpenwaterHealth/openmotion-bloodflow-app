@@ -558,6 +558,9 @@ def main():
     # drive is nearly full. Deferred to the first event-loop turn so the
     # QML modal is listening when it fires.
     QTimer.singleShot(0, connector.check_startup_storage)
+    # Research builds: a unit left waiting in update mode by an interrupted
+    # firmware write gets a "do not power off / finish it" prompt (#737).
+    connector.arm_firmware_resume_probe()
     if _plaintext_scan_db:
         QTimer.singleShot(0, lambda: connector.raise_startup_error(
             "E-108", detail=f"{_scan_db_path} is a plaintext database."))

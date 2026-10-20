@@ -189,6 +189,10 @@ APP_CONFIG = {
     "altCameraSettingsDirty": False,
     "altLaserPulseWidthDirty": False,
     "altLaserSafetyCeilingDirty": False,
+    # Internal: the device firmware update in flight (firmware_resume.py,
+    # #737), so an update that left a bare-metal unit waiting in the ROM
+    # loader can be finished after a restart. None when nothing is pending.
+    "firmwareUpdatePending": None,
 }
 
 # ── Tiers ──────────────────────────────────────────────────────────────────
@@ -239,7 +243,7 @@ PREFERENCE_KEYS = frozenset({
 
 STATE_KEYS = frozenset({
     "altCameraSettingsDirty", "altLaserPulseWidthDirty",
-    "altLaserSafetyCeilingDirty",
+    "altLaserSafetyCeilingDirty", "firmwareUpdatePending",
 })
 
 PERSISTED_KEYS = PREFERENCE_KEYS | STATE_KEYS

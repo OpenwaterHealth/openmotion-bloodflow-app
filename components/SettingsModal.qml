@@ -1901,6 +1901,52 @@ Item {
                         updateAvailable: MotionInterface.rightSensorFirmwareUpdateAvailable
                     }
 
+                    // Interrupted firmware update (#737): the unit is waiting
+                    // in update mode with incomplete firmware, and a power
+                    // cycle would brick it. The connector sets this when the
+                    // SDK gives up on a write (UpdateInterruptedError) or the
+                    // startup probe finds the unit in DFU; Retry rewrites it
+                    // from the cached download. Research builds only.
+                    Rectangle {
+                        Layout.fillWidth: true
+                        visible: !root.clinicalMode
+                                 && MotionInterface.firmwareResumeDevice !== ""
+                        implicitHeight: resumeCol.implicitHeight + 20
+                        radius: 6
+                        color: "transparent"
+                        border.width: 1
+                        border.color: AppTheme.accentRed
+                        ColumnLayout {
+                            id: resumeCol
+                            anchors.fill: parent
+                            anchors.margins: 10
+                            spacing: 8
+                            Text {
+                                Layout.fillWidth: true
+                                text: "Firmware update interrupted — do not power off"
+                                color: AppTheme.accentRed
+                                font.pixelSize: 13
+                                font.weight: Font.DemiBold
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: MotionInterface.firmwareResumeMessage
+                                wrapMode: Text.WordWrap
+                                color: root.colTextPri
+                                font.pixelSize: 12
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Item { Layout.fillWidth: true }
+                                ActionButton {
+                                    text: "Retry update"
+                                    onClicked: MotionInterface.retryFirmwareUpdate(
+                                        MotionInterface.firmwareResumeDevice)
+                                }
+                            }
+                        }
+                    }
+
                     // Hardware identity (#529): the programmed serial number
                     // of each connected device (console + sensor modules),
                     // cached by the connector on connect (_log_device_stats)
