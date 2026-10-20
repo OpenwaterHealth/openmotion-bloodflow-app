@@ -128,7 +128,10 @@ hidden += [
 # third-party deps, and PyInstaller's static analysis doesn't trace into them
 # either - same class of gap as the serial/usb block above. requests backs
 # omotion.firmware_update; crcmod backs omotion's i2c packet framing; base58
-# is imported directly by motion_connector.py.
+# is imported directly by motion_connector.py. cryptography checks a firmware
+# image's signature before omotion.dfu writes it (SDK 1.14.0, #739); it is
+# imported inside the check, so a missing module would only surface when a
+# user starts a firmware update.
 hidden += [
     "requests",
     "urllib3",
@@ -137,6 +140,12 @@ hidden += [
     "idna",
     "crcmod",
     "base58",
+    "cryptography",
+    "cryptography.exceptions",
+    "cryptography.hazmat.primitives.hashes",
+    "cryptography.hazmat.primitives.serialization",
+    "cryptography.hazmat.primitives.asymmetric.ec",
+    "cryptography.hazmat.primitives.asymmetric.utils",
 ]
 
 # --- scan-DB encryption stack (clinical builds) ---
@@ -295,18 +304,15 @@ if not _has_engineering_unlock:
     print(f"[spec] left {_UNLOCK_QML} out of the clinical bundle (#706)")
 
 # ---------- libusb >= 1.0.30 only (#669) ----------
-# Every libusb the app ships comes from the SDK package. Two other copies
-# reach the Analysis, and neither is ever loaded:
-#  * the libusb1 wheel's hook adds usb1\libusb-1.0.dll (1.0.28 in libusb1
-#    3.3.1). Only the SDK's Linux/macOS hotplug provider imports usb1. If
-#    anything imported it here, its loader would fall back to the bare
-#    libusb-1.0.dll name, which resolves to the SDK's copy in the _vendor
-#    directories main.py registers.
-#  * the dependency scan of the SDK's dfu-util.exe / lsusb.exe resolves their
-#    libusb-1.0.dll import on the BUILD HOST's search path and adds whatever it
-#    finds at the bundle root (a 1.0.29 copy in System32 on one dev machine).
-#    The exes load the DLL beside them.
-# So both stay out, and every libusb-1.0.dll left in the payload must be
+# Every libusb the app ships comes from the SDK package (omotion\_vendor).
+# The libusb1 wheel's hook adds another, usb1\libusb-1.0.dll (1.0.28 in
+# libusb1 3.3.1), that is never loaded: only the SDK's Linux/macOS hotplug
+# provider imports usb1. If anything imported it here, its loader would fall
+# back to the bare libusb-1.0.dll name, which resolves to the SDK's copy in
+# the _vendor directories main.py registers. (SDKs before 1.14.0 also shipped
+# dfu-util.exe / lsusb.exe, whose dependency scan pulled in the BUILD HOST's
+# libusb-1.0.dll; the filter still drops any such copy.)
+# So it stays out, and every libusb-1.0.dll left in the payload must be
 # >= 1.0.30. An rc build pinned to an SDK release with older DLLs stops here.
 _OM_DIR = os.path.normcase(os.path.abspath(
     list(_om_spec.submodule_search_locations)[0])) + os.sep
