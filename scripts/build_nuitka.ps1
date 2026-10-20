@@ -90,27 +90,14 @@ $args = @(
     "--include-data-dir=components=components",
     "--include-data-dir=assets=assets",
     "--include-data-files=resources\sample_scan.csv=resources\sample_scan.csv",
-    # the SDK: modules compiled, package data copied. Its vendored binaries
-    # (libusb DLLs, dfu-util exes) are NOT data to Nuitka - --include-data-dir
-    # silently drops .dll/.exe - so those trees go in raw: only the Windows
-    # dfu-util directories (the SDK picks win64/win32 by architecture; the
-    # Linux/macOS binaries and the dfuse-pack.py helper are dead weight on
-    # Windows and a raw copy would ship that .py as plaintext). The last
-    # entry mirrors libusb to the bundle root where the libusb1 wheel and
-    # utils/libusb_paths.py look for it (same as openwater.spec).
+    # the SDK: modules compiled, package data copied (the bootloader public
+    # keys omotion\dfu\keys\*.pem among it). Its vendored libusb DLLs are NOT
+    # data to Nuitka - --include-data-dir silently drops .dll - so that tree
+    # goes in raw. The second entry mirrors libusb to the bundle root where
+    # the libusb1 wheel and utils/libusb_paths.py look for it (same as
+    # openwater.spec). SDK 1.14.0 replaced its dfu-util executables with a
+    # pure-Python DFU (#739), so there are no SDK exes to copy any more.
     "--include-package=omotion", "--include-package-data=omotion",
-    # Package data would also carry the Linux and macOS dfu-util builds
-    # (extensionless binaries are data to Nuitka) and the libusb static and
-    # import libraries (.a, .dll.a, .la) of every platform (#680). None of
-    # that runs on Windows. The patterns match destination paths, so they
-    # cover the raw win64/win32 copies below too. The dfu-util license and
-    # README files stay.
-    "--noinclude-data-files=omotion/dfu-util/linux-amd64/*",
-    "--noinclude-data-files=omotion/dfu-util/darwin-x86_64/*",
-    "--noinclude-data-files=omotion/dfu-util/*.a",
-    "--noinclude-data-files=omotion/dfu-util/*.la",
-    "--include-raw-dir=$sdkDir\dfu-util\win64=omotion\dfu-util\win64",
-    "--include-raw-dir=$sdkDir\dfu-util\win32=omotion\dfu-util\win32",
     "--include-raw-dir=$sdkDir\_vendor=omotion\_vendor",
     "--include-raw-dir=$sdkDir\_vendor\libusb\windows\x64=_vendor\libusb\windows\x64",
     # #669: Nuitka's usb1 config pulls in the libusb1 wheel's own DLL (1.0.28

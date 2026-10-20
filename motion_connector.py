@@ -2753,13 +2753,16 @@ class MotionConnector(QObject):
             with keep_system_awake(f"{device_key} firmware update"):
                 result = run(self._firmware_progress_cb(device_key))
             ok = bool(result.success)
-            # A bare-metal sensor does not restart after the ROM loader's
-            # jump into new firmware, and a console may not either; success
-            # means "written; now power-cycle". The connect-time version
-            # check clears the banner once it is back.
-            msg = ("Firmware written. Power-cycle the device now — it will "
-                   "reconnect with the new version shortly.") if ok else \
-                  result.message
+            # needs_power_cycle: the image is written but the device did not
+            # come back within the SDK's wait, so it still has to be
+            # power-cycled before it runs the new firmware.
+            if not ok:
+                msg = "The firmware update reported a failure."
+            elif result.needs_power_cycle:
+                msg = ("Firmware written. Power-cycle the device now — it will "
+                       "reconnect with the new version shortly.")
+            else:
+                msg = "Firmware updated. The device restarted with the new version."
         except UpdateInterruptedError as e:
             keep_record = True
             msg = self._firmware_interrupted(device_key, e)
@@ -2779,18 +2782,26 @@ class MotionConnector(QObject):
             self.firmwareUpdateFinished.emit(device_key, ok, msg)
 
     def _firmware_progress_cb(self, device_key: str):
-        labels = {"erase": "Erasing", "download": "Writing", "verify": "Verifying"}
-
         def _prog(p) -> None:
             pct = p.percent if p.percent is not None else -1
-            # Byte and sector progress gets a clean per-phase label, so the
-            # line does not jitter as it fills. Announcements (a retry, the
-            # wait for the application, "power-cycle the unit now") carry
-            # no percent and are the sentence the operator has to read.
-            if p.percent is None and p.message:
-                label = p.message
+            # Emit a clean per-phase label, never the SDK's per-step text:
+            # it changes on every erase step and jitters in the UI.
+            # update() blocks through the last two phases until the device
+            # is back on USB; "power_cycle" waits for the user to do it (#739).
+            # "retry" (sdk#334) is the exception: its sentence carries the
+            # attempt and the "do not power off" warning (#737).
+            if p.phase == "retry":
+                label = p.message or ("The firmware write failed; retrying. "
+                                      "Do not power off or unplug the device.")
             else:
-                label = labels.get(p.phase, str(p.phase).capitalize())
+                label = {
+                    "erase": "Erasing",
+                    "download": "Writing",
+                    "verify": "Verifying",
+                    "wait": "Waiting for the device to restart…",
+                    "power_cycle": "Firmware written. Power-cycle the device "
+                                   "now; the update finishes when it reconnects.",
+                }.get(p.phase, str(p.phase).capitalize())
             self.firmwareUpdateProgress.emit(device_key, p.phase, pct, label)
 
         return _prog

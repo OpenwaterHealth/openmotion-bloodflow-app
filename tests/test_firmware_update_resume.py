@@ -100,13 +100,14 @@ class FakeUpdater:
         if progress_cb is not None:
             progress_cb(DFUProgress(phase="download", percent=50, bytes_written=32,
                                     message="", elapsed_s=1.0))
-            progress_cb(DFUProgress(phase="erase", percent=None, bytes_written=None,
+            progress_cb(DFUProgress(phase="retry", percent=None, bytes_written=None,
                                     message="Retrying (2/3): do not power off",
                                     elapsed_s=2.0))
         outcome = FakeUpdater.outcomes.pop(0) if FakeUpdater.outcomes else None
         if outcome is not None:
             raise outcome
-        return MagicMock(success=True, message="bare-metal application installed")
+        return MagicMock(success=True, needs_power_cycle=False,
+                         message="bare-metal application installed")
 
 
 @pytest.fixture
@@ -204,7 +205,7 @@ def test_progress_shows_announcements_and_clean_labels(tmp_path, updater, downlo
     _start(c)
 
     assert ("console", "download", 50, "Writing") in out["progress"]
-    assert ("console", "erase", -1, "Retrying (2/3): do not power off") in out["progress"]
+    assert ("console", "retry", -1, "Retrying (2/3): do not power off") in out["progress"]
 
 
 def test_interrupted_update_warns_and_offers_retry(tmp_path, updater, downloads):
