@@ -26,9 +26,27 @@ GitHub Issue
 
 * `next` is the integration branch: every change lands there first, through a pull request. Never open a pull request against `main`. It only receives `next` when a release is cut.
 * Branch from the latest `next`: one issue per branch, named `feature/<issue-number>-short-description`.
-* Pre-release builds for testing (`X.Y.Z-dev.N`, `X.Y.Z-rc.N`) are tagged from `next`. A full release (`X.Y.Z`) is tagged on `main` after `next` has been merged into it.
+* Pre-release builds for testing (`X.Y.Z-dev.N`, `X.Y.Z-rc.N`) are tagged from `next`. A full release (`X.Y.Z`) is tagged on `main` after `next` has been merged into it. See [From Merge to Release](#from-merge-to-release).
 * Pull requests are merged with a merge commit, not squashed, so your commits land on `next` exactly as you wrote them. Keep them small, focused and well described.
 * Every commit must be signed off (`git commit -s`); see [Sign Off Every Commit](#sign-off-every-commit).
+
+## From Merge to Release
+
+After your pull request merges into `next`, it reaches users through three kinds of release. Each one is a version tag that CI builds and publishes. For what each kind means to someone installing it, see [Release types](README.md#release-types) in the README.
+
+| Release | Tag | Cut from | SDK it is built with | Code-signed |
+|---|---|---|---|---|
+| Development build | `X.Y.Z-dev.N` | `next` | The `openmotion-sdk` `next` branch | No |
+| Release candidate | `X.Y.Z-rc.N` | `next` | The PyPI release pinned in `sdk-version.txt` | Yes, for now |
+| Full release | `X.Y.Z` | `main`, after `next` is merged into it | The PyPI release pinned in `sdk-version.txt` | Yes |
+
+* **Development builds** are tagged from `next` whenever there are merged changes to test, so your change normally ships in the next one.
+* A **release candidate** is tagged once everything planned for the version has merged. It is meant to become the full release if testing finds no problems. Fixes for problems found in testing go into `next` through normal pull requests and ship in the next candidate (`rc.N+1`).
+* The **full release** is tagged on `main` after `next` has been merged into it.
+
+**If your change depends on an SDK change:** a development build picks up SDK changes as soon as they merge into the SDK's `next` branch. A release candidate gets them only after they are in an SDK release on PyPI and `sdk-version.txt` has been updated to that release. CI fails a release candidate or full release build whose installed SDK differs from `sdk-version.txt`. Link the SDK issue or pull request from your issue so the maintainers know to update the pin before the release candidate.
+
+Your issue stays open through this: it is verified in a development build or release candidate that contains the change, and the maintainers close it then (see [Pull Request Process](#-pull-request-process)).
 
 ---
 

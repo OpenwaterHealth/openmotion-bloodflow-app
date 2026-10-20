@@ -32,11 +32,36 @@ These are the only builds this repository publishes.
 | `Open-Motion-Research-<version>.zip` | Windows 11 | Portable. Unzip it anywhere and run `Open-Motion.exe`. Install the [USB driver](#usb-drivers) separately. Pre-releases only. |
 | `Open-Motion-<version>-macOS.dmg` | macOS (Apple Silicon) | See [macOS](#macos) below. |
 
-**Versions.** Tags such as `1.5.3` are full releases. `-rc.N` (release
-candidate) and `-dev.N` (development) tags are pre-releases for testing. Release
-candidates and full releases are code-signed with Openwater's EV certificate;
-dev builds are unsigned. Research builds check GitHub for updates, and the
-in-app updater installs only builds signed with that certificate.
+### Release types
+
+Every release on the Releases page is one of three types, and its version tag
+says which:
+
+| | Development build | Release candidate | Full release |
+|---|---|---|---|
+| Example tag | `1.5.4-dev.4` | `1.5.4-rc.2` | `1.5.4` |
+| What it's for | Trying specific changes early | Final testing before a full release | Normal use |
+| Built from | the `next` branch | the `next` branch | the `main` branch |
+| SDK inside | Unreleased code from the `openmotion-sdk` `next` branch | The published SDK release pinned in `sdk-version.txt` | The published SDK release pinned in `sdk-version.txt` |
+| Code-signed | No | Yes, for now | Yes |
+| Downloads | Installer, portable zip, macOS DMG | Installer, portable zip, macOS DMG | Installer, macOS DMG |
+| GitHub label | Pre-release | Pre-release | Latest (the newest one) |
+| In-app updater (default) | Not offered | Not offered | Offered |
+
+A **development build** is published whenever there are new changes to test, so
+it can contain changes that haven't been through release testing yet. A
+**release candidate** is meant to become the next full release if testing finds
+no problems. If testing does find problems, they are fixed and a new candidate
+is published. A version usually has development builds first, then one or more
+release candidates, then the full release. The number after `dev.` or `rc.`
+goes up with each build, and every pre-release comes before the full release of
+its version: `1.5.4-rc.2` is newer than `1.5.3` and older than `1.5.4`.
+
+**Which one to install.** Use the newest full release unless you have been asked
+to test a pre-release. To install a pre-release, download it from the Releases
+page. By default, the in-app updater offers only full releases. It also installs
+only builds signed with Openwater's EV certificate. If you run a pre-release, the
+updater offers the next full release once it is published.
 
 ### Windows notes
 
@@ -208,8 +233,9 @@ pip install --upgrade "pyinstaller>=6.13"
 
 **Releases** are built by CI (`.github/workflows/release-build.yml`) when a
 version tag is pushed. The version comes from the git tag. Release candidates
-and full releases install the exact SDK version pinned in `sdk-version.txt`.
-Code signing is described in [docs/SIGNING.md](docs/SIGNING.md), and the release
+and full releases install the exact SDK version pinned in `sdk-version.txt`, and
+the build fails if the installed SDK differs from it. Development builds install
+the SDK's `next` branch instead. See [Release types](#release-types). Code signing is described in [docs/SIGNING.md](docs/SIGNING.md), and the release
 procedure in [AGENTS.md](AGENTS.md).
 
 ### Repository layout
