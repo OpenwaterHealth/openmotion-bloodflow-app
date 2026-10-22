@@ -4850,6 +4850,7 @@ class MotionConnector(QObject):
             logger.warning("startLaserOptimizerCapture refused: %s", reason)
             self.captureLog.emit(reason)
             self.notify(reason, "error")
+            self.laserOptimizerFinished.emit("error", reason)
             return False
         return self._start_capture(
             subject_id,
@@ -5335,6 +5336,9 @@ class MotionConnector(QObject):
             logger.warning("Laser optimizer refused: %s", reason)
             self.captureLog.emit(f"Laser optimizer refused: {reason}")
             self.notify(f"Laser optimizer refused: {reason}", "error")
+            # The progress modal shows the reason (the toast times out).
+            self.laserOptimizerFinished.emit(
+                "error", f"Laser optimizer refused: {reason}.")
             return False
         if not started:
             self._capture_running = False

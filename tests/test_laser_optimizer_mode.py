@@ -157,8 +157,12 @@ def test_sdk_refusal_unwinds_capture_state(tmp_path):
     c._interface.start_laser_optimizer.return_value = False
     c._interface.laser_optimizer_workflow.last_result = SimpleNamespace(
         message="no near camera (positions 4/5) is active on a connected sensor")
+    outcomes = []
+    c.laserOptimizerFinished.connect(lambda o, t: outcomes.append((o, t)))
     assert c.startLaserOptimizerCapture("hoof", 0x00, 0xC3) is False
     assert c._capture_running is False
+    # The modal gets the reason, not just the toast.
+    assert outcomes and outcomes[0][0] == "error" and "near camera" in outcomes[0][1]
 
 
 def test_outcome_without_a_scan_finishes_the_capture(tmp_path):
