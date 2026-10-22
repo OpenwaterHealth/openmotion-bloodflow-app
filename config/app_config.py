@@ -196,12 +196,15 @@ APP_CONFIG = {
     # so --clinical / --research source runs get the matching default.
     "liquidGlass": not CLINICAL_MODE,
     # Internal restore bookkeeping for the alternative settings above:
-    # True while camera / TA / safety-ceiling registers may still hold an
-    # alternative value, so the first scan after the toggle goes off writes
-    # the firmware / laser_params baseline back once.
+    # True while camera / TA / safety-ceiling / safety rate-floor registers
+    # may still hold an alternative value, so the first scan after the
+    # toggle goes off (or, for the rate floor, the first scan that no longer
+    # needs the long dark skip, #747) writes the firmware / laser_params /
+    # console baseline back once.
     "altCameraSettingsDirty": False,
     "altLaserPulseWidthDirty": False,
     "altLaserSafetyCeilingDirty": False,
+    "altLaserSafetyRateFloorDirty": False,
 }
 
 # ── Tiers ──────────────────────────────────────────────────────────────────
@@ -253,7 +256,7 @@ PREFERENCE_KEYS = frozenset({
 
 STATE_KEYS = frozenset({
     "altCameraSettingsDirty", "altLaserPulseWidthDirty",
-    "altLaserSafetyCeilingDirty",
+    "altLaserSafetyCeilingDirty", "altLaserSafetyRateFloorDirty",
 })
 
 PERSISTED_KEYS = PREFERENCE_KEYS | STATE_KEYS

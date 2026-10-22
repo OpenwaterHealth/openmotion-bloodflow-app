@@ -67,7 +67,7 @@ def test_display_preferences_persist():
 
 def test_restore_flags_are_persisted_state():
     for key in ("altCameraSettingsDirty", "altLaserPulseWidthDirty",
-                "altLaserSafetyCeilingDirty"):
+                "altLaserSafetyCeilingDirty", "altLaserSafetyRateFloorDirty"):
         assert compiled.tier_of(key) == compiled.STATE, key
         assert compiled.APP_CONFIG[key] is False
 

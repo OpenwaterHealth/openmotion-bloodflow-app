@@ -10,6 +10,7 @@ from PyQt6.QtCore import (
 from PyQt6.QtQml import QJSValue
 from pathlib import Path
 from typing import Any, Dict, NamedTuple, Optional
+import dataclasses
 import itertools
 import logging
 import math
@@ -42,6 +43,7 @@ from omotion.config import (
     DEBUG_FLAG_HISTO_STALL,
 )
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
+from omotion.ContactQualityWorkflow import ContactQualityWorkflow
 from omotion.contact_quality import CQThresholds, ContactQualityMonitor
 from motion_config import (
     FW_DEFAULT_CAMERA_SETTINGS,
@@ -59,6 +61,11 @@ from motion_config import (
     ALT_PULSE_WIDTH_SAFETY_CEILING_US,
     SAFETY_PULSE_TICK_US,
     safety_pulse_width_ul_writes,
+    DARK_SKIP_CLEAN_EXPOSURE_MAX_US,
+    DARK_SKIP_DELAY_US,
+    DARK_SKIP_SAFETY_RATE_LL_US,
+    dark_skip_delay_us,
+    safety_rate_ll_writes,
 )
 import error_codes
 import bug_report
@@ -726,6 +733,30 @@ class _CompletionSink:
             self._on_complete_cb(self._meta)
         except Exception:
             logger.exception("_CompletionSink.on_complete callback raised")
+
+
+class _TriggerOverrideScanWorkflow:
+    """A ScanWorkflow stand-in that adds a trigger-config override to every
+    ScanRequest it starts, then hands it to the real workflow.
+
+    For the preflight signal-quality check (#747): the SDK's
+    ContactQualityWorkflow.check() builds its own ScanRequest and takes no
+    trigger config, but it accepts any object with the scan workflow's
+    public surface. Everything except start_scan passes straight through,
+    so the check still shares the interface's one scan-running lock.
+    """
+
+    def __init__(self, scan_workflow, trigger_config: dict):
+        self._scan_workflow = scan_workflow
+        self._trigger_config = dict(trigger_config)
+
+    def start_scan(self, request):
+        merged = {**(request.trigger_config or {}), **self._trigger_config}
+        return self._scan_workflow.start_scan(
+            dataclasses.replace(request, trigger_config=merged))
+
+    def __getattr__(self, name):
+        return getattr(self._scan_workflow, name)
 
 
 # ── Scan-outcome classification (interrupted / empty scans) ────────────────
@@ -4740,7 +4771,154 @@ class MotionConnector(QObject):
             self._apply_alt_ta_pulse_width()
             self._apply_alt_safety_pulse_width_ul()
 
-    def _sync_alt_scan_settings(self, left_mask: int, right_mask: int):
+    def _alt_dark_skip_us(self) -> int:
+        """The dark-frame skip this run's alternative settings need (#747).
+
+        DARK_SKIP_HIGH_EXPOSURE_US (2400) when the alternative camera
+        exposure, or the pulse delay + the alternative pulse width, reaches
+        past DARK_SKIP_CLEAN_EXPOSURE_MAX_US (1700); otherwise the default
+        DARK_SKIP_DELAY_US. Reads the config the sync just applied: a
+        setting that is off, invalid or (for the pulse width) gated off on
+        a plain clinical build doesn't count.
+        """
+        exposure_us = None
+        if self._app_config.get("altCameraSettingsEnabled") is True:
+            settings, _ = camera_settings_from_config(
+                self._app_config.get("altCameraExposureUs"),
+                self._app_config.get("altCameraGains"),
+            )
+            if settings is not None:
+                exposure_us = settings.exposure_us
+        width_us = None
+        if (self._app_config.get("altLaserPulseWidthEnabled") is True
+                and not (self._app_config.get("clinicalMode", False)
+                         and not self._app_config.get("engineeringMode", False))):
+            width_us, _ = laser_pulse_width_from_config(
+                self._app_config.get("altLaserPulseWidthUsec"))
+        return dark_skip_delay_us(exposure_us, width_us)
+
+    def _apply_alt_safety_rate_ll(self, needed: bool) -> bool:
+        """Widen / restore the safety FPGAs' RATE_LL floor (#747).
+
+        A run at the 2400 µs dark skip starts the pulse after each dark
+        frame 22600 µs after the previous one: under the 23125 µs RATE_LL
+        floor real consoles hold in flash, and only 100 µs over the
+        laser_params stock 22500. Under the floor the safety FPGAs trip
+        and LATCH (E-202, console power-cycle to clear) on the first dark.
+        So when ``needed`` this writes DARK_SKIP_SAFETY_RATE_LL_US (22000)
+        to both registers before the run, and on the first run that no
+        longer needs it restores the unit's own value — flash user config,
+        else the laser_params.json stock — via the persisted
+        ``altLaserSafetyRateFloorDirty`` flag. Runs with the trigger off.
+
+        Returns True only when ``needed`` and both floors were written, so
+        the caller may run the 2400 µs skip. Same gates as the
+        PULSE_WIDTH_UL ceiling: nothing on a plain clinical build, nothing
+        while ``forceLaserFail`` is armed (the dirty flag is carried).
+        """
+        dirty = self._app_config.get("altLaserSafetyRateFloorDirty") is True
+        if not needed and not dirty:
+            return False
+        if (self._app_config.get("clinicalMode", False)
+                and not self._app_config.get("engineeringMode", False)):
+            return False
+        console = getattr(self._interface, "console", None)
+        if console is None:
+            return False
+        if self._force_laser_fail:
+            logger.warning(
+                "forceLaserFail is armed; leaving the safety RATE_LL "
+                "registers alone (%s deferred)",
+                "floor widen" if needed else "floor restore",
+            )
+            return False
+
+        if needed:
+            writes = safety_rate_ll_writes(DARK_SKIP_SAFETY_RATE_LL_US)
+        else:
+            user_cfg = None
+            try:
+                cfg_obj = console.read_config()
+                json_data = getattr(cfg_obj, "json_data", None)
+                if isinstance(json_data, dict):
+                    user_cfg = json_data
+            except Exception as e:
+                logger.warning(
+                    "Could not read the console user config before the "
+                    "safety RATE_LL restore (%s); restoring the "
+                    "laser_params baseline", e,
+                )
+            writes = safety_rate_ll_writes(None, user_config=user_cfg)
+
+        failures = []
+        wrote_any = False
+        for name, write_kwargs, ticks, source in writes:
+            label = (f"{name} {ticks * SAFETY_PULSE_TICK_US:.0f} µs = "
+                     f"{ticks} ticks ({source})")
+            try:
+                ok = console.write_i2c_packet(**write_kwargs) is not False
+            except Exception as e:
+                logger.warning("%s write raised: %s", name, e)
+                ok = False
+            if ok:
+                wrote_any = True
+                # WARNING on purpose — this moves a laser-safety limit.
+                logger.warning("SAFETY RATE_LL WRITTEN: %s", label)
+            else:
+                failures.append(label)
+                logger.warning(
+                    "SAFETY RATE_LL write FAILED (%s); the register keeps "
+                    "its previous limit", label,
+                )
+
+        new_dirty = dirty
+        if needed and wrote_any:
+            new_dirty = True
+        elif not needed and not failures:
+            new_dirty = False
+        if new_dirty != dirty:
+            self._app_config["altLaserSafetyRateFloorDirty"] = new_dirty
+            self._save_app_config()
+        return needed and not failures
+
+    def _sync_alt_dark_skip(self) -> Optional[dict]:
+        """Pick this run's dark-frame skip and bring the safety RATE_LL
+        floor in line with it (#747). Returns the trigger-config override
+        for the run, or None for the default 1800 µs skip.
+
+        The override goes on the run's ScanRequest.trigger_config, never on
+        a trigger push of our own: ScanWorkflow re-sends the resolved
+        config right before start_trigger, so only the request's override
+        survives to the trigger that fires. If the floor can't be widened
+        the run keeps the 1800 µs skip — its darks catch the laser, but a
+        2400 µs skip under an unmoved floor would latch the interlock.
+        """
+        skip_us = self._alt_dark_skip_us()
+        needed = skip_us != DARK_SKIP_DELAY_US
+        widened = self._apply_alt_safety_rate_ll(needed)
+        if not needed:
+            return None
+        if not widened:
+            logger.warning(
+                "Keeping the %d µs dark-frame skip this run: the safety "
+                "RATE_LL floor was not widened, so a %d µs skip would latch "
+                "the laser-safety interlock (E-202). Scheduled dark frames "
+                "will catch the laser at this exposure.",
+                DARK_SKIP_DELAY_US, skip_us,
+            )
+            return None
+        # WARNING on purpose — it changes the laser timing of this run.
+        logger.warning(
+            "LONG DARK SKIP ACTIVE: LaserPulseSkipDelayUsec %d -> %d µs for "
+            "this run (alternative settings reach past %d µs; safety "
+            "RATE_LL floor %d µs)",
+            DARK_SKIP_DELAY_US, skip_us, DARK_SKIP_CLEAN_EXPOSURE_MAX_US,
+            DARK_SKIP_SAFETY_RATE_LL_US,
+        )
+        return {"LaserPulseSkipDelayUsec": skip_us}
+
+    def _sync_alt_scan_settings(self, left_mask: int,
+                                right_mask: int) -> Optional[dict]:
         """Bring the hardware in line with the Engineering-mode alternative
         settings toggles — the ONE place those registers are written (#510).
 
@@ -4761,6 +4939,9 @@ class MotionConnector(QObject):
         dirty paths ride along for the same reason: the first preflight
         after a toggle is turned off already runs at the restored
         baseline.
+
+        Returns the trigger-config override the run must carry on its
+        ScanRequest (#747: the 2400 µs dark skip past 1700 µs), or None.
         """
         # #446: write exposure + per-camera analog gain via the SDK, every
         # time — or restore firmware defaults on the first run after the
@@ -4773,6 +4954,11 @@ class MotionConnector(QObject):
         # #483: bracketed by the safety FPGAs' PULSE_WIDTH_UL ceiling —
         # raised before the pulse is widened, restored after it's narrowed.
         self._apply_alt_laser_pulse_width_registers()
+
+        # #747: past 1700 µs the scheduled dark's displaced pulse (start
+        # 1900 µs at the default skip) lands inside the exposure, so the run
+        # moves it to 2400 µs and widens the safety RATE_LL floor to match.
+        return self._sync_alt_dark_skip()
 
     # --- CONSOLE COMMUNICATION METHODS ---
     @pyqtSlot()
@@ -5140,8 +5326,11 @@ class MotionConnector(QObject):
             "cq_live_clear_frames", _CQ_DEFAULT_LIVE_CLEAR_FRAMES)
 
         # Engineering-mode alternative camera + laser settings (#446/#449),
-        # shared with the preflight signal-quality check (#510).
-        self._sync_alt_scan_settings(left_camera_mask, right_camera_mask)
+        # shared with the preflight signal-quality check (#510). The returned
+        # override (#747, long dark skip) must ride the request: ScanWorkflow
+        # re-sends the resolved trigger config right before start_trigger.
+        trigger_override = self._sync_alt_scan_settings(
+            left_camera_mask, right_camera_mask)
 
         req = ScanRequest(
             subject_id=subject_id,
@@ -5175,6 +5364,7 @@ class MotionConnector(QObject):
                 self._raw_csv_duration_sec
                 if (raw_csv_allowed and self._write_raw_csv) else 0
             ),
+            trigger_config=trigger_override,
             sinks=[
                 _LivePlotSink(connector=self, plot_t0=plot_t0, live_source=live_source,
                               nan_gap_tracker=nan_gap_tracker),
@@ -5572,7 +5762,9 @@ class MotionConnector(QObject):
             # width, applied to every trigger push while enabled. (The
             # dark-frame skip needs no counterpart here — it lives in the
             # interface's default_trigger_config (main.py, #449), so the
-            # resolve above already carries it.)
+            # resolve above already carries it. A long-exposure run's
+            # 2400 µs skip (#747) rides its ScanRequest instead, which
+            # ScanWorkflow re-sends after this push.)
             json_trigger_data = self._apply_alt_laser_pulse_width(
                 json_trigger_data
             )
@@ -5795,7 +5987,15 @@ class MotionConnector(QObject):
         # alternative camera + laser settings before the check scan, exactly
         # as startCapture does. Synchronous on this thread, before the SDK
         # worker spawns, mirroring the scan-start call.
-        self._sync_alt_scan_settings(left_mask, right_mask)
+        trigger_override = self._sync_alt_scan_settings(left_mask, right_mask)
+
+        # #747: the check's dark frames gate AMBIENT_LIGHT, so it needs the
+        # same long dark skip as the scan. check() takes no trigger config;
+        # run it over a scan-workflow wrapper that adds it to the request.
+        cq_workflow = self._interface.contact_quality_workflow
+        if trigger_override:
+            cq_workflow = ContactQualityWorkflow(_TriggerOverrideScanWorkflow(
+                self._interface.scan_workflow, trigger_override))
 
         self._cq_t0 = time.monotonic()
         logger.info(
@@ -5806,7 +6006,7 @@ class MotionConnector(QObject):
 
         def _worker():
             try:
-                result = self._interface.contact_quality_workflow.check(
+                result = cq_workflow.check(
                     duration_sec=duration_s,
                     rolling_window=rolling_window,
                     dark_threshold_per_camera=dark_thresholds,

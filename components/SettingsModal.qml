@@ -1588,17 +1588,17 @@ Item {
                         Item { Layout.fillWidth: true }
                     }
 
-                    // Dark-frame contamination warning (#449). The console
+                    // Long-exposure dark-skip notice (#449, #747). The console
                     // displaces the scheduled dark's laser pulse to start at
-                    // delay(100) + LaserPulseSkipDelayUsec = 1900 µs, so an
-                    // exposure reaching past that re-catches the pulse and
-                    // inflates the dark reference. The app runs the 1800 µs
-                    // skip because 2400 shortens the post-dark gap below the
-                    // RATE_LL floor stock consoles ship with, which latches
-                    // the safety interlock — see motion_config.py. Shown only
-                    // when the selected exposure actually crosses the line.
+                    // delay(100) + LaserPulseSkipDelayUsec, 1900 µs at the
+                    // default 1800 µs skip, so an exposure past 1700 µs would
+                    // re-catch it. Those scans run a 2400 µs skip instead,
+                    // and the connector widens the safety RATE_LL floor for
+                    // them (2400 shortens the post-dark gap below the floor
+                    // stock consoles ship with) — see motion_config.py.
+                    // Shown only when the selected exposure crosses the line.
                     Text {
-                        objectName: "altExposureDarkContaminationWarning"
+                        objectName: "altExposureDarkSkipNotice"
                         // Gated on the CONFIG value rather than the combo's
                         // currentIndex: the config value is what actually
                         // reaches the cameras, so a hand-edited off-grid
@@ -1610,16 +1610,14 @@ Item {
                         wrapMode: Text.WordWrap
                         font.pixelSize: 11
                         color: AppTheme.accentYellow
-                        text: qsTr("Dark frames are contaminated above 1700 µs — "
-                                   + "the scheduled dark's laser pulse only moves "
-                                   + "to 1900 µs, so this exposure re-catches it "
-                                   + "and BFI/BVI come out biased. To fix: lower "
-                                   + "the console's EE/OPT_RATE_LL to ≤ 22600 µs "
-                                   + "FIRST, then raise the dark-frame skip 1800 → "
-                                   + "2400 µs (motion_config.DARK_SKIP_DELAY_US). "
-                                   + "Raising the skip on a stock console (RATE_LL "
-                                   + "23125 µs) latches the laser-safety interlock "
-                                   + "until a power-cycle.")
+                        text: qsTr("Above 1700 µs, scans and signal-quality "
+                                   + "checks move the dark frame's laser pulse "
+                                   + "from 1900 to 2500 µs so it stays outside "
+                                   + "the exposure. To allow that, the console's "
+                                   + "laser-safety rate limit (EE/OPT_RATE_LL) "
+                                   + "is lowered to 22000 µs for those runs and "
+                                   + "restored on the first run at or below "
+                                   + "1700 µs.")
                     }
 
                     // Per-position analog gain (cameras 1–8); one set applied
