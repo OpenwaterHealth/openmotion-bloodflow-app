@@ -18,6 +18,12 @@ Rectangle {
     // True for a scan started from the Optimize button (#746): the SDK's
     // laser optimizer tunes pulse width + camera gain, then runs this scan.
     property bool laserOptimizerScan: false
+    // What the header's elapsed / total counter shows: an optimizer scan
+    // runs for its own configured length, not the Scan Settings duration.
+    readonly property bool headerFreeRun: freeRun && !laserOptimizerScan
+    readonly property int headerDurationSec: laserOptimizerScan
+        ? (MotionInterface.appConfig.laserOptimizerScanDurationSec || 10)
+        : durationSec
     property bool camerasReady: true  // gates Start/Check; false only while no sensor is connected
 
     // Aggregate live state of the contact-quality runners so main.qml
@@ -602,6 +608,9 @@ Rectangle {
                 // connector already raised a toast with the reason).
                 if (!ok && err !== "Canceled" && laserOptimizerModal.phase === "probing")
                     laserOptimizerModal.finished("error", err)
+                // Back to the normal scan length in the header; Retry and
+                // the Optimize button set it again.
+                bloodFlow.laserOptimizerScan = false
                 return
             }
             if (!ok && err !== "Canceled") {
