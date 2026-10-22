@@ -131,6 +131,12 @@ class _StubMotionInterface(QObject):
             **self._trace_colors,
         }
 
+    # Mirrors the connector (#746): engineering mode on a research build
+    # (a clinical bundle doesn't carry the optimizer at all).
+    @pyqtProperty(bool, notify=appConfigChanged)
+    def laserOptimizerAvailable(self):
+        return self._engineering and not self._clinical
+
     # The connector's is constant (the compiled baseline); the stub's
     # notifies so a test can swap it, e.g. to {} for a host without it.
     @pyqtProperty("QVariantMap", notify=appConfigChanged)
@@ -435,6 +441,32 @@ def test_engineering_card_follows_engineering_flag(modal_factory):
     # Live flip — the same path the runtime unlock/disable exercises.
     modal_factory.stub.setFlags(clinical=False, engineering=False)
     assert _card_visible(modal, "Engineering") is False
+
+
+def test_laser_optimizer_card_is_engineering_research_only(modal_factory):
+    """#746: the optimizer's settings live in their own card, shown only
+    with engineering mode on a research build."""
+    modal = modal_factory()
+    for clinical, engineering, shown in ((False, True, True),
+                                         (False, False, False),
+                                         (True, True, False),
+                                         (True, False, False)):
+        modal_factory.stub.setFlags(clinical=clinical, engineering=engineering)
+        assert _card_visible(modal, "Laser Optimizer") is shown, (clinical, engineering)
+    modal_factory.stub.setFlags(clinical=False, engineering=False)
+
+
+def test_laser_optimizer_duration_sits_in_its_own_card(modal_factory):
+    modal = modal_factory()
+    combo = modal.findChild(QObject, "laserOptimizerDurationCombo")
+    card = modal.findChild(QObject, "laserOptimizerCard")
+    assert combo is not None and card is not None
+    parent = combo.parent()
+    while parent is not None and parent is not card:
+        assert parent.property("title") != "Engineering", \
+            "the duration control moved out of the Engineering card"
+        parent = parent.parent()
+    assert parent is card
 
 
 def _find_item(root, object_name):

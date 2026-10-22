@@ -198,7 +198,7 @@ Rectangle {
             objectName: "laserOptimizerButton"
             visible: panel.laserOptimizerAvailable
             enabled: !panel.scanning && panel.camerasReady && panel.allConnected
-            iconText: "\ue953"  // autobrightness icon
+            laserIcon: true
             label: "Optimize"
             onClicked: panel.optimizeClicked()
         }
@@ -247,6 +247,8 @@ Rectangle {
     component PanelButton: Item {
         id: btnItem
         property string iconText: ""
+        // Draw the laser-hazard sign (LaserSafetyIcon) instead of a font glyph.
+        property bool laserIcon: false
         property string label: ""
         property bool highlighted: false
         property color highlightColor: AppTheme.accentInteractive
@@ -273,12 +275,20 @@ Rectangle {
             spacing: 2
 
             Text {
-                text: btnItem.iconText
+                // A blank glyph keeps the icon row's height for the drawn sign.
+                text: btnItem.laserIcon ? " " : btnItem.iconText
                 font.family: iconFont.name
                 font.pixelSize: 26
                 color: btnItem.enabled ? (btnItem.highlighted ? "white" : AppTheme.textSecondary) : AppTheme.textDisabled
                 horizontalAlignment: Text.AlignHCenter
                 Layout.alignment: Qt.AlignHCenter
+
+                // Laser-hazard yellow while usable, like the warning sign.
+                LaserSafetyIcon {
+                    visible: btnItem.laserIcon
+                    anchors.centerIn: parent
+                    color: btnItem.enabled ? AppTheme.accentYellow : AppTheme.textDisabled
+                }
             }
 
             Text {
