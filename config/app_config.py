@@ -138,8 +138,14 @@ APP_CONFIG = {
     # 20-2200. Writes the TA driver's pulse_width register at scan start.
     "altLaserPulseWidthEnabled": False,
     "altLaserPulseWidthUsec": 500,
-    # Laser optimizer mode (#746): seconds the final scan runs once the SDK
-    # optimizer has found its pulse width + gain. Settings → Engineering.
+    # Laser optimizer mode (#746), Settings → Laser Optimizer (validated in
+    # laser_optimizer_mode.SETTINGS): the near cameras' setpoint (dark-
+    # corrected DN) and accepted band (+/- %), where each run starts (near
+    # gain, TA pulse µs), and how long it scans once tuned (s).
+    "laserOptimizerTargetMeanDn": 100,
+    "laserOptimizerTolerancePct": 15,
+    "laserOptimizerStartGain": 16,
+    "laserOptimizerStartPulseUs": 2000,
     "laserOptimizerScanDurationSec": 10,
     # Beta/prerelease channel for both updaters; effective only in a
     # Research build with engineering mode unlocked.
@@ -252,6 +258,8 @@ PREFERENCE_KEYS = frozenset({
     # engineeringMode is session-only. autoExportCsv is gated on
     # !clinicalMode alone at scan end.
     "writeRawCsv", "rawCsvDurationSec", "autoExportCsv",
+    "laserOptimizerTargetMeanDn", "laserOptimizerTolerancePct",
+    "laserOptimizerStartGain", "laserOptimizerStartPulseUs",
     "laserOptimizerScanDurationSec",
 })
 

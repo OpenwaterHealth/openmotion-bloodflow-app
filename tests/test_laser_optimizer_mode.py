@@ -289,3 +289,55 @@ def test_a_build_without_the_module_offers_and_runs_nothing(tmp_path, monkeypatc
     assert c.startLaserOptimizerCapture("hoof", 0x00, 0xFF) is False
     c._interface.start_laser_optimizer.assert_not_called()
     assert "not part of this build" in outcomes[0]
+
+
+# ---------------------------------------------------------------------------
+# Operator settings (Settings → Laser Optimizer)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("key, value, expected", [
+    ("laserOptimizerTargetMeanDn", 150, 150),
+    ("laserOptimizerTargetMeanDn", 110, 110),     # between steps is fine
+    ("laserOptimizerTargetMeanDn", 500, 100),     # out of range: default
+    ("laserOptimizerTargetMeanDn", "150", 100),
+    ("laserOptimizerTolerancePct", 10, 10),
+    ("laserOptimizerTolerancePct", 0, 15),
+    ("laserOptimizerStartGain", 8, 8),
+    ("laserOptimizerStartGain", 3, 16),           # not a gain step
+    ("laserOptimizerStartPulseUs", 1500, 1500),
+    ("laserOptimizerStartPulseUs", 2100, 2000),   # beyond the exposure
+    ("laserOptimizerStartPulseUs", True, 2000),
+])
+def test_settings_validation(key, value, expected):
+    assert lom.setting({key: value}, key) == expected
+
+
+def test_choices_carry_defaults_and_cover_them():
+    c = lom.choices()
+    for name, default in c["defaults"].items():
+        assert default in c[name], name
+
+
+def test_optimizer_config_maps_the_settings():
+    pytest.importorskip("omotion.LaserOptimizerWorkflow")
+    cfg = lom.optimizer_config({
+        "laserOptimizerTargetMeanDn": 150, "laserOptimizerTolerancePct": 10,
+        "laserOptimizerStartGain": 8, "laserOptimizerStartPulseUs": 1000,
+    })
+    assert (cfg.target_mean_dn, cfg.tolerance, cfg.max_gain, cfg.max_pulse_width_us) == (
+        150.0, 0.10, 8, 1000)
+    defaults = lom.optimizer_config({})
+    assert (defaults.target_mean_dn, defaults.tolerance) == (100.0, 0.15)
+
+
+def test_the_run_uses_the_operator_settings(tmp_path):
+    pytest.importorskip("omotion.LaserOptimizerWorkflow")
+    c = _make_connector(tmp_path, {**ENG_RESEARCH, "laserOptimizerTargetMeanDn": 150,
+                                   "laserOptimizerStartGain": 4})
+    assert c.laserOptimizerSettings["targetMeanDn"] == 150
+    assert c.laserOptimizerChoices["defaults"]["targetMeanDn"] == 100
+    assert c.startLaserOptimizerCapture("hoof", 0x00, 0xFF) is True
+    request = c._interface.start_laser_optimizer.call_args.args[0]
+    assert request.config.target_mean_dn == 150.0 and request.config.max_gain == 4
+    # Everything the operator does not set stays the SDK's agreed default.
+    assert request.config.row_gain_ratio == (8, 4, 2, 1, 1, 2, 4, 8)

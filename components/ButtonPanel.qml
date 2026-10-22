@@ -283,11 +283,11 @@ Rectangle {
                 horizontalAlignment: Text.AlignHCenter
                 Layout.alignment: Qt.AlignHCenter
 
-                // Laser-hazard yellow while usable, like the warning sign.
+                // Same colour as the font glyphs on the other buttons.
                 LaserSafetyIcon {
                     visible: btnItem.laserIcon
                     anchors.centerIn: parent
-                    color: btnItem.enabled ? AppTheme.accentYellow : AppTheme.textDisabled
+                    color: parent.color
                 }
             }
 

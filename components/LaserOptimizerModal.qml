@@ -44,12 +44,15 @@ Item {
         elide: Text.ElideRight
     }
     readonly property int probeCount: probeModel.count
+    // The operator settings this run uses (Settings → Laser Optimizer).
+    readonly property var opt: MotionInterface.laserOptimizerSettings || ({})
 
     function reset() {
         probeModel.clear()
         phase = "probing"
         outcome = ""
-        statusText = "Starting at the brightest setting (16x gain, 2000 µs pulse)…"
+        statusText = "Starting at " + opt.startGain + "x gain and a "
+                     + opt.startPulseUs + " µs pulse…"
     }
     function addProbe(row) {
         probeModel.append(row)
@@ -127,10 +130,11 @@ Item {
 
             Text {
                 text: "Tunes the laser pulse width and camera gain until the near "
-                      + "cameras (4 and 5) read about 100 DN, then scans for "
-                      + (MotionInterface.appConfig.laserOptimizerScanDurationSec || 10)
-                      + " s. Engineering experiments only: the laser-safety limits "
-                      + "are widened for the run and restored afterwards."
+                      + "cameras (4 and 5) read " + root.opt.targetMeanDn + " DN (± "
+                      + root.opt.tolerancePct + " %), then scans for "
+                      + root.opt.scanDurationSec + " s. Engineering experiments "
+                      + "only: the laser-safety limits are widened for the run and "
+                      + "restored afterwards."
                 color: AppTheme.textTertiary
                 font.pixelSize: 12
                 wrapMode: Text.WordWrap
