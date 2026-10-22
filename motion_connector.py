@@ -5327,13 +5327,15 @@ class MotionConnector(QObject):
             started = self._start_laser_optimizer(req)
         else:
             started = self._interface.start_scan(req)
-        if started:
+        if started and not laser_optimizer:
+            # (An optimizer run logs its own start; its scan starts later.)
             logger.info(
                 "=== Full scan started: subject=%s duration=%ss "
                 "left=0x%02X right=0x%02X laser=%s ===",
                 subject_id, duration_sec, left_camera_mask, right_camera_mask,
                 "off" if disable_laser else "on",
             )
+        if started:
             if self._sensor_debug_logging:
                 # DEBUG_FLAG_USB_PRINTF is set, so this scan carries an
                 # elevated camera-dropout risk on firmware without
