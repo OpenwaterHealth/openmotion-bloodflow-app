@@ -129,6 +129,16 @@ if ($Variant -eq "clinical" -and -not $Service) {
     $args += "--nofollow-import-to=engineering_unlock"
     $args += "--noinclude-data-files=components/EngineeringUnlockModal.qml"
 }
+# Nor laser optimizer mode (#746) in any clinical build, the service tool
+# included: the app module, the SDK's workflow + register writers (the flag
+# overrides --include-package=omotion) and the modal QML. motion_connector
+# skips the import on the compiled CLINICAL_MODE.
+if ($Variant -eq "clinical") {
+    $args += "--nofollow-import-to=laser_optimizer_mode"
+    $args += "--nofollow-import-to=omotion.LaserOptimizerWorkflow"
+    $args += "--nofollow-import-to=omotion.register_overrides"
+    $args += "--noinclude-data-files=components/LaserOptimizerModal.qml"
+}
 
 # Data blobs (the program's constants, the onefile payload) go in as COFF
 # objects that Nuitka writes itself (#698). That is MSVC's default, so CI is
