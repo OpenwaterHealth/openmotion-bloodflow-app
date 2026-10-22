@@ -132,6 +132,7 @@ Rectangle {
     // the progress modal up while the optimizer probes.
     function startLaserOptimizerScan() {
         if (bloodFlow.scanning || startGate.running) return
+        if (!laserOptimizerModal) return   // not in this build
         if (!MotionInterface.checkStorageForScan()) return
         bloodFlow.laserOptimizerScan = true
         laserOptimizerModal.reset()
@@ -459,16 +460,28 @@ Rectangle {
 
     // Laser optimizer progress (#746): probe table while it tunes, then out
     // of the way for the scan; back up for an outcome that needs the
-    // operator (not enough light → reposition, Retry).
-    LaserOptimizerModal {
-        id: laserOptimizerModal
-        onRetryRequested: bloodFlow.startLaserOptimizerScan()
-        onStopRequested: {
+    // operator (not enough light → reposition, Retry). Loaded, never
+    // instantiated by type: a clinical bundle doesn't carry
+    // LaserOptimizerModal.qml, and the connector reports
+    // laserOptimizerInBuild false there (laserOptimizerModal stays null).
+    Loader {
+        id: laserOptimizerLoader
+        anchors.fill: parent
+        z: 9998
+        active: MotionInterface.laserOptimizerInBuild === true
+        source: active ? "../components/LaserOptimizerModal.qml" : ""
+    }
+    readonly property var laserOptimizerModal: laserOptimizerLoader.item
+    Connections {
+        target: bloodFlow.laserOptimizerModal
+        function onRetryRequested() { bloodFlow.startLaserOptimizerScan() }
+        function onStopRequested() {
             if (bloodFlow.scanning) scanRunner.cancel()
         }
     }
     Connections {
         target: MotionInterface
+        enabled: bloodFlow.laserOptimizerModal !== null
         function onLaserOptimizerProbe(row) { laserOptimizerModal.addProbe(row) }
         function onLaserOptimizerScanStarted(setting) {
             laserOptimizerModal.scanStarted(setting)
@@ -606,7 +619,8 @@ Rectangle {
                 // the connector refused never reached the optimizer, so the
                 // modal is still on "probing": close that out here (the
                 // connector already raised a toast with the reason).
-                if (!ok && err !== "Canceled" && laserOptimizerModal.phase === "probing")
+                if (!ok && err !== "Canceled" && laserOptimizerModal
+                        && laserOptimizerModal.phase === "probing")
                     laserOptimizerModal.finished("error", err)
                 // Back to the normal scan length in the header; Retry and
                 // the Optimize button set it again.

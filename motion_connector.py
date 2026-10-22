@@ -63,7 +63,6 @@ from motion_config import (
 import error_codes
 import bug_report
 from nan_gap_tracker import NanGapTracker, gap_note_line
-import laser_optimizer_mode
 from utils.resource_path import resource_path
 from utils import app_paths, config_store, disk_space, log_tail
 from config.app_config import APP_CONFIG as _COMPILED_APP_CONFIG
@@ -98,6 +97,23 @@ else:
         import engineering_unlock
     except ImportError:   # excluded from this bundle
         engineering_unlock = None
+
+# Laser optimizer mode (#746) is a research + engineering-mode feature: it
+# widens the laser-safety limits while it runs. It is compiled out of every
+# clinical build, the service tool included: openwater.spec /
+# build_nuitka.ps1 leave ``laser_optimizer_mode``, the SDK's
+# ``omotion.LaserOptimizerWorkflow`` / ``omotion.register_overrides`` and
+# LaserOptimizerModal.qml out of a clinical bundle, and this import is skipped
+# on the same constant. A research build still needs engineering mode
+# (laser_optimizer_mode.refusal); a source run with ``--clinical`` keeps the
+# module and relies on that runtime check.
+if _CLINICAL_BUILD:
+    laser_optimizer_mode = None
+else:
+    try:
+        import laser_optimizer_mode
+    except ImportError:   # excluded from this bundle
+        laser_optimizer_mode = None
 from data_sources import (
     LiveScanSource, PastScanSource, ScanDataSource, buffers_are_empty,
     effective_bvi_lpf_cutoff, load_csv_scan_buffers,
@@ -1409,7 +1425,9 @@ class MotionConnector(QObject):
         self._scan_notes_session_label = ""
         # Laser optimizer mode (#746): does the SDK ship it, and the notes
         # block of the run whose final scan is in progress.
-        self._laser_optimizer_sdk = laser_optimizer_mode.sdk_supports_laser_optimizer()
+        self._laser_optimizer_sdk = (
+            laser_optimizer_mode is not None
+            and laser_optimizer_mode.sdk_supports_laser_optimizer())
         self._laser_optimizer_note = ""
         self.connect_signals()
 
@@ -4814,10 +4832,19 @@ class MotionConnector(QObject):
         return self._start_capture(subject_id, duration_sec, left_camera_mask,
                                    right_camera_mask, disable_laser)
 
+    @pyqtProperty(bool, constant=True)
+    def laserOptimizerInBuild(self) -> bool:
+        """True when this build carries laser optimizer mode at all (#746):
+        False in every clinical bundle, which also lacks
+        LaserOptimizerModal.qml, so QML loads that modal only on True."""
+        return laser_optimizer_mode is not None
+
     @pyqtProperty(bool, notify=appConfigChanged)
     def laserOptimizerAvailable(self) -> bool:
         """Show the Optimize button: engineering mode on a research build
         with an SDK that ships the optimizer (#746)."""
+        if laser_optimizer_mode is None:
+            return False
         return laser_optimizer_mode.refusal(
             {**self._app_config, "forceLaserFail": False},
             sdk_supported=self._laser_optimizer_sdk,
@@ -4834,8 +4861,11 @@ class MotionConnector(QObject):
         gain until the near cameras read ~100 DN, then runs the normal scan
         request built here for laserOptimizerScanDurationSec seconds.
         Returns True if the optimizer started."""
-        reason = laser_optimizer_mode.refusal(
-            self._app_config, sdk_supported=self._laser_optimizer_sdk)
+        if laser_optimizer_mode is None:
+            reason = "Laser optimizer mode is not part of this build."
+        else:
+            reason = laser_optimizer_mode.refusal(
+                self._app_config, sdk_supported=self._laser_optimizer_sdk)
         if reason:
             logger.warning("startLaserOptimizerCapture refused: %s", reason)
             self.captureLog.emit(reason)

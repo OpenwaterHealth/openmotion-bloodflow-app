@@ -221,3 +221,71 @@ def test_stop_also_stops_the_optimizer(tmp_path):
     c.stopCapture()
     c._interface.cancel_laser_optimizer.assert_called_once()
     c._interface.cancel_scan.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Research + engineering only: compiled out of every clinical build
+# ---------------------------------------------------------------------------
+
+import re
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+_LASER_MODULES = ("laser_optimizer_mode", "omotion.LaserOptimizerWorkflow",
+                  "omotion.register_overrides")
+
+
+def test_connector_import_is_gated_on_the_clinical_stamp():
+    src = (REPO_ROOT / "motion_connector.py").read_text(encoding="utf-8")
+    assert re.search(
+        r"if _CLINICAL_BUILD:\n    laser_optimizer_mode = None\nelse:\n"
+        r"    try:\n        import laser_optimizer_mode\n", src,
+    ), "laser_optimizer_mode must only be imported when the build keeps it"
+    assert src.count("import laser_optimizer_mode") == 1
+    assert "from laser_optimizer_mode import" not in src
+    # No top-level SDK import that would drag the workflow into a bundle.
+    assert not re.search(r"^from omotion\.LaserOptimizerWorkflow import", src, re.M)
+
+
+def test_pyinstaller_spec_leaves_it_out_of_every_clinical_bundle():
+    spec = (REPO_ROOT / "openwater.spec").read_text(encoding="utf-8")
+    for name in _LASER_MODULES:
+        assert f'"{name}"' in spec
+    assert re.search(r"if _is_clinical:\n    _excludes\.extend\(_LASER_OPTIMIZER_MODULES\)\n"
+                     r"    hidden = \[h for h in hidden if h not in _LASER_OPTIMIZER_MODULES\]",
+                     spec)
+    assert 'os.path.join("components", "LaserOptimizerModal.qml")' in spec
+    assert re.search(r"if _is_clinical:\n"
+                     r"    a\.datas = \[e for e in a\.datas if _norm\(e\[0\]\) != _LASER_OPTIMIZER_QML\]",
+                     spec)
+
+
+def test_nuitka_build_leaves_it_out_of_every_clinical_bundle():
+    ps1 = (REPO_ROOT / "scripts" / "build_nuitka.ps1").read_text(encoding="utf-8-sig")
+    blocks = re.findall(r'if \(\$Variant -eq "clinical"\) \{(.*?)\n\}', ps1, re.S)
+    joined = "\n".join(blocks)
+    for name in _LASER_MODULES:
+        assert f'"--nofollow-import-to={name}"' in joined
+    assert '"--noinclude-data-files=components/LaserOptimizerModal.qml"' in joined
+
+
+def test_bloodflow_loads_the_modal_only_when_the_build_has_it():
+    qml = (REPO_ROOT / "pages" / "BloodFlow.qml").read_text(encoding="utf-8")
+    assert not re.search(r"^\s*LaserOptimizerModal\s*\{", qml, re.M), \
+        "instantiating the modal by type breaks a clinical bundle without the file"
+    assert "active: MotionInterface.laserOptimizerInBuild === true" in qml
+    assert 'source: active ? "../components/LaserOptimizerModal.qml" : ""' in qml
+
+
+def test_a_build_without_the_module_offers_and_runs_nothing(tmp_path, monkeypatch):
+    import motion_connector
+    monkeypatch.setattr(motion_connector, "laser_optimizer_mode", None)
+    c = _make_connector(tmp_path)
+    c._laser_optimizer_sdk = False
+    assert c.laserOptimizerInBuild is False
+    assert c.laserOptimizerAvailable is False
+    outcomes = []
+    c.laserOptimizerFinished.connect(lambda o, t: outcomes.append(t))
+    assert c.startLaserOptimizerCapture("hoof", 0x00, 0xFF) is False
+    c._interface.start_laser_optimizer.assert_not_called()
+    assert "not part of this build" in outcomes[0]

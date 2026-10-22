@@ -273,6 +273,20 @@ if _is_clinical:
 # tests/test_engineering_unlock.py.
 if not _has_engineering_unlock:
     _excludes.append("engineering_unlock")
+# Laser optimizer mode (#746) is research + engineering-mode only (it widens
+# the laser-safety limits while it runs): no clinical build carries it, the
+# service tool included. motion_connector skips the import on the same
+# constant; the SDK modules come out of collect_all("omotion")'s hidden
+# imports too, and the modal QML is dropped below. Guarded by
+# tests/test_laser_optimizer_mode.py.
+_LASER_OPTIMIZER_MODULES = (
+    "laser_optimizer_mode",
+    "omotion.LaserOptimizerWorkflow",
+    "omotion.register_overrides",
+)
+if _is_clinical:
+    _excludes.extend(_LASER_OPTIMIZER_MODULES)
+    hidden = [h for h in hidden if h not in _LASER_OPTIMIZER_MODULES]
 
 a = Analysis(
     [ENTRY],
@@ -293,6 +307,13 @@ _UNLOCK_QML = _norm(os.path.join("components", "EngineeringUnlockModal.qml"))
 if not _has_engineering_unlock:
     a.datas = [e for e in a.datas if _norm(e[0]) != _UNLOCK_QML]
     print(f"[spec] left {_UNLOCK_QML} out of the clinical bundle (#706)")
+
+# Same for the laser optimizer modal (#746): BloodFlow.qml loads it only when
+# the connector reports laserOptimizerInBuild.
+_LASER_OPTIMIZER_QML = _norm(os.path.join("components", "LaserOptimizerModal.qml"))
+if _is_clinical:
+    a.datas = [e for e in a.datas if _norm(e[0]) != _LASER_OPTIMIZER_QML]
+    print("[spec] left laser optimizer mode out of the clinical bundle (#746)")
 
 # ---------- libusb >= 1.0.30 only (#669) ----------
 # Every libusb the app ships comes from the SDK package. Two other copies
