@@ -1766,12 +1766,49 @@ Item {
                         Item { Layout.fillWidth: true }
                     }
 
-                    // ── Laser optimizer scan (#746): length of the scan the
-                    // Optimize button runs once it has tuned the laser
-                    // pulse + camera gain. Persisted (PREFERENCE).
+                    Rectangle { Layout.fillWidth: true; height: 1; color: root.colBorderSoft }
                     FieldRow {
-                        label: "Optimizer scan"
-                        visible: MotionInterface.laserOptimizerAvailable
+                        label: "Engineering mode"
+                        ActionButton {
+                            text: "Disable engineering mode"
+                            Layout.preferredWidth: 200
+                            hoverColor: "#C0392B"
+                            onClicked: {
+                                MotionInterface.setConfig("engineeringMode", false)
+                                MotionInterface.notify("Engineering mode disabled.", "info", 3000, false, "engineering-mode")
+                            }
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+                }
+
+                // ── Laser optimizer (#746) ────────────────────────────────────
+                // Its own card, shown only where the mode exists and may run:
+                // engineering mode on a research build (laserOptimizerAvailable
+                // is false in every clinical build, service tool included).
+                SectionCard {
+                    objectName: "laserOptimizerCard"
+                    title: "Laser Optimizer"
+                    visible: MotionInterface.laserOptimizerAvailable === true
+
+                    Text {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: 11
+                        color: AppTheme.accentYellow
+                        text: qsTr("Experiments only — never for clinical scans. The "
+                                   + "Optimize button starts at 16x camera gain and a "
+                                   + "2000 µs laser pulse, steps down until cameras 4 "
+                                   + "and 5 read about 100 DN, then scans. While it runs "
+                                   + "the exposure is 2196 µs and the laser-safety limits "
+                                   + "are widened (pulse width 2200 µs, pulse interval "
+                                   + "22,000 µs); everything returns to stock afterwards.")
+                    }
+
+                    // Length of the scan it runs once tuned. Persisted
+                    // (PREFERENCE laserOptimizerScanDurationSec).
+                    FieldRow {
+                        label: "Scan duration"
                         StyledCombo {
                             objectName: "laserOptimizerDurationCombo"
                             Layout.preferredWidth: 180
@@ -1788,21 +1825,6 @@ Item {
                             }
                             onActivated: MotionInterface.setConfig(
                                 "laserOptimizerScanDurationSec", durationValues[currentIndex])
-                        }
-                        Item { Layout.fillWidth: true }
-                    }
-
-                    Rectangle { Layout.fillWidth: true; height: 1; color: root.colBorderSoft }
-                    FieldRow {
-                        label: "Engineering mode"
-                        ActionButton {
-                            text: "Disable engineering mode"
-                            Layout.preferredWidth: 200
-                            hoverColor: "#C0392B"
-                            onClicked: {
-                                MotionInterface.setConfig("engineeringMode", false)
-                                MotionInterface.notify("Engineering mode disabled.", "info", 3000, false, "engineering-mode")
-                            }
                         }
                         Item { Layout.fillWidth: true }
                     }
