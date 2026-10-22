@@ -1766,6 +1766,32 @@ Item {
                         Item { Layout.fillWidth: true }
                     }
 
+                    // ── Laser optimizer scan (#746): length of the scan the
+                    // Optimize button runs once it has tuned the laser
+                    // pulse + camera gain. Persisted (PREFERENCE).
+                    FieldRow {
+                        label: "Optimizer scan"
+                        visible: MotionInterface.laserOptimizerAvailable
+                        StyledCombo {
+                            objectName: "laserOptimizerDurationCombo"
+                            Layout.preferredWidth: 180
+                            // laser_optimizer_mode.DURATION_CHOICES_SEC
+                            readonly property var durationValues: [5, 10, 15, 20, 30, 60, 120, 300]
+                            model: durationValues.map(function(sec) {
+                                var t = sec < 60 ? sec + " s" : (sec / 60) + " min"
+                                return sec === 10 ? t + " (default)" : t
+                            })
+                            currentIndex: {
+                                var sec = MotionInterface.appConfig.laserOptimizerScanDurationSec
+                                var i = durationValues.indexOf(sec)
+                                return i >= 0 ? i : durationValues.indexOf(10)
+                            }
+                            onActivated: MotionInterface.setConfig(
+                                "laserOptimizerScanDurationSec", durationValues[currentIndex])
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
                     Rectangle { Layout.fillWidth: true; height: 1; color: root.colBorderSoft }
                     FieldRow {
                         label: "Engineering mode"

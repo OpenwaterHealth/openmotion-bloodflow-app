@@ -26,6 +26,8 @@ QtObject {
     property int durationSec: 60
     property string subjectId: ""
     property bool disableLaser: false
+    // "capture" mode only: run the laser optimizer (#746) before the scan.
+    property bool laserOptimizer: false
     property bool laserOn: true
     property int laserPower: 50
     property var triggerConfig: ({})
@@ -147,10 +149,11 @@ QtObject {
         durationSec: runner.durationSec
         subjectId: runner.subjectId
         disableLaser: runner.disableLaser
+        laserOptimizer: runner.laserOptimizer
 
         onStarted: {
             runner._stage = "capture"
-            runner.stageUpdate("Capturing…")
+            runner.stageUpdate(runner.laserOptimizer ? "Optimizing laser…" : "Capturing…")
         }
         onProgress: function(pct) { runner.progressUpdate(pct) }
         onLog: function(line) { runner.messageOut(line) }

@@ -63,6 +63,7 @@ from motion_config import (
 import error_codes
 import bug_report
 from nan_gap_tracker import NanGapTracker, gap_note_line
+import laser_optimizer_mode
 from utils.resource_path import resource_path
 from utils import app_paths, config_store, disk_space, log_tail
 from config.app_config import APP_CONFIG as _COMPILED_APP_CONFIG
@@ -1004,6 +1005,16 @@ class MotionConnector(QObject):
     captureLog = pyqtSignal(str)  # log lines
     captureFinished = pyqtSignal(bool, str, str, str)  # ok, error, leftPath, rightPath
 
+    # Laser optimizer mode (#746, engineering experiments): progress of the
+    # SDK's LaserOptimizerWorkflow, which probes pulse width + camera gain
+    # and then runs this connector's scan request as its final scan.
+    laserOptimizerStarted = pyqtSignal()
+    laserOptimizerProbe = pyqtSignal('QVariantMap')    # laser_optimizer_mode.probe_row
+    laserOptimizerScanStarted = pyqtSignal(str)        # chosen setting, e.g. "8x / 1339 µs"
+    laserOptimizerFinished = pyqtSignal(str, str)      # outcome value, user-facing text
+    _laserOptimizerScanStartedSignal = pyqtSignal(str, str)  # worker→main: label, setting
+    _laserOptimizerCompleteSignal = pyqtSignal(object)       # worker→main: LaserOptimizerResult
+
     # Calibration procedure signals
     calibrationStateChanged = pyqtSignal()  # any of running/passed/failed/canceled/timed_out/error/idle
     _calibrationCompleteSignal = pyqtSignal(object)  # private worker→main marshalling
@@ -1396,6 +1407,10 @@ class MotionConnector(QObject):
         # session_label of the just-completed scan's DB session — notes edits
         # persist there (sessions.session_notes); empty until a scan completes.
         self._scan_notes_session_label = ""
+        # Laser optimizer mode (#746): does the SDK ship it, and the notes
+        # block of the run whose final scan is in progress.
+        self._laser_optimizer_sdk = laser_optimizer_mode.sdk_supports_laser_optimizer()
+        self._laser_optimizer_note = ""
         self.connect_signals()
 
         self._tec_voltage = 0.0
@@ -2774,6 +2789,12 @@ class MotionConnector(QObject):
         self._capture_stop.set()
         try:
             if self._interface:
+                # A laser optimizer run (#746) is between probes most of the
+                # time, with no scan to cancel; stop the run itself too.
+                cancel_optimizer = getattr(
+                    self._interface, "cancel_laser_optimizer", None)
+                if cancel_optimizer is not None:
+                    cancel_optimizer()
                 self._interface.cancel_scan()
             self._trigger_state = "OFF"
             self.triggerStateChanged.emit()
@@ -4790,10 +4811,60 @@ class MotionConnector(QObject):
         disable_laser: bool,
     ) -> bool:
         """Start capture asynchronously; returns True if kicked off."""
+        return self._start_capture(subject_id, duration_sec, left_camera_mask,
+                                   right_camera_mask, disable_laser)
+
+    @pyqtProperty(bool, notify=appConfigChanged)
+    def laserOptimizerAvailable(self) -> bool:
+        """Show the Optimize button: engineering mode on a research build
+        with an SDK that ships the optimizer (#746)."""
+        return laser_optimizer_mode.refusal(
+            {**self._app_config, "forceLaserFail": False},
+            sdk_supported=self._laser_optimizer_sdk,
+        ) is None
+
+    @pyqtSlot(str, int, int, result=bool)
+    def startLaserOptimizerCapture(
+        self,
+        subject_id: str,
+        left_camera_mask: int,
+        right_camera_mask: int,
+    ) -> bool:
+        """Laser optimizer scan (#746): the SDK probes pulse width + camera
+        gain until the near cameras read ~100 DN, then runs the normal scan
+        request built here for laserOptimizerScanDurationSec seconds.
+        Returns True if the optimizer started."""
+        reason = laser_optimizer_mode.refusal(
+            self._app_config, sdk_supported=self._laser_optimizer_sdk)
+        if reason:
+            logger.warning("startLaserOptimizerCapture refused: %s", reason)
+            self.captureLog.emit(reason)
+            self.notify(reason, "error")
+            return False
+        return self._start_capture(
+            subject_id,
+            laser_optimizer_mode.scan_duration_sec(self._app_config),
+            left_camera_mask, right_camera_mask, False,
+            laser_optimizer=True,
+        )
+
+    def _start_capture(
+        self,
+        subject_id: str,
+        duration_sec: int,
+        left_camera_mask: int,
+        right_camera_mask: int,
+        disable_laser: bool,
+        *,
+        laser_optimizer: bool = False,
+    ) -> bool:
+        """Body of startCapture. ``laser_optimizer`` hands the built request
+        to the SDK's LaserOptimizerWorkflow as its final scan instead of
+        starting it directly (#746)."""
         logger.info(
             f"startCapture(subject_id={subject_id}, dur={duration_sec}s, "
             f"left_mask=0x{left_camera_mask:02X}, right_mask=0x{right_camera_mask:02X}, "
-            f"disable_laser={disable_laser})"
+            f"disable_laser={disable_laser}, laser_optimizer={laser_optimizer})"
         )
 
         # Issue #352: a disconnected side's mask must be recorded as 0x00
@@ -4846,6 +4917,7 @@ class MotionConnector(QObject):
         self._capture_stop = threading.Event()
         # Each new scan starts with a fresh notes buffer
         self._scan_notes = ""
+        self._laser_optimizer_note = ""
         self._scan_notes_session_label = ""
         self.scanNotesChanged.emit()
         self._capture_running = True
@@ -4980,6 +5052,10 @@ class MotionConnector(QObject):
                 "=== Full scan ended: %s — duration %s ===", status, duration_str
             )
             duration_line = f"\n---\nScan {status} — duration: {duration_str}"
+            if self._laser_optimizer_note:
+                # Laser optimizer scan (#746): chosen settings + probe log.
+                self._scan_notes = (self._scan_notes.strip() + "\n"
+                                    + self._laser_optimizer_note).strip()
             self._scan_notes = (self._scan_notes.strip() + duration_line)
             # Data-gap footer: aggregate ranges where any camera went >1 s
             # without a finite BFI/BVI sample (sustained NaN-fill/dropout).
@@ -5130,8 +5206,17 @@ class MotionConnector(QObject):
             "cq_live_clear_frames", _CQ_DEFAULT_LIVE_CLEAR_FRAMES)
 
         # Engineering-mode alternative camera + laser settings (#446/#449),
-        # shared with the preflight signal-quality check (#510).
-        self._sync_alt_scan_settings(left_camera_mask, right_camera_mask)
+        # shared with the preflight signal-quality check (#510). A laser
+        # optimizer run owns those registers itself and restores the stock
+        # values when it ends; the dirty flag makes the next normal scan
+        # rewrite the camera registers anyway, in case this process dies
+        # before that restore (console reconnect already reloads the laser).
+        if laser_optimizer:
+            if self._app_config.get("altCameraSettingsDirty") is not True:
+                self._app_config["altCameraSettingsDirty"] = True
+                self._save_app_config()
+        else:
+            self._sync_alt_scan_settings(left_camera_mask, right_camera_mask)
 
         req = ScanRequest(
             subject_id=subject_id,
@@ -5193,7 +5278,14 @@ class MotionConnector(QObject):
             on_error=lambda exc: self.scanWorkerFailedDuringCapture.emit(str(exc)),
         )
 
-        started = self._interface.start_scan(req)
+        if laser_optimizer:
+            # The stock live contact-quality thresholds (3 DN ambient) would
+            # fire constantly at the optimizer's 16x gains.
+            req.sinks = [s for s in req.sinks
+                         if not isinstance(s, ContactQualityMonitor)]
+            started = self._start_laser_optimizer(req)
+        else:
+            started = self._interface.start_scan(req)
         if started:
             logger.info(
                 "=== Full scan started: subject=%s duration=%ss "
@@ -5218,9 +5310,22 @@ class MotionConnector(QObject):
             # exact label (set synchronously inside start_scan), so a later
             # pan-into-past resolves the right session instead of guessing the
             # newest one.
+            # (An optimizer scan's label exists only once its probes are done:
+            # _on_laser_optimizer_scan_started binds it.)
             label = getattr(self._scan_workflow, "current_scan_label", None)
-            if label:
+            if label and not laser_optimizer:
                 live_source.set_scan_label(label)
+        if not started and laser_optimizer:
+            self._capture_running = False
+            self._dropout_timer.stop()
+            self._set_current_scan_source(None)
+            last = getattr(self._interface.laser_optimizer_workflow,
+                           "last_result", None)
+            reason = getattr(last, "message", "") or "refused to start"
+            logger.warning("Laser optimizer refused: %s", reason)
+            self.captureLog.emit(f"Laser optimizer refused: {reason}")
+            self.notify(f"Laser optimizer refused: {reason}", "error")
+            return False
         if not started:
             self._capture_running = False
             # Unbind the viewer. The orphaned LiveScanSource itself stays
@@ -5250,6 +5355,83 @@ class MotionConnector(QObject):
                 self.captureLog.emit("Capture already running.")
                 self._raise_critical("E-302")
         return bool(started)
+
+    def _start_laser_optimizer(self, req) -> bool:
+        """Hand ``req`` (the normal scan request, sinks and all) to the SDK's
+        LaserOptimizerWorkflow as its final scan (#746). Its callbacks fire
+        on the optimizer's worker thread: probe rows go straight to QML (a
+        cross-thread emit is queued), the rest hops to the main thread."""
+        from omotion.LaserOptimizerWorkflow import LaserOptimizerRequest
+
+        request = LaserOptimizerRequest(final_scan=req,
+                                        console_lock=self._console_mutex)
+        probes = []
+
+        def on_probe(probe, decision):
+            probes.append(probe)
+            self.laserOptimizerProbe.emit(
+                laser_optimizer_mode.probe_row(probe, decision))
+
+        def on_scan_started(label, setting):
+            # Read by _on_pipeline_complete, which runs after this scan.
+            self._laser_optimizer_note = laser_optimizer_mode.notes_block(
+                probes, setting, request.config)
+            self._laserOptimizerScanStartedSignal.emit(
+                label or "", setting.describe())
+
+        self.laserOptimizerStarted.emit()
+        started = self._interface.start_laser_optimizer(
+            request,
+            on_probe=on_probe,
+            on_scan_started=on_scan_started,
+            on_complete=self._laserOptimizerCompleteSignal.emit,
+        )
+        if started:
+            logger.warning(
+                "=== Laser optimizer started: subject=%s final scan %ss "
+                "left=0x%02X right=0x%02X ===", req.subject_id,
+                req.duration_sec, req.left_camera_mask, req.right_camera_mask)
+            self.captureLog.emit("Laser optimizer: probing laser and camera settings…")
+        return bool(started)
+
+    def _on_laser_optimizer_scan_started(self, label: str, setting: str):
+        """Main thread: the optimizer accepted a setting and started the
+        final scan. Bind the live source's DB tail to that scan's row."""
+        if label and self._live_scan_source is not None:
+            self._live_scan_source.set_scan_label(label)
+        self.captureLog.emit(f"Laser optimizer: scanning at {setting}")
+        self.laserOptimizerScanStarted.emit(setting)
+
+    def _on_laser_optimizer_complete(self, result):
+        """Main thread: the optimizer finished and restored the hardware.
+
+        When its final scan ran, that scan's own completion path already
+        finished the capture (notes, captureFinished). Otherwise nothing
+        did: unwind startCapture's state here the way a refused start does,
+        and end the ScanRunner through captureFinished."""
+        outcome = result.outcome.value
+        text = laser_optimizer_mode.outcome_text(outcome, result.message)
+        logger.warning("Laser optimizer %s: %s (restored=%s)", outcome,
+                       result.message, result.restored)
+        if not result.restored:
+            self.notify(
+                "Laser optimizer could not restore the stock camera/laser "
+                "settings; reconnect the console before the next scan.",
+                "error", 0)
+        self.laserOptimizerFinished.emit(outcome, text)
+        if result.scan_ran:
+            return
+        canceled = outcome == "canceled"
+        self._dropout_timer.stop()
+        self._capture_running = False
+        self._capture_thread = None
+        self._set_current_scan_source(None)
+        duration = (time.time() - self._capture_start_time
+                    if self._capture_start_time else None)
+        self._log_scan_ended_audit(self._capture_subject_id, "", duration,
+                                   None, canceled)
+        self.captureLog.emit(text)
+        self.captureFinished.emit(False, "Canceled" if canceled else text, "", "")
 
     def _on_safety_trip_during_capture(self):
         """Called on main thread when safety tripped while scan was running: show message and cancel scan in 5 s."""
@@ -5710,6 +5892,10 @@ class MotionConnector(QObject):
         workflow = getattr(self, "_scan_workflow", None)
         if workflow is not None and getattr(workflow, "running", False):
             return "Scan already running"
+        if getattr(getattr(self, "_interface", None),
+                   "laser_optimizer_running", False) is True:
+            # Still probing, scanning, or restoring the stock settings (#746).
+            return "Laser optimizer still running"
         if workflow is not None and getattr(workflow, "config_running", False):
             return "Camera configuration already in progress"
         return None
@@ -6893,6 +7079,11 @@ class MotionConnector(QObject):
         self._errorLedBlinkRequested.connect(self._start_error_led_blink)
         # Worker → Qt main thread for the calibration completion callback.
         self._calibrationCompleteSignal.connect(self._on_calibration_complete)
+        # Worker → Qt main thread for the laser optimizer (#746).
+        self._laserOptimizerScanStartedSignal.connect(
+            self._on_laser_optimizer_scan_started)
+        self._laserOptimizerCompleteSignal.connect(
+            self._on_laser_optimizer_complete)
         self._testScanCompleteSignal.connect(self._on_test_scan_complete)
         # Worker → Qt main thread for the CQ workflow result.
         self._cq_result_signal.connect(self._on_cq_result_ready)
