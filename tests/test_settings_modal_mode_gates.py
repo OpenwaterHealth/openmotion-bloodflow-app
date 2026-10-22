@@ -510,12 +510,13 @@ def test_laser_optimizer_settings_show_values_and_write_their_keys(modal_factory
     shown = {name: _find_item(modal, name).property("displayText") for name in (
         "laserOptimizerTargetCombo", "laserOptimizerToleranceCombo",
         "laserOptimizerStartGainCombo", "laserOptimizerStartPulseCombo",
-        "laserOptimizerDurationCombo")}
+        "laserOptimizerProbeFramesCombo", "laserOptimizerDurationCombo")}
     assert shown == {
         "laserOptimizerTargetCombo": "100 DN (default)",
         "laserOptimizerToleranceCombo": "± 15 % (default)",
         "laserOptimizerStartGainCombo": "16x (default)",
         "laserOptimizerStartPulseCombo": "2000 µs (default)",
+        "laserOptimizerProbeFramesCombo": "30 light frames (default)",
         "laserOptimizerDurationCombo": "10 s (default)",
     }
     assert "85–115 DN" in _texts(modal)

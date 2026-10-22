@@ -38,6 +38,10 @@ SETTINGS = {
     # covers after the 100 µs laser delay.
     "laserOptimizerStartPulseUs": (
         "startPulseUs", 2000, (250, 500, 750, 1000, 1250, 1500, 1750, 2000), (100, 2000)),
+    # Light frames each probe averages per camera (the probe scans 10 more:
+    # warmup + its boundary dark). 30 = one second at 40 Hz.
+    "laserOptimizerProbeFrames": (
+        "probeFrames", 30, (10, 20, 30, 50, 100, 200), (5, 400)),
     # Length of the scan it runs once tuned.
     "laserOptimizerScanDurationSec": (
         "scanDurationSec", 10, (5, 10, 15, 20, 30, 60, 120, 300), (1, 3600)),
@@ -112,6 +116,7 @@ def optimizer_config(app_config: Mapping[str, Any]):
         tolerance=setting(app_config, "laserOptimizerTolerancePct") / 100.0,
         max_gain=setting(app_config, "laserOptimizerStartGain"),
         max_pulse_width_us=setting(app_config, "laserOptimizerStartPulseUs"),
+        probe_light_frames=setting(app_config, "laserOptimizerProbeFrames"),
     )
 
 
@@ -124,6 +129,7 @@ def probe_row(probe: Any, decision: Any) -> dict:
     """One row of the progress modal's probe table, as a plain dict."""
     control = probe.control
     nxt = decision.setting
+    leak, _ = probe.dark_leak
     return {
         "probe": int(probe.index),     # 1-based ("index" is a ListModel built-in)
         "setting": probe.setting.describe(),
@@ -136,6 +142,9 @@ def probe_row(probe: Any, decision: Any) -> dict:
         "camera": (f"{control.side.capitalize()} {control.cam_id + 1}"
                    if control is not None else ""),
         "darkDn": _num(control.dark_dn) if control is not None else -1.0,
+        # Largest (scheduled dark - laser-off frame) over the cameras: ~0 when
+        # the dark is clean. Text, since the value may be negative or absent.
+        "darkLeak": f"{leak:+.1f}" if math.isfinite(leak) else "—",
         "action": str(getattr(decision.action, "value", decision.action)),
         "next": nxt.describe() if nxt is not None else "",
         "reason": str(decision.reason),

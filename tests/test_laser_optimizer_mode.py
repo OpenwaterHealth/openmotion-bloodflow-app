@@ -68,6 +68,7 @@ def test_sdk_probe_row_and_notes_block():
     assert row["clippedPct"] == pytest.approx(0.2)
     assert row["action"] == "probe" and row["next"] == "8x / 1339 µs"
     assert "index" not in row   # a ListModel role named index breaks delegates
+    assert row["darkLeak"] == "—"   # no laser-off frame in this hand-built probe
 
     text = lom.notes_block([probe], OptimizerSetting(8, 1339))
     assert "8x / 1339 µs" in text and "probe 2" in text
@@ -307,6 +308,9 @@ def test_a_build_without_the_module_offers_and_runs_nothing(tmp_path, monkeypatc
     ("laserOptimizerStartPulseUs", 1500, 1500),
     ("laserOptimizerStartPulseUs", 2100, 2000),   # beyond the exposure
     ("laserOptimizerStartPulseUs", True, 2000),
+    ("laserOptimizerProbeFrames", 100, 100),
+    ("laserOptimizerProbeFrames", 2, 30),          # too few to average
+    ("laserOptimizerProbeFrames", 1000, 30),
 ])
 def test_settings_validation(key, value, expected):
     assert lom.setting({key: value}, key) == expected
@@ -323,9 +327,10 @@ def test_optimizer_config_maps_the_settings():
     cfg = lom.optimizer_config({
         "laserOptimizerTargetMeanDn": 150, "laserOptimizerTolerancePct": 10,
         "laserOptimizerStartGain": 8, "laserOptimizerStartPulseUs": 1000,
+        "laserOptimizerProbeFrames": 100,
     })
-    assert (cfg.target_mean_dn, cfg.tolerance, cfg.max_gain, cfg.max_pulse_width_us) == (
-        150.0, 0.10, 8, 1000)
+    assert (cfg.target_mean_dn, cfg.tolerance, cfg.max_gain, cfg.max_pulse_width_us,
+            cfg.probe_light_frames) == (150.0, 0.10, 8, 1000, 100)
     defaults = lom.optimizer_config({})
     assert (defaults.target_mean_dn, defaults.tolerance) == (100.0, 0.15)
 
@@ -341,3 +346,15 @@ def test_the_run_uses_the_operator_settings(tmp_path):
     assert request.config.target_mean_dn == 150.0 and request.config.max_gain == 4
     # Everything the operator does not set stays the SDK's agreed default.
     assert request.config.row_gain_ratio == (8, 4, 2, 1, 1, 2, 4, 8)
+
+
+def test_probe_row_reports_the_dark_leak():
+    pytest.importorskip("omotion.LaserOptimizerWorkflow")
+    from omotion.LaserOptimizerWorkflow import (
+        Action, CameraReading, Decision, OptimizerSetting, ProbeResult,
+    )
+    near = [CameraReading("right", 3, 100.0, 0.0, 128.4, 30, 128.1),
+            CameraReading("right", 4, 98.0, 0.0, 127.9, 30, 129.0)]
+    probe = ProbeResult(1, OptimizerSetting(1, 250), near, [], 0.01)
+    row = lom.probe_row(probe, Decision(Action.ACCEPT, OptimizerSetting(1, 250), "ok"))
+    assert row["darkLeak"] == "+0.3"      # the larger of +0.3 and -1.1

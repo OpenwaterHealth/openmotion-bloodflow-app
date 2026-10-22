@@ -154,7 +154,7 @@ Item {
                     Cell { w: 76;  text: "Near mean";  color: AppTheme.textTertiary }
                     Cell { w: 64;  text: "Clipped";    color: AppTheme.textTertiary }
                     Cell { w: 70;  text: "Camera";     color: AppTheme.textTertiary }
-                    Cell { w: 60;  text: "Dark";       color: AppTheme.textTertiary }
+                    Cell { w: 60;  text: "Dark Δ";     color: AppTheme.textTertiary }
                     Cell { w: 130; text: "Next";       color: AppTheme.textTertiary }
                 }
                 Rectangle { Layout.fillWidth: true; height: 1; color: AppTheme.borderSoft }
@@ -177,7 +177,8 @@ Item {
                             color: model.clipped ? AppTheme.accentYellow : AppTheme.textSecondary
                         }
                         Cell { w: 70;  text: model.camera }
-                        Cell { w: 60;  text: model.darkDn >= 0 ? model.darkDn.toFixed(1) : "—" }
+                        // Scheduled dark minus the probe's laser-off frame.
+                        Cell { w: 60;  text: model.darkLeak }
                         Cell {
                             w: 130
                             text: model.action === "probe" ? model.next
@@ -192,6 +193,19 @@ Item {
                     text: "No probes yet."
                     color: AppTheme.textTertiary
                     font.pixelSize: 12
+                }
+
+                Text {
+                    visible: probeModel.count > 0
+                    Layout.topMargin: 4
+                    text: "Each probe averages " + root.opt.probeFrames + " light frames. "
+                          + "Dark Δ: scheduled dark frame minus the laser-off frame, "
+                          + "largest over the cameras (≈ 0 DN when the dark is clean; "
+                          + "above 5 DN stops the run)."
+                    color: AppTheme.textTertiary
+                    font.pixelSize: 11
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
                 }
             }
 
