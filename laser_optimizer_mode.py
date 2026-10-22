@@ -2,11 +2,12 @@
 
 The SDK's ``LaserOptimizerWorkflow`` (openmotion-sdk#335) does the work: it
 probes the TA pulse width and the camera gains until the near cameras read
-the target dark-corrected mean (100 DN), runs the scan request the connector
-built as its final scan, then restores the stock settings. What lives here
-is the pure app-side part the connector and its tests share: who may start
-it, how long the final scan runs, and how probes and outcomes read in the UI
-and the scan notes. No Qt, no hardware.
+the operator's setpoint (dark-corrected mean, 100 DN by default), runs the
+scan request the connector built as its final scan, then restores the stock
+settings. What lives here is the pure app-side part the connector and its
+tests share: who may start it, the operator settings and their validation,
+and how probes and outcomes read in the UI and the scan notes. No Qt, no
+hardware.
 
 Engineering experiments only (horse-hoof blood flow and the like): the run
 widens the laser-safety FPGAs' limits while it is active, so it is never
@@ -19,10 +20,32 @@ import importlib.util
 import math
 from typing import Any, Mapping, Optional
 
-DURATION_DEFAULT_SEC = 10
-# Settings → Engineering dropdown. Any whole second in [1, MAX] validates.
-DURATION_CHOICES_SEC = (5, 10, 15, 20, 30, 60, 120, 300)
-DURATION_MAX_SEC = 3600
+# Operator settings (Settings → Laser Optimizer card), each a PREFERENCE key:
+# config key -> (QML name, default, dropdown choices, valid range). A
+# hand-set whole number inside the range is used even between dropdown
+# steps; anything else falls back to the default.
+SETTINGS = {
+    # Dark-corrected mean (DN) the near cameras (4 and 5) should land on.
+    "laserOptimizerTargetMeanDn": (
+        "targetMeanDn", 100, (50, 75, 100, 125, 150, 200, 250, 300), (20, 400)),
+    # Accepted band around it, +/- percent.
+    "laserOptimizerTolerancePct": (
+        "tolerancePct", 15, (5, 10, 15, 20, 25), (2, 50)),
+    # Where every run starts: the near cameras' analog gain ...
+    "laserOptimizerStartGain": (
+        "startGain", 16, (1, 2, 4, 8, 16), (1, 16)),
+    # ... and the TA pulse width. 2000 µs is the most the 2196 µs exposure
+    # covers after the 100 µs laser delay.
+    "laserOptimizerStartPulseUs": (
+        "startPulseUs", 2000, (250, 500, 750, 1000, 1250, 1500, 1750, 2000), (100, 2000)),
+    # Length of the scan it runs once tuned.
+    "laserOptimizerScanDurationSec": (
+        "scanDurationSec", 10, (5, 10, 15, 20, 30, 60, 120, 300), (1, 3600)),
+}
+_GAIN_STEPS = (1, 2, 4, 8, 16)
+
+DURATION_DEFAULT_SEC = SETTINGS["laserOptimizerScanDurationSec"][1]
+DURATION_CHOICES_SEC = SETTINGS["laserOptimizerScanDurationSec"][2]
 
 
 def sdk_supports_laser_optimizer() -> bool:
@@ -48,17 +71,48 @@ def refusal(app_config: Mapping[str, Any], *, sdk_supported: bool) -> Optional[s
     return None
 
 
-def scan_duration_sec(app_config: Mapping[str, Any]) -> int:
-    """The final scan's length from ``laserOptimizerScanDurationSec``; the
-    default for a missing or malformed value."""
-    value = app_config.get("laserOptimizerScanDurationSec")
+def setting(app_config: Mapping[str, Any], key: str) -> int:
+    """The validated value of one ``SETTINGS`` key: a whole number inside its
+    range (a power of two for the gain), else its default."""
+    _, default, _, (lo, hi) = SETTINGS[key]
+    value = app_config.get(key)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return DURATION_DEFAULT_SEC
-    if not math.isfinite(value) or value != int(value):
-        return DURATION_DEFAULT_SEC
-    if not 1 <= int(value) <= DURATION_MAX_SEC:
-        return DURATION_DEFAULT_SEC
+        return default
+    if not math.isfinite(value) or value != int(value) or not lo <= value <= hi:
+        return default
+    if key == "laserOptimizerStartGain" and int(value) not in _GAIN_STEPS:
+        return default
     return int(value)
+
+
+def settings(app_config: Mapping[str, Any]) -> dict:
+    """Every operator setting, validated, by QML name (the Settings card and
+    the progress modal read these)."""
+    return {name: setting(app_config, key) for key, (name, *_) in SETTINGS.items()}
+
+
+def choices() -> dict:
+    """Dropdown entries by QML name, plus ``defaults`` (for the "(default)" tag)."""
+    out = {name: list(steps) for name, _, steps, _ in SETTINGS.values()}
+    out["defaults"] = {name: default for name, default, _, _ in SETTINGS.values()}
+    return out
+
+
+def scan_duration_sec(app_config: Mapping[str, Any]) -> int:
+    """The final scan's length (``laserOptimizerScanDurationSec``)."""
+    return setting(app_config, "laserOptimizerScanDurationSec")
+
+
+def optimizer_config(app_config: Mapping[str, Any]):
+    """The SDK ``OptimizerConfig`` for a run: the operator's setpoint, band
+    and starting point; every other number stays the SDK's agreed default."""
+    from omotion.LaserOptimizerWorkflow import OptimizerConfig
+    return OptimizerConfig(
+        target_mean_dn=float(setting(app_config, "laserOptimizerTargetMeanDn")),
+        tolerance=setting(app_config, "laserOptimizerTolerancePct") / 100.0,
+        max_gain=setting(app_config, "laserOptimizerStartGain"),
+        max_pulse_width_us=setting(app_config, "laserOptimizerStartPulseUs"),
+    )
 
 
 def _num(v: float, nd: int = 1) -> float:

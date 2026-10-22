@@ -22,7 +22,7 @@ Rectangle {
     // runs for its own configured length, not the Scan Settings duration.
     readonly property bool headerFreeRun: freeRun && !laserOptimizerScan
     readonly property int headerDurationSec: laserOptimizerScan
-        ? (MotionInterface.appConfig.laserOptimizerScanDurationSec || 10)
+        ? (MotionInterface.laserOptimizerSettings.scanDurationSec || 10)
         : durationSec
     property bool camerasReady: true  // gates Start/Check; false only while no sensor is connected
 

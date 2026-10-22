@@ -28,6 +28,7 @@ from pathlib import Path
 # offscreen platform is passed via argv, NOT via QT_QPA_PLATFORM, so
 # HIL subprocesses launched later in the session can't inherit it.
 from PyQt6.QtCore import (  # noqa: E402
+    Q_ARG,
     QCoreApplication,
     QMetaObject,
     QObject,
@@ -88,6 +89,8 @@ class _StubMotionInterface(QObject):
         self._default_config: dict = {}
         self._trace_colors: dict = {}
         self.password_checks: list[str] = []
+        self.set_config_calls: list[tuple] = []
+        self._laser_optimizer_config: dict = {}
 
     # ── Mode flags (the gates under test) ────────────────────────────
     def setFlags(self, clinical: bool, engineering: bool):
@@ -182,7 +185,25 @@ class _StubMotionInterface(QObject):
 
     @pyqtSlot(str, "QVariant")
     def setConfig(self, key, value):
-        pass
+        self.set_config_calls.append((key, value))
+        # The laser optimizer settings rebind like the connector's (#746).
+        if key.startswith("laserOptimizer"):
+            self._laser_optimizer_config[key] = value
+            self.appConfigChanged.emit()
+
+    def setLaserOptimizerConfig(self, values: dict):
+        self._laser_optimizer_config = dict(values)
+        self.appConfigChanged.emit()
+
+    @pyqtProperty("QVariantMap", notify=appConfigChanged)
+    def laserOptimizerSettings(self):
+        import laser_optimizer_mode
+        return laser_optimizer_mode.settings(self._laser_optimizer_config)
+
+    @pyqtProperty("QVariantMap", constant=True)
+    def laserOptimizerChoices(self):
+        import laser_optimizer_mode
+        return laser_optimizer_mode.choices()
 
     @pyqtSlot(str, str, int, bool, str)
     def notify(self, text, kind, ms, sticky, tag):
@@ -467,6 +488,54 @@ def test_laser_optimizer_duration_sits_in_its_own_card(modal_factory):
             "the duration control moved out of the Engineering card"
         parent = parent.parent()
     assert parent is card
+
+
+def _texts(root):
+    """Every Text item's text under ``root`` (visual tree)."""
+    out = []
+    if root.inherits("QQuickText"):
+        out.append(root.property("text"))
+    for child in root.childItems():
+        out.extend(_texts(child))
+    return out
+
+
+def test_laser_optimizer_settings_show_values_and_write_their_keys(modal_factory):
+    """#746: setpoint, band, starting gain / pulse and scan length, each a
+    dropdown over the connector's choices that writes its own key."""
+    stub = modal_factory.stub
+    stub.setFlags(clinical=False, engineering=True)
+    stub.setLaserOptimizerConfig({})
+    modal = modal_factory()
+    shown = {name: _find_item(modal, name).property("displayText") for name in (
+        "laserOptimizerTargetCombo", "laserOptimizerToleranceCombo",
+        "laserOptimizerStartGainCombo", "laserOptimizerStartPulseCombo",
+        "laserOptimizerDurationCombo")}
+    assert shown == {
+        "laserOptimizerTargetCombo": "100 DN (default)",
+        "laserOptimizerToleranceCombo": "± 15 % (default)",
+        "laserOptimizerStartGainCombo": "16x (default)",
+        "laserOptimizerStartPulseCombo": "2000 µs (default)",
+        "laserOptimizerDurationCombo": "10 s (default)",
+    }
+    assert "85–115 DN" in _texts(modal)
+
+    combo = _find_item(modal, "laserOptimizerTargetCombo")
+    stub.set_config_calls.clear()
+    combo.setProperty("currentIndex", 4)                       # 150 DN
+    QMetaObject.invokeMethod(combo, "activated", Qt.ConnectionType.DirectConnection,
+                             Q_ARG(int, 4))
+    assert stub.set_config_calls == [("laserOptimizerTargetMeanDn", 150)]
+    texts = _texts(modal)
+    assert "128–173 DN" in texts                               # band follows
+    assert any("read 150 DN" in t for t in texts)              # so does the note
+
+    # A hand-set value between steps shows the nearest entry.
+    stub.setLaserOptimizerConfig({"laserOptimizerStartPulseUs": 1100})
+    assert _find_item(modal, "laserOptimizerStartPulseCombo").property(
+        "displayText") == "1000 µs"
+    stub.setLaserOptimizerConfig({})
+    stub.setFlags(clinical=False, engineering=False)
 
 
 def _find_item(root, object_name):

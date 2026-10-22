@@ -4849,6 +4849,22 @@ class MotionConnector(QObject):
         LaserOptimizerModal.qml, so QML loads that modal only on True."""
         return laser_optimizer_mode is not None
 
+    @pyqtProperty('QVariantMap', notify=appConfigChanged)
+    def laserOptimizerSettings(self) -> dict:
+        """The operator settings a run will use, validated (#746):
+        targetMeanDn, tolerancePct, startGain, startPulseUs,
+        scanDurationSec. Empty in a build without the mode."""
+        if laser_optimizer_mode is None:
+            return {}
+        return laser_optimizer_mode.settings(self._app_config)
+
+    @pyqtProperty('QVariantMap', constant=True)
+    def laserOptimizerChoices(self) -> dict:
+        """Dropdown entries per setting, plus their defaults (#746)."""
+        if laser_optimizer_mode is None:
+            return {}
+        return laser_optimizer_mode.choices()
+
     @pyqtProperty(bool, notify=appConfigChanged)
     def laserOptimizerAvailable(self) -> bool:
         """Show the Optimize button: engineering mode on a research build
@@ -5409,8 +5425,11 @@ class MotionConnector(QObject):
         cross-thread emit is queued), the rest hops to the main thread."""
         from omotion.LaserOptimizerWorkflow import LaserOptimizerRequest
 
-        request = LaserOptimizerRequest(final_scan=req,
-                                        console_lock=self._console_mutex)
+        request = LaserOptimizerRequest(
+            final_scan=req,
+            config=laser_optimizer_mode.optimizer_config(self._app_config),
+            console_lock=self._console_mutex,
+        )
         probes = []
 
         def on_probe(probe, decision):
@@ -5435,8 +5454,11 @@ class MotionConnector(QObject):
         if started:
             logger.warning(
                 "=== Laser optimizer started: subject=%s final scan %ss "
-                "left=0x%02X right=0x%02X ===", req.subject_id,
-                req.duration_sec, req.left_camera_mask, req.right_camera_mask)
+                "left=0x%02X right=0x%02X; setpoint %g DN +/-%g%%, start %dx / "
+                "%d µs ===", req.subject_id, req.duration_sec,
+                req.left_camera_mask, req.right_camera_mask,
+                request.config.target_mean_dn, request.config.tolerance * 100,
+                request.config.max_gain, request.config.max_pulse_width_us)
             self.captureLog.emit("Laser optimizer: probing laser and camera settings…")
         return bool(started)
 
