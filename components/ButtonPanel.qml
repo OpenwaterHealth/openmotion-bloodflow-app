@@ -17,6 +17,8 @@ Rectangle {
     property bool waiting: false       // true while a scan start is armed (pipeline-idle gate)
     property bool camerasReady: false  // gates Start/Check enablement
     property bool clinicalMode: false       // Clinical mode hides scan-settings button
+    // Laser optimizer scan (#746): engineering mode on a research build.
+    property bool laserOptimizerAvailable: false
 
     // Engineering-gated extras (Logs button). Live binding: appConfig is
     // a notify property, so the button appears the moment the runtime
@@ -37,6 +39,7 @@ Rectangle {
     signal historyClicked()
     signal settingsClicked()
     signal logsClicked()
+    signal optimizeClicked()
 
     FontLoader {
         id: iconFont
@@ -181,6 +184,23 @@ Rectangle {
             iconText: "\uea31"  // graph-3 icon
             label: "Check"
             onClicked: panel.checkClicked()
+        }
+
+        // Laser optimizer scan (#746): tune laser pulse + camera gain to
+        // the target image mean, then scan. Engineering experiments only.
+        Rectangle {
+            visible: panel.laserOptimizerAvailable
+            Layout.preferredWidth: 52; Layout.preferredHeight: 1
+            Layout.topMargin: 4; Layout.bottomMargin: 4
+            Layout.alignment: Qt.AlignHCenter; color: AppTheme.borderSubtle
+        }
+        PanelButton {
+            objectName: "laserOptimizerButton"
+            visible: panel.laserOptimizerAvailable
+            enabled: !panel.scanning && panel.camerasReady && panel.allConnected
+            iconText: "\ue953"  // autobrightness icon
+            label: "Optimize"
+            onClicked: panel.optimizeClicked()
         }
 
         // ── spacer pushes bottom controls down ──
