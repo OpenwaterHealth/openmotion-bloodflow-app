@@ -1834,16 +1834,18 @@ Item {
                         text: qsTr("Experiments only — never for clinical scans. Optimize "
                                    + "starts at %1x camera gain and a %2 µs laser pulse, "
                                    + "steps down until cameras 4 and 5 read %3 DN (± %4 %), "
-                                   + "then scans for %5 s. The other rows run at 2x, 4x and "
-                                   + "8x the near gain (16x at most). While it runs the "
-                                   + "exposure is 2196 µs and the laser-safety limits are "
-                                   + "widened (pulse width 2200 µs, pulse interval "
-                                   + "22,000 µs); everything returns to stock afterwards.")
+                                   + "averaging %6 light frames per step, then scans for "
+                                   + "%5 s. The other rows run at 2x, 4x and 8x the near "
+                                   + "gain (16x at most). While it runs the exposure is "
+                                   + "2196 µs and the laser-safety limits are widened "
+                                   + "(pulse width 2200 µs, pulse interval 22,000 µs); "
+                                   + "everything returns to stock afterwards.")
                               .arg(laserOptimizerCard.opt.startGain)
                               .arg(laserOptimizerCard.opt.startPulseUs)
                               .arg(laserOptimizerCard.opt.targetMeanDn)
                               .arg(laserOptimizerCard.opt.tolerancePct)
                               .arg(laserOptimizerCard.opt.scanDurationSec)
+                              .arg(laserOptimizerCard.opt.probeFrames)
                     }
 
                     FieldRow {
@@ -1894,6 +1896,17 @@ Item {
                             name: "startPulseUs"
                             configKey: "laserOptimizerStartPulseUs"
                             suffix: " µs"
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    FieldRow {
+                        label: "Frames per probe"
+                        OptimizerSettingCombo {
+                            objectName: "laserOptimizerProbeFramesCombo"
+                            name: "probeFrames"
+                            configKey: "laserOptimizerProbeFrames"
+                            suffix: " light frames"
                         }
                         Item { Layout.fillWidth: true }
                     }
