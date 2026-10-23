@@ -88,14 +88,10 @@ Written for scans recorded on a Clinical build.
 | `bvi_left`, `bvi_right` | BVI averaged the same way. |
 
 Values have up to 6 decimals. A camera with no value at a frame is left out
-of that frame's average.
-
-> **Known issue:** when a module's average BFI (or BVI) can't be computed at
-> a frame but the other metric can, the export writes `0.0` in that cell
-> instead of leaving it empty. This happens, for example, when every camera
-> on one module is covered: BVI is still computed, BFI is not. Treat a `0.0`
-> in a Clinical export as possibly missing. The Research layout is not
-> affected.
+of that frame's average. If a module's average can't be computed at a
+frame, its cell is empty. For example, when every camera on one module is
+covered, BVI is still computed but BFI is not, so that module's `bfi_` cell
+is empty and its `bvi_` cell has a value.
 
 ### Rows
 
