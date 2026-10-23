@@ -138,6 +138,7 @@ def bvi_lpf_alpha(cutoff_hz: float) -> float:
 # than stretching it; non-finite samples are skipped. A scan younger than
 # the windows uses what it has. Evaluated on demand from the buffers, so
 # a live scan, a replay and a pane switched on mid-scan read alike.
+# Beside them, the pulsatility index (#744): peak-to-peak / average.
 
 
 def _rolling_range(t: np.ndarray, v: np.ndarray, window_s: float,
@@ -187,6 +188,17 @@ def window_stats(t: np.ndarray, v: np.ndarray, t_now: float,
     ranges = ranges[np.isfinite(ranges)]
     p2p = float(ranges.mean()) if ranges.size else float("nan")
     return avg, p2p
+
+
+def pulsatility_index(avg: float, p2p: float) -> float:
+    """Gosling's pulsatility index, (max - min) / mean, from a stream's
+    window_stats: its peak-to-peak over its average. A 5 s window holds
+    several beats, so the peak-to-peak is the systolic - diastolic swing.
+    NaN unless the average is positive (a ratio over a zero or negative
+    mean means nothing) and the peak-to-peak finite."""
+    if not (avg > 0.0 and math.isfinite(avg) and math.isfinite(p2p)):
+        return float("nan")
+    return p2p / avg
 
 
 class _CameraBuffer:
@@ -790,8 +802,9 @@ class ScanDataSource(QObject):
         """Statistics pane (#635), one call per refresh: for each cell key
         (``"side:camId"``, as the viewer's cell model spells it) and each
         metric, ``row[metric]`` is value_at(t), the number the cell's value
-        label shows, and ``row[metric + "_avg"]`` / ``row[metric + "_p2p"]``
-        the stream's window_stats at t. Missing streams read NaN.
+        label shows, ``row[metric + "_avg"]`` / ``row[metric + "_p2p"]``
+        the stream's window_stats at t, and ``row[metric + "_pi"]`` their
+        pulsatility_index (#744). Missing streams read NaN.
 
         The window stats read only the in-memory buffer: the pane asks at
         the live edge, which is always in memory."""
@@ -818,6 +831,7 @@ class ScanDataSource(QObject):
                         avg, p2p = window_stats(ts, vs, t, window_s)
                 row[metric + "_avg"] = avg
                 row[metric + "_p2p"] = p2p
+                row[metric + "_pi"] = pulsatility_index(avg, p2p)
             out[str(key)] = row
         return out
 
