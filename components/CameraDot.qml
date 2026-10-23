@@ -7,7 +7,8 @@ import OpenMotion 1.0
  *  Used in ContactQualityModal sensor diagrams. Encapsulates the
  *  status/type lookup and renders either a solid circular dot or
  *  a vertical-split dot (dark left, light right) for the dev-mode
- *  "ambient + contact both fired" case (#128).
+ *  "ambient + contact both fired" case (#128). A camera that sent no
+ *  usable frames ("no_signal", #731) gets its own colour in dev mode.
  *
  *  API:
  *      side       : "left" | "right"
@@ -35,7 +36,10 @@ Item {
                                     : []
     readonly property bool   hasAmbient: types.indexOf("ambient_light") >= 0
     readonly property bool   hasContact: types.indexOf("poor_contact") >= 0
-    readonly property bool   isSplit:    hasAmbient && hasContact
+    // #731: the camera sent no usable frames. Outranks the other two, as in
+    // the SDK's verdict order, since there was no reading to judge them by.
+    readonly property bool   hasNoSignal: types.indexOf("no_signal") >= 0
+    readonly property bool   isSplit:    hasAmbient && hasContact && !hasNoSignal
 
     readonly property color singleColor: {
         if (status === "good")     return "#A3E4A1"
@@ -43,6 +47,7 @@ Item {
         if (status === "inactive") return "#666666"
         // status === "bad" past this point
         if (!modal.engineeringMode)  return "#E67E22"
+        if (hasNoSignal)            return AppTheme.accentRed
         if (isSplit)                return AppTheme.accentOrangeAmbient  // unused at render time (splitFrame handles it); kept so singleColor is never undefined
         if (hasAmbient)             return AppTheme.accentOrangeAmbient
         if (hasContact)             return AppTheme.accentOrangeContact

@@ -5686,9 +5686,13 @@ class MotionConnector(QObject):
 
     @staticmethod
     def _warning_text(type_key: str) -> str:
+        # no_signal (#731): the camera delivered no usable frames, so there
+        # is no reading to judge contact by. Worded as a data problem —
+        # re-seating a sensor cannot fix it.
         return {
             "ambient_light": "Ambient light detected",
             "poor_contact": "Poor sensor contact",
+            "no_signal": "No data from camera",
         }.get(type_key, type_key)
 
     @staticmethod
@@ -5893,13 +5897,15 @@ class MotionConnector(QObject):
                     }
                     warn_tags.append("ambient_light")
                 elif reason in ("poor_contact", "no_signal"):
-                    warnings_by_key[(camera, "poor_contact")] = {
+                    # Each keeps its own type (#731): a no_signal camera sent
+                    # no usable frames, so it must not read as poor contact.
+                    warnings_by_key[(camera, reason)] = {
                         "camera": camera,
-                        "typeKey": "poor_contact",
-                        "typeText": self._warning_text("poor_contact"),
+                        "typeKey": reason,
+                        "typeText": self._warning_text(reason),
                         "value": float(light_avg_dn) if light_avg_dn == light_avg_dn else 0.0,
                     }
-                    warn_tags.append("poor_contact")
+                    warn_tags.append(reason)
 
                 table_rows.append({
                     "camera": camera,
@@ -5959,14 +5965,13 @@ class MotionConnector(QObject):
         every edge so QML can clear the entry.
         """
         label = self._camera_label(side, cam_id)
-        # The modal knows two type keys. Defensive, not a live path today:
-        # the SDK's ContactQualityMonitor skips non-finite readings before
-        # on_transition ever fires, so it does not currently emit
-        # "no_signal". Collapsing it to poor_contact here costs nothing and
-        # keeps live and preflight wording identical — matching
-        # _on_cq_result_ready's preflight mapping — if that contract ever
-        # changes.
-        type_key = "poor_contact" if reason == "no_signal" else reason
+        # SDK reasons pass through as the modal's type keys. "no_signal" is
+        # defensive, not a live path today: the SDK's ContactQualityMonitor
+        # skips non-finite readings before on_transition ever fires. If that
+        # contract changes it keeps its own type, as in _on_cq_result_ready's
+        # preflight mapping, so live and preflight wording stay identical
+        # (#731).
+        type_key = reason
         type_text = self._warning_text(type_key)
         try:
             if active:
