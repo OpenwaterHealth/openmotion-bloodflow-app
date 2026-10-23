@@ -1015,7 +1015,9 @@ class MotionConnector(QObject):
     # scan that finished normally or was canceled by the user. The UI uses
     # this to auto-open the notes modal at the only moment when scanNotes
     # is guaranteed to reflect the just-completed scan. Not emitted on
-    # hard errors — those keep the scan dialog visible with the error.
+    # hard errors — those keep the scan dialog visible with the error — nor
+    # for a scan that saved no data, whose session ScanDBSink deleted
+    # (issue #725).
     scanNotesReady = pyqtSignal()
 
     # Contact-quality quick-check signals.
@@ -3696,22 +3698,53 @@ class MotionConnector(QObject):
 
     @scanNotes.setter
     def scanNotes(self, value: str):
+        self._store_scan_notes(value)
+
+    def _store_scan_notes(self, value: str) -> bool | None:
+        """Replace the notes buffer and persist it to the completed scan's DB
+        session. Returns what _persist_scan_notes returns, or None when there
+        is no session to write to (no scan has completed, the last one saved
+        nothing, or a scan is running and will persist the buffer when it
+        ends)."""
         value = value or ""
         if value != self._scan_notes:
             self._scan_notes = value
             self.scanNotesChanged.emit()
         # Always persist when a scan's DB session exists, even if the
         # in-memory value didn't change (covers the first save after capture).
-        if self._scan_notes_session_label:
-            self._persist_scan_notes(self._scan_notes_session_label)
+        if not self._scan_notes_session_label:
+            return None
+        return self._persist_scan_notes(self._scan_notes_session_label)
+
+    @pyqtSlot(str)
+    def saveScanNotes(self, text: str) -> None:
+        """The Notes modal's save. Stores the text and toasts what actually
+        happened to it: "Note saved." only once it is in the scan's DB
+        session (issue #725 — the modal used to toast success itself, so a
+        note for a deleted session was reported saved and lost)."""
+        stored = self._store_scan_notes(text)
+        if stored:
+            self.notify("Note saved.", "success", 4000, True, "scan-notes")
+        elif stored is None and self._capture_running:
+            # Held in the buffer; the scan-completion handler persists it.
+            self.notify("Note added. It is saved with the scan when the "
+                        "scan ends.", "success", 4000, True, "scan-notes")
+        elif stored is False:
+            self.notify("Note not saved: the scan database could not be "
+                        "updated.", "error", 0, True, "scan-notes")
+        elif self._scan_notes.strip():
+            self.notify("Note not saved: there is no saved scan to attach "
+                        "it to.", "error", 0, True, "scan-notes")
 
     def _persist_scan_notes(
         self, session_label: str, actual_duration_sec: float | None = None
-    ) -> bool:
+    ) -> bool | None:
         """Write the in-memory notes buffer to sessions.session_notes of the
-        scan DB session whose session_label matches. Returns True on success.
-        ScanDBSink (critical) creates the session at scan start, so every scan
-        that ran has a row to update.
+        scan DB session whose session_label matches. Returns True on success,
+        False when the write failed, and None when no session has that label:
+        ScanDBSink creates the session at scan start but deletes it at scan
+        end if the scan recorded no corrected rows (stopped before the first
+        dark interval closed), so there is nothing to attach notes to.
 
         When ``actual_duration_sec`` is given, merge it into session_meta as
         ``actual_duration_sec`` so History reports the actual trigger-ON scan
@@ -3719,8 +3752,10 @@ class MotionConnector(QObject):
         the app's _CompletionSink, which fires *after* the SDK's ScanDBSink has
         finalised session_end + any diagnostics meta, so a read-modify-write
         here is race-free and preserves the existing meta."""
+        if not session_label:
+            return None
         db_path = getattr(self._interface, "scan_db_path", None)
-        if not db_path or not session_label:
+        if not db_path:
             return False
         try:
             from omotion.ScanDatabase import ScanDatabase
@@ -3728,10 +3763,10 @@ class MotionConnector(QObject):
             try:
                 session = db.get_session_by_label(session_label)
                 if session is None:
-                    logger.error(
+                    logger.warning(
                         "Scan notes: no DB session with label %r", session_label
                     )
-                    return False
+                    return None
                 update_kwargs: dict = {
                     "session_notes": self._scan_notes.strip()
                 }
@@ -4980,7 +5015,8 @@ class MotionConnector(QObject):
                 "=== Full scan ended: %s — duration %s ===", status, duration_str
             )
             duration_line = f"\n---\nScan {status} — duration: {duration_str}"
-            self._scan_notes = (self._scan_notes.strip() + duration_line)
+            operator_notes = self._scan_notes.strip()
+            self._scan_notes = operator_notes + duration_line
             # Data-gap footer: aggregate ranges where any camera went >1 s
             # without a finite BFI/BVI sample (sustained NaN-fill/dropout).
             # Empty string when the scan was clean. Fail-soft like the rest
@@ -5004,7 +5040,28 @@ class MotionConnector(QObject):
             # Stamp the actual trigger-ON duration (same value as the notes
             # line above) so History shows the real scan time, not the pipeline
             # wall-clock session_end - session_start (issue #335).
-            self._persist_scan_notes(session_label, actual_duration_sec=elapsed)
+            notes_stored = self._persist_scan_notes(
+                session_label, actual_duration_sec=elapsed
+            )
+            if notes_stored is None:
+                # No session row: ScanDBSink deleted it because the scan
+                # recorded no corrected rows, so the scan was not saved and
+                # its notes have nowhere to go. Don't offer the Notes modal
+                # (issue #725), drop the footer for a scan that doesn't
+                # exist, and say so if the operator wrote notes during it.
+                logger.info(
+                    "Scan %r saved no data; notes not stored and the Notes "
+                    "modal is not offered", session_label,
+                )
+                self._scan_notes_session_label = ""
+                self._scan_notes = operator_notes
+                self.scanNotesChanged.emit()
+                if operator_notes:
+                    self.notify(
+                        "Notes not saved: this scan recorded no data, so it "
+                        "was not saved.",
+                        "error", 0, True, "scan-notes",
+                    )
 
             # Research auto-export (#598): same file as History → Export
             # CSV, on its own thread so the scan-done flow isn't held up
@@ -5059,8 +5116,10 @@ class MotionConnector(QObject):
             # screen (e.g. an E-304 device-disconnect abort raised it seconds
             # ago): defer the open until the error is dismissed so the error
             # modal stays on top and doesn't lose focus to the notes field
-            # behind it (issue #387).
-            self._emit_or_defer_scan_notes()
+            # behind it (issue #387). Not for a scan that saved nothing: there
+            # is no session to hold the notes (issue #725).
+            if notes_stored is not None:
+                self._emit_or_defer_scan_notes()
 
         # Issue #43: telemetry CSVs are engineering diagnostics — clinical
         # users must not get them. Default False (fail closed). Raw

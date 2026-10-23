@@ -50,9 +50,10 @@ Item {
     }
     function close() {
         root._mergeConnectorNotes()
-        MotionInterface.scanNotes = notesArea.text
+        // The connector stores the text and raises the toast: "Note saved."
+        // only when the note reached the scan's DB session (#725).
+        MotionInterface.saveScanNotes(notesArea.text)
         root._loadedNotes = notesArea.text
-        MotionInterface.notify("Note saved.", "success", 4000, true)
         root.visible = false
     }
 

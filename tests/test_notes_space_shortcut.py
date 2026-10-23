@@ -77,6 +77,8 @@ class _StubMotionInterface(QObject):
         super().__init__(parent)
         self._trigger_state = "OFF"
         self._scan_notes = ""
+        self.saved = []
+        self.toasts = []
 
     @pyqtProperty("QVariantMap", notify=_neverEmitted)
     def appConfig(self):
@@ -103,6 +105,13 @@ class _StubMotionInterface(QObject):
         self._scan_notes = value or ""
         self.scanNotesChanged.emit()
 
+    @pyqtSlot(str)
+    def saveScanNotes(self, text):
+        """The connector stores the text and raises the outcome toast
+        itself (#725); the stub only records the call."""
+        self.saved.append(text)
+        self.scanNotes = text
+
     @pyqtSlot(result=str)
     def scanElapsedStr(self):
         return "00:01:23"
@@ -113,7 +122,7 @@ class _StubMotionInterface(QObject):
 
     @pyqtSlot(str, str, int, bool)
     def notify(self, message, level, duration_ms, dismissable):
-        pass
+        self.toasts.append((level, message))
 
     def finish_scan_on_sdk_thread(self, footer):
         """What the connector's scan-completion handler does to the notes,
@@ -312,6 +321,20 @@ def test_switching_modals_keeps_the_new_modals_focus(page):
 def test_space_does_nothing_outside_a_scan(page):
     page.key(Qt.Key.Key_Space)
     assert page.current_label() is None
+
+
+def test_closing_notes_saves_through_the_connector_without_its_own_toast(page):
+    """The modal hands the text to saveScanNotes and leaves the toast to
+    the connector, which knows whether the note was stored (#725). It
+    used to raise "Note saved." itself, even for a note that was lost."""
+    QMetaObject.invokeMethod(page.button_panel(), "notesClicked")
+    page.pump()
+    page.type_text("hello")
+    page.key(Qt.Key.Key_Escape)
+
+    assert page.current_label() is None
+    assert page.stub.saved == ["hello"]
+    assert page.stub.toasts == []
 
 
 # ── A scan that ends under an open Notes modal (#617) ─────────────────
