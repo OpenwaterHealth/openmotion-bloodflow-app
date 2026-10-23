@@ -283,7 +283,11 @@ TA_PULSE_MIN_TICKS = TA_PULSE_TRUNCATION_TICKS
 # can't be widened the run keeps the 1800 skip: contaminated darks, but no
 # latch. Bench 2026-10-21 (2196 us exposure, 2000 us pulse, 16x gain): skip
 # 2400 with RATE_LL 22000 gave scheduled darks of 127-130 DN, the same as
-# the laser-off terminal frame; skip 1800 gave 207-1017 DN.
+# the laser-off terminal frame; skip 1800 gave 207-1017 DN. The laser
+# optimizer (#746) runs under the same envelope for its whole run: skip,
+# RATE_LL floor and PULSE_WIDTH_UL ceiling reach the SDK workflow from these
+# constants (laser_optimizer_mode.optimizer_config), which then writes and
+# restores the limits itself.
 DARK_SKIP_DELAY_US = 1800             # what every other scan runs
 DARK_SKIP_HIGH_EXPOSURE_US = 2400     # what a >1700 us exposure run needs
 # Longest exposure whose dark frames stay clean at DARK_SKIP_DELAY_US. Bench
