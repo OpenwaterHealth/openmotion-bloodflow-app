@@ -76,6 +76,17 @@ Item {
     // Each entry: { camera, typeKey, typeText, value }
     property var entries: []
 
+    // #731: a "no_signal" camera sent no usable frames. That is a camera /
+    // data problem, not contact, so the modal names the remedy once for all
+    // such cameras instead of leaving the operator to re-seat a sensor.
+    readonly property bool hasNoSignal: {
+        for (var i = 0; i < entries.length; ++i)
+            if (entries[i].typeKey === "no_signal") return true
+        return false
+    }
+    readonly property string noSignalHint:
+        "One or more cameras are not sending data. Power-cycle the system and reconnect."
+
     readonly property bool engineeringMode: !!(MotionInterface.appConfig && MotionInterface.appConfig.engineeringMode)
     readonly property bool clinicalMode: !!(MotionInterface.appConfig && MotionInterface.appConfig.clinicalMode)
 
@@ -204,8 +215,9 @@ Item {
             return lines.join("\n")
         }
         for (var i = 0; i < entries.length; ++i) {
+            // A no_signal camera has no reading; its value is a 0.0 filler.
             if (entries[i].camera === label)
-                lines.push(showDn
+                lines.push(showDn && entries[i].typeKey !== "no_signal"
                            ? (entries[i].typeText + " (" + entries[i].value.toFixed(1) + " DN)")
                            : entries[i].typeText)
         }
@@ -319,7 +331,8 @@ Item {
                 color: AppTheme.textSecondary
                 font.pixelSize: 14
                 text: (root.entries.length > 0)
-                      ? "Hover over orange cameras for details."
+                      ? (root.hasNoSignal ? root.noSignalHint + "\n" : "")
+                        + "Hover over orange cameras for details."
                       : "All contact quality issues are currently inactive. You may dismiss."
             }
 
@@ -468,6 +481,13 @@ Item {
                         }
                     }
                     Text { text: "both"; color: AppTheme.textSecondary; font.pixelSize: 11 }
+                }
+                RowLayout {
+                    spacing: 6
+                    Rectangle { width: 10; height: 10; radius: 5
+                        color: AppTheme.accentRed
+                        border.color: "black"; border.width: 1 }
+                    Text { text: "no data"; color: AppTheme.textSecondary; font.pixelSize: 11 }
                 }
             }
 
