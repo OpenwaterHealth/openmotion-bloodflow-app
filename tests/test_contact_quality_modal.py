@@ -21,9 +21,11 @@ from pathlib import Path
 # untouched (see test_logs_modal_filters.py).
 from PyQt6.QtCore import (  # noqa: E402
     Q_ARG,
+    Q_RETURN_ARG,
     QCoreApplication,
     QMetaObject,
     QObject,
+    Qt,
     QUrl,
     pyqtProperty,
     pyqtSignal,
@@ -367,3 +369,101 @@ def test_force_dismiss_reads_as_a_user_facing_control(cq_modal):
     help_text = btn.property("helpText")
     assert "If a scan is running" in help_text
     assert "The next scan warns again" in help_text
+
+
+# ── No-signal warning type (#731) ───────────────────────────────────────────
+
+HOVER_LINE = "Hover over orange cameras for details."
+
+
+def _add_warning(modal, camera, type_key, type_text, value):
+    QMetaObject.invokeMethod(
+        modal, "addWarning",
+        Q_ARG("QVariant", camera), Q_ARG("QVariant", type_key),
+        Q_ARG("QVariant", type_text), Q_ARG("QVariant", value))
+
+
+def _show_check_result(modal, warnings):
+    """The quick-check shape BloodFlow produces from
+    contactQualityCheckFinished: reset(false), then one addWarning per
+    entry the connector mapped."""
+    QMetaObject.invokeMethod(modal, "reset", Q_ARG("QVariant", False))
+    for w in warnings:
+        _add_warning(modal, *w)
+    assert modal.property("state_") == "warnings"
+
+
+def _subtitle(modal):
+    texts = [o.property("text") for o in modal.findChildren(QObject)
+             if isinstance(o.property("text"), str)
+             and HOVER_LINE in o.property("text")]
+    assert len(texts) == 1, texts
+    return texts[0]
+
+
+def _tooltip(modal, side, cam_index1):
+    return QMetaObject.invokeMethod(
+        modal, "cameraTooltip", Qt.ConnectionType.DirectConnection,
+        Q_RETURN_ARG("QVariant"),
+        Q_ARG("QVariant", side), Q_ARG("QVariant", cam_index1))
+
+
+def _dot_color(modal, side, cam_index1):
+    dots = [o for o in modal.findChildren(QObject)
+            if o.property("camIndex1") == cam_index1
+            and o.property("side") == side]
+    assert len(dots) == 1
+    return dots[0].property("singleColor").name()
+
+
+NO_SIGNAL_L7 = ("L7", "no_signal", "No data from camera", 0.0)
+POOR_CONTACT_R2 = ("R2", "poor_contact", "Poor sensor contact", 1.5)
+
+
+def test_no_signal_adds_the_remedy_line_to_the_subtitle(cq_harness):
+    """An operator never sees the per-type dot colours, so the remedy for a
+    camera with no data is spelled out once, above the hover hint."""
+    cq_harness.stub.setFlags(True, False)      # plain clinical build
+    try:
+        modal = cq_harness(in_window=True)
+        _show_check_result(modal, [NO_SIGNAL_L7, POOR_CONTACT_R2])
+        assert modal.property("hasNoSignal") is True
+        hint = modal.property("noSignalHint")
+        assert hint and "contact" not in hint.lower()
+        assert _subtitle(modal) == hint + "\n" + HOVER_LINE
+        modal.setProperty("visible", False)
+    finally:
+        cq_harness.stub.setFlags(False, True)
+
+
+def test_poor_contact_alone_keeps_the_plain_subtitle(cq_harness):
+    modal = cq_harness(in_window=True)
+    _show_check_result(modal, [POOR_CONTACT_R2])
+    assert modal.property("hasNoSignal") is False
+    assert _subtitle(modal) == HOVER_LINE
+    modal.setProperty("visible", False)
+
+
+def test_no_signal_tooltip_shows_no_dn_reading(cq_harness):
+    """Engineering mode appends the DN reading to each tooltip line; a
+    camera with no data has none (its value is a 0.0 filler)."""
+    modal = cq_harness(in_window=True)          # engineering mode on
+    _show_check_result(modal, [NO_SIGNAL_L7, POOR_CONTACT_R2])
+    assert _tooltip(modal, "left", 7) == "L7\nNo data from camera"
+    assert _tooltip(modal, "right", 2) == "R2\nPoor sensor contact (1.5 DN)"
+    modal.setProperty("visible", False)
+
+
+def test_no_signal_dot_has_its_own_engineering_colour(cq_harness):
+    """Engineering mode colours dots by type; no_signal is red, apart from
+    the two contact oranges. Operators keep the single orange (#128)."""
+    modal = cq_harness(in_window=True)          # engineering mode on
+    _show_check_result(modal, [NO_SIGNAL_L7, POOR_CONTACT_R2])
+    assert _dot_color(modal, "left", 7) == "#e74c3c"     # AppTheme.accentRed
+    assert _dot_color(modal, "right", 2) == "#f4a460"    # accentOrangeContact
+    cq_harness.stub.setFlags(True, False)
+    try:
+        assert _dot_color(modal, "left", 7) == "#e67e22"
+    finally:
+        cq_harness.stub.setFlags(False, True)
+    modal.setProperty("visible", False)
