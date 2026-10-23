@@ -62,7 +62,9 @@ xattr -dr com.apple.quarantine /Applications/Open-Motion.app
   and scrub real BFI/BVI traces in the plot viewer. Nothing loads unless you
   accept.
 - **History → Export CSV** exports any stored scan. By default the app writes no
-  per-scan CSV files; everything is kept in the local scan database.
+  per-scan CSV files; everything is kept in the local scan database. The
+  [CSV format reference](docs/csv-formats.md) describes every column of the
+  exported, raw and telemetry CSVs.
 - **Errors** show a stable code such as `E-104`. The
   [error code catalog](docs/ERROR_CODES.md) explains each code and what to do
   about it.
