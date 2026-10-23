@@ -157,8 +157,15 @@ Item {
                         border.color: parent.hovered ? AppTheme.textPrimary : AppTheme.textSecondary; radius: 4
                     }
                     onClicked: {
-                        exportDialog.selectedFile = "file:///" + MotionInterface.directory
-                                                    + "/audit_log.csv"
+                        var dir = "file:///" + MotionInterface.directory
+                        // Windows keeps only the file name of selectedFile and
+                        // reopens the last folder any Open-Motion.exe saved to.
+                        // A portable build pins its own folder (several zips
+                        // may sit side by side); an installed one keeps that
+                        // memory, e.g. a USB stick (#723).
+                        if (MotionInterface.appConfig.portableMode === true)
+                            exportDialog.currentFolder = dir
+                        exportDialog.selectedFile = dir + "/audit_log.csv"
                         exportDialog.open()
                     }
                 }
@@ -389,6 +396,7 @@ Item {
 
     Dialogs.FileDialog {
         id: exportDialog
+        objectName: "auditExportDialog"
         title: "Export Audit Log CSV"
         fileMode: Dialogs.FileDialog.SaveFile
         nameFilters: ["CSV files (*.csv)", "All files (*)"]
