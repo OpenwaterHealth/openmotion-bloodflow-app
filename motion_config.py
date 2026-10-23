@@ -245,7 +245,7 @@ TA_PULSE_WIDTH_BASELINE_TICKS = 1563
 TA_PULSE_TRUNCATION_TICKS = 55
 TA_PULSE_MIN_TICKS = TA_PULSE_TRUNCATION_TICKS
 
-# --- Dark-frame skip delay (#449) ---------------------------------------------
+# --- Dark-frame skip delay (#449, #747) ---------------------------------------
 # A scheduled dark frame isn't laser-off: the console firmware DISPLACES the
 # pulse later by LaserPulseSkipDelayUsec so it lands outside the exposure
 # window (console-fw trigger.c: long_lsync_arr = laserPulseDelayUsec +
@@ -264,37 +264,66 @@ TA_PULSE_MIN_TICKS = TA_PULSE_TRUNCATION_TICKS
 # immediately before start_trigger (fsync-counter reset), so anything patched
 # in after resolution is silently reverted on the push that actually matters.
 #
-# WHY NOT 2400 (reverted 2026-08-17): 2400 cleared the whole alternative-
-# exposure dropdown, but it shortens the post-dark inter-pulse gap to
-# 25000 - 2400 = 22600 us at 40 Hz, which undercuts the EE/OPT_RATE_LL floor
-# every stock console ships with (23125 us observed on real hardware, raw
-# 72266) — the safety FPGAs then trip RATE_LOWER_LIMIT_FAIL and LATCH until a
-# console power-cycle, i.e. no laser at all. Buying clean darks above 1700 us
-# exposure by requiring a fleet-wide safety-config change is the wrong trade:
-# the contamination only exists in engineering high-exposure runs (#446),
-# while the latch breaks every scan on every console. 1800 leaves a 23200 us
+# WHY NOT 2400 BY DEFAULT (reverted 2026-08-17): 2400 clears the whole
+# alternative-exposure dropdown, but it shortens the post-dark inter-pulse gap
+# to 25000 - 2400 = 22600 us at 40 Hz, which undercuts the EE/OPT_RATE_LL
+# floor every stock console ships with (23125 us observed on real hardware,
+# raw 72266) — the safety FPGAs then trip RATE_LOWER_LIMIT_FAIL and LATCH
+# until a console power-cycle, i.e. no laser at all. 1800 leaves a 23200 us
 # post-dark gap, which clears both the stock 22500 and the observed 23125.
 #
-# TO RUN A >1700 us EXPOSURE EXPERIMENT you must do BOTH, in this order:
-#   1. lower the console's EE/OPT_RATE_LL to <= 22600 us (raw <= 70625) —
-#      recipe in HANDOFF-laser-safety-ceiling-override.md — and power-cycle
-#      the console to clear any latched fault;
-#   2. set DARK_SKIP_DELAY_US below to DARK_SKIP_HIGH_EXPOSURE_US.
-# Doing 2 without 1 latches the interlock on the first dark frame.
-DARK_SKIP_DELAY_US = 1800             # what the app runs, everywhere
+# LONG-EXPOSURE RUNS (#747): a scan whose alternative settings reach past
+# DARK_SKIP_CLEAN_EXPOSURE_MAX_US — the alternative camera exposure, or the
+# pulse delay + the alternative pulse width — runs, preflight signal-quality
+# check included, at DARK_SKIP_HIGH_EXPOSURE_US instead (dark_skip_delay_us
+# below decides). The connector passes it per scan as
+# ScanRequest.trigger_config, and before such a run widens both safety FPGAs'
+# RATE_LL to DARK_SKIP_SAFETY_RATE_LL_US (safety_rate_ll_writes); the first
+# run that no longer needs it restores the console's own value. If the floor
+# can't be widened the run keeps the 1800 skip: contaminated darks, but no
+# latch. Bench 2026-10-21 (2196 us exposure, 2000 us pulse, 16x gain): skip
+# 2400 with RATE_LL 22000 gave scheduled darks of 127-130 DN, the same as
+# the laser-off terminal frame; skip 1800 gave 207-1017 DN.
+DARK_SKIP_DELAY_US = 1800             # what every other scan runs
 DARK_SKIP_HIGH_EXPOSURE_US = 2400     # what a >1700 us exposure run needs
 # Longest exposure whose dark frames stay clean at DARK_SKIP_DELAY_US. Bench
 # onset was between 1700 and 1800 us; take the clean end.
 DARK_SKIP_CLEAN_EXPOSURE_MAX_US = 1700
-# Max console EE/OPT_RATE_LL the current skip tolerates: the post-dark gap is
+# Max console EE/OPT_RATE_LL the default skip tolerates: the post-dark gap is
 # (period - skip) = 25000 - 1800 at 40 Hz. Per-console flash config, NOT the
 # stock laser_params.json 22500 — read the connect log's
 # "Override EE/OPT_RATE_LL raw=" lines for ground truth (raw x 0.32 = us).
 DARK_RATE_LOWER_LIMIT_US = 23200
+# RATE_LL written for a run at DARK_SKIP_HIGH_EXPOSURE_US: below its 22600 us
+# post-dark gap, and the value the 2026-10-21 bench runs used.
+DARK_SKIP_SAFETY_RATE_LL_US = 22000
+# The SDK's DEFAULT_TRIGGER_CONFIG LaserPulseDelayUsec. The app overrides
+# only the skip, so this is the delay every scan resolves to.
+LASER_PULSE_DELAY_US = 100
 
 # Merged onto the SDK's DEFAULT_TRIGGER_CONFIG at MotionInterface
 # construction, so every workflow's resolved trigger config carries it.
 DEFAULT_TRIGGER_OVERRIDES = {"LaserPulseSkipDelayUsec": DARK_SKIP_DELAY_US}
+
+
+def dark_skip_delay_us(exposure_us=None, pulse_width_us=None):
+    """The dark-frame skip delay a run with these alternative settings needs.
+
+    ``exposure_us`` is the run's alternative camera exposure and
+    ``pulse_width_us`` its alternative laser pulse width; ``None`` means
+    that setting isn't active for the run. Returns
+    DARK_SKIP_HIGH_EXPOSURE_US when the exposure, or LASER_PULSE_DELAY_US +
+    the pulse width, exceeds DARK_SKIP_CLEAN_EXPOSURE_MAX_US, else
+    DARK_SKIP_DELAY_US.
+    """
+    reach = []
+    if exposure_us is not None:
+        reach.append(float(exposure_us))
+    if pulse_width_us is not None:
+        reach.append(LASER_PULSE_DELAY_US + float(pulse_width_us))
+    if any(r > DARK_SKIP_CLEAN_EXPOSURE_MAX_US for r in reach):
+        return DARK_SKIP_HIGH_EXPOSURE_US
+    return DARK_SKIP_DELAY_US
 
 
 def ta_pulse_width_write(width_us=None):
@@ -369,7 +398,7 @@ def ta_pulse_width_write(width_us=None):
 ALT_PULSE_WIDTH_SAFETY_CEILING_US = LASER_PULSE_WIDTH_MAX_US  # 2200 µs = 6875 ticks
 SAFETY_PULSE_TICK_US = 0.32
 SAFETY_PULSE_WIDTH_UL_STOCK_TICKS = 3125  # laser_params.json [53, 12, 0, 0]
-SAFETY_PULSE_WIDTH_UL_BYTES = 4           # fpga_model.json data_size "32B"
+SAFETY_LIMIT_BYTES = 4  # fpga_model.json data_size "32B", every safety limit
 SAFETY_PULSE_WIDTH_UL_REGISTERS = (
     # friendlyName, fallback channel (mux 1, I2C 0x41, offset 0x04)
     ("EE_PULSE_WIDTH_UL", 6),
@@ -395,7 +424,53 @@ def safety_pulse_width_ul_writes(ceiling_us=None, user_config=None):
     the constants above (same data, hardcoded) so a missing/renamed SDK
     entry can't break scan start.
     """
-    names = tuple(name for name, _ in SAFETY_PULSE_WIDTH_UL_REGISTERS)
+    return _safety_limit_writes(
+        SAFETY_PULSE_WIDTH_UL_REGISTERS, 0x04,
+        SAFETY_PULSE_WIDTH_UL_STOCK_TICKS, ceiling_us, user_config,
+        "alternative pulse width ceiling",
+    )
+
+
+# --- Long-dark-skip safety rate floor (#747) ----------------------------------
+# The same two safety FPGAs also latch E-202 when two pulses start closer
+# together than their RATE_LL register (offset 0x08, 32-bit LE, 0.32 µs/tick
+# — fpga_model.json "EE/OPT_RATE_LL"; 22500 µs in laser_params.json, 23125 µs
+# in a real console's flash config). A run at DARK_SKIP_HIGH_EXPOSURE_US has a
+# 22600 µs post-dark gap: under 23125, and only 100 µs over 22500. So the
+# connector writes DARK_SKIP_SAFETY_RATE_LL_US to both registers before such
+# a run and restores the unit's own value (flash user config, else stock) on
+# the first run after, via the persisted altLaserSafetyRateFloorDirty flag.
+# Same writers and order as the PULSE_WIDTH_UL ceiling above: firmware at
+# boot, apply_laser_power at connect, this app at scan start.
+SAFETY_RATE_LL_STOCK_TICKS = 70313  # laser_params.json [169, 18, 1, 0] ≈ 22500 µs
+SAFETY_RATE_LL_REGISTERS = (
+    # friendlyName, fallback channel (mux 1, I2C 0x41, offset 0x08)
+    ("EE_RATE_LL", 6),
+    ("OPT_RATE_LL", 7),
+)
+
+
+def safety_rate_ll_writes(floor_us=None, user_config=None):
+    """Build the I2C writes that program both safety FPGAs' RATE_LL.
+
+    ``floor_us`` is the limit to write (the long-dark-skip widen path);
+    ``None`` restores the unit's baseline exactly as
+    ``safety_pulse_width_ul_writes`` does: the console's flash user-config
+    value when it has a numeric one, else the laser_params.json stock.
+    Same return shape and never-raises contract.
+    """
+    return _safety_limit_writes(
+        SAFETY_RATE_LL_REGISTERS, 0x08, SAFETY_RATE_LL_STOCK_TICKS,
+        floor_us, user_config, "long dark skip floor",
+    )
+
+
+def _safety_limit_writes(registers, fallback_reg_addr, stock_ticks,
+                         limit_us, user_config, limit_source):
+    """Shared builder behind the safety-FPGA limit writes: one register
+    per FPGA in ``registers`` (friendlyName, fallback channel), at
+    ``fallback_reg_addr`` on I2C 0x41 mux 1 when the SDK's map lacks it."""
+    names = tuple(name for name, _ in registers)
     try:
         from omotion.laser import FpgaMap
         fpga_map = FpgaMap()
@@ -403,7 +478,7 @@ def safety_pulse_width_ul_writes(ceiling_us=None, user_config=None):
         fpga_map = None
 
     stock = {}
-    if ceiling_us is None:
+    if limit_us is None:
         try:
             from omotion.laser import load_laser_params
             for param in load_laser_params():
@@ -413,23 +488,23 @@ def safety_pulse_width_ul_writes(ceiling_us=None, user_config=None):
             stock = {}
 
     writes = []
-    for name, fallback_channel in SAFETY_PULSE_WIDTH_UL_REGISTERS:
+    for name, fallback_channel in registers:
         entry = None
         if fpga_map is not None:
             try:
                 entry = fpga_map.get_entry_by_friendly_name(name)
             except Exception:
                 entry = None
-        num_bytes = SAFETY_PULSE_WIDTH_UL_BYTES
+        num_bytes = SAFETY_LIMIT_BYTES
         try:
             if entry and entry.get("data_size"):
                 num_bytes = int(str(entry["data_size"]).rstrip("B")) // 8
         except (TypeError, ValueError):
-            num_bytes = SAFETY_PULSE_WIDTH_UL_BYTES
+            num_bytes = SAFETY_LIMIT_BYTES
 
-        if ceiling_us is not None:
-            ticks = int(round(float(ceiling_us) / SAFETY_PULSE_TICK_US))
-            source = "alternative pulse width ceiling"
+        if limit_us is not None:
+            ticks = int(round(float(limit_us) / SAFETY_PULSE_TICK_US))
+            source = limit_source
         else:
             ticks, source = None, None
             override = (user_config.get(name)
@@ -443,7 +518,7 @@ def safety_pulse_width_ul_writes(ceiling_us=None, user_config=None):
             if ticks is None:
                 data = stock.get(name)
                 ticks = (int.from_bytes(bytes(data), "little") if data
-                         else SAFETY_PULSE_WIDTH_UL_STOCK_TICKS)
+                         else stock_ticks)
                 source = "laser_params baseline restore"
         ticks = max(0, min((1 << (8 * num_bytes)) - 1, ticks))
         data = bytearray(ticks.to_bytes(num_bytes, "little"))
@@ -452,7 +527,8 @@ def safety_pulse_width_ul_writes(ceiling_us=None, user_config=None):
             "mux_index": entry["mux_idx"] if entry else 1,
             "channel": entry["channel"] if entry else fallback_channel,
             "device_addr": entry["i2c_addr"] if entry else 0x41,
-            "reg_addr": entry["start_address"] if entry else 0x04,
+            "reg_addr": (entry["start_address"] if entry
+                         else fallback_reg_addr),
             "data": data,
         }
         writes.append((name, write_kwargs, ticks, source))
