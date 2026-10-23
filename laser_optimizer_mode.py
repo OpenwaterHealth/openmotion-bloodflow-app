@@ -20,6 +20,8 @@ import importlib.util
 import math
 from typing import Any, Mapping, Optional
 
+import motion_config
+
 # Operator settings (Settings → Laser Optimizer card), each a PREFERENCE key:
 # config key -> (QML name, default, dropdown choices, valid range). A
 # hand-set whole number inside the range is used even between dropdown
@@ -109,7 +111,10 @@ def scan_duration_sec(app_config: Mapping[str, Any]) -> int:
 
 def optimizer_config(app_config: Mapping[str, Any]):
     """The SDK ``OptimizerConfig`` for a run: the operator's setpoint, band
-    and starting point; every other number stays the SDK's agreed default."""
+    and starting point, plus the long-exposure envelope the app's
+    alternative settings run under (#747: dark skip, safety RATE_LL floor
+    and PULSE_WIDTH_UL ceiling, from ``motion_config``), so one edit there
+    moves both paths. Every other number stays the SDK's agreed default."""
     from omotion.LaserOptimizerWorkflow import OptimizerConfig
     return OptimizerConfig(
         target_mean_dn=float(setting(app_config, "laserOptimizerTargetMeanDn")),
@@ -117,6 +122,9 @@ def optimizer_config(app_config: Mapping[str, Any]):
         max_gain=setting(app_config, "laserOptimizerStartGain"),
         max_pulse_width_us=setting(app_config, "laserOptimizerStartPulseUs"),
         probe_light_frames=setting(app_config, "laserOptimizerProbeFrames"),
+        dark_skip_delay_us=motion_config.DARK_SKIP_HIGH_EXPOSURE_US,
+        safety_rate_ll_us=float(motion_config.DARK_SKIP_SAFETY_RATE_LL_US),
+        safety_pulse_width_ul_us=float(motion_config.ALT_PULSE_WIDTH_SAFETY_CEILING_US),
     )
 
 

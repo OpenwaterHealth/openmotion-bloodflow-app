@@ -99,7 +99,8 @@ def _make_connector(tmp_path, app_config=None):
     c._leftSensorConnected = False
     c._rightSensorConnected = True
     c._laser_optimizer_sdk = True
-    c._sync_alt_scan_settings = MagicMock()
+    # Returns the run's trigger override (#747); None = default dark skip.
+    c._sync_alt_scan_settings = MagicMock(return_value=None)
     return c
 
 
@@ -141,15 +142,22 @@ def test_request_handed_to_the_sdk_optimizer(tmp_path):
     # the cameras in case the process dies before the SDK restore.
     c._sync_alt_scan_settings.assert_not_called()
     assert c._app_config["altCameraSettingsDirty"] is True
+    # Nor does it take the #747 long-dark-skip override: the SDK workflow
+    # sets its own skip and safety limits for the whole run.
+    assert final.trigger_config is None
 
 
 def test_normal_scan_still_starts_directly(tmp_path):
     c = _make_connector(tmp_path)
     c._interface.start_scan.return_value = True
+    c._sync_alt_scan_settings.return_value = {"LaserPulseSkipDelayUsec": 2400}
     assert c.startCapture("subj", 5, 0x00, 0xFF, False) is True
     c._interface.start_scan.assert_called_once()
     c._interface.start_laser_optimizer.assert_not_called()
     c._sync_alt_scan_settings.assert_called_once()
+    # A long alternative exposure's override still rides the request (#747).
+    request = c._interface.start_scan.call_args.args[0]
+    assert request.trigger_config == {"LaserPulseSkipDelayUsec": 2400}
 
 
 def test_sdk_refusal_unwinds_capture_state(tmp_path):
@@ -333,6 +341,17 @@ def test_optimizer_config_maps_the_settings():
             cfg.probe_light_frames) == (150.0, 0.10, 8, 1000, 100)
     defaults = lom.optimizer_config({})
     assert (defaults.target_mean_dn, defaults.tolerance) == (100.0, 0.15)
+
+
+def test_optimizer_config_shares_the_long_exposure_envelope():
+    """The optimizer runs under the same dark skip, RATE_LL floor and
+    PULSE_WIDTH_UL ceiling as a long alternative-settings run (#747)."""
+    pytest.importorskip("omotion.LaserOptimizerWorkflow")
+    import motion_config as mc
+    cfg = lom.optimizer_config({})
+    assert cfg.dark_skip_delay_us == mc.DARK_SKIP_HIGH_EXPOSURE_US == 2400
+    assert cfg.safety_rate_ll_us == mc.DARK_SKIP_SAFETY_RATE_LL_US == 22000
+    assert cfg.safety_pulse_width_ul_us == mc.ALT_PULSE_WIDTH_SAFETY_CEILING_US == 2200
 
 
 def test_the_run_uses_the_operator_settings(tmp_path):
