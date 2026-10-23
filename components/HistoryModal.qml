@@ -174,8 +174,14 @@ Item {
             // Export by the unique DB session id — labels can collide, and a
             // by-label lookup silently exports the newest match (issue #254).
             exportDialog.exportSessionId = rows[0].sessionId
-            exportDialog.selectedFile = "file:///" + MotionInterface.directory
-                                        + "/" + rows[0].label + "_export.csv"
+            var dir = "file:///" + MotionInterface.directory
+            // Windows keeps only the file name of selectedFile and reopens
+            // the last folder any Open-Motion.exe saved to. A portable build
+            // pins its own folder (several zips may sit side by side); an
+            // installed one keeps that memory, e.g. a USB stick (#723).
+            if (MotionInterface.appConfig.portableMode === true)
+                exportDialog.currentFolder = dir
+            exportDialog.selectedFile = dir + "/" + rows[0].label + "_export.csv"
             exportDialog.open()
             return
         }
@@ -639,6 +645,7 @@ Item {
 
     Dialogs.FileDialog {
         id: exportDialog
+        objectName: "scanExportDialog"
         title: "Export Scan CSV"
         fileMode: Dialogs.FileDialog.SaveFile
         nameFilters: ["CSV files (*.csv)", "All files (*)"]
