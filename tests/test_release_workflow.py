@@ -25,7 +25,6 @@ WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release-build.yml"
 # repository runs the very same build (#573).
 WINDOWS_BUILD = REPO_ROOT / ".github" / "actions" / "windows-build" / "action.yml"
 PIN_FILE = REPO_ROOT / "sdk-version.txt"
-BRANCH_FILE = REPO_ROOT / "sdk-branch.txt"
 
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
@@ -48,44 +47,6 @@ def test_read_pin_rejects_anything_but_a_release(tmp_path):
         bad.write_text(text, encoding="utf-8")
         with pytest.raises(ValueError):
             check_sdk_pin.read_pin(bad)
-
-
-# ----------------------------------------------------------- the branch file
-def test_sdk_branch_is_one_sdk_integration_branch():
-    """#761: dev builds pair with the SDK branch this file names — next on
-    app next, next-next on app next-next. The file travels with the commit,
-    so a tag-only caller (the private Clinical repo) pairs the same way."""
-    branch = check_sdk_pin.read_branch(BRANCH_FILE)
-    assert branch in ("next", "next-next")
-    assert BRANCH_FILE.read_text(encoding="utf-8").strip().splitlines() == [branch]
-
-
-def test_read_branch_rejects_anything_but_an_integration_branch(tmp_path):
-    bad = tmp_path / "sdk-branch.txt"
-    for text in ("main\n", "nextnext\n", "next next\n", "\n",
-                 "next\nnext-next\n", "feature/343-cq\n", "@next\n"):
-        bad.write_text(text, encoding="utf-8")
-        with pytest.raises(ValueError):
-            check_sdk_pin.read_branch(bad)
-
-
-def test_print_branch_prints_only_the_branch_or_fails(tmp_path, capsys):
-    """The install steps capture stdout with $(...), so stdout must be the
-    bare branch on success and empty on failure (the error goes to stderr,
-    and the non-zero exit stops the bash -e step before pip runs)."""
-    branch = tmp_path / "sdk-branch.txt"
-    branch.write_text("next-next\n", encoding="utf-8")
-    assert check_sdk_pin.main(["--print-branch", "--branch-file", str(branch)]) == 0
-    assert capsys.readouterr().out == "next-next\n"
-
-    branch.write_text("main\n", encoding="utf-8")
-    assert check_sdk_pin.main(["--print-branch", "--branch-file", str(branch)]) == 1
-    out = capsys.readouterr()
-    assert out.out == "" and "::error" in out.err
-
-    missing = tmp_path / "absent.txt"
-    assert check_sdk_pin.main(["--print-branch", "--branch-file", str(missing)]) == 1
-    assert capsys.readouterr().out == ""
 
 
 # --------------------------------------------------------- check_sdk_pin.py
@@ -169,29 +130,14 @@ def workflow(release_workflow, windows_build) -> str:
 def test_release_builds_install_the_pinned_sdk(workflow):
     """No more 'latest' anywhere: rc/production (and main/dispatch) builds
     install openmotion-sdk==<sdk-version.txt>; only dev/next builds source-
-    install, from the branch sdk-branch.txt names (#761) — never a
-    hard-coded @next, which would pair a 1.6.0 dev build with SDK next."""
+    install, and on next-next (the 1.6.0 line) from SDK next-next (#761) —
+    a 1.6.0 dev build must not bundle SDK next. Back to @next at the fold-in."""
     assert "pip install --upgrade openmotion-sdk" not in workflow
     assert "releases/latest" not in workflow
     assert workflow.count('SDK_PIN=$(tr -d \'[:space:]\' < sdk-version.txt)') == 2
     assert workflow.count('pip install "openmotion-sdk==${SDK_PIN}"') == 2
-    assert "openmotion-sdk.git@next" not in workflow
-    assert workflow.count(
-        "SDK_BRANCH=$(python scripts/check_sdk_pin.py --print-branch)") == 2
-    assert workflow.count(
-        'pip install "git+https://github.com/OpenwaterHealth/openmotion-sdk.git@${SDK_BRANCH}"') == 2
-
-
-def test_windows_dev_build_reads_the_branch_inside_the_branch_source_case(windows_build):
-    """The branch install sits in the SDK_SOURCE=branch case and every
-    step that branches on the SDK source agrees on that name."""
-    assert "SDK_SOURCE=branch" in windows_build
-    assert 'SDK_SOURCE" = "next"' not in windows_build
-    assert windows_build.count('if [ "$SDK_SOURCE" = "branch" ]; then') == 3
-    install = windows_build[windows_build.index("- name: Install dependencies into omotion"):]
-    install = install[:install.index("pip install -r requirements.txt")]
-    case = install[install.index('if [ "$SDK_SOURCE" = "branch" ]; then'):install.index("else")]
-    assert "--print-branch" in case and "@${SDK_BRANCH}" in case
+    assert workflow.count('openmotion-sdk.git@next-next"') == 2
+    assert 'openmotion-sdk.git@next"' not in workflow
 
 
 def test_release_builds_verify_the_pin_in_both_jobs(workflow):
