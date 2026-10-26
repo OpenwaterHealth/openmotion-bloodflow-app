@@ -446,7 +446,10 @@ Consequences to remember:
 - Releases triggered by semver tags (e.g. `1.1.2`, `1.1.2-dev.0`, `1.1.2-rc.1`) — see [../CLAUDE.md](../CLAUDE.md) for tag format.
 - **SDK pin (#545):** rc and production tags (and main/dispatch builds) install
   exactly `openmotion-sdk==<sdk-version.txt>`; dev tags and pushes to `next`
-  install `openmotion-sdk@next`. **Bump `sdk-version.txt` to the SDK release
+  install `openmotion-sdk@next`. **On `next-next` (the 1.6.0 line) both CI
+  jobs install `openmotion-sdk@next-next` instead** (#761), so a 1.6.0-dev
+  build carries the SDK's 1.6.0 work; switch them back to `@next` when
+  `next-next` folds into `next`. **Bump `sdk-version.txt` to the SDK release
   that is on PyPI before tagging an rc or production release** — CI fails the
   build (`scripts/check_sdk_pin.py --enforce`) if the installed SDK differs.
   The local dev setup is unaffected: it still installs the SDK editable and

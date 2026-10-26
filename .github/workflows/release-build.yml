@@ -33,7 +33,7 @@ on:
     tags:
       - "[0-9]+.[0-9]+.[0-9]+"             # production release (cut from main)       — SDK pinned by sdk-version.txt
       - "[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+"   # release candidate (cut from next)        — SDK pinned by sdk-version.txt
-      - "[0-9]+.[0-9]+.[0-9]+-dev.[0-9]+"  # dev pre-release   (cut from next)        — SDK from @next source
+      - "[0-9]+.[0-9]+.[0-9]+-dev.[0-9]+"  # dev pre-release   (cut from next-next)   — SDK from @next-next source (#761)
 permissions:
   contents: write
 
@@ -239,8 +239,8 @@ jobs:
           # there for the full rationale, #545).
           SDK_PIN=$(tr -d '[:space:]' < sdk-version.txt)
           if [[ "$GITHUB_REF" == refs/tags/*-dev.* ]] || [[ "$GITHUB_REF" == refs/heads/next ]]; then
-            echo "Dev/next-branch ($GITHUB_REF) — installing SDK from openmotion-sdk@next"
-            pip install "git+https://github.com/OpenwaterHealth/openmotion-sdk.git@next"
+            echo "Dev/next-branch ($GITHUB_REF) — installing SDK from openmotion-sdk@next-next"
+            pip install "git+https://github.com/OpenwaterHealth/openmotion-sdk.git@next-next"
           else
             echo "Release/rc/main/dispatch ($GITHUB_REF) — installing openmotion-sdk==${SDK_PIN} (sdk-version.txt)"
             pip install "openmotion-sdk==${SDK_PIN}"
