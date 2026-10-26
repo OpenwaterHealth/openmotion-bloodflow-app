@@ -67,6 +67,9 @@ def _watchdog_self(*, abort_notified, last_seen, toasts, aborts):
         _camera_last_seen=dict(last_seen),
         _camera_dropped=set(),
         _camera_last_temp={},
+        # Never-started pass (issue #585) — no masks, so it stays idle.
+        _capture_camera_masks={},
+        _camera_streaming_since=None,
         _current_scan_source=None,
         _scan_elapsed_str=lambda: "00:00:13",
         notify=lambda *a, **k: toasts.append((a, k)),
