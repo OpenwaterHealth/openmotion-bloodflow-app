@@ -107,7 +107,7 @@ SCAN_LABEL = f"{SCAN_ID}_subj"
 
 
 def _start_scan(tmp_path, left_mask=0x66, right_mask=0x66, *,
-                right_connected=True, console_serial=""):
+                right_connected=True, serials=None):
     """Start a scan on the mocked interface. Returns the connector, the
     completion sink startCapture handed the SDK, and the scan DB path."""
     db_path = str(tmp_path / "scans.db")
@@ -116,7 +116,7 @@ def _start_scan(tmp_path, left_mask=0x66, right_mask=0x66, *,
         True, True, right_connected)
     c._consoleConnected = c._leftSensorConnected = True
     c._rightSensorConnected = right_connected
-    c._device_serials["console"] = console_serial
+    c._device_serials.update(serials or {})
     c._interface.start_scan.return_value = True
     assert c.startCapture("subj", 5, left_mask, right_mask, False) is True
     req = c._interface.start_scan.call_args.args[0]
@@ -149,11 +149,21 @@ class TestScanEndNotesModal:
         assert offers == []
 
 
-SERIAL = "WWW04Q40005"
+SERIALS = {"console": "WWW04Q40005", "left": "QWW04Q10003",
+           "right": "QWW04Q10004"}
+FOOTER_LINES = ["Console SN: WWW04Q40005",
+                "Left Sensor SN: QWW04Q10003",
+                "Right Sensor SN: QWW04Q10004",
+                "Scan configuration: FFFF"]
 
 
 class TestScanIdentityFooter:
-    """#759: the end-of-scan footer names the console and the cameras."""
+    """#759: the end-of-scan footer names the console, the sensor modules
+    and the cameras."""
+
+    def test_footer_lines(self):
+        assert _scan_identity_note_lines(SERIALS, 0xFF, 0xFF) == (
+            "".join("\n" + line for line in FOOTER_LINES))
 
     @pytest.mark.parametrize("left, right, config", [
         (0xFF, 0xFF, "FFFF"),
@@ -163,46 +173,56 @@ class TestScanIdentityFooter:
     ])
     def test_configuration_is_left_then_right_mask(self, left, right,
                                                    config):
-        assert _scan_identity_note_lines(SERIAL, left, right) == (
-            f"\nConsole SN: {SERIAL}\nScan configuration: {config}")
+        assert _scan_identity_note_lines(SERIALS, left, right).endswith(
+            f"\nScan configuration: {config}")
 
-    @pytest.mark.parametrize("serial", ["", "   ", None])
-    def test_missing_serial_reads_not_programmed(self, serial):
-        assert _scan_identity_note_lines(serial, 0xFF, 0xFF) == (
-            "\nConsole SN: Not programmed\nScan configuration: FFFF")
+    @pytest.mark.parametrize("serial", ["", "   "])
+    def test_empty_serial_reads_not_programmed(self, serial):
+        lines = _scan_identity_note_lines(
+            {"console": serial, "left": serial, "right": serial},
+            0xFF, 0xFF).splitlines()
+        assert lines[1:4] == ["Console SN: Not programmed",
+                              "Left Sensor SN: Not programmed",
+                              "Right Sensor SN: Not programmed"]
 
-    def test_scan_end_note_carries_serial_and_configuration(self, tmp_path):
+    def test_unconnected_sensor_reads_not_connected(self):
+        lines = _scan_identity_note_lines(
+            {**SERIALS, "right": None}, 0xFF, 0x00).splitlines()
+        assert lines[3] == "Right Sensor SN: Not connected"
+
+    def test_scan_end_note_carries_serials_and_configuration(self, tmp_path):
         c, sink, db_path = _start_scan(tmp_path, 0xFF, 0xFF,
-                                       console_serial=SERIAL)
+                                       serials=SERIALS)
         _session(db_path, SCAN_LABEL)
-        # A mid-scan console disconnect clears the cached serial; the note
-        # still names the console the scan started on.
-        c._device_serials["console"] = ""
+        # A mid-scan disconnect clears a device's cached serial; the note
+        # still names the hardware the scan started on.
+        c._device_serials.update(console="", left="", right="")
 
         sink._on_complete_cb(SimpleNamespace(scan_id=SCAN_ID))
 
         lines = c.scanNotes.strip().splitlines()
         assert lines[0] == "---"
         assert lines[1].startswith("Scan completed — duration: ")
-        assert lines[2:] == [f"Console SN: {SERIAL}",
-                             "Scan configuration: FFFF"]
+        assert lines[2:] == FOOTER_LINES
         assert _db_notes(db_path, SCAN_LABEL) == c.scanNotes.strip()
 
-    def test_side_without_a_sensor_reads_00(self, tmp_path):
+    def test_side_without_a_sensor(self, tmp_path):
         """The UI's pending right selection never reached the scan (#352),
         so the note must not claim it."""
         c, sink, db_path = _start_scan(tmp_path, 0xFF, 0xFF,
                                        right_connected=False,
-                                       console_serial=SERIAL)
+                                       serials=SERIALS)
         _session(db_path, SCAN_LABEL)
 
         sink._on_complete_cb(SimpleNamespace(scan_id=SCAN_ID))
 
-        assert c.scanNotes.strip().endswith("Scan configuration: FF00")
+        lines = c.scanNotes.strip().splitlines()
+        assert lines[-2:] == ["Right Sensor SN: Not connected",
+                              "Scan configuration: FF00"]
 
     def test_operator_notes_stay_above_the_footer(self, tmp_path):
         c, sink, db_path = _start_scan(tmp_path, 0xFF, 0xFF,
-                                       console_serial=SERIAL)
+                                       serials=SERIALS)
         _session(db_path, SCAN_LABEL)
         c._scan_notes = "subject moved at 2 min\n"
 
@@ -210,8 +230,7 @@ class TestScanIdentityFooter:
 
         notes = c.scanNotes
         assert notes.startswith("subject moved at 2 min\n---\nScan completed")
-        assert notes.endswith(
-            f"\nConsole SN: {SERIAL}\nScan configuration: FFFF")
+        assert notes.endswith("".join("\n" + line for line in FOOTER_LINES))
 
 
 class TestGetScanDetailsNotes:
