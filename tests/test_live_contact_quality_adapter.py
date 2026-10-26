@@ -72,19 +72,28 @@ def test_adapter_clear_edge_emits_state_only_not_a_new_warning():
     ]
 
 
-def test_adapter_collapses_no_signal_to_poor_contact():
-    """The modal knows two type keys; the preflight already collapses
-    no_signal the same way, so live and preflight wording agree."""
+def test_adapter_keeps_no_signal_as_its_own_warning():
+    """#731: a camera with no usable frames is not a contact problem, so
+    no_signal must not collapse to poor_contact on either edge. The
+    preflight mapping does the same (test_contact_quality_reason_mapping.py),
+    so live and preflight wording agree."""
     conn = _connector()
     emitted = []
     conn.contactQualityWarning = type(
-        "S", (), {"emit": lambda _s, *a: emitted.append(a)}
+        "S", (), {"emit": lambda _s, *a: emitted.append(("warn", a))}
     )()
-    conn.contactQualityIssueStateChanged = type("S", (), {"emit": lambda _s, *a: None})()
+    conn.contactQualityIssueStateChanged = type(
+        "S", (), {"emit": lambda _s, *a: emitted.append(("state", a))}
+    )()
 
     conn._on_cq_transition_main("left", 3, "no_signal", 0.0, True)
+    conn._on_cq_transition_main("left", 3, "no_signal", 0.0, False)
 
-    assert emitted == [("L4", "poor_contact", "Poor sensor contact", 0.0)]
+    assert emitted == [
+        ("warn", ("L4", "no_signal", "No data from camera", 0.0)),
+        ("state", ("L4", "no_signal", "No data from camera", 0.0, True)),
+        ("state", ("L4", "no_signal", "No data from camera", 0.0, False)),
+    ]
 
 
 def test_marshal_forwards_transition_with_coerced_types():
