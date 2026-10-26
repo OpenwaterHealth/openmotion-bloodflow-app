@@ -1015,7 +1015,8 @@ class MotionConnector(QObject):
     # scan that finished normally or was canceled by the user. The UI uses
     # this to auto-open the notes modal at the only moment when scanNotes
     # is guaranteed to reflect the just-completed scan. Not emitted on
-    # hard errors — those keep the scan dialog visible with the error.
+    # hard errors — those keep the scan dialog visible with the error — or
+    # for a scan that saved no data (issue #725).
     scanNotesReady = pyqtSignal()
 
     # Contact-quality quick-check signals.
@@ -5004,7 +5005,8 @@ class MotionConnector(QObject):
             # Stamp the actual trigger-ON duration (same value as the notes
             # line above) so History shows the real scan time, not the pipeline
             # wall-clock session_end - session_start (issue #335).
-            self._persist_scan_notes(session_label, actual_duration_sec=elapsed)
+            notes_saved = self._persist_scan_notes(
+                session_label, actual_duration_sec=elapsed)
 
             # Research auto-export (#598): same file as History → Export
             # CSV, on its own thread so the scan-done flow isn't held up
@@ -5059,8 +5061,11 @@ class MotionConnector(QObject):
             # screen (e.g. an E-304 device-disconnect abort raised it seconds
             # ago): defer the open until the error is dismissed so the error
             # modal stays on top and doesn't lose focus to the notes field
-            # behind it (issue #387).
-            self._emit_or_defer_scan_notes()
+            # behind it (issue #387). Not for a scan that saved no data:
+            # ScanDBSink deleted its empty session, so there is nowhere to
+            # store a note (issue #725).
+            if notes_saved:
+                self._emit_or_defer_scan_notes()
 
         # Issue #43: telemetry CSVs are engineering diagnostics — clinical
         # users must not get them. Default False (fail closed). Raw

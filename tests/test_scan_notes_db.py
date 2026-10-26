@@ -1,10 +1,11 @@
 """Scan notes — persisted to the scan DB session, not a notes.txt file."""
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
-from motion_connector import MotionConnector
+from motion_connector import MotionConnector, _CompletionSink
 from omotion.ScanDatabase import ScanDatabase
 
 pytestmark = pytest.mark.unit
@@ -97,6 +98,39 @@ class TestScanNotesSetter:
         c.scanNotes = "pre-scan notes"
         assert c.scanNotes == "pre-scan notes"
         assert list((tmp_path / "data").glob("*_notes.txt")) == []
+
+
+def _stop_scan(tmp_path, keep_session):
+    """Start a scan on the mocked interface and stop it through the
+    completion sink startCapture handed the SDK. Returns one entry per
+    Notes modal offer (scanNotesReady)."""
+    db_path = str(tmp_path / "scans.db")
+    c = _connector(tmp_path, scan_db_path=db_path)
+    c._consoleConnected = c._leftSensorConnected = True
+    c._rightSensorConnected = True
+    c._interface.start_scan.return_value = True
+    assert c.startCapture("subj", 5, 0x66, 0x66, False) is True
+    req = c._interface.start_scan.call_args.args[0]
+    (sink,) = [s for s in req.sinks if isinstance(s, _CompletionSink)]
+    if keep_session:  # ScanDBSink keeps the session of a scan with data
+        _session(db_path, "20261013_162530_subj")
+    offers = []
+    c.scanNotesReady.connect(lambda: offers.append(True))
+    c._capture_stop.set()
+    sink._on_complete_cb(SimpleNamespace(scan_id="20261013_162530"))
+    return offers
+
+
+class TestScanEndNotesModal:
+    def test_scan_with_data_offers_notes(self, tmp_path):
+        offers = _stop_scan(tmp_path, keep_session=True)
+        assert offers == [True]
+
+    def test_scan_without_data_does_not_offer_notes(self, tmp_path):
+        """#725: stopped before any data was recorded, so ScanDBSink
+        deleted the session and there is nowhere to store a note."""
+        offers = _stop_scan(tmp_path, keep_session=False)
+        assert offers == []
 
 
 class TestGetScanDetailsNotes:
