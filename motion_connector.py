@@ -151,16 +151,25 @@ def _config_name(mask) -> str:
     return _CONFIG_NAMES.get(m, f"0x{m:02X}")
 
 
-def _scan_identity_note_lines(console_serial, left_mask, right_mask) -> str:
-    """End-of-scan notes footer lines naming the console and the cameras
+def _scan_identity_note_lines(serials, left_mask, right_mask) -> str:
+    """End-of-scan notes footer lines naming the hardware and the cameras
     the scan ran with (#759), each starting with a newline so the caller
-    appends them straight after the duration line. The configuration is
-    the left then right camera mask as two hex bytes: all 8 cameras on
-    both sides reads FFFF, left only FF00. An empty serial reads "Not
-    programmed", as in Settings → About."""
-    serial = (console_serial or "").strip() or "Not programmed"
+    appends them straight after the duration line. ``serials`` maps
+    console/left/right to the programmed serial: "" reads "Not
+    programmed" and None (a sensor that wasn't connected) "Not
+    connected", as in Settings → About. The configuration is the left
+    then right camera mask as two hex bytes: all 8 cameras on both sides
+    reads FFFF, left only FF00."""
+    def label(serial):
+        if serial is None:
+            return "Not connected"
+        return serial.strip() or "Not programmed"
+
     config = f"{int(left_mask) & 0xFF:02X}{int(right_mask) & 0xFF:02X}"
-    return f"\nConsole SN: {serial}\nScan configuration: {config}"
+    return (f"\nConsole SN: {label(serials.get('console'))}"
+            f"\nLeft Sensor SN: {label(serials.get('left'))}"
+            f"\nRight Sensor SN: {label(serials.get('right'))}"
+            f"\nScan configuration: {config}")
 
 
 def _sdk_meta_dict(session) -> dict:
@@ -4948,9 +4957,16 @@ class MotionConnector(QObject):
         self._storage_warned = False
         self._dropout_timer.start()
 
-        # Console serial for the notes footer (#759), read now: a mid-scan
-        # console disconnect clears the cache before the scan completes.
-        console_serial = self._device_serials.get("console", "")
+        # Device serials for the notes footer (#759), read now: a mid-scan
+        # disconnect clears the cache before the scan completes. None marks
+        # a sensor that isn't connected.
+        scan_serials = {
+            "console": self._device_serials.get("console", ""),
+            "left": (self._device_serials.get("left", "")
+                     if self._leftSensorConnected else None),
+            "right": (self._device_serials.get("right", "")
+                      if self._rightSensorConnected else None),
+        }
 
         # NaN-gap tracker — fresh per scan (same lifecycle as the watchdog).
         # Bound to a local so the completion closure and the sink provably
@@ -5009,7 +5025,7 @@ class MotionConnector(QObject):
             duration_line = f"\n---\nScan {status} — duration: {duration_str}"
             # Masks as gated above: a side without a sensor reads 00.
             identity_lines = _scan_identity_note_lines(
-                console_serial, left_camera_mask, right_camera_mask)
+                scan_serials, left_camera_mask, right_camera_mask)
             self._scan_notes = (self._scan_notes.strip() + duration_line
                                 + identity_lines)
             # Data-gap footer: aggregate ranges where any camera went >1 s
