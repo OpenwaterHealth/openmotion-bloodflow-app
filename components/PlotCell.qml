@@ -75,6 +75,9 @@ Item {
     // while the connector's dropout watchdog has this (side, camId)
     // marked Connection Lost; clears when frames resume.
     property bool connectionLost: false
+    // Badge copy. An averaged side plot names its offline cameras instead
+    // (issue #585): its trace keeps going from the remaining cameras.
+    property string connectionLostText: "CONNECTION LOST"
 
     // ── Repaint plumbing ───────────────────────────────────────────────
     // Repaints are throttled by the parent PlotViewer: it owns a 33 ms
@@ -397,7 +400,7 @@ Item {
         Text {
             id: lostLabel
             anchors.centerIn: parent
-            text: "CONNECTION LOST"
+            text: cell.connectionLostText
             color: AppTheme.accentRed
             font.pixelSize: cell.width >= 160 ? 11 : 9
             font.weight: Font.DemiBold
