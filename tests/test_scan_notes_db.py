@@ -5,7 +5,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from motion_connector import MotionConnector, _CompletionSink
+from motion_connector import (
+    MotionConnector, _CompletionSink, _scan_identity_note_lines,
+)
 from omotion.ScanDatabase import ScanDatabase
 
 pytestmark = pytest.mark.unit
@@ -100,24 +102,38 @@ class TestScanNotesSetter:
         assert list((tmp_path / "data").glob("*_notes.txt")) == []
 
 
-def _stop_scan(tmp_path, keep_session):
-    """Start a scan on the mocked interface and stop it through the
-    completion sink startCapture handed the SDK. Returns one entry per
-    Notes modal offer (scanNotesReady)."""
+SCAN_ID = "20261013_162530"
+SCAN_LABEL = f"{SCAN_ID}_subj"
+
+
+def _start_scan(tmp_path, left_mask=0x66, right_mask=0x66, *,
+                right_connected=True, console_serial=""):
+    """Start a scan on the mocked interface. Returns the connector, the
+    completion sink startCapture handed the SDK, and the scan DB path."""
     db_path = str(tmp_path / "scans.db")
     c = _connector(tmp_path, scan_db_path=db_path)
+    c._interface.is_device_connected.return_value = (
+        True, True, right_connected)
     c._consoleConnected = c._leftSensorConnected = True
-    c._rightSensorConnected = True
+    c._rightSensorConnected = right_connected
+    c._device_serials["console"] = console_serial
     c._interface.start_scan.return_value = True
-    assert c.startCapture("subj", 5, 0x66, 0x66, False) is True
+    assert c.startCapture("subj", 5, left_mask, right_mask, False) is True
     req = c._interface.start_scan.call_args.args[0]
     (sink,) = [s for s in req.sinks if isinstance(s, _CompletionSink)]
+    return c, sink, db_path
+
+
+def _stop_scan(tmp_path, keep_session):
+    """Start a scan and stop it through the completion sink. Returns one
+    entry per Notes modal offer (scanNotesReady)."""
+    c, sink, db_path = _start_scan(tmp_path)
     if keep_session:  # ScanDBSink keeps the session of a scan with data
-        _session(db_path, "20261013_162530_subj")
+        _session(db_path, SCAN_LABEL)
     offers = []
     c.scanNotesReady.connect(lambda: offers.append(True))
     c._capture_stop.set()
-    sink._on_complete_cb(SimpleNamespace(scan_id="20261013_162530"))
+    sink._on_complete_cb(SimpleNamespace(scan_id=SCAN_ID))
     return offers
 
 
@@ -131,6 +147,71 @@ class TestScanEndNotesModal:
         deleted the session and there is nowhere to store a note."""
         offers = _stop_scan(tmp_path, keep_session=False)
         assert offers == []
+
+
+SERIAL = "WWW04Q40005"
+
+
+class TestScanIdentityFooter:
+    """#759: the end-of-scan footer names the console and the cameras."""
+
+    @pytest.mark.parametrize("left, right, config", [
+        (0xFF, 0xFF, "FFFF"),
+        (0xFF, 0x00, "FF00"),
+        (0x00, 0xFF, "00FF"),
+        (0x5A, 0x0F, "5A0F"),
+    ])
+    def test_configuration_is_left_then_right_mask(self, left, right,
+                                                   config):
+        assert _scan_identity_note_lines(SERIAL, left, right) == (
+            f"\nConsole SN: {SERIAL}\nScan configuration: {config}")
+
+    @pytest.mark.parametrize("serial", ["", "   ", None])
+    def test_missing_serial_reads_not_programmed(self, serial):
+        assert _scan_identity_note_lines(serial, 0xFF, 0xFF) == (
+            "\nConsole SN: Not programmed\nScan configuration: FFFF")
+
+    def test_scan_end_note_carries_serial_and_configuration(self, tmp_path):
+        c, sink, db_path = _start_scan(tmp_path, 0xFF, 0xFF,
+                                       console_serial=SERIAL)
+        _session(db_path, SCAN_LABEL)
+        # A mid-scan console disconnect clears the cached serial; the note
+        # still names the console the scan started on.
+        c._device_serials["console"] = ""
+
+        sink._on_complete_cb(SimpleNamespace(scan_id=SCAN_ID))
+
+        lines = c.scanNotes.strip().splitlines()
+        assert lines[0] == "---"
+        assert lines[1].startswith("Scan completed — duration: ")
+        assert lines[2:] == [f"Console SN: {SERIAL}",
+                             "Scan configuration: FFFF"]
+        assert _db_notes(db_path, SCAN_LABEL) == c.scanNotes.strip()
+
+    def test_side_without_a_sensor_reads_00(self, tmp_path):
+        """The UI's pending right selection never reached the scan (#352),
+        so the note must not claim it."""
+        c, sink, db_path = _start_scan(tmp_path, 0xFF, 0xFF,
+                                       right_connected=False,
+                                       console_serial=SERIAL)
+        _session(db_path, SCAN_LABEL)
+
+        sink._on_complete_cb(SimpleNamespace(scan_id=SCAN_ID))
+
+        assert c.scanNotes.strip().endswith("Scan configuration: FF00")
+
+    def test_operator_notes_stay_above_the_footer(self, tmp_path):
+        c, sink, db_path = _start_scan(tmp_path, 0xFF, 0xFF,
+                                       console_serial=SERIAL)
+        _session(db_path, SCAN_LABEL)
+        c._scan_notes = "subject moved at 2 min\n"
+
+        sink._on_complete_cb(SimpleNamespace(scan_id=SCAN_ID))
+
+        notes = c.scanNotes
+        assert notes.startswith("subject moved at 2 min\n---\nScan completed")
+        assert notes.endswith(
+            f"\nConsole SN: {SERIAL}\nScan configuration: FFFF")
 
 
 class TestGetScanDetailsNotes:

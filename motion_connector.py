@@ -151,6 +151,18 @@ def _config_name(mask) -> str:
     return _CONFIG_NAMES.get(m, f"0x{m:02X}")
 
 
+def _scan_identity_note_lines(console_serial, left_mask, right_mask) -> str:
+    """End-of-scan notes footer lines naming the console and the cameras
+    the scan ran with (#759), each starting with a newline so the caller
+    appends them straight after the duration line. The configuration is
+    the left then right camera mask as two hex bytes: all 8 cameras on
+    both sides reads FFFF, left only FF00. An empty serial reads "Not
+    programmed", as in Settings → About."""
+    serial = (console_serial or "").strip() or "Not programmed"
+    config = f"{int(left_mask) & 0xFF:02X}{int(right_mask) & 0xFF:02X}"
+    return f"\nConsole SN: {serial}\nScan configuration: {config}"
+
+
 def _sdk_meta_dict(session) -> dict:
     """Decode a ScanDatabase session dict's ``session_meta`` into a dict.
     ScanDatabase already json-decodes it, but tolerate a raw JSON string too —
@@ -4936,6 +4948,10 @@ class MotionConnector(QObject):
         self._storage_warned = False
         self._dropout_timer.start()
 
+        # Console serial for the notes footer (#759), read now: a mid-scan
+        # console disconnect clears the cache before the scan completes.
+        console_serial = self._device_serials.get("console", "")
+
         # NaN-gap tracker — fresh per scan (same lifecycle as the watchdog).
         # Bound to a local so the completion closure and the sink provably
         # share THIS scan's tracker even if the attribute is reset elsewhere.
@@ -4991,7 +5007,11 @@ class MotionConnector(QObject):
                 "=== Full scan ended: %s — duration %s ===", status, duration_str
             )
             duration_line = f"\n---\nScan {status} — duration: {duration_str}"
-            self._scan_notes = (self._scan_notes.strip() + duration_line)
+            # Masks as gated above: a side without a sensor reads 00.
+            identity_lines = _scan_identity_note_lines(
+                console_serial, left_camera_mask, right_camera_mask)
+            self._scan_notes = (self._scan_notes.strip() + duration_line
+                                + identity_lines)
             # Data-gap footer: aggregate ranges where any camera went >1 s
             # without a finite BFI/BVI sample (sustained NaN-fill/dropout).
             # Empty string when the scan was clean. Fail-soft like the rest
