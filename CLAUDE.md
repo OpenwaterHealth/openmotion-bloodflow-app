@@ -95,6 +95,7 @@ artifacts, so every tagged release carries one.
 | `utils/frozen.py` | The one answer to "built executable?" and "which exe / where are resources?" for PyInstaller **and** Nuitka (#548). Nothing else may read `sys.frozen`, `sys._MEIPASS` or `sys.executable`. |
 | `scripts/build_nuitka.ps1` | Opt-in native compile (#548); same output path as the PyInstaller build. See "Native compile with Nuitka". |
 | `sdk-version.txt` | The one place the release SDK is pinned (#545): rc/prod CI builds install exactly this `openmotion-sdk` release and fail if the installed version differs; the per-release SBOM asserts the same line. Dev builds and the editable local setup ignore it. |
+| `sdk-branch.txt` | The SDK branch dev builds install from (#761): `next-next` on this line, `next` on `next`. Read and validated by `scripts/check_sdk_pin.py --print-branch` in both CI jobs; the editable local setup ignores it. |
 | `vendor/sqlcipher3/` | The sqlcipher3 wheels `requirements.txt` installs on Windows (#682): 0.6.2 rebuilt against SQLCipher 4.19.0 + OpenSSL 3.5.9 by `.github/workflows/sqlcipher3-wheels.yml` from `pins.txt` and `conanfile.py`. See "Branching and releases" below and the README there. |
 | `tests/` | Hardware-in-loop pytest suite, ~23 files. Markers: `@pytest.mark.dev` (~1–2 min) and `@pytest.mark.release` (~6–8 min); both are run by hand against hardware since the automated HIL workflow was retired on 2026-09-18 (#571). CI runs none of them. |
 
@@ -452,7 +453,10 @@ Consequences to remember:
 - Releases triggered by semver tags (e.g. `1.1.2`, `1.1.2-dev.0`, `1.1.2-rc.1`) — see [../CLAUDE.md](../CLAUDE.md) for tag format.
 - **SDK pin (#545):** rc and production tags (and main/dispatch builds) install
   exactly `openmotion-sdk==<sdk-version.txt>`; dev tags and pushes to `next`
-  install `openmotion-sdk@next`. **Bump `sdk-version.txt` to the SDK release
+  install the SDK branch named in `sdk-branch.txt` (#761): `next` on app
+  `next`, **`next-next` on app `next-next`** (SDK `next-next` holds the 1.6.0
+  SDK work). Reset the file to `next` when `next-next` folds into `next`.
+  **Bump `sdk-version.txt` to the SDK release
   that is on PyPI before tagging an rc or production release** — CI fails the
   build (`scripts/check_sdk_pin.py --enforce`) if the installed SDK differs.
   The local dev setup is unaffected: it still installs the SDK editable and

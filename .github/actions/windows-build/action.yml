@@ -15,7 +15,7 @@ inputs:
     description: "Release tag being built (X.Y.Z, X.Y.Z-rc.N, X.Y.Z-dev.N). Empty on a branch push: the version then comes from git describe."
     default: ""
   sdk-next:
-    description: "'true' on a branch build that must pair with openmotion-sdk@next (pushes to next). Dev tags always do; ignored when `tag` is set."
+    description: "'true' on a branch build that must pair with the SDK branch named in sdk-branch.txt (pushes to next). Dev tags always do; ignored when `tag` is set."
     default: "false"
   variants:
     description: "Space-separated variants to build and package: clinical, research, or both."
@@ -120,10 +120,13 @@ runs:
         fi
 
         # SDK selection (#545):
-        #   * X.Y.Z-dev.N tag / push to next → source-install from
-        #     openmotion-sdk@next. The bloodflow next branch tracks SDK API
-        #     drift before any release, so it must always pair with SDK
-        #     next; PyPI's latest stable can be API-behind.
+        #   * X.Y.Z-dev.N tag / push to next → source-install from the SDK
+        #     branch named in sdk-branch.txt (#761): next on app next,
+        #     next-next on app next-next (the 1.6.0 line). An app
+        #     integration branch tracks SDK API drift on its SDK twin before
+        #     any release; PyPI's latest stable can be API-behind. The file
+        #     travels with the commit, so a tag-only caller (the private
+        #     Clinical repo) pairs the same way.
         #   * Everything else (X.Y.Z production tag, X.Y.Z-rc.N tag, push to
         #     main, manual dispatch) → the exact release pinned in
         #     sdk-version.txt, so the binary, the SBOM and the verification
@@ -131,7 +134,7 @@ runs:
         #     an rc/production release; the check step below fails the build
         #     if the installed SDK does not match.
         if [ "$CHANNEL" = "dev" ] || { [ "$CHANNEL" = "branch" ] && [ "$INPUT_SDK_NEXT" = "true" ]; }; then
-          SDK_SOURCE=next
+          SDK_SOURCE=branch
         else
           SDK_SOURCE=pin
         fi
@@ -189,9 +192,10 @@ runs:
         conda activate omotion
         # pip comes from the lock; upgrading it here would undo the pin.
         SDK_PIN=$(tr -d '[:space:]' < sdk-version.txt)
-        if [ "$SDK_SOURCE" = "next" ]; then
-          echo "Dev/next-branch build — installing SDK from openmotion-sdk@next"
-          pip install "git+https://github.com/OpenwaterHealth/openmotion-sdk.git@next"
+        if [ "$SDK_SOURCE" = "branch" ]; then
+          SDK_BRANCH=$(python scripts/check_sdk_pin.py --print-branch)
+          echo "Dev/next-branch build — installing SDK from openmotion-sdk@${SDK_BRANCH} (sdk-branch.txt)"
+          pip install "git+https://github.com/OpenwaterHealth/openmotion-sdk.git@${SDK_BRANCH}"
         else
           echo "Release/rc/main/dispatch build — installing openmotion-sdk==${SDK_PIN} (sdk-version.txt)"
           pip install "openmotion-sdk==${SDK_PIN}"
@@ -215,7 +219,7 @@ runs:
         SDK_SOURCE: ${{ steps.meta.outputs.SDK_SOURCE }}
       run: |
         conda activate omotion
-        if [ "$SDK_SOURCE" = "next" ]; then
+        if [ "$SDK_SOURCE" = "branch" ]; then
           python scripts/check_sdk_pin.py            # dev: report only
         else
           python scripts/check_sdk_pin.py --enforce
@@ -409,7 +413,7 @@ runs:
         # covers every Windows variant: they are frozen from this same env.
         pipx run --spec cyclonedx-bom cyclonedx-py environment "$BUILD_PY" \
           --of JSON --mc-type application -o "$SBOM"
-        if [ "$SDK_SOURCE" = "next" ]; then
+        if [ "$SDK_SOURCE" = "branch" ]; then
           python scripts/stamp_sbom.py "$SBOM" --name Open-Motion --version "$TAG"
         else
           python scripts/stamp_sbom.py "$SBOM" --name Open-Motion --version "$TAG" \
