@@ -151,6 +151,41 @@ def _config_name(mask) -> str:
     return _CONFIG_NAMES.get(m, f"0x{m:02X}")
 
 
+_NOTE_DEVICES = (("Console", "console"), ("Left Sensor", "left"),
+                 ("Right Sensor", "right"))
+
+
+def _scan_identity_note_lines(serials, firmware, left_mask, right_mask, *,
+                              app_version, sdk_version) -> str:
+    """End-of-scan notes footer lines naming the hardware, the cameras and
+    the software the scan ran with (#759), each starting with a newline so
+    the caller appends them straight after the duration line.
+
+    ``serials`` and ``firmware`` map console/left/right to the cached
+    value, None for a sensor that wasn't connected ("Not connected", as in
+    Settings → About). An empty serial reads "Not programmed", any other
+    empty value "unknown". The configuration is the left then right camera
+    mask as two hex bytes: all 8 cameras on both sides reads FFFF, left
+    only FF00."""
+    def text(value, empty="unknown"):
+        if not isinstance(value, str) or not value.strip():
+            return empty
+        return value.strip()
+
+    def device(value, empty="unknown"):
+        return "Not connected" if value is None else text(value, empty)
+
+    config = f"{int(left_mask) & 0xFF:02X}{int(right_mask) & 0xFF:02X}"
+    lines = [f"{name} SN: {device(serials.get(key), 'Not programmed')}"
+             for name, key in _NOTE_DEVICES]
+    lines += [f"Scan configuration: {config}",
+              f"App version: {text(app_version)}",
+              f"SDK version: {text(sdk_version)}"]
+    lines += [f"{name} FW: {device(firmware.get(key))}"
+              for name, key in _NOTE_DEVICES]
+    return "".join("\n" + line for line in lines)
+
+
 def _sdk_meta_dict(session) -> dict:
     """Decode a ScanDatabase session dict's ``session_meta`` into a dict.
     ScanDatabase already json-decodes it, but tolerate a raw JSON string too —
@@ -4936,6 +4971,20 @@ class MotionConnector(QObject):
         self._storage_warned = False
         self._dropout_timer.start()
 
+        # Device serials and firmware for the notes footer (#759), read now:
+        # a mid-scan disconnect clears both caches before the scan
+        # completes. None marks a sensor that isn't connected.
+        connected = {"console": True, "left": self._leftSensorConnected,
+                     "right": self._rightSensorConnected}
+        scan_serials = {d: self._device_serials.get(d, "") if on else None
+                        for d, on in connected.items()}
+        scan_firmware = {d: self._firmware_versions.get(d, "") if on else None
+                         for d, on in connected.items()}
+        try:
+            scan_sdk_version = self._interface.get_sdk_version()
+        except Exception:
+            scan_sdk_version = ""
+
         # NaN-gap tracker — fresh per scan (same lifecycle as the watchdog).
         # Bound to a local so the completion closure and the sink provably
         # share THIS scan's tracker even if the attribute is reset elsewhere.
@@ -4991,7 +5040,13 @@ class MotionConnector(QObject):
                 "=== Full scan ended: %s — duration %s ===", status, duration_str
             )
             duration_line = f"\n---\nScan {status} — duration: {duration_str}"
-            self._scan_notes = (self._scan_notes.strip() + duration_line)
+            # Masks as gated above: a side without a sensor reads 00.
+            identity_lines = _scan_identity_note_lines(
+                scan_serials, scan_firmware, left_camera_mask,
+                right_camera_mask, app_version=self._app_version,
+                sdk_version=scan_sdk_version)
+            self._scan_notes = (self._scan_notes.strip() + duration_line
+                                + identity_lines)
             # Data-gap footer: aggregate ranges where any camera went >1 s
             # without a finite BFI/BVI sample (sustained NaN-fill/dropout).
             # Empty string when the scan was clean. Fail-soft like the rest
