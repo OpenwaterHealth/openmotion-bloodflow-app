@@ -129,6 +129,7 @@ Rectangle {
         // the new scan — without this reset, the modal would keep showing
         // an orange dot from the prior scan.
         contactQualityModal.entries = []
+        contactQualityModal.clearCamerasWithoutData()
         scanRunner.start()
     }
 
@@ -547,6 +548,9 @@ Rectangle {
             // bloodFlow.scanning flips false or triggerState goes "OFF".
             bloodFlow.scanning = false
             bloodFlow.suppressLiveCqModal = false
+            // A camera's no-data mark is about the scan that just ended;
+            // the next pre-scan check must not inherit it (#731).
+            contactQualityModal.clearCamerasWithoutData()
 
             if (!ok && err !== "Canceled") {
                 console.log("ERROR: " + err)

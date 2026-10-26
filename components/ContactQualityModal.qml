@@ -87,6 +87,19 @@ Item {
     readonly property string noSignalHint:
         "One or more cameras are not sending data. Power-cycle the system and reconnect."
 
+    // #731: cameras the connector's dropout watchdog reports as delivering
+    // no frames mid-scan (stopped, or never started — #585), keyed by label
+    // ("R8"). Fed by cameraDropoutDetected / cameraDropoutRecovered, like
+    // PlotViewer's Connection Lost badges; BloodFlow clears it at both scan
+    // boundaries. Display only: it never opens the modal or holds Continue,
+    // so a dead camera stays a warning (#585). Reassigned wholesale, never
+    // mutated in place, so the dot bindings re-evaluate.
+    property var camerasWithoutData: ({})
+    readonly property string noDataText: "No data from camera"
+    readonly property bool anyCameraWithoutData: Object.keys(camerasWithoutData).length > 0
+    // Red dots (no frames) are on screen: name the remedy and the colour.
+    readonly property bool showNoDataHint: hasNoSignal || anyCameraWithoutData
+
     readonly property bool engineeringMode: !!(MotionInterface.appConfig && MotionInterface.appConfig.engineeringMode)
     readonly property bool clinicalMode: !!(MotionInterface.appConfig && MotionInterface.appConfig.clinicalMode)
 
@@ -175,8 +188,32 @@ Item {
         }
     }
 
+    function setCameraWithoutData(side, camIndex1, noData) {
+        var label = ((side === "left") ? "L" : "R") + camIndex1
+        var m = {}
+        for (var k in root.camerasWithoutData) m[k] = true
+        if (noData) m[label] = true
+        else delete m[label]
+        root.camerasWithoutData = m
+    }
+
+    function clearCamerasWithoutData() {
+        root.camerasWithoutData = ({})
+    }
+
+    Connections {
+        target: MotionInterface
+        function onCameraDropoutDetected(side, camId, elapsed) {
+            root.setCameraWithoutData(side, camId + 1, true)
+        }
+        function onCameraDropoutRecovered(side, camId, elapsed) {
+            root.setCameraWithoutData(side, camId + 1, false)
+        }
+    }
+
     // Build per-camera quality status from entries.
-    // Returns "good" (no warnings), "bad" (has warning), or "inactive".
+    // Returns "good" (no warnings), "bad" (has warning), "nodata" (the
+    // dropout watchdog reports no frames from it), "checking" or "inactive".
     function cameraStatus(side, camIndex1) {
         if (root.liveScan && !cameraEnabled(side, camIndex1))
             return "inactive"
@@ -184,6 +221,7 @@ Item {
         var label = prefix + camIndex1
         if (root.state_ === "checking") return "checking"
         if (root.state_ === "error") return "inactive"
+        if (root.camerasWithoutData[label]) return "nodata"
         for (var i = 0; i < entries.length; ++i) {
             if (entries[i].camera === label) return "bad"
         }
@@ -214,12 +252,21 @@ Item {
             lines.push("Inactive for current scan mask")
             return lines.join("\n")
         }
+        var noData = !!root.camerasWithoutData[label]
+        if (noData)
+            lines.push(root.noDataText)
         for (var i = 0; i < entries.length; ++i) {
             // A no_signal camera has no reading; its value is a 0.0 filler.
-            if (entries[i].camera === label)
-                lines.push(showDn && entries[i].typeKey !== "no_signal"
-                           ? (entries[i].typeText + " (" + entries[i].value.toFixed(1) + " DN)")
-                           : entries[i].typeText)
+            if (entries[i].camera !== label)
+                continue
+            if (entries[i].typeKey === "no_signal") {
+                if (!noData)
+                    lines.push(entries[i].typeText)
+                continue
+            }
+            lines.push(showDn
+                       ? (entries[i].typeText + " (" + entries[i].value.toFixed(1) + " DN)")
+                       : entries[i].typeText)
         }
         return lines.join("\n")
     }
@@ -330,10 +377,11 @@ Item {
                 wrapMode: Text.WordWrap
                 color: AppTheme.textSecondary
                 font.pixelSize: 14
-                text: (root.entries.length > 0)
-                      ? (root.hasNoSignal ? root.noSignalHint + "\n" : "")
-                        + "Hover over orange cameras for details."
-                      : "All contact quality issues are currently inactive. You may dismiss."
+                text: (root.showNoDataHint ? root.noSignalHint + "\n" : "")
+                      + ((root.entries.length > 0)
+                         ? (root.showNoDataHint ? "Hover over orange or red cameras for details."
+                                                : "Hover over orange cameras for details.")
+                         : "All contact quality issues are currently inactive. You may dismiss.")
             }
 
             // Error message

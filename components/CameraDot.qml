@@ -7,8 +7,9 @@ import OpenMotion 1.0
  *  Used in ContactQualityModal sensor diagrams. Encapsulates the
  *  status/type lookup and renders either a solid circular dot or
  *  a vertical-split dot (dark left, light right) for the dev-mode
- *  "ambient + contact both fired" case (#128). A camera that sent no
- *  usable frames ("no_signal", #731) gets its own colour in dev mode.
+ *  "ambient + contact both fired" case (#128). A camera that is sending
+ *  no frames (#731: the pre-scan check's "no_signal", or the dropout
+ *  watchdog mid-scan) is red in every mode.
  *
  *  API:
  *      side       : "left" | "right"
@@ -31,23 +32,27 @@ Item {
 
 
     readonly property string status: modal.cameraStatus(side, camIndex1)
-    readonly property var    types: status === "bad" && modal.engineeringMode
+    readonly property var    types: status === "bad"
                                     ? modal.cameraWarningTypes(side, camIndex1)
                                     : []
     readonly property bool   hasAmbient: types.indexOf("ambient_light") >= 0
     readonly property bool   hasContact: types.indexOf("poor_contact") >= 0
-    // #731: the camera sent no usable frames. Outranks the other two, as in
-    // the SDK's verdict order, since there was no reading to judge them by.
+    // #731: no frames from this camera — the pre-scan check's no_signal, or
+    // the dropout watchdog mid-scan ("nodata"). Red in every mode, and it
+    // outranks the other two, as in the SDK's verdict order: there was no
+    // reading to judge them by.
     readonly property bool   hasNoSignal: types.indexOf("no_signal") >= 0
-    readonly property bool   isSplit:    hasAmbient && hasContact && !hasNoSignal
+    readonly property bool   noData:     status === "nodata" || hasNoSignal
+    // The split dot is an engineering-mode detail (#128).
+    readonly property bool   isSplit:    modal.engineeringMode && hasAmbient && hasContact && !noData
 
     readonly property color singleColor: {
         if (status === "good")     return "#A3E4A1"
         if (status === "checking") return "#666666"
         if (status === "inactive") return "#666666"
+        if (noData)                return AppTheme.accentRed
         // status === "bad" past this point
         if (!modal.engineeringMode)  return "#E67E22"
-        if (hasNoSignal)            return AppTheme.accentRed
         if (isSplit)                return AppTheme.accentOrangeAmbient  // unused at render time (splitFrame handles it); kept so singleColor is never undefined
         if (hasAmbient)             return AppTheme.accentOrangeAmbient
         if (hasContact)             return AppTheme.accentOrangeContact
