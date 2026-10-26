@@ -104,10 +104,12 @@ class TestScanNotesSetter:
 
 SCAN_ID = "20261013_162530"
 SCAN_LABEL = f"{SCAN_ID}_subj"
+APP_VERSION = "1.6.0-dev.1"
+SDK_VERSION = "1.14.0"
 
 
 def _start_scan(tmp_path, left_mask=0x66, right_mask=0x66, *,
-                right_connected=True, serials=None):
+                right_connected=True, serials=None, firmware=None):
     """Start a scan on the mocked interface. Returns the connector, the
     completion sink startCapture handed the SDK, and the scan DB path."""
     db_path = str(tmp_path / "scans.db")
@@ -117,6 +119,9 @@ def _start_scan(tmp_path, left_mask=0x66, right_mask=0x66, *,
     c._consoleConnected = c._leftSensorConnected = True
     c._rightSensorConnected = right_connected
     c._device_serials.update(serials or {})
+    c._firmware_versions.update(firmware or {})
+    c._app_version = APP_VERSION
+    c._interface.get_sdk_version.return_value = SDK_VERSION
     c._interface.start_scan.return_value = True
     assert c.startCapture("subj", 5, left_mask, right_mask, False) is True
     req = c._interface.start_scan.call_args.args[0]
@@ -151,19 +156,37 @@ class TestScanEndNotesModal:
 
 SERIALS = {"console": "WWW04Q40005", "left": "QWW04Q10003",
            "right": "QWW04Q10004"}
+FIRMWARE = {"console": "v1.8.3", "left": "v1.8.4", "right": "v1.8.5"}
 FOOTER_LINES = ["Console SN: WWW04Q40005",
                 "Left Sensor SN: QWW04Q10003",
                 "Right Sensor SN: QWW04Q10004",
-                "Scan configuration: FFFF"]
+                "Scan configuration: FFFF",
+                f"App version: {APP_VERSION}",
+                f"SDK version: {SDK_VERSION}",
+                "Console FW: v1.8.3",
+                "Left Sensor FW: v1.8.4",
+                "Right Sensor FW: v1.8.5"]
+FOOTER = "".join("\n" + line for line in FOOTER_LINES)
+
+
+def _footer(serials=SERIALS, firmware=FIRMWARE, left=0xFF, right=0xFF,
+            app_version=APP_VERSION, sdk_version=SDK_VERSION):
+    return _scan_identity_note_lines(serials, firmware, left, right,
+                                     app_version=app_version,
+                                     sdk_version=sdk_version)
+
+
+def _line(footer, prefix):
+    (line,) = [ln for ln in footer.splitlines() if ln.startswith(prefix)]
+    return line
 
 
 class TestScanIdentityFooter:
-    """#759: the end-of-scan footer names the console, the sensor modules
-    and the cameras."""
+    """#759: the end-of-scan footer names the hardware, the cameras and
+    the software versions."""
 
     def test_footer_lines(self):
-        assert _scan_identity_note_lines(SERIALS, 0xFF, 0xFF) == (
-            "".join("\n" + line for line in FOOTER_LINES))
+        assert _footer() == FOOTER
 
     @pytest.mark.parametrize("left, right, config", [
         (0xFF, 0xFF, "FFFF"),
@@ -173,30 +196,46 @@ class TestScanIdentityFooter:
     ])
     def test_configuration_is_left_then_right_mask(self, left, right,
                                                    config):
-        assert _scan_identity_note_lines(SERIALS, left, right).endswith(
-            f"\nScan configuration: {config}")
+        assert _line(_footer(left=left, right=right),
+                     "Scan configuration:") == f"Scan configuration: {config}"
 
-    @pytest.mark.parametrize("serial", ["", "   "])
-    def test_empty_serial_reads_not_programmed(self, serial):
-        lines = _scan_identity_note_lines(
-            {"console": serial, "left": serial, "right": serial},
-            0xFF, 0xFF).splitlines()
-        assert lines[1:4] == ["Console SN: Not programmed",
-                              "Left Sensor SN: Not programmed",
-                              "Right Sensor SN: Not programmed"]
+    @pytest.mark.parametrize("empty", ["", "   "])
+    def test_empty_values(self, empty):
+        blank = {"console": empty, "left": empty, "right": empty}
+        footer = _footer(serials=blank, firmware=blank, app_version=empty,
+                         sdk_version=empty)
+        assert footer.splitlines()[1:] == [
+            "Console SN: Not programmed",
+            "Left Sensor SN: Not programmed",
+            "Right Sensor SN: Not programmed",
+            "Scan configuration: FFFF",
+            "App version: unknown",
+            "SDK version: unknown",
+            "Console FW: unknown",
+            "Left Sensor FW: unknown",
+            "Right Sensor FW: unknown",
+        ]
+
+    def test_non_string_sdk_version_reads_unknown(self):
+        assert _line(_footer(sdk_version=None),
+                     "SDK version:") == "SDK version: unknown"
 
     def test_unconnected_sensor_reads_not_connected(self):
-        lines = _scan_identity_note_lines(
-            {**SERIALS, "right": None}, 0xFF, 0x00).splitlines()
-        assert lines[3] == "Right Sensor SN: Not connected"
+        footer = _footer(serials={**SERIALS, "right": None},
+                         firmware={**FIRMWARE, "right": None}, right=0x00)
+        assert _line(footer, "Right Sensor SN:") == (
+            "Right Sensor SN: Not connected")
+        assert _line(footer, "Right Sensor FW:") == (
+            "Right Sensor FW: Not connected")
 
-    def test_scan_end_note_carries_serials_and_configuration(self, tmp_path):
+    def test_scan_end_note_carries_the_footer(self, tmp_path):
         c, sink, db_path = _start_scan(tmp_path, 0xFF, 0xFF,
-                                       serials=SERIALS)
+                                       serials=SERIALS, firmware=FIRMWARE)
         _session(db_path, SCAN_LABEL)
-        # A mid-scan disconnect clears a device's cached serial; the note
-        # still names the hardware the scan started on.
+        # A mid-scan disconnect clears a device's cached serial and
+        # firmware; the note still names what the scan started on.
         c._device_serials.update(console="", left="", right="")
+        c._firmware_versions.update(console="", left="", right="")
 
         sink._on_complete_cb(SimpleNamespace(scan_id=SCAN_ID))
 
@@ -211,18 +250,22 @@ class TestScanIdentityFooter:
         so the note must not claim it."""
         c, sink, db_path = _start_scan(tmp_path, 0xFF, 0xFF,
                                        right_connected=False,
-                                       serials=SERIALS)
+                                       serials=SERIALS, firmware=FIRMWARE)
         _session(db_path, SCAN_LABEL)
 
         sink._on_complete_cb(SimpleNamespace(scan_id=SCAN_ID))
 
-        lines = c.scanNotes.strip().splitlines()
-        assert lines[-2:] == ["Right Sensor SN: Not connected",
-                              "Scan configuration: FF00"]
+        notes = c.scanNotes
+        assert _line(notes, "Right Sensor SN:") == (
+            "Right Sensor SN: Not connected")
+        assert _line(notes, "Right Sensor FW:") == (
+            "Right Sensor FW: Not connected")
+        assert _line(notes, "Scan configuration:") == (
+            "Scan configuration: FF00")
 
     def test_operator_notes_stay_above_the_footer(self, tmp_path):
         c, sink, db_path = _start_scan(tmp_path, 0xFF, 0xFF,
-                                       serials=SERIALS)
+                                       serials=SERIALS, firmware=FIRMWARE)
         _session(db_path, SCAN_LABEL)
         c._scan_notes = "subject moved at 2 min\n"
 
@@ -230,7 +273,7 @@ class TestScanIdentityFooter:
 
         notes = c.scanNotes
         assert notes.startswith("subject moved at 2 min\n---\nScan completed")
-        assert notes.endswith("".join("\n" + line for line in FOOTER_LINES))
+        assert notes.endswith(FOOTER)
 
 
 class TestGetScanDetailsNotes:

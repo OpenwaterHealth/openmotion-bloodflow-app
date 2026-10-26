@@ -151,25 +151,39 @@ def _config_name(mask) -> str:
     return _CONFIG_NAMES.get(m, f"0x{m:02X}")
 
 
-def _scan_identity_note_lines(serials, left_mask, right_mask) -> str:
-    """End-of-scan notes footer lines naming the hardware and the cameras
-    the scan ran with (#759), each starting with a newline so the caller
-    appends them straight after the duration line. ``serials`` maps
-    console/left/right to the programmed serial: "" reads "Not
-    programmed" and None (a sensor that wasn't connected) "Not
-    connected", as in Settings → About. The configuration is the left
-    then right camera mask as two hex bytes: all 8 cameras on both sides
-    reads FFFF, left only FF00."""
-    def label(serial):
-        if serial is None:
-            return "Not connected"
-        return serial.strip() or "Not programmed"
+_NOTE_DEVICES = (("Console", "console"), ("Left Sensor", "left"),
+                 ("Right Sensor", "right"))
+
+
+def _scan_identity_note_lines(serials, firmware, left_mask, right_mask, *,
+                              app_version, sdk_version) -> str:
+    """End-of-scan notes footer lines naming the hardware, the cameras and
+    the software the scan ran with (#759), each starting with a newline so
+    the caller appends them straight after the duration line.
+
+    ``serials`` and ``firmware`` map console/left/right to the cached
+    value, None for a sensor that wasn't connected ("Not connected", as in
+    Settings → About). An empty serial reads "Not programmed", any other
+    empty value "unknown". The configuration is the left then right camera
+    mask as two hex bytes: all 8 cameras on both sides reads FFFF, left
+    only FF00."""
+    def text(value, empty="unknown"):
+        if not isinstance(value, str) or not value.strip():
+            return empty
+        return value.strip()
+
+    def device(value, empty="unknown"):
+        return "Not connected" if value is None else text(value, empty)
 
     config = f"{int(left_mask) & 0xFF:02X}{int(right_mask) & 0xFF:02X}"
-    return (f"\nConsole SN: {label(serials.get('console'))}"
-            f"\nLeft Sensor SN: {label(serials.get('left'))}"
-            f"\nRight Sensor SN: {label(serials.get('right'))}"
-            f"\nScan configuration: {config}")
+    lines = [f"{name} SN: {device(serials.get(key), 'Not programmed')}"
+             for name, key in _NOTE_DEVICES]
+    lines += [f"Scan configuration: {config}",
+              f"App version: {text(app_version)}",
+              f"SDK version: {text(sdk_version)}"]
+    lines += [f"{name} FW: {device(firmware.get(key))}"
+              for name, key in _NOTE_DEVICES]
+    return "".join("\n" + line for line in lines)
 
 
 def _sdk_meta_dict(session) -> dict:
@@ -4957,16 +4971,19 @@ class MotionConnector(QObject):
         self._storage_warned = False
         self._dropout_timer.start()
 
-        # Device serials for the notes footer (#759), read now: a mid-scan
-        # disconnect clears the cache before the scan completes. None marks
-        # a sensor that isn't connected.
-        scan_serials = {
-            "console": self._device_serials.get("console", ""),
-            "left": (self._device_serials.get("left", "")
-                     if self._leftSensorConnected else None),
-            "right": (self._device_serials.get("right", "")
-                      if self._rightSensorConnected else None),
-        }
+        # Device serials and firmware for the notes footer (#759), read now:
+        # a mid-scan disconnect clears both caches before the scan
+        # completes. None marks a sensor that isn't connected.
+        connected = {"console": True, "left": self._leftSensorConnected,
+                     "right": self._rightSensorConnected}
+        scan_serials = {d: self._device_serials.get(d, "") if on else None
+                        for d, on in connected.items()}
+        scan_firmware = {d: self._firmware_versions.get(d, "") if on else None
+                         for d, on in connected.items()}
+        try:
+            scan_sdk_version = self._interface.get_sdk_version()
+        except Exception:
+            scan_sdk_version = ""
 
         # NaN-gap tracker — fresh per scan (same lifecycle as the watchdog).
         # Bound to a local so the completion closure and the sink provably
@@ -5025,7 +5042,9 @@ class MotionConnector(QObject):
             duration_line = f"\n---\nScan {status} — duration: {duration_str}"
             # Masks as gated above: a side without a sensor reads 00.
             identity_lines = _scan_identity_note_lines(
-                scan_serials, left_camera_mask, right_camera_mask)
+                scan_serials, scan_firmware, left_camera_mask,
+                right_camera_mask, app_version=self._app_version,
+                sdk_version=scan_sdk_version)
             self._scan_notes = (self._scan_notes.strip() + duration_line
                                 + identity_lines)
             # Data-gap footer: aggregate ranges where any camera went >1 s
