@@ -97,6 +97,20 @@ else:
         import engineering_unlock
     except ImportError:   # excluded from this bundle
         engineering_unlock = None
+
+# Optimize Laser (docs/auto_exposure) is compiled out of clinical builds the
+# same way: openwater.spec / build_nuitka.ps1 leave ``optimize_laser`` and
+# the SDK's OptimizeLaserWorkflow out of a clinical bundle, and this import
+# is skipped on the same constant. A run widens the laser-safety limits, so
+# a clinical exe neither ships nor loads that code. An SDK without the
+# workflow (ImportError) leaves the feature unavailable.
+if _CLINICAL_BUILD:
+    optimize_laser = None
+else:
+    try:
+        import optimize_laser
+    except ImportError:   # excluded from this bundle, or an older SDK
+        optimize_laser = None
 from data_sources import (
     LiveScanSource, PastScanSource, ScanDataSource, buffers_are_empty,
     effective_bvi_lpf_cutoff, load_csv_scan_buffers,
@@ -989,6 +1003,19 @@ class MotionConnector(QObject):
     # SDK's ContactQualityMonitor. Same pattern as _cq_result_signal; QML
     # must never be touched from the pipeline worker thread.
     _cqTransitionSignal = pyqtSignal(str, int, str, float, bool)
+    # Optimize Laser (research + engineering mode only). Progress carries one
+    # iteration row (optimize_laser.iteration_row); Finished carries ok, the
+    # headline and optimize_laser.summary(). StateChanged notifies the
+    # optimizeLaser* properties.
+    optimizeLaserStarted = pyqtSignal()
+    optimizeLaserProgress = pyqtSignal('QVariantMap')
+    optimizeLaserFinished = pyqtSignal(bool, str, 'QVariantMap')
+    optimizeLaserStateChanged = pyqtSignal()
+    laserDefaultsRestored = pyqtSignal(bool, str)
+    # Worker → main thread marshalling for the run and the restore.
+    _optimizeProgressSignal = pyqtSignal(object)
+    _optimizeDoneSignal = pyqtSignal(object)
+    _laserRestoreDoneSignal = pyqtSignal(object)
     cameraDropoutDetected = pyqtSignal(str, int, str)  # side ("left"/"right"), cam_id (0-7), elapsed HH:MM:SS
     # Frames resumed for a camera previously flagged Connection Lost — the
     # watchdog was re-armed and display resumed. Mirror of cameraDropoutDetected.
@@ -1342,6 +1369,17 @@ class MotionConnector(QObject):
         self._capture_stop = threading.Event()
         self._capture_running = False
         self._cq_quick_running = False
+        # Optimize Laser: the run in flight, and the passed run whose
+        # settings every scan and check re-applies until the defaults are
+        # restored (session only: a console reconnect resets the laser and
+        # every Start/Check reconfigures the cameras).
+        self._optimize_running = False
+        self._optimize_stop = threading.Event()
+        self._optimize_result = None
+        self._optimize_masks = (0, 0)
+        self._optimize_finished_at = None
+        self._optimize_workflow = None
+        self._laser_restore_running = False
         # Monotonic id assigned to each notify() call. itertools.count is a
         # single atomic step under the GIL — notify() is reachable from
         # several worker threads (export/bundle/update workers), where a
@@ -4601,6 +4639,16 @@ class MotionConnector(QObject):
         after a toggle is turned off already runs at the restored
         baseline.
         """
+        # Optimize Laser settings take precedence: they write the same camera
+        # and TA registers (and wider safety limits), and the scan re-applies
+        # them itself (_prepare_optimized_scan). The dirty flags carry, so
+        # the first scan after Restore still puts back what the toggles
+        # changed.
+        if getattr(self, "_optimize_result", None) is not None:
+            logger.info("Alternative camera / laser settings skipped: "
+                        "Optimize Laser settings are active")
+            return
+
         # #446: write exposure + per-camera analog gain via the SDK, every
         # time — or restore firmware defaults on the first run after the
         # toggle was turned off. No-op when disabled and clean.
@@ -4612,6 +4660,270 @@ class MotionConnector(QObject):
         # #483: bracketed by the safety FPGAs' PULSE_WIDTH_UL ceiling —
         # raised before the pulse is widened, restored after it's narrowed.
         self._apply_alt_laser_pulse_width_registers()
+
+    # --- OPTIMIZE LASER (docs/auto_exposure; research + engineering only) ---
+    #
+    # The SDK's OptimizeLaserWorkflow runs the search on a worker thread and,
+    # when it passes, leaves the device at the solved settings. Those stay
+    # "active" for this session: every scan and check re-applies them
+    # (_prepare_optimized_scan) because each Start/Check reconfigures the
+    # cameras and a console reconnect reloads the stock laser settings.
+    # Restore default laser settings (or a refused gate) drops them.
+
+    def _optimize_problem(self) -> str | None:
+        if optimize_laser is None:
+            return ("Optimize Laser is not available in this build "
+                    "(clinical build, or an SDK without OptimizeLaserWorkflow).")
+        return optimize_laser.refusal(self._app_config, clinical_build=_CLINICAL_BUILD)
+
+    def _optimize_wf(self):
+        if self._optimize_workflow is None:
+            self._optimize_workflow = optimize_laser.make_workflow(
+                self._interface, force_fault=lambda: self._force_laser_fail)
+        return self._optimize_workflow
+
+    def _set_optimize_result(self, result) -> None:
+        self._optimize_result = result
+        self._optimize_finished_at = datetime.datetime.now() if result is not None else None
+        self.optimizeLaserStateChanged.emit()
+
+    @pyqtProperty(bool, notify=optimizeLaserStateChanged)
+    def optimizeLaserAvailable(self) -> bool:
+        """The build ships Optimize Laser (research build, SDK has it)."""
+        return optimize_laser is not None and not _CLINICAL_BUILD
+
+    @pyqtProperty(bool, notify=optimizeLaserStateChanged)
+    def optimizeLaserRunning(self) -> bool:
+        return self._optimize_running
+
+    @pyqtProperty(bool, notify=optimizeLaserStateChanged)
+    def optimizeLaserActive(self) -> bool:
+        """A passed run's settings are in use for scans and checks."""
+        return self._optimize_result is not None
+
+    @pyqtProperty('QVariantMap', notify=optimizeLaserStateChanged)
+    def optimizeLaserSummary(self):
+        if self._optimize_result is None or optimize_laser is None:
+            return {}
+        return optimize_laser.summary(self._optimize_result)
+
+    @pyqtSlot(result=str)
+    def optimizeLaserRefusal(self) -> str:
+        """Why the Optimize Laser button would be refused now ("" = it can run)."""
+        return self._optimize_problem() or ""
+
+    @pyqtSlot(result='QVariantMap')
+    def optimizeLaserSettings(self):
+        """The Settings form: saved values (over the defaults), dropdown
+        entries, defaults, hardware limits, and any problem with the saved
+        values."""
+        if optimize_laser is None:
+            return {}
+        _, problems = optimize_laser.stored_settings(self._app_config)
+        return {"values": optimize_laser.stored_form(self._app_config),
+                "problems": problems, **optimize_laser.choices()}
+
+    @pyqtSlot('QVariantMap', result='QVariantList')
+    def setOptimizeLaserSettings(self, form):
+        """Validate and save the Settings form. Returns the errors; nothing
+        is saved unless there are none."""
+        if optimize_laser is None:
+            return ["Optimize Laser is not available in this build."]
+        settings, errors = optimize_laser.from_form(dict(form or {}))
+        if errors:
+            logger.info("Optimize Laser settings not saved: %s", "; ".join(errors))
+            return errors
+        self._app_config[optimize_laser.SETTINGS_KEY] = optimize_laser.storage_diff(settings)
+        self._save_app_config()
+        self.appConfigChanged.emit()
+        logger.info("Optimize Laser settings saved: %s",
+                    self._app_config[optimize_laser.SETTINGS_KEY] or "defaults")
+        return []
+
+    @pyqtSlot(int, int, result=bool)
+    def optimizeLaser(self, left_camera_mask: int, right_camera_mask: int) -> bool:
+        """Start Optimize Laser on the scan's cameras (after the caller has
+        configured them, like any scan). Returns False with
+        optimizeLaserFinished(False, reason) when it can't start."""
+        left = int(left_camera_mask) if self._leftSensorConnected else 0x00
+        right = int(right_camera_mask) if self._rightSensorConnected else 0x00
+        reason = self._optimize_problem() or self._ensure_idle()
+        if reason is None and self._safetyFailure:
+            reason = "The laser safety system is tripped. Clear the safety interlock first."
+        if reason is None and not (left or right):
+            reason = "No cameras selected on a connected sensor."
+        settings = None
+        if reason is None:
+            settings, problems = optimize_laser.stored_settings(self._app_config)
+            if problems:
+                reason = ("The Optimize Laser settings are invalid (Settings, Engineering): "
+                          + "; ".join(problems))
+        if reason is not None:
+            logger.warning("Optimize Laser refused: %s", reason)
+            self.optimizeLaserFinished.emit(False, reason, {})
+            return False
+
+        previous = self._optimize_result
+        initial_gains = dict(previous.settings.gains) if previous is not None else None
+        # The new run replaces any active settings; its preflight reads the
+        # console as it is now and its restore reloads the stock values.
+        self._optimize_result = None
+        self._optimize_running = True
+        self._optimize_masks = (left, right)
+        stop = threading.Event()
+        self._optimize_stop = stop
+        log_path = optimize_laser.csv_path(self._data_root, datetime.datetime.now())
+        self._audit.log("optimize_laser_started", {
+            "left_mask": left, "right_mask": right,
+            "settings": optimize_laser.to_form(settings), "log": log_path,
+        })
+        # WARNING on purpose: the run changes laser emission and widens the
+        # laser-safety limits.
+        logger.warning("=== Optimize Laser started: left=0x%02X right=0x%02X, "
+                       "settings %s, log %s ===",
+                       left, right, optimize_laser.to_form(settings), log_path)
+        self.optimizeLaserStateChanged.emit()
+        self.optimizeLaserStarted.emit()
+        workflow = self._optimize_wf()
+
+        def _worker():
+            try:
+                result = workflow.run(
+                    settings, left_camera_mask=left, right_camera_mask=right,
+                    initial_gains=initial_gains, log_path=log_path, stop_evt=stop,
+                    on_iteration=lambda record: self._optimizeProgressSignal.emit(
+                        optimize_laser.iteration_row(record)))
+            except Exception as exc:
+                logger.exception("Optimize Laser raised")
+                result = exc
+            self._optimizeDoneSignal.emit(result)
+
+        threading.Thread(target=_worker, daemon=True, name="OptimizeLaser").start()
+        return True
+
+    @pyqtSlot()
+    def cancelOptimizeLaser(self):
+        """Stop a run between (or during) its short scans; it restores the
+        defaults before it reports."""
+        if self._optimize_running:
+            logger.info("Optimize Laser cancel requested")
+            self._optimize_stop.set()
+
+    @pyqtSlot(object)
+    def _on_optimize_progress(self, row):
+        self.optimizeLaserProgress.emit(row)
+
+    @pyqtSlot(object)
+    def _on_optimize_done(self, result):
+        self._optimize_running = False
+        if isinstance(result, BaseException):
+            ok, text, summary = False, f"Optimize Laser failed: {result}", {}
+            self._set_optimize_result(None)
+        else:
+            summary = optimize_laser.summary(result)
+            ok, text = bool(result.passed), summary["message"]
+            self._set_optimize_result(result if result.passed else None)
+            if result.restore_problems:
+                restored_ok, restore_text = optimize_laser.restore_message(
+                    list(result.restore_problems))
+                if not restored_ok:
+                    self.notify(restore_text, "error", 0)
+        self._audit.log("optimize_laser_finished", {
+            "ok": ok, "status": summary.get("status", ""), "message": text,
+            "iterations": summary.get("iterations"), "log": summary.get("csvPath", ""),
+            "pulse_width_us": summary.get("pulseWidthUs"),
+            "current_ma": summary.get("currentMa"), "gains": summary.get("gains", {}),
+        })
+        logger.warning("=== Optimize Laser finished: %s ===", text)
+        for alert in summary.get("alerts", []):
+            logger.warning("Optimize Laser: %s", alert)
+        self.optimizeLaserFinished.emit(ok, text, summary)
+
+    @pyqtSlot(result=bool)
+    def restoreDefaultLaserSettings(self) -> bool:
+        """Settings → Restore default laser settings: laser driver and safety
+        limits back to the console's flash values (apply_laser_power), and the
+        cameras to the sensor firmware's settings. Drops the active Optimize
+        Laser settings. Runs on a worker; reports via laserDefaultsRestored."""
+        if optimize_laser is None:
+            self.laserDefaultsRestored.emit(False, "Optimize Laser is not available in this build.")
+            return False
+        err = self._ensure_idle()
+        if err is not None:
+            self.laserDefaultsRestored.emit(False, err)
+            return False
+        if self._optimize_result is not None:
+            left, right = self._optimize_masks
+        else:
+            left = 0xFF if self._leftSensorConnected else 0x00
+            right = 0xFF if self._rightSensorConnected else 0x00
+        self._laser_restore_running = True
+        self.optimizeLaserStateChanged.emit()
+        logger.warning("Restoring the default laser settings (left=0x%02X right=0x%02X)",
+                       left, right)
+        workflow = self._optimize_wf()
+
+        def _worker():
+            try:
+                problems = workflow.restore_defaults(left, right)
+            except Exception as exc:
+                logger.exception("Restore default laser settings raised")
+                problems = [f"laser power restore raised: {exc}"]
+            self._laserRestoreDoneSignal.emit(problems)
+
+        threading.Thread(target=_worker, daemon=True, name="OptimizeLaserRestore").start()
+        return True
+
+    @pyqtSlot(object)
+    def _on_laser_restore_done(self, problems):
+        self._laser_restore_running = False
+        ok, text = optimize_laser.restore_message(list(problems or []))
+        # Dropped either way: re-applying settings over a console whose
+        # restore half-failed would compound it.
+        self._set_optimize_result(None)
+        self._audit.log("laser_defaults_restored", {"ok": ok, "problems": list(problems or [])})
+        (logger.info if ok else logger.error)("Restore default laser settings: %s", text)
+        self.notify(text, "success" if ok else "error", 6000 if ok else 0)
+        self.laserDefaultsRestored.emit(ok, text)
+
+    def _prepare_optimized_scan(self, left_mask: int, right_mask: int):
+        """Before a scan or check: re-apply the active Optimize Laser settings
+        (synchronously, trigger off) and return the ScanRequest overrides, or
+        None when no settings are active. Returns (overrides, error); an error
+        means the scan must not start: its 2400 µs dark skip under an
+        unwidened RATE_LL would latch the safety interlock (E-202).
+
+        Settings that may no longer be used (engineering mode turned off,
+        Force laser fail armed) are dropped with a restore, and the scan runs
+        at the stock settings."""
+        result = getattr(self, "_optimize_result", None)
+        if result is None or optimize_laser is None:
+            return None, None
+        workflow = self._optimize_wf()
+        problem = optimize_laser.active_problem(self._app_config, clinical_build=_CLINICAL_BUILD)
+        if problem:
+            logger.warning("Optimize Laser settings dropped before this scan: %s", problem)
+            ok, text = optimize_laser.restore_message(
+                workflow.restore_defaults(*self._optimize_masks))
+            self._set_optimize_result(None)
+            if not ok:
+                return None, text
+            self.notify(f"Optimize Laser settings cleared: {problem} "
+                        "This scan uses the default laser settings.", "warning", 8000)
+            return None, None
+        try:
+            workflow.reapply(result)
+        except Exception as e:
+            logger.error("Optimize Laser settings could not be re-applied: %s", e)
+            return None, (f"The Optimize Laser settings could not be re-applied ({e}). "
+                          "Restore the default laser settings or run Optimize Laser again.")
+        missing = optimize_laser.unoptimized_cameras(result, left_mask, right_mask)
+        if missing:
+            logger.warning("Scan uses cameras Optimize Laser did not optimize: %s",
+                           ", ".join(missing))
+        logger.warning("OPTIMIZE LASER SETTINGS ACTIVE for this scan: %s us / %.0f mA",
+                       result.settings.pulse_width_us, result.settings.current_ma)
+        return workflow.scan_overrides(result), None
 
     # --- CONSOLE COMMUNICATION METHODS ---
     @pyqtSlot()
@@ -4692,9 +5004,28 @@ class MotionConnector(QObject):
         if not self.checkStorageForScan():
             return False
 
+        # Active Optimize Laser settings: re-applied now (the Start just
+        # reconfigured the cameras), with the scan's overrides below. A
+        # failed re-apply refuses the scan rather than running its 2400 µs
+        # dark skip under the stock RATE_LL (E-202).
+        optimized, optimize_err = self._prepare_optimized_scan(
+            left_camera_mask, right_camera_mask)
+        if optimize_err is not None:
+            logger.warning("startCapture refused: %s", optimize_err)
+            self.captureLog.emit(optimize_err)
+            self.notify(optimize_err, "error", 0)
+            return False
+
         self._capture_stop = threading.Event()
-        # Each new scan starts with a fresh notes buffer
+        # Each new scan starts with a fresh notes buffer; a scan at Optimize
+        # Laser settings starts with their block (HANDOFF: every laser and
+        # camera setting goes into the session notes).
         self._scan_notes = ""
+        if optimized is not None:
+            self._scan_notes = optimize_laser.notes_block(
+                self._optimize_result, left_mask=left_camera_mask,
+                right_mask=right_camera_mask,
+                finished_at=self._optimize_finished_at or datetime.datetime.now()) + "\n"
         self._scan_notes_session_label = ""
         self.scanNotesChanged.emit()
         self._capture_running = True
@@ -5034,6 +5365,9 @@ class MotionConnector(QObject):
             # value. Fires on the worker thread, so just hop to the main thread
             # via a queued signal — see _on_scan_worker_failed.
             on_error=lambda exc: self.scanWorkerFailedDuringCapture.emit(str(exc)),
+            # Optimize Laser: 2400 µs dark skip + mirrored pulse width, the
+            # solved gains for shot-noise correction, BVI I_max = 2 x target.
+            **(optimized or {}),
         )
 
         started = self._interface.start_scan(req)
@@ -5120,6 +5454,11 @@ class MotionConnector(QObject):
         Before #431 that second case showed only the persistent toast, which
         an operator can miss.
         """
+        if getattr(self, "_optimize_running", False):
+            # Optimize Laser would read the latched (dark) console as "too
+            # dim" and step brighter; stop it, it restores the defaults.
+            logger.warning("Laser safety trip during Optimize Laser: canceling the run")
+            self._optimize_stop.set()
         if self._capture_running:
             if not self._safety_cancel_scheduled:
                 self.safetyTripDuringCaptureRequested.emit()
@@ -5546,6 +5885,10 @@ class MotionConnector(QObject):
                     "and try again")
         if self._cq_quick_running:
             return "Contact-quality check already in progress"
+        if getattr(self, "_optimize_running", False):
+            return "Optimize Laser is running"
+        if getattr(self, "_laser_restore_running", False):
+            return "The default laser settings are being restored"
         if self._capture_running or self._capture_thread is not None:
             return "Scan already running"
         if self._config_running:
@@ -5616,12 +5959,21 @@ class MotionConnector(QObject):
             self.contactQualityCheckFinished.emit(False, "No sensors connected", [])
             return
 
+        left_mask = int(left_camera_mask) if self._leftSensorConnected else 0x00
+        right_mask = int(right_camera_mask) if self._rightSensorConnected else 0x00
+
+        # Same rule as #510 below for Optimize Laser: the check runs under the
+        # settings (and the 2400 µs dark skip) the scan it gates will use.
+        optimized, optimize_err = self._prepare_optimized_scan(left_mask, right_mask)
+        if optimize_err is not None:
+            logger.warning("Contact-quality check refused: %s", optimize_err)
+            self.contactQualityCheckFinished.emit(False, optimize_err, [])
+            return
+        trigger_config = (optimized or {}).get("trigger_config")
+
         self._cq_quick_running = True
         self.contactQualityScanInProgress.emit(True)
         self.contactQualityCheckStarted.emit(int(round(duration_s + 3)))
-
-        left_mask = int(left_camera_mask) if self._leftSensorConnected else 0x00
-        right_mask = int(right_camera_mask) if self._rightSensorConnected else 0x00
 
         # #510: the preflight must run under the same registers the scan it
         # gates will use — apply (or restore) the Engineering-mode
@@ -5639,6 +5991,7 @@ class MotionConnector(QObject):
 
         def _worker():
             try:
+                kwargs = {"trigger_config": trigger_config} if trigger_config else {}
                 result = self._interface.contact_quality_workflow.check(
                     duration_sec=duration_s,
                     rolling_window=rolling_window,
@@ -5646,6 +5999,7 @@ class MotionConnector(QObject):
                     light_threshold_per_camera=light_thresholds,
                     left_camera_mask=left_mask,
                     right_camera_mask=right_mask,
+                    **kwargs,
                 )
                 self._cq_result_signal.emit(result)
             except Exception as exc:
@@ -6729,6 +7083,10 @@ class MotionConnector(QObject):
         self._testScanCompleteSignal.connect(self._on_test_scan_complete)
         # Worker → Qt main thread for the CQ workflow result.
         self._cq_result_signal.connect(self._on_cq_result_ready)
+        # Worker → Qt main thread for Optimize Laser and its restore.
+        self._optimizeProgressSignal.connect(self._on_optimize_progress)
+        self._optimizeDoneSignal.connect(self._on_optimize_done)
+        self._laserRestoreDoneSignal.connect(self._on_laser_restore_done)
         # Runner thread → Qt main thread for live contact-quality transitions.
         self._cqTransitionSignal.connect(self._on_cq_transition_main)
         # Worker → Qt main thread for async past-scan loads (issue #152).

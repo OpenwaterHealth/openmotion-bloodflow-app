@@ -4,8 +4,10 @@
 //   FlashSensorsTask -> SetTriggerTask -> <final task>
 //
 // ``mode`` selects the final task:
-//   * "capture" — CaptureDataTask  (normal user scan)
-//   * "check"   — ContactQualityCheckTask  (contact-quality quick check)
+//   * "capture"  — CaptureDataTask  (normal user scan)
+//   * "check"    — ContactQualityCheckTask  (contact-quality quick check)
+//   * "optimize" — OptimizeLaserTask  (Optimize Laser; research +
+//                  engineering mode only, the connector refuses otherwise)
 //
 // Properties irrelevant to a given mode are ignored (e.g. ``durationSec``
 // for "check"; ``leftPath``/``rightPath`` in ``scanFinished`` are empty
@@ -17,7 +19,7 @@ QtObject {
     id: runner
     property var connector
 
-    // "capture" | "check"
+    // "capture" | "check" | "optimize"
     property string mode: "capture"
 
     property int leftMask: 0x5A
@@ -51,6 +53,7 @@ QtObject {
         flashWatchdog.stop()
         setTriggerWatchdog.stop()
         checkWatchdog.stop()
+        optimizeWatchdog.stop()
         scanFinished(ok, err || "", l || "", r || "")
         _stage = "idle"
     }
@@ -81,6 +84,17 @@ QtObject {
         onTriggered: {
             runner.messageOut("Contact-quality check timed out.")
             runner._finish(false, "Contact-quality check timed out", "", "")
+        }
+    }
+
+    property Timer optimizeWatchdog: Timer {
+        // At most 20 iterations of ~4-6 s each (bench, 2026-10-28); generous.
+        interval: 600000
+        repeat: false
+        onTriggered: {
+            runner.optimizeTask.cancel()
+            runner.messageOut("Optimize Laser timed out.")
+            runner._finish(false, "Optimize Laser timed out", "", "")
         }
     }
 
@@ -132,6 +146,8 @@ QtObject {
             if (!ok) { runner._finish(false, err, "", ""); return }
             if (runner.mode === "check") {
                 runner.checkTask.run()
+            } else if (runner.mode === "optimize") {
+                runner.optimizeTask.run()
             } else {
                 runner.captureTask.run()
             }
@@ -188,6 +204,27 @@ QtObject {
         }
     }
 
+    // --- Optimize Laser (mode: "optimize") ---------------------------------
+
+    property OptimizeLaserTask optimizeTask: OptimizeLaserTask {
+        connector: runner.connector
+        leftCameraMask: runner.leftMask
+        rightCameraMask: runner.rightMask
+
+        onStarted: {
+            runner._stage = "optimize"
+            runner.stageUpdate("Optimizing laser and camera settings…")
+            runner.optimizeWatchdog.restart()
+        }
+        onProgress: function(pct) { runner.progressUpdate(pct) }
+        onLog: function(line) { runner.messageOut(line) }
+        onFinished: function(ok, err) {
+            if (runner._done) return
+            runner.optimizeWatchdog.stop()
+            runner._finish(ok, err, "", "")
+        }
+    }
+
     // --- Controls -----------------------------------------------------------
 
     function start() {
@@ -218,6 +255,12 @@ QtObject {
             else if (connector && connector.stopTrigger)
                 try { connector.stopTrigger() } catch(e) {}
             break
+        case "optimize":
+            // The run restores the defaults before it reports; finish when
+            // optimizeLaserFinished arrives (the watchdog backs this up), so
+            // nothing can start while the restore is still writing.
+            optimizeTask.cancel()
+            return
         case "finish":
             // No long-running work — scan-notes write is synchronous,
             // and CSVs are already on disk. Nothing to cancel.

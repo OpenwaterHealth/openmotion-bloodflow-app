@@ -24,6 +24,10 @@ Rectangle {
     // to go idle) so main.qml's close-while-busy warning still covers it.
     readonly property bool checkRunning: qualityCheckRunner.running ||
                                          (startGate.running && startGate.action === "check")
+    // Same for Optimize Laser: its runner (flash + run) or a start armed on
+    // the pipeline-idle gate. Holds Start / Check / Optimize Laser disabled.
+    readonly property bool optimizeRunning: optimizeRunner.running ||
+                                            (startGate.running && startGate.action === "optimize")
 
     // Hand main.qml the same ModalManager BloodFlow's icon-bar uses,
     // so the close-while-busy handler can dismiss any open modal
@@ -142,7 +146,7 @@ Rectangle {
     // wait it out on the flash watchdog's timescale instead of erroring.
     property bool scanStartPending: startGate.running && startGate.action === "scan"
     function beginScanWhenReady() {
-        if (bloodFlow.scanning || startGate.running) return
+        if (bloodFlow.scanning || startGate.running || optimizeRunner.running) return
         startGate.arm("scan")
     }
     // Same gate for starting a contact-quality check (Check button and the
@@ -150,16 +154,24 @@ Rectangle {
     // configuration was still draining used to surface a raw "Camera
     // configuration already in progress" error in the modal (issue #283).
     function beginCheckWhenReady() {
-        if (bloodFlow.scanning || startGate.running || qualityCheckRunner.running)
+        if (bloodFlow.scanning || startGate.running || qualityCheckRunner.running
+                || optimizeRunner.running)
             return
         startGate.arm("check")
+    }
+    // And for Optimize Laser (its runner flashes the cameras first, like Check).
+    function beginOptimizeWhenReady() {
+        if (bloodFlow.scanning || startGate.running || qualityCheckRunner.running
+                || optimizeRunner.running)
+            return
+        startGate.arm("optimize")
     }
     Timer {
         id: startGate
         interval: 200
         repeat: true
         triggeredOnStart: true   // idle path starts with no delay
-        property string action: "scan"   // "scan" | "check"
+        property string action: "scan"   // "scan" | "check" | "optimize"
         property int elapsedMs: 0
         function arm(what) {
             action = what
@@ -171,6 +183,8 @@ Rectangle {
                 stop()
                 if (action === "scan")
                     beginScanNow()
+                else if (action === "optimize")
+                    optimizeRunner.start()
                 else
                     qualityCheckRunner.start()
                 return
@@ -192,6 +206,10 @@ Rectangle {
                     MotionInterface.notify(
                         "Could not start scan — the previous step is still " +
                         "finishing. Please press Start again.", "error")
+                } else if (action === "optimize") {
+                    optimizeLaserModal.showError(
+                        "Could not start Optimize Laser — the previous step is " +
+                        "still finishing. Please try again.")
                 } else {
                     contactQualityModal.showError(
                         "Could not start check — the previous step is still " +
@@ -220,7 +238,12 @@ Rectangle {
         // the laser registers are loaded. deviceInitBusy re-arms on every
         // (re)connect, so a mid-session replug re-gates too.
         camerasReady: bloodFlow.camerasReady && !MotionInterface.deviceInitBusy
+                      && !bloodFlow.optimizeRunning
         clinicalMode: bloodFlow.clinicalMode
+        optimizeLaserVisible: !bloodFlow.clinicalMode
+                              && MotionInterface.optimizeLaserAvailable
+                              && MotionInterface.appConfig.engineeringMode === true
+        optimizeLaserActive: MotionInterface.optimizeLaserActive
 
         // Action buttons — close any open modal first (which by
         // convention saves), then perform the action. If the open
@@ -258,6 +281,19 @@ Rectangle {
             contactQualityModal.reset(false)
             beginCheckWhenReady()
         }
+        onOptimizeLaserClicked: {
+            // The connector refuses too; asking first keeps the modal from
+            // opening on a run that can't start.
+            var reason = MotionInterface.optimizeLaserRefusal()
+            if (reason) {
+                MotionInterface.notify(reason, "warning", 6000)
+                return
+            }
+            modalManager.closeCurrent()
+            optimizeLaserModal.reset()
+            modalManager.toggle(optimizeLaserModal)
+            beginOptimizeWhenReady()
+        }
 
         // Toggle buttons — open the named modal, or close it if it's
         // already open. modalManager.toggle() handles closing whatever
@@ -291,7 +327,7 @@ Rectangle {
         id: modalManager
         modals: [scanSettingsModal, notesModal, historyModal,
                  settingsModal, contactQualityModal, logsModal,
-                 sampleScanOfferModal]
+                 sampleScanOfferModal, optimizeLaserModal]
         // Hiding an item does not take its keyboard focus away (#517). A
         // modal closed while one of its text fields had focus left that
         // invisible field holding it: it took every later Space as typed
@@ -370,6 +406,20 @@ Rectangle {
     // connector's startup watchdog; research builds only.
     SampleScanOfferModal {
         id: sampleScanOfferModal
+    }
+
+    // Optimize Laser progress / result (research + engineering mode).
+    OptimizeLaserModal {
+        id: optimizeLaserModal
+        onCancelRequested: {
+            // Armed but not started yet: just disarm.
+            if (startGate.running && startGate.action === "optimize") {
+                startGate.stop()
+                optimizeLaserModal.showError("Optimize Laser canceled.")
+                return
+            }
+            optimizeRunner.cancel()
+        }
     }
 
     // Spacebar during an active scan pops the Notes modal with a fresh
@@ -585,6 +635,33 @@ Rectangle {
             if (!ok && qualityCheckRunner._stage !== "check") {
                 contactQualityModal.showError(err || "Check pipeline failed")
             }
+        }
+    }
+
+    // ===== SCAN RUNNER (optimize mode) =====
+    // Flash + trigger plumbing like the other two, on the scan's cameras;
+    // the final stage runs Optimize Laser. Its outcome reaches the modal
+    // through optimizeLaserFinished; only flash/trigger failures (and a
+    // cancel during the flash) surface here.
+    ScanRunner {
+        id: optimizeRunner
+        mode: "optimize"
+        connector: MotionInterface
+        leftMask: bloodFlow.leftMask
+        rightMask: bloodFlow.rightMask
+        laserOn: true
+        laserPower: 50
+        triggerConfig: ({})
+
+        onStageUpdate: function(txt) {
+            console.log("OptimizeLaser: " + txt)
+            if (optimizeRunner._stage !== "optimize") optimizeLaserModal.stage = txt
+        }
+        onMessageOut: function(line) { console.log("OptimizeLaser: " + line) }
+        onScanFinished: function(ok, err, left, right) {
+            if (!ok && optimizeRunner._stage !== "optimize")
+                optimizeLaserModal.showError(err === "Canceled" ? "Optimize Laser canceled."
+                                             : (err || "Optimize Laser pipeline failed"))
         }
     }
 

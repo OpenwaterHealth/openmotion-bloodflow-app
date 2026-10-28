@@ -52,6 +52,7 @@ ApplicationWindow {
     readonly property bool _anyInProgress:
         bloodFlowPage.scanning ||
         bloodFlowPage.checkRunning ||
+        bloodFlowPage.optimizeRunning ||
         MotionInterface.calibrationRunning ||
         MotionInterface.testScanRunning
 
@@ -71,6 +72,7 @@ ApplicationWindow {
         if (MotionInterface.testScanRunning)    return "Test scan"
         if (bloodFlowPage.scanning)             return "Scan"
         if (bloodFlowPage.checkRunning)         return "Contact-quality check"
+        if (bloodFlowPage.optimizeRunning)      return "Optimize Laser"
         return ""
     }
 
