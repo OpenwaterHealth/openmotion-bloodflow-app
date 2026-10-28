@@ -7,6 +7,10 @@ import OpenMotion 1.0
  *  firmware is available. Shown in Research builds; never in Clinical — the
  *  connector never flags a firmware update in a clinical build (#386). The
  *  "View" button asks the host to open the Settings overlay (firmware card).
+ *
+ *  Turns red, and cannot be dismissed, while a unit waits in update mode
+ *  with incomplete firmware (#737): a power cycle would brick it, and the
+ *  Settings firmware card has the Retry that finishes the update.
  */
 Rectangle {
     id: banner
@@ -21,9 +25,12 @@ Rectangle {
     // check), but gate the banner on !clinicalMode too for defence in depth.
     readonly property bool _clinical: MotionInterface.appConfig.clinicalMode === true
     property bool _dismissed: false
-    visible: !_clinical && MotionInterface.anyFirmwareUpdateAvailable && !_dismissed
+    readonly property bool _interrupted: !_clinical
+                                         && MotionInterface.firmwareResumeDevice !== ""
+    visible: _interrupted
+             || (!_clinical && MotionInterface.anyFirmwareUpdateAvailable && !_dismissed)
 
-    color: AppTheme.accentInteractive
+    color: _interrupted ? AppTheme.accentRed : AppTheme.accentInteractive
     radius: 0
     Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutQuad } }
 
@@ -36,7 +43,12 @@ Rectangle {
         Text { text: "⚠"; font.pixelSize: 14; color: "#FFFFFF" }
 
         Text {
-            text: "Device firmware update available"
+            text: banner._interrupted
+                  ? "Firmware update interrupted — do not power off the "
+                    + ({"console": "console", "left": "left sensor",
+                        "right": "right sensor"}[MotionInterface.firmwareResumeDevice]
+                       || "unit")
+                  : "Device firmware update available"
             color: "#FFFFFF"
             font.pixelSize: 13
             Layout.fillWidth: true
@@ -48,7 +60,7 @@ Rectangle {
                 id: viewBtn
                 anchors.centerIn: parent
                 text: "View"
-                color: AppTheme.accentInteractive
+                color: banner.color
                 font.pixelSize: 12
                 font.weight: Font.DemiBold
             }
@@ -62,6 +74,7 @@ Rectangle {
         }
 
         Rectangle {
+            visible: !banner._interrupted
             width: 22; height: 22; radius: 11
             color: dismissArea.containsMouse ? "#FFFFFF30" : "transparent"
             Text { anchors.centerIn: parent; text: "✕"; color: "#FFFFFF"; font.pixelSize: 12 }
