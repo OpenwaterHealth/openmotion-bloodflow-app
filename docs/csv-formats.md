@@ -71,7 +71,7 @@ Written for scans recorded on a Research build.
 | `mean_l1` … `mean_r8` | 16 | Dark-subtracted mean intensity, in DN (camera pixel-value units). |
 | `contrast_l1` … `contrast_r8` | 16 | Speckle contrast (unitless), corrected for dark level and shot noise. |
 | `temp_l1` … `temp_r8` | 16 | Camera temperature, °C. |
-| `quality_l1` … `quality_r8` | 16 | How the frame's timing was recorded (see below). |
+| `quality_l1` … `quality_r8` | 16 | Flags on that camera's frame: a corrected timestamp, an unlit camera, and the contact-quality warning shown during the scan (see below). |
 
 All 16 cameras always have columns. Cameras that weren't scanned have empty
 columns.
@@ -90,12 +90,13 @@ Written for scans recorded on a Clinical build.
 Values have up to 6 decimals. A camera with no value at a frame is left out
 of that frame's average.
 
-> **Known issue:** when a module's average BFI (or BVI) can't be computed at
-> a frame but the other metric can, the export writes `0.0` in that cell
-> instead of leaving it empty. This happens, for example, when every camera
-> on one module is covered: BVI is still computed, BFI is not. Treat a `0.0`
-> in a Clinical export as possibly missing. The Research layout is not
-> affected.
+When a module's average BFI (or BVI) can't be computed at a frame but the
+other metric can, the export writes `0.0` in that cell instead of leaving it
+empty. This is intended. It happens, for example, when every camera on one
+module is covered: BVI is still computed, BFI is not. The Clinical layout has
+no quality columns, so nothing in the file marks such a cell: treat a `0.0`
+in a Clinical export as possibly missing. The Research layout leaves the
+cell empty.
 
 ### Rows
 
@@ -126,20 +127,44 @@ holds the computed value without clamping, so values below 0 or above 10 do
 appear.
 
 A per-camera cell is empty when that camera has no valid measurement at that
-frame. Three things cause that: the frame was lost in transfer; the camera
-saw no light above its dark level (covered or unlit); or its variance fell
-below the shot-noise floor, which leaves `contrast` and `bfi` empty while
-`mean` and `bvi` can still have values. The full processing chain is
-described in the SDK's
+frame. Three things cause that:
+
+- The frame was lost in transfer. Every cell is empty.
+- The camera saw no light above its dark level: it was covered or lifted,
+  or its fiber was decoupled. `contrast` and `bfi` are empty. `mean` (near 0)
+  and `bvi` still have values, so `bvi` reads near 10, the top of the scale;
+  `quality` carries `low_light` on those frames.
+- Its variance fell below the shot-noise floor. `contrast` and `bfi` are
+  empty, while `mean` and `bvi` can still have values.
+
+The full processing chain is described in the SDK's
 [Science Pipeline reference](https://github.com/OpenwaterHealth/openmotion-sdk/blob/next/docs/SciencePipeline.md#58-darkcorrectionstage).
 
-**`quality`** values:
+**`quality`** is a `;`-separated list of flags, for example
+`ts_corrected;poor_contact`. A cell with no flag reads `ok`. Flags are always
+listed in the order of this table:
 
-| Value | Meaning |
+| Flag | Meaning |
 |---|---|
-| `ok` | Recorded as captured. |
 | `ts_corrected` | The frame arrived with a timestamp off the 25 ms cadence; `timestamp_s` was replaced by one interpolated from its neighbours. The other values are measured. |
 | `nan_filled` | A placeholder for a frame that never arrived. Such frames have no values, so in practice they rarely appear. |
+| `low_light` | The camera saw no light above its dark level on this frame (see above). `bfi` and `contrast` are empty; `bvi` reads near 10. |
+| `poor_contact` | The poor-contact warning was showing for this camera at this frame. |
+| `ambient_light` | The ambient-light warning was showing for this camera at this frame. |
+
+`poor_contact` and `ambient_light` record the live contact-quality warning
+the operator was shown during the scan. They are not a fresh judgment of the
+exported values, and they follow the warning's timing:
+
+- `poor_contact` is raised once the camera's signal, averaged over its last
+  5 frames, has stayed below its contact threshold for 10 consecutive frames
+  (about 0.25 s). It clears after 80 consecutive good frames (about 2 s). So
+  the flag starts slightly after contact degrades and stays about 2 s after
+  it recovers. A camera that sees no light at all counts as poor contact, so
+  an unlit camera usually reads `low_light;poor_contact`.
+- `ambient_light` is checked only on dark frames, about once every 15 s. It
+  is raised on a dark frame that sees too much light and stays until a later
+  dark frame is clean, so it covers whole 15 s stretches.
 
 ### Older scans
 
