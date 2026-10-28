@@ -278,6 +278,37 @@ Item {
         }
     }
 
+    // One Laser Optimizer setting (#746): a dropdown over the connector's
+    // choices for `name` (laser_optimizer_mode.SETTINGS) that writes
+    // `configKey`. A hand-set value between steps shows the nearest entry.
+    component OptimizerSettingCombo: StyledCombo {
+        property string name: ""
+        property string configKey: ""
+        property string prefix: ""
+        property string suffix: ""
+        property bool seconds: false     // show as "30 s" / "2 min"
+        readonly property var values:
+            (MotionInterface.laserOptimizerChoices || {})[name] || []
+        readonly property var defaultValue:
+            ((MotionInterface.laserOptimizerChoices || {}).defaults || {})[name]
+        readonly property var current:
+            (MotionInterface.laserOptimizerSettings || {})[name]
+        model: values.map(function(v) {
+            var t = seconds ? (v < 60 ? v + " s" : (v / 60) + " min")
+                            : prefix + v + suffix
+            return v === defaultValue ? t + " (default)" : t
+        })
+        currentIndex: {
+            var best = -1, bestD = Infinity
+            for (var i = 0; i < values.length; i++) {
+                var d = Math.abs(values[i] - current)
+                if (d < bestD) { bestD = d; best = i }
+            }
+            return best
+        }
+        onActivated: MotionInterface.setConfig(configKey, values[currentIndex])
+    }
+
     component StyledCombo: ComboBox {
         id: styledComboCtrl
         // 0 = unbounded (historic behavior, fine for short models). Set on
@@ -1775,6 +1806,116 @@ Item {
                                 MotionInterface.setConfig("engineeringMode", false)
                                 MotionInterface.notify("Engineering mode disabled.", "info", 3000, false, "engineering-mode")
                             }
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+                }
+
+                // ── Laser optimizer (#746) ────────────────────────────────────
+                // Its own card, shown only where the mode exists and may run:
+                // engineering mode on a research build (laserOptimizerAvailable
+                // is false in every clinical build, service tool included).
+                SectionCard {
+                    id: laserOptimizerCard
+                    objectName: "laserOptimizerCard"
+                    title: "Laser Optimizer"
+                    visible: MotionInterface.laserOptimizerAvailable === true
+                    // Validated values a run will use (PREFERENCE keys
+                    // laserOptimizer*; laser_optimizer_mode.SETTINGS).
+                    readonly property var opt: MotionInterface.laserOptimizerSettings || ({})
+
+                    Text {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: 11
+                        color: AppTheme.accentYellow
+                        text: qsTr("Experiments only — never for clinical scans. Optimize "
+                                   + "starts at %1x camera gain and a %2 µs laser pulse, "
+                                   + "steps down until cameras 4 and 5 read %3 DN (± %4 %), "
+                                   + "averaging %6 light frames per step, then scans for "
+                                   + "%5 s. The other rows run at 2x, 4x and 8x the near "
+                                   + "gain (16x at most). While it runs the exposure is "
+                                   + "2196 µs and the laser-safety limits are widened "
+                                   + "(pulse width 2200 µs, pulse interval 22,000 µs); "
+                                   + "everything returns to stock afterwards.")
+                              .arg(laserOptimizerCard.opt.startGain)
+                              .arg(laserOptimizerCard.opt.startPulseUs)
+                              .arg(laserOptimizerCard.opt.targetMeanDn)
+                              .arg(laserOptimizerCard.opt.tolerancePct)
+                              .arg(laserOptimizerCard.opt.scanDurationSec)
+                              .arg(laserOptimizerCard.opt.probeFrames)
+                    }
+
+                    FieldRow {
+                        label: "Near-camera setpoint"
+                        OptimizerSettingCombo {
+                            objectName: "laserOptimizerTargetCombo"
+                            name: "targetMeanDn"
+                            configKey: "laserOptimizerTargetMeanDn"
+                            suffix: " DN"
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    FieldRow {
+                        label: "Accepted band"
+                        OptimizerSettingCombo {
+                            objectName: "laserOptimizerToleranceCombo"
+                            name: "tolerancePct"
+                            configKey: "laserOptimizerTolerancePct"
+                            prefix: "± "
+                            suffix: " %"
+                        }
+                        Text {
+                            readonly property real t: laserOptimizerCard.opt.targetMeanDn || 0
+                            readonly property real p: (laserOptimizerCard.opt.tolerancePct || 0) / 100
+                            text: Math.round(t * (1 - p)) + "–" + Math.round(t * (1 + p)) + " DN"
+                            color: root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    FieldRow {
+                        label: "Starting gain"
+                        OptimizerSettingCombo {
+                            objectName: "laserOptimizerStartGainCombo"
+                            name: "startGain"
+                            configKey: "laserOptimizerStartGain"
+                            suffix: "x"
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    FieldRow {
+                        label: "Starting pulse"
+                        OptimizerSettingCombo {
+                            objectName: "laserOptimizerStartPulseCombo"
+                            name: "startPulseUs"
+                            configKey: "laserOptimizerStartPulseUs"
+                            suffix: " µs"
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    FieldRow {
+                        label: "Frames per probe"
+                        OptimizerSettingCombo {
+                            objectName: "laserOptimizerProbeFramesCombo"
+                            name: "probeFrames"
+                            configKey: "laserOptimizerProbeFrames"
+                            suffix: " light frames"
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    FieldRow {
+                        label: "Scan duration"
+                        OptimizerSettingCombo {
+                            objectName: "laserOptimizerDurationCombo"
+                            name: "scanDurationSec"
+                            configKey: "laserOptimizerScanDurationSec"
+                            seconds: true
                         }
                         Item { Layout.fillWidth: true }
                     }

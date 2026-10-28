@@ -17,6 +17,8 @@ Rectangle {
     property bool waiting: false       // true while a scan start is armed (pipeline-idle gate)
     property bool camerasReady: false  // gates Start/Check enablement
     property bool clinicalMode: false       // Clinical mode hides scan-settings button
+    // Laser optimizer scan (#746): engineering mode on a research build.
+    property bool laserOptimizerAvailable: false
 
     // Engineering-gated extras (Logs button). Live binding: appConfig is
     // a notify property, so the button appears the moment the runtime
@@ -37,6 +39,7 @@ Rectangle {
     signal historyClicked()
     signal settingsClicked()
     signal logsClicked()
+    signal optimizeClicked()
 
     FontLoader {
         id: iconFont
@@ -183,6 +186,23 @@ Rectangle {
             onClicked: panel.checkClicked()
         }
 
+        // Laser optimizer scan (#746): tune laser pulse + camera gain to
+        // the target image mean, then scan. Engineering experiments only.
+        Rectangle {
+            visible: panel.laserOptimizerAvailable
+            Layout.preferredWidth: 52; Layout.preferredHeight: 1
+            Layout.topMargin: 4; Layout.bottomMargin: 4
+            Layout.alignment: Qt.AlignHCenter; color: AppTheme.borderSubtle
+        }
+        PanelButton {
+            objectName: "laserOptimizerButton"
+            visible: panel.laserOptimizerAvailable
+            enabled: !panel.scanning && panel.camerasReady && panel.allConnected
+            laserIcon: true
+            label: "Optimize"
+            onClicked: panel.optimizeClicked()
+        }
+
         // ── spacer pushes bottom controls down ──
         Item { Layout.fillHeight: true }
 
@@ -227,6 +247,8 @@ Rectangle {
     component PanelButton: Item {
         id: btnItem
         property string iconText: ""
+        // Draw the laser-hazard sign (LaserSafetyIcon) instead of a font glyph.
+        property bool laserIcon: false
         property string label: ""
         property bool highlighted: false
         property color highlightColor: AppTheme.accentInteractive
@@ -253,12 +275,20 @@ Rectangle {
             spacing: 2
 
             Text {
-                text: btnItem.iconText
+                // A blank glyph keeps the icon row's height for the drawn sign.
+                text: btnItem.laserIcon ? " " : btnItem.iconText
                 font.family: iconFont.name
                 font.pixelSize: 26
                 color: btnItem.enabled ? (btnItem.highlighted ? "white" : AppTheme.textSecondary) : AppTheme.textDisabled
                 horizontalAlignment: Text.AlignHCenter
                 Layout.alignment: Qt.AlignHCenter
+
+                // Same colour as the font glyphs on the other buttons.
+                LaserSafetyIcon {
+                    visible: btnItem.laserIcon
+                    anchors.centerIn: parent
+                    color: parent.color
+                }
             }
 
             Text {

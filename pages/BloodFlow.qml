@@ -15,6 +15,15 @@ Rectangle {
 
 
     property bool scanning: false
+    // True for a scan started from the Optimize button (#746): the SDK's
+    // laser optimizer tunes pulse width + camera gain, then runs this scan.
+    property bool laserOptimizerScan: false
+    // What the header's elapsed / total counter shows: an optimizer scan
+    // runs for its own configured length, not the Scan Settings duration.
+    readonly property bool headerFreeRun: freeRun && !laserOptimizerScan
+    readonly property int headerDurationSec: laserOptimizerScan
+        ? (MotionInterface.laserOptimizerSettings.scanDurationSec || 10)
+        : durationSec
     property bool camerasReady: true  // gates Start/Check; false only while no sensor is connected
 
     // Aggregate live state of the contact-quality runners so main.qml
@@ -119,6 +128,18 @@ Rectangle {
         // doing redundant work.
     }
 
+    // Optimize button / Retry (#746): same start gate as a normal scan, with
+    // the progress modal up while the optimizer probes.
+    function startLaserOptimizerScan() {
+        if (bloodFlow.scanning || startGate.running) return
+        if (!laserOptimizerModal) return   // not in this build
+        if (!MotionInterface.checkStorageForScan()) return
+        bloodFlow.laserOptimizerScan = true
+        laserOptimizerModal.reset()
+        if (!laserOptimizerModal.visible) modalManager.toggle(laserOptimizerModal)
+        beginScanWhenReady()
+    }
+
     function beginScanNow() {
         bloodFlow.scanning = true
         bloodFlow.suppressLiveCqModal = false
@@ -221,6 +242,7 @@ Rectangle {
         // (re)connect, so a mid-session replug re-gates too.
         camerasReady: bloodFlow.camerasReady && !MotionInterface.deviceInitBusy
         clinicalMode: bloodFlow.clinicalMode
+        laserOptimizerAvailable: MotionInterface.laserOptimizerAvailable && !bloodFlow.clinicalMode
 
         // Action buttons — close any open modal first (which by
         // convention saves), then perform the action. If the open
@@ -243,6 +265,7 @@ Rectangle {
                 // drive the connector raises the E-305 critical modal and
                 // nothing starts — not even the clinical pre-scan check.
                 if (!MotionInterface.checkStorageForScan()) return
+                bloodFlow.laserOptimizerScan = false
                 if (bloodFlow.clinicalMode) {
                     clinicalStartPending = true
                     contactQualityModal.preScanMode = true
@@ -257,6 +280,11 @@ Rectangle {
             modalManager.closeCurrent()
             contactQualityModal.reset(false)
             beginCheckWhenReady()
+        }
+        onOptimizeClicked: {
+            if (bloodFlow.scanStartPending) return
+            modalManager.closeCurrent()
+            bloodFlow.startLaserOptimizerScan()
         }
 
         // Toggle buttons — open the named modal, or close it if it's
@@ -291,7 +319,7 @@ Rectangle {
         id: modalManager
         modals: [scanSettingsModal, notesModal, historyModal,
                  settingsModal, contactQualityModal, logsModal,
-                 sampleScanOfferModal]
+                 sampleScanOfferModal, laserOptimizerModal]
         // Hiding an item does not take its keyboard focus away (#517). A
         // modal closed while one of its text fields had focus left that
         // invisible field holding it: it took every later Space as typed
@@ -430,6 +458,43 @@ Rectangle {
         id: historyModal
     }
 
+    // Laser optimizer progress (#746): probe table while it tunes, then out
+    // of the way for the scan; back up for an outcome that needs the
+    // operator (not enough light → reposition, Retry). Loaded, never
+    // instantiated by type: a clinical bundle doesn't carry
+    // LaserOptimizerModal.qml, and the connector reports
+    // laserOptimizerInBuild false there (laserOptimizerModal stays null).
+    Loader {
+        id: laserOptimizerLoader
+        anchors.fill: parent
+        z: 9998
+        active: MotionInterface.laserOptimizerInBuild === true
+        source: active ? "../components/LaserOptimizerModal.qml" : ""
+    }
+    readonly property var laserOptimizerModal: laserOptimizerLoader.item
+    Connections {
+        target: bloodFlow.laserOptimizerModal
+        function onRetryRequested() { bloodFlow.startLaserOptimizerScan() }
+        function onStopRequested() {
+            if (bloodFlow.scanning) scanRunner.cancel()
+        }
+    }
+    Connections {
+        target: MotionInterface
+        enabled: bloodFlow.laserOptimizerModal !== null
+        function onLaserOptimizerProbe(row) { laserOptimizerModal.addProbe(row) }
+        function onLaserOptimizerScanStarted(setting) {
+            laserOptimizerModal.scanStarted(setting)
+            laserOptimizerModal.close()
+            MotionInterface.notify("Laser optimizer: scanning at " + setting, "info")
+        }
+        function onLaserOptimizerFinished(outcome, text) {
+            laserOptimizerModal.finished(outcome, text)
+            if (laserOptimizerModal.failed && !laserOptimizerModal.visible)
+                modalManager.toggle(laserOptimizerModal)
+        }
+    }
+
     SettingsModal {
         id: settingsModal
         // Audit Log: View Logs has no password in any build (#703).
@@ -524,6 +589,7 @@ Rectangle {
         durationSec: bloodFlow.durationSec
         subjectId: MotionInterface.userLabel
         disableLaser: false
+        laserOptimizer: bloodFlow.laserOptimizerScan
         laserOn: true
         laserPower: 50
         // triggerConfig left at the SetTriggerTask default ({}) so
@@ -548,6 +614,19 @@ Rectangle {
             bloodFlow.scanning = false
             bloodFlow.suppressLiveCqModal = false
 
+            if (bloodFlow.laserOptimizerScan) {
+                // The optimizer modal reports its own outcome (#746). A start
+                // the connector refused never reached the optimizer, so the
+                // modal is still on "probing": close that out here (the
+                // connector already raised a toast with the reason).
+                if (!ok && err !== "Canceled" && laserOptimizerModal
+                        && laserOptimizerModal.phase === "probing")
+                    laserOptimizerModal.finished("error", err)
+                // Back to the normal scan length in the header; Retry and
+                // the Optimize button set it again.
+                bloodFlow.laserOptimizerScan = false
+                return
+            }
             if (!ok && err !== "Canceled") {
                 console.log("ERROR: " + err)
                 // The scan progress dialog that used to surface these is

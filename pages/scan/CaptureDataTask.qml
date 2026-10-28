@@ -9,6 +9,10 @@ QtObject {
     property int durationSec: 60
     property string subjectId: ""
     property bool disableLaser: false
+    // Laser optimizer scan (#746): the connector runs the SDK optimizer,
+    // whose final scan is this capture; durationSec comes from the
+    // connector's laserOptimizerScanDurationSec instead.
+    property bool laserOptimizer: false
 
     property string leftPath: ""
     property string rightPath: ""
@@ -67,7 +71,9 @@ QtObject {
         // kick off async capture
         var startedOk = false
         try {
-            startedOk = connector.startCapture(subjectId, durationSec, leftCameraMask, rightCameraMask, disableLaser)
+            startedOk = laserOptimizer
+                ? connector.startLaserOptimizerCapture(subjectId, leftCameraMask, rightCameraMask)
+                : connector.startCapture(subjectId, durationSec, leftCameraMask, rightCameraMask, disableLaser)
         } catch(e) {}
         if (!startedOk) {
             // cleanup if start failed
