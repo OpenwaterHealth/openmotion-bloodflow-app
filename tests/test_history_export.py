@@ -281,3 +281,33 @@ def test_export_scan_csv_fails_when_notes_cannot_be_written(
     c.errorOccurred.connect(errors.append)
     assert c._export_scan_csv_sync(sid, str(tmp_path / "x.csv")) is False
     assert errors
+
+
+def test_export_carries_quality_flag_lists(tmp_path):
+    """#589/#600: quality is a ;-separated flag list that can carry the live
+    contact-quality verdict. The History export (real SDK materialize, no
+    mock) writes it into quality_l1 … quality_r8 as stored, and leaves the
+    cells of cameras that weren't scanned empty."""
+    import csv
+
+    db_path = str(tmp_path / "scans.db")
+    sid = _session(db_path, "scanQ", 1.0)
+    db = ScanDatabase(db_path=db_path)
+    stored = {10: "ok", 11: "ts_corrected;poor_contact", 12: "poor_contact;ambient_light"}
+    db.insert_session_data_rows([
+        {"session_id": sid, "cam_id": 0, "side": 0, "frame_id": fid,
+         "timestamp_s": fid * 0.025, "bfi": 4.0, "bvi": 6.0, "mean": 100.0,
+         "contrast": 0.2, "temp": None, "quality": quality}
+        for fid, quality in stored.items()
+    ])
+    db.close()
+    c = _connector(tmp_path, scan_db_path=db_path)
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    assert c._export_scans_sync([sid], str(out_dir)) == {"exported": 1, "skipped": 0}
+
+    with open(out_dir / "scanQ_export.csv", newline="", encoding="utf-8") as fh:
+        rows = {int(r["frame_id"]): r for r in csv.DictReader(fh)}
+    assert {fid: r["quality_l1"] for fid, r in rows.items()} == stored
+    assert all(r["quality_r1"] == "" for r in rows.values())
