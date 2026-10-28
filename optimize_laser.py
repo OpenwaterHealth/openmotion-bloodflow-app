@@ -414,15 +414,18 @@ def notes_block(result: OptimizeResult, *, left_mask: int, right_mask: int,
     missing = unoptimized_cameras(result, left_mask, right_mask)
     if missing:
         lines.append(f"Not optimized (sensor firmware settings): {', '.join(missing)}")
-    lines.append("---")
+    # No closing rule: the scan's footer opens with its own "---".
     return "\n".join(lines)
 
 
 def restore_message(problems: list[str]) -> tuple[bool, str]:
-    """(ok, message) for a Restore default laser settings result. Camera
-    write failures alone still count as restored: every Start and Check
+    """(ok, message) for a Restore default laser settings result. A laser or
+    trigger-config problem fails it (a held 2400 us skip under the restored
+    RATE_LL would latch E-202 on a direct trigger start). Camera write
+    failures alone still count as restored: every Start and Check
     reconfigures the cameras first."""
-    laser = [p for p in problems if p.startswith("laser power restore")]
+    laser = [p for p in problems
+             if p.startswith(("laser power restore", "trigger config reset"))]
     if laser:
         return False, ("Could not restore the laser defaults: " + "; ".join(laser)
                        + ". Power-cycle the console to be sure.")

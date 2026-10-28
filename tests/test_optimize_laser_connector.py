@@ -42,9 +42,16 @@ def _no_config_writes(monkeypatch):
 class _InlineThread:
     def __init__(self, target=None, daemon=None, name=None, **_):
         self._target = target
+        self.name = name
 
     def start(self):
         self._target()
+
+    def is_alive(self):
+        return False
+
+    def join(self, timeout=None):
+        pass
 
 
 class _InlineThreading:
@@ -369,6 +376,63 @@ def test_restore_refused_while_busy(tmp_path):
     restored = _record(c.laserDefaultsRestored)
     assert c.restoreDefaultLaserSettings() is False
     assert wf.calls == [] and restored[0][0] is False
+
+
+class _SlowThread:
+    """A worker still running at shutdown; finishes when joined."""
+    name = "OptimizeLaser"
+
+    def __init__(self):
+        self.alive = True
+        self.joined = None
+
+    def is_alive(self):
+        return self.alive
+
+    def join(self, timeout=None):
+        self.joined = timeout
+        self.alive = False
+
+
+def test_shutdown_restores_active_settings(tmp_path):
+    wf = FakeWorkflow(_result())
+    c = _connector(tmp_path, workflow=wf)
+    c._set_optimize_result(_result())
+    c._optimize_masks = (0x81, 0x00)
+    c.shutdown()
+    assert wf.calls == [("restore", 0x81, 0x00)]
+    assert c._optimize_result is None
+
+
+def test_shutdown_without_active_settings_touches_nothing(tmp_path):
+    wf = FakeWorkflow(_result())
+    c = _connector(tmp_path, workflow=wf)
+    c.shutdown()
+    assert wf.calls == []
+
+
+def test_shutdown_stops_a_run_and_waits_for_its_restore(tmp_path):
+    wf = FakeWorkflow(_result())
+    c = _connector(tmp_path, workflow=wf)
+    c._optimize_running = True
+    c._optimize_thread = _SlowThread()
+    c._optimize_worker_result = _result(passed=False, status=OptimizeStatus.NOT_CONVERGED)
+    c.shutdown()
+    assert c._optimize_stop.is_set() and c._optimize_thread.joined == 30.0
+    # The run restored itself; nothing more to do.
+    assert wf.calls == []
+
+
+def test_shutdown_restores_a_pass_the_main_thread_has_not_seen(tmp_path):
+    """The worker returned a passed result, but its queued result signal
+    never ran before the quit: the settings are on the device anyway."""
+    wf = FakeWorkflow(_result())
+    c = _connector(tmp_path, workflow=wf)
+    c._optimize_masks = (0xFF, 0x00)
+    c._optimize_thread = _SlowThread()
+    c._optimize_worker_result = _result()
+    c.shutdown()
+    assert wf.calls == [("restore", 0xFF, 0x00)]
 
 
 def test_restores_honor_force_laser_fail(tmp_path, monkeypatch):

@@ -216,8 +216,16 @@ class TestResults:
         assert "Optimize Laser log: optimize-20261028_120643.csv" in text
         assert "Not on target: L3, L4: too bright at minimum gain" in text
         # The scan uses R1, which the run did not optimize.
-        assert "Not optimized (sensor firmware settings): R1" in text
-        assert text.endswith("---")
+        assert text.endswith("Not optimized (sensor firmware settings): R1")
+
+    def test_notes_with_the_scan_footer_have_one_separator(self):
+        """The connector appends the block + a blank line; the scan footer
+        adds its own "---" (bench, 2026-10-28: the block's closing rule
+        doubled it)."""
+        block = ol.notes_block(_result(), left_mask=0x0D, right_mask=0x80,
+                               finished_at=datetime.datetime(2026, 10, 28, 13, 2, 3))
+        notes = (block + "\n\n").strip() + "\n---\nScan completed — duration: 00:00:10"
+        assert notes.splitlines().count("---") == 1
 
     def test_unoptimized_cameras(self):
         r = _result()
@@ -228,6 +236,9 @@ class TestResults:
         ([], True, "Laser and camera defaults restored."),
         (["camera writes failed: left cam 1"], True, "reconfigured at the next Start"),
         (["laser power restore failed: EE_PULSE_WIDTH_UL"], False, "Power-cycle the console"),
+        # A held 2400 us skip under the restored RATE_LL is a failed restore.
+        (["trigger config reset failed: the console rejected the stock trigger config"],
+         False, "Power-cycle the console"),
     ])
     def test_restore_message(self, problems, ok, fragment):
         got_ok, text = ol.restore_message(problems)

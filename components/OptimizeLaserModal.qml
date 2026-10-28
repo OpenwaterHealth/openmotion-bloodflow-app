@@ -56,9 +56,11 @@ Item {
         if (s === "no_data") return AppTheme.accentRed
         return AppTheme.textSecondary
     }
+    // Short, so both sensors' tables fit side by side; the alert lines
+    // below the table spell out "at maximum / minimum gain".
     function _statusText(s) {
-        return ({ "on_target": "on target", "too_dim": "too dim at max gain",
-                  "too_bright": "too bright at min gain", "adjusting": "adjusting",
+        return ({ "on_target": "on target", "too_dim": "too dim",
+                  "too_bright": "too bright", "adjusting": "adjusting",
                   "no_data": "no data" })[s] || s
     }
     function _side(side) {
@@ -114,7 +116,8 @@ Item {
 
     Rectangle {
         id: card
-        width: Math.min(parent.width - root.iconBarInset - 40, 620)
+        objectName: "optimizeLaserCard"
+        width: Math.min(parent.width - root.iconBarInset - 40, 660)
         height: Math.min(parent.height - 40, contentCol.implicitHeight + 48)
         radius: 12
         color: AppTheme.sheetBg
@@ -170,8 +173,10 @@ Item {
                 Layout.fillWidth: true
             }
 
-            // Per-camera table, one column block per sensor module.
+            // Per-camera table, one column block per sensor module. Fixed
+            // column widths (status elided), so it never runs past the card.
             RowLayout {
+                objectName: "optimizeLaserTable"
                 visible: root.cameras.length > 0
                 Layout.fillWidth: true
                 spacing: 24
@@ -209,6 +214,8 @@ Item {
                                 Text {
                                     text: root._statusText(modelData.status)
                                     color: root._statusColor(modelData.status); font.pixelSize: 12
+                                    Layout.preferredWidth: 76
+                                    elide: Text.ElideRight
                                 }
                             }
                         }

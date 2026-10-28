@@ -12,7 +12,8 @@ import pytest
 # Creates the offscreen QGuiApplication before conftest's QCoreApplication.
 import test_settings_modal_mode_gates as base  # noqa: E402
 from PyQt6.QtCore import (  # noqa: E402
-    Q_ARG, QMetaObject, QObject, Qt, QUrl, pyqtProperty, pyqtSignal, pyqtSlot,
+    Q_ARG, QCoreApplication, QMetaObject, QObject, Qt, QUrl, pyqtProperty, pyqtSignal,
+    pyqtSlot,
 )
 from PyQt6.QtQml import QQmlComponent, QQmlEngine, qmlRegisterSingletonInstance  # noqa: E402
 from PyQt6.QtQuick import QQuickWindow  # noqa: E402
@@ -154,6 +155,33 @@ def test_modal_follows_progress_and_result(qml):
     assert modal.property("dismissable") is True
     assert _py(modal.property("alerts")) == ["R4: too bright at minimum gain"]
     assert modal.property("csvName") == "optimize-x.csv"
+
+
+def test_modal_table_fits_the_card(qml):
+    """Bench, 2026-10-28: the right sensor's status text ran past the card."""
+    modal = qml("components", "OptimizeLaserModal.qml")
+    # The app's window size; a test-created modal has no parent to fill.
+    modal.setProperty("width", 1400)
+    modal.setProperty("height", 900)
+    base._invoke(modal, "reset")
+    base._invoke(modal, "open")
+    rows = [{"camera": f"{s[0].upper()}{p}", "side": s, "position": p, "gain": 13.0625,
+             "gainCode": 209, "mean": 710.0, "signal": 582.0, "dark": 128.0, "sat": 0.07,
+             "onTarget": False, "status": "too_bright"}
+            for s in ("left", "right") for p in range(1, 9)]
+    qml.stub.optimizeLaserProgress.emit({
+        "iteration": 3, "pulseWidthUs": 2096.0, "emittedPulseWidthUs": 2078.7,
+        "currentMa": 5000.0, "done": True, "status": "partial",
+        "next": {"pulseWidthUs": 2096.0, "currentMa": 5000.0}, "cameras": rows})
+    for _ in range(5):          # let the layouts polish
+        QCoreApplication.processEvents()
+    card = modal.findChild(QObject, "optimizeLaserCard")
+    table = modal.findChild(QObject, "optimizeLaserTable")
+    assert table.property("implicitWidth") > 400     # really laid out
+    assert table.property("implicitWidth") <= card.property("width") - 48, (
+        table.property("implicitWidth"), card.property("width"))
+    modal.setProperty("running", False)
+    base._invoke(modal, "close")
 
 
 def test_modal_shows_errors_from_the_runner(qml):

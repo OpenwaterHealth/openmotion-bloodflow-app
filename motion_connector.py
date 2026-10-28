@@ -1380,6 +1380,11 @@ class MotionConnector(QObject):
         self._optimize_finished_at = None
         self._optimize_workflow = None
         self._laser_restore_running = False
+        # The worker threads, joined by shutdown(), and the run's result as
+        # the worker returned it (before the queued slot sees it).
+        self._optimize_thread = None
+        self._optimize_worker_result = None
+        self._laser_restore_thread = None
         # Monotonic id assigned to each notify() call. itertools.count is a
         # single atomic step under the GIL — notify() is reachable from
         # several worker threads (export/bundle/update workers), where a
@@ -2792,6 +2797,10 @@ class MotionConnector(QObject):
         teardown) right after this returns."""
         logger.info("Shutting down MotionConnector...")
         self.stopCapture()
+        try:
+            self._shutdown_optimize_laser()
+        except Exception:
+            logger.exception("Optimize Laser shutdown restore failed")
         try:
             self._audit.log("system_shutdown", {"clean": True})
             self._audit.close()
@@ -4796,9 +4805,12 @@ class MotionConnector(QObject):
             except Exception as exc:
                 logger.exception("Optimize Laser raised")
                 result = exc
+            self._optimize_worker_result = result
             self._optimizeDoneSignal.emit(result)
 
-        threading.Thread(target=_worker, daemon=True, name="OptimizeLaser").start()
+        self._optimize_worker_result = None
+        self._optimize_thread = threading.Thread(target=_worker, daemon=True, name="OptimizeLaser")
+        self._optimize_thread.start()
         return True
 
     @pyqtSlot()
@@ -4871,8 +4883,46 @@ class MotionConnector(QObject):
                 problems = [f"laser power restore raised: {exc}"]
             self._laserRestoreDoneSignal.emit(problems)
 
-        threading.Thread(target=_worker, daemon=True, name="OptimizeLaserRestore").start()
+        self._laser_restore_thread = threading.Thread(
+            target=_worker, daemon=True, name="OptimizeLaserRestore")
+        self._laser_restore_thread.start()
         return True
+
+    def _shutdown_optimize_laser(self) -> None:
+        """App quit: leave no Optimize Laser settings on the console. A run
+        in flight is stopped (it restores before it returns) and a restore in
+        flight finishes; settings still active are restored here. Otherwise
+        the widened safety limits and the long pulse would stay until the
+        console's next connect or power-cycle (bench, 2026-10-28)."""
+        if optimize_laser is None or not hasattr(self, "_optimize_running"):
+            return   # a connector built without __init__ (unit tests)
+        if self._optimize_running:
+            self._optimize_stop.set()
+        for thread in (self._optimize_thread, self._laser_restore_thread):
+            if thread is not None and thread.is_alive():
+                logger.info("Waiting for %s before shutdown", thread.name)
+                thread.join(timeout=30.0)
+                if thread.is_alive():
+                    logger.warning("%s still running at shutdown", thread.name)
+        # A run that passed just before the quit: its queued result never
+        # reached _on_optimize_done, but its settings are on the device.
+        pending = self._optimize_worker_result
+        active = self._optimize_result or (
+            pending if getattr(pending, "passed", False) else None)
+        if active is None:
+            return
+        logger.warning("Restoring the default laser settings before quitting "
+                       "(left=0x%02X right=0x%02X)", *self._optimize_masks)
+        try:
+            problems = self._optimize_wf().restore_defaults(*self._optimize_masks)
+        except Exception as e:
+            problems = [f"laser power restore raised: {e}"]
+        ok, text = optimize_laser.restore_message(problems)
+        (logger.info if ok else logger.error)("Shutdown restore: %s", text)
+        self._audit.log("laser_defaults_restored",
+                        {"ok": ok, "problems": problems, "at": "shutdown"})
+        self._optimize_result = None
+        self._optimize_worker_result = None
 
     @pyqtSlot(object)
     def _on_laser_restore_done(self, problems):
@@ -5022,10 +5072,11 @@ class MotionConnector(QObject):
         # camera setting goes into the session notes).
         self._scan_notes = ""
         if optimized is not None:
+            # A blank line keeps notes typed during the scan apart from it.
             self._scan_notes = optimize_laser.notes_block(
                 self._optimize_result, left_mask=left_camera_mask,
                 right_mask=right_camera_mask,
-                finished_at=self._optimize_finished_at or datetime.datetime.now()) + "\n"
+                finished_at=self._optimize_finished_at or datetime.datetime.now()) + "\n\n"
         self._scan_notes_session_label = ""
         self.scanNotesChanged.emit()
         self._capture_running = True
