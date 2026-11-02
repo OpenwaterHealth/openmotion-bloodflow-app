@@ -25,7 +25,7 @@ FORM = {"method": "fit", "targetMean": 200.0, "passingRange": 20.0, "startPoint"
         "order": "gain,pulse_width,current", "gainBounds": [[1.0, 16.0]] * 4,
         "pulseWidthBounds": [100.0, 2096.0], "currentBounds": [2500.0, 5000.0],
         "gainMode": "individual", "gainPriority": "near", "framesPerIteration": 1,
-        "inRangePoints": 1}
+        "inRangePoints": 1, "scanAfterOptimize": False, "scanDurationSec": 10}
 
 
 class _Stub(base._StubMotionInterface):
@@ -42,6 +42,9 @@ class _Stub(base._StubMotionInterface):
         self.saved_forms = []
         self.restores = 0
         self.answers = []
+        self.storage_ok = True
+        self.toasts = []
+        self.optimize_runs = 0
         self.current = {"source": "default", "gainBounds": ["16×", "4×", "2×", "1×"],
                         "pulseWidthBounds": "530 µs", "currentBounds": "5000 mA",
                         "exposure": "648 µs"}
@@ -53,6 +56,18 @@ class _Stub(base._StubMotionInterface):
     @pyqtSlot(str)
     def answerOptimizeLaser(self, answer):
         self.answers.append(answer)
+
+    @pyqtSlot(int, int)
+    def optimizeLaser(self, left, right):
+        self.optimize_runs += 1
+
+    @pyqtSlot(result=bool)
+    def checkStorageForScan(self):
+        return self.storage_ok
+
+    @pyqtSlot(result=bool)
+    def isPipelineIdle(self):
+        return False        # holds the start gate armed, so nothing scans
 
     @pyqtProperty(bool, notify=optimizeLaserStateChanged)
     def optimizeLaserAvailable(self):
@@ -93,7 +108,7 @@ class _Stub(base._StubMotionInterface):
     @pyqtSlot(str, str, int)
     @pyqtSlot(str, str, int, bool, str)
     def notify(self, text, kind="info", ms=0, sticky=True, tag=""):
-        pass
+        self.toasts.append((text, kind))
 
 
 @pytest.fixture(scope="module")
@@ -380,6 +395,125 @@ def test_modal_hides_the_iteration_count_when_no_run_started(qml):
     stub.optimizeLaserFinished.emit(False, "Optimize Laser needs engineering mode.", {})
     assert modal.findChild(QObject, "optimizeLaserIterations").property("visible") is False
     base._invoke(modal, "close")
+
+
+def test_settings_section_has_the_scan_after_controls(qml):
+    stub = qml.stub
+    modal = qml("components", "SettingsModal.qml")
+    stub.setFlags(clinical=False, engineering=True)
+    base._invoke(modal, "open")
+    try:
+        section = _section(modal)
+        base._invoke(section, "load")
+        toggle = modal.findChild(QObject, "optimizeLaserScanAfterSwitch")
+        duration = modal.findChild(QObject, "optimizeLaserField_scanDurationSec")
+        assert toggle.property("checked") is False
+        assert duration.property("text") == "10"
+        assert duration.property("enabled") is False    # only with the toggle on
+        section.setProperty("form", {**FORM, "scanAfterOptimize": True, "scanDurationSec": 45})
+        assert toggle.property("checked") is True
+        assert duration.property("text") == "45" and duration.property("enabled") is True
+        section.setProperty("form", dict(FORM))
+    finally:
+        base._invoke(modal, "close")
+
+
+def _runner(page):
+    return next(o for o in page.findChildren(QObject)
+                if o.metaObject().indexOfProperty("mode") >= 0 and o.property("mode") == "optimize")
+
+
+def _finish_run(qml, page, summary, ok=True):
+    """Runs the real task, so its handler, the page's and the modal's all
+    hear optimizeLaserFinished in their real order. Returns the open modal."""
+    modal = next(o for o in page.findChildren(QObject)
+                 if o.metaObject().indexOfProperty("deciding") >= 0)
+    base._invoke(modal, "reset")
+    base._invoke(modal, "open")
+    base._invoke(_runner(page).property("optimizeTask"), "run")
+    assert modal.property("running") is True and qml.stub.optimize_runs == 1
+    qml.stub.optimize_runs = 0
+    qml.stub.optimizeLaserFinished.emit(ok, "done", summary)
+    return modal
+
+
+def _stop_gate(page):
+    gate = next((o for o in page.findChildren(QObject)
+                 if o.metaObject().indexOfProperty("action") >= 0
+                 and o.metaObject().indexOfProperty("elapsedMs") >= 0), None)
+    assert gate is not None
+    was_armed, action = gate.property("running"), gate.property("action")
+    gate.setProperty("running", False)
+    return was_armed, action
+
+
+AUTO = {"autoScanSec": 15, "iterations": 3, "alerts": [], "csvName": "", "cameras": []}
+
+
+def test_a_good_run_goes_straight_into_a_scan(qml):
+    stub = qml.stub
+    page = qml("pages", "BloodFlow.qml")
+    page.setProperty("durationSec", 3600)
+    modal = _finish_run(qml, page, AUTO)
+    assert modal.property("visible") is False
+    assert page.property("autoScanSec") == 15
+    assert page.property("scanDurationSec") == 15
+    assert page.property("durationSec") == 3600     # Scan Settings keeps its own
+    assert page.property("scanFreeRun") is False
+    assert _stop_gate(page) == (True, "scan")
+    assert stub.toasts[-1] == ("Optimize Laser finished in 3 iteration(s). Scanning for 15 s.",
+                               "info")
+
+
+def test_camera_alerts_ride_on_the_toast(qml):
+    stub = qml.stub
+    page = qml("pages", "BloodFlow.qml")
+    _finish_run(qml, page, {**AUTO, "alerts": ["L1: too dim at maximum gain"]})
+    _stop_gate(page)
+    assert stub.toasts[-1] == (
+        "Optimize Laser finished in 3 iteration(s). Scanning for 15 s. "
+        "L1: too dim at maximum gain", "warning")
+
+
+@pytest.mark.parametrize("summary, ok", [
+    ({**AUTO, "autoScanSec": 0}, True),     # toggle off, or a result that waits
+    (AUTO, False),                          # the run failed
+    ({}, False),                            # a refused start
+])
+def test_other_endings_do_not_scan(qml, summary, ok):
+    page = qml("pages", "BloodFlow.qml")
+    modal = _finish_run(qml, page, summary, ok=ok)
+    assert modal.property("visible") is True
+    assert page.property("autoScanSec") == 0
+    assert _stop_gate(page)[0] is False
+
+
+def test_low_storage_stops_the_automatic_scan(qml):
+    stub = qml.stub
+    page = qml("pages", "BloodFlow.qml")
+    stub.storage_ok = False
+    try:
+        modal = _finish_run(qml, page, AUTO)
+    finally:
+        stub.storage_ok = True
+    assert modal.property("visible") is True
+    assert page.property("autoScanSec") == 0
+    assert _stop_gate(page)[0] is False
+
+
+def test_the_scan_ending_gives_scan_settings_back(qml):
+    page = qml("pages", "BloodFlow.qml")
+    page.setProperty("durationSec", 3600)
+    _finish_run(qml, page, AUTO)
+    _stop_gate(page)
+    capture = next(o for o in page.findChildren(QObject)
+                   if o.metaObject().indexOfProperty("mode") >= 0
+                   and o.property("mode") == "capture")
+    assert capture.property("durationSec") == 15
+    QMetaObject.invokeMethod(capture, "scanFinished", Qt.ConnectionType.DirectConnection,
+                             Q_ARG(bool, True), Q_ARG(str, ""), Q_ARG(str, ""), Q_ARG(str, ""))
+    assert page.property("autoScanSec") == 0
+    assert capture.property("durationSec") == 3600
 
 
 def test_button_panel_shows_the_button_only_when_asked(qml):

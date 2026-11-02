@@ -109,10 +109,10 @@ ApplicationWindow {
             // Bind session bar state from BloodFlow page
             sessionId:   bloodFlowPage.sessionId
             scanning:    bloodFlowPage.scanning
-            freeRun:     bloodFlowPage.freeRun
+            freeRun:     bloodFlowPage.scanFreeRun
             clinicalMode:     bloodFlowPage.clinicalMode
             elapsedSec:  bloodFlowPage.elapsedSec
-            durationSec: bloodFlowPage.durationSec
+            durationSec: bloodFlowPage.scanDurationSec
 
             // Issue #75: warn-then-quit on close-while-busy.
             //   * Always: dismiss the open modal first (if any +

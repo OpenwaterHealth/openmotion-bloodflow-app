@@ -1955,6 +1955,41 @@ Item {
                             Item { Layout.fillWidth: true }
                         }
 
+                        // Scan straight after a good run, on its own duration.
+                        FieldRow {
+                            label: "Start a scan after optimizing"
+                            PillSwitch {
+                                objectName: "optimizeLaserScanAfterSwitch"
+                                checked: optimizeLaserSection.form.scanAfterOptimize === true
+                                onToggled: optimizeLaserSection.setField("scanAfterOptimize", checked)
+                            }
+                            Item { Layout.fillWidth: true }
+                        }
+                        FieldRow {
+                            label: "Scan duration (s)"
+                            StyledNumberField {
+                                objectName: "optimizeLaserField_scanDurationSec"
+                                decimals: 0
+                                enabled: optimizeLaserSection.form.scanAfterOptimize === true
+                                text: {
+                                    var v = optimizeLaserSection.form.scanDurationSec
+                                    return v === undefined || v === null ? "" : String(v)
+                                }
+                                onEditingFinished: optimizeLaserSection.setField(
+                                    "scanDurationSec", Number(text))
+                            }
+                            Item { Layout.fillWidth: true }
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                            font.pixelSize: 11
+                            color: root.colTextMuted
+                            text: "After an on-target or partial result the scan starts by "
+                                  + "itself, for this long instead of the Scan Settings "
+                                  + "duration. Any other result waits in the result window."
+                        }
+
                         Repeater {
                             model: optimizeLaserSection.errors
                             delegate: Text {

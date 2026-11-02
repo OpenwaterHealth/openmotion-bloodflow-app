@@ -192,6 +192,20 @@ def test_passed_run_activates_its_settings(tmp_path, inline_threads):
     assert c.optimizeLaserSummary["pulseWidthUs"] == 1901.0
 
 
+@pytest.mark.parametrize("saved, status, seconds", [
+    ({"scanAfterOptimize": True, "scanDurationSec": 15}, OptimizeStatus.ON_TARGET, 15),
+    ({"scanAfterOptimize": True, "scanDurationSec": 15}, OptimizeStatus.PARTIAL, 15),
+    ({"scanAfterOptimize": True, "scanDurationSec": 15}, OptimizeStatus.TOO_DIM_AT_MAX, 0),
+    ({"scanDurationSec": 15}, OptimizeStatus.ON_TARGET, 0),
+])
+def test_the_result_says_whether_a_scan_follows(tmp_path, inline_threads, saved, status, seconds):
+    c = _connector(tmp_path, {**RESEARCH_ENG, ol.SETTINGS_KEY: saved},
+                   FakeWorkflow(_result(status=status)))
+    finished = _record(c.optimizeLaserFinished)
+    c.optimizeLaser(0xFF, 0)
+    assert finished[0][0] is True and finished[0][2]["autoScanSec"] == seconds
+
+
 def test_a_new_run_starts_from_the_active_gains(tmp_path, inline_threads):
     wf = FakeWorkflow(_result())
     c = _connector(tmp_path, workflow=wf)
@@ -410,6 +424,17 @@ def test_scan_carries_the_overrides_and_the_notes_block(tmp_path):
     assert req.camera_gains == "gains"
     assert req.calibration_override == {"i_max": 400.0}
     assert c._scan_notes.startswith("--- Optimize Laser settings")
+    assert not any(isinstance(s, motion_connector.ContactQualityMonitor) for s in req.sinks)
+    c.stopCapture()
+
+
+def test_stock_scans_keep_the_live_contact_quality_monitor(tmp_path):
+    c = _connector(tmp_path)
+    c.checkStorageForScan = lambda: True
+    c._interface.start_scan.return_value = True
+    assert c.startCapture("subj", 10, 0x01, 0, False) is True
+    req = c._interface.start_scan.call_args.args[0]
+    assert any(isinstance(s, motion_connector.ContactQualityMonitor) for s in req.sinks)
     c.stopCapture()
 
 
@@ -423,6 +448,9 @@ def test_settings_form_saves_only_valid_values(tmp_path):
     assert c._app_config[ol.SETTINGS_KEY] == {"targetMean": 300.0}
     errors = c.setOptimizeLaserSettings({**ol.DEFAULT_FORM, "pulseWidthBounds": [100, 2200]})
     assert errors and c._app_config[ol.SETTINGS_KEY] == {"targetMean": 300.0}
+    assert c.setOptimizeLaserSettings(
+        {**ol.DEFAULT_FORM, "scanAfterOptimize": True, "scanDurationSec": 25}) == []
+    assert c._app_config[ol.SETTINGS_KEY] == {"scanAfterOptimize": True, "scanDurationSec": 25}
 
 
 def test_restore_uses_the_run_masks_and_clears_the_settings(tmp_path, inline_threads):

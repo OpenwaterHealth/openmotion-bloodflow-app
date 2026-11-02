@@ -160,7 +160,14 @@ def to_form(settings: OptimizeLaserSettings) -> dict:
 # above background, +/- 10 DN, 20 consecutive in-range points to exit.
 DEFAULT_SETTINGS = dataclasses.replace(
     OptimizeLaserSettings(), target_mean=100.0, passing_range=10.0, in_range_points=20)
-DEFAULT_FORM = to_form(DEFAULT_SETTINGS)
+# Scanning straight after a good run: form fields of the app's, not SDK
+# settings, because the run itself doesn't change.
+SCAN_AFTER_DEFAULTS = {"scanAfterOptimize": False, "scanDurationSec": 10}
+SCAN_DURATION_RANGE_S = (1, 3600)
+# Results good enough to scan on with nobody looking first. The others that
+# count as a pass (too dim, too bright, accepted) wait in the result window.
+SCAN_AFTER_STATUSES = (OptimizeStatus.ON_TARGET, OptimizeStatus.PARTIAL)
+DEFAULT_FORM = {**to_form(DEFAULT_SETTINGS), **SCAN_AFTER_DEFAULTS}
 GAIN_STEP = 1.0 / 16    # analog gain register resolution
 
 _LABELS = {
@@ -171,6 +178,7 @@ _LABELS = {
     "currentBounds": "drive current bounds", "gainMode": "gain adjustment",
     "gainPriority": "gain priority", "framesPerIteration": "frames per iteration",
     "inRangePoints": "in-range points to exit",
+    "scanAfterOptimize": "start a scan after optimizing", "scanDurationSec": "scan duration",
 }
 
 
@@ -239,6 +247,14 @@ def from_form(form: Mapping[str, Any]) -> tuple[Optional[OptimizeLaserSettings],
     if knobs is None:
         errors.append(f"optimization order must be text like 'gain,pulse_width,current', got {order!r}")
 
+    if not isinstance(f["scanAfterOptimize"], bool):
+        errors.append(f"start a scan after optimizing must be on or off, "
+                      f"got {f['scanAfterOptimize']!r}")
+    seconds = _whole("scan duration", f["scanDurationSec"], errors)
+    low, high = SCAN_DURATION_RANGE_S
+    if seconds is not None and not low <= seconds <= high:
+        errors.append(f"scan duration {seconds} s is outside {low} to {high} s")
+
     parsed = dict(
         method=_choice("method", f["method"], Method, errors),
         target_mean=_number("target mean", f["targetMean"], errors),
@@ -275,10 +291,30 @@ def stored_settings(app_config: Mapping[str, Any]) -> tuple[Optional[OptimizeLas
     return from_form(stored_form(app_config))
 
 
-def storage_diff(settings: OptimizeLaserSettings) -> dict:
+def storage_diff(settings: OptimizeLaserSettings,
+                 form: Optional[Mapping[str, Any]] = None) -> dict:
     """What to save under ``SETTINGS_KEY``: the values that differ from the
-    defaults."""
-    return {k: v for k, v in to_form(settings).items() if v != DEFAULT_FORM[k]}
+    defaults. ``form`` is the validated form the settings came from, which
+    carries the scan-after fields."""
+    form = form or {}
+    full = {
+        **to_form(settings),
+        "scanAfterOptimize": form.get("scanAfterOptimize", SCAN_AFTER_DEFAULTS["scanAfterOptimize"]),
+        "scanDurationSec": int(form.get("scanDurationSec", SCAN_AFTER_DEFAULTS["scanDurationSec"])),
+    }
+    return {k: v for k, v in full.items() if v != DEFAULT_FORM[k]}
+
+
+def scan_after_seconds(app_config: Mapping[str, Any]) -> Optional[int]:
+    """How long to scan after a good run, or None when the toggle is off.
+    Read after ``stored_settings`` validated the saved form."""
+    form = stored_form(app_config)
+    return int(form["scanDurationSec"]) if form["scanAfterOptimize"] is True else None
+
+
+def scans_after(result: OptimizeResult) -> bool:
+    """Whether this result may go straight into a scan."""
+    return result.passed and result.status in SCAN_AFTER_STATUSES
 
 
 def choices() -> dict:
@@ -295,6 +331,7 @@ def choices() -> dict:
             "pulseWidthUs": [LIMITS.pulse_width_min_us, LIMITS.effective_pulse_width_max_us],
             "currentMa": [LIMITS.current_min_ma, LIMITS.effective_current_max_ma],
             "exposureUs": LIMITS.exposure_us,
+            "scanDurationSec": list(SCAN_DURATION_RANGE_S),
         },
     }
 
@@ -392,9 +429,12 @@ def message(result: OptimizeResult) -> str:
     return f"{text} Scans can go ahead with these settings."
 
 
-def summary(result: OptimizeResult, *, run_seconds: Optional[float] = None) -> dict:
+def summary(result: OptimizeResult, *, run_seconds: Optional[float] = None,
+            scan_after_sec: Optional[int] = None) -> dict:
     """A finished run, for the modal and the Settings card. ``run_seconds``:
-    how long the run itself took (the camera setup before it not included)."""
+    how long the run itself took (the camera setup before it not included).
+    ``scan_after_sec``: the automatic scan's length, when the toggle was on
+    for this run; ``autoScanSec`` is non-zero only if this result scans."""
     final = result.settings
     last = result.records[-1] if result.records else None
     shown = final or (last.settings if last else None)
@@ -402,6 +442,7 @@ def summary(result: OptimizeResult, *, run_seconds: Optional[float] = None) -> d
         "passed": result.passed,
         "accepted": result.accepted,
         "runSeconds": None if run_seconds is None else round(float(run_seconds), 1),
+        "autoScanSec": scan_after_sec if scan_after_sec and scans_after(result) else 0,
         "status": _value(result.status) if result.status else "",
         "message": message(result),
         "alerts": camera_alerts(result) if result.passed else [],
@@ -458,6 +499,7 @@ def notes_block(result: OptimizeResult, *, left_mask: int, right_mask: int,
         "while these settings are active",
         f"BVI I_max: {2 * cfg.target_mean:g} DN (2 x target). BFI uses the stock "
         "calibration, so it is not comparable with scans at stock settings.",
+        "Live contact-quality warnings: off at these settings",
     ]
     if result.csv_path:
         lines.append(f"Optimize Laser log: {os.path.basename(result.csv_path)}")

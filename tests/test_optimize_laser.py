@@ -32,7 +32,7 @@ class TestForm:
         settings, errors = ol.from_form(ol.DEFAULT_FORM)
         assert errors == []
         assert settings == ol.DEFAULT_SETTINGS
-        assert ol.to_form(settings) == ol.DEFAULT_FORM
+        assert {**ol.to_form(settings), **ol.SCAN_AFTER_DEFAULTS} == ol.DEFAULT_FORM
 
     def test_study_defaults(self):
         """Brad, 2026-11-02: 100 DN above background, +/- 10, 20 points;
@@ -127,6 +127,56 @@ class TestForm:
         assert c["defaults"] == ol.DEFAULT_FORM
         assert c["limits"]["pulseWidthUs"] == [100.0, 2096.0]
         assert c["limits"]["currentMa"] == [2500.0, 5000.0]
+
+
+class TestScanAfter:
+    def test_off_by_default(self):
+        assert ol.DEFAULT_FORM["scanAfterOptimize"] is False
+        assert ol.DEFAULT_FORM["scanDurationSec"] == 10
+        assert ol.scan_after_seconds({}) is None
+
+    def test_saved_with_the_form(self):
+        form = {**ol.DEFAULT_FORM, "scanAfterOptimize": True, "scanDurationSec": 30.0}
+        settings, errors = ol.from_form(form)
+        assert errors == []
+        saved = ol.storage_diff(settings, form)
+        assert saved == {"scanAfterOptimize": True, "scanDurationSec": 30}
+        assert ol.scan_after_seconds({ol.SETTINGS_KEY: saved}) == 30
+        # The duration alone doesn't turn it on.
+        assert ol.scan_after_seconds({ol.SETTINGS_KEY: {"scanDurationSec": 30}}) is None
+
+    @pytest.mark.parametrize("form, fragment", [
+        ({"scanDurationSec": 0}, "outside 1 to 3600"),
+        ({"scanDurationSec": 3601}, "outside 1 to 3600"),
+        ({"scanDurationSec": 2.5}, "whole number"),
+        ({"scanDurationSec": "10"}, "scan duration must be a number"),
+        ({"scanAfterOptimize": 1}, "on or off"),
+    ])
+    def test_bad_values_are_errors(self, form, fragment):
+        settings, errors = ol.from_form(form)
+        assert settings is None and any(fragment in e for e in errors), errors
+
+    @pytest.mark.parametrize("status, passed, scans", [
+        (OptimizeStatus.ON_TARGET, True, True),
+        (OptimizeStatus.PARTIAL, True, True),
+        (OptimizeStatus.TOO_DIM_AT_MAX, True, False),
+        (OptimizeStatus.TOO_BRIGHT_AT_MIN, True, False),
+        (OptimizeStatus.SPREAD_TOO_WIDE, True, False),
+        (OptimizeStatus.NOT_CONVERGED, False, False),
+    ])
+    def test_which_results_scan(self, status, passed, scans):
+        result = _result(status=status, passed=passed)
+        assert ol.scans_after(result) is scans
+        assert ol.summary(result, scan_after_sec=15)["autoScanSec"] == (15 if scans else 0)
+
+    def test_an_accepted_run_waits(self):
+        accepted = dataclasses.replace(
+            _result(status=OptimizeStatus.NOT_CONVERGED), accepted=True)
+        assert accepted.passed and not ol.scans_after(accepted)
+        assert ol.summary(accepted, scan_after_sec=15)["autoScanSec"] == 0
+
+    def test_toggle_off_never_scans(self):
+        assert ol.summary(_result(status=OptimizeStatus.ON_TARGET))["autoScanSec"] == 0
 
 
 # ---- gates ----------------------------------------------------------------
@@ -238,6 +288,7 @@ class TestResults:
         assert "Camera gains (right): 8: 12.8125x" in text
         assert "Dark-frame skip: 2400 us" in text
         assert "BVI I_max: 400 DN" in text
+        assert "Live contact-quality warnings: off at these settings" in text
         assert "Optimize Laser log: optimize-20261028_120643.csv" in text
         assert "Not on target: L3, L4: too bright at minimum gain" in text
         # The scan uses R1, which the run did not optimize.

@@ -64,6 +64,13 @@ Rectangle {
     // Duration from scan time modal
     property bool freeRun: clinicalMode
     property int durationSec: clinicalMode ? 43200 : 3600  // 12h in clinical mode, 1h default
+    // Optimize Laser's automatic scan runs for its own duration, for that
+    // scan only, so Scan Settings keeps its values. 0 = a normal scan.
+    property int autoScanSec: 0
+    readonly property int scanDurationSec: autoScanSec > 0 ? autoScanSec : durationSec
+    readonly property bool scanFreeRun: freeRun && autoScanSec === 0
+    // A finished run's summary while its runner unwinds, when it scans next.
+    property var pendingAutoScan: null
 
     onClinicalModeChanged: {
         if (clinicalMode) {
@@ -159,6 +166,19 @@ Rectangle {
             return
         startGate.arm("check")
     }
+    // "Start a scan after optimizing": a good run goes straight into the
+    // normal Start path, with the same checks, on its own duration.
+    function beginAutoScan(summary) {
+        if (!MotionInterface.checkStorageForScan()) return
+        bloodFlow.autoScanSec = summary.autoScanSec
+        optimizeLaserModal.close()
+        var alerts = summary.alerts || []
+        MotionInterface.notify(
+            "Optimize Laser finished in " + summary.iterations + " iteration(s). Scanning for "
+            + summary.autoScanSec + " s." + (alerts.length ? " " + alerts.join("; ") : ""),
+            alerts.length ? "warning" : "info", 8000)
+        beginScanWhenReady()
+    }
     // And for Optimize Laser (its runner flashes the cameras first, like Check).
     function beginOptimizeWhenReady() {
         if (bloodFlow.scanning || startGate.running || qualityCheckRunner.running
@@ -203,6 +223,7 @@ Rectangle {
             if (elapsedMs >= deadline) {
                 stop()
                 if (action === "scan") {
+                    bloodFlow.autoScanSec = 0
                     MotionInterface.notify(
                         "Could not start scan — the previous step is still " +
                         "finishing. Please press Start again.", "error")
@@ -565,7 +586,7 @@ Rectangle {
         connector: MotionInterface
         leftMask: bloodFlow.leftMask
         rightMask: bloodFlow.rightMask
-        durationSec: bloodFlow.durationSec
+        durationSec: bloodFlow.scanDurationSec
         subjectId: MotionInterface.userLabel
         disableLaser: false
         laserOn: true
@@ -591,6 +612,7 @@ Rectangle {
             // bloodFlow.scanning flips false or triggerState goes "OFF".
             bloodFlow.scanning = false
             bloodFlow.suppressLiveCqModal = false
+            bloodFlow.autoScanSec = 0
 
             if (!ok && err !== "Canceled") {
                 console.log("ERROR: " + err)
@@ -662,12 +684,21 @@ Rectangle {
             if (!ok && optimizeRunner._stage !== "optimize")
                 optimizeLaserModal.showError(err === "Canceled" ? "Optimize Laser canceled."
                                              : (err || "Optimize Laser pipeline failed"))
+            var autoScan = bloodFlow.pendingAutoScan
+            bloodFlow.pendingAutoScan = null
+            if (ok && autoScan) bloodFlow.beginAutoScan(autoScan)
         }
     }
 
     // ===== CONNECTIONS =====
     Connections {
         target: MotionInterface
+
+        // The connector says whether this result scans next (the toggle was
+        // on and it ended on target or partial).
+        function onOptimizeLaserFinished(ok, message, summary) {
+            bloodFlow.pendingAutoScan = (ok && summary.autoScanSec > 0) ? summary : null
+        }
 
         function onSignalConnected(descriptor, port) {
             // Adopt the config default camera masks when sensors connect.

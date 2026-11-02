@@ -1397,6 +1397,8 @@ class MotionConnector(QObject):
         self._optimize_baseline = None
         self._optimize_decision = None
         self._optimize_waiting = False
+        # Seconds to scan after this run when it ends well (None = don't).
+        self._optimize_scan_after = None
         # Monotonic id assigned to each notify() call. itertools.count is a
         # single atomic step under the GIL — notify() is reachable from
         # several worker threads (export/bundle/update workers), where a
@@ -4762,11 +4764,12 @@ class MotionConnector(QObject):
         is saved unless there are none."""
         if optimize_laser is None:
             return ["Optimize Laser is not available in this build."]
-        settings, errors = optimize_laser.from_form(dict(form or {}))
+        form = dict(form or {})
+        settings, errors = optimize_laser.from_form(form)
         if errors:
             logger.info("Optimize Laser settings not saved: %s", "; ".join(errors))
             return errors
-        self._app_config[optimize_laser.SETTINGS_KEY] = optimize_laser.storage_diff(settings)
+        self._app_config[optimize_laser.SETTINGS_KEY] = optimize_laser.storage_diff(settings, form)
         self._save_app_config()
         self.appConfigChanged.emit()
         logger.info("Optimize Laser settings saved: %s",
@@ -4804,6 +4807,7 @@ class MotionConnector(QObject):
         self._optimize_running = True
         self._optimize_masks = (left, right)
         self._optimize_t0 = time.monotonic()
+        self._optimize_scan_after = optimize_laser.scan_after_seconds(self._app_config)
         stop = threading.Event()
         self._optimize_stop = stop
         decision = {"event": threading.Event(), "answer": None}
@@ -4901,7 +4905,8 @@ class MotionConnector(QObject):
         else:
             if result.baseline is not None:
                 self._optimize_baseline = result.baseline
-            summary = optimize_laser.summary(result, run_seconds=run_seconds)
+            summary = optimize_laser.summary(result, run_seconds=run_seconds,
+                                             scan_after_sec=self._optimize_scan_after)
             ok, text = bool(result.passed), summary["message"]
             self._set_optimize_result(result if result.passed else None)
             if result.restore_problems:
@@ -5489,6 +5494,12 @@ class MotionConnector(QObject):
             # solved gains for shot-noise correction, BVI I_max = 2 x target.
             **(optimized or {}),
         )
+        if optimized is not None:
+            # No live contact-quality warnings at optimized settings: the
+            # thresholds were set for the stock gains and exposure. A check
+            # for a pulsatile waveform is the planned replacement.
+            req.sinks = [s for s in req.sinks if not isinstance(s, ContactQualityMonitor)]
+            logger.info("Live contact-quality monitor off: Optimize Laser settings are active")
 
         started = self._interface.start_scan(req)
         if started:
