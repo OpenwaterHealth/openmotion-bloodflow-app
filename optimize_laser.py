@@ -18,6 +18,7 @@ first write.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import functools
 import itertools
@@ -25,8 +26,18 @@ import math
 import os
 from typing import Any, Callable, Mapping, Optional
 
-from omotion.OptimizeLaserWorkflow import OptimizeLaserWorkflow, OptimizeResult
-from omotion.exposure.actuator import LaserCameraActuator
+from omotion.OptimizeLaserWorkflow import (
+    ACCEPT,
+    CONTINUE,
+    OptimizeLaserWorkflow,
+    OptimizeResult,
+)
+from omotion.exposure.actuator import (
+    FW_DEFAULT_EXPOSURE_ROWS,
+    FW_DEFAULT_GAIN_CODES,
+    LaserBaseline,
+    LaserCameraActuator,
+)
 from omotion.exposure.controller import CameraStatus, OptimizeStatus
 from omotion.exposure.settings import (
     Bounds,
@@ -37,7 +48,11 @@ from omotion.exposure.settings import (
     Method,
     OptimizeLaserSettings,
     StartPoint,
+    gain_row,
 )
+
+# Answers to the "did not converge" question (the SDK's on_not_converged).
+DECISIONS = (CONTINUE, ACCEPT, "stop")
 
 # The one PREFERENCE key: the Settings form's values that differ from the
 # SDK defaults ({} = every default), so a default the SDK moves later is not
@@ -48,13 +63,16 @@ SIDES = ("left", "right")
 LIMITS = HardwareLimits()
 
 # Dropdown entries: (stored value, label).
-METHODS = (("fit", "Fit (option 1)"), ("basic", "Basic (option 2)"))
+METHODS = (("fit", "Histogram Fitting & Saturated Pixels"),
+           ("basic", "Simple (image mean from raw histograms)"))
 START_POINTS = (("max", "Highest output"), ("current", "Current settings"))
 GAIN_MODES = (("individual", "Individually"),
               ("row", "By row (1 & 8, 2 & 7, 3 & 6, 4 & 5)"))
-GAIN_PRIORITIES = (("near", "Near (cameras 1 & 8)"),
-                   ("far", "Far (cameras 4 & 5)"),
-                   ("none", "None (all cameras)"))
+# Near = the pair nearest the laser. "All" is every camera selected in Scan
+# Settings: the run's cameras are exactly the scan masks.
+GAIN_PRIORITIES = (("near", "Average of Near (cameras 4 & 5)"),
+                   ("far", "Average of Far (cameras 1 & 8)"),
+                   ("none", "Average of All Cameras Selected"))
 _KNOB_LABELS = {"gain": "gain", "pulse_width": "pulse width", "current": "drive current"}
 ORDERS = tuple(
     (",".join(p), ", ".join(f"{i + 1}. {_KNOB_LABELS[k]}" for i, k in enumerate(p)))
@@ -138,16 +156,27 @@ def to_form(settings: OptimizeLaserSettings) -> dict:
     }
 
 
-DEFAULT_FORM = to_form(OptimizeLaserSettings())
+# The study's defaults (Brad, 2026-11-02) over the SDK's: target 100 DN
+# above background, +/- 10 DN, 20 consecutive in-range points to exit.
+DEFAULT_SETTINGS = dataclasses.replace(
+    OptimizeLaserSettings(), target_mean=100.0, passing_range=10.0, in_range_points=20)
+DEFAULT_FORM = to_form(DEFAULT_SETTINGS)
+GAIN_STEP = 1.0 / 16    # analog gain register resolution
 
 _LABELS = {
-    "method": "method", "targetMean": "target mean", "passingRange": "passing range",
+    "method": "method", "targetMean": "target image mean above background",
+    "passingRange": "passing range",
     "startPoint": "starting point", "order": "optimization order",
     "gainBounds": "gain bounds", "pulseWidthBounds": "pulse width bounds",
     "currentBounds": "drive current bounds", "gainMode": "gain adjustment",
     "gainPriority": "gain priority", "framesPerIteration": "frames per iteration",
     "inRangePoints": "in-range points to exit",
 }
+
+
+def round_gain(gain: float) -> float:
+    """Nearest 1/16 step (the analog gain register's resolution)."""
+    return round(gain / GAIN_STEP) * GAIN_STEP
 
 
 def _number(label, v, errors):
@@ -200,7 +229,10 @@ def from_form(form: Mapping[str, Any]) -> tuple[Optional[OptimizeLaserSettings],
         errors.append(f"gain bounds need 4 rows, got {gain_bounds!r}")
         rows = None
     else:
+        # Gains snap to the register's 1/16 steps (a rounding, not a
+        # range clamp: out-of-range gains are still errors).
         rows = [_bounds(f"row {i + 1} gain", b, errors) for i, b in enumerate(gain_bounds)]
+        rows = [Bounds(round_gain(b.low), round_gain(b.high)) if b else None for b in rows]
     order = f["order"]
     knobs = (tuple(_choice("optimization order", k.strip(), Knob, errors) for k in order.split(","))
              if isinstance(order, str) else None)
@@ -316,6 +348,18 @@ def iteration_row(record) -> dict:
     }
 
 
+def not_converged_question(record, settings: OptimizeLaserSettings) -> dict:
+    """The modal's "keep iterating or accept?" prompt for a run that hit
+    its iteration limit: the last iteration's row plus the question."""
+    row = iteration_row(record)
+    row["question"] = (
+        f"The cameras have not settled within {settings.passing_range:g} DN of the "
+        f"{settings.target_mean:g} DN target ({settings.in_range_points} in-range point(s) "
+        f"in a row) after {record.iteration} iteration(s). Keep iterating, or accept the "
+        "current settings?")
+    return row
+
+
 def camera_alerts(result: OptimizeResult) -> list[str]:
     """One line per kind of camera that ended off target, e.g.
     "L3, L4: too bright at minimum gain"."""
@@ -337,6 +381,9 @@ def message(result: OptimizeResult) -> str:
         return f"Optimize Laser stopped: {result.error}.{tail}"
     if result.canceled:
         return "Optimize Laser canceled. Defaults restored."
+    if result.accepted:
+        return (f"Did not settle within {result.iterations} iteration(s); the last settings "
+                "were accepted. Scans use them until you restore the defaults.")
     text = STATUS_TEXT.get(result.status, str(_value(result.status)))
     if not result.passed:
         return f"{text} Defaults restored."
@@ -345,13 +392,16 @@ def message(result: OptimizeResult) -> str:
     return f"{text} Scans can go ahead with these settings."
 
 
-def summary(result: OptimizeResult) -> dict:
-    """A finished run, for the modal and the Settings card."""
+def summary(result: OptimizeResult, *, run_seconds: Optional[float] = None) -> dict:
+    """A finished run, for the modal and the Settings card. ``run_seconds``:
+    how long the run itself took (the camera setup before it not included)."""
     final = result.settings
     last = result.records[-1] if result.records else None
     shown = final or (last.settings if last else None)
     return {
         "passed": result.passed,
+        "accepted": result.accepted,
+        "runSeconds": None if run_seconds is None else round(float(run_seconds), 1),
         "status": _value(result.status) if result.status else "",
         "message": message(result),
         "alerts": camera_alerts(result) if result.passed else [],
@@ -393,11 +443,12 @@ def notes_block(result: OptimizeResult, *, left_mask: int, right_mask: int,
                 for pos in range(8) if camera_label(side, pos) in gains]
         return f"Camera gains ({SIDES[side]}): " + ", ".join(cams) if cams else None
 
+    accepted = " (accepted without settling)" if result.accepted else ""
     lines = [
         "--- Optimize Laser settings (research, engineering mode) ---",
-        f"Optimized {finished_at:%Y-%m-%d %H:%M:%S}: {_value(result.status)}, "
+        f"Optimized {finished_at:%Y-%m-%d %H:%M:%S}: {_value(result.status)}{accepted}, "
         f"{result.iterations} iteration(s), method {_value(cfg.method)}",
-        f"Target: {cfg.target_mean:g} +/- {cfg.passing_range:g} DN dark-subtracted mean",
+        f"Target: {cfg.target_mean:g} +/- {cfg.passing_range:g} DN image mean above background",
         f"Exposure: {result.exposure_us:g} us",
         f"Laser pulse width: {s.pulse_width_us:g} us commanded, "
         f"~{emitted_pulse_width_us(s.pulse_width_us):.0f} us emitted",
@@ -416,6 +467,37 @@ def notes_block(result: OptimizeResult, *, left_mask: int, right_mask: int,
         lines.append(f"Not optimized (sensor firmware settings): {', '.join(missing)}")
     # No closing rule: the scan's footer opens with its own "---".
     return "\n".join(lines)
+
+
+def _gain_text(gains) -> str:
+    lo, hi = min(gains), max(gains)
+    return f"{lo:g}×" if lo == hi else f"{lo:g}–{hi:g}×"
+
+
+def current_values(result: Optional[OptimizeResult],
+                   baseline: Optional[LaserBaseline] = None) -> dict:
+    """What scans use now, for the Settings form's read-only column: the
+    active run's settings, else the defaults (sensor firmware gains and
+    exposure; the console's own pulse width and current when a run's
+    preflight has read them, ``baseline``)."""
+    if result is not None and result.passed:
+        s = result.settings
+        rows = []
+        for row in range(4):
+            gains = [g for (_, pos), g in s.gains.items() if gain_row(pos) == row]
+            rows.append(_gain_text(gains) if gains else "not optimized")
+        return {"source": "optimized", "gainBounds": rows,
+                "pulseWidthBounds": f"{s.pulse_width_us:.0f} µs",
+                "currentBounds": f"{s.current_ma:.0f} mA",
+                "exposure": f"{result.exposure_us:g} µs"}
+    fw_rows = [_gain_text([FW_DEFAULT_GAIN_CODES[pos] / 16]) for pos in range(4)]
+    return {
+        "source": "default", "gainBounds": fw_rows,
+        "pulseWidthBounds": (f"{baseline.ta_pulse_width_us:.0f} µs" if baseline
+                             else "console default"),
+        "currentBounds": f"{baseline.ta_current_ma:.0f} mA" if baseline else "console default",
+        "exposure": f"{FW_DEFAULT_EXPOSURE_ROWS * 9} µs",
+    }
 
 
 def restore_message(problems: list[str]) -> tuple[bool, str]:

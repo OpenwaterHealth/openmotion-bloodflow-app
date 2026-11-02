@@ -152,6 +152,10 @@ Item {
     function close() {
         // Commit any in-progress text field edit before saving
         panel.forceActiveFocus()
+        // Optimize Laser settings save on close too; invalid ones stay
+        // unsaved and say why.
+        if (optimizeLaserSection.visible && optimizeLaserSection.dirty)
+            optimizeLaserSection.save(true)
         MotionInterface.saveConfigs({
             "leftMask":           maskFromIndex(defaultLeftMaskIndex),
             "rightMask":          maskFromIndex(defaultRightMaskIndex),
@@ -259,8 +263,10 @@ Item {
             text:           parent.label
             color:          root.colTextSec
             font.pixelSize: 13
+            wrapMode:       Text.WordWrap
             Layout.preferredWidth: 140
             Layout.minimumWidth: 140
+            Layout.maximumWidth: 140
         }
     }
 
@@ -1741,7 +1747,9 @@ Item {
                         property var choices: ({})
                         property var errors: []
                         readonly property bool dirty: JSON.stringify(form) !== JSON.stringify(saved)
-                        readonly property var summary: MotionInterface.optimizeLaserSummary
+                        // What scans use now (optimized or default), for the
+                        // read-only column next to the bounds.
+                        readonly property var current: MotionInterface.optimizeLaserCurrentValues
 
                         function _copy(v) { return JSON.parse(JSON.stringify(v)) }
                         function load() {
@@ -1760,13 +1768,16 @@ Item {
                             else f[key][row][which] = value
                             form = f
                         }
-                        function save() {
+                        function save(closing) {
                             var errs = MotionInterface.setOptimizeLaserSettings(form)
                             if (errs.length === 0) {
                                 load()
                                 MotionInterface.notify("Optimize Laser settings saved.", "success", 3000)
                             } else {
                                 errors = errs
+                                if (closing)
+                                    MotionInterface.notify("Optimize Laser settings not saved: "
+                                                           + errs.join("; "), "warning", 8000)
                             }
                         }
                         Component.onCompleted: load()
@@ -1827,7 +1838,7 @@ Item {
 
                         Repeater {
                             model: [
-                                { key: "targetMean", label: "Target mean (DN)", decimals: 1 },
+                                { key: "targetMean", label: "Target image mean above background (DN)", decimals: 1 },
                                 { key: "passingRange", label: "Passing range (± DN)", decimals: 1 },
                                 { key: "framesPerIteration", label: "Frames per iteration", decimals: 0 },
                                 { key: "inRangePoints", label: "In-range points to exit", decimals: 0 }
@@ -1849,7 +1860,29 @@ Item {
                         }
 
                         // Lower / upper bounds: gain per mirrored row (shared
-                        // by both modules in "by row" mode), then the laser.
+                        // by both modules in "by row" mode), then the laser,
+                        // each with what scans use now (read-only).
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 12
+                            Item { Layout.preferredWidth: 140 }
+                            Text {
+                                text: "Lower"; color: root.colTextMuted; font.pixelSize: 11
+                                Layout.preferredWidth: 84; horizontalAlignment: Text.AlignHCenter
+                            }
+                            Item { Layout.preferredWidth: 14 }
+                            Text {
+                                text: "Upper"; color: root.colTextMuted; font.pixelSize: 11
+                                Layout.preferredWidth: 84; horizontalAlignment: Text.AlignHCenter
+                            }
+                            Text {
+                                objectName: "optimizeLaserCurrentHeader"
+                                text: optimizeLaserSection.current.source === "optimized"
+                                      ? "Current (optimized)" : "Current (default)"
+                                color: root.colTextMuted; font.pixelSize: 11
+                            }
+                            Item { Layout.fillWidth: true }
+                        }
                         Repeater {
                             model: [
                                 { key: "gainBounds", row: 0, label: "Gain, cameras 1 & 8", decimals: 4 },
@@ -1867,12 +1900,18 @@ Item {
                                     if (!b) return [null, null]
                                     return modelData.row < 0 ? b : (b[modelData.row] || [null, null])
                                 }
+                                // Gains snap to the register's 1/16 steps.
+                                function entered(text) {
+                                    var v = Number(text)
+                                    return modelData.key === "gainBounds" && isFinite(v)
+                                           ? Math.round(v * 16) / 16 : v
+                                }
                                 StyledNumberField {
                                     objectName: "optimizeLaserLow_" + modelData.key + modelData.row
                                     decimals: modelData.decimals
                                     text: boundRow.pair[0] === null ? "" : String(boundRow.pair[0])
                                     onEditingFinished: optimizeLaserSection.setBound(
-                                        modelData.key, modelData.row, 0, Number(text))
+                                        modelData.key, modelData.row, 0, boundRow.entered(text))
                                 }
                                 Text { text: "to"; color: root.colTextSec; font.pixelSize: 13 }
                                 StyledNumberField {
@@ -1880,10 +1919,40 @@ Item {
                                     decimals: modelData.decimals
                                     text: boundRow.pair[1] === null ? "" : String(boundRow.pair[1])
                                     onEditingFinished: optimizeLaserSection.setBound(
-                                        modelData.key, modelData.row, 1, Number(text))
+                                        modelData.key, modelData.row, 1, boundRow.entered(text))
+                                }
+                                Text {
+                                    objectName: "optimizeLaserCurrent_" + modelData.key + modelData.row
+                                    text: {
+                                        var v = optimizeLaserSection.current[modelData.key]
+                                        if (v === undefined) return ""
+                                        return modelData.row < 0 ? v : v[modelData.row]
+                                    }
+                                    color: root.colTextSec
+                                    font.pixelSize: 12
                                 }
                                 Item { Layout.fillWidth: true }
                             }
+                        }
+
+                        // Exposure is fixed for a run; shown for reference.
+                        FieldRow {
+                            label: "Exposure"
+                            Text {
+                                text: (optimizeLaserSection.choices.limits
+                                       ? optimizeLaserSection.choices.limits.exposureUs : 2196)
+                                      + " µs during a run (fixed)"
+                                color: root.colTextSec
+                                font.pixelSize: 12
+                                Layout.preferredWidth: 182
+                            }
+                            Text {
+                                objectName: "optimizeLaserCurrent_exposure"
+                                text: optimizeLaserSection.current.exposure || ""
+                                color: root.colTextSec
+                                font.pixelSize: 12
+                            }
+                            Item { Layout.fillWidth: true }
                         }
 
                         Repeater {
@@ -1897,6 +1966,7 @@ Item {
                             }
                         }
 
+                        // Changes also save when Settings closes.
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 8
@@ -1905,13 +1975,7 @@ Item {
                                 text: "Save"
                                 Layout.preferredWidth: 90
                                 enabled: optimizeLaserSection.dirty
-                                onClicked: optimizeLaserSection.save()
-                            }
-                            ActionButton {
-                                text: "Revert"
-                                Layout.preferredWidth: 90
-                                enabled: optimizeLaserSection.dirty
-                                onClicked: optimizeLaserSection.load()
+                                onClicked: optimizeLaserSection.save(false)
                             }
                             ActionButton {
                                 text: "Defaults"
@@ -1922,34 +1986,6 @@ Item {
                             Item { Layout.fillWidth: true }
                         }
 
-                        // What scans use now, and the way back.
-                        Text {
-                            objectName: "optimizeLaserActiveText"
-                            Layout.fillWidth: true
-                            wrapMode: Text.WordWrap
-                            font.pixelSize: 12
-                            color: MotionInterface.optimizeLaserActive ? AppTheme.accentYellow : root.colTextSec
-                            text: {
-                                var s = optimizeLaserSection.summary
-                                if (!MotionInterface.optimizeLaserActive || !s || s.pulseWidthUs === undefined)
-                                    return "Laser and cameras: default settings."
-                                return "Active (" + s.status + "): pulse " + Math.round(s.pulseWidthUs)
-                                    + " µs, current " + Math.round(s.currentMa) + " mA, exposure "
-                                    + s.exposureUs + " µs. Every scan and check uses these "
-                                    + "settings until you restore the defaults."
-                            }
-                        }
-                        Repeater {
-                            model: MotionInterface.optimizeLaserActive
-                                   ? (optimizeLaserSection.summary.alerts || []) : []
-                            delegate: Text {
-                                Layout.fillWidth: true
-                                wrapMode: Text.WordWrap
-                                font.pixelSize: 11
-                                color: AppTheme.accentYellow
-                                text: "• " + modelData
-                            }
-                        }
                         FieldRow {
                             label: "Laser defaults"
                             ActionButton {

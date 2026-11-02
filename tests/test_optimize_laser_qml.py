@@ -33,6 +33,7 @@ class _Stub(base._StubMotionInterface):
     optimizeLaserStarted = pyqtSignal()
     optimizeLaserProgress = pyqtSignal("QVariantMap")
     optimizeLaserFinished = pyqtSignal(bool, str, "QVariantMap")
+    optimizeLaserDecisionNeeded = pyqtSignal("QVariantMap")
     laserDefaultsRestored = pyqtSignal(bool, str)
 
     def __init__(self):
@@ -40,6 +41,18 @@ class _Stub(base._StubMotionInterface):
         self.available = True
         self.saved_forms = []
         self.restores = 0
+        self.answers = []
+        self.current = {"source": "default", "gainBounds": ["16×", "4×", "2×", "1×"],
+                        "pulseWidthBounds": "530 µs", "currentBounds": "5000 mA",
+                        "exposure": "648 µs"}
+
+    @pyqtProperty("QVariantMap", notify=optimizeLaserStateChanged)
+    def optimizeLaserCurrentValues(self):
+        return self.current
+
+    @pyqtSlot(str)
+    def answerOptimizeLaser(self, answer):
+        self.answers.append(answer)
 
     @pyqtProperty(bool, notify=optimizeLaserStateChanged)
     def optimizeLaserAvailable(self):
@@ -234,11 +247,11 @@ def test_settings_section_saves_and_restores_through_the_connector(qml):
         assert section.property("dirty") is False
         section.setProperty("form", {**FORM, "targetMean": 250.0})
         assert section.property("dirty") is True
-        base._invoke(section, "save")
+        _save(section)
         assert stub.saved_forms[-1]["targetMean"] == 250.0
         # A refused save keeps the errors on screen and the edits in the form.
         section.setProperty("form", {**FORM, "targetMean": -1})
-        base._invoke(section, "save")
+        _save(section)
         assert _py(section.property("errors")) == ["target mean is nonsense"]
         assert section.property("dirty") is True
         button = modal.findChild(QObject, "restoreDefaultLaserButton")
@@ -247,6 +260,100 @@ def test_settings_section_saves_and_restores_through_the_connector(qml):
         assert stub.restores == 1
     finally:
         base._invoke(modal, "close")
+
+
+def _find_item(root, name):
+    """An item by objectName through the visual tree: Repeater delegates
+    aren't QObject children, so findChild() misses them."""
+    from PyQt6 import sip
+    from PyQt6.QtQuick import QQuickItem
+    stack = [sip.cast(root, QQuickItem)]
+    while stack:
+        item = stack.pop()
+        if item.objectName() == name:
+            return item
+        stack.extend(item.childItems())
+    return None
+
+
+def _save(section, closing=False):
+    QMetaObject.invokeMethod(section, "save", Qt.ConnectionType.DirectConnection,
+                             Q_ARG("QVariant", closing))
+
+
+def test_settings_section_autosaves_on_close(qml):
+    stub = qml.stub
+    modal = qml("components", "SettingsModal.qml")
+    stub.setFlags(clinical=False, engineering=True)
+    base._invoke(modal, "open")
+    section = _section(modal)
+    base._invoke(section, "load")
+    n = len(stub.saved_forms)
+    section.setProperty("form", {**FORM, "inRangePoints": 7})
+    base._invoke(modal, "close")
+    assert len(stub.saved_forms) == n + 1 and stub.saved_forms[-1]["inRangePoints"] == 7
+    # Unchanged: closing saves nothing.
+    base._invoke(modal, "open")
+    base._invoke(section, "load")
+    base._invoke(modal, "close")
+    assert len(stub.saved_forms) == n + 1
+
+
+def test_settings_section_shows_the_current_values(qml):
+    stub = qml.stub
+    modal = qml("components", "SettingsModal.qml")
+    stub.setFlags(clinical=False, engineering=True)
+    base._invoke(modal, "open")
+    try:
+        def text(name):
+            return _find_item(modal, name).property("text")
+        assert text("optimizeLaserCurrentHeader") == "Current (default)"
+        assert text("optimizeLaserCurrent_gainBounds0") == "16×"
+        assert text("optimizeLaserCurrent_pulseWidthBounds-1") == "530 µs"
+        assert text("optimizeLaserCurrent_exposure") == "648 µs"
+        stub.current = {"source": "optimized", "gainBounds": ["12.125–16×", "1.5–1.6875×",
+                                                              "1×", "1×"],
+                        "pulseWidthBounds": "2096 µs", "currentBounds": "5000 mA",
+                        "exposure": "2196 µs"}
+        stub.optimizeLaserStateChanged.emit()
+        assert text("optimizeLaserCurrentHeader") == "Current (optimized)"
+        assert text("optimizeLaserCurrent_gainBounds0") == "12.125–16×"
+        assert text("optimizeLaserCurrent_pulseWidthBounds-1") == "2096 µs"
+        # The yellow status block and Revert are gone.
+        assert modal.findChild(QObject, "optimizeLaserActiveText") is None
+    finally:
+        base._invoke(modal, "close")
+
+
+def test_modal_asks_keep_iterating_or_accept(qml):
+    stub = qml.stub
+    modal = qml("components", "OptimizeLaserModal.qml")
+    base._invoke(modal, "reset")
+    stub.optimizeLaserDecisionNeeded.emit({
+        "iteration": 20, "pulseWidthUs": 2096.0, "emittedPulseWidthUs": 2078.7,
+        "currentMa": 5000.0, "done": True, "status": "not_converged",
+        "next": {"pulseWidthUs": 2096.0, "currentMa": 5000.0}, "cameras": [],
+        "question": "The cameras have not settled ... Keep iterating, or accept?"})
+    assert modal.property("deciding") is True
+    assert modal.property("dismissable") is False
+    assert "Keep iterating" in modal.findChild(QObject, "optimizeLaserQuestion").property("text")
+    for choice in ("continue", "accept", "stop"):
+        assert _find_item(modal, f"optimizeLaserAnswer_{choice}") is not None
+    base._invoke(_find_item(modal, "optimizeLaserAnswer_accept"), "clicked")
+    assert stub.answers[-1] == "accept" and modal.property("deciding") is False
+
+
+def test_modal_shows_the_total_time(qml):
+    stub = qml.stub
+    modal = qml("components", "OptimizeLaserModal.qml")
+    base._invoke(modal, "reset")
+    modal.setProperty("startedAt", modal.property("startedAt") - 119_000)   # 119 s ago
+    stub.optimizeLaserFinished.emit(True, "Every camera is on target.", {
+        "alerts": [], "csvName": "", "cameras": [], "pulseWidthUs": 1000.0,
+        "emittedPulseWidthUs": 982.7, "currentMa": 5000.0, "iterations": 3,
+        "runSeconds": 14.2})
+    assert modal.findChild(QObject, "optimizeLaserTime").property("text") == (
+        "Total time: 1 min 59 s (camera setup 1 min 45 s, optimizing 14 s)")
 
 
 def test_button_panel_shows_the_button_only_when_asked(qml):

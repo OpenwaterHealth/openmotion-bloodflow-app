@@ -32,6 +32,12 @@ Item {
     property var emittedPulseWidthUs: null
     property var currentMa: null
     property string csvName: ""
+    // The run hit its iteration limit and waits for the operator.
+    property bool deciding: false
+    property string question: ""
+    // Start to finish, button press included (the camera setup counts).
+    property double startedAt: 0
+    property string timeText: ""
 
     signal cancelRequested()
 
@@ -39,14 +45,38 @@ Item {
         running = true; canceling = false; finished = false; ok = false
         stage = "Preparing…"; message = ""; alerts = []; cameras = []
         iteration = 0; pulseWidthUs = null; emittedPulseWidthUs = null
-        currentMa = null; csvName = ""
+        currentMa = null; csvName = ""; deciding = false; question = ""
+        startedAt = Date.now(); timeText = ""
     }
     function open() { root.visible = true; card.forceActiveFocus() }
     function close() { if (root.dismissable) root.visible = false }
     // Flash / start failures that never reach the connector's run.
     function showError(text) {
         running = false; canceling = false; finished = true; ok = false
+        deciding = false
         message = text
+        timeText = _elapsedText(null)
+    }
+    function answer(choice) {
+        deciding = false
+        stage = choice === "continue" ? "Continuing…"
+              : choice === "accept" ? "Keeping the current settings…"
+              : "Stopping, restoring the defaults…"
+        MotionInterface.answerOptimizeLaser(choice)
+    }
+
+    function _duration(s) {
+        s = Math.round(s)
+        return s >= 60 ? (Math.floor(s / 60) + " min " + (s % 60) + " s") : (s + " s")
+    }
+    function _elapsedText(runSeconds) {
+        if (!startedAt) return ""
+        var total = (Date.now() - startedAt) / 1000
+        var t = "Total time: " + _duration(total)
+        if (runSeconds !== null && runSeconds !== undefined)
+            t += " (camera setup " + _duration(Math.max(0, total - runSeconds))
+                 + ", optimizing " + _duration(runSeconds) + ")"
+        return t
     }
 
     function _fmt(v, unit) { return (v === null || v === undefined) ? "—" : (Math.round(v) + " " + unit) }
@@ -82,12 +112,23 @@ Item {
                          + root._fmt(row.next.pulseWidthUs, "µs") + ", "
                          + root._fmt(row.next.currentMa, "mA"))
         }
+        function onOptimizeLaserDecisionNeeded(q) {
+            root.iteration = q.iteration
+            root.pulseWidthUs = q.pulseWidthUs
+            root.emittedPulseWidthUs = q.emittedPulseWidthUs
+            root.currentMa = q.currentMa
+            root.cameras = q.cameras
+            root.question = q.question
+            root.deciding = true
+        }
         function onOptimizeLaserFinished(ok, message, summary) {
             root.running = false
             root.canceling = false
+            root.deciding = false
             root.finished = true
             root.ok = ok
             root.message = message
+            root.timeText = root._elapsedText(summary.runSeconds)
             root.alerts = summary.alerts || []
             root.csvName = summary.csvName || ""
             if (summary.cameras && summary.cameras.length) root.cameras = summary.cameras
@@ -153,6 +194,17 @@ Item {
             }
 
             Text {
+                objectName: "optimizeLaserQuestion"
+                visible: root.deciding
+                text: root.question
+                color: AppTheme.accentYellow
+                font.pixelSize: 13
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+
+            Text {
+                visible: !root.deciding
                 text: root.finished ? root.message : (root.canceling ? "Canceling, restoring the defaults…" : root.stage)
                 color: root.finished ? (root.ok ? AppTheme.textPrimary : AppTheme.accentYellow) : AppTheme.textSecondary
                 font.pixelSize: 13
@@ -235,6 +287,15 @@ Item {
             }
 
             Text {
+                objectName: "optimizeLaserTime"
+                visible: root.finished && root.timeText !== ""
+                text: root.timeText
+                color: AppTheme.textSecondary
+                font.pixelSize: 12
+                Layout.fillWidth: true
+            }
+
+            Text {
                 visible: root.finished && root.csvName !== ""
                 text: "Log: data/optimize-laser/" + root.csvName
                 color: AppTheme.textTertiary
@@ -248,9 +309,40 @@ Item {
                 spacing: 12
                 Item { Layout.fillWidth: true }
 
+                // The iteration-limit question: keep going, keep what the
+                // device holds now, or stop (which restores the defaults).
+                Repeater {
+                    model: root.deciding ? [
+                        { choice: "stop", text: "Stop and restore defaults" },
+                        { choice: "accept", text: "Accept current settings" },
+                        { choice: "continue", text: "Keep iterating" }
+                    ] : []
+                    delegate: Button {
+                        objectName: "optimizeLaserAnswer_" + modelData.choice
+                        text: modelData.text
+                        Layout.preferredHeight: 32
+                        onClicked: root.answer(modelData.choice)
+                        contentItem: Text {
+                            text: parent.text; font.pixelSize: 13
+                            color: modelData.choice === "continue" ? "#FFFFFF" : AppTheme.textSecondary
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        background: Rectangle {
+                            color: modelData.choice === "continue"
+                                   ? (parent.hovered ? Qt.lighter(AppTheme.accentInteractive, 1.1)
+                                                     : AppTheme.accentInteractive)
+                                   : (parent.hovered ? AppTheme.bgHover : AppTheme.bgInput)
+                            radius: 4
+                            border.color: AppTheme.borderSoft
+                            border.width: modelData.choice === "continue" ? 0 : 1
+                        }
+                    }
+                }
+
                 Button {
                     objectName: "optimizeLaserCancelButton"
-                    visible: root.running
+                    visible: root.running && !root.deciding
                     enabled: !root.canceling
                     text: "Cancel"
                     Layout.preferredHeight: 32

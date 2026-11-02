@@ -1012,9 +1012,14 @@ class MotionConnector(QObject):
     optimizeLaserFinished = pyqtSignal(bool, str, 'QVariantMap')
     optimizeLaserStateChanged = pyqtSignal()
     laserDefaultsRestored = pyqtSignal(bool, str)
+    # The run hit its iteration limit and waits (trigger off) for
+    # answerOptimizeLaser("continue" | "accept" | "stop"); carries
+    # optimize_laser.not_converged_question().
+    optimizeLaserDecisionNeeded = pyqtSignal('QVariantMap')
     # Worker → main thread marshalling for the run and the restore.
     _optimizeProgressSignal = pyqtSignal(object)
     _optimizeDoneSignal = pyqtSignal(object)
+    _optimizeDecisionSignal = pyqtSignal(object)
     _laserRestoreDoneSignal = pyqtSignal(object)
     cameraDropoutDetected = pyqtSignal(str, int, str)  # side ("left"/"right"), cam_id (0-7), elapsed HH:MM:SS
     # Frames resumed for a camera previously flagged Connection Lost — the
@@ -1385,6 +1390,13 @@ class MotionConnector(QObject):
         self._optimize_thread = None
         self._optimize_worker_result = None
         self._laser_restore_thread = None
+        # Run timing, the console's stock laser values from the last
+        # preflight (for the Settings form's current-value column), and the
+        # pending "keep iterating or accept?" answer.
+        self._optimize_t0 = None
+        self._optimize_baseline = None
+        self._optimize_decision = None
+        self._optimize_waiting = False
         # Monotonic id assigned to each notify() call. itertools.count is a
         # single atomic step under the GIL — notify() is reachable from
         # several worker threads (export/bundle/update workers), where a
@@ -4716,6 +4728,18 @@ class MotionConnector(QObject):
             return {}
         return optimize_laser.summary(self._optimize_result)
 
+    @pyqtProperty('QVariantMap', notify=optimizeLaserStateChanged)
+    def optimizeLaserCurrentValues(self):
+        """What scans use now, for the Settings form's read-only column."""
+        if optimize_laser is None:
+            return {}
+        return optimize_laser.current_values(self._optimize_result, self._optimize_baseline)
+
+    @pyqtProperty(bool, notify=optimizeLaserStateChanged)
+    def optimizeLaserWaiting(self) -> bool:
+        """The run is waiting for answerOptimizeLaser (trigger off)."""
+        return self._optimize_waiting
+
     @pyqtSlot(result=str)
     def optimizeLaserRefusal(self) -> str:
         """Why the Optimize Laser button would be refused now ("" = it can run)."""
@@ -4779,8 +4803,11 @@ class MotionConnector(QObject):
         self._optimize_result = None
         self._optimize_running = True
         self._optimize_masks = (left, right)
+        self._optimize_t0 = time.monotonic()
         stop = threading.Event()
         self._optimize_stop = stop
+        decision = {"event": threading.Event(), "answer": None}
+        self._optimize_decision = decision
         log_path = optimize_laser.csv_path(self._data_root, datetime.datetime.now())
         self._audit.log("optimize_laser_started", {
             "left_mask": left, "right_mask": right,
@@ -4795,11 +4822,24 @@ class MotionConnector(QObject):
         self.optimizeLaserStarted.emit()
         workflow = self._optimize_wf()
 
+        def _ask(record):
+            # Worker thread, trigger off: hand the question to the modal and
+            # wait for answerOptimizeLaser. Cancel or quitting answers "stop".
+            decision["event"].clear()
+            decision["answer"] = None
+            self._optimizeDecisionSignal.emit(
+                optimize_laser.not_converged_question(record, settings))
+            while not decision["event"].wait(0.2):
+                if stop.is_set():
+                    return "stop"
+            return decision["answer"] or "stop"
+
         def _worker():
             try:
                 result = workflow.run(
                     settings, left_camera_mask=left, right_camera_mask=right,
                     initial_gains=initial_gains, log_path=log_path, stop_evt=stop,
+                    on_not_converged=_ask,
                     on_iteration=lambda record: self._optimizeProgressSignal.emit(
                         optimize_laser.iteration_row(record)))
             except Exception as exc:
@@ -4826,13 +4866,42 @@ class MotionConnector(QObject):
         self.optimizeLaserProgress.emit(row)
 
     @pyqtSlot(object)
+    def _on_optimize_decision(self, question):
+        self._optimize_waiting = True
+        self.optimizeLaserStateChanged.emit()
+        logger.warning("Optimize Laser did not converge after %s iteration(s); "
+                       "waiting for the operator", question.get("iteration"))
+        self.optimizeLaserDecisionNeeded.emit(question)
+
+    @pyqtSlot(str)
+    def answerOptimizeLaser(self, answer: str):
+        """The operator's answer to optimizeLaserDecisionNeeded: "continue"
+        (another round of iterations), "accept" (keep the last settings) or
+        "stop" (restore the defaults). Anything else is "stop"."""
+        decision = self._optimize_decision
+        if decision is None or not self._optimize_waiting:
+            return
+        answer = answer if answer in optimize_laser.DECISIONS else "stop"
+        logger.warning("Optimize Laser: operator chose %r", answer)
+        self._audit.log("optimize_laser_decision", {"answer": answer})
+        self._optimize_waiting = False
+        self.optimizeLaserStateChanged.emit()
+        decision["answer"] = answer
+        decision["event"].set()
+
+    @pyqtSlot(object)
     def _on_optimize_done(self, result):
         self._optimize_running = False
+        self._optimize_waiting = False
+        run_seconds = (time.monotonic() - self._optimize_t0
+                       if self._optimize_t0 is not None else None)
         if isinstance(result, BaseException):
             ok, text, summary = False, f"Optimize Laser failed: {result}", {}
             self._set_optimize_result(None)
         else:
-            summary = optimize_laser.summary(result)
+            if result.baseline is not None:
+                self._optimize_baseline = result.baseline
+            summary = optimize_laser.summary(result, run_seconds=run_seconds)
             ok, text = bool(result.passed), summary["message"]
             self._set_optimize_result(result if result.passed else None)
             if result.restore_problems:
@@ -7137,6 +7206,7 @@ class MotionConnector(QObject):
         # Worker → Qt main thread for Optimize Laser and its restore.
         self._optimizeProgressSignal.connect(self._on_optimize_progress)
         self._optimizeDoneSignal.connect(self._on_optimize_done)
+        self._optimizeDecisionSignal.connect(self._on_optimize_decision)
         self._laserRestoreDoneSignal.connect(self._on_laser_restore_done)
         # Runner thread → Qt main thread for live contact-quality transitions.
         self._cqTransitionSignal.connect(self._on_cq_transition_main)

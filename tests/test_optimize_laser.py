@@ -31,8 +31,34 @@ class TestForm:
     def test_defaults_round_trip(self):
         settings, errors = ol.from_form(ol.DEFAULT_FORM)
         assert errors == []
-        assert settings == OptimizeLaserSettings()
+        assert settings == ol.DEFAULT_SETTINGS
         assert ol.to_form(settings) == ol.DEFAULT_FORM
+
+    def test_study_defaults(self):
+        """Brad, 2026-11-02: 100 DN above background, +/- 10, 20 points;
+        near priority (cameras 4 & 5)."""
+        s = ol.DEFAULT_SETTINGS
+        assert (s.target_mean, s.passing_range, s.in_range_points) == (100.0, 10.0, 20)
+        assert s.gain_priority.value == "near"
+        assert s.method.value == "fit"
+
+    def test_labels(self):
+        assert dict(ol.METHODS) == {
+            "fit": "Histogram Fitting & Saturated Pixels",
+            "basic": "Simple (image mean from raw histograms)"}
+        assert dict(ol.GAIN_PRIORITIES) == {
+            "near": "Average of Near (cameras 4 & 5)",
+            "far": "Average of Far (cameras 1 & 8)",
+            "none": "Average of All Cameras Selected"}
+
+    def test_gains_round_to_the_nearest_sixteenth(self):
+        settings, errors = ol.from_form({"gainBounds": [[1.03, 15.97], [1.1, 4.0], [2, 2], [1, 16]]})
+        assert errors == []
+        assert settings.gain_bounds[0] == Bounds(1.0, 16.0)
+        assert settings.gain_bounds[1] == Bounds(1.125, 4.0)
+        # Rounding never moves a gain into range: 17x is still an error.
+        settings, errors = ol.from_form({"gainBounds": [[1, 17], [1, 16], [1, 16], [1, 16]]})
+        assert settings is None and any("hardware maximum" in e for e in errors)
 
     def test_missing_keys_take_the_defaults(self):
         settings, errors = ol.from_form({"targetMean": 300, "gainMode": "row"})
@@ -57,7 +83,6 @@ class TestForm:
         ({"pulseWidthBounds": [100, 2200]}, "above the hardware maximum"),   # 2196 - 100
         ({"pulseWidthBounds": [50, 600]}, "below the hardware minimum"),
         ({"currentBounds": [2500, 6000]}, "above the hardware maximum"),
-        ({"gainBounds": [[1.03, 16], [1, 16], [1, 16], [1, 16]]}, "not a multiple of 1/16"),
         ({"gainBounds": [[1, 16]] * 3}, "4 rows"),
         ({"method": "magic"}, "method"),
         ({"order": "gain,gain,current"}, "optimization order"),
@@ -80,13 +105,13 @@ class TestForm:
         assert settings is None and errors
 
     def test_storage_diff_keeps_only_changes(self):
-        assert ol.storage_diff(OptimizeLaserSettings()) == {}
+        assert ol.storage_diff(ol.DEFAULT_SETTINGS) == {}
         settings, _ = ol.from_form({"targetMean": 250, "pulseWidthBounds": [100, 1500]})
         assert ol.storage_diff(settings) == {"targetMean": 250.0, "pulseWidthBounds": [100.0, 1500.0]}
 
     def test_stored_settings(self):
-        assert ol.stored_settings({})[0] == OptimizeLaserSettings()
-        assert ol.stored_settings({ol.SETTINGS_KEY: {}})[0] == OptimizeLaserSettings()
+        assert ol.stored_settings({})[0] == ol.DEFAULT_SETTINGS
+        assert ol.stored_settings({ol.SETTINGS_KEY: {}})[0] == ol.DEFAULT_SETTINGS
         s, errors = ol.stored_settings({ol.SETTINGS_KEY: {"targetMean": 300}})
         assert errors == [] and s.target_mean == 300
         # A bad save refuses rather than falling back to the defaults.
@@ -205,7 +230,7 @@ class TestResults:
                               finished_at=datetime.datetime(2026, 10, 28, 12, 6, 57))
         assert text.startswith("--- Optimize Laser settings")
         assert "Optimized 2026-10-28 12:06:57: partial, 1 iteration(s), method fit" in text
-        assert "Target: 200 +/- 20 DN" in text
+        assert "Target: 200 +/- 20 DN image mean above background" in text
         assert "Exposure: 2196 us" in text
         assert "Laser pulse width: 1901 us commanded, ~1884 us emitted" in text
         assert "Laser drive current: 5000 mA" in text
@@ -226,6 +251,47 @@ class TestResults:
                                finished_at=datetime.datetime(2026, 10, 28, 13, 2, 3))
         notes = (block + "\n\n").strip() + "\n---\nScan completed — duration: 00:00:10"
         assert notes.splitlines().count("---") == 1
+
+    def test_accepted_run(self):
+        accepted = dataclasses.replace(
+            _result(status=OptimizeStatus.NOT_CONVERGED), accepted=True)
+        assert accepted.passed
+        s = ol.summary(accepted, run_seconds=41.27)
+        assert s["passed"] and s["accepted"] and s["runSeconds"] == 41.3
+        assert s["message"].startswith("Did not settle within 1 iteration(s); the last settings "
+                                       "were accepted")
+        assert s["alerts"] == ["L3, L4: too bright at minimum gain"]
+        text = ol.notes_block(accepted, left_mask=0x0D, right_mask=0x80,
+                              finished_at=datetime.datetime(2026, 11, 2, 9, 0, 0))
+        assert "not_converged (accepted without settling), 1 iteration(s)" in text
+
+    def test_not_converged_question(self):
+        q = ol.not_converged_question(_result().records[-1], ol.DEFAULT_SETTINGS)
+        assert q["iteration"] == 3 and len(q["cameras"]) == 4
+        assert q["question"] == (
+            "The cameras have not settled within 10 DN of the 100 DN target (20 in-range "
+            "point(s) in a row) after 3 iteration(s). Keep iterating, or accept the "
+            "current settings?")
+
+    def test_current_values_while_optimized(self):
+        v = ol.current_values(_result())
+        assert v["source"] == "optimized"
+        # Row 1 = cameras 1 & 8 (L1 16x, R8 12.8125x); row 2 (2 & 7) wasn't run.
+        assert v["gainBounds"] == ["12.8125–16×", "not optimized", "1×", "1×"]
+        assert v["pulseWidthBounds"] == "1901 µs" and v["currentBounds"] == "5000 mA"
+        assert v["exposure"] == "2196 µs"
+
+    def test_current_values_at_the_defaults(self):
+        v = ol.current_values(None)
+        assert v["source"] == "default"
+        assert v["gainBounds"] == ["16×", "4×", "2×", "1×"]
+        assert v["pulseWidthBounds"] == "console default"
+        assert v["exposure"] == "648 µs"
+        # A failed run's preflight read the console's own values.
+        from omotion.exposure.actuator import LaserBaseline
+        base = LaserBaseline("1.8.1", 529.92, 5000.0, 5500.0, {})
+        v = ol.current_values(_result(passed=False), base)
+        assert (v["pulseWidthBounds"], v["currentBounds"]) == ("530 µs", "5000 mA")
 
     def test_unoptimized_cameras(self):
         r = _result()

@@ -4,8 +4,10 @@ compile-out. The SDK workflow is a fake and worker threads run inline, so
 no hardware and no event loop are needed.
 """
 
+import dataclasses
 import re
 import threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -214,6 +216,80 @@ def test_workflow_exception_reports_failure(tmp_path, inline_threads):
     c.optimizeLaser(0xFF, 0)
     assert finished[0][:2] == (False, "Optimize Laser failed: boom")
     assert not c.optimizeLaserActive and not c.optimizeLaserRunning
+
+
+class AskingWorkflow(FakeWorkflow):
+    """Hits the iteration limit and asks, like the SDK's run()."""
+
+    def run(self, settings, **kw):
+        self.calls.append(("run", settings, kw))
+        self.answer = kw["on_not_converged"](self.result.records[-1])
+        if self.answer == "accept":
+            return dataclasses.replace(self.result, accepted=True)
+        return _result(passed=False, status=OptimizeStatus.NOT_CONVERGED)
+
+
+def _pump(until, timeout=5.0):
+    """Run the Qt event loop (queued worker -> main signals) until ``until()``."""
+    from PyQt6.QtCore import QCoreApplication
+    deadline = time.monotonic() + timeout
+    while not until():
+        assert time.monotonic() < deadline, "timed out waiting"
+        QCoreApplication.processEvents()
+        time.sleep(0.01)
+
+
+@pytest.mark.parametrize("answer, ok", [("accept", True), ("stop", False), ("nonsense", False)])
+def test_not_converged_asks_the_operator(tmp_path, answer, ok):
+    wf = AskingWorkflow(_result(status=OptimizeStatus.NOT_CONVERGED))
+    c = _connector(tmp_path, workflow=wf)
+    asked = _record(c.optimizeLaserDecisionNeeded)
+    finished = _record(c.optimizeLaserFinished)
+    assert c.optimizeLaser(0xFF, 0) is True
+    _pump(lambda: asked)
+    assert c.optimizeLaserWaiting and "Keep iterating" in asked[0][0]["question"]
+    c.answerOptimizeLaser(answer)
+    _pump(lambda: finished)
+    assert wf.answer == (answer if answer in ("accept", "stop") else "stop")
+    assert finished[0][0] is ok and c.optimizeLaserActive is ok
+    assert not c.optimizeLaserWaiting
+    if ok:
+        assert finished[0][2]["accepted"] is True
+        assert finished[0][2]["runSeconds"] is not None
+
+
+def test_cancel_answers_an_open_question_with_stop(tmp_path):
+    wf = AskingWorkflow(_result(status=OptimizeStatus.NOT_CONVERGED))
+    c = _connector(tmp_path, workflow=wf)
+    asked = _record(c.optimizeLaserDecisionNeeded)
+    finished = _record(c.optimizeLaserFinished)
+    c.optimizeLaser(0xFF, 0)
+    _pump(lambda: asked)
+    c.cancelOptimizeLaser()
+    _pump(lambda: finished)
+    assert wf.answer == "stop" and finished[0][0] is False
+
+
+def test_current_values_follow_the_settings_in_use(tmp_path):
+    from omotion.exposure.actuator import LaserBaseline
+    c = _connector(tmp_path)
+    assert c.optimizeLaserCurrentValues["source"] == "default"
+    c._optimize_baseline = LaserBaseline("1.8.1", 529.92, 5000.0, 5500.0, {})
+    assert c.optimizeLaserCurrentValues["pulseWidthBounds"] == "530 µs"
+    c._set_optimize_result(_result())
+    v = c.optimizeLaserCurrentValues
+    assert v["source"] == "optimized" and v["pulseWidthBounds"] == "1901 µs"
+
+
+def test_a_run_remembers_the_consoles_own_values(tmp_path, inline_threads):
+    from omotion.exposure.actuator import LaserBaseline
+    base = LaserBaseline("1.8.1", 529.92, 5000.0, 5500.0, {})
+    failed = dataclasses.replace(_result(passed=False, status=OptimizeStatus.NOT_CONVERGED),
+                                 baseline=base)
+    c = _connector(tmp_path, workflow=FakeWorkflow(failed))
+    c.optimizeLaser(0xFF, 0)
+    assert c._optimize_baseline is base
+    assert c.optimizeLaserCurrentValues["currentBounds"] == "5000 mA"
 
 
 def test_cancel_sets_the_stop_event(tmp_path):
