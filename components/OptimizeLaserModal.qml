@@ -287,6 +287,15 @@ Item {
             }
 
             Text {
+                objectName: "optimizeLaserIterations"
+                visible: root.finished && root.iteration > 0
+                text: "Iterations: " + root.iteration
+                color: AppTheme.textSecondary
+                font.pixelSize: 12
+                Layout.fillWidth: true
+            }
+
+            Text {
                 objectName: "optimizeLaserTime"
                 visible: root.finished && root.timeText !== ""
                 text: root.timeText

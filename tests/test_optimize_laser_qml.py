@@ -356,6 +356,32 @@ def test_modal_shows_the_total_time(qml):
         "Total time: 1 min 59 s (camera setup 1 min 45 s, optimizing 14 s)")
 
 
+def test_modal_shows_the_iteration_count(qml):
+    stub = qml.stub
+    modal = qml("components", "OptimizeLaserModal.qml")
+    base._invoke(modal, "reset")
+    base._invoke(modal, "open")
+    label = modal.findChild(QObject, "optimizeLaserIterations")
+    assert label.property("visible") is False       # not while it runs
+    stub.optimizeLaserFinished.emit(True, "Every camera is on target.", {
+        "alerts": [], "csvName": "", "cameras": [], "pulseWidthUs": 1000.0,
+        "emittedPulseWidthUs": 982.7, "currentMa": 5000.0, "iterations": 3,
+        "runSeconds": 14.2})
+    assert label.property("text") == "Iterations: 3"
+    assert label.property("visible") is True
+    base._invoke(modal, "close")
+
+
+def test_modal_hides_the_iteration_count_when_no_run_started(qml):
+    stub = qml.stub
+    modal = qml("components", "OptimizeLaserModal.qml")
+    base._invoke(modal, "reset")
+    base._invoke(modal, "open")
+    stub.optimizeLaserFinished.emit(False, "Optimize Laser needs engineering mode.", {})
+    assert modal.findChild(QObject, "optimizeLaserIterations").property("visible") is False
+    base._invoke(modal, "close")
+
+
 def test_button_panel_shows_the_button_only_when_asked(qml):
     panel = qml("components", "ButtonPanel.qml")
     button = panel.findChild(QObject, "optimizeLaserButton")
