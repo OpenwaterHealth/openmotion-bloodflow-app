@@ -4897,6 +4897,7 @@ class MotionConnector(QObject):
     def _on_optimize_done(self, result):
         self._optimize_running = False
         self._optimize_waiting = False
+        self._optimize_worker_result = None     # reported: _optimize_result has it now
         run_seconds = (time.monotonic() - self._optimize_t0
                        if self._optimize_t0 is not None else None)
         if isinstance(result, BaseException):
@@ -5036,7 +5037,7 @@ class MotionConnector(QObject):
                         "This scan uses the default laser settings.", "warning", 8000)
             return None, None
         try:
-            workflow.reapply(result)
+            workflow.reapply(result, left_mask, right_mask)
         except Exception as e:
             logger.error("Optimize Laser settings could not be re-applied: %s", e)
             return None, (f"The Optimize Laser settings could not be re-applied ({e}). "

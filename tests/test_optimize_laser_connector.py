@@ -97,8 +97,8 @@ class FakeWorkflow:
         kw["on_iteration"](self.result.records[-1])
         return self.result
 
-    def reapply(self, result):
-        self.calls.append(("reapply", result))
+    def reapply(self, result, left, right):
+        self.calls.append(("reapply", result, left, right))
         if self.reapply_error:
             raise RuntimeError(self.reapply_error)
 
@@ -337,6 +337,18 @@ def test_prepare_reapplies_and_returns_the_overrides(tmp_path):
     assert wf.calls[0][0] == "reapply"
 
 
+def test_prepare_reapplies_to_the_scans_cameras_not_the_runs(tmp_path):
+    """The scan powers off whatever its masks leave out, so a run on 0x66
+    followed by a scan on 0x0F must not write L6 and L7."""
+    wf = FakeWorkflow(_result())
+    c = _connector(tmp_path, workflow=wf)
+    result = _result()
+    c._set_optimize_result(result)
+    c._optimize_masks = (0x66, 0x66)
+    assert c._prepare_optimized_scan(0x0F, 0x00) == (OVERRIDES, None)
+    assert wf.calls[0] == ("reapply", result, 0x0F, 0x00)
+
+
 def test_failed_reapply_refuses_the_scan(tmp_path):
     c = _connector(tmp_path, workflow=FakeWorkflow(reapply_error="RATE_LL write refused"))
     c._set_optimize_result(_result())
@@ -513,6 +525,27 @@ def test_shutdown_without_active_settings_touches_nothing(tmp_path):
     c = _connector(tmp_path, workflow=wf)
     c.shutdown()
     assert wf.calls == []
+
+
+def test_quit_after_a_restore_does_not_restore_again(tmp_path, inline_threads):
+    wf = FakeWorkflow(_result())
+    c = _connector(tmp_path, workflow=wf)
+    c.optimizeLaser(0xFF, 0)
+    assert c.optimizeLaserActive is True
+    assert c.restoreDefaultLaserSettings() is True
+    assert c.optimizeLaserActive is False
+    wf.calls.clear()
+    c.shutdown()
+    assert wf.calls == []
+
+
+def test_quit_with_a_finished_run_still_restores(tmp_path, inline_threads):
+    wf = FakeWorkflow(_result())
+    c = _connector(tmp_path, workflow=wf)
+    c.optimizeLaser(0xFF, 0)
+    wf.calls.clear()
+    c.shutdown()
+    assert wf.calls == [("restore", 0xFF, 0)]
 
 
 def test_shutdown_stops_a_run_and_waits_for_its_restore(tmp_path):
