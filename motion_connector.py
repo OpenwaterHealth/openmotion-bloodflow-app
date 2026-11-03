@@ -2817,10 +2817,26 @@ class MotionConnector(QObject):
             e.image_path or previous.get("image", ""),
             dfu_serial=e.dfu_serial or previous.get("dfu_serial"),
             interrupted=True))
-        if e.in_dfu:
+        # A sensor's USB runs through the console, and the sensor restarts
+        # whenever that link drops (bench, 2026-11-03): for a sensor,
+        # unplugging the system's cable is a power loss.
+        sensor = kind is FirmwareKind.SENSOR
+        if e.in_dfu and sensor:
+            msg = (f"The {label} firmware update did not finish, and the {label} "
+                   "is waiting in update mode with incomplete firmware. Do not "
+                   "power off the system or unplug its USB cable, which restarts "
+                   "the sensor: press Retry to finish the update.")
+        elif e.in_dfu:
             msg = (f"The {label} firmware update did not finish, and the {label} "
                    "is waiting in update mode with incomplete firmware. Do not "
                    "power it off or unplug it: press Retry to finish the update.")
+        elif sensor:
+            msg = (f"The {label} dropped off USB during the firmware update, and "
+                   "its firmware is incomplete. A sensor restarts when its USB "
+                   "connection drops, so it has most likely restarted into the "
+                   "incomplete firmware and needs bench recovery: contact "
+                   "Openwater support. Retry can still finish the update if the "
+                   "sensor is back in update mode.")
         else:
             msg = (f"The {label} dropped off USB during the firmware update, and "
                    "its firmware is incomplete. Do not power it off: reconnect "
@@ -2891,9 +2907,14 @@ class MotionConnector(QObject):
         if record is not None and (record.get("dfu_serial") is None
                                    or record["dfu_serial"] in serials):
             label = firmware_resume.describe(record)
+            # Unplugging the system's cable restarts a sensor, as in
+            # _firmware_interrupted.
+            warning = ("Do not power off the system or unplug its USB cable"
+                       if record["kind"] == FirmwareKind.SENSOR.value
+                       else "Do not power it off or unplug it")
             msg = (f"The last {label} firmware update did not finish. The "
                    f"{label} is waiting in update mode with incomplete firmware. "
-                   "Do not power it off or unplug it: finish the update now.")
+                   f"{warning}: finish the update now.")
             logger.warning("Startup: %d unit(s) waiting in DFU; offering to "
                            "finish the interrupted %s update", len(serials), label)
             self._set_firmware_resume(record["device"], msg)
@@ -2901,8 +2922,8 @@ class MotionConnector(QObject):
         else:
             msg = ("A unit is waiting in firmware update mode (USB DFU), and "
                    "this computer has no record of an interrupted update for "
-                   "it. If its firmware update was interrupted, do not power "
-                   "it off; contact Openwater support.")
+                   "it. If its firmware update was interrupted, do not power off "
+                   "the system or unplug its USB cable; contact Openwater support.")
             logger.warning("Startup: %d unit(s) waiting in DFU with no update "
                            "record (serials %s)", len(serials), serials)
             self.firmwareResumeOffered.emit("", msg)

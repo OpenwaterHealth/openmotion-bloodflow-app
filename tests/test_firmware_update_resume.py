@@ -149,12 +149,11 @@ def _signals(c):
     return out
 
 
-def _interrupted(tmp_path, *, in_dfu=True, serial="ROM-UID"):
-    image = firmware_resume.cache_dir(Path(tmp_path) / "data", FirmwareKind.CONSOLE, TAG) \
-        / CONSOLE_ASSET
+def _interrupted(tmp_path, *, in_dfu=True, serial="ROM-UID", kind=FirmwareKind.CONSOLE):
+    image = firmware_resume.cache_dir(Path(tmp_path) / "data", kind, TAG) / CONSOLE_ASSET
     return motion_connector.UpdateInterruptedError(
         "the firmware write failed 3 time(s)", image_path=image,
-        kind=FirmwareKind.CONSOLE, dfu_serial=serial, in_dfu=in_dfu, attempts=3)
+        kind=kind, dfu_serial=serial, in_dfu=in_dfu, attempts=3)
 
 
 def _start(c, device="console"):
@@ -228,7 +227,7 @@ def test_interrupted_update_warns_and_offers_retry(tmp_path, updater, downloads)
     assert c._firmware_update_in_progress is None
 
 
-def test_unit_that_dropped_off_usb_is_told_to_reconnect(tmp_path, updater, downloads):
+def test_a_console_that_dropped_off_usb_is_told_to_reconnect(tmp_path, updater, downloads):
     c = _connector(tmp_path)
     out = _signals(c)
     updater.outcomes = [_interrupted(tmp_path, in_dfu=False)]
@@ -237,6 +236,40 @@ def test_unit_that_dropped_off_usb_is_told_to_reconnect(tmp_path, updater, downl
 
     assert "reconnect its USB cable" in out["finished"][-1][2]
     assert c.firmwareResumeDevice == "console"
+
+
+def test_a_sensor_in_update_mode_warns_about_the_systems_usb_cable(
+        tmp_path, updater, downloads):
+    c = _connector(tmp_path)
+    out = _signals(c)
+    updater.outcomes = [_interrupted(tmp_path, kind=FirmwareKind.SENSOR)]
+
+    _start(c, "left")
+
+    dev, ok, msg = out["finished"][-1]
+    assert dev == "left" and ok is False
+    assert "left sensor" in msg
+    assert "Do not power off the system or unplug its USB cable" in msg
+    assert "press Retry" in msg
+    assert c.firmwareResumeDevice == "left"
+
+
+def test_a_sensor_that_dropped_off_usb_is_not_told_to_reconnect(
+        tmp_path, updater, downloads):
+    """Dropping the console's USB link restarts both sensors (bench,
+    2026-11-03), so reconnecting the cable cannot bring a sensor's ROM loader
+    back: it has most likely started the half-written image."""
+    c = _connector(tmp_path)
+    out = _signals(c)
+    updater.outcomes = [_interrupted(tmp_path, in_dfu=False, kind=FirmwareKind.SENSOR)]
+
+    _start(c, "left")
+
+    msg = out["finished"][-1][2]
+    assert "needs bench recovery" in msg and "Openwater support" in msg
+    assert "reconnect" not in msg
+    assert c.firmwareResumeDevice == "left", "Retry stays offered"
+    assert c._app_config[firmware_resume.PENDING_KEY]["interrupted"] is True
 
 
 def test_an_ordinary_failure_leaves_nothing_to_resume(tmp_path, updater, downloads):
@@ -413,8 +446,22 @@ def test_startup_offers_to_finish_a_recorded_update(tmp_path, monkeypatch):
 
     assert out["offered"] and out["offered"][0][0] == "left"
     assert "left sensor" in out["offered"][0][1]
-    assert "Do not power it off" in out["offered"][0][1]
+    assert "Do not power off the system or unplug its USB cable" in out["offered"][0][1]
     assert c.firmwareResumeDevice == "left"
+
+
+def test_startup_offer_for_a_console_warns_about_the_console(tmp_path, monkeypatch):
+    monkeypatch.setattr(firmware_resume, "waiting_dfu_serials", lambda: ["ROM-UID"])
+    c = _connector(tmp_path)
+    c._app_config[firmware_resume.PENDING_KEY] = firmware_resume.make_record(
+        "console", FirmwareKind.CONSOLE, TAG, CONSOLE_ASSET, dfu_serial="ROM-UID",
+        interrupted=True)
+    out = _signals(c)
+
+    c._probe_interrupted_firmware_update()
+
+    assert out["offered"][0][0] == "console"
+    assert "Do not power it off or unplug it" in out["offered"][0][1]
 
 
 def test_startup_warns_about_a_waiting_unit_it_has_no_record_of(tmp_path, monkeypatch):
@@ -426,7 +473,7 @@ def test_startup_warns_about_a_waiting_unit_it_has_no_record_of(tmp_path, monkey
     c._probe_interrupted_firmware_update()
 
     assert out["offered"][0][0] == ""
-    assert "do not power it off" in out["offered"][0][1]
+    assert "do not power off the system or unplug its USB cable" in out["offered"][0][1]
     assert c.firmwareResumeDevice == ""
 
 
