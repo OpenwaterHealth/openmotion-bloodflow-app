@@ -122,6 +122,20 @@ if ($Jobs -gt 0) { $args += "--jobs=$Jobs" }
 # is False, but Nuitka follows the import statically regardless of the
 # branch, so tell it not to; openwater.spec does the same with excludes=.
 if ($Variant -eq "clinical") { $args += "--nofollow-import-to=app_updater" }
+# DICOM export is Research-only (the connector gates it on !clinicalMode),
+# so a clinical bundle carries neither the exporter nor pydicom. Research:
+# pydicom's init imports its pixel encoder/decoder plugins by name, and
+# pydicom.examples reads data/urls.json + hashes.json (a missing urls.json
+# is a runtime error). PyInstaller gets the same from
+# pyinstaller-hooks-contrib's hook-pydicom. The test DICOMs stay out.
+if ($Variant -eq "clinical") {
+    $args += "--nofollow-import-to=dicom_export"
+    $args += "--nofollow-import-to=pydicom"
+} else {
+    $args += "--include-package=pydicom.pixels"
+    $args += "--include-package-data=pydicom.data:urls.json"
+    $args += "--include-package-data=pydicom.data:hashes.json"
+}
 # Nor the engineering-mode unlock (#706), unless this is the service tool:
 # the Python module (imported on the same compiled constants) and its QML
 # prompt, so a clinical bundle carries neither the check nor the dialog.

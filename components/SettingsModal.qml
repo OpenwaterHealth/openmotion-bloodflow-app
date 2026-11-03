@@ -50,6 +50,7 @@ Item {
     property real   contrastMin: 0.0
     property real   contrastMax: 1.0
     property bool   writeRawCsv:       false
+    property bool   exportDicom:       false
     property var    rawCsvDurationSec: 60
 
     // ── App update state — driven by MotionInterface's auto-check on
@@ -121,6 +122,7 @@ Item {
         b = sanitizeBoundPair("contrast", cfg.contrastMin, cfg.contrastMax)
         contrastMin = b.min; contrastMax = b.max
         writeRawCsv       = cfg.writeRawCsv       !== undefined ? cfg.writeRawCsv       : false
+        exportDicom       = cfg.exportDicom       !== undefined ? cfg.exportDicom       : false
         rawCsvDurationSec = cfg.rawCsvDurationSec !== undefined ? cfg.rawCsvDurationSec : null
         // Theme selector (themeCombo) binds its currentIndex directly to
         // appConfig.darkMode/liquidGlass, so no manual sync is needed here.
@@ -174,6 +176,7 @@ Item {
             "contrastMax": contrastMax
         })
         MotionInterface.setWriteRawCsv(writeRawCsv)
+        MotionInterface.setExportDicom(exportDicom)
         MotionInterface.setRawCsvDurationSec(rawCsvDurationSec)
         settingsChanged()
         root.visible = false
@@ -649,6 +652,28 @@ Item {
                                 border.color: root.colBorderSoft; border.width: 1
                             }
                         }
+                    }
+
+                    // ── DICOM beside the History CSV export (Research only) ──
+                    // The connector re-checks !clinicalMode at export time,
+                    // so a persisted value is inert on a clinical build.
+                    FieldRow {
+                        visible: !root.clinicalMode
+                        label: "Export DICOM too"
+                        PillSwitch {
+                            objectName: "exportDicomSwitch"
+                            Accessible.name: "Export DICOM too"
+                            checked: root.exportDicom
+                            onCheckedChanged: root.exportDicom = checked
+                        }
+                        Text {
+                            text: root.exportDicom
+                                  ? "History export also writes a .dcm waveform"
+                                  : "Off"
+                            color: root.exportDicom ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
                     }
 
                     // ── Raw histogram CSVs (research + engineering, #234) ────

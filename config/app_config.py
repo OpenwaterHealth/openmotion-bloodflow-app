@@ -64,6 +64,8 @@ APP_CONFIG = {
     "writeRawCsv": False,
     "rawCsvDurationSec": None,
     "writeTelemetryCsv": False,
+    # Research-only DICOM export beside the History CSV export.
+    "exportDicom": False,
     "leftMask": 102,
     "rightMask": 102,
     "clinicalMode": CLINICAL_MODE,
@@ -235,6 +237,9 @@ PREFERENCE_KEYS = frozenset({
     # build: the scan-start gate is (!clinicalMode || engineeringMode), and
     # engineeringMode is session-only.
     "writeRawCsv", "rawCsvDurationSec",
+    # History export also writes a DICOM waveform. Gated on !clinicalMode at
+    # export time, so a value persisted here is inert on a clinical build.
+    "exportDicom",
 })
 
 STATE_KEYS = frozenset({

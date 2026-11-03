@@ -4107,11 +4107,47 @@ class MotionConnector(QObject):
                 "exportScanCsv: exported %r (sid=%d) → %s",
                 session.get("session_label"), session_id, output_path,
             )
+            if self._export_dicom_enabled():
+                with ScanDatabase(db_path) as db:
+                    self._write_dicom_beside(db, int(session_id), output_path)
             return True
         except Exception as exc:
             logger.exception("exportScanCsv failed for sid %s", session_id)
             self.errorOccurred.emit(f"Export failed:\n{exc}")
             return False
+
+    def _export_dicom_enabled(self) -> bool:
+        """History export also writes a DICOM waveform: Research builds
+        only, opt-in via the exportDicom preference."""
+        return (bool(self._app_config.get("exportDicom", False))
+                and not self._app_config.get("clinicalMode", False))
+
+    def _write_dicom_beside(self, db, session_id: int,
+                            csv_path: str) -> Optional[str]:
+        """Write ``<csv stem>.dcm`` next to an exported CSV. Fail-soft: the
+        CSV is already written, so a DICOM failure is logged and surfaced
+        as a warning toast but does not count the scan as skipped."""
+        dcm_path = os.path.splitext(csv_path)[0] + ".dcm"
+        try:
+            import dicom_export
+            from PyQt6.QtCore import QCoreApplication
+            dicom_export.export_session_dicom(
+                db, int(session_id), dcm_path,
+                software_version=QCoreApplication.applicationVersion() or "",
+            )
+            return dcm_path
+        except Exception as exc:
+            logger.exception("DICOM export failed for sid %s", session_id)
+            self.notify(f"CSV exported, but the DICOM file failed: {exc}",
+                        type_="warning", tag="dicom-export")
+            return None
+
+    @pyqtSlot(bool)
+    def setExportDicom(self, enabled: bool) -> None:
+        """Update the exportDicom preference (Settings → Data Output)."""
+        self._app_config["exportDicom"] = bool(enabled)
+        self._save_app_config()
+        self.appConfigChanged.emit()
 
     @pyqtSlot('QVariantList', str)
     def exportScansToFolder(self, session_ids, folder) -> None:
@@ -4156,6 +4192,7 @@ class MotionConnector(QObject):
             if not db_path:
                 self.errorOccurred.emit("No scan database available.")
                 return result
+            want_dicom = self._export_dicom_enabled()
             with ScanDatabase(db_path) as db:
                 for sid in session_ids:
                     try:
@@ -4176,6 +4213,8 @@ class MotionConnector(QObject):
                             "exportScansToFolder: exported %r (sid=%d) -> %s",
                             label, sid, out_path,
                         )
+                        if want_dicom:
+                            self._write_dicom_beside(db, sid, out_path)
                     except Exception:
                         logger.exception(
                             "exportScansToFolder: failed for %r", sid)
