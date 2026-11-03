@@ -276,6 +276,9 @@ runtime_hooks = ["rthook_libusb_paths.py"]
 _excludes = ["PySide6", "shiboken6", "PySide2", "PyQt5"]
 if _is_clinical:
     _excludes.append("app_updater")
+    # DICOM export is Research-only (gated on !clinicalMode at export time):
+    # keep the exporter and pydicom out of the clinical bundle.
+    _excludes += ["dicom_export", "pydicom"]
 # Same for the engineering-mode unlock (#706): a clinical build that is not
 # the service tool leaves out the Python unlock here and its QML prompt
 # below, so it carries neither the check nor the dialog. Guarded by

@@ -11,6 +11,8 @@ pyserial==3.5
 crcmod==1.7
 numpy==2.2.5
 matplotlib==3.10.1
+# DICOM waveform export (dicom_export.py), pure Python.
+pydicom==3.0.2
 # Build-time only: the app never imports it, and neither bundle carries it.
 # scripts/make_app_icon.py writes favicon.ico with it, and matplotlib needs
 # it. Pinned because tests/test_app_icon_resources.py checks the committed
