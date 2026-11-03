@@ -12,6 +12,10 @@ ApplicationWindow {
     visible: true
     width: 1200
     height: 800
+    // Floor for native edge resizing / snapping (issue #642); matches the
+    // bottom-right grip's clamp below.
+    minimumWidth: 800
+    minimumHeight: 600
     flags: Qt.FramelessWindowHint | Qt.Window | Qt.CustomizeWindowHint | Qt.WindowTitleHint
     color: "transparent"
 
@@ -87,6 +91,100 @@ ApplicationWindow {
         interval: window._exitArmDurationMs
         repeat: false
         onTriggered: window._exitArmed = false
+    }
+
+    // Window state changes (#608, #632). The title-bar buttons and F11
+    // go through these functions, never straight to show*(), because Qt
+    // mishandles this frameless window on Windows in two ways:
+    //   * showMinimized() replaces the state instead of adding to it, so
+    //     a maximized or fullscreen window came back from the taskbar as
+    //     a "normal" window of screen size, with Qt's normal geometry
+    //     overwritten, and the buttons could never shrink it again.
+    //   * FullScreen -> Maximized directly uses the native maximize,
+    //     after which showNormal() leaves the window maximized (and on
+    //     another monitor).
+    // So the window keeps its own normal geometry and pre-minimize
+    // state, and every return passes through showNormal() at that
+    // geometry before maximizing or going fullscreen again.
+    property bool _wasMaximizedBeforeFullScreen: false
+    property int _visibilityBeforeMinimize: Window.Windowed
+    property bool _restoreAfterMinimize: false
+    property rect _normalGeometry: Qt.rect(0, 0, 0, 0)
+
+    function _saveNormalGeometry() {
+        if (window.visibility === Window.Windowed)
+            window._normalGeometry = Qt.rect(window.x, window.y,
+                                             window.width, window.height)
+    }
+
+    function _showNormalAtSavedGeometry() {
+        window.showNormal()
+        var g = window._normalGeometry
+        if (g.width > 0 && g.height > 0) {
+            window.x = g.x
+            window.y = g.y
+            window.width = g.width
+            window.height = g.height
+        }
+    }
+
+    // Deferred a turn: issued in the same turn as showNormal() it lands
+    // among the resize events of leaving fullscreen and the window ends
+    // up normal at screen size.
+    function _showMaximizedLater() {
+        Qt.callLater(window.showMaximized)
+    }
+
+    function toggleMaximized() {
+        if (window.visibility === Window.Maximized) {
+            window._showNormalAtSavedGeometry()
+        } else {
+            window._saveNormalGeometry()
+            window.showMaximized()
+        }
+    }
+
+    function minimizeWindow() {
+        window._saveNormalGeometry()
+        window._visibilityBeforeMinimize = window.visibility
+        window._restoreAfterMinimize = true
+        window.showMinimized()
+    }
+
+    // Leaving fullscreen returns to whichever state it was entered
+    // from, so a maximized window comes back maximized.
+    function toggleFullScreen() {
+        if (window.visibility === Window.FullScreen) {
+            window._showNormalAtSavedGeometry()
+            if (window._wasMaximizedBeforeFullScreen) window._showMaximizedLater()
+        } else {
+            window._wasMaximizedBeforeFullScreen =
+                window.visibility === Window.Maximized
+            window._saveNormalGeometry()
+            window.showFullScreen()
+        }
+    }
+
+    // Back from the taskbar: re-apply the state the window was
+    // minimized from.
+    onVisibilityChanged: {
+        if (!window._restoreAfterMinimize
+                || window.visibility === Window.Minimized)
+            return
+        window._restoreAfterMinimize = false
+        var target = window._visibilityBeforeMinimize
+        if (target === Window.Maximized || target === Window.FullScreen) {
+            window._showNormalAtSavedGeometry()
+            if (target === Window.Maximized) window._showMaximizedLater()
+            else window.showFullScreen()
+        }
+    }
+
+    // No Escape binding: every modal closes on Escape, and a
+    // window-level Shortcut would take the key before they see it.
+    Shortcut {
+        sequence: "F11"
+        onActivated: window.toggleFullScreen()
     }
 
     Rectangle {
@@ -196,7 +294,7 @@ ApplicationWindow {
         }
     }
 
-    // Bottom-right resize handle (hidden when maximized)
+    // Bottom-right resize handle (hidden when maximized or fullscreen)
     Item {
         id: resizeHandle
         width: 18
@@ -204,6 +302,7 @@ ApplicationWindow {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         visible: window.visibility !== Window.Maximized
+                 && window.visibility !== Window.FullScreen
 
         // Diagonal grip lines
         Canvas {

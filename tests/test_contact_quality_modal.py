@@ -3,8 +3,9 @@
 BloodFlow.qml can't be instantiated standalone (it needs the whole app), so
 its handler contracts are pinned as source-structure assertions. The modal
 itself compiles fine in a bare engine, so its signal contract — including the
-#492 Force Dismiss behavior — is exercised for real in an offscreen QML
-harness (pattern: test_critical_error_modal_footer.py).
+#492 Force Dismiss behavior — and the #709 build/engineering gate on that
+button are exercised for real in an offscreen QML harness (pattern:
+test_critical_error_modal_footer.py).
 """
 
 import contextlib
@@ -19,9 +20,12 @@ from pathlib import Path
 # is passed via argv, NOT via QT_QPA_PLATFORM, so the process environment is
 # untouched (see test_logs_modal_filters.py).
 from PyQt6.QtCore import (  # noqa: E402
+    Q_ARG,
+    Q_RETURN_ARG,
     QCoreApplication,
     QMetaObject,
     QObject,
+    Qt,
     QUrl,
     pyqtProperty,
     pyqtSignal,
@@ -40,6 +44,7 @@ from PyQt6.QtQml import (  # noqa: E402
     qmlRegisterSingletonInstance,
     qmlRegisterSingletonType,
 )
+from PyQt6.QtQuick import QQuickWindow  # noqa: E402
 
 pytestmark = pytest.mark.unit
 
@@ -107,11 +112,30 @@ class _StubMotionInterface(QObject):
     """Minimal MotionInterface stand-in covering every member the
     ContactQualityModal.qml tree (and AppTheme.qml) references."""
 
+    appConfigChanged = pyqtSignal()
     _neverEmitted = pyqtSignal()
+    # The connector's dropout watchdog signals (#731 feeds the modal's
+    # no-data dots from them): side, cam_id (0-7), elapsed.
+    cameraDropoutDetected = pyqtSignal(str, int, str)
+    cameraDropoutRecovered = pyqtSignal(str, int, str)
 
-    @pyqtProperty("QVariantMap", notify=_neverEmitted)
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._clinical = False
+        self._engineering = True
+
+    def setFlags(self, clinical: bool, engineering: bool):
+        self._clinical = bool(clinical)
+        self._engineering = bool(engineering)
+        self.appConfigChanged.emit()
+
+    @pyqtProperty("QVariantMap", notify=appConfigChanged)
     def appConfig(self):
-        return {"engineeringMode": True, "darkMode": True}
+        return {
+            "engineeringMode": self._engineering,
+            "clinicalMode": self._clinical,
+            "darkMode": True,
+        }
 
     @pyqtProperty(bool, notify=_neverEmitted)
     def leftSensorConnected(self):
@@ -139,8 +163,12 @@ def _basic_controls_style():
 
 
 @pytest.fixture(scope="module")
-def cq_modal():
-    """Compile ContactQualityModal.qml once for this module."""
+def cq_harness():
+    """Compile ContactQualityModal.qml once for this module; hand out
+    instances. ``make(in_window=True)`` parents the instance into a shown
+    offscreen window — effective item visibility only resolves there (an
+    unattached item tree reads visible=false everywhere). The stub is
+    shared, so tests flip the mode flags through ``make.stub.setFlags``."""
     stub = _StubMotionInterface()
     qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MotionInterface", stub)
     qmlRegisterSingletonType(
@@ -155,18 +183,39 @@ def cq_modal():
             "ContactQualityModal.qml failed to compile:\n"
             + "\n".join(e.toString() for e in component.errors())
         )
-    obj = component.create()
-    if obj is None:
-        raise RuntimeError(
-            "ContactQualityModal.qml failed to instantiate:\n"
-            + "\n".join(e.toString() for e in component.errors())
-        )
 
-    yield obj
+    window = QQuickWindow()
+    window.resize(1400, 820)
+    window.show()
+    created = []
 
-    obj.deleteLater()
+    def make(in_window=False):
+        obj = component.create()
+        if obj is None:
+            raise RuntimeError(
+                "ContactQualityModal.qml failed to instantiate:\n"
+                + "\n".join(e.toString() for e in component.errors())
+            )
+        if in_window:
+            obj.setParentItem(window.contentItem())
+        created.append(obj)
+        return obj
+
+    make.stub = stub
+    yield make
+
+    for obj in created:
+        obj.setParentItem(None)
+        obj.deleteLater()
+    window.close()
     del engine
     del stub
+
+
+@pytest.fixture(scope="module")
+def cq_modal(cq_harness):
+    """One shared, unparented instance for the signal-contract tests."""
+    return cq_harness()
 
 
 def _is_quick_button(obj):
@@ -231,3 +280,296 @@ def test_no_other_footer_button_emits_force_dismissed(cq_modal):
         assert counts["root"] > before, b.property("text")
 
     assert counts["force"] == 0
+
+
+# ── Force Dismiss availability + look (#709) ────────────────────────────────
+
+def _show_live_warning(modal):
+    """Drive the modal through its public API into the live-scan
+    poor-contact state BloodFlow produces on a mid-scan latch (reset(true)
+    + addWarning), where the footer is up for every build variant."""
+    QMetaObject.invokeMethod(modal, "reset", Q_ARG("QVariant", True))
+    QMetaObject.invokeMethod(
+        modal, "addWarning",
+        Q_ARG("QVariant", "L1"), Q_ARG("QVariant", "contact"),
+        Q_ARG("QVariant", "Poor contact"), Q_ARG("QVariant", 12.0))
+    assert modal.property("state_") == "warnings"
+    assert modal.property("visible") is True
+
+
+@pytest.mark.parametrize(
+    "clinical, engineering, expected",
+    [
+        (False, False, True),   # Research build: always offered (#709)
+        (False, True, True),
+        (True, False, False),   # plain clinical build: hidden, as before
+        (True, True, True),     # clinical + engineering unlock
+    ],
+)
+def test_force_dismiss_visibility_follows_build_and_engineering(
+        cq_harness, clinical, engineering, expected):
+    """#709: the button is gated ``!clinicalMode || engineeringMode`` (the
+    #234 raw-CSV pattern) instead of engineering mode alone."""
+    cq_harness.stub.setFlags(clinical, engineering)
+    try:
+        modal = cq_harness(in_window=True)
+        _show_live_warning(modal)
+        btn = modal.findChild(QObject, "cqForceDismissBtn")
+        assert btn is not None
+        assert btn.property("visible") is expected
+        # The rest of the live footer is unaffected by the gate.
+        stop = [b for b in _footer_buttons(modal)
+                if b.property("text") == "Stop scan"]
+        assert len(stop) == 1 and stop[0].property("visible") is True
+        modal.setProperty("visible", False)
+    finally:
+        cq_harness.stub.setFlags(False, True)
+
+
+def _visible_footer_order(modal):
+    """Texts of the shown footer buttons, left to right as laid out."""
+    _qt_app.processEvents()     # let the RowLayout place its children
+    shown = [b for b in _footer_buttons(modal) if b.property("visible")]
+    return [b.property("text") for b in sorted(shown, key=lambda b: b.property("x"))]
+
+
+def test_live_footer_puts_continue_after_hide_for_this_scan(cq_harness):
+    """Continue resumes the scan, so it sits last, at the right edge, with
+    "Hide for this scan" before it (Ethan, 2026-10-07)."""
+    cq_harness.stub.setFlags(False, False)     # Research, no engineering
+    try:
+        modal = cq_harness(in_window=True)
+        _show_live_warning(modal)
+        assert _visible_footer_order(modal) == [
+            "Stop scan", "Hide for this scan", "Continue"]
+        modal.setProperty("visible", False)
+    finally:
+        cq_harness.stub.setFlags(False, True)
+
+
+def test_quick_check_footer_order_is_unchanged(cq_harness):
+    """Outside a live scan there is no Continue; Hide stays last."""
+    cq_harness.stub.setFlags(False, False)
+    try:
+        modal = cq_harness(in_window=True)
+        QMetaObject.invokeMethod(modal, "reset", Q_ARG("QVariant", False))
+        QMetaObject.invokeMethod(
+            modal, "addWarning",
+            Q_ARG("QVariant", "L1"), Q_ARG("QVariant", "contact"),
+            Q_ARG("QVariant", "Poor contact"), Q_ARG("QVariant", 12.0))
+        assert _visible_footer_order(modal) == [
+            "Dismiss", "Retest", "Hide for this scan"]
+        modal.setProperty("visible", False)
+    finally:
+        cq_harness.stub.setFlags(False, True)
+
+
+def test_force_dismiss_reads_as_a_user_facing_control(cq_modal):
+    """#709: plain-language label, plus help text that says how long the
+    hide lasts — and stays true outside a scan, where the click is a
+    one-shot dismiss."""
+    btn = cq_modal.findChild(QObject, "cqForceDismissBtn")
+    assert btn.property("text") == "Hide for this scan"
+    help_text = btn.property("helpText")
+    assert "If a scan is running" in help_text
+    assert "The next scan warns again" in help_text
+
+
+# ── No-data cameras: pre-scan no_signal and mid-scan dropouts (#731) ───────
+
+HOVER_LINE = "Hover over orange cameras for details."
+HOVER_LINE_RED = "Hover over orange or red cameras for details."
+DISMISS_LINE = "All contact quality issues are currently inactive. You may dismiss."
+RED = "#e74c3c"             # AppTheme.accentRed
+ORANGE = "#e67e22"          # the operator's single "bad" orange
+GREEN = "#a3e4a1"
+
+
+def _add_warning(modal, camera, type_key, type_text, value):
+    QMetaObject.invokeMethod(
+        modal, "addWarning",
+        Q_ARG("QVariant", camera), Q_ARG("QVariant", type_key),
+        Q_ARG("QVariant", type_text), Q_ARG("QVariant", value))
+
+
+def _show_check_result(modal, warnings):
+    """The quick-check shape BloodFlow produces from
+    contactQualityCheckFinished: reset(false), then one addWarning per
+    entry the connector mapped."""
+    QMetaObject.invokeMethod(modal, "reset", Q_ARG("QVariant", False))
+    for w in warnings:
+        _add_warning(modal, *w)
+    assert modal.property("state_") == "warnings"
+
+
+def _show_live_scan_warning(modal, warnings):
+    """The live-scan shape: BloodFlow's onContactQualityWarning resets the
+    modal for a live scan, then adds the latched warning."""
+    QMetaObject.invokeMethod(modal, "reset", Q_ARG("QVariant", True))
+    for w in warnings:
+        _add_warning(modal, *w)
+    assert modal.property("state_") == "warnings"
+
+
+def _subtitle(modal):
+    texts = [o.property("text") for o in modal.findChildren(QObject)
+             if isinstance(o.property("text"), str)
+             and ("Hover over" in o.property("text")
+                  or DISMISS_LINE in o.property("text"))]
+    assert len(texts) == 1, texts
+    return texts[0]
+
+
+def _tooltip(modal, side, cam_index1):
+    return QMetaObject.invokeMethod(
+        modal, "cameraTooltip", Qt.ConnectionType.DirectConnection,
+        Q_RETURN_ARG("QVariant"),
+        Q_ARG("QVariant", side), Q_ARG("QVariant", cam_index1))
+
+
+def _dot(modal, side, cam_index1):
+    dots = [o for o in modal.findChildren(QObject)
+            if o.property("camIndex1") == cam_index1
+            and o.property("side") == side]
+    assert len(dots) == 1
+    return dots[0]
+
+
+def _dot_color(modal, side, cam_index1):
+    return _dot(modal, side, cam_index1).property("singleColor").name()
+
+
+NO_SIGNAL_L7 = ("L7", "no_signal", "No data from camera", 0.0)
+POOR_CONTACT_R2 = ("R2", "poor_contact", "Poor sensor contact", 1.5)
+POOR_CONTACT_L2 = ("L2", "poor_contact", "Poor sensor contact", 10.3)
+
+
+def test_no_signal_adds_the_remedy_line_to_the_subtitle(cq_harness):
+    """An operator never sees the per-type dot colours, so the remedy for a
+    camera with no data is spelled out once, above the hover hint, and the
+    hint names the red dot too."""
+    cq_harness.stub.setFlags(True, False)      # plain clinical build
+    try:
+        modal = cq_harness(in_window=True)
+        _show_check_result(modal, [NO_SIGNAL_L7, POOR_CONTACT_R2])
+        assert modal.property("hasNoSignal") is True
+        hint = modal.property("noSignalHint")
+        assert hint and "contact" not in hint.lower()
+        assert _subtitle(modal) == hint + "\n" + HOVER_LINE_RED
+        modal.setProperty("visible", False)
+    finally:
+        cq_harness.stub.setFlags(False, True)
+
+
+def test_poor_contact_alone_keeps_the_plain_subtitle(cq_harness):
+    modal = cq_harness(in_window=True)
+    _show_check_result(modal, [POOR_CONTACT_R2])
+    assert modal.property("hasNoSignal") is False
+    assert _subtitle(modal) == HOVER_LINE
+    modal.setProperty("visible", False)
+
+
+def test_no_signal_tooltip_shows_no_dn_reading(cq_harness):
+    """Engineering mode appends the DN reading to each tooltip line; a
+    camera with no data has none (its value is a 0.0 filler)."""
+    modal = cq_harness(in_window=True)          # engineering mode on
+    _show_check_result(modal, [NO_SIGNAL_L7, POOR_CONTACT_R2])
+    assert _tooltip(modal, "left", 7) == "L7\nNo data from camera"
+    assert _tooltip(modal, "right", 2) == "R2\nPoor sensor contact (1.5 DN)"
+    modal.setProperty("visible", False)
+
+
+def test_no_signal_dot_is_red_in_every_mode(cq_harness):
+    """Red means "no frames from this camera" for operators and engineers
+    alike (Ethan, 2026-10-26). Other warnings keep their colours: the
+    operator's single orange, engineering's contact orange."""
+    modal = cq_harness(in_window=True)          # engineering mode on
+    _show_check_result(modal, [NO_SIGNAL_L7, POOR_CONTACT_R2])
+    assert _dot_color(modal, "left", 7) == RED
+    assert _dot_color(modal, "right", 2) == "#f4a460"    # accentOrangeContact
+    cq_harness.stub.setFlags(True, False)
+    try:
+        assert _dot_color(modal, "left", 7) == RED
+        assert _dot_color(modal, "right", 2) == ORANGE
+    finally:
+        cq_harness.stub.setFlags(False, True)
+    modal.setProperty("visible", False)
+
+
+def test_camera_without_frames_mid_scan_turns_red_and_back(cq_harness):
+    """The 2026-10-26 bench case: the live modal is up for L2's poor
+    contact while R8 never delivers a frame. The dropout watchdog's signal
+    turns R8 red (it used to read as a green, good dot); recovery turns it
+    back."""
+    cq_harness.stub.setFlags(True, False)      # plain clinical build
+    try:
+        modal = cq_harness(in_window=True)
+        _show_live_scan_warning(modal, [POOR_CONTACT_L2])
+        assert _dot_color(modal, "right", 8) == GREEN
+        assert _subtitle(modal) == HOVER_LINE
+
+        cq_harness.stub.cameraDropoutDetected.emit("right", 7, "00:00:03")
+        assert _dot(modal, "right", 8).property("status") == "nodata"
+        assert _dot_color(modal, "right", 8) == RED
+        assert _dot_color(modal, "left", 2) == ORANGE
+        assert _tooltip(modal, "right", 8) == "R8\nNo data from camera"
+        assert _subtitle(modal) == (
+            modal.property("noSignalHint") + "\n" + HOVER_LINE_RED)
+
+        cq_harness.stub.cameraDropoutRecovered.emit("right", 7, "00:00:20")
+        assert _dot_color(modal, "right", 8) == GREEN
+        assert _subtitle(modal) == HOVER_LINE
+        modal.setProperty("visible", False)
+    finally:
+        cq_harness.stub.setFlags(False, True)
+
+
+def test_no_data_mark_never_opens_or_gates_the_modal(cq_harness):
+    """A dead camera stays a warning (#585): marking it must not pop the
+    modal mid-scan or hold Continue, which a clinical operator could only
+    escape by stopping the scan. The toast is the notice."""
+    modal = cq_harness(in_window=True)
+    assert modal.property("visible") is False
+    cq_harness.stub.cameraDropoutDetected.emit("right", 7, "00:00:03")
+    assert modal.property("visible") is False
+    assert modal.property("anyCameraWithoutData") is True
+
+    _show_live_scan_warning(modal, [POOR_CONTACT_L2])
+    dismissable = modal.property("liveScanDismissable")
+    cq_harness.stub.cameraDropoutDetected.emit("left", 0, "00:00:04")
+    assert modal.property("liveScanDismissable") == dismissable
+    entries = modal.property("entries").toVariant()   # a QML var array
+    assert len(entries) == 1 and entries[0]["camera"] == "L2"
+    modal.setProperty("visible", False)
+
+
+def test_reset_keeps_and_clear_drops_cameras_without_data(cq_harness):
+    """The live modal resets each time it reopens, which must not forget a
+    camera the watchdog already reported dead in this scan. Only the scan
+    boundary (BloodFlow's clearCamerasWithoutData) drops the marks."""
+    modal = cq_harness(in_window=True)
+    cq_harness.stub.cameraDropoutDetected.emit("right", 7, "00:00:03")
+    _show_live_scan_warning(modal, [POOR_CONTACT_L2])
+    assert _dot_color(modal, "right", 8) == RED
+    QMetaObject.invokeMethod(modal, "clearCamerasWithoutData")
+    assert modal.property("anyCameraWithoutData") is False
+    assert _dot_color(modal, "right", 8) == GREEN
+    modal.setProperty("visible", False)
+
+
+def test_scan_boundaries_clear_cameras_without_data():
+    """Both boundaries, so neither the next scan nor the next pre-scan
+    check inherits a previous scan's red dot."""
+    text = _bloodflow_text()
+    begin = text.index("function beginScanNow")
+    assert "contactQualityModal.clearCamerasWithoutData()" in text[begin:begin + 900]
+    finished = text.index("onScanFinished:", text.index("id: scanRunner"))
+    assert "contactQualityModal.clearCamerasWithoutData()" in text[finished:finished + 700]
+
+
+def test_no_data_text_matches_the_connector_wording(cq_modal):
+    """The red dot's tooltip and the pre-scan no_signal warning say the
+    same thing; the text lives in two places, so pin them together."""
+    from motion_connector import MotionConnector
+
+    assert cq_modal.property("noDataText") == MotionConnector._warning_text("no_signal")

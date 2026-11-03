@@ -55,3 +55,11 @@ def test_expected_catalog_codes_present():
     # E-104/E-106 are intentionally absent: the connection watchdog surfaces
     # them as warning toasts, not via this critical-modal registry.
     assert expected == set(error_codes.ERROR_CODES.keys())
+
+
+def test_camera_power_error_is_inclusive():
+    """#342: E-105 covers any camera power failure, not just power-on at
+    initialization. The code number is stable (referenced in the manual)."""
+    err = error_codes.lookup("E-105")
+    assert err.title == "Camera power failed"
+    assert "power-on" not in err.title.lower()

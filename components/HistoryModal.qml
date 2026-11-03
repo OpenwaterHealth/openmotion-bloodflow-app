@@ -174,8 +174,14 @@ Item {
             // Export by the unique DB session id — labels can collide, and a
             // by-label lookup silently exports the newest match (issue #254).
             exportDialog.exportSessionId = rows[0].sessionId
-            exportDialog.selectedFile = "file:///" + MotionInterface.directory
-                                        + "/" + rows[0].label + "_export.csv"
+            var dir = "file:///" + MotionInterface.directory
+            // Windows keeps only the file name of selectedFile and reopens
+            // the last folder any Open-Motion.exe saved to. A portable build
+            // pins its own folder (several zips may sit side by side); an
+            // installed one keeps that memory, e.g. a USB stick (#723).
+            if (MotionInterface.appConfig.portableMode === true)
+                exportDialog.currentFolder = dir
+            exportDialog.selectedFile = dir + "/" + rows[0].label + "_export.csv"
             exportDialog.open()
             return
         }
@@ -208,8 +214,11 @@ Item {
 
     function formatDuration(sec) {
         if (sec === undefined || sec === null || sec < 0) return "—"
-        var m = Math.floor(sec / 60)
-        var s = Math.round(sec % 60)
+        // Truncate, not round: the session-notes "duration:" line formats
+        // the same actual_duration_sec with int(), so both show 59.6 s as 0:59.
+        var totalSeconds = Math.floor(sec)
+        var m = Math.floor(totalSeconds / 60)
+        var s = totalSeconds % 60
         return m + ":" + (s < 10 ? "0" + s : s)
     }
 
@@ -636,6 +645,7 @@ Item {
 
     Dialogs.FileDialog {
         id: exportDialog
+        objectName: "scanExportDialog"
         title: "Export Scan CSV"
         fileMode: Dialogs.FileDialog.SaveFile
         nameFilters: ["CSV files (*.csv)", "All files (*)"]

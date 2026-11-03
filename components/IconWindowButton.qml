@@ -18,6 +18,10 @@ Item {
     property color activeBackground: "#374774"      // Background color when clicked
     property color activeIconColor: "white"     // Icon color when clicked
 
+    // Icon color for the current hover/press state; also used by icons
+    // drawn as child items instead of a font glyph (see WindowMenu).
+    readonly property color currentIconColor: mouseArea.pressed ? activeIconColor : (mouseArea.containsMouse ? hoverIconColor : iconColor)
+
     // Signal for click handling
     signal clicked()
 
@@ -42,7 +46,7 @@ Item {
         text: buttonIcon
         font.family: iconFont.name
         font.pixelSize: 24 // Icon size
-        color: mouseArea.pressed ? activeIconColor : (mouseArea.containsMouse ? hoverIconColor : iconColor)
+        color: currentIconColor
         anchors.centerIn: parent
     }
 

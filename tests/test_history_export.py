@@ -34,10 +34,10 @@ def _connector(tmp_path, scan_db_path=None):
     )
 
 
-def _session(db_path, label, start):
+def _session(db_path, label, start, notes=None):
     db = ScanDatabase(db_path=db_path)
     sid = db.create_session(session_label=label, session_start=start,
-                            session_notes=None, session_meta={})
+                            session_notes=notes, session_meta={})
     db.close()
     return sid
 
@@ -222,3 +222,62 @@ def test_export_scan_csv_slot_invalid_inputs_signal_false(tmp_path):
     c.exportScanCsv(-1, str(tmp_path / "x.csv"))
     c.exportScanCsv(1, "")
     assert results == [(False, str(tmp_path / "x.csv")), (False, "")]
+
+
+# ── Notes sidecar (#644) ─────────────────────────────────────────────
+# Every exported CSV gets <csv stem>_notes.txt beside it, so the scan's
+# notes (which otherwise live only in scans.db) travel with the data.
+
+
+def test_export_scan_csv_writes_notes_sidecar(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "scans.db")
+    notes = "Subject moved at 00:42.\nRight fiber reseated.\n"
+    sid = _session(db_path, "scanA", 1.0, notes=notes)
+    c = _connector(tmp_path, scan_db_path=db_path)
+    import omotion.SessionPlayback as sp
+    monkeypatch.setattr(sp, "materialize_corrected_csv",
+                        lambda *a, **k: None)
+
+    out = tmp_path / "picked name.csv"
+    assert c._export_scan_csv_sync(sid, str(out)) is True
+    sidecar = tmp_path / "picked name_notes.txt"
+    assert sidecar.read_bytes().decode("utf-8") == notes
+
+
+def test_export_scans_to_folder_writes_notes_sidecar_per_scan(
+        tmp_path, monkeypatch):
+    """Each scan gets its own notes file — including an empty one for a
+    scan without notes, so every export is a consistent pair."""
+    db_path = str(tmp_path / "scans.db")
+    sid_a = _session(db_path, "scanA", 1.0, notes="notes for A")
+    sid_b = _session(db_path, "scanB", 2.0)  # no notes
+    c = _connector(tmp_path, scan_db_path=db_path)
+    import omotion.SessionPlayback as sp
+    monkeypatch.setattr(sp, "materialize_corrected_csv",
+                        lambda *a, **k: None)
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    assert c._export_scans_sync([sid_a, sid_b], str(out_dir)) == {
+        "exported": 2, "skipped": 0}
+    assert (out_dir / "scanA_export_notes.txt").read_text(
+        encoding="utf-8") == "notes for A"
+    assert (out_dir / "scanB_export_notes.txt").read_text(
+        encoding="utf-8") == ""
+
+
+def test_export_scan_csv_fails_when_notes_cannot_be_written(
+        tmp_path, monkeypatch):
+    """A CSV without its notes is not a complete export — report failure."""
+    db_path = str(tmp_path / "scans.db")
+    sid = _session(db_path, "scanA", 1.0, notes="n")
+    c = _connector(tmp_path, scan_db_path=db_path)
+    import omotion.SessionPlayback as sp
+    monkeypatch.setattr(sp, "materialize_corrected_csv",
+                        lambda *a, **k: None)
+    (tmp_path / "x_notes.txt").mkdir()  # sidecar path is unwritable
+
+    errors = []
+    c.errorOccurred.connect(errors.append)
+    assert c._export_scan_csv_sync(sid, str(tmp_path / "x.csv")) is False
+    assert errors

@@ -22,6 +22,9 @@ Item {
     // See HistoryModal.qml for the original fix.
     readonly property int iconBarInset: 104
 
+    // The StyledCombo dropdown currently open, if any (#478).
+    property var _openComboPopup: null
+
     // ── Settings values — initialised from live config on creation ──────────
     property int    defaultLeftMaskIndex:  4
     property int    defaultRightMaskIndex: 4
@@ -35,8 +38,15 @@ Item {
     // edits or persists it.
     readonly property bool clinicalMode: MotionInterface.appConfig.clinicalMode === true
     property int    plotWindowSec:     15
-    property color  bfiColor:          "#E74C3C"
-    property color  bviColor:          "#3498DB"
+    // Trace-color defaults (#630) come from the compiled bfiColor /
+    // bviColor in config/app_config.py, via MotionInterface.defaultConfig.
+    // The literals are the same values, for a host without that property
+    // (offscreen test stubs); keep them in step with app_config.py.
+    readonly property var   _defaultConfig:  MotionInterface.defaultConfig || ({})
+    readonly property color defaultBfiColor: _defaultConfig.bfiColor !== undefined ? _defaultConfig.bfiColor : "#ffffff"
+    readonly property color defaultBviColor: _defaultConfig.bviColor !== undefined ? _defaultConfig.bviColor : "#3437db"
+    property color  bfiColor:          defaultBfiColor
+    property color  bviColor:          defaultBviColor
     // BVI display low-pass switch (#552) — research-only. The cutoff
     // itself is the compiled bviLowPassCutoffHz constant; this only
     // gates it, and the connector applies a change mid-scan.
@@ -51,6 +61,8 @@ Item {
     property real   contrastMax: 1.0
     property bool   writeRawCsv:       false
     property var    rawCsvDurationSec: 60
+    // Research-only (#598): export each scan's CSV into data/ at scan end.
+    property bool   autoExportCsv:     false
 
     // ── App update state — driven by MotionInterface's auto-check on
     // launch (UpdateBanner.qml fires it ~3s after startup). "idle" until
@@ -106,8 +118,8 @@ Item {
         showBfiBvi         = clinicalMode ? true : (cfg.showBfiBvi !== undefined ? cfg.showBfiBvi : true)
         autoScale          = cfg.autoScale          !== undefined ? cfg.autoScale          : false
         plotWindowSec      = cfg.plotWindowSec      !== undefined ? cfg.plotWindowSec      : 15
-        bfiColor           = cfg.bfiColor           !== undefined ? cfg.bfiColor           : "#E74C3C"
-        bviColor           = cfg.bviColor           !== undefined ? cfg.bviColor           : "#3498DB"
+        bfiColor           = cfg.bfiColor           !== undefined ? cfg.bfiColor           : defaultBfiColor
+        bviColor           = cfg.bviColor           !== undefined ? cfg.bviColor           : defaultBviColor
         bviLowPassEnabled  = cfg.bviLowPassEnabled  !== undefined ? cfg.bviLowPassEnabled  : true
         // Persisted bounds are untrusted (#229) — sanitizeBoundPair
         // supplies the per-metric defaults for missing/garbage values
@@ -122,6 +134,7 @@ Item {
         contrastMin = b.min; contrastMax = b.max
         writeRawCsv       = cfg.writeRawCsv       !== undefined ? cfg.writeRawCsv       : false
         rawCsvDurationSec = cfg.rawCsvDurationSec !== undefined ? cfg.rawCsvDurationSec : null
+        autoExportCsv     = cfg.autoExportCsv     === true
         // Theme selector (themeCombo) binds its currentIndex directly to
         // appConfig.darkMode/liquidGlass, so no manual sync is needed here.
     }
@@ -164,6 +177,7 @@ Item {
             "bfiColor":           "" + bfiColor,
             "bviColor":           "" + bviColor,
             "bviLowPassEnabled":  bviLowPassEnabled,
+            "autoExportCsv":      autoExportCsv,
             "bfiMin":      bfiMin,
             "bfiMax":      bfiMax,
             "bviMin":      bviMin,
@@ -193,7 +207,7 @@ Item {
     ListModel {
         id: cameraPatterns
         ListElement { name: "None";      maskHex: "0x00" }
-        ListElement { name: "Near";      maskHex: "0x5A" }
+        ListElement { name: "Near";      maskHex: "0x3C" }
         ListElement { name: "Middle";    maskHex: "0x66" }
         ListElement { name: "Far";       maskHex: "0xC3" }
         ListElement { name: "Outer";     maskHex: "0x99" }
@@ -295,6 +309,13 @@ Item {
             color: root.colTextSec
         }
         popup: Popup {
+            id: styledComboPopup
+            // Tracked so the modal's wheel catcher can close it (#478).
+            onAboutToShow: root._openComboPopup = styledComboPopup
+            onAboutToHide: {
+                if (root._openComboPopup === styledComboPopup)
+                    root._openComboPopup = null
+            }
             y: styledComboCtrl.height
             width: styledComboCtrl.width
             implicitHeight: styledComboCtrl.maxPopupHeight > 0
@@ -651,6 +672,29 @@ Item {
                         }
                     }
 
+                    // ── Scan-end CSV auto-export (research only, #598) ───────
+                    // Writes the History → Export CSV file into data/ when
+                    // each scan ends. Hidden on clinical builds, engineering
+                    // unlock included; the connector re-checks clinicalMode
+                    // at scan end, so a stale persisted value never exports.
+                    FieldRow {
+                        visible: !root.clinicalMode
+                        label: "Auto-export CSV"
+                        PillSwitch {
+                            objectName: "autoExportCsvSwitch"
+                            Accessible.name: "Auto-export CSV"
+                            checked: root.autoExportCsv
+                            onCheckedChanged: root.autoExportCsv = checked
+                        }
+                        Text {
+                            text: root.autoExportCsv ? "On — every scan, saved to data\\ in the output folder"
+                                                     : "Off"
+                            color: root.autoExportCsv ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
                     // ── Raw histogram CSVs (research + engineering, #234) ────
                     // Research data — moved out of the Engineering card so
                     // Research (non-clinical) users get them without the
@@ -822,9 +866,10 @@ Item {
                         Text { text: "BVI"; color: root.colTextSec; font.pixelSize: 12 }
                         Item { Layout.fillWidth: true }
                         ActionButton {
+                            objectName: "traceColorResetButton"
                             text: "Reset"
                             Layout.preferredWidth: 70
-                            onClicked: { root.bfiColor = "#E74C3C"; root.bviColor = "#3498DB" }
+                            onClicked: { root.bfiColor = root.defaultBfiColor; root.bviColor = root.defaultBviColor }
                         }
                     }
                 }
@@ -2084,6 +2129,23 @@ Item {
 
         Keys.onReleased: function(event) {
             if (event.key === Qt.Key_Escape) { root.close(); event.accepted = true }
+        }
+    }
+
+    // Close an open dropdown when the wheel turns outside it (#478).
+    // Popup.closePolicy only reacts to presses/releases outside, never to
+    // the wheel, so without this the list stayed open (and rode along)
+    // while the page scrolled. Enabled only while a StyledCombo is open;
+    // the wheel is left unaccepted so it still reaches the Settings
+    // ScrollView (or the backdrop) underneath. A wheel over the open list
+    // never gets here — the popup sits in the window overlay above us.
+    MouseArea {
+        anchors.fill: parent
+        enabled: root._openComboPopup !== null
+        acceptedButtons: Qt.NoButton
+        onWheel: function(wheel) {
+            root._openComboPopup.close()
+            wheel.accepted = false
         }
     }
 
