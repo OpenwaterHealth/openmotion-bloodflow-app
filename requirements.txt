@@ -19,6 +19,9 @@ matplotlib==3.10.1
 # scripts/make_app_icon.py and commit the result.
 Pillow==12.3.0
 pyusb==1.3.1
+# LSL output streams (lsl_output.py). The platform wheels carry liblsl itself
+# (pylsl/lib/lsl.dll, liblsl.dylib); every build bundles that file.
+pylsl==1.18.6
 libusb1==3.3.1
 keyboard==0.13.5
 # The SDK checks signed firmware images with it before an update writes

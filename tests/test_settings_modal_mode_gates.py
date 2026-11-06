@@ -81,6 +81,7 @@ class _StubMotionInterface(QObject):
         self._directory = "C:/tmp"
         self.saved_configs: list[dict] = []
         self.write_raw_csv_calls: list[bool] = []
+        self.lsl_output_calls: list[bool] = []
         self.write_telemetry_csv_calls: list[bool] = []
         self._write_telemetry_csv = False
         self.sensor_debug_flag_calls: list[tuple] = []
@@ -153,6 +154,10 @@ class _StubMotionInterface(QObject):
     @pyqtSlot(bool)
     def setWriteRawCsv(self, enabled):
         self.write_raw_csv_calls.append(bool(enabled))
+
+    @pyqtSlot(bool)
+    def setLslOutputEnabled(self, enabled):
+        self.lsl_output_calls.append(bool(enabled))
 
     @pyqtSlot(bool)
     def setWriteTelemetryCsv(self, enabled):
@@ -373,6 +378,31 @@ def test_raw_csv_controls_hidden_on_plain_clinical_build(modal_factory):
     modal = modal_factory()
     assert _control_visible(modal, "saveRawCsvSwitch") is False
     assert _control_visible(modal, "rawCsvDurationField") is False
+
+
+@pytest.mark.parametrize("clinical,engineering,visible", [
+    (False, False, True),   # research build
+    (True, True, True),     # clinical build with the engineering unlock
+    (True, False, False),   # plain clinical build
+])
+def test_lsl_output_switch_follows_the_raw_csv_gate(
+        modal_factory, clinical, engineering, visible):
+    """LSL output streams research data on the network: same gate as the
+    raw CSV, so a plain clinical build never shows it."""
+    modal_factory.stub.setFlags(clinical=clinical, engineering=engineering)
+    modal = modal_factory()
+    assert _control_visible(modal, "lslOutputSwitch") is visible
+
+
+def test_lsl_output_switch_is_saved_through_its_slot(modal_factory):
+    stub = modal_factory.stub
+    stub.setFlags(clinical=False, engineering=False)
+    stub.lsl_output_calls.clear()
+    modal = modal_factory()
+    _invoke(modal, "open")
+    modal.setProperty("lslOutputEnabled", True)
+    _invoke(modal, "close")
+    assert stub.lsl_output_calls[-1:] == [True]
 
 
 def test_bvi_low_pass_switch_is_research_only(modal_factory):

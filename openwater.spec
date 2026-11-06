@@ -221,6 +221,13 @@ if _is_clinical:
             "    Fix:  pip install -r requirements.txt\n"
         )
 
+# ── pylsl + its bundled liblsl (LSL output streams, lsl_output.py) ──
+# pylsl loads liblsl with ctypes from pylsl/lib/ next to its own module, so
+# the library has to land at that path inside the bundle.
+binaries += collect_dynamic_libs("pylsl")
+hidden += ["pylsl", "pylsl.lib", "pylsl.info", "pylsl.outlet", "pylsl.inlet",
+           "pylsl.resolve", "pylsl.util"]
+
 # Optional: if you also have a separate 'libusb' wheel installed, this won't hurt
 try:
     binaries += collect_dynamic_libs("libusb")

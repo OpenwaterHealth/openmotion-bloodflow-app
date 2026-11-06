@@ -166,6 +166,10 @@ class _StubMotionInterface(QObject):
     def setWriteRawCsv(self, value):
         pass
 
+    @pyqtSlot(bool)
+    def setLslOutputEnabled(self, value):
+        pass
+
     @pyqtSlot("QVariant")
     def setRawCsvDurationSec(self, value):
         pass

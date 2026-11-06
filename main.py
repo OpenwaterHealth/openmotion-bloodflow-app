@@ -208,6 +208,11 @@ _QT_ENV_SCRUB = (
     "QML_DISABLE_DISK_CACHE",
     "QML_FORCE_DISK_CACHE",
     "QML_DISK_CACHE_PATH",
+    # Not Qt, same reason: pylsl loads whatever DLL PYLSL_LIB names in place
+    # of the bundled liblsl, and liblsl reads its network config from the
+    # file LSLAPICFG names (LSL output streams, lsl_output.py).
+    "PYLSL_LIB",
+    "LSLAPICFG",
 )
 
 _QT_ENV_PINNED = {

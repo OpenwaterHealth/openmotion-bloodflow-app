@@ -63,6 +63,7 @@ Item {
     property var    rawCsvDurationSec: 60
     // Research-only (#598): export each scan's CSV into data/ at scan end.
     property bool   autoExportCsv:     false
+    property bool   lslOutputEnabled:  false
 
     // ── App update state — driven by MotionInterface's auto-check on
     // launch (UpdateBanner.qml fires it ~3s after startup). "idle" until
@@ -135,6 +136,7 @@ Item {
         writeRawCsv       = cfg.writeRawCsv       !== undefined ? cfg.writeRawCsv       : false
         rawCsvDurationSec = cfg.rawCsvDurationSec !== undefined ? cfg.rawCsvDurationSec : null
         autoExportCsv     = cfg.autoExportCsv     === true
+        lslOutputEnabled  = cfg.lslOutputEnabled  === true
         // Theme selector (themeCombo) binds its currentIndex directly to
         // appConfig.darkMode/liquidGlass, so no manual sync is needed here.
     }
@@ -189,6 +191,7 @@ Item {
         })
         MotionInterface.setWriteRawCsv(writeRawCsv)
         MotionInterface.setRawCsvDurationSec(rawCsvDurationSec)
+        MotionInterface.setLslOutputEnabled(lslOutputEnabled)
         settingsChanged()
         root.visible = false
     }
@@ -757,6 +760,31 @@ Item {
                             text: "seconds  (blank = full scan)"
                             color: root.colTextMuted
                             font.pixelSize: 11
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    // ── LSL output (research + engineering) ─────────────────
+                    // Publishes two Lab Streaming Layer streams while a scan
+                    // runs, OpenMotion-Live and OpenMotion-Corrected, in the
+                    // corrected CSV's column layout (lsl_output.py). Same
+                    // gate as the raw CSV, re-checked at scan start.
+                    FieldRow {
+                        visible: !root.clinicalMode
+                                 || MotionInterface.appConfig.engineeringMode === true
+                        label: "LSL output"
+                        PillSwitch {
+                            objectName: "lslOutputSwitch"
+                            Accessible.name: "LSL output"
+                            checked: root.lslOutputEnabled
+                            onCheckedChanged: root.lslOutputEnabled = checked
+                        }
+                        Text {
+                            text: root.lslOutputEnabled
+                                  ? "On  (live + corrected streams on the local network)"
+                                  : "Off"
+                            color: root.lslOutputEnabled ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
                         }
                         Item { Layout.fillWidth: true }
                     }
