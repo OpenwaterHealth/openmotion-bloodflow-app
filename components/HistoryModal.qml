@@ -414,6 +414,7 @@ Item {
                     Layout.preferredWidth: 34; Layout.preferredHeight: 34
                     topInset: 0; bottomInset: 0; leftInset: 0; rightInset: 0
                     padding: 0
+                    leftPadding: 0; rightPadding: 0; topPadding: 0; bottomPadding: 0
                     // Don't allow deleting while a scan is running (could be the
                     // in-flight session). The confirm prompt still guards it.
                     enabled: root.checkedCount > 0 && MotionInterface.state !== 4
@@ -426,13 +427,25 @@ Item {
                     // Keenicons trash glyph (same icon font as the sidebar)
                     // instead of the 🗑 emoji, which rendered as a full-colour
                     // system emoji that clashed with the outline UI.
-                    contentItem: Text {
-                        text: "\ueb0e"   // keenicons "trash"
-                        font.family: historyIconFont.name
-                        font.pixelSize: 18
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                        color: deleteBtn.enabled ? AppTheme.accentRed : AppTheme.textTertiary
+                    // Centre on the glyph's ink, not its line box: the icon
+                    // font's ascent/descent sit the trash low in a plain
+                    // centred Text.
+                    contentItem: Item {
+                        TextMetrics {
+                            id: trashMetrics
+                            font.family: historyIconFont.name
+                            font.pixelSize: 18
+                            text: "\ueb0e"   // keenicons "trash"
+                        }
+                        Text {
+                            text: trashMetrics.text
+                            font: trashMetrics.font
+                            color: deleteBtn.enabled ? AppTheme.accentRed : AppTheme.textTertiary
+                            x: Math.round((parent.width - trashMetrics.tightBoundingRect.width) / 2
+                                          - trashMetrics.tightBoundingRect.x)
+                            y: Math.round((parent.height - trashMetrics.tightBoundingRect.height) / 2
+                                          - trashMetrics.tightBoundingRect.y - baselineOffset)
+                        }
                     }
                     background: Rectangle {
                         radius: 6
