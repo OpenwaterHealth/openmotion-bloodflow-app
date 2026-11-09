@@ -138,7 +138,7 @@ _ERROR_LED_BLINK_MS = 500  # on/off half-period, matches firmware Error_Handler
 # pattern table. Unmapped masks render as hex; -1 (unknown, e.g. a
 # clinical-mode scan whose meta lacks sdk_flags) renders as an em dash.
 _CONFIG_NAMES = {
-    0x00: "None", 0x5A: "Near", 0x66: "Middle", 0xC3: "Far",
+    0x00: "None", 0x3C: "Near", 0x66: "Middle", 0xC3: "Far",
     0x99: "Outer", 0x0F: "Left", 0xF0: "Right", 0x42: "Third Row",
     0xFF: "All",
 }
@@ -149,6 +149,41 @@ def _config_name(mask) -> str:
         return "—"
     m = int(mask) & 0xFF
     return _CONFIG_NAMES.get(m, f"0x{m:02X}")
+
+
+_NOTE_DEVICES = (("Console", "console"), ("Left Sensor", "left"),
+                 ("Right Sensor", "right"))
+
+
+def _scan_identity_note_lines(serials, firmware, left_mask, right_mask, *,
+                              app_version, sdk_version) -> str:
+    """End-of-scan notes footer lines naming the hardware, the cameras and
+    the software the scan ran with (#759), each starting with a newline so
+    the caller appends them straight after the duration line.
+
+    ``serials`` and ``firmware`` map console/left/right to the cached
+    value, None for a sensor that wasn't connected ("Not connected", as in
+    Settings → About). An empty serial reads "Not programmed", any other
+    empty value "unknown". The configuration is the left then right camera
+    mask as two hex bytes: all 8 cameras on both sides reads FFFF, left
+    only FF00."""
+    def text(value, empty="unknown"):
+        if not isinstance(value, str) or not value.strip():
+            return empty
+        return value.strip()
+
+    def device(value, empty="unknown"):
+        return "Not connected" if value is None else text(value, empty)
+
+    config = f"{int(left_mask) & 0xFF:02X}{int(right_mask) & 0xFF:02X}"
+    lines = [f"{name} SN: {device(serials.get(key), 'Not programmed')}"
+             for name, key in _NOTE_DEVICES]
+    lines += [f"Scan configuration: {config}",
+              f"App version: {text(app_version)}",
+              f"SDK version: {text(sdk_version)}"]
+    lines += [f"{name} FW: {device(firmware.get(key))}"
+              for name, key in _NOTE_DEVICES]
+    return "".join("\n" + line for line in lines)
 
 
 def _sdk_meta_dict(session) -> dict:
@@ -292,6 +327,42 @@ def _scan_data_stall_decision(
     return stalled if stalled > timeout_sec else None
 
 
+def _never_started_cameras(
+    camera_masks: dict,
+    last_seen: dict,
+    dropped: set,
+    streaming_since: float | None,
+    trigger_on_mono: float | None,
+    now_mono: float,
+    threshold_sec: float,
+) -> list:
+    """Mask-enabled cameras that have not delivered a single frame
+    (issue #585).
+
+    The per-camera dropout pass walks ``last_seen``, which gains an entry
+    on a camera's first frame, so a camera that never starts is invisible
+    to it. The clock for "never started" is the later of the moment the
+    scan was first seen streaming (``streaming_since``: some camera has
+    delivered) and the current trigger-ON edge. Until some camera
+    delivers, nothing is returned: a scan with no data at all belongs to
+    the whole-scan stall abort (E-303, issue #248), not to 16 per-camera
+    toasts. Returns ``(side, cam_id)`` keys not already in ``dropped``.
+    """
+    if streaming_since is None or trigger_on_mono is None:
+        return []
+    if now_mono - max(streaming_since, trigger_on_mono) <= threshold_sec:
+        return []
+    out = []
+    for side in ("left", "right"):
+        mask = int(camera_masks.get(side, 0) or 0) & 0xFF
+        for cam_id in range(8):
+            key = (side, cam_id)
+            if (mask >> cam_id) & 1 and key not in last_seen \
+                    and key not in dropped:
+                out.append(key)
+    return out
+
+
 def _should_abort_on_disconnect(
     name: str,
     capture_running: bool,
@@ -322,6 +393,23 @@ def _disconnect_toast_text(name: str) -> str:
 
 
 _SIDE_NAMES = ("left", "right")
+
+
+# The SDK's configure step (ScanWorkflow.start_configure_camera_sensors)
+# fails with "Failed to power on cameras on <side> (mask 0x..)" when the
+# sensor refuses the camera power-on command it sends before FPGA
+# programming. Matched narrowly: the step's wrapper prefix ("Error setting
+# camera power for <side>:") also wraps comm exceptions, which are not a
+# power fault.
+_CAMERA_POWER_ON_FAILED_RE = re.compile(
+    r"Failed to power on cameras on (left|right)\b")
+
+
+def _camera_power_failure_side(error: str) -> Optional[str]:
+    """Side ("left"/"right") of a camera power-on refusal named in a
+    configure error, else None (#342: routes it to E-105)."""
+    m = _CAMERA_POWER_ON_FAILED_RE.search(error or "")
+    return m.group(1) if m else None
 
 
 class _LivePlotSink:
@@ -358,6 +446,9 @@ class _LivePlotSink:
         self._plot_t0 = plot_t0
         self._live_source = live_source
         self._temp_alerted: dict[tuple[str, int], bool] = {}
+        # Outside engineering mode the operator gets ONE over-temp toast per
+        # scan — the first camera to cross — with airflow advice (#110).
+        self._temp_airflow_warned = False
         # Records every arriving frame so the scan-complete handler can
         # report sustained DELIVERY gaps in the notes footer. Optional so
         # the sink works standalone (tests, future callers).
@@ -371,6 +462,7 @@ class _LivePlotSink:
 
     def on_scan_start(self, meta) -> None:
         self._temp_alerted.clear()
+        self._temp_airflow_warned = False
 
     def consume(self, channel: str, payload) -> None:
         if channel == "live_side":
@@ -385,6 +477,9 @@ class _LivePlotSink:
         n = batch.bfi_live.shape[0]
         connector = self._connector
         threshold = connector._camera_temp_alert_threshold_c
+        # Engineering mode toasts every camera that crosses; everyone else
+        # gets a single airflow warning per scan (#110).
+        temp_toast_per_camera = connector._app_config.get("engineeringMode", False)
         now_mono = time.monotonic()
 
         low_light_rt = getattr(batch, "low_light_rt", None)
@@ -486,14 +581,27 @@ class _LivePlotSink:
                         # from this runner thread — it emits a signal that
                         # is delivered queued onto the GUI thread, same as
                         # _on_camera_dropout_recovered below.
-                        connector.notify(
-                            f"Camera {side.upper()} {cam_id + 1} temperature "
-                            f"{temp_c:.1f}°C — above {threshold:.0f}°C threshold. "
-                            f"Check the airflow around the sensor module.",
-                            type_="warning",
-                            duration_ms=5000,
-                            tag=f"temp_{side}_{cam_id}",
-                        )
+                        if temp_toast_per_camera:
+                            connector.notify(
+                                f"Camera {side.upper()} {cam_id + 1} temperature "
+                                f"{temp_c:.1f}°C — above {threshold:.0f}°C threshold. "
+                                f"Check the airflow around the sensor module.",
+                                type_="warning",
+                                duration_ms=5000,
+                                tag=f"temp_{side}_{cam_id}",
+                            )
+                        elif not self._temp_airflow_warned:
+                            # One warning per scan, on the first camera
+                            # to cross; later cameras are log-only (#110).
+                            self._temp_airflow_warned = True
+                            connector.notify(
+                                f"A sensor camera is running hot "
+                                f"({temp_c:.0f} °C). Check that the sensor's "
+                                f"airflow is not blocked (SPEC-18).",
+                                type_="warning",
+                                duration_ms=5000,
+                                tag="temp_airflow",
+                            )
 
                 # Non-finite BFI/BVI: row-addressed LIGHT rows are appended
                 # anyway (issue #418) — an unlit (covered / off-target)
@@ -605,7 +713,10 @@ class _LivePlotSink:
         )
 
     def on_complete(self) -> None:
-        pass
+        # Land the research Average / Aggregate views' last open capture
+        # per side (#606, #621); a no-op when the source doesn't derive
+        # (clinical).
+        self._live_source.flush_side_average()
 
 
 class _TriggerStateSink:
@@ -952,6 +1063,8 @@ class MotionConnector(QObject):
     # Emitted from _on_pipeline_complete (pipeline worker thread); delivered
     # on the GUI thread via the auto-queued connection wired in connect_signals.
     _scanOutcomeWarningSignal = pyqtSignal(str, str)
+    # Worker->main: scan-end auto-export result (#598), (ok, path-or-reason).
+    _autoExportFinishedSignal = pyqtSignal(bool, str)
 
     configProgress = pyqtSignal(int)
     configLog = pyqtSignal(str)
@@ -973,7 +1086,8 @@ class MotionConnector(QObject):
     # scan that finished normally or was canceled by the user. The UI uses
     # this to auto-open the notes modal at the only moment when scanNotes
     # is guaranteed to reflect the just-completed scan. Not emitted on
-    # hard errors — those keep the scan dialog visible with the error.
+    # hard errors — those keep the scan dialog visible with the error — or
+    # for a scan that saved no data (issue #725).
     scanNotesReady = pyqtSignal()
 
     # Contact-quality quick-check signals.
@@ -1118,7 +1232,11 @@ class MotionConnector(QObject):
         # streaming unlit frames (covered sensor) is NOT a dropout.
         # Dropped cameras re-arm automatically when frames resume
         # (_rearm_dropped_camera), so the set holds currently-silent
-        # cameras, not a permanent per-scan record.
+        # cameras, not a permanent per-scan record. A mask-enabled camera
+        # that never delivers joins the set too (issue #585), via the
+        # scan's masks and the moment the scan was first seen streaming.
+        self._capture_camera_masks: dict[str, int] = {}
+        self._camera_streaming_since: float | None = None
         self._camera_last_seen: dict[tuple[str, int], float] = {}
         self._camera_last_temp: dict[tuple[str, int], float] = {}
         self._camera_dropped: set[tuple[str, int]] = set()
@@ -1717,7 +1835,10 @@ class MotionConnector(QObject):
                             "Could not power on cameras on %s sensor for ID cache fill",
                             side,
                         )
-                        self._raise_critical("E-105", detail=f"{side} sensor")
+                        self._raise_critical(
+                            "E-105",
+                            detail=f"{side} sensor: camera power-on refused "
+                                   f"during initialization")
                         refresh_cache()  # try anyway in case some cameras are already on
                 elif refresh_cache:
                     refresh_cache()  # fallback: fill cache without power cycle (may get zeros for off cameras)
@@ -3342,7 +3463,7 @@ class MotionConnector(QObject):
         })
         self.notify(
             "Debug logs saved to " + path
-            + ". Please email this file to support@openwater.cc.",
+            + ". Please email this file to " + self._support_email + ".",
             type_="success", duration_ms=0, dismissible=True,
             tag="debug-bundle",
         )
@@ -3426,6 +3547,14 @@ class MotionConnector(QObject):
     @pyqtProperty('QVariantMap', notify=appConfigChanged)
     def appConfig(self):
         return self._app_config
+
+    @pyqtProperty('QVariantMap', constant=True)
+    def defaultConfig(self):
+        """The compiled baseline (config/app_config.py + dev launch flags)
+        that the settings table diffs against. QML "Reset" buttons read
+        their targets here (#630), so a reset lands on exactly the value a
+        fresh install shows and its persisted row is deleted, not rewritten."""
+        return self._baseline_config
 
     def _effective_config_json(self) -> str:
         """The running config as pretty JSON, for the debug bundle (there is
@@ -3535,6 +3664,17 @@ class MotionConnector(QObject):
             self._refresh_update_checks()
         if "bviLowPassEnabled" in changes:
             self._apply_bvi_lpf_setting()
+
+    # ── Research Average / Aggregate views (#606, #621) ───────────────
+    def _derive_side_average(self) -> bool:
+        """Whether plot sources derive the per-side average and mirrored-
+        pair streams the research Average and Aggregate views (⋯ menu,
+        plotViewMode) draw. Research builds
+        always derive, whichever view is showing, so switching is instant
+        and has full history; clinical builds never do (their side average
+        is the SDK's reduced-mode stream). Safe from the past-scan loader
+        thread: a plain dict read."""
+        return self._app_config.get("clinicalMode") is not True
 
     # ── BVI display low-pass (#228, #552) ─────────────────────────────
     def _bvi_lpf_cutoff_hz(self) -> float:
@@ -3809,7 +3949,8 @@ class MotionConnector(QObject):
                 csv_path)
             return
         try:
-            buffers = load_csv_scan_buffers(csv_path)
+            buffers = load_csv_scan_buffers(
+                csv_path, derive_side_average=self._derive_side_average())
         except Exception:
             logger.warning(
                 "[Plot] sample scan load failed: %s", csv_path, exc_info=True)
@@ -3951,7 +4092,8 @@ class MotionConnector(QObject):
                         session_label, exc_info=True,
                     )
                 buffers, _ = load_past_scan_buffers(
-                    db, session_id, corrected_csv
+                    db, session_id, corrected_csv,
+                    derive_side_average=self._derive_side_average(),
                 )
             finally:
                 db.close()
@@ -4058,6 +4200,18 @@ class MotionConnector(QObject):
             logger.exception("loadPastScan failed for label %r", session_label)
             self.pastScanLoadFinished.emit(session_label, False)
 
+    @staticmethod
+    def _write_export_notes(csv_path: str, session: dict) -> str:
+        """Write the scan's notes next to an exported CSV as
+        ``<csv stem>_notes.txt`` (#644) — notes otherwise live only in
+        scans.db and would not leave the machine with the CSV. Written
+        even when the scan has no notes, so every export is a consistent
+        pair. Returns the notes path; raises on a write failure."""
+        notes_path = os.path.splitext(csv_path)[0] + "_notes.txt"
+        with open(notes_path, "w", encoding="utf-8", newline="") as f:
+            f.write(session.get("session_notes") or "")
+        return notes_path
+
     @pyqtSlot(int, str)
     def exportScanCsv(self, session_id: int, output_path: str) -> None:
         """Export a scan's session_data to a corrected-format CSV, on a
@@ -4103,6 +4257,7 @@ class MotionConnector(QObject):
                 str(db_path), int(session_id), output_path,
                 include_quality=True,
             )
+            self._write_export_notes(output_path, session)
             logger.info(
                 "exportScanCsv: exported %r (sid=%d) → %s",
                 session.get("session_label"), session_id, output_path,
@@ -4171,6 +4326,7 @@ class MotionConnector(QObject):
                             str(db_path), sid, out_path,
                             include_quality=True,
                         )
+                        self._write_export_notes(out_path, session)
                         result["exported"] += 1
                         logger.info(
                             "exportScansToFolder: exported %r (sid=%d) -> %s",
@@ -4185,6 +4341,87 @@ class MotionConnector(QObject):
             logger.exception("exportScansToFolder failed")
             self.errorOccurred.emit(f"Export failed:\n{exc}")
             return result
+
+    # ── Scan-end CSV auto-export (#598) ─────────────────────────────────
+    def _auto_export_enabled(self) -> bool:
+        """The Research-only Settings switch, re-checked at every scan end
+        so a persisted autoExportCsv=true never exports on a clinical
+        build (which has no switch to turn it off)."""
+        return (self._app_config.get("autoExportCsv") is True
+                and self._app_config.get("clinicalMode") is not True)
+
+    def _maybe_auto_export_scan_csv(self, session_label: str):
+        """Start the scan-end export when enabled. Returns the worker
+        thread (None when nothing was started) so tests can join it."""
+        if not session_label or not self._auto_export_enabled():
+            return None
+        out_path = os.path.join(self._data_root,
+                                f"{session_label}_export.csv")
+        t = threading.Thread(
+            target=self._auto_export_scan_csv_worker,
+            args=(session_label, out_path),
+            name="scan-csv-auto-export", daemon=True,
+        )
+        t.start()
+        return t
+
+    def _auto_export_scan_csv_worker(self, session_label: str,
+                                     out_path: str) -> None:
+        ok, detail = self._auto_export_scan_csv_sync(session_label, out_path)
+        if detail:
+            self._autoExportFinishedSignal.emit(ok, detail)
+
+    def _auto_export_scan_csv_sync(self, session_label: str,
+                                   out_path: str) -> tuple[bool, str]:
+        """Export the just-finished scan to ``out_path``. Returns
+        ``(ok, detail)``: ``(True, path)`` on success, ``(False, reason)``
+        on failure, ``(False, "")`` when there is nothing to export (an
+        empty scan, whose session row ScanDBSink already deleted — the
+        scan-outcome toast covers that case). Writes a ``.partial`` file
+        and renames it, so an export cut short by an app exit never leaves
+        a truncated CSV under the final name. Never raises."""
+        tmp_path = out_path + ".partial"
+        try:
+            from omotion.ScanDatabase import ScanDatabase
+            from omotion.SessionPlayback import materialize_corrected_csv
+
+            db_path = getattr(self._interface, "scan_db_path", None)
+            if not db_path:
+                return False, "no scan database available"
+            with ScanDatabase(db_path) as db:
+                session = db.get_session_by_label(session_label)
+            if not session:
+                logger.info("Auto-export: no saved data for %r; skipped",
+                            session_label)
+                return False, ""
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            materialize_corrected_csv(
+                str(db_path), int(session["id"]), tmp_path,
+                include_quality=True,
+            )
+            os.replace(tmp_path, out_path)
+            # Runs after _persist_scan_notes, so the notes (incl. the
+            # scan-end footer) are already in the session row read above.
+            self._write_export_notes(out_path, session)
+            logger.info("Auto-export: %r (sid=%d) -> %s",
+                        session_label, session["id"], out_path)
+            return True, out_path
+        except Exception as exc:
+            logger.exception("Auto-export failed for %r", session_label)
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+            return False, str(exc) or type(exc).__name__
+
+    def _on_auto_export_finished(self, ok: bool, detail: str) -> None:
+        """GUI thread: toast the auto-export result."""
+        if ok:
+            self.notify(f"Scan CSV exported to {detail}", "success",
+                        duration_ms=6000, tag="scan-auto-export")
+        else:
+            self.notify(f"Automatic CSV export failed: {detail}", "warning",
+                        duration_ms=0, tag="scan-auto-export")
 
     @pyqtSlot(str, result=int)
     @pyqtSlot(str, str, result=int)
@@ -4737,6 +4974,7 @@ class MotionConnector(QObject):
             scan_db_path=getattr(self._interface, "scan_db_path", None),
             cache_max_samples=_live_cache_samples,
             bvi_lpf_cutoff_hz=_bvi_lpf_cutoff,
+            derive_side_average=self._derive_side_average(),
         )
         # Track the live source separately so the user can navigate
         # to a past scan and return; emit so QML rebinds the
@@ -4757,6 +4995,11 @@ class MotionConnector(QObject):
         self._camera_last_seen = {}
         self._camera_last_temp = {}
         self._camera_dropped = set()
+        # Never-started detection (issue #585): which cameras this scan
+        # expects, and when the scan was first seen streaming.
+        self._capture_camera_masks = {
+            "left": int(left_camera_mask), "right": int(right_camera_mask)}
+        self._camera_streaming_since = None
         self._scan_abort_notified = False
         self._scan_abort_code = None
         self._scan_abort_reason = ""
@@ -4772,6 +5015,20 @@ class MotionConnector(QObject):
         self._storage_next_check_mono = 0.0
         self._storage_warned = False
         self._dropout_timer.start()
+
+        # Device serials and firmware for the notes footer (#759), read now:
+        # a mid-scan disconnect clears both caches before the scan
+        # completes. None marks a sensor that isn't connected.
+        connected = {"console": True, "left": self._leftSensorConnected,
+                     "right": self._rightSensorConnected}
+        scan_serials = {d: self._device_serials.get(d, "") if on else None
+                        for d, on in connected.items()}
+        scan_firmware = {d: self._firmware_versions.get(d, "") if on else None
+                         for d, on in connected.items()}
+        try:
+            scan_sdk_version = self._interface.get_sdk_version()
+        except Exception:
+            scan_sdk_version = ""
 
         # NaN-gap tracker — fresh per scan (same lifecycle as the watchdog).
         # Bound to a local so the completion closure and the sink provably
@@ -4828,7 +5085,13 @@ class MotionConnector(QObject):
                 "=== Full scan ended: %s — duration %s ===", status, duration_str
             )
             duration_line = f"\n---\nScan {status} — duration: {duration_str}"
-            self._scan_notes = (self._scan_notes.strip() + duration_line)
+            # Masks as gated above: a side without a sensor reads 00.
+            identity_lines = _scan_identity_note_lines(
+                scan_serials, scan_firmware, left_camera_mask,
+                right_camera_mask, app_version=self._app_version,
+                sdk_version=scan_sdk_version)
+            self._scan_notes = (self._scan_notes.strip() + duration_line
+                                + identity_lines)
             # Data-gap footer: aggregate ranges where any camera went >1 s
             # without a finite BFI/BVI sample (sustained NaN-fill/dropout).
             # Empty string when the scan was clean. Fail-soft like the rest
@@ -4852,7 +5115,13 @@ class MotionConnector(QObject):
             # Stamp the actual trigger-ON duration (same value as the notes
             # line above) so History shows the real scan time, not the pipeline
             # wall-clock session_end - session_start (issue #335).
-            self._persist_scan_notes(session_label, actual_duration_sec=elapsed)
+            notes_saved = self._persist_scan_notes(
+                session_label, actual_duration_sec=elapsed)
+
+            # Research auto-export (#598): same file as History → Export
+            # CSV, on its own thread so the scan-done flow isn't held up
+            # by a multi-second materialize.
+            self._maybe_auto_export_scan_csv(session_label)
 
             # Interrupted-scan outcome. An interrupted scan loses its open
             # interval; one that ends before any interval closes saves
@@ -4902,8 +5171,11 @@ class MotionConnector(QObject):
             # screen (e.g. an E-304 device-disconnect abort raised it seconds
             # ago): defer the open until the error is dismissed so the error
             # modal stays on top and doesn't lose focus to the notes field
-            # behind it (issue #387).
-            self._emit_or_defer_scan_notes()
+            # behind it (issue #387). Not for a scan that saved no data:
+            # ScanDBSink deleted its empty session, so there is nowhere to
+            # store a note (issue #725).
+            if notes_saved:
+                self._emit_or_defer_scan_notes()
 
         # Issue #43: telemetry CSVs are engineering diagnostics — clinical
         # users must not get them. Default False (fail closed). Raw
@@ -5519,9 +5791,13 @@ class MotionConnector(QObject):
 
     @staticmethod
     def _warning_text(type_key: str) -> str:
+        # no_signal (#731): the camera delivered no usable frames, so there
+        # is no reading to judge contact by. Worded as a data problem —
+        # re-seating a sensor cannot fix it.
         return {
             "ambient_light": "Ambient light detected",
             "poor_contact": "Poor sensor contact",
+            "no_signal": "No data from camera",
         }.get(type_key, type_key)
 
     @staticmethod
@@ -5726,13 +6002,15 @@ class MotionConnector(QObject):
                     }
                     warn_tags.append("ambient_light")
                 elif reason in ("poor_contact", "no_signal"):
-                    warnings_by_key[(camera, "poor_contact")] = {
+                    # Each keeps its own type (#731): a no_signal camera sent
+                    # no usable frames, so it must not read as poor contact.
+                    warnings_by_key[(camera, reason)] = {
                         "camera": camera,
-                        "typeKey": "poor_contact",
-                        "typeText": self._warning_text("poor_contact"),
+                        "typeKey": reason,
+                        "typeText": self._warning_text(reason),
                         "value": float(light_avg_dn) if light_avg_dn == light_avg_dn else 0.0,
                     }
-                    warn_tags.append("poor_contact")
+                    warn_tags.append(reason)
 
                 table_rows.append({
                     "camera": camera,
@@ -5792,14 +6070,13 @@ class MotionConnector(QObject):
         every edge so QML can clear the entry.
         """
         label = self._camera_label(side, cam_id)
-        # The modal knows two type keys. Defensive, not a live path today:
-        # the SDK's ContactQualityMonitor skips non-finite readings before
-        # on_transition ever fires, so it does not currently emit
-        # "no_signal". Collapsing it to poor_contact here costs nothing and
-        # keeps live and preflight wording identical — matching
-        # _on_cq_result_ready's preflight mapping — if that contract ever
-        # changes.
-        type_key = "poor_contact" if reason == "no_signal" else reason
+        # SDK reasons pass through as the modal's type keys. "no_signal" is
+        # defensive, not a live path today: the SDK's ContactQualityMonitor
+        # skips non-finite readings before on_transition ever fires. If that
+        # contract changes it keeps its own type, as in _on_cq_result_ready's
+        # preflight mapping, so live and preflight wording stay identical
+        # (#731).
+        type_key = reason
         type_text = self._warning_text(type_key)
         try:
             if active:
@@ -5878,6 +6155,42 @@ class MotionConnector(QObject):
                     drop_t = src.last_sample_t(side, cam_id)
                     if math.isfinite(drop_t):
                         src.mark_dropped(side=side, cam_id=cam_id, t=drop_t)
+
+        # ── Cameras that never started (issue #585) ───────────────────
+        # The loop above only sees cameras that delivered at least once.
+        # A mask-enabled camera that never sent a frame is offline too:
+        # same dropped set / signal / toast tag, so the plot badges (per
+        # camera and on the averaged side plot) and the toast dismissal
+        # treat it exactly like a dropout. No plot marker — there is no
+        # trace to end. A late first frame re-arms it through the sink's
+        # _rearm_dropped_camera, like any recovered camera.
+        if self._camera_streaming_since is None and self._camera_last_seen:
+            self._camera_streaming_since = now
+        for key in _never_started_cameras(
+            self._capture_camera_masks,
+            self._camera_last_seen,
+            self._camera_dropped,
+            self._camera_streaming_since,
+            self._trigger_on_mono,
+            now,
+            threshold,
+        ):
+            side, cam_id = key
+            elapsed_str = self._scan_elapsed_str()
+            logger.warning(
+                f"[{elapsed_str}] Camera {side.upper()} {cam_id + 1} offline: "
+                f"enabled for this scan but never delivered a frame "
+                f"(>{threshold:.0f} s after the other cameras started)."
+            )
+            self.notify(
+                f"Camera {side.upper()} {cam_id + 1} never started"
+                f" — no data from it since the scan began",
+                type_="warning",
+                duration_ms=30000,
+                tag=f"dropout_{side}_{cam_id}",
+            )
+            self._camera_dropped.add(key)
+            self.cameraDropoutDetected.emit(side, cam_id, elapsed_str)
 
         # ── All-camera stall (issue #248) ─────────────────────────────
         # Per-camera dropouts above are informational (fail-soft: the
@@ -6342,7 +6655,17 @@ class MotionConnector(QObject):
         if not self._config_running:
             return
         self._config_running = False
-        self.configFinished.emit(bool(result.ok), result.error or "")
+        err = result.error or ""
+        if not result.ok:
+            side = _camera_power_failure_side(err)
+            if side is not None:
+                # Same fault as the connect-time power-on refusal: surface
+                # it as E-105, not only as the scan-failed toast (#342).
+                self._raise_critical(
+                    "E-105",
+                    detail=f"{side} sensor: camera power-on refused before "
+                           f"scan/check configuration")
+        self.configFinished.emit(bool(result.ok), err)
 
     @pyqtSlot(str)
     def querySensorAccelerometer(self, target: str):
@@ -6736,6 +7059,7 @@ class MotionConnector(QObject):
         # Auto-queued: emitted on the pipeline worker thread, runs the toast
         # on the GUI thread (same marshalling pattern as _pastScanBuffersReady).
         self._scanOutcomeWarningSignal.connect(self._on_scan_outcome_warning)
+        self._autoExportFinishedSignal.connect(self._on_auto_export_finished)
 
     def _ft_thresholds(self):
         """``CalibrationThresholds`` from the ft_* config values, falling

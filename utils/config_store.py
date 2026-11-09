@@ -77,6 +77,16 @@ def apply_saved_preferences(cfg: dict, saved: Dict[str, Any]) -> set:
             used.add(key)
         else:
             logger.info("settings table: ignoring non-preference key %r", key)
+    # A saved Light theme is solid (#659). The Theme selector writes
+    # darkMode=false only together with liquidGlass=false, and the table
+    # holds diffs, so Light chosen while liquidGlass defaulted to False
+    # (Research before #604) left no liquidGlass row. Against the Research
+    # default of True the missing row would resolve to glass over the
+    # light palette, a pair no Theme option writes. The next preference
+    # save stores the row; an explicit liquidGlass row is never touched.
+    if ("darkMode" in used and cfg["darkMode"] is False
+            and "liquidGlass" not in used and "liquidGlass" in cfg):
+        cfg["liquidGlass"] = False
     _coerce_ints(cfg)
     return used
 

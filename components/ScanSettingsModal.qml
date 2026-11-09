@@ -37,7 +37,7 @@ Item {
     ListModel {
         id: sensorPatterns
         ListElement { name: "None";      maskHex: "0x00" }
-        ListElement { name: "Near";      maskHex: "0x5A" }
+        ListElement { name: "Near";      maskHex: "0x3C" }
         ListElement { name: "Middle";    maskHex: "0x66" }
         ListElement { name: "Far";       maskHex: "0xC3" }
         ListElement { name: "Outer";     maskHex: "0x99" }
@@ -102,7 +102,7 @@ Item {
         var pattern
         switch (index) {
             case 0: pattern = [false,false,false,false,false,false,false,false]; break
-            case 1: pattern = [false,true,false,true,true,false,true,false]; break
+            case 1: pattern = [false,false,true,true,true,true,false,false]; break
             case 2: pattern = [false,true,true,false,false,true,true,false]; break
             case 3: pattern = [true,true,false,false,false,false,true,true]; break
             case 4: pattern = [true,false,false,true,true,false,false,true]; break
@@ -142,9 +142,21 @@ Item {
         root.visible = true
     }
     function close() {
+        commitUserLabel()
         commitDurationFields()
         selectionChanged(maskFromArray(leftSensorActive), maskFromArray(rightSensorActive))
         root.visible = false
+    }
+
+    // The field's onEditingFinished only fires on Enter/Tab/focus loss, and
+    // a hidden item keeps keyboard focus, so closing the modal alone never
+    // fires it — a label typed and dismissed with Done/X/Esc was dropped and
+    // the next scan was named after the previous subject (#551).
+    function commitUserLabel() {
+        if (userLabelField.text !== MotionInterface.userLabel) {
+            MotionInterface.userLabel = userLabelField.text
+            userLabelField.text = MotionInterface.userLabel  // reflect normalization
+        }
     }
 
     function commitDurationFields() {
@@ -288,6 +300,7 @@ Item {
 
                 TextField {
                     id: userLabelField
+                    objectName: "userLabelField"
                     Layout.fillWidth: true
                     Layout.preferredHeight: 30
                     font.pixelSize: 14
@@ -297,12 +310,7 @@ Item {
                         border.color: userLabelField.activeFocus ? AppTheme.accentInteractive : AppTheme.borderSubtle
                         border.width: 1
                     }
-                    onEditingFinished: {
-                        if (text !== MotionInterface.userLabel) {
-                            MotionInterface.userLabel = text
-                            text = MotionInterface.userLabel  // reflect normalization
-                        }
-                    }
+                    onEditingFinished: root.commitUserLabel()
                 }
             }
 

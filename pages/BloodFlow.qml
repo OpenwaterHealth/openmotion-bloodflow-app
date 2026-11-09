@@ -38,8 +38,8 @@ Rectangle {
     // In clinical mode, Start first runs a contact-quality preflight check.
     property bool clinicalStartPending: false
     // Prevent CQ callbacks from re-opening the modal. Set while a stop/cancel
-    // is in flight, and by the engineering Force Dismiss button for the rest
-    // of the running scan (#492). Reset at the scan boundaries (beginScanNow /
+    // is in flight, and by the CQ modal's Force Dismiss ("Hide for this
+    // scan") button for the rest of the running scan (#492). Reset at the scan boundaries (beginScanNow /
     // scanRunner.onScanFinished), so the next scan warns again.
     property bool suppressLiveCqModal: false
 
@@ -129,6 +129,7 @@ Rectangle {
         // the new scan — without this reset, the modal would keep showing
         // an orange dot from the prior scan.
         contactQualityModal.entries = []
+        contactQualityModal.clearCamerasWithoutData()
         scanRunner.start()
     }
 
@@ -332,14 +333,20 @@ Rectangle {
         settingContrastMin: settingsModal.contrastMin
         settingContrastMax: settingsModal.contrastMax
         // Bottom-right settings popup writes back through these
-        // signals → settingsModal owns the persisted state and
-        // the Settings modal stays in sync with the viewer's quick
-        // toggles.
+        // signals → settingsModal holds the state the viewer binds to,
+        // and the Settings modal stays in sync with the viewer's quick
+        // toggles. Persisted here as well (#622): settingsModal only
+        // saves on close and reloads from config on open, so a popup
+        // choice used to revert the next time Settings opened, and was
+        // lost at restart, while the popup's per-plot and view choices
+        // (written through setConfig) stuck.
         onAutoScaleToggleRequested: function(enabled) {
             settingsModal.autoScale = enabled
+            MotionInterface.setConfig("autoScale", enabled)
         }
         onDisplayModeToggleRequested: function(bfiBviMode) {
             settingsModal.showBfiBvi = bfiBviMode
+            MotionInterface.setConfig("showBfiBvi", bfiBviMode)
         }
     }
 
@@ -426,8 +433,8 @@ Rectangle {
 
     SettingsModal {
         id: settingsModal
-        // Audit Log: the password gate lives in SettingsModal; on success
-        // close Settings first so toggle() sees current === null and goes
+        // Audit Log: View Logs has no password in any build (#703).
+        // Close Settings first so toggle() sees current === null and goes
         // straight to logsModal.open() (no redundant close), then open the
         // ModalManager-governed LogsModal.
         onLogsRequested: {
@@ -470,7 +477,7 @@ Rectangle {
             clinicalStartPending = false
         }
         onForceDismissed: {
-            // Engineering Force Dismiss is sticky (#492): suppress live CQ
+            // Force Dismiss ("Hide for this scan") is sticky (#492): suppress live CQ
             // re-opens for the remainder of this scan. Outside a scan
             // (quick check / pre-scan gate) nothing re-opens the modal, so
             // there is nothing to suppress — and the flag must not leak
@@ -541,6 +548,9 @@ Rectangle {
             // bloodFlow.scanning flips false or triggerState goes "OFF".
             bloodFlow.scanning = false
             bloodFlow.suppressLiveCqModal = false
+            // A camera's no-data mark is about the scan that just ended;
+            // the next pre-scan check must not inherit it (#731).
+            contactQualityModal.clearCamerasWithoutData()
 
             if (!ok && err !== "Canceled") {
                 console.log("ERROR: " + err)

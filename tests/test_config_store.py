@@ -121,6 +121,22 @@ def test_apply_saved_preferences_uses_only_persisted_tiers():
     assert "retiredKey" not in cfg
 
 
+@pytest.mark.parametrize("saved, glass", [
+    ({"darkMode": False}, False),                       # Light, pre-#604 diff
+    ({"darkMode": False, "liquidGlass": True}, True),   # explicit row wins
+    ({"liquidGlass": True}, True),
+    ({"bfiMax": 5.0}, True),                            # no theme row
+])
+def test_saved_light_theme_without_a_glass_row_is_solid(saved, glass):
+    """#659: the table is a diff, so Light saved while liquidGlass defaulted
+    to False has no liquidGlass row; it must not pick up a True default."""
+    cfg = config_store.compiled_config()
+    cfg["liquidGlass"] = True                           # Research default
+    used = config_store.apply_saved_preferences(cfg, saved)
+    assert cfg["liquidGlass"] is glass
+    assert used == set(saved)                           # implied, not loaded
+
+
 def test_apply_saved_preferences_coerces_masks_to_int():
     cfg = config_store.compiled_config()
     config_store.apply_saved_preferences(cfg, {"leftMask": 195.0})

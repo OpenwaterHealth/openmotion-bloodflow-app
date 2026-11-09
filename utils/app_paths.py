@@ -30,8 +30,9 @@ Since #546 ``portableMode`` is derived, not configured: the exe in the
 portable zip and the exe inside the installer are byte-identical (the
 signed-installer workflow repacks the QA-validated zip), so the difference
 has to come from the install itself. The MSI writes
-``HKLM/Software/Openwater/Open-Motion/InstallDir`` (backslashes); a frozen Windows
-build whose exe lives in that directory is "installed" (writable state
+``HKLM/Software/Openwater/<ProductName>/InstallDir`` (backslashes; one key per
+variant, #586); a frozen Windows
+build whose exe lives in a registered directory is "installed" (writable state
 under %LOCALAPPDATA%), anything else is "portable" (next to the exe). Only
 an administrator can write that key.
 
@@ -61,8 +62,15 @@ DATA_ROOT_OVERRIDE: Path | None = None
 _FOLDERID_LOCAL_APP_DATA = "{F1B32785-6FBA-4FCF-9D55-7B8E7F157091}"
 _FOLDERID_PROFILE = "{5E6C858F-0E22-4760-9AFE-EA3317B67173}"
 
-# Written by installer/app.wxs (AppShortcut component) as [APPFOLDER].
-_INSTALL_REG_KEY = r"Software\Openwater\Open-Motion"
+# Written by installer/app.wxs (AppShortcut component) as [APPFOLDER], under
+# Software\Openwater\<ProductName>: one key per build variant (#586), so the
+# Clinical and Research MSIs never share a component. Both are read; the exe
+# is "installed" when it lives in either registered directory. The two
+# variants install to different folders, so a match is never ambiguous.
+_INSTALL_REG_KEYS = (
+    r"Software\Openwater\Open-Motion",           # Clinical
+    r"Software\Openwater\Open-Motion Research",  # Research
+)
 _INSTALL_REG_VALUE = "InstallDir"
 
 # Test / dev hook: None = derive from the registry + exe location.
@@ -114,8 +122,8 @@ def _known_folder(folder_id: str) -> Path | None:
         return None
 
 
-def installed_dir() -> Path | None:
-    """The directory the MSI installed the app to, per HKLM, or None.
+def installed_dirs() -> list[Path]:
+    """Every directory an app MSI registered in HKLM (one per variant).
 
     Both registry views are read, 64-bit first, each one explicitly so the
     answer never depends on the bitness of this process. The app MSI is built
@@ -126,35 +134,35 @@ def installed_dir() -> Path | None:
     portable copy and died creating ``logs\`` next to the exe (#577).
     """
     if sys.platform != "win32":
-        return None
+        return []
     try:
         import winreg
     except ImportError:
-        return None
-    for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
-        try:
-            with winreg.OpenKey(
-                winreg.HKEY_LOCAL_MACHINE, _INSTALL_REG_KEY, 0,
-                winreg.KEY_READ | view,
-            ) as key:
-                value, kind = winreg.QueryValueEx(key, _INSTALL_REG_VALUE)
-        except OSError:
-            continue
-        if kind == winreg.REG_SZ and value:
-            return Path(value)
-    return None
+        return []
+    found: list[Path] = []
+    for subkey in _INSTALL_REG_KEYS:
+        for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+            try:
+                with winreg.OpenKey(
+                    winreg.HKEY_LOCAL_MACHINE, subkey, 0,
+                    winreg.KEY_READ | view,
+                ) as key:
+                    value, kind = winreg.QueryValueEx(key, _INSTALL_REG_VALUE)
+            except OSError:
+                continue
+            if kind == winreg.REG_SZ and value:
+                found.append(Path(value))
+                break
+    return found
 
 
 def is_installed_exe() -> bool:
-    """True when this frozen exe is the one the installer registered."""
+    """True when this frozen exe is one the installer registered."""
     if not is_frozen() or sys.platform != "win32":
-        return False
-    target = installed_dir()
-    if target is None:
         return False
     try:
         exe_dir = executable_path().resolve().parent
-        return exe_dir == target.resolve()
+        return any(exe_dir == target.resolve() for target in installed_dirs())
     except OSError:
         return False
 
@@ -240,7 +248,7 @@ def writable_root(portable: bool | None = None) -> Path:
     if is_frozen():
         if sys.platform == "darwin":
             # macOS has no %LOCALAPPDATA%, and the portable layout can't apply
-            # either: writing inside Open-Motion.app invalidates its code
+            # either: writing inside Open-Motion Research.app invalidates its code
             # signature. Both variants use the standard per-user data location.
             root = _home_dir() / "Library" / "Application Support" / _APP_DIRNAME
         elif portable:

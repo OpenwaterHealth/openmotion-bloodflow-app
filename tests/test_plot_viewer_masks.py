@@ -45,7 +45,7 @@ from PyQt6.QtCore import (  # noqa: E402
     pyqtSignal,
     pyqtSlot,
 )
-from PyQt6.QtGui import QGuiApplication  # noqa: E402
+from PyQt6.QtGui import QColor, QGuiApplication  # noqa: E402
 
 if QCoreApplication.instance() is None:
     _qt_app = QGuiApplication([sys.argv[0], "-platform", "offscreen"])
@@ -58,6 +58,8 @@ from PyQt6.QtQml import (  # noqa: E402
     QQmlEngine,
     qmlRegisterSingletonInstance,
 )
+
+from config.app_config import APP_CONFIG  # noqa: E402
 
 pytestmark = pytest.mark.unit
 
@@ -271,6 +273,16 @@ def _cam_ids(cells, side):
     return sorted(c["camId"] for c in cells if c["side"] == side)
 
 
+def test_unbound_trace_colors_match_app_config(viewer_factory):
+    """#630: nothing binds bfiColor / bviColor in a standalone render (and
+    this stub has no defaultConfig), so the viewer's literal fallbacks
+    show. They must be the compiled defaults in config/app_config.py;
+    they used to be a stale red/blue pair."""
+    viewer = viewer_factory()
+    for key in ("bfiColor", "bviColor"):
+        assert viewer.property(key).name() == QColor(APP_CONFIG[key]).name(), key
+
+
 def test_default_masks_render_middle_four_per_side(viewer_factory):
     viewer = viewer_factory()
     viewer.setProperty("leftMask", MIDDLE_MASK)
@@ -341,7 +353,7 @@ def test_past_scan_config_overrides_live_mask_selection(viewer_factory):
 
 # ── Issue #245 — "Viewing" badge names the replayed scan ───────────────
 # The viewer shows a top-center badge identifying the loaded past scan
-# (user label · date trimmed to minutes). It is hidden during live
+# (user label · full date/time, seconds included — #456). It is hidden during live
 # monitoring and when no scan is loaded.
 
 
@@ -353,7 +365,7 @@ def test_viewing_badge_names_loaded_past_scan(viewer_factory):
             user_label="Patient A", date_time="2026-06-23 11:19:35")
         viewer_factory.stub.setScanSource(past)
         assert viewer.property("_showScanBadge") is True
-        assert viewer.property("_scanBadgeText") == "Patient A · 2026-06-23 11:19"
+        assert viewer.property("_scanBadgeText") == "Patient A · 2026-06-23 11:19:35"
     finally:
         viewer_factory.stub.setScanSource(None)
 
@@ -366,7 +378,7 @@ def test_viewing_badge_collapses_to_date_when_unlabeled(viewer_factory):
             user_label="", date_time="2026-06-23 11:19:35")
         viewer_factory.stub.setScanSource(past)
         assert viewer.property("_showScanBadge") is True
-        assert viewer.property("_scanBadgeText") == "2026-06-23 11:19"
+        assert viewer.property("_scanBadgeText") == "2026-06-23 11:19:35"
     finally:
         viewer_factory.stub.setScanSource(None)
 

@@ -16,6 +16,7 @@ pytestmark = pytest.mark.unit
 def connector(monkeypatch):
     from motion_connector import MotionConnector
     fake_iface = MagicMock()
+    fake_iface.scan_db_path = None  # a MagicMock path becomes a DB file in cwd (#620)
     fake_iface.is_device_connected.return_value = (True, True, True)
     c = MotionConnector(
         interface=fake_iface,

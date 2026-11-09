@@ -27,10 +27,10 @@ import OpenMotion 1.0
  *      stopScanRequested()  — user clicked "Stop scan" (live-scan footer)
  *      continueRequested()  — user clicked "Continue"  (live-scan footer)
  *      dismissed()          — modal closed by any button
- *      forceDismissed()     — engineering Force Dismiss clicked; fires
- *                             alongside dismissed(). BloodFlow uses it to
- *                             keep the live-scan modal suppressed for the
- *                             rest of the scan (#492).
+ *      forceDismissed()     — "Hide for this scan" (cqForceDismissBtn)
+ *                             clicked; fires alongside dismissed().
+ *                             BloodFlow uses it to keep the live-scan modal
+ *                             suppressed for the rest of the scan (#492).
  */
 Item {
     id: root
@@ -76,7 +76,32 @@ Item {
     // Each entry: { camera, typeKey, typeText, value }
     property var entries: []
 
+    // #731: a "no_signal" camera sent no usable frames. That is a camera /
+    // data problem, not contact, so the modal names the remedy once for all
+    // such cameras instead of leaving the operator to re-seat a sensor.
+    readonly property bool hasNoSignal: {
+        for (var i = 0; i < entries.length; ++i)
+            if (entries[i].typeKey === "no_signal") return true
+        return false
+    }
+    readonly property string noSignalHint:
+        "One or more cameras are not sending data. Power-cycle the system and reconnect."
+
+    // #731: cameras the connector's dropout watchdog reports as delivering
+    // no frames mid-scan (stopped, or never started — #585), keyed by label
+    // ("R8"). Fed by cameraDropoutDetected / cameraDropoutRecovered, like
+    // PlotViewer's Connection Lost badges; BloodFlow clears it at both scan
+    // boundaries. Display only: it never opens the modal or holds Continue,
+    // so a dead camera stays a warning (#585). Reassigned wholesale, never
+    // mutated in place, so the dot bindings re-evaluate.
+    property var camerasWithoutData: ({})
+    readonly property string noDataText: "No data from camera"
+    readonly property bool anyCameraWithoutData: Object.keys(camerasWithoutData).length > 0
+    // Red dots (no frames) are on screen: name the remedy and the colour.
+    readonly property bool showNoDataHint: hasNoSignal || anyCameraWithoutData
+
     readonly property bool engineeringMode: !!(MotionInterface.appConfig && MotionInterface.appConfig.engineeringMode)
+    readonly property bool clinicalMode: !!(MotionInterface.appConfig && MotionInterface.appConfig.clinicalMode)
 
     signal stopScanRequested()
     signal continueRequested()
@@ -163,8 +188,32 @@ Item {
         }
     }
 
+    function setCameraWithoutData(side, camIndex1, noData) {
+        var label = ((side === "left") ? "L" : "R") + camIndex1
+        var m = {}
+        for (var k in root.camerasWithoutData) m[k] = true
+        if (noData) m[label] = true
+        else delete m[label]
+        root.camerasWithoutData = m
+    }
+
+    function clearCamerasWithoutData() {
+        root.camerasWithoutData = ({})
+    }
+
+    Connections {
+        target: MotionInterface
+        function onCameraDropoutDetected(side, camId, elapsed) {
+            root.setCameraWithoutData(side, camId + 1, true)
+        }
+        function onCameraDropoutRecovered(side, camId, elapsed) {
+            root.setCameraWithoutData(side, camId + 1, false)
+        }
+    }
+
     // Build per-camera quality status from entries.
-    // Returns "good" (no warnings), "bad" (has warning), or "inactive".
+    // Returns "good" (no warnings), "bad" (has warning), "nodata" (the
+    // dropout watchdog reports no frames from it), "checking" or "inactive".
     function cameraStatus(side, camIndex1) {
         if (root.liveScan && !cameraEnabled(side, camIndex1))
             return "inactive"
@@ -172,6 +221,7 @@ Item {
         var label = prefix + camIndex1
         if (root.state_ === "checking") return "checking"
         if (root.state_ === "error") return "inactive"
+        if (root.camerasWithoutData[label]) return "nodata"
         for (var i = 0; i < entries.length; ++i) {
             if (entries[i].camera === label) return "bad"
         }
@@ -202,11 +252,21 @@ Item {
             lines.push("Inactive for current scan mask")
             return lines.join("\n")
         }
+        var noData = !!root.camerasWithoutData[label]
+        if (noData)
+            lines.push(root.noDataText)
         for (var i = 0; i < entries.length; ++i) {
-            if (entries[i].camera === label)
-                lines.push(showDn
-                           ? (entries[i].typeText + " (" + entries[i].value.toFixed(1) + " DN)")
-                           : entries[i].typeText)
+            // A no_signal camera has no reading; its value is a 0.0 filler.
+            if (entries[i].camera !== label)
+                continue
+            if (entries[i].typeKey === "no_signal") {
+                if (!noData)
+                    lines.push(entries[i].typeText)
+                continue
+            }
+            lines.push(showDn
+                       ? (entries[i].typeText + " (" + entries[i].value.toFixed(1) + " DN)")
+                       : entries[i].typeText)
         }
         return lines.join("\n")
     }
@@ -317,9 +377,11 @@ Item {
                 wrapMode: Text.WordWrap
                 color: AppTheme.textSecondary
                 font.pixelSize: 14
-                text: (root.entries.length > 0)
-                      ? "Hover over orange cameras for details."
-                      : "All contact quality issues are currently inactive. You may dismiss."
+                text: (root.showNoDataHint ? root.noSignalHint + "\n" : "")
+                      + ((root.entries.length > 0)
+                         ? (root.showNoDataHint ? "Hover over orange or red cameras for details."
+                                                : "Hover over orange cameras for details.")
+                         : "All contact quality issues are currently inactive. You may dismiss.")
             }
 
             // Error message
@@ -468,6 +530,13 @@ Item {
                     }
                     Text { text: "both"; color: AppTheme.textSecondary; font.pixelSize: 11 }
                 }
+                RowLayout {
+                    spacing: 6
+                    Rectangle { width: 10; height: 10; radius: 5
+                        color: AppTheme.accentRed
+                        border.color: "black"; border.width: 1 }
+                    Text { text: "no data"; color: AppTheme.textSecondary; font.pixelSize: 11 }
+                }
             }
 
             Item {
@@ -560,28 +629,6 @@ Item {
                     }
                     onClicked: { root.stopScanRequested(); root.close(); root.dismissed() }
                 }
-                Button {
-                    visible: !root.preScanMode && root.liveScan && (root.state_ === "warnings" || root.state_ === "ok")
-                    enabled: root.liveScanDismissable
-                    text: "Continue"
-                    hoverEnabled: enabled
-                    Layout.preferredHeight: 45
-                    contentItem: Text {
-                        text: parent.text; font.pixelSize: 12
-                        color: !parent.enabled ? AppTheme.textDisabled
-                              : (parent.hovered ? "#FFFFFF" : AppTheme.textSecondary)
-                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-                    }
-                    background: Rectangle {
-                        color: !parent.enabled ? AppTheme.bgCard
-                              : (parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput)
-                        radius: 4
-                        border.color: !parent.enabled ? AppTheme.borderSubtle
-                                    : (parent.hovered ? AppTheme.accentInteractive : AppTheme.borderSoft)
-                        border.width: 1
-                    }
-                    onClicked: { root.continueRequested(); root.close(); root.dismissed() }
-                }
 
                 // Quick-check / OK / error footer
                 Button {
@@ -617,30 +664,71 @@ Item {
                     onClicked: { root.close(); root.retestRequested() }
                 }
 
-                // Engineering-mode escape hatch: bypass all contact-quality
-                // gates. Sticky during a live scan (#492) — the extra
-                // forceDismissed() signal lets BloodFlow suppress live
-                // re-opens until the scan ends. ESC (also engineering-gated)
-                // stays a one-shot dismiss for when you still want the next
-                // warning.
+                // Force Dismiss ("Hide for this scan"): bypass all
+                // contact-quality gates. Sticky during a live scan (#492) —
+                // the extra forceDismissed() signal lets BloodFlow suppress
+                // live re-opens until the scan ends; outside a scan it is a
+                // one-shot dismiss. Always offered in Research builds
+                // (#709); a clinical build keeps it behind the engineering
+                // unlock, the same gate as raw CSVs (#234). ESC
+                // (engineering-gated) stays a one-shot dismiss for when you
+                // still want the next warning.
                 Button {
                     objectName: "cqForceDismissBtn"
-                    visible: root.engineeringMode
-                    text: "Force Dismiss"
+                    visible: !root.clinicalMode || root.engineeringMode
+                    text: "Hide for this scan"
+                    // Worded to hold outside a scan too, where nothing
+                    // re-opens the modal and the click is a plain dismiss.
+                    readonly property string helpText:
+                        "Closes this notice. If a scan is running, contact-quality "
+                        + "warnings stay hidden until it ends. The next scan warns again."
                     hoverEnabled: true
                     Layout.preferredHeight: 45
+                    // An explicit ToolTip (not the attached one) so the
+                    // text can wrap instead of running wider than the panel;
+                    // x re-centers it, the default centers on implicitWidth.
+                    ToolTip {
+                        visible: parent.hovered
+                        delay: 500
+                        text: parent.helpText
+                        width: Math.min(implicitWidth, 320)
+                        x: (parent.width - width) / 2
+                    }
                     contentItem: Text {
                         text: parent.text; font.pixelSize: 12
-                        color: parent.hovered ? "#FFFFFF" : "#E8A020"
+                        color: parent.hovered ? "#FFFFFF" : AppTheme.textSecondary
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle {
-                        color: parent.hovered ? "#B8740F" : AppTheme.bgInput
-                        radius: 4
-                        border.color: parent.hovered ? "#E8A020" : "#E8A020"
-                        border.width: 1
+                        color: parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput
+                        radius: 4; border.color: parent.hovered ? AppTheme.accentInteractive : AppTheme.borderSoft; border.width: 1
                     }
                     onClicked: { root.close(); root.forceDismissed(); root.dismissed() }
+                }
+
+                // Live-scan Continue: last, so the action that resumes the scan
+                // sits at the right edge, after "Hide for this scan".
+                Button {
+                    visible: !root.preScanMode && root.liveScan && (root.state_ === "warnings" || root.state_ === "ok")
+                    enabled: root.liveScanDismissable
+                    text: "Continue"
+                    hoverEnabled: enabled
+                    Layout.preferredHeight: 45
+                    contentItem: Text {
+                        text: parent.text; font.pixelSize: 12
+                        color: !parent.enabled ? AppTheme.textDisabled
+                              : (parent.hovered ? "#FFFFFF" : AppTheme.textSecondary)
+                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle {
+                        color: !parent.enabled ? AppTheme.bgCard
+                              : (parent.hovered ? AppTheme.accentInteractive : AppTheme.bgInput)
+                        radius: 4
+                        border.color: !parent.enabled ? AppTheme.borderSubtle
+                                    : (parent.hovered ? AppTheme.accentInteractive : AppTheme.borderSoft)
+                        border.width: 1
+                    }
+                    onClicked: { root.continueRequested(); root.close(); root.dismissed() }
                 }
             }
         }

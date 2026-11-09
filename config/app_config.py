@@ -33,8 +33,6 @@ one inside the installer are byte-identical (#501's repack step depends on
 that).
 """
 
-import sys
-
 # ── Build variant ─────────────────────────────────────────────────────────
 # Stamped per artifact by scripts/build_common.ps1 (regex on this exact
 # line). Source runs may override it with --clinical / --research.
@@ -63,6 +61,9 @@ APP_CONFIG = {
     "dataDirectory": None,
     "writeRawCsv": False,
     "rawCsvDurationSec": None,
+    # Research-only (#598): export the History → Export CSV file into data/
+    # automatically when each scan ends. Never exports on a clinical build.
+    "autoExportCsv": False,
     "writeTelemetryCsv": False,
     "leftMask": 102,
     "rightMask": 102,
@@ -92,6 +93,16 @@ APP_CONFIG = {
     "autoScale": False,
     "autoScalePerPlot": False,
     "showAxisLabels": True,
+    # Research plot view (#606), from the plot's ⋯ menu: "individual" (one
+    # plot per camera), "aggregate" (one plot per mirrored camera pair,
+    # 1+8 / 2+7 / 3+6 / 4+5, per module; #621) or "average" (one per-side
+    # averaged plot per module, clinical-style). Display-only; clinical
+    # builds ignore it.
+    "plotViewMode": "individual",
+    # Statistics pane beside the plots (#635), from the plot's ⋯ menu: live
+    # and 0.5 Hz low-passed values per plot plus the left − right
+    # differential. Display-only; clinical builds ignore it.
+    "showStatistics": False,
     "darkMode": True,
     "max_calibration_time_sec": 600,
     "calibration_scan_duration_sec": 15,
@@ -179,9 +190,11 @@ APP_CONFIG = {
     # Critical-error bug report SMTP block (see bug_report.py); None
     # disables the SMTP path and the report is copied to the clipboard.
     "bug_report_smtp": None,
-    # Liquid Glass theme: on for macOS (its native look), off elsewhere so
-    # Windows clinical builds keep the solid palette.
-    "liquidGlass": sys.platform == "darwin",
+    # Liquid Glass theme: the default look of the Research variant (macOS
+    # included, which is Research-only); Clinical keeps the solid palette.
+    # main._load_app_config re-derives it from the effective clinicalMode
+    # so --clinical / --research source runs get the matching default.
+    "liquidGlass": not CLINICAL_MODE,
     # Internal restore bookkeeping for the alternative settings above:
     # True while camera / TA / safety-ceiling registers may still hold an
     # alternative value, so the first scan after the toggle goes off writes
@@ -228,13 +241,14 @@ PREFERENCE_KEYS = frozenset({
     "bfiMin", "bfiMax", "bviMin", "bviMax",
     "meanMin", "meanMax", "contrastMin", "contrastMax",
     "bfiColor", "bviColor", "plotWindowSec",
-    "autoScale", "autoScalePerPlot", "showAxisLabels",
-    "bviLowPassEnabled",
+    "autoScale", "autoScalePerPlot", "showAxisLabels", "plotViewMode",
+    "showStatistics", "bviLowPassEnabled",
     "darkMode", "liquidGlass",
     # Research data output. Persisting these is harmless in a clinical
     # build: the scan-start gate is (!clinicalMode || engineeringMode), and
-    # engineeringMode is session-only.
-    "writeRawCsv", "rawCsvDurationSec",
+    # engineeringMode is session-only. autoExportCsv is gated on
+    # !clinicalMode alone at scan end.
+    "writeRawCsv", "rawCsvDurationSec", "autoExportCsv",
 })
 
 STATE_KEYS = frozenset({

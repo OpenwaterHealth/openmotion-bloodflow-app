@@ -13,6 +13,14 @@ Item {
     property var source: null            // ScanDataSource (Python QObject) or null
     property string side: "left"
     property int    camId: 0
+    // Top-left identity label. The viewer overrides it for the Aggregate
+    // view's pair streams (#621), whose camId is not a camera number.
+    property string label: cell.side.toUpperCase() + " " + (cell.camId + 1)
+    // cam_id = -1 is the side-averaged stream (clinical, and the research
+    // Average view): hidden by default, since the large side panel next to
+    // the plot names the side. The viewer shows it when those panels are
+    // off (the Statistics pane replaces them, #635).
+    property bool showLabel: cell.camId !== -1
     property real   windowSeconds: 15
 
     // Time-axis state — when followLive=true, the cell tracks the
@@ -55,8 +63,8 @@ Item {
     // shows the same numbers on the large side panels) can hide them.
     property bool showValueLabels: true
 
-    // Y-axis tick labels (max/mid/min). Toggleable from the ⋯ popup;
-    // default comes from appConfig.showAxisLabels (false = labels off).
+    // Y-axis tick labels (max/mid/min). The viewer sets this; it has had
+    // no UI toggle since #622 (see PlotViewer.showAxisLabels).
     property bool showAxisLabels: true
 
     // Top-right temperature readout — engineering mode only; the viewer
@@ -67,6 +75,9 @@ Item {
     // while the connector's dropout watchdog has this (side, camId)
     // marked Connection Lost; clears when frames resume.
     property bool connectionLost: false
+    // Badge copy. An averaged side plot names its offline cameras instead
+    // (issue #585): its trace keeps going from the remaining cameras.
+    property string connectionLostText: "CONNECTION LOST"
 
     // ── Repaint plumbing ───────────────────────────────────────────────
     // Repaints are throttled by the parent PlotViewer: it owns a 33 ms
@@ -137,6 +148,20 @@ Item {
         }
     }
 
+    // Trace pen: one DEVICE pixel wide, never more. QPainter strokes a
+    // pen of at most 1 device px with its fast cosmetic stroker; a wider
+    // one goes through the general path stroker and a polygon fill that
+    // gets slower the more of the cell a zigzagging trace covers. At
+    // 1.5 px, 8 cells on a 3440 px screen cost ~270 ms per repaint (vs
+    // ~6 ms), so the plots refreshed about twice a second and every
+    // other control lagged behind the painting (#616). Canvas scales its
+    // painter by the device pixel ratio, so a plain 1 would be 1.25 px on
+    // a 125 % display and slow again; 0.99 keeps rounding under 1. The
+    // 1.5 px look comes back from stroking twice (_drawTrace): ~1.3x the
+    // frame cost of one stroke. Stroking 1.5 px in short chunks would
+    // match it exactly, but at ~2x that cost.
+    readonly property real _tracePenWidth: 0.99 / Math.max(1, Screen.devicePixelRatio)
+
     // Render one trace inside the current Canvas context using the given
     // metric/color/yMin/yMax. Defined as a JS function on the cell so
     // both primary and secondary draws share it. Returns the number of
@@ -150,23 +175,29 @@ Item {
         if (pts.length < 2) return 0
         var dy = yMaxVal - yMinVal
         if (dy <= 0) return 0
-        ctx.beginPath()
-        ctx.lineWidth = 1.5
+        ctx.lineWidth = cell._tracePenWidth
         ctx.strokeStyle = color
-        // Pen-up at non-finite samples: a NaN run (unlit camera during a
-        // contact loss) must render as a blank gap, not a straight line
-        // bridging the last point before the gap to the first one after.
-        var penDown = false
-        for (var i = 0; i < pts.length; i++) {
-            var t = pts[i][0]
-            var v = pts[i][1]
-            if (!isFinite(v)) { penDown = false; continue }
-            var x = ((t - tLo) / dt) * w
-            var y = h - ((v - yMinVal) / dy) * h
-            if (!penDown) { ctx.moveTo(x, y); penDown = true }
-            else ctx.lineTo(x, y)
+        // Stroked twice, the second pass half a pen width to the right: two
+        // fast one-device-pixel strokes read like the 1.5 px trace the plots
+        // used to draw, at a fraction of its cost (see _tracePenWidth).
+        for (var pass = 0; pass < 2; pass++) {
+            var ox = pass * 0.5 * cell._tracePenWidth
+            ctx.beginPath()
+            // Pen-up at non-finite samples: a NaN run (unlit camera during a
+            // contact loss) must render as a blank gap, not a straight line
+            // bridging the last point before the gap to the first one after.
+            var penDown = false
+            for (var i = 0; i < pts.length; i++) {
+                var t = pts[i][0]
+                var v = pts[i][1]
+                if (!isFinite(v)) { penDown = false; continue }
+                var x = ((t - tLo) / dt) * w + ox
+                var y = h - ((v - yMinVal) / dy) * h
+                if (!penDown) { ctx.moveTo(x, y); penDown = true }
+                else ctx.lineTo(x, y)
+            }
+            ctx.stroke()
         }
-        ctx.stroke()
         return pts.length
     }
 
@@ -284,11 +315,8 @@ Item {
         spacing: 1
 
         Text {
-            // cam_id = -1 is the side-averaged stream fed by the SDK's
-            // SideAveragingStage in clinical mode — hide the label there;
-            // the large side panel next to the plot already names the side.
-            visible: cell.camId !== -1
-            text: cell.side.toUpperCase() + " " + (cell.camId + 1)
+            visible: cell.showLabel
+            text: cell.label
             color: AppTheme.textSecondary
             font.pixelSize: 11
             font.family: "Roboto Mono"
@@ -372,7 +400,7 @@ Item {
         Text {
             id: lostLabel
             anchors.centerIn: parent
-            text: "CONNECTION LOST"
+            text: cell.connectionLostText
             color: AppTheme.accentRed
             font.pixelSize: cell.width >= 160 ? 11 : 9
             font.weight: Font.DemiBold

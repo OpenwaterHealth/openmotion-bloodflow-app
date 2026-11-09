@@ -20,8 +20,8 @@ QtObject {
     // "capture" | "check"
     property string mode: "capture"
 
-    property int leftMask: 0x5A
-    property int rightMask: 0x5A
+    property int leftMask: 0x3C
+    property int rightMask: 0x3C
 
     property int durationSec: 60
     property string subjectId: ""

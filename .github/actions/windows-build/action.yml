@@ -123,7 +123,10 @@ runs:
         #   * X.Y.Z-dev.N tag / push to next → source-install from
         #     openmotion-sdk@next. The bloodflow next branch tracks SDK API
         #     drift before any release, so it must always pair with SDK
-        #     next; PyPI's latest stable can be API-behind.
+        #     next; PyPI's latest stable can be API-behind. On app next-next
+        #     (the 1.6.0 line) the twin is SDK next-next instead (#761), so
+        #     the install step below names @next-next. Switch it back to
+        #     @next when next-next folds into next.
         #   * Everything else (X.Y.Z production tag, X.Y.Z-rc.N tag, push to
         #     main, manual dispatch) → the exact release pinned in
         #     sdk-version.txt, so the binary, the SBOM and the verification
@@ -190,8 +193,8 @@ runs:
         # pip comes from the lock; upgrading it here would undo the pin.
         SDK_PIN=$(tr -d '[:space:]' < sdk-version.txt)
         if [ "$SDK_SOURCE" = "next" ]; then
-          echo "Dev/next-branch build — installing SDK from openmotion-sdk@next"
-          pip install "git+https://github.com/OpenwaterHealth/openmotion-sdk.git@next"
+          echo "Dev/next-branch build — installing SDK from openmotion-sdk@next-next"
+          pip install "git+https://github.com/OpenwaterHealth/openmotion-sdk.git@next-next"
         else
           echo "Release/rc/main/dispatch build — installing openmotion-sdk==${SDK_PIN} (sdk-version.txt)"
           pip install "openmotion-sdk==${SDK_PIN}"

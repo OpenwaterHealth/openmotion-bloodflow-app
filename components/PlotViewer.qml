@@ -65,15 +65,17 @@ Rectangle {
 
     // ── Inputs ─────────────────────────────────────────────────────────
     property bool clinicalMode: false   // honored in Phase 2b-ii
-    // Per-cell top-left value labels. Default off in clinical mode — the
-    // large side panels show the same numbers there — and toggleable at
-    // runtime from the bottom-right ⋯ popup.
-    property bool showCellValues: !viewer.effectiveClinical
-    // Y-axis tick labels (max/mid/min per metric). Config is the single
-    // source of truth: the ⋯ popup toggle (hidden in clinical mode) writes
-    // through MotionInterface.setConfig, which persists it to the scans.db settings table
-    // and notifies appConfigChanged — this binding then updates.
-    property bool showAxisLabels: MotionInterface.appConfig.showAxisLabels === true
+    // Per-cell top-left value labels. Off whenever the same numbers are
+    // shown elsewhere: the large side panels (clinical, and the research
+    // Average view) or the Statistics pane.
+    property bool showCellValues: !viewer.averageView && !viewer.statsActive
+    // Y-axis tick labels (max/mid/min per metric). Always on: the ⋯ popup
+    // toggle was removed (#622), and binding this to the persisted
+    // appConfig.showAxisLabels without it would strand anyone who had
+    // switched labels off. Flip it here to hide them; to offer the toggle
+    // again, bind it back to appConfig.showAxisLabels (still a persisted
+    // preference) and restore the popup row that writes it.
+    property bool showAxisLabels: true
     // displayMode pair selector — driven externally (BloodFlow.qml binds
     // it from settingsModal.showBfiBvi). "bfi_bvi" overlays BFI+BVI on
     // each cell; "mean_contrast" overlays Mean+Contrast.
@@ -84,20 +86,148 @@ Rectangle {
     property bool autoScale: true
     // autoScalePerPlot (#452) — research-only refinement of autoScale:
     // each cell fits its own camera's trace instead of every cell
-    // sharing one range per metric. Config is the source of truth (same
-    // pattern as showAxisLabels): the ⋯ popup switch writes it through
-    // MotionInterface.setConfig. Clinical never autoscales at all, so
-    // the flag is forced off there regardless of what the settings
-    // table holds.
+    // sharing one range per metric. Config is the source of truth: the
+    // ⋯ popup's Scale switch writes it through MotionInterface.setConfig.
+    // Clinical never autoscales at all, so the flag is forced off there
+    // regardless of what the settings table holds.
     property bool autoScalePerPlot:
         !viewer.effectiveClinical
         && MotionInterface.appConfig.autoScalePerPlot === true
     readonly property bool perPlotActive: viewer.autoScale && viewer.autoScalePerPlot
+
+    // The ⋯ popup's Scale switch (#622) shows the two flags as one
+    // three-way mode: "fixed" (autoscale off: the manual bounds from
+    // Settings), "global" (one autoscaled range per metric) or "perPlot"
+    // (each plot fits its own trace).
+    readonly property string scaleMode: !viewer.autoScale ? "fixed"
+        : (viewer.autoScalePerPlot ? "perPlot" : "global")
+
+    // Writes a Scale choice back: the per-plot flag straight to config,
+    // autoscale through the host, which shares it with the Settings modal
+    // (autoScaleToggleRequested). Per-plot goes first so switching on
+    // autoscale never fits once in the mode being left. Fixed leaves the
+    // per-plot flag as it was.
+    function setScaleMode(mode) {
+        var on = mode !== "fixed"
+        if (on && viewer.autoScalePerPlot !== (mode === "perPlot"))
+            MotionInterface.setConfig("autoScalePerPlot", mode === "perPlot")
+        if (viewer.autoScale !== on) viewer.autoScaleToggleRequested(on)
+        console.info("[Plot] scale → " + mode)
+    }
+    // Research view mode (#606): the ⋯ popup's Individual | Aggregate |
+    // Average buttons write plotViewMode through MotionInterface.setConfig
+    // (same pattern as autoScalePerPlot). Average draws the clinical
+    // layout (one per-side averaged plot per module plus the large readout
+    // panels) from the cam_id=-1 streams the research sources derive from
+    // the per-camera data. Aggregate (#621) keeps the camera grid but folds
+    // each row's mirrored pair (1+8, 2+7, 3+6, 4+5) into one plot of their
+    // average, from the pair streams derived alongside. Display-only.
+    // Gated on the build (clinicalMode) as well as the shown scan, so a
+    // clinical build never honors a stale value; clinical is averageView
+    // through effectiveClinical as before. Anything unrecognized, and every
+    // clinical case, reads as "individual" here.
+    readonly property string researchViewMode: {
+        var m = MotionInterface.appConfig.plotViewMode
+        if (viewer.clinicalMode || viewer.effectiveClinical) return "individual"
+        return (m === "average" || m === "aggregate") ? m : "individual"
+    }
+    readonly property bool researchAverage: viewer.researchViewMode === "average"
+    readonly property bool aggregateView: viewer.researchViewMode === "aggregate"
+    readonly property bool averageView: viewer.effectiveClinical || viewer.researchAverage
+    onResearchViewModeChanged: viewer._recomputeAutoscale()
+    // Statistics pane (#635): the ⋯ popup's Statistics switch writes
+    // showStatistics through MotionInterface.setConfig. While on, the
+    // StatisticsPanel column sits right of the plots and the per-cell value
+    // labels (and the Average view's side panels) give way to it.
+    // Research-only, with the View row's gate: never in a clinical build,
+    // nor while replaying a clinical scan.
+    readonly property bool statsActive:
+        !viewer.clinicalMode && !viewer.effectiveClinical
+        && MotionInterface.appConfig.showStatistics === true
     // Per-plot ranges, keyed "side:camId" → { pMin, pMax, sMin, sMax }
     // for the current display pair. Rebuilt as a whole object by
     // _recomputeAutoscale so the cell bindings re-evaluate (mutating a
     // nested value would not notify). Empty unless perPlotActive.
     property var _cellBounds: ({})
+    // Per-plot fits the VISIBLE window (#591), so any change to the
+    // window the cells draw needs a refit. Coalesced into the 33 ms
+    // paint tick rather than run per event: a drag fires setWindow at
+    // pointer rate, and 16 cells × 2 metrics of percentiles per event
+    // would drag the pointer at the 5-min zoom. The live edge sliding
+    // under a followed window is NOT a trigger (that is every paint);
+    // the autoscale Timer covers it at 1 s in per-plot mode.
+    property bool _refitPending: false
+    function _requestRefit() {
+        if (!viewer.perPlotActive) return
+        viewer._refitPending = true
+        viewer._dirty = true
+    }
+    // A windowed fit re-evaluated every half second is noisy: the 2/98
+    // percentiles of a sliding 5 s window (about five beats) move ~7%
+    // of the axis between evaluations, and adopting every fit made the
+    // axes visibly jump (bench feedback 2026-09-23). A deadband with
+    // persistence was tried first and traded that for rarer but much
+    // larger moves (mean 56% of the axis) plus seconds of clipping —
+    // simulated on bench session 79 — because the tallest beat in any
+    // five genuinely varies that much. So instead the fit is SMOOTHED:
+    // each cell's range follows the fresh windowed fit with a
+    // first-order lag, asymmetric so nothing stays clipped for long — a
+    // bound moving outward follows with _perPlotTauUpSec (1 s), inward
+    // with _perPlotTauDownSec (3 s; 10 s read as "extremely slow" to
+    // tighten on the bench). On the bench data that is ~3.8% of the
+    // axis per evaluation, largest move 19% (adopting every fit: 7% /
+    // 56%), tallest beats off-axis ~10% of the time. The range SNAPS
+    // (no lag) whenever the window itself changes — first fit, pan,
+    // zoom, window length, back to live, display-mode flip, new source
+    // — since that is new content, not the same window sliding; and
+    // also when the window has NOT moved since the last evaluation
+    // (scan stopped, view paused): the fresh fit is then final. A new
+    // source starts with no previous range at all, so each cell's first
+    // real fit snaps too (#613), and while a live scan is younger than
+    // the window an OUTWARD move is adopted at once: the fitted set is
+    // still growing, so a wider fit is new data, not jitter (inward
+    // moves keep the lag). Without that the first few samples' narrow
+    // fit clipped the beats for the scan's first ~2 s.
+    //
+    // The new range is applied directly at each 0.5 s evaluation. An
+    // earlier revision also glided the shown range toward it in the
+    // 33 ms paint tick; that kept the tick dirty for as long as the
+    // target kept moving (always, in per-plot mode), i.e. every cell
+    // repainted at 30 Hz even with no data streaming — measured 30
+    // paints/s vs 9/s in global mode — and the bench reported the whole
+    // UI "haltingly slow". Per-plot mode must not add repaints beyond
+    // the one its 0.5 s evaluation marks dirty.
+    readonly property real _perPlotTauUpSec: 1.0
+    readonly property real _perPlotTauDownSec: 3.0
+    readonly property real _perPlotEvalSec: 0.5
+    property var _cellTargets: ({})     // same object as _cellBounds; kept for tests/readability
+    property string _cellTargetsPair: ""
+    property var _lastFitWindow: null   // {tLo, tHi} of the last per-plot fit
+
+    // Next target range for one metric: the fresh fit itself when
+    // snapping, else the asymmetric first-order lag from the previous
+    // target (outward moves adopted at once when growNow). The exact
+    // neutral fallback (no usable samples in the window) holds the
+    // previous target rather than collapsing the axis to 0..1 while a
+    // camera is covered.
+    function _followRange(prev, f, snap, growNow) {
+        if (f.yMin === 0 && f.yMax === 1) return prev
+        if (snap || !prev) return [f.yMin, f.yMax]
+        var dt = viewer._perPlotEvalSec
+        var aUp = growNow ? 1 : dt / (viewer._perPlotTauUpSec + dt)
+        var aDown = dt / (viewer._perPlotTauDownSec + dt)
+        var lo = prev[0] + ((f.yMin < prev[0]) ? aUp : aDown) * (f.yMin - prev[0])
+        var hi = prev[1] + ((f.yMax > prev[1]) ? aUp : aDown) * (f.yMax - prev[1])
+        return [lo, hi]
+    }
+
+    // Two zero-argument entries over _fitAutoscale(snap): every refit
+    // trigger (window change, new source, mode flip, mask change, the
+    // per-plot switch) snaps; only the autoscale Timer lets the target
+    // lag. Zero-argument so they stay invokable by name (tests).
+    function _recomputeAutoscale() { viewer._fitAutoscale(true) }
+    function _autoscaleTick() { viewer._fitAutoscale(false) }
+
     // Mode flips and grid re-layouts (mask change, sensor connect) get
     // an immediate refit rather than waiting up to 3 s for the tick —
     // a cell without an entry yet would draw on the global range. The
@@ -134,6 +264,20 @@ Rectangle {
     // "Back to live" button restores it.
     property bool followLive: true
     property real windowStartT: 0.0
+    onFollowLiveChanged: viewer._requestRefit()
+    onWindowStartTChanged: viewer._requestRefit()
+    onWindowSecondsChanged: viewer._requestRefit()
+
+    // The window the cells are drawing — the same math as PlotCell:
+    // the last windowSeconds up to the live-edge snapshot when following
+    // live, else the pinned DVR window. Per-plot autoscale fits this
+    // (#591), not the whole scan.
+    function _visibleWindow() {
+        var tHi = viewer.followLive
+            ? viewer.liveEdgeSnapshot
+            : viewer.windowStartT + viewer.windowSeconds
+        return { tLo: tHi - viewer.windowSeconds, tHi: tHi }
+    }
 
     // Y-axis bounds — when autoScale is true, _autoPrimaryYMin/Max are
     // written by _recomputeAutoscale (every 3 s + on displayMode change)
@@ -221,13 +365,69 @@ Rectangle {
     // ── Side break ─────────────────────────────────────────────────────
     // A bit of extra margin between the left and right sensor modules in
     // dev (non-clinical) mode. The grid reserves an empty spacer column
-    // (col 2) between them, but only when BOTH sides have active cameras —
-    // a single-sided scan keeps filling the width with no dangling gap.
+    // between them (col 2; col 1 in the Aggregate view), but only when
+    // BOTH sides have active cameras — a single-sided scan keeps filling
+    // the width with no dangling gap.
     readonly property bool _sideGapActive:
-        !viewer.effectiveClinical
+        !viewer.averageView
         && (viewer._effLeftMask & 0xFF) !== 0
         && (viewer._effRightMask & 0xFF) !== 0
     readonly property real _sideGapPx: 3
+    readonly property int _sideGapCol: viewer.aggregateView ? 1 : 2
+
+    // ── Aggregate pair streams (#621) ──────────────────────────────────
+    // Pair p is the zero-based cameras (p, 7 - p), i.e. 1-based p+1 and
+    // 8-p, stored under cam_id _aggregateCamBase + p. Mirrors
+    // data_sources.AGGREGATE_CAM_BASE / AGGREGATE_PAIRS.
+    readonly property int _aggregateCamBase: 8
+
+    function _aggregatePair(camId) {
+        var p = camId - viewer._aggregateCamBase
+        return (p >= 0 && p < 4) ? [p, 7 - p] : null
+    }
+
+    // A cell's camera label: "LEFT 3", "LEFT 1+8" for a pair, or "LEFT
+    // AVG" for the side average. The hover tooltip passes compact=true
+    // for "L3" / "L1+8" / "L AVG".
+    function _cellLabel(side, camId, compact) {
+        if (camId === -1)
+            return (compact ? side.charAt(0).toUpperCase() : side.toUpperCase()) + " AVG"
+        var s = compact ? side.charAt(0).toUpperCase() : side.toUpperCase() + " "
+        var pair = viewer._aggregatePair(camId)
+        return pair ? s + (pair[0] + 1) + "+" + (pair[1] + 1) : s + (camId + 1)
+    }
+
+    // Connection Lost badge key: a pair cell shows it when either of its
+    // cameras is lost — the trace is then one camera, not the pair.
+    function _cellLost(side, camId) {
+        if (camId === -1) return viewer._lostOnSide(side).length > 0
+        var pair = viewer._aggregatePair(camId)
+        var ids = pair ? pair : [camId]
+        for (var i = 0; i < ids.length; i++) {
+            if (viewer._lostCameras[side + ":" + ids[i]] === true) return true
+        }
+        return false
+    }
+
+    // The side-averaged plot (cam_id -1, issue #585) stands for every
+    // camera on its side, so it badges while any of them is offline —
+    // including one that never started. Its trace keeps going from the
+    // other cameras, so the badge names the offline ones instead of
+    // saying the plot lost its connection.
+    function _lostOnSide(side) {
+        var ids = []
+        for (var c = 0; c < 8; c++) {
+            if (viewer._lostCameras[side + ":" + c] === true) ids.push(c + 1)
+        }
+        return ids
+    }
+
+    function _cellLostText(side, camId) {
+        if (camId !== -1) return "CONNECTION LOST"
+        var ids = viewer._lostOnSide(side)
+        return (ids.length === 1 ? "CAMERA " : "CAMERAS ")
+            + ids.join(", ") + " OFFLINE"
+    }
 
     // ── Grid model ─────────────────────────────────────────────────────
     // Dev mode (default) — one cell per active camera (bits set in
@@ -267,9 +467,10 @@ Rectangle {
         return entries
     }
 
-    // Clinical mode — one cell per ACTIVE side, each rendering the
-    // side-averaged stream (cam_id=-1, fed by SDK's SideAveragingStage
-    // via _LivePlotSink.consume). Stacked vertically in a single column.
+    // Clinical mode (and the research Average view, #606) — one cell per
+    // ACTIVE side, each rendering the side-averaged stream (cam_id=-1: the
+    // SDK's SideAveragingStage via _LivePlotSink.consume in clinical, the
+    // app-derived average in research). Stacked vertically in one column.
     // A side with no active cameras (disconnected sensor / recorded mask 0)
     // is dropped and the survivor compacts to row 0 so a single-sided
     // clinical scan doesn't reserve a blank row (issue #298).
@@ -283,16 +484,56 @@ Rectangle {
         return entries
     }
 
-    readonly property var _activeCellModel: viewer.effectiveClinical
+    // Aggregate view (#621) — the dev grid with each row's two cells
+    // folded into one: display row r's mirrored pair (1-based 4-r | 5+r,
+    // pair index 3-r) as a single plot per module, left module in
+    // column 0 and right in column 2 (column 1 is the side-break spacer).
+    // Rows drop exactly as in the dev grid; a pair with only one camera
+    // enabled still gets its cell, which then plots that camera alone.
+    readonly property var _aggregateCellModel: {
+        var masks = [viewer._effLeftMask & 0xFF, viewer._effRightMask & 0xFF]
+        var sides = ["left", "right"]
+        var colBase = [0, masks[0] !== 0 ? 2 : 0]
+        var entries = []
+        var displayRow = 0
+        for (var r = 0; r < 4; r++) {
+            var p = 3 - r
+            var rowBits = (1 << p) | (1 << (7 - p))
+            if (!((masks[0] | masks[1]) & rowBits)) continue
+            for (var s = 0; s < 2; s++) {
+                if (masks[s] & rowBits) {
+                    entries.push({ side: sides[s],
+                                   camId: viewer._aggregateCamBase + p,
+                                   row: displayRow, col: colBase[s] })
+                }
+            }
+            displayRow++
+        }
+        return entries
+    }
+
+    readonly property var _activeCellModel: viewer.averageView
         ? _clinicalCellModel
-        : _devCellModel
+        : (viewer.aggregateView ? _aggregateCellModel : _devCellModel)
 
     // Clinical readout column gate — the whole 250 px column collapses when
     // no side has active cameras, not just its individual panels (#298):
     // an empty-but-visible column would push the "No active cameras
-    // selected" placeholder off the canvas center (issue #487).
+    // selected" placeholder off the canvas center (issue #487). The
+    // Statistics pane replaces it: it shows the same side-average numbers.
     readonly property bool _showClinicalPanels:
-        viewer.effectiveClinical && viewer._activeCellModel.length > 0
+        viewer.averageView && !viewer.statsActive
+        && viewer._activeCellModel.length > 0
+
+    // Statistics pane column (#635): shown with the grid, i.e. not over the
+    // "No active cameras selected" placeholder. The overlays that belong to
+    // the plots (back-to-live pill, hover tooltip, bottom-right controls)
+    // are anchored to the viewer's right edge, so they move left by the
+    // pane plus the row spacing to stay over the plots.
+    readonly property bool _showStatsPanel:
+        viewer.statsActive && viewer._activeCellModel.length > 0
+    readonly property real _statsInsetPx:
+        viewer._showStatsPanel ? statsPanel.width + 8 : 0
 
     // ── Autoscale recompute (shared by Timer + displayMode change) ────
     // Global mode writes _auto* — the derived primaryYMin/Max bindings
@@ -304,7 +545,16 @@ Rectangle {
         return b && typeof b.yMin === "number" && typeof b.yMax === "number"
     }
 
-    function _recomputeAutoscale() {
+    // Shared (global-mode) fit for one metric over the traces the current
+    // view draws: the research Average and Aggregate views fit their
+    // derived streams (#606, #621); every other view the cameras.
+    function _globalBounds(src, metric) {
+        if (viewer.researchAverage) return src.compute_bounds_for_side_average(metric)
+        if (viewer.aggregateView) return src.compute_bounds_for_aggregate(metric)
+        return src.compute_bounds_for_metric(metric)
+    }
+
+    function _fitAutoscale(snap) {
         if (!viewer.scanSource) return
         var src = viewer.scanSource
         // Resolve the pair from displayMode directly rather than reading
@@ -313,27 +563,56 @@ Rectangle {
         // Mean/Contrast flip would otherwise fit the pair being left.
         var pair = viewer._pairForMode(viewer.displayMode)
         if (viewer.perPlotActive) {
-            var bounds = ({})
+            // Fit what is on screen (#591): the whole-scan fit let slow
+            // BVI drift balloon a cell's axis 20x past the visible trace
+            // within a few minutes, and a past excursion stayed inside
+            // the percentile clip for ~50x its own duration.
+            var w = viewer._visibleWindow()
+            // Same window as the last evaluation (scan stopped, view
+            // paused): nothing is sliding, the fresh fit is final — snap.
+            if (!snap && viewer._lastFitWindow
+                    && w.tLo === viewer._lastFitWindow.tLo
+                    && w.tHi === viewer._lastFitWindow.tHi)
+                snap = true
+            viewer._lastFitWindow = w
+            // Scan time starts at 0, so a window reaching below it is
+            // still filling: outward moves are adopted at once (#613).
+            var growNow = w.tLo < 0
+            // Targets and shown ranges are per metric pair: a BFI/BVI ↔
+            // Mean/Contrast flip starts over (snap), it does not glide
+            // from a BVI range to a contrast range.
+            var pairKey = pair.primary + "/" + pair.secondary
+            var samePair = (viewer._cellTargetsPair === pairKey)
+            var prevTargets = samePair ? viewer._cellTargets : ({})
+            var targets = ({})
             var cells = viewer._activeCellModel
             for (var i = 0; i < cells.length; i++) {
                 var c = cells[i]
-                var bp = src.compute_bounds_for_cell(c.side, c.camId, pair.primary)
-                var bs = src.compute_bounds_for_cell(c.side, c.camId, pair.secondary)
-                if (!_validBounds(bp) || !_validBounds(bs)) continue
-                bounds[c.side + ":" + c.camId] = {
-                    pMin: bp.yMin, pMax: bp.yMax, sMin: bs.yMin, sMax: bs.yMax
-                }
+                var key = c.side + ":" + c.camId
+                var fp = src.compute_bounds_for_cell(c.side, c.camId, pair.primary, w.tLo, w.tHi)
+                var fs = src.compute_bounds_for_cell(c.side, c.camId, pair.secondary, w.tLo, w.tHi)
+                if (!_validBounds(fp) || !_validBounds(fs)) continue
+                var prev = prevTargets[key]
+                var p = _followRange(prev ? [prev.pMin, prev.pMax] : null, fp, snap, growNow)
+                var s = _followRange(prev ? [prev.sMin, prev.sMax] : null, fs, snap, growNow)
+                if (!p || !s) continue   // neutral fit on a brand-new cell: nothing to show yet
+                targets[key] = { pMin: p[0], pMax: p[1], sMin: s[0], sMax: s[1] }
             }
-            viewer._cellBounds = bounds
+            viewer._cellTargets = targets
+            viewer._cellTargetsPair = pairKey
+            viewer._cellBounds = targets
         } else {
-            if (Object.keys(viewer._cellBounds).length > 0)
+            if (Object.keys(viewer._cellBounds).length > 0) {
                 viewer._cellBounds = ({})
-            var gp = src.compute_bounds_for_metric(pair.primary)
+                viewer._cellTargets = ({})
+                viewer._cellTargetsPair = ""
+            }
+            var gp = viewer._globalBounds(src, pair.primary)
             if (_validBounds(gp)) {
                 viewer._autoPrimaryYMin = gp.yMin
                 viewer._autoPrimaryYMax = gp.yMax
             }
-            var gs = src.compute_bounds_for_metric(pair.secondary)
+            var gs = viewer._globalBounds(src, pair.secondary)
             if (_validBounds(gs)) {
                 viewer._autoSecondaryYMin = gs.yMin
                 viewer._autoSecondaryYMax = gs.yMax
@@ -440,9 +719,13 @@ Rectangle {
     // bindings below; mean/contrast keep the legacy palette (no config
     // keys exist for them). Every color is passed through the theme's
     // readability guard so a palette tuned for one mode (e.g. white BFI
-    // on dark) doesn't render invisible in the other.
-    property color bfiColor: "#E74C3C"
-    property color bviColor: "#3498DB"
+    // on dark) doesn't render invisible in the other. BloodFlow.qml binds
+    // both from the Settings modal; unbound (standalone renders) they fall
+    // back to the compiled defaults in config/app_config.py (#630), with
+    // the same literals for a host without MotionInterface.defaultConfig.
+    readonly property var _defaultConfig: MotionInterface.defaultConfig || ({})
+    property color bfiColor: _defaultConfig.bfiColor !== undefined ? _defaultConfig.bfiColor : "#ffffff"
+    property color bviColor: _defaultConfig.bviColor !== undefined ? _defaultConfig.bviColor : "#3437db"
     readonly property color bfiInk: AppTheme.readableInk(viewer.bfiColor)
     readonly property color bviInk: AppTheme.readableInk(viewer.bviColor)
 
@@ -627,6 +910,14 @@ Rectangle {
                 var t0 = viewer._hudVisible ? Date.now() : 0
                 viewer._dirty = false
                 viewer.liveEdgeSnapshot = viewer.scanSource ? viewer.scanSource.liveEdge : 0
+                if (viewer._refitPending) {
+                    // Coalesced per-plot refit (#591), after the snapshot
+                    // so the fit and this paint use the same window. The
+                    // refit marks dirty for a paint we are about to do.
+                    viewer._refitPending = false
+                    viewer._recomputeAutoscale()
+                    viewer._dirty = false
+                }
                 viewer.paintTick++
                 if (viewer._hudVisible) {
                     var dt = Date.now() - t0
@@ -650,23 +941,36 @@ Rectangle {
         // are already hidden by the delegate's live-only binding.
         if (viewer.scanSource && viewer.scanSource.live === true)
             viewer._lostCameras = ({})
+        // A new source is new content: no per-plot range carries over.
+        // A scan starts with no samples, so the refit below got only
+        // neutral fits and each cell held the PREVIOUS source's range;
+        // the 0.5 s evaluations then lagged away from it for seconds,
+        // with the traces off-axis meanwhile (#613). With no previous
+        // range, a cell's first real fit snaps.
+        viewer._cellTargets = ({})
+        viewer._cellTargetsPair = ""
+        viewer._lastFitWindow = null
         // Re-fit y-axis to the new source's data immediately, otherwise
         // a past scan loaded with very different value ranges would draw
         // off-axis until the next autoscale tick.
         viewer._recomputeAutoscale()
     }
 
-    // Autoscale tick — every 3 s. compute_bounds_for_metric walks every
-    // sample across all buffers, so the per-call cost scales with scan
-    // duration; 3 s amortizes that work without making the y-axis feel
-    // unresponsive (a 3-second delay between bound adjustments is hard
-    // to notice during live monitoring).
+    // Autoscale tick — every 3 s in global mode: compute_bounds_for_metric
+    // walks every sample across all buffers, so the per-call cost scales
+    // with scan duration; 3 s amortizes that work without making the
+    // y-axis feel unresponsive (a 3-second delay between bound adjustments
+    // is hard to notice during live monitoring). Per-plot mode (#591) fits
+    // only the visible window, which is cheap (and stays cheap zoomed
+    // out: long windows are subsampled, #614), so it evaluates every
+    // 0.5 s (= _perPlotEvalSec, the lag math depends on it) and lets
+    // the smoothed target follow rather than snap.
     Timer {
-        interval: 3000
+        interval: viewer.perPlotActive ? 500 : 3000
         running: viewer.autoScale && viewer.scanSource !== null
         repeat: true
         triggeredOnStart: true
-        onTriggered: viewer._recomputeAutoscale()
+        onTriggered: viewer._autoscaleTick()
     }
 
     // Window-seconds options — duplicated here from the old PlotToolbar
@@ -713,14 +1017,24 @@ Rectangle {
         console.info("[Plot] windowSeconds → " + s + " s")
     }
 
-    // Large per-side BFI/BVI readout panel — clinical mode
-    // only, one per plot row, sitting to the left of the plot. Mirrors
-    // the legacy ReducedPlotView side column: side label up top, big
-    // mono values beneath. Values are the side-averaged stream
+    // Large per-side readout panel — clinical mode and the research
+    // Average view (#606), one per plot row, sitting to the left of the
+    // plot. Mirrors the legacy ReducedPlotView side column: side label up
+    // top, big mono values beneath. Values are the side-averaged stream
     // (cam_id = -1), refreshed on paintTick and clamped for display.
+    // Clinical always reads BFI/BVI; the research view follows the plots'
+    // BFI/BVI ↔ Mean/Contrast pair so the numbers match the traces.
     component SideMetricPanel: Item {
         id: panel
         property string panelSide: "left"
+        readonly property string topMetric:
+            viewer.effectiveClinical ? "bfi" : viewer._displayPair.primary
+        readonly property string bottomMetric:
+            viewer.effectiveClinical ? "bvi" : viewer._displayPair.secondary
+
+        function _metricLabel(m) {
+            return m.toUpperCase()
+        }
 
         function _displayText(metricName) {
             void viewer.paintTick  // dependency
@@ -746,13 +1060,13 @@ Rectangle {
             Item { Layout.fillHeight: true }
 
             Text {
-                text: "BFI"
-                color: viewer.bfiInk
+                text: panel._metricLabel(panel.topMetric)
+                color: viewer._traceColorForMetric(panel.topMetric)
                 font.pixelSize: 24
                 font.weight: Font.DemiBold
             }
             Text {
-                text: panel._displayText("bfi")
+                text: panel._displayText(panel.topMetric)
                 color: AppTheme.textPrimary
                 font.pixelSize: 60
                 font.weight: Font.Bold
@@ -762,13 +1076,13 @@ Rectangle {
             Item { height: 10 }
 
             Text {
-                text: "BVI"
-                color: viewer.bviInk
+                text: panel._metricLabel(panel.bottomMetric)
+                color: viewer._traceColorForMetric(panel.bottomMetric)
                 font.pixelSize: 24
                 font.weight: Font.DemiBold
             }
             Text {
-                text: panel._displayText("bvi")
+                text: panel._displayText(panel.bottomMetric)
                 color: AppTheme.textPrimary
                 font.pixelSize: 60
                 font.weight: Font.Bold
@@ -826,21 +1140,26 @@ Rectangle {
                 visible: viewer._activeCellModel.length > 0
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                // Clinical mode: single column, 2 stacked cells. Engineering mode:
-                // 4 columns; +1 spacer column (col 2) when both sides are
-                // active, for a visual break between the modules.
-                columns: viewer.effectiveClinical ? 1 : (viewer._sideGapActive ? 5 : 4)
+                // Clinical mode / Average view: single column, 2 stacked
+                // cells. Individual view: 4 columns; +1 spacer column
+                // (col 2) when both sides are active, for a visual break
+                // between the modules. Aggregate view: one column per
+                // module, spacer at col 1.
+                columns: viewer.averageView ? 1
+                    : viewer.aggregateView ? (viewer._sideGapActive ? 3 : 2)
+                    : (viewer._sideGapActive ? 5 : 4)
                 rowSpacing: 6
                 columnSpacing: 6
 
                 // Side-break spacer — fixed-width empty column 2 between the
-                // left (cols 0-1) and right (cols 3-4) modules. fillWidth is
-                // false so it stays a fixed gap; the plot cells (fillWidth)
-                // absorb the rest of the row width around it.
+                // left (cols 0-1) and right (cols 3-4) modules; column 1 in
+                // the Aggregate view. fillWidth is false so it stays a fixed
+                // gap; the plot cells (fillWidth) absorb the rest of the row
+                // width around it.
                 Item {
                     visible: viewer._sideGapActive
                     Layout.row: 0
-                    Layout.column: 2
+                    Layout.column: viewer._sideGapCol
                     Layout.fillWidth: false
                     Layout.fillHeight: false
                     Layout.preferredWidth: viewer._sideGapPx
@@ -856,6 +1175,11 @@ Rectangle {
                         source: viewer.scanSource
                         side: modelData.side
                         camId: modelData.camId
+                        label: viewer._cellLabel(modelData.side, modelData.camId, false)
+                        // An averaged cell leaves naming its side to the
+                        // large side panel beside it, unless the
+                        // Statistics pane has replaced those panels.
+                        showLabel: modelData.camId !== -1 || !viewer._showClinicalPanels
                         windowSeconds: viewer.windowSeconds
                         followLive: viewer.followLive
                         windowStartT: viewer.windowStartT
@@ -884,7 +1208,9 @@ Rectangle {
                         // connection state to report (issue #174).
                         connectionLost: viewer.scanSource !== null
                             && viewer.scanSource.live === true
-                            && viewer._lostCameras[modelData.side + ":" + modelData.camId] === true
+                            && viewer._cellLost(modelData.side, modelData.camId)
+                        connectionLostText: viewer._cellLostText(
+                            modelData.side, modelData.camId)
                     }
                 }
             }
@@ -903,6 +1229,26 @@ Rectangle {
                     font.pixelSize: 14
                     font.family: "Roboto Mono"
                 }
+            }
+
+            // Statistics pane (#635), right of the plots. Sized by its own
+            // content (fillWidth explicitly false, as for the clinical
+            // column), within 40% of the viewer so the plots keep the rest.
+            StatisticsPanel {
+                id: statsPanel
+                visible: viewer._showStatsPanel
+                Layout.fillWidth: false
+                Layout.fillHeight: true
+                Layout.preferredWidth: implicitWidth
+                maxWidth: viewer.width * 0.4
+                host: viewer
+                source: viewer.scanSource
+                cells: viewer._activeCellModel
+                primaryMetric: viewer._displayPair.primary
+                secondaryMetric: viewer._displayPair.secondary
+                primaryColor: viewer._traceColorForMetric(viewer._displayPair.primary)
+                secondaryColor: viewer._traceColorForMetric(viewer._displayPair.secondary)
+                readoutT: viewer.liveEdgeSnapshot
             }
         }
 
@@ -949,7 +1295,7 @@ Rectangle {
                            + (viewer._showBackToLive
                               ? backToLiveOverlay.height + viewer._overlayMarginPx
                               : 0)
-        anchors.rightMargin: viewer._overlayEdgeMarginPx
+        anchors.rightMargin: viewer._overlayEdgeMarginPx + viewer._statsInsetPx
         color: AppTheme.overlayBgSolid
         border.color: AppTheme.borderSubtle
         border.width: 1
@@ -975,14 +1321,9 @@ Rectangle {
                     viewer.scanSource.value_at(c.side, c.camId, primMetric, t))
                 var sv = viewer.clampForDisplay(secMetric,
                     viewer.scanSource.value_at(c.side, c.camId, secMetric, t))
-                // Clinical mode uses camId=-1 for the side-averaged stream;
-                // (c.camId + 1) would render "L0"/"R0" instead of the
-                // cell's own "LEFT AVG" / "RIGHT AVG" label.
-                var label = c.camId === -1
-                    ? c.side.charAt(0).toUpperCase() + " AVG"
-                    : c.side.charAt(0).toUpperCase() + (c.camId + 1)
                 rows.push({
-                    label: label,
+                    // "L3", "L1+8" (Aggregate) or "L AVG" (side average).
+                    label: viewer._cellLabel(c.side, c.camId, true),
                     pVal: pv, pColor: primColor,
                     sVal: sv, sColor: secColor,
                 })
@@ -1049,10 +1390,12 @@ Rectangle {
     // for the LEFT/RIGHT/TOP edges (anchored to viewer's edges) the
     // total margin is outer-layout-margin + rim-margin. The BOTTOM
     // edge is further inset by the scrubber area (scrubber height +
-    // ColumnLayout.spacing).
+    // ColumnLayout.spacing) while the scrubber is shown. With no scan
+    // source it is hidden and the grid reaches down into its strip, so
+    // the bottom-right controls (shown before a scan, #708) drop with it.
     readonly property real _overlayMarginPx: 12      // rim margin (inside grid)
     readonly property real _outerLayoutMarginPx: 12  // ColumnLayout.anchors.margins
-    readonly property real _scrubberAreaPx: 28 + 8   // scrubber height + Layout.spacing
+    readonly property real _scrubberAreaPx: scrubber.visible ? 28 + 8 : 0
     // Convenience: full edge margin from viewer.{right,top,left}.
     readonly property real _overlayEdgeMarginPx: _outerLayoutMarginPx + _overlayMarginPx
     // Convenience: full bottom margin from viewer.bottom.
@@ -1062,8 +1405,8 @@ Rectangle {
     // settingsModal — Autoscale and BFI/BVI ↔ Mean/Contrast persist in
     // app config and are also reachable from the Settings modal, so the
     // bottom-right popup switches just request changes; BloodFlow.qml
-    // applies them to settingsModal which then flows back into the
-    // viewer's `autoScale` / `displayMode` bindings.
+    // applies them to settingsModal, which then flows back into the
+    // viewer's `autoScale` / `displayMode` bindings, and persists them.
     signal autoScaleToggleRequested(bool enabled)
     signal displayModeToggleRequested(bool bfiBviMode)
 
@@ -1085,7 +1428,7 @@ Rectangle {
         anchors.top: parent.top
         anchors.right: parent.right
         anchors.topMargin: viewer._overlayEdgeMarginPx
-        anchors.rightMargin: viewer._overlayEdgeMarginPx
+        anchors.rightMargin: viewer._overlayEdgeMarginPx + viewer._statsInsetPx
         z: 6
         color: AppTheme.overlayBg
         border.color: AppTheme.accentRed
@@ -1119,11 +1462,11 @@ Rectangle {
     // History list renders, so the badge can't disagree with the clicked row.
     readonly property string _scanBadgeLabel:
         (viewer.scanSource && viewer.scanSource.userLabel) || ""
-    readonly property string _scanBadgeDate: {
-        var d = (viewer.scanSource && viewer.scanSource.dateTime) || ""
-        // Trim "YYYY-MM-DD HH:MM:SS" → "YYYY-MM-DD HH:MM" for a tighter badge.
-        return d.length >= 16 ? d.substring(0, 16) : d
-    }
+    // Full "YYYY-MM-DD HH:MM:SS", seconds included (#456): operators match
+    // the loaded scan against their acquisition records to the second, and
+    // the History list shows the same string.
+    readonly property string _scanBadgeDate:
+        (viewer.scanSource && viewer.scanSource.dateTime) || ""
     readonly property string _scanBadgeText:
         viewer._scanBadgeLabel.length > 0
             ? (viewer._scanBadgeLabel + " · " + viewer._scanBadgeDate)
@@ -1150,11 +1493,17 @@ Rectangle {
         border.color: AppTheme.borderSubtle
         border.width: 1
 
+        // Never wider than the viewer: a long operator label elides so the
+        // date/time (the part being cross-checked, #456) always stays whole.
+        readonly property real _maxRowWidth:
+            Math.max(0, viewer.width - 2 * viewer._overlayEdgeMarginPx - 28)
+
         Row {
             id: scanBadgeRow
             anchors.centerIn: parent
             spacing: 8
             Text {
+                id: scanBadgeViewing
                 anchors.verticalCenter: parent.verticalCenter
                 text: "Viewing"
                 color: AppTheme.textTertiary
@@ -1162,8 +1511,23 @@ Rectangle {
                 font.family: "Roboto Mono"
             }
             Text {
+                id: scanBadgeLabelText
+                visible: viewer._scanBadgeLabel.length > 0
                 anchors.verticalCenter: parent.verticalCenter
-                text: viewer._scanBadgeText
+                width: Math.max(0, Math.min(implicitWidth,
+                    scanBadge._maxRowWidth - scanBadgeViewing.implicitWidth
+                    - scanBadgeDateText.implicitWidth - scanBadgeRow.spacing * 2))
+                text: viewer._scanBadgeLabel + " ·"
+                elide: Text.ElideRight
+                color: AppTheme.textPrimary
+                font.pixelSize: 13
+                font.weight: Font.DemiBold
+                font.family: "Roboto Mono"
+            }
+            Text {
+                id: scanBadgeDateText
+                anchors.verticalCenter: parent.verticalCenter
+                text: viewer._scanBadgeDate
                 color: AppTheme.textPrimary
                 font.pixelSize: 13
                 font.weight: Font.DemiBold
@@ -1175,16 +1539,26 @@ Rectangle {
     // ── Bottom-right overlay: window-seconds pill + three-dot menu ────
     // Window-seconds pill shows the current zoom and opens a dropdown
     // menu of the canonical zoom options when clicked. The three-dot
-    // button to its right opens a popup with switches for display mode,
-    // autoscale (+ per-plot scale, #452), axis labels, and (dev-only)
-    // profiler.
+    // button to its right opens a popup of segmented switches (#622):
+    // research view mode (#606, #621), scale (fixed / global / per-plot,
+    // #452), metric pair and the Statistics pane (#635), plus the dev-only
+    // profiler switch.
+    //
+    // Shown with or without a scan source (#708), so the window and the
+    // display options can be set before the first scan: both edit viewer
+    // and config state that outlives the source (onScanSourceChanged
+    // leaves windowSeconds alone), and every refit they trigger is a no-op
+    // until a source is bound. Shown only with the plot grid, though: on
+    // the "No active cameras selected" placeholder (no sensor connected,
+    // or no camera selected) there are no plots to set up yet, and the
+    // controls would only crowd that screen.
     Row {
         id: bottomRightOverlay
-        visible: viewer.scanSource !== null
+        visible: grid.visible
         spacing: 8
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        anchors.rightMargin: viewer._overlayEdgeMarginPx
+        anchors.rightMargin: viewer._overlayEdgeMarginPx + viewer._statsInsetPx
         anchors.bottomMargin: viewer._overlayBottomMarginPx
         z: 6
 
@@ -1227,11 +1601,15 @@ Rectangle {
                 // Match the bottom-right settings popup's visual style
                 // — same translucent dark card, subtle border, rounded
                 // corners — so the two corner overlays read as parts
-                // of the same control system. Keeping the default
-                // MenuItem contentItem (instead of overriding it) so
-                // implicitWidth resolves correctly; a custom Text
-                // contentItem leaves the menu zero-width and the items
-                // un-clickable.
+                // of the same control system.
+                //
+                // Item text and hover fill come from AppTheme, not the
+                // Controls style (#538): main.py pins Material *Dark*
+                // app-wide, so the default MenuItem text is always white
+                // and vanished on this card in the Light theme. The items
+                // keep an explicit implicitWidth so the menu still sizes
+                // (a bare Text contentItem once left it zero-width and
+                // the items un-clickable).
                 padding: 6
                 implicitWidth: 120
                 background: Rectangle {
@@ -1243,9 +1621,26 @@ Rectangle {
                 Repeater {
                     model: viewer._windowOptions
                     MenuItem {
+                        id: windowOptionItem
                         text: modelData.label
                         font.family: "Roboto Mono"
                         font.pixelSize: 13
+                        implicitWidth: 108
+                        implicitHeight: 36
+                        leftPadding: 12
+                        rightPadding: 12
+                        contentItem: Text {
+                            text: windowOptionItem.text
+                            font: windowOptionItem.font
+                            color: AppTheme.textPrimary
+                            verticalAlignment: Text.AlignVCenter
+                            elide: Text.ElideRight
+                        }
+                        background: Rectangle {
+                            radius: 4
+                            color: windowOptionItem.highlighted || windowOptionItem.down
+                                   ? AppTheme.bgHover : "transparent"
+                        }
                         onTriggered: viewer._windowSecondsRequested(modelData.value)
                     }
                 }
@@ -1254,10 +1649,10 @@ Rectangle {
 
         Rectangle {
             id: settingsMenuButton
-            // In clinical mode the popup's only rows (display mode +
-            // autoscale) are hidden and Cell values is gone, leaving the
-            // dev-only Profiler as the sole possible entry. Hide the
-            // button entirely when it would open an empty card.
+            // In clinical mode every research row (view, scale, metrics)
+            // is hidden, leaving the dev-only Profiler as the sole
+            // possible entry. Hide the button entirely when it would
+            // open an empty card.
             visible: !viewer.effectiveClinical
                      || MotionInterface.appConfig.engineeringMode === true
             width: 36
@@ -1284,7 +1679,7 @@ Rectangle {
             }
 
             // Popup opens UPWARD from the button so it doesn't cover
-            // the scrubber. Width tracks the longest switch row.
+            // the scrubber. Width tracks the widest row.
             Popup {
                 id: settingsPopup
                 parent: settingsMenuButton
@@ -1328,85 +1723,219 @@ Rectangle {
                     }
                 }
 
+                // Segmented "bubble" switch (#622): one pill per option in
+                // a rounded track, the selected one filled with the accent.
+                // options: [{ value, label }]; current: the selected value.
+                // A click on an unselected option emits picked(value); the
+                // caller writes the state and `current` follows it back.
+                component PopupSegmented: Rectangle {
+                    id: seg
+                    property var options: []
+                    property string current: ""
+                    signal picked(string value)
+                    width: segButtons.implicitWidth + 4
+                    height: 28
+                    radius: 14
+                    color: AppTheme.bgInput
+                    border.color: AppTheme.borderSoft
+                    border.width: 1
+                    Row {
+                        id: segButtons
+                        anchors.centerIn: parent
+                        Repeater {
+                            model: seg.options
+                            delegate: Rectangle {
+                                id: segButton
+                                readonly property bool selected: seg.current === modelData.value
+                                width: segLabel.implicitWidth + 24
+                                height: 24
+                                radius: 12
+                                color: selected ? AppTheme.accentInteractive : "transparent"
+                                Behavior on color { ColorAnimation { duration: 120 } }
+                                Accessible.role: Accessible.Button
+                                Accessible.name: modelData.label
+                                Text {
+                                    id: segLabel
+                                    anchors.centerIn: parent
+                                    text: modelData.label
+                                    color: segButton.selected ? "white" : AppTheme.textPrimary
+                                    font.pixelSize: 12
+                                    font.family: "Roboto Mono"
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: if (!segButton.selected) seg.picked(modelData.value)
+                                }
+                            }
+                        }
+                    }
+                }
+
                 contentItem: Column {
                     id: popupColumn
-                    spacing: 6
+                    spacing: 8
                     padding: 12
+                    // One label column for every row, and one switch column
+                    // as wide as the widest switch, each switch centered in
+                    // it, so the switches share a center line whatever the
+                    // label and option lengths.
+                    readonly property real labelWidth: Math.max(
+                        viewLabel.implicitWidth, scaleLabel.implicitWidth,
+                        metricsLabel.implicitWidth, statsLabel.implicitWidth)
+                    readonly property real selectorWidth: Math.max(
+                        viewModeSelector.width, scaleSelector.width,
+                        metricsSelector.width, statsSelector.width)
 
+                    // Research view mode (#606): Individual (one plot per
+                    // camera) | Aggregate (one plot per mirrored camera
+                    // pair, #621) | Average (one averaged plot per module).
+                    // Same gate as viewer.researchViewMode: never in a
+                    // clinical build, nor while replaying a clinical scan
+                    // (it only holds the averages).
                     Row {
-                        // Hidden in clinical mode — that view only
-                        // ever shows the BFI/BVI side averages, so the
-                        // Mean/Contrast alternative isn't offered there.
+                        id: viewModeRow
+                        visible: !viewer.clinicalMode && !viewer.effectiveClinical
+                        spacing: 10
+                        Text {
+                            id: viewLabel
+                            width: popupColumn.labelWidth
+                            anchors.verticalCenter: viewModeSlot.verticalCenter
+                            text: "View"
+                            color: AppTheme.textSecondary
+                            font.pixelSize: 12
+                            font.family: "Roboto Mono"
+                        }
+                        Item {
+                            id: viewModeSlot
+                            width: popupColumn.selectorWidth
+                            height: viewModeSelector.height
+                            PopupSegmented {
+                                id: viewModeSelector
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                Accessible.name: "View"
+                                options: [
+                                    { value: "individual", label: "Individual" },
+                                    { value: "aggregate",  label: "Aggregate" },
+                                    { value: "average",    label: "Average" }
+                                ]
+                                current: viewer.researchViewMode
+                                onPicked: function(value) {
+                                    MotionInterface.setConfig("plotViewMode", value)
+                                    console.info("[Plot] view mode → " + value)
+                                }
+                            }
+                        }
+                    }
+
+                    // Y-axis scale (#622): Fixed | Global | Per Plot — see
+                    // viewer.scaleMode. Hidden in clinical mode: autoscale
+                    // is not offered there; the view always uses the
+                    // configured manual bounds.
+                    Row {
+                        id: scaleRow
                         visible: !viewer.effectiveClinical
-                        spacing: 8
-                        PopupPillSwitch {
-                            id: bfiBviSwitch
-                            checked: viewer.displayMode === "bfi_bvi"
-                            onToggled: viewer.displayModeToggleRequested(checked)
-                        }
+                        spacing: 10
                         Text {
-                            anchors.verticalCenter: bfiBviSwitch.verticalCenter
-                            text: bfiBviSwitch.checked ? "BFI / BVI" : "Mean / Contrast"
-                            color: AppTheme.textPrimary
+                            id: scaleLabel
+                            width: popupColumn.labelWidth
+                            anchors.verticalCenter: scaleSlot.verticalCenter
+                            text: "Scale"
+                            color: AppTheme.textSecondary
                             font.pixelSize: 12
                             font.family: "Roboto Mono"
                         }
+                        Item {
+                            id: scaleSlot
+                            width: popupColumn.selectorWidth
+                            height: scaleSelector.height
+                            PopupSegmented {
+                                id: scaleSelector
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                Accessible.name: "Scale"
+                                options: [
+                                    { value: "fixed",   label: "Fixed" },
+                                    { value: "global",  label: "Global" },
+                                    { value: "perPlot", label: "Per Plot" }
+                                ]
+                                current: viewer.scaleMode
+                                onPicked: function(value) { viewer.setScaleMode(value) }
+                            }
+                        }
                     }
+
+                    // Plotted metric pair. Hidden in clinical mode — that
+                    // view only ever shows the BFI/BVI side averages, so
+                    // the Mean/Contrast alternative isn't offered there.
                     Row {
-                        // Hidden in clinical mode — autoscale is
-                        // not offered there; the view always uses the
-                        // configured manual bounds.
+                        id: metricsRow
                         visible: !viewer.effectiveClinical
-                        spacing: 8
-                        PopupPillSwitch {
-                            id: autoScaleSwitch
-                            checked: viewer.autoScale
-                            onToggled: viewer.autoScaleToggleRequested(checked)
-                        }
+                        spacing: 10
                         Text {
-                            anchors.verticalCenter: autoScaleSwitch.verticalCenter
-                            text: "Autoscale"
-                            color: AppTheme.textPrimary
+                            id: metricsLabel
+                            width: popupColumn.labelWidth
+                            anchors.verticalCenter: metricsSlot.verticalCenter
+                            text: "Metrics"
+                            color: AppTheme.textSecondary
                             font.pixelSize: 12
                             font.family: "Roboto Mono"
                         }
+                        Item {
+                            id: metricsSlot
+                            width: popupColumn.selectorWidth
+                            height: metricsSelector.height
+                            PopupSegmented {
+                                id: metricsSelector
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                Accessible.name: "Metrics"
+                                options: [
+                                    { value: "bfi_bvi",       label: "BFI / BVI" },
+                                    { value: "mean_contrast", label: "Mean / Contrast" }
+                                ]
+                                current: viewer.displayMode
+                                onPicked: function(value) {
+                                    viewer.displayModeToggleRequested(value === "bfi_bvi")
+                                }
+                            }
+                        }
                     }
+
+                    // Statistics pane (#635): Off | On. Same gate as the
+                    // View row (viewer.statsActive).
                     Row {
-                        // Per-plot scale (#452) — research-only, and only
-                        // meaningful while autoscale is on, so it is
-                        // disclosed under that switch rather than shown
-                        // dead. Clinical never sees it (nor autoscale).
-                        visible: !viewer.effectiveClinical && viewer.autoScale
-                        spacing: 8
-                        PopupPillSwitch {
-                            id: perPlotSwitch
-                            checked: viewer.autoScalePerPlot
-                            onToggled: MotionInterface.setConfig("autoScalePerPlot", checked)
-                        }
+                        id: statsRow
+                        visible: !viewer.clinicalMode && !viewer.effectiveClinical
+                        spacing: 10
                         Text {
-                            anchors.verticalCenter: perPlotSwitch.verticalCenter
-                            text: perPlotSwitch.checked ? "Per-plot scale" : "Global scale"
-                            color: AppTheme.textPrimary
+                            id: statsLabel
+                            width: popupColumn.labelWidth
+                            anchors.verticalCenter: statsSlot.verticalCenter
+                            text: "Statistics"
+                            color: AppTheme.textSecondary
                             font.pixelSize: 12
                             font.family: "Roboto Mono"
                         }
-                    }
-                    Row {
-                        visible: !viewer.effectiveClinical
-                        spacing: 8
-                        PopupPillSwitch {
-                            id: axisLabelsSwitch
-                            checked: viewer.showAxisLabels
-                            onToggled: MotionInterface.setConfig("showAxisLabels", checked)
+                        Item {
+                            id: statsSlot
+                            width: popupColumn.selectorWidth
+                            height: statsSelector.height
+                            PopupSegmented {
+                                id: statsSelector
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                Accessible.name: "Statistics"
+                                options: [
+                                    { value: "off", label: "Off" },
+                                    { value: "on",  label: "On" }
+                                ]
+                                current: viewer.statsActive ? "on" : "off"
+                                onPicked: function(value) {
+                                    MotionInterface.setConfig("showStatistics", value === "on")
+                                    console.info("[Plot] statistics → " + value)
+                                }
+                            }
                         }
-                        Text {
-                            anchors.verticalCenter: axisLabelsSwitch.verticalCenter
-                            text: "Axis labels"
-                            color: AppTheme.textPrimary
-                            font.pixelSize: 12
-                            font.family: "Roboto Mono"
-                        }
                     }
+
                     Row {
                         visible: MotionInterface.appConfig.engineeringMode === true
                         spacing: 8
