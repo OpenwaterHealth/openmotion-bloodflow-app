@@ -67,7 +67,7 @@ cat > "$SPEC_FILE" << 'SPEC_EOF'
 # openwater_macos.spec — macOS .app bundle
 import os, sys
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_all, collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_dynamic_libs, collect_submodules
 from PyInstaller.building.build_main import Analysis, PYZ, EXE, COLLECT, BUNDLE
 
 APP_NAME = "Open-Motion Research"
@@ -158,6 +158,13 @@ hidden += [
     "cryptography.hazmat.primitives.asymmetric.ec",
     "cryptography.hazmat.primitives.asymmetric.utils",
 ]
+
+# ── pylsl + its bundled liblsl (LSL output streams, lsl_output.py) ──
+# pylsl loads liblsl with ctypes from pylsl/lib/ next to its own module, so
+# the library has to land at that path inside the bundle.
+binaries += collect_dynamic_libs("pylsl")
+hidden += ["pylsl", "pylsl.lib", "pylsl.info", "pylsl.outlet", "pylsl.inlet",
+           "pylsl.resolve", "pylsl.util"]
 
 # ── Bundle Homebrew libusb (matching current arch) ──
 import glob, platform

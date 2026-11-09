@@ -1338,6 +1338,9 @@ class MotionConnector(QObject):
         # Engineering → "Save telemetry CSV" (#471); default False so a
         # config missing the key fails closed for clinical use.
         self._write_telemetry_csv         = bool(cfg.get("writeTelemetryCsv", False))
+        # LSL output (live + corrected streams, lsl_output.py): opt-in, and
+        # gated at scan start like the raw CSV, so default False fails closed.
+        self._lsl_output_enabled          = bool(cfg.get("lslOutputEnabled", False))
 
         # Initialize CSV output directory to user's home directory
         self._csv_output_directory = os.path.expanduser("~")
@@ -3750,6 +3753,35 @@ class MotionConnector(QObject):
         logger.debug(f"[Connector] writeRawCsv set to {self._write_raw_csv}")
 
     @pyqtSlot(bool)
+    def setLslOutputEnabled(self, enabled: bool) -> None:
+        """Turn the LSL output streams on or off for the next scan."""
+        enabled = bool(enabled)
+        old = self._lsl_output_enabled
+        self._lsl_output_enabled = enabled
+        self._app_config["lslOutputEnabled"] = enabled
+        self._save_app_config()
+        self.appConfigChanged.emit()
+        if old != enabled:
+            self._audit.log("settings_changed", {"changes": {
+                "lslOutputEnabled": {"old": old, "new": enabled}}})
+
+    def _make_lsl_sink(self, allowed: bool):
+        """The LSL sink for this scan, or None when LSL output is off, not
+        allowed on this build, or liblsl cannot load (warned once per scan:
+        the scan itself must still start)."""
+        if not (allowed and self._lsl_output_enabled):
+            return None
+        from lsl_output import LslStreamSink, lsl_available
+        ok, reason = lsl_available()
+        if not ok:
+            logger.warning("LSL output is on but unavailable: %s", reason)
+            self.notify("LSL output is unavailable on this computer; "
+                        "the scan runs without it.", "warning",
+                        tag="lsl-output")
+            return None
+        return LslStreamSink(app_version=self._app_version or "")
+
+    @pyqtSlot(bool)
     def setWriteTelemetryCsv(self, enabled: bool) -> None:
         """Update writeTelemetryCsv in both the runtime cache and persisted config."""
         self._write_telemetry_csv = bool(enabled)
@@ -5248,6 +5280,11 @@ class MotionConnector(QObject):
         # shared with the preflight signal-quality check (#510).
         self._sync_alt_scan_settings(left_camera_mask, right_camera_mask)
 
+        # LSL output (live + corrected streams in the corrected-CSV layout):
+        # research data, same gate as the raw CSV, re-checked here so a
+        # plain clinical build never streams even with a stale toggle.
+        lsl_sink = self._make_lsl_sink(raw_csv_allowed)
+
         req = ScanRequest(
             subject_id=subject_id,
             duration_sec=duration_sec,
@@ -5299,6 +5336,7 @@ class MotionConnector(QObject):
                     light_activate_debounce=_cq_light_activate,
                     light_clear_debounce=_cq_light_clear,
                 ),
+                *([lsl_sink] if lsl_sink is not None else []),
             ],
             # Async backstop (#213): if the worker aborts after start_scan
             # returned True (e.g. a critical sink dies because the scan DB

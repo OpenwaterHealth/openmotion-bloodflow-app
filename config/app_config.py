@@ -65,6 +65,7 @@ APP_CONFIG = {
     # automatically when each scan ends. Never exports on a clinical build.
     "autoExportCsv": False,
     "writeTelemetryCsv": False,
+    "lslOutputEnabled": False,
     "leftMask": 102,
     "rightMask": 102,
     "clinicalMode": CLINICAL_MODE,
@@ -249,6 +250,8 @@ PREFERENCE_KEYS = frozenset({
     # engineeringMode is session-only. autoExportCsv is gated on
     # !clinicalMode alone at scan end.
     "writeRawCsv", "rawCsvDurationSec", "autoExportCsv",
+    # LSL output: same gate as the raw CSV, re-checked at scan start.
+    "lslOutputEnabled",
 })
 
 STATE_KEYS = frozenset({

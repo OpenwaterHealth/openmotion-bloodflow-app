@@ -62,6 +62,18 @@ $sdkDir = (Invoke-AppPython -CondaEnv $CondaEnv -Arguments @(
 )) | Select-Object -Last 1
 if (-not $sdkDir -or -not (Test-Path $sdkDir)) { throw "omotion is not importable in the build environment" }
 $env:PYTHONPATH = Split-Path -Parent $sdkDir
+# pylsl's liblsl (LSL output streams, lsl_output.py). pylsl loads lsl.dll with
+# ctypes from pylsl\lib\ beside its own module; Nuitka has no package config
+# for it and --include-package-data never copies a DLL, so it goes in raw.
+$pylslLib = (Invoke-AppPython -CondaEnv $CondaEnv -Arguments @(
+    "-c", "import importlib.util as u, os; print(os.path.join(list(u.find_spec('pylsl').submodule_search_locations)[0], 'lib'))"
+)) | Select-Object -Last 1
+if (-not $pylslLib -or -not (Test-Path (Join-Path $pylslLib "lsl.dll"))) { throw "pylsl (with its lsl.dll) is not installed in the build environment" }
+# Stage the DLL alone: the package's lib\ also holds lib\__init__.py, which
+# Nuitka compiles and must not ship again as source.
+$pylslStage = Join-Path $workPath "pylsl-lib"
+New-Item -ItemType Directory -Force $pylslStage | Out-Null
+Copy-Item -Force (Join-Path $pylslLib "lsl.dll") $pylslStage
 $env:PYTHONIOENCODING = "utf-8"
 
 $args = @(
@@ -112,6 +124,8 @@ $args = @(
     "--include-package=keyring.backends", "--include-package=win32ctypes",
     "--include-package=sqlcipher3",
     "--include-module=usb.backend.libusb1", "--include-package=serial",
+    "--include-package=pylsl", "--nofollow-import-to=pylsl.examples",
+    "--include-raw-dir=$pylslStage=pylsl\lib",
     "--report=$workPath\nuitka-report.xml",
     "--assume-yes-for-downloads",
     "main.py"
