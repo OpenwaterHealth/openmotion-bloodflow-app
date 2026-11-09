@@ -16,8 +16,18 @@ Item {
 
     // Full session list from the connector (newest first).
     property var scans: []
-    // Filtered + sorted view actually rendered.
+    // Filtered + sorted scans (select-all, focus and Delete work on these).
     property var view: []
+    // What the ListView renders: `view` as flat scan rows, or, with
+    // "Aggregate sessions" on, one collapsible group row per user label that
+    // has 2+ scans (its scans nested below it while expanded). Items are
+    // { kind: "scan", scan, nested } or
+    // { kind: "group", key, ids, count, totalSec, dateText, configText, open }.
+    property var rows: []
+    // "Aggregate sessions" toggle and the expanded groups ({ userLabel: true }).
+    // Both survive closing the modal for the rest of the app session.
+    property bool aggregate: false
+    property var expanded: ({})
     // Multiselect membership: { sessionId: true }. Reassigned (not mutated)
     // on every toggle so delegate bindings re-evaluate.
     property var checked: ({})
@@ -95,6 +105,74 @@ Item {
             return 0
         })
         view = arr
+        rebuildRows()
+    }
+
+    function rebuildRows() {
+        if (!aggregate) {
+            rows = view.map(function(r) { return { kind: "scan", scan: r, nested: false } })
+            return
+        }
+        // Group in view order, so the active sort orders the groups (by
+        // their first scan) and the scans inside each group.
+        var order = [], groups = {}
+        for (var i = 0; i < view.length; i++) {
+            var k = view[i].userLabel || ""
+            if (!groups.hasOwnProperty(k)) { groups[k] = []; order.push(k) }
+            groups[k].push(view[i])
+        }
+        var out = []
+        for (var j = 0; j < order.length; j++) {
+            var g = groups[order[j]]
+            if (g.length === 1) { out.push({ kind: "scan", scan: g[0], nested: false }); continue }
+            var ids = [], total = 0, cfgs = {}, nCfg = 0
+            var dates = []
+            for (var m = 0; m < g.length; m++) {
+                ids.push(g[m].sessionId)
+                if (g[m].durationSec > 0) total += g[m].durationSec
+                var cfg = (g[m].configL || "—") + " / " + (g[m].configR || "—")
+                if (!cfgs[cfg]) { cfgs[cfg] = true; nCfg++ }
+                if (g[m].dateTime) dates.push(("" + g[m].dateTime).substring(0, 10))
+            }
+            dates.sort()
+            var dateText = dates.length === 0 ? "-"
+                         : (dates[0] === dates[dates.length - 1] ? dates[0]
+                            : dates[0] + " – " + dates[dates.length - 1].substring(5))
+            var open = expanded[order[j]] === true
+            out.push({ kind: "group", key: order[j], ids: ids, count: g.length,
+                       totalSec: total, dateText: dateText,
+                       configText: nCfg === 1 ? Object.keys(cfgs)[0] : "Mixed",
+                       open: open })
+            if (open)
+                for (var n = 0; n < g.length; n++)
+                    out.push({ kind: "scan", scan: g[n], nested: true })
+        }
+        rows = out
+    }
+
+    function toggleGroup(key) {
+        var e = Object.assign({}, expanded)
+        if (e[key]) delete e[key]; else e[key] = true
+        expanded = e
+        rebuildRows()
+    }
+
+    function groupCheckedCount(ids) {
+        var n = 0
+        for (var i = 0; i < ids.length; i++) if (checked[ids[i]]) n++
+        return n
+    }
+
+    // Group checkbox: check every scan in the group, or clear them all when
+    // they're already all checked.
+    function setGroupChecked(ids, on) {
+        var c = Object.assign({}, checked), n = checkedCount
+        for (var i = 0; i < ids.length; i++) {
+            if (on && !c[ids[i]]) { c[ids[i]] = true; n++ }
+            else if (!on && c[ids[i]]) { delete c[ids[i]]; n-- }
+        }
+        checked = c; checkedCount = n
+        reconcileActive()
     }
 
     function setSort(key) {
@@ -235,6 +313,7 @@ Item {
 
     // Re-filter whenever the search text changes.
     onSearchTextChanged: rebuildView()
+    onAggregateChanged: rebuildRows()
 
     // ── backdrop ───────────────────────────────────────────────────
     Rectangle {
@@ -296,6 +375,13 @@ Item {
                 }
                 Item { Layout.fillWidth: true }
 
+                HistoryCheckBox {
+                    objectName: "historyAggregate"
+                    text: "Aggregate sessions"
+                    checked: root.aggregate
+                    onToggled: root.aggregate = !root.aggregate
+                }
+
                 TextField {
                     id: searchField
                     Layout.preferredWidth: 240
@@ -312,6 +398,50 @@ Item {
                         border.width: 1
                     }
                     onTextChanged: root.searchText = text
+                }
+
+                Button {
+                    id: deleteBtn
+                    objectName: "historyDeleteButton"
+                    text: "Delete" + (root.checkedCount > 0 ? "  (" + root.checkedCount + ")" : "")
+                    Layout.preferredWidth: implicitContentWidth + 28; Layout.preferredHeight: 34
+                    // Don't allow deleting while a scan is running (could be the
+                    // in-flight session). The confirm prompt still guards it.
+                    enabled: root.checkedCount > 0 && MotionInterface.state !== 4
+                    hoverEnabled: enabled
+                    // Keenicons trash glyph (same icon font as the sidebar)
+                    // instead of the 🗑 emoji, which rendered as a full-colour
+                    // system emoji that clashed with the outline UI.
+                    contentItem: Item {
+                        implicitWidth: delRow.implicitWidth
+                        readonly property color fg:
+                            deleteBtn.enabled ? AppTheme.accentRed : AppTheme.textTertiary
+                        Row {
+                            id: delRow
+                            anchors.centerIn: parent
+                            spacing: 6
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: "\ueb0e"   // keenicons "trash"
+                                font.family: historyIconFont.name
+                                font.pixelSize: 15
+                                color: parent.parent.fg
+                            }
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: deleteBtn.text; font.pixelSize: 13
+                                color: parent.parent.fg
+                            }
+                        }
+                    }
+                    background: Rectangle {
+                        radius: 6
+                        color: deleteBtn.hovered && deleteBtn.enabled
+                               ? Qt.rgba(0.75, 0.22, 0.17, 0.16) : "transparent"
+                        border.color: deleteBtn.enabled ? AppTheme.accentRed : AppTheme.textTertiary
+                        border.width: 1
+                    }
+                    onClicked: root.requestDelete()
                 }
 
                 Rectangle {
@@ -387,70 +517,170 @@ Item {
                     id: listView
                     anchors.fill: parent
                     anchors.margins: 2
-                    model: root.view
+                    model: root.rows
                     boundsBehavior: Flickable.StopAtBounds
                     ScrollBar.vertical: ScrollBar {}
 
-                    delegate: Rectangle {
+                    delegate: Item {
+                        id: row
                         width: ListView.view.width
                         height: 34
-                        // Row tints follow the theme accent so they match
-                        // the checkboxes (blue in dark, terracotta in light).
-                        readonly property color tint: AppTheme.accentInteractive
-                        color: modelData.sessionId === root.focusedSessionId
-                               ? Qt.rgba(tint.r, tint.g, tint.b, 0.16)
-                               : (root.checked[modelData.sessionId]
-                                  ? Qt.rgba(tint.r, tint.g, tint.b, 0.07) : "transparent")
+                        readonly property bool isScan: modelData.kind === "scan"
 
-                        MouseArea {
+                        // Group header (aggregate mode): chevron, tri-state
+                        // checkbox for the whole group, label + count, the
+                        // date span, shared config, and total duration.
+                        Rectangle {
+                            id: grpRow
                             anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.selectRow(modelData.sessionId)
+                            visible: !row.isScan
+                            readonly property var grp: row.isScan ? ({ ids: [], count: 0 }) : modelData
+                            readonly property int nChecked: root.groupCheckedCount(grp.ids)
+                            color: grpArea.containsMouse ? AppTheme.bgHover : "transparent"
+
+                            MouseArea {
+                                id: grpArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.toggleGroup(grpRow.grp.key)
+                            }
+
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: 8; anchors.rightMargin: 8
+                                spacing: 8
+
+                                HistoryCheckBox {
+                                    Layout.preferredWidth: col.chk
+                                    Layout.fillHeight: true
+                                    checked: grpRow.nChecked > 0
+                                             && grpRow.nChecked === grpRow.grp.count
+                                    partial: grpRow.nChecked > 0 && !checked
+                                    onToggled: root.setGroupChecked(grpRow.grp.ids, !checked)
+                                }
+                                Row {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+                                    clip: true
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: "\ue9e5"   // keenicons "down"
+                                        font.family: historyIconFont.name
+                                        font.pixelSize: 12
+                                        color: AppTheme.textSecondary
+                                        rotation: grpRow.grp.open ? 0 : -90
+                                        Behavior on rotation { NumberAnimation { duration: 120 } }
+                                    }
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: grpRow.grp.key || "(unlabeled)"
+                                        color: AppTheme.textPrimary
+                                        font.pixelSize: 13; font.weight: Font.DemiBold
+                                    }
+                                    Rectangle {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: countText.implicitWidth + 14; height: 18; radius: 9
+                                        color: AppTheme.bgInput
+                                        border.color: AppTheme.borderSubtle; border.width: 1
+                                        Text {
+                                            id: countText
+                                            anchors.centerIn: parent
+                                            text: grpRow.grp.count + " sessions"
+                                            color: AppTheme.textSecondary; font.pixelSize: 11
+                                        }
+                                    }
+                                }
+                                Text {
+                                    Layout.preferredWidth: col.date
+                                    text: grpRow.grp.dateText || "-"
+                                    color: AppTheme.textSecondary; font.pixelSize: 13
+                                    elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter
+                                }
+                                Text {
+                                    Layout.preferredWidth: col.config
+                                    text: grpRow.grp.configText || "—"
+                                    color: AppTheme.textSecondary; font.pixelSize: 13
+                                    elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter
+                                }
+                                Text {
+                                    Layout.preferredWidth: col.dur
+                                    text: root.formatDuration(grpRow.grp.totalSec)
+                                    color: AppTheme.textSecondary; font.pixelSize: 13
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                                Item {
+                                    visible: root.engineeringMode
+                                    Layout.preferredWidth: col.status
+                                }
+                            }
                         }
 
-                        RowLayout {
+                        // Scan row (flat list, or nested under an open group).
+                        Rectangle {
+                            id: scanRow
                             anchors.fill: parent
-                            anchors.leftMargin: 8; anchors.rightMargin: 8
-                            spacing: 8
+                            visible: row.isScan
+                            readonly property var sc: row.isScan ? modelData.scan : ({})
+                            // Row tints follow the theme accent so they match
+                            // the checkboxes (blue in dark, terracotta in light).
+                            readonly property color tint: AppTheme.accentInteractive
+                            color: scanRow.sc.sessionId === root.focusedSessionId
+                                   ? Qt.rgba(tint.r, tint.g, tint.b, 0.16)
+                                   : (root.checked[scanRow.sc.sessionId]
+                                      ? Qt.rgba(tint.r, tint.g, tint.b, 0.07) : "transparent")
 
-                            HistoryCheckBox {
-                                Layout.preferredWidth: col.chk
-                                Layout.fillHeight: true
-                                checked: root.checked[modelData.sessionId] === true
-                                onToggled: root.toggleCheck(modelData.sessionId)
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.selectRow(scanRow.sc.sessionId)
                             }
-                            Text {
-                                Layout.fillWidth: true
-                                text: modelData.userLabel || "(unlabeled)"
-                                color: AppTheme.textPrimary; font.pixelSize: 13
-                                elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter
-                            }
-                            Text {
-                                Layout.preferredWidth: col.date
-                                text: modelData.dateTime || "-"
-                                color: AppTheme.textSecondary; font.pixelSize: 13
-                                verticalAlignment: Text.AlignVCenter
-                            }
-                            Text {
-                                Layout.preferredWidth: col.config
-                                text: (modelData.configL || "—") + " / " + (modelData.configR || "—")
-                                color: AppTheme.textSecondary; font.pixelSize: 13
-                                elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter
-                            }
-                            Text {
-                                Layout.preferredWidth: col.dur
-                                text: root.formatDuration(modelData.durationSec)
-                                color: AppTheme.textSecondary; font.pixelSize: 13
-                                verticalAlignment: Text.AlignVCenter
-                            }
-                            Text {
-                                visible: root.engineeringMode
-                                Layout.preferredWidth: col.status
-                                text: modelData.interrupted ? "⚠" : "●"
-                                color: modelData.interrupted ? "#E6A23C" : "#3EC97A"
-                                font.pixelSize: 13
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
+
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: modelData.nested ? 28 : 8
+                                anchors.rightMargin: 8
+                                spacing: 8
+
+                                HistoryCheckBox {
+                                    Layout.preferredWidth: col.chk
+                                    Layout.fillHeight: true
+                                    checked: root.checked[scanRow.sc.sessionId] === true
+                                    onToggled: root.toggleCheck(scanRow.sc.sessionId)
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: scanRow.sc.userLabel || "(unlabeled)"
+                                    color: AppTheme.textPrimary; font.pixelSize: 13
+                                    elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter
+                                }
+                                Text {
+                                    Layout.preferredWidth: col.date
+                                    text: scanRow.sc.dateTime || "-"
+                                    color: AppTheme.textSecondary; font.pixelSize: 13
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                                Text {
+                                    Layout.preferredWidth: col.config
+                                    text: (scanRow.sc.configL || "—") + " / " + (scanRow.sc.configR || "—")
+                                    color: AppTheme.textSecondary; font.pixelSize: 13
+                                    elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter
+                                }
+                                Text {
+                                    Layout.preferredWidth: col.dur
+                                    text: root.formatDuration(scanRow.sc.durationSec)
+                                    color: AppTheme.textSecondary; font.pixelSize: 13
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                                Text {
+                                    visible: root.engineeringMode
+                                    Layout.preferredWidth: col.status
+                                    text: scanRow.sc.interrupted ? "⚠" : "●"
+                                    color: scanRow.sc.interrupted ? "#E6A23C" : "#3EC97A"
+                                    font.pixelSize: 13
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
+                                }
                             }
                         }
                     }
@@ -520,51 +750,10 @@ Item {
             }
 
             // ── actions ────────────────────────────────────────────
-            // Destructive Delete sits apart on the left; primary actions
-            // (Export, then the emphasized Load) group on the right.
+            // Primary actions (Export, then the emphasized Load) on the
+            // right. Delete lives in the toolbar, top right.
             RowLayout {
                 Layout.fillWidth: true; spacing: 10
-
-                Button {
-                    id: deleteBtn
-                    text: "Delete" + (root.checkedCount > 0 ? "  (" + root.checkedCount + ")" : "")
-                    Layout.preferredWidth: 132; Layout.preferredHeight: 36
-                    // Don't allow deleting while a scan is running (could be the
-                    // in-flight session). The confirm prompt still guards it.
-                    enabled: root.checkedCount > 0 && MotionInterface.state !== 4
-                    hoverEnabled: enabled
-                    // Keenicons trash glyph (same icon font as the sidebar)
-                    // instead of the 🗑 emoji, which rendered as a full-colour
-                    // system emoji that clashed with the outline UI.
-                    contentItem: Item {
-                        readonly property color fg:
-                            deleteBtn.enabled ? AppTheme.accentRed : AppTheme.textTertiary
-                        Row {
-                            anchors.centerIn: parent
-                            spacing: 6
-                            Text {
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: "\ueb0e"   // keenicons "trash"
-                                font.family: historyIconFont.name
-                                font.pixelSize: 15
-                                color: parent.parent.fg
-                            }
-                            Text {
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: deleteBtn.text; font.pixelSize: 13
-                                color: parent.parent.fg
-                            }
-                        }
-                    }
-                    background: Rectangle {
-                        radius: 6
-                        color: deleteBtn.hovered && deleteBtn.enabled
-                               ? Qt.rgba(0.75, 0.22, 0.17, 0.16) : "transparent"
-                        border.color: deleteBtn.enabled ? AppTheme.accentRed : AppTheme.textTertiary
-                        border.width: 1
-                    }
-                    onClicked: root.requestDelete()
-                }
 
                 Item { Layout.fillWidth: true }
 
