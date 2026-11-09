@@ -503,18 +503,19 @@ def test_alt_laser_pulse_width_gates_on_its_own_toggle(modal_factory):
     assert combo.property("enabled") is True
 
 
-def test_dark_contamination_warning_follows_the_selected_exposure(modal_factory):
-    """#449: the app runs the 1800 µs dark skip (2400 latches the safety
-    interlock on stock consoles), so exposures past 1700 µs re-catch the
-    displaced dark pulse. The warning must fire on exactly those, and stay
-    out of the way at the firmware default."""
+def test_dark_skip_notice_follows_the_selected_exposure(modal_factory):
+    """#449/#747: exposures past 1700 µs would re-catch the dark frame's
+    displaced pulse at the default 1800 µs skip, so those runs move to a
+    2400 µs skip and lower the console's safety RATE_LL floor. The notice
+    saying so must show on exactly those, and stay out of the way at the
+    firmware default."""
     stub = modal_factory.stub
     stub.setFlags(clinical=False, engineering=True)
     stub.setAltCameraEnabled(True)
     stub.setAltExposureUs(648)
     modal = modal_factory()
 
-    name = "altExposureDarkContaminationWarning"
+    name = "altExposureDarkSkipNotice"
     assert _control_visible(modal, name) is False   # fw default is clean
 
     stub.setAltExposureUs(1701)                     # first row past the ceiling
@@ -526,7 +527,7 @@ def test_dark_contamination_warning_follows_the_selected_exposure(modal_factory)
     stub.setAltExposureUs(1750)                     # off-grid hand-edit
     assert _control_visible(modal, name) is True
 
-    stub.setAltCameraEnabled(False)                 # feature off ⇒ no warning
+    stub.setAltCameraEnabled(False)                 # feature off ⇒ no notice
     assert _control_visible(modal, name) is False
 
 

@@ -528,24 +528,27 @@ class TestPreflightAppliesAltSettings:
     def test_shared_helper_is_the_single_sync_path(self, tmp_path):
         # startCapture and runContactQualityCheck both go through
         # _sync_alt_scan_settings — camera writes first, then the laser
-        # register pair.
+        # register pair, then the dark skip (#747) whose override it returns.
         c = _connector(tmp_path, {})
         order = []
         c._apply_alt_camera_settings = (
             lambda left, right: order.append(("camera", left, right)))
         c._apply_alt_laser_pulse_width_registers = (
             lambda: order.append(("laser",)))
-        c._sync_alt_scan_settings(0x0F, 0xF0)
-        assert order == [("camera", 0x0F, 0xF0), ("laser",)]
+        c._sync_alt_dark_skip = (
+            lambda: (order.append(("dark skip",)), {"k": 1})[1])
+        assert c._sync_alt_scan_settings(0x0F, 0xF0) == {"k": 1}
+        assert order == [("camera", 0x0F, 0xF0), ("laser",), ("dark skip",)]
 
 
 # ── Dark-frame skip delay (pinned 1800 µs, every build — #449) ───────────────
 
 class TestDarkSkipConstant:
-    """Reverted from 2400 to 1800 on 2026-08-17: 2400 bought clean darks at
-    engineering-only high exposures by requiring a fleet-wide safety-config
-    change, and a console that didn't get it latches its interlock on the
-    first dark frame — no laser at all. Clean darks up to 1700 us beat that."""
+    """Reverted from 2400 to 1800 on 2026-08-17: as the default, 2400 needs
+    the console's RATE_LL floor lowered, and a console that didn't get it
+    latches its interlock on the first dark frame — no laser at all. Only a
+    run whose alternative settings go past 1700 us takes 2400, with the
+    floor widened for it (#747, tests/test_long_exposure_dark_skip.py)."""
 
     def test_pinned_skip_clears_stock_console_rate_ll(self):
         # THE constraint that drove the revert: the post-dark inter-pulse gap
@@ -565,12 +568,11 @@ class TestDarkSkipConstant:
         assert 100 + DARK_SKIP_DELAY_US > DARK_SKIP_CLEAN_EXPOSURE_MAX_US
         assert 100 + DARK_SKIP_DELAY_US > FW_DEFAULT_EXPOSURE_US
 
-    def test_high_exposure_alternative_is_documented_and_needs_provisioning(self):
-        # The 2400 us escape hatch stays in the module as a named constant so
-        # the UI warning and the docs can point at it — but taking it REQUIRES
-        # dropping the console's RATE_LL below the gap it produces, which is
-        # under every stock floor. That precondition is the whole reason it
-        # isn't the default.
+    def test_high_exposure_skip_needs_the_floor_lowered(self):
+        # The 2400 us skip clears the whole exposure dropdown, but the gap it
+        # produces is under every stock RATE_LL floor — the whole reason it
+        # isn't the default, and why a long-exposure run widens the floor
+        # first (#747).
         period_us = 1_000_000.0 / 40
         assert DARK_SKIP_HIGH_EXPOSURE_US > DARK_SKIP_DELAY_US
         assert 100 + DARK_SKIP_HIGH_EXPOSURE_US >= 2196   # clears the dropdown
