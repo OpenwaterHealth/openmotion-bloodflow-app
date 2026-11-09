@@ -88,12 +88,15 @@ Written for scans recorded on a Clinical build.
 | `bvi_left`, `bvi_right` | BVI averaged the same way. |
 
 Values have up to 6 decimals. A camera with no value at a frame is left out
-of that frame's average.
+of that frame's average. An unlit camera (covered, lifted, or a decoupled
+fiber) has no BVI, so it is left out of the BVI average, but it still counts
+toward the BFI average, where its BFI can be far below zero (see "What the
+values mean").
 
 When a module's average BFI (or BVI) can't be computed at a frame but the
 other metric can, the export writes `0.0` in that cell instead of leaving it
 empty. This is intended. It happens, for example, when every camera on one
-module is covered: BVI is still computed, BFI is not. The Clinical layout has
+module is covered: BFI is still computed, BVI is not. The Clinical layout has
 no quality columns, so nothing in the file marks such a cell: treat a `0.0`
 in a Clinical export as possibly missing. The Research layout leaves the
 cell empty.
@@ -131,9 +134,12 @@ frame. Three things cause that:
 
 - The frame was lost in transfer. Every cell is empty.
 - The camera saw no light above its dark level: it was covered or lifted,
-  or its fiber was decoupled. `contrast` and `bfi` are empty. `mean` (near 0)
-  and `bvi` still have values, so `bvi` reads near 10, the top of the scale;
-  `quality` carries `low_light` on those frames.
+  or its fiber was decoupled. `quality` carries `low_light` on those frames,
+  and `bvi` is empty: from a mean near 0 it would read 10, the top of the
+  scale. `mean` (near 0), `contrast` and `bfi` are kept as computed.
+  `contrast` and `bfi` are often empty anyway, and otherwise far outside a
+  lit camera's range (BFI down to around −10,000), so filter on `low_light`
+  before using them.
 - Its variance fell below the shot-noise floor. `contrast` and `bfi` are
   empty, while `mean` and `bvi` can still have values.
 
@@ -148,7 +154,7 @@ listed in the order of this table:
 |---|---|
 | `ts_corrected` | The frame arrived with a timestamp off the 25 ms cadence; `timestamp_s` was replaced by one interpolated from its neighbours. The other values are measured. |
 | `nan_filled` | A placeholder for a frame that never arrived. Such frames have no values, so in practice they rarely appear. |
-| `low_light` | The camera saw no light above its dark level on this frame (see above). `bfi` and `contrast` are empty; `bvi` reads near 10. |
+| `low_light` | The camera saw no light above its dark level on this frame (see above). `bvi` is empty; `contrast` and `bfi` are kept as computed and can be far out of range. |
 | `poor_contact` | The poor-contact warning was showing for this camera at this frame. |
 | `ambient_light` | The ambient-light warning was showing for this camera at this frame. |
 
