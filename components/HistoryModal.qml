@@ -47,6 +47,12 @@ Item {
     // windows. Matches PlotViewer's left content edge (88 + 16 gutter).
     readonly property int iconBarInset: 104
 
+    // Outline icon font shared with the sidebar (ButtonPanel).
+    FontLoader {
+        id: historyIconFont
+        source: "../assets/fonts/keenicons-outline.ttf"
+    }
+
     // ── data plumbing ──────────────────────────────────────────────
     function open() {
         refresh()
@@ -332,16 +338,16 @@ Item {
                     spacing: 8
 
                     // Select-all checkbox.
-                    Text {
+                    // Tri-state: dash while only some rows are checked.
+                    HistoryCheckBox {
+                        objectName: "historySelectAll"
                         Layout.preferredWidth: col.chk
-                        text: (root.checkedCount > 0 && root.checkedCount === root.view.length) ? "☑" : "☐"
-                        color: AppTheme.textSecondary; font.pixelSize: 15
-                        horizontalAlignment: Text.AlignHCenter
-                        MouseArea {
-                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                            onClicked: root.setAllChecked(
-                                !(root.checkedCount > 0 && root.checkedCount === root.view.length))
-                        }
+                        Layout.fillHeight: true
+                        readonly property bool all:
+                            root.checkedCount > 0 && root.checkedCount === root.view.length
+                        checked: all
+                        partial: root.checkedCount > 0 && !all
+                        onToggled: root.setAllChecked(!all)
                     }
                     HistoryHeaderCell {
                         text: "User Label"; sortName: "userLabel"; Layout.fillWidth: true
@@ -388,10 +394,13 @@ Item {
                     delegate: Rectangle {
                         width: ListView.view.width
                         height: 34
+                        // Row tints follow the theme accent so they match
+                        // the checkboxes (blue in dark, terracotta in light).
+                        readonly property color tint: AppTheme.accentInteractive
                         color: modelData.sessionId === root.focusedSessionId
-                               ? Qt.rgba(0.31, 0.55, 1.0, 0.16)
+                               ? Qt.rgba(tint.r, tint.g, tint.b, 0.16)
                                : (root.checked[modelData.sessionId]
-                                  ? Qt.rgba(0.31, 0.55, 1.0, 0.07) : "transparent")
+                                  ? Qt.rgba(tint.r, tint.g, tint.b, 0.07) : "transparent")
 
                         MouseArea {
                             anchors.fill: parent
@@ -404,17 +413,11 @@ Item {
                             anchors.leftMargin: 8; anchors.rightMargin: 8
                             spacing: 8
 
-                            Text {
+                            HistoryCheckBox {
                                 Layout.preferredWidth: col.chk
-                                text: root.checked[modelData.sessionId] ? "☑" : "☐"
-                                color: AppTheme.textPrimary; font.pixelSize: 15
-                                horizontalAlignment: Text.AlignHCenter
-                                MouseArea {
-                                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                    onClicked: function(mouse) {
-                                        root.toggleCheck(modelData.sessionId); mouse.accepted = true
-                                    }
-                                }
+                                Layout.fillHeight: true
+                                checked: root.checked[modelData.sessionId] === true
+                                onToggled: root.toggleCheck(modelData.sessionId)
                             }
                             Text {
                                 Layout.fillWidth: true
@@ -524,16 +527,34 @@ Item {
 
                 Button {
                     id: deleteBtn
-                    text: "🗑  Delete" + (root.checkedCount > 0 ? "  (" + root.checkedCount + ")" : "")
+                    text: "Delete" + (root.checkedCount > 0 ? "  (" + root.checkedCount + ")" : "")
                     Layout.preferredWidth: 132; Layout.preferredHeight: 36
                     // Don't allow deleting while a scan is running (could be the
                     // in-flight session). The confirm prompt still guards it.
                     enabled: root.checkedCount > 0 && MotionInterface.state !== 4
                     hoverEnabled: enabled
-                    contentItem: Text {
-                        text: parent.text; font.pixelSize: 13
-                        color: deleteBtn.enabled ? AppTheme.accentRed : AppTheme.textTertiary
-                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                    // Keenicons trash glyph (same icon font as the sidebar)
+                    // instead of the 🗑 emoji, which rendered as a full-colour
+                    // system emoji that clashed with the outline UI.
+                    contentItem: Item {
+                        readonly property color fg:
+                            deleteBtn.enabled ? AppTheme.accentRed : AppTheme.textTertiary
+                        Row {
+                            anchors.centerIn: parent
+                            spacing: 6
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: "\ueb0e"   // keenicons "trash"
+                                font.family: historyIconFont.name
+                                font.pixelSize: 15
+                                color: parent.parent.fg
+                            }
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: deleteBtn.text; font.pixelSize: 13
+                                color: parent.parent.fg
+                            }
+                        }
                     }
                     background: Rectangle {
                         radius: 6
