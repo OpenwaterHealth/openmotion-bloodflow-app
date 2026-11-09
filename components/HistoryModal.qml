@@ -403,36 +403,36 @@ Item {
                 Button {
                     id: deleteBtn
                     objectName: "historyDeleteButton"
-                    text: "Delete" + (root.checkedCount > 0 ? "  (" + root.checkedCount + ")" : "")
-                    Layout.preferredWidth: implicitContentWidth + 28; Layout.preferredHeight: 34
+                    // Icon-only. The count lives in the tooltip and the
+                    // confirm prompt.
+                    text: "Delete" + (root.checkedCount > 0 ? " " + root.checkedCount
+                                      + (root.checkedCount === 1 ? " scan" : " scans") : "")
+                    display: AbstractButton.IconOnly
+                    // Square, same height as the search field. Zero the
+                    // Material insets, which otherwise shrink the background
+                    // to a short pill inside the 34 px cell.
+                    Layout.preferredWidth: 34; Layout.preferredHeight: 34
+                    topInset: 0; bottomInset: 0; leftInset: 0; rightInset: 0
+                    padding: 0
                     // Don't allow deleting while a scan is running (could be the
                     // in-flight session). The confirm prompt still guards it.
                     enabled: root.checkedCount > 0 && MotionInterface.state !== 4
-                    hoverEnabled: enabled
+                    hoverEnabled: true
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 400
+                    ToolTip.text: enabled ? text
+                                          : (root.checkedCount > 0 ? "Can't delete while a scan is running"
+                                                                   : "Select scans to delete")
                     // Keenicons trash glyph (same icon font as the sidebar)
                     // instead of the 🗑 emoji, which rendered as a full-colour
                     // system emoji that clashed with the outline UI.
-                    contentItem: Item {
-                        implicitWidth: delRow.implicitWidth
-                        readonly property color fg:
-                            deleteBtn.enabled ? AppTheme.accentRed : AppTheme.textTertiary
-                        Row {
-                            id: delRow
-                            anchors.centerIn: parent
-                            spacing: 6
-                            Text {
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: "\ueb0e"   // keenicons "trash"
-                                font.family: historyIconFont.name
-                                font.pixelSize: 15
-                                color: parent.parent.fg
-                            }
-                            Text {
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: deleteBtn.text; font.pixelSize: 13
-                                color: parent.parent.fg
-                            }
-                        }
+                    contentItem: Text {
+                        text: "\ueb0e"   // keenicons "trash"
+                        font.family: historyIconFont.name
+                        font.pixelSize: 18
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        color: deleteBtn.enabled ? AppTheme.accentRed : AppTheme.textTertiary
                     }
                     background: Rectangle {
                         radius: 6
