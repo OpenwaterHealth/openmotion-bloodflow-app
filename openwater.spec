@@ -282,6 +282,13 @@ if _is_clinical:
 # tests/test_engineering_unlock.py.
 if not _has_engineering_unlock:
     _excludes.append("engineering_unlock")
+# And Optimize Laser (docs/auto_exposure): it widens the laser-safety limits,
+# so a clinical build carries neither the app module nor the SDK's workflow
+# and its exposure package (MotionInterface imports them lazily, only for a
+# run). The service tool too: it is a clinical build. Guarded by
+# tests/test_optimize_laser_connector.py.
+if _is_clinical:
+    _excludes += ["optimize_laser", "omotion.OptimizeLaserWorkflow", "omotion.exposure"]
 
 a = Analysis(
     [ENTRY],
