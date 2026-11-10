@@ -1740,24 +1740,21 @@ class MotionConnector(QObject):
         # init, just raises the modal if the sensor reports trouble.
         self._check_sensor_i2c_health(side)
 
-        # Power on all cameras, fill the ID cache (serial numbers, connection info), then power off
+        # Power on all cameras, fill the ID cache (serial numbers, connection
+        # info), then bring them up and leave them powered so the first Start
+        # finds them ready (#494). powerOffUnusedCameras is a scan-time rule:
+        # the scan-start configure powers off the cameras outside the scan
+        # mask. Powering everything off here would undo the warm-up.
         try:
             sensor = getattr(self._interface, side, None) if self._interface else None
             if sensor is not None and sensor.is_connected():
                 enable_power = getattr(sensor, "enable_camera_power", None)
-                disable_power = getattr(sensor, "disable_camera_power", None)
                 refresh_cache = getattr(sensor, "refresh_id_cache", None)
-                if enable_power and disable_power and refresh_cache:
+                if enable_power and refresh_cache:
                     if enable_power(0xFF):
                         time.sleep(0.5)  # settle time
                         refresh_cache()
-                        if self._power_off_unused_cameras:
-                            disable_power(0xFF)
-                            time.sleep(0.05)
-                        else:
-                            # Cameras stay powered — do the one-time FPGA
-                            # bring-up now so Start doesn't pay for it (#494).
-                            self._warm_up_cameras(side, sensor)
+                        self._warm_up_cameras(side, sensor)
                     else:
                         logger.warning(
                             "Could not power on cameras on %s sensor for ID cache fill",
@@ -1787,7 +1784,8 @@ class MotionConnector(QObject):
         """Program camera FPGAs + write default registers at connect (#494).
 
         The cameras were just powered on for the ID-cache fill and stay
-        powered (powerOffUnusedCameras off), so the one-time FPGA bring-up
+        powered until a scan start drops the ones outside its mask, so the
+        one-time FPGA bring-up
         can happen here in the init worker, overlapping operator setup,
         instead of inflating the first Start press. This is pre-work, not a
         scan gate: the scan-start configure re-reads the firmware's

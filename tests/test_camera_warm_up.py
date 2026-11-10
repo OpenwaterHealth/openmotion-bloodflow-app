@@ -136,15 +136,12 @@ def init_connector(tmp_path, monkeypatch):
     return build
 
 
-def test_init_warms_up_when_cameras_stay_powered(init_connector):
-    connector, iface = init_connector(power_off_unused=False)
+@pytest.mark.parametrize("power_off_unused", [False, True])
+def test_init_warms_up_and_leaves_cameras_powered(init_connector, power_off_unused):
+    # powerOffUnusedCameras is applied by the scan-start configure, against
+    # the scan mask. Connect must not power cameras off, or the warm-up is
+    # lost and Start boots every camera cold again.
+    connector, iface = init_connector(power_off_unused=power_off_unused)
     connector._init_sensor("left", connector._device_connect_gen["left"])
     connector._warm_up_cameras.assert_called_once_with("left", iface.left)
     iface.left.disable_camera_power.assert_not_called()
-
-
-def test_init_skips_warm_up_when_powering_off_unused(init_connector):
-    connector, iface = init_connector(power_off_unused=True)
-    connector._init_sensor("left", connector._device_connect_gen["left"])
-    connector._warm_up_cameras.assert_not_called()
-    iface.left.disable_camera_power.assert_called_once_with(0xFF)
