@@ -42,7 +42,7 @@ from omotion.config import (
     DEBUG_FLAG_HISTO_STALL,
 )
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
-from omotion.contact_quality import CQThresholds, ContactQualityMonitor
+from omotion.contact_quality import CQSettings, CQThresholds, ContactQualityTransitionSink
 from motion_config import (
     FW_DEFAULT_CAMERA_SETTINGS,
     TA_PULSE_TICK_US,
@@ -1100,7 +1100,7 @@ class MotionConnector(QObject):
     contactQualityIssueStateChanged = pyqtSignal(str, str, str, float, bool)
     contactQualityScanInProgress = pyqtSignal(bool)
     # Runner thread → main thread marshal for live CQ transitions from the
-    # SDK's ContactQualityMonitor. Same pattern as _cq_result_signal; QML
+    # SDK's contact-quality stage. Same pattern as _cq_result_signal; QML
     # must never be touched from the pipeline worker thread.
     _cqTransitionSignal = pyqtSignal(str, int, str, float, bool)
     cameraDropoutDetected = pyqtSignal(str, int, str)  # side ("left"/"right"), cam_id (0-7), elapsed HH:MM:SS
@@ -5280,6 +5280,16 @@ class MotionConnector(QObject):
                 self._raw_csv_duration_sec
                 if (raw_csv_allowed and self._write_raw_csv) else 0
             ),
+            # Live contact quality (issues #364, #589): the SDK judges it in
+            # the pipeline, raises/clears the live warning through the
+            # ContactQualityTransitionSink below, and records the warning
+            # in each per-camera row's quality flags in scans.db.
+            contact_quality=CQSettings(
+                thresholds=_cq_thresholds,
+                rolling_window=_cq_rolling_window,
+                light_activate_debounce=_cq_light_activate,
+                light_clear_debounce=_cq_light_clear,
+            ),
             sinks=[
                 _LivePlotSink(connector=self, plot_t0=plot_t0, live_source=live_source,
                               nan_gap_tracker=nan_gap_tracker),
@@ -5292,13 +5302,7 @@ class MotionConnector(QObject):
                 # QML modal and both Qt signals have been waiting for it
                 # since. Not `critical`: a contact fault must never abort a
                 # clinical scan in progress.
-                ContactQualityMonitor(
-                    thresholds=_cq_thresholds,
-                    on_transition=self._on_cq_transition,
-                    rolling_window=_cq_rolling_window,
-                    light_activate_debounce=_cq_light_activate,
-                    light_clear_debounce=_cq_light_clear,
-                ),
+                ContactQualityTransitionSink(on_transition=self._on_cq_transition),
             ],
             # Async backstop (#213): if the worker aborts after start_scan
             # returned True (e.g. a critical sink dies because the scan DB
@@ -6047,7 +6051,8 @@ class MotionConnector(QObject):
         self.contactQualityCheckFinished.emit(ok, err_msg, warning_list)
 
     def _on_cq_transition(self, side, cam_id, reason, value, active):
-        """Runner-thread callback from the SDK's ContactQualityMonitor.
+        """Runner-thread callback from the SDK's contact-quality stage
+        (delivered by ContactQualityTransitionSink).
 
         Does nothing but hop to the main thread — see the cross-thread
         gotcha in CLAUDE.md. Never raises: an exception escaping a sink's
