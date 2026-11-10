@@ -1,8 +1,10 @@
 """Unit tests for the live contact-quality adapter (issue #364).
 
-The SDK's ContactQualityMonitor reports transitions on the pipeline runner
-thread; the connector's only job is to marshal them to the main thread and
-translate SDK vocabulary into what ContactQualityModal expects.
+The SDK judges contact quality in its pipeline (ContactQualityStage, set up
+from ScanRequest.contact_quality) and reports transitions on the pipeline
+runner thread through a ContactQualityTransitionSink; the connector's only
+job is to marshal them to the main thread and translate SDK vocabulary into
+what ContactQualityModal expects.
 """
 
 import pytest
@@ -156,14 +158,19 @@ def _captured_scan_request(connector):
     return connector._interface.start_scan.call_args.args[0]
 
 
-def test_startcapture_attaches_exactly_one_contact_quality_monitor_from_config(tmp_path):
-    """The regression this whole feature exists to fix (#364): the sink
-    must actually reach ScanRequest.sinks, and it must be built from
-    config rather than silently from the hardcoded defaults — using
-    distinguishable values proves the construction actually read
-    self._app_config rather than happening to pass with defaults that
-    look plausible either way."""
-    from omotion.contact_quality import ContactQualityMonitor
+def _cq_sinks(req):
+    from omotion.contact_quality import ContactQualityTransitionSink
+    return [s for s in req.sinks if isinstance(s, ContactQualityTransitionSink)]
+
+
+def test_startcapture_requests_contact_quality_from_config(tmp_path):
+    """The regression this whole feature exists to fix (#364): the live
+    warning must actually be wired (settings on ScanRequest.contact_quality,
+    exactly one transition sink in ScanRequest.sinks), and the settings
+    must be built from config rather than silently from the hardcoded
+    defaults — using distinguishable values proves the construction
+    actually read self._app_config rather than happening to pass with
+    defaults that look plausible either way."""
 
     dark = [1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8]
     light = [10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 10.7, 10.8]
@@ -181,20 +188,22 @@ def test_startcapture_attaches_exactly_one_contact_quality_monitor_from_config(t
 
     req = _captured_scan_request(connector)
 
-    cq_sinks = [s for s in req.sinks if isinstance(s, ContactQualityMonitor)]
-    assert len(cq_sinks) == 1, (
-        f"expected exactly one ContactQualityMonitor in sinks, found "
-        f"{len(cq_sinks)} among {[type(s).__name__ for s in req.sinks]}"
-    )
-    sink = cq_sinks[0]
-    assert sink._thresholds.dark == tuple(dark)
-    assert sink._thresholds.light == tuple(light)
-    assert sink._window_size == 9
+    settings = req.contact_quality
+    assert settings is not None, "ScanRequest.contact_quality was not set"
+    assert settings.thresholds.dark == tuple(dark)
+    assert settings.thresholds.light == tuple(light)
+    assert settings.rolling_window == 9
     # Prove the two edges are wired independently and not swapped: the RAISE
     # (activate) bound comes from cq_live_activate_frames, the CLEAR bound from
     # cq_live_clear_frames.
-    assert sink._light_activate_debounce == 7
-    assert sink._light_clear_debounce == 33
+    assert settings.light_activate_debounce == 7
+    assert settings.light_clear_debounce == 33
+    cq_sinks = _cq_sinks(req)
+    assert len(cq_sinks) == 1, (
+        f"expected exactly one ContactQualityTransitionSink in sinks, found "
+        f"{len(cq_sinks)} among {[type(s).__name__ for s in req.sinks]}"
+    )
+    sink = cq_sinks[0]
     # Plain bound methods aren't cached — connector._on_cq_transition
     # fetched here and the one startCapture fetched when constructing the
     # sink are two distinct MethodType objects (`is` is False even when
@@ -217,7 +226,6 @@ def test_startcapture_survives_null_light_debounce_config(tmp_path):
         _CQ_DEFAULT_LIVE_ACTIVATE_FRAMES,
         _CQ_DEFAULT_LIVE_CLEAR_FRAMES,
     )
-    from omotion.contact_quality import ContactQualityMonitor
 
     connector = _make_scan_connector(tmp_path, {
         "cq_live_activate_frames": None,
@@ -226,10 +234,9 @@ def test_startcapture_survives_null_light_debounce_config(tmp_path):
 
     req = _captured_scan_request(connector)
 
-    cq_sinks = [s for s in req.sinks if isinstance(s, ContactQualityMonitor)]
-    assert len(cq_sinks) == 1
-    assert cq_sinks[0]._light_activate_debounce == _CQ_DEFAULT_LIVE_ACTIVATE_FRAMES
-    assert cq_sinks[0]._light_clear_debounce == _CQ_DEFAULT_LIVE_CLEAR_FRAMES
+    assert len(_cq_sinks(req)) == 1
+    assert req.contact_quality.light_activate_debounce == _CQ_DEFAULT_LIVE_ACTIVATE_FRAMES
+    assert req.contact_quality.light_clear_debounce == _CQ_DEFAULT_LIVE_CLEAR_FRAMES
 
 
 def test_startcapture_survives_non_numeric_debounce_config(tmp_path):
@@ -242,7 +249,6 @@ def test_startcapture_survives_non_numeric_debounce_config(tmp_path):
         _CQ_DEFAULT_LIVE_ACTIVATE_FRAMES,
         _CQ_DEFAULT_LIVE_CLEAR_FRAMES,
     )
-    from omotion.contact_quality import ContactQualityMonitor
 
     connector = _make_scan_connector(tmp_path, {
         "cq_live_activate_frames": "abc",
@@ -251,10 +257,9 @@ def test_startcapture_survives_non_numeric_debounce_config(tmp_path):
 
     req = _captured_scan_request(connector)
 
-    cq_sinks = [s for s in req.sinks if isinstance(s, ContactQualityMonitor)]
-    assert len(cq_sinks) == 1
-    assert cq_sinks[0]._light_activate_debounce == _CQ_DEFAULT_LIVE_ACTIVATE_FRAMES
-    assert cq_sinks[0]._light_clear_debounce == _CQ_DEFAULT_LIVE_CLEAR_FRAMES
+    assert len(_cq_sinks(req)) == 1
+    assert req.contact_quality.light_activate_debounce == _CQ_DEFAULT_LIVE_ACTIVATE_FRAMES
+    assert req.contact_quality.light_clear_debounce == _CQ_DEFAULT_LIVE_CLEAR_FRAMES
 
 
 def test_startcapture_zero_debounce_config_is_not_conflated_with_missing(tmp_path):
@@ -265,9 +270,9 @@ def test_startcapture_zero_debounce_config_is_not_conflated_with_missing(tmp_pat
     instead, so a configured 0 passes through unchanged on both edges; it is
     ContactQualityMonitor's own max(1, int(...)) clamp that then turns a
     deliberate 0 into 1 ("no debounce"), not this fallback — confirmed
-    end-to-end through the real sink, for both the activate and clear
-    edges, not just the intermediate value."""
-    from omotion.contact_quality import ContactQualityMonitor
+    end-to-end through the real pipeline stage, for both the activate and
+    clear edges, not just the intermediate value."""
+    from omotion.pipeline.stages.contact_quality import ContactQualityStage
 
     connector = _make_scan_connector(tmp_path, {
         "cq_live_activate_frames": 0,
@@ -276,25 +281,24 @@ def test_startcapture_zero_debounce_config_is_not_conflated_with_missing(tmp_pat
 
     req = _captured_scan_request(connector)
 
-    cq_sinks = [s for s in req.sinks if isinstance(s, ContactQualityMonitor)]
-    assert len(cq_sinks) == 1
-    assert cq_sinks[0]._light_activate_debounce == 1
-    assert cq_sinks[0]._light_clear_debounce == 1
+    assert req.contact_quality.light_activate_debounce == 0
+    assert req.contact_quality.light_clear_debounce == 0
+    monitor = ContactQualityStage(req.contact_quality, metadata=None).monitor
+    assert monitor._light_activate_debounce == 1
+    assert monitor._light_clear_debounce == 1
 
 
 def test_startcapture_survives_null_rolling_window_config(tmp_path):
     """Same null-config hazard as the debounce case above, for the
     sibling cq_rolling_avg_window key that feeds the same construction."""
     from motion_connector import _CQ_DEFAULT_ROLLING_WINDOW
-    from omotion.contact_quality import ContactQualityMonitor
 
     connector = _make_scan_connector(tmp_path, {"cq_rolling_avg_window": None})
 
     req = _captured_scan_request(connector)
 
-    cq_sinks = [s for s in req.sinks if isinstance(s, ContactQualityMonitor)]
-    assert len(cq_sinks) == 1
-    assert cq_sinks[0]._window_size == _CQ_DEFAULT_ROLLING_WINDOW
+    assert len(_cq_sinks(req)) == 1
+    assert req.contact_quality.rolling_window == _CQ_DEFAULT_ROLLING_WINDOW
 
 
 def test_startcapture_survives_malformed_threshold_array_element(tmp_path):
@@ -309,7 +313,6 @@ def test_startcapture_survives_malformed_threshold_array_element(tmp_path):
         _CQ_DEFAULT_DARK_THRESHOLD_DN,
         _CQ_DEFAULT_LIGHT_THRESHOLD_DN,
     )
-    from omotion.contact_quality import ContactQualityMonitor
 
     connector = _make_scan_connector(tmp_path, {
         "cq_dark_threshold_per_camera": [3.0, None, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0],
@@ -317,10 +320,9 @@ def test_startcapture_survives_malformed_threshold_array_element(tmp_path):
 
     req = _captured_scan_request(connector)
 
-    cq_sinks = [s for s in req.sinks if isinstance(s, ContactQualityMonitor)]
-    assert len(cq_sinks) == 1
-    assert cq_sinks[0]._thresholds.dark == tuple([_CQ_DEFAULT_DARK_THRESHOLD_DN] * 8)
-    assert cq_sinks[0]._thresholds.light == tuple([_CQ_DEFAULT_LIGHT_THRESHOLD_DN] * 8)
+    assert len(_cq_sinks(req)) == 1
+    assert req.contact_quality.thresholds.dark == tuple([_CQ_DEFAULT_DARK_THRESHOLD_DN] * 8)
+    assert req.contact_quality.thresholds.light == tuple([_CQ_DEFAULT_LIGHT_THRESHOLD_DN] * 8)
 
 
 def test_marshal_coerces_numpy_scalar_types_to_plain_python():
