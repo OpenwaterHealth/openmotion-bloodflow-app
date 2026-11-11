@@ -1,6 +1,6 @@
 """Optimize Laser in the connector: the run slot and its gates, the active
-settings every scan and check re-applies, the restore, and the clinical
-compile-out. The SDK workflow is a fake and worker threads run inline, so
+settings the SDK keeps (and re-applies itself before every scan), the
+restore, and the clinical compile-out. The SDK workflow is a fake and worker threads run inline, so
 no hardware and no event loop are needed.
 """
 
@@ -30,8 +30,6 @@ pytestmark = pytest.mark.unit
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RESEARCH_ENG = {"clinicalMode": False, "engineeringMode": True}
-OVERRIDES = {"trigger_config": {"LaserPulseSkipDelayUsec": 2400, "LaserPulseWidthUsec": 1901},
-             "camera_gains": "gains", "calibration_override": {"i_max": 400.0}}
 
 
 @pytest.fixture(autouse=True)
@@ -83,30 +81,36 @@ def _result(passed=True, status=OptimizeStatus.PARTIAL):
 
 
 class FakeWorkflow:
-    def __init__(self, result=None, run_error=None, reapply_error=None, restore_problems=()):
+    def __init__(self, result=None, run_error=None, restore_problems=()):
         self.result = result
         self.run_error = run_error
-        self.reapply_error = reapply_error
         self.restore_problems = list(restore_problems)
         self.calls = []
+        # What the SDK workflow owns: the active result, and the hooks the
+        # connector attaches in _optimize_wf.
+        self.active = None
+        self.on_active_changed = None
+        self.gate = None
+        self.force_fault = None
+
+    def set_active(self, result, reason=None):
+        self.active = result
+        if self.on_active_changed is not None:
+            self.on_active_changed(reason)
 
     def run(self, settings, **kw):
         self.calls.append(("run", settings, kw))
         if self.run_error:
             raise self.run_error
+        self.set_active(None)
         kw["on_iteration"](self.result.records[-1])
+        if self.result.passed:
+            self.set_active(self.result)
         return self.result
 
-    def reapply(self, result, left, right):
-        self.calls.append(("reapply", result, left, right))
-        if self.reapply_error:
-            raise RuntimeError(self.reapply_error)
-
-    def scan_overrides(self, result):
-        return dict(OVERRIDES)
-
-    def restore_defaults(self, left, right):
+    def restore_defaults(self, left=None, right=None, *, reason=None):
         self.calls.append(("restore", left, right))
+        self.set_active(None, reason)
         return list(self.restore_problems)
 
 
@@ -121,7 +125,15 @@ def _connector(tmp_path, cfg=None, workflow=None):
     c._leftSensorConnected = True
     c._rightSensorConnected = False
     c._optimize_workflow = workflow or FakeWorkflow(_result())
+    c._optimize_workflow.on_active_changed = c._optimizeActiveSignal.emit
     return c
+
+
+def _activate(c, result=None):
+    """Make ``result`` the SDK's active settings, as a passed run does."""
+    result = result or _result()
+    c._optimize_workflow.set_active(result)
+    return result
 
 
 def _record(signal):
@@ -239,7 +251,9 @@ class AskingWorkflow(FakeWorkflow):
         self.calls.append(("run", settings, kw))
         self.answer = kw["on_not_converged"](self.result.records[-1])
         if self.answer == "accept":
-            return dataclasses.replace(self.result, accepted=True)
+            accepted = dataclasses.replace(self.result, accepted=True)
+            self.set_active(accepted)
+            return accepted
         return _result(passed=False, status=OptimizeStatus.NOT_CONVERGED)
 
 
@@ -290,7 +304,7 @@ def test_current_values_follow_the_settings_in_use(tmp_path):
     assert c.optimizeLaserCurrentValues["source"] == "default"
     c._optimize_baseline = LaserBaseline("1.8.1", 529.92, 5000.0, 5500.0, {})
     assert c.optimizeLaserCurrentValues["pulseWidthBounds"] == "530 µs"
-    c._set_optimize_result(_result())
+    _activate(c)
     v = c.optimizeLaserCurrentValues
     assert v["source"] == "optimized" and v["pulseWidthBounds"] == "1901 µs"
 
@@ -322,80 +336,81 @@ def test_a_safety_trip_stops_the_run(tmp_path):
 
 # ---- the active settings at each scan / check ------------------------------
 
-def test_prepare_without_active_settings_does_nothing(tmp_path):
-    wf = FakeWorkflow(_result())
-    c = _connector(tmp_path, workflow=wf)
-    assert c._prepare_optimized_scan(0xFF, 0) == (None, None)
-    assert wf.calls == []
+def test_no_active_settings_means_a_stock_scan(tmp_path):
+    c = _connector(tmp_path)
+    assert c._optimize_result is None and c._optimized_for_scan() is None
 
 
-def test_prepare_reapplies_and_returns_the_overrides(tmp_path):
-    wf = FakeWorkflow(_result())
-    c = _connector(tmp_path, workflow=wf)
-    c._set_optimize_result(_result())
-    assert c._prepare_optimized_scan(0x01, 0) == (OVERRIDES, None)
-    assert wf.calls[0][0] == "reapply"
+def test_active_settings_come_from_the_sdk_workflow(tmp_path):
+    c = _connector(tmp_path)
+    changed = _record(c.optimizeLaserStateChanged)
+    result = _activate(c)
+    assert c._optimize_result is result and c._optimized_for_scan() is result
+    assert c.optimizeLaserActive and changed
 
 
-def test_prepare_reapplies_to_the_scans_cameras_not_the_runs(tmp_path):
-    """The scan powers off whatever its masks leave out, so a run on 0x66
-    followed by a scan on 0x0F must not write L6 and L7."""
-    wf = FakeWorkflow(_result())
-    c = _connector(tmp_path, workflow=wf)
-    result = _result()
-    c._set_optimize_result(result)
-    c._optimize_masks = (0x66, 0x66)
-    assert c._prepare_optimized_scan(0x0F, 0x00) == (OVERRIDES, None)
-    assert wf.calls[0] == ("reapply", result, 0x0F, 0x00)
+def test_the_connector_attaches_its_policy_to_the_interface_workflow(tmp_path):
+    """One workflow, the interface's: the gate, the Force laser fail flag for
+    restores, and the state-change hook all go on it."""
+    c = _connector(tmp_path)
+    sdk_wf = FakeWorkflow(_result())
+    c._interface.optimize_laser_workflow = sdk_wf
+    c._optimize_workflow = None
+    assert c._optimize_wf() is sdk_wf and c._optimize_wf() is sdk_wf
 
-
-def test_failed_reapply_refuses_the_scan(tmp_path):
-    c = _connector(tmp_path, workflow=FakeWorkflow(reapply_error="RATE_LL write refused"))
-    c._set_optimize_result(_result())
-    overrides, err = c._prepare_optimized_scan(0x01, 0)
-    assert overrides is None and "RATE_LL write refused" in err
-
-
-def test_engineering_mode_off_drops_the_settings_with_a_restore(tmp_path):
-    wf = FakeWorkflow(_result())
-    c = _connector(tmp_path, workflow=wf)
-    c._set_optimize_result(_result())
-    c._optimize_masks = (0x81, 0)
+    assert sdk_wf.gate() is None
     c._app_config["engineeringMode"] = False
-    assert c._prepare_optimized_scan(0x81, 0) == (None, None)
-    assert wf.calls == [("restore", 0x81, 0)]
-    assert not c.optimizeLaserActive
-
-
-def test_drop_with_a_failed_laser_restore_refuses_the_scan(tmp_path):
-    c = _connector(tmp_path, workflow=FakeWorkflow(
-        restore_problems=["laser power restore failed: EE_RATE_LL"]))
-    c._set_optimize_result(_result())
+    assert "engineering mode" in sdk_wf.gate()
+    c._app_config["engineeringMode"] = True
     c._app_config["forceLaserFail"] = True
-    overrides, err = c._prepare_optimized_scan(0x01, 0)
-    assert overrides is None and "Power-cycle" in err
+    assert "Force laser fail" in sdk_wf.gate()
+
+    assert sdk_wf.force_fault() is False
+    c._force_laser_fail = True
+    assert sdk_wf.force_fault() is True
+
+
+def test_settings_the_gate_will_drop_do_not_shape_the_scan(tmp_path):
+    """The SDK asks the same gate when the scan starts and restores the
+    defaults, so the app must not add the notes block or turn live contact
+    quality off for that scan."""
+    c = _connector(tmp_path)
+    _activate(c)
+    c._app_config["engineeringMode"] = False
+    assert c._optimize_result is not None and c._optimized_for_scan() is None
+
+
+def test_a_gate_drop_by_the_sdk_tells_the_operator(tmp_path):
+    c = _connector(tmp_path)
+    _activate(c)
+    notes = []
+    c.notify = lambda text, *a, **k: notes.append(text)
+    c._optimize_workflow.set_active(None, "Optimize Laser needs engineering mode.")
+    assert not c.optimizeLaserActive
+    assert len(notes) == 1 and "needs engineering mode" in notes[0]
+    assert "default laser settings" in notes[0]
 
 
 def test_alt_settings_are_skipped_while_optimized_settings_are_active(tmp_path):
     cfg = {**RESEARCH_ENG, "altCameraSettingsEnabled": True,
            "altCameraExposureUs": 648, "altCameraGains": [16, 4, 2, 1, 1, 2, 4, 16]}
     c = _connector(tmp_path, cfg)
-    c._set_optimize_result(_result())
+    _activate(c)
     c._sync_alt_scan_settings(0x01, 0)
     c._interface.left.camera_i2c_write.assert_not_called()
     # Control: without them the toggle writes the cameras.
-    c._set_optimize_result(None)
+    c._optimize_workflow.set_active(None)
     c._sync_alt_scan_settings(0x01, 0)
     assert c._interface.left.camera_i2c_write.called
 
 
-def test_check_runs_with_the_optimized_trigger_config(tmp_path, inline_threads):
+def test_check_leaves_the_optimized_trigger_to_the_sdk(tmp_path, inline_threads):
     c = _connector(tmp_path)
-    c._prepare_optimized_scan = lambda left, right: (dict(OVERRIDES), None)
+    _activate(c)
+    c._interface.scan_workflow.last_scan_error = None
     c._interface.contact_quality_workflow.check.return_value = None
     c.runContactQualityCheck(0xFF, 0)
-    kw = c._interface.contact_quality_workflow.check.call_args.kwargs
-    assert kw["trigger_config"] == OVERRIDES["trigger_config"]
+    assert "trigger_config" not in c._interface.contact_quality_workflow.check.call_args.kwargs
 
 
 def test_check_without_active_settings_passes_no_trigger_config(tmp_path, inline_threads):
@@ -405,36 +420,40 @@ def test_check_without_active_settings_passes_no_trigger_config(tmp_path, inline
     assert "trigger_config" not in c._interface.contact_quality_workflow.check.call_args.kwargs
 
 
-def test_check_refused_when_reapply_fails(tmp_path):
+def test_check_reports_why_the_sdk_refused_its_scan(tmp_path, inline_threads):
+    """A refused check scan has no frames, which would read as "no signal"
+    on every camera; with optimized settings active the reason is shown."""
     c = _connector(tmp_path)
-    c._prepare_optimized_scan = lambda left, right: (None, "could not be re-applied")
+    _activate(c)
+    c._interface.scan_workflow.last_scan_error = "could not be re-applied"
+    c._interface.contact_quality_workflow.check.return_value = "an empty result"
     finished = _record(c.contactQualityCheckFinished)
     c.runContactQualityCheck(0xFF, 0)
     assert finished == [(False, "could not be re-applied", [])]
-    c._interface.contact_quality_workflow.check.assert_not_called()
     assert not c._cq_quick_running
 
 
-def test_scan_refused_when_reapply_fails(tmp_path):
+def test_scan_refused_by_the_sdk_does_not_start(tmp_path):
     c = _connector(tmp_path)
     c.checkStorageForScan = lambda: True
-    c._prepare_optimized_scan = lambda left, right: (None, "could not be re-applied")
+    _activate(c)
+    c._interface.start_scan.return_value = False
+    c._interface.scan_workflow.last_scan_error = "could not be re-applied"
     assert c.startCapture("subj", 10, 0x01, 0, False) is False
     assert not c._capture_running
-    c._interface.start_scan.assert_not_called()
 
 
-def test_scan_carries_the_overrides_and_the_notes_block(tmp_path):
+def test_scan_at_optimized_settings_gets_the_notes_block_and_no_live_cq(tmp_path):
     c = _connector(tmp_path)
     c.checkStorageForScan = lambda: True
-    c._set_optimize_result(_result())
-    c._prepare_optimized_scan = lambda left, right: (dict(OVERRIDES), None)
+    _activate(c)
     c._interface.start_scan.return_value = True
     assert c.startCapture("subj", 10, 0x01, 0, False) is True
     req = c._interface.start_scan.call_args.args[0]
-    assert req.trigger_config == OVERRIDES["trigger_config"]
-    assert req.camera_gains == "gains"
-    assert req.calibration_override == {"i_max": 400.0}
+    # The trigger config, gains and calibration are the SDK's to add
+    # (ScanWorkflow's scan preparer); the request leaves here without them.
+    assert req.trigger_config is None and req.camera_gains is None
+    assert req.calibration_override is None
     assert c._scan_notes.startswith("--- Optimize Laser settings")
     # 1.6.0 line: live contact quality is ScanRequest.contact_quality (#589).
     assert req.contact_quality is None
@@ -466,23 +485,23 @@ def test_settings_form_saves_only_valid_values(tmp_path):
     assert c._app_config[ol.SETTINGS_KEY] == {"scanAfterOptimize": True, "scanDurationSec": 25}
 
 
-def test_restore_uses_the_run_masks_and_clears_the_settings(tmp_path, inline_threads):
+def test_restore_clears_the_settings(tmp_path, inline_threads):
     wf = FakeWorkflow(_result())
     c = _connector(tmp_path, workflow=wf)
-    c._set_optimize_result(_result())
-    c._optimize_masks = (0x0F, 0x00)
+    _activate(c)
     restored = _record(c.laserDefaultsRestored)
     assert c.restoreDefaultLaserSettings() is True
-    assert wf.calls == [("restore", 0x0F, 0x00)]
+    # No masks: the SDK restores the active run's cameras.
+    assert wf.calls == [("restore", None, None)]
     assert restored[0][0] is True and not c.optimizeLaserActive
 
 
-def test_restore_without_a_run_covers_the_connected_sensors(tmp_path, inline_threads):
+def test_restore_without_a_run_reports_a_laser_problem(tmp_path, inline_threads):
     wf = FakeWorkflow(_result(), restore_problems=["laser power restore failed: x"])
     c = _connector(tmp_path, workflow=wf)
     restored = _record(c.laserDefaultsRestored)
     c.restoreDefaultLaserSettings()
-    assert wf.calls == [("restore", 0xFF, 0x00)]
+    assert wf.calls == [("restore", None, None)]
     assert restored[0][0] is False
 
 
@@ -514,10 +533,9 @@ class _SlowThread:
 def test_shutdown_restores_active_settings(tmp_path):
     wf = FakeWorkflow(_result())
     c = _connector(tmp_path, workflow=wf)
-    c._set_optimize_result(_result())
-    c._optimize_masks = (0x81, 0x00)
+    _activate(c)
     c.shutdown()
-    assert wf.calls == [("restore", 0x81, 0x00)]
+    assert wf.calls == [("restore", None, None)]
     assert c._optimize_result is None
 
 
@@ -546,7 +564,7 @@ def test_quit_with_a_finished_run_still_restores(tmp_path, inline_threads):
     c.optimizeLaser(0xFF, 0)
     wf.calls.clear()
     c.shutdown()
-    assert wf.calls == [("restore", 0xFF, 0)]
+    assert wf.calls == [("restore", None, None)]
 
 
 def test_shutdown_stops_a_run_and_waits_for_its_restore(tmp_path):
@@ -554,7 +572,6 @@ def test_shutdown_stops_a_run_and_waits_for_its_restore(tmp_path):
     c = _connector(tmp_path, workflow=wf)
     c._optimize_running = True
     c._optimize_thread = _SlowThread()
-    c._optimize_worker_result = _result(passed=False, status=OptimizeStatus.NOT_CONVERGED)
     c.shutdown()
     assert c._optimize_stop.is_set() and c._optimize_thread.joined == 30.0
     # The run restored itself; nothing more to do.
@@ -563,29 +580,14 @@ def test_shutdown_stops_a_run_and_waits_for_its_restore(tmp_path):
 
 def test_shutdown_restores_a_pass_the_main_thread_has_not_seen(tmp_path):
     """The worker returned a passed result, but its queued result signal
-    never ran before the quit: the settings are on the device anyway."""
+    never ran before the quit. The SDK made the settings active on the
+    worker thread, so the shutdown sees them anyway."""
     wf = FakeWorkflow(_result())
     c = _connector(tmp_path, workflow=wf)
-    c._optimize_masks = (0xFF, 0x00)
     c._optimize_thread = _SlowThread()
-    c._optimize_worker_result = _result()
+    wf.active = _result()               # set by the worker; no slot has run
     c.shutdown()
-    assert wf.calls == [("restore", 0xFF, 0x00)]
-
-
-def test_restores_honor_force_laser_fail(tmp_path, monkeypatch):
-    """The workflow's laser restore goes through apply_laser_power with the
-    app's flag, like every other laser load (the sdk#252 class)."""
-    import omotion.laser
-    calls = []
-    monkeypatch.setattr(omotion.laser, "apply_laser_power",
-                        lambda console, force_fault=False, lock=None: calls.append(force_fault) or True)
-    c = _connector(tmp_path)
-    c._optimize_workflow = None
-    c._force_laser_fail = True
-    actuator = c._optimize_wf().actuator()
-    actuator._restore_laser(actuator._console, lock=None)
-    assert calls == [True]
+    assert wf.calls == [("restore", None, None)]
 
 
 # ---- compiled out of clinical builds ---------------------------------------

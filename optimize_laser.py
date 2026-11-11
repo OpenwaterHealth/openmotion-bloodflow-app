@@ -20,23 +20,20 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
-import functools
 import itertools
 import math
 import os
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Mapping, Optional
 
 from omotion.OptimizeLaserWorkflow import (
     ACCEPT,
     CONTINUE,
-    OptimizeLaserWorkflow,
     OptimizeResult,
 )
 from omotion.exposure.actuator import (
     FW_DEFAULT_EXPOSURE_ROWS,
     FW_DEFAULT_GAIN_CODES,
     LaserBaseline,
-    LaserCameraActuator,
 )
 from omotion.exposure.controller import CameraStatus, OptimizeStatus
 from omotion.exposure.settings import (
@@ -338,17 +335,19 @@ def choices() -> dict:
 
 # ---- running it -----------------------------------------------------------
 
-def make_workflow(interface, *, force_fault: Callable[[], bool]) -> OptimizeLaserWorkflow:
-    """The workflow, with restores going through ``apply_laser_power`` with
-    the app's Force laser fail flag, like every other laser load in the app."""
-    from omotion.laser import apply_laser_power
-
-    def restore_laser(console, lock=None):
-        return apply_laser_power(console, force_fault=bool(force_fault()), lock=lock)
-
-    return OptimizeLaserWorkflow(
-        interface,
-        actuator_factory=functools.partial(LaserCameraActuator, restore_laser=restore_laser))
+def attach_workflow(interface, *, force_fault, gate, on_active_changed):
+    """The interface's one ``OptimizeLaserWorkflow`` with the app's policy on
+    it. ``force_fault``: restores load the laser with the app's Force laser
+    fail flag, like every other laser load in the app. ``gate``: asked by the
+    SDK before each scan while settings are active; a reason drops them with
+    a restore. ``on_active_changed``: called when the active settings change,
+    on any thread. The connector reaches the SDK workflow only through here
+    (it must not name it in a clinical build)."""
+    workflow = interface.optimize_laser_workflow
+    workflow.force_fault = force_fault
+    workflow.gate = gate
+    workflow.on_active_changed = on_active_changed
+    return workflow
 
 
 def csv_path(data_root: str, now: datetime.datetime) -> str:
