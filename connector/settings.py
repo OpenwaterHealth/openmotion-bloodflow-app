@@ -197,6 +197,18 @@ class SettingsMixin:
 
     # ── App config — generic read/write API ──────────────────────────────────
 
+    def _flag(self, key: str) -> bool:
+        """Truthiness of one appConfig key (missing = False)."""
+        return bool(self._app_config.get(key, False))
+
+    @property
+    def _clinical(self) -> bool:
+        return self._flag("clinicalMode")
+
+    @property
+    def _engineering(self) -> bool:
+        return self._flag("engineeringMode")
+
     @pyqtProperty('QVariantMap', notify=appConfigChanged)
     def appConfig(self):
         return self._app_config
