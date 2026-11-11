@@ -4,7 +4,7 @@ When the BloodFlow app hits a showstopper condition it raises a **critical-error
 modal** carrying a stable code (e.g. `E-101`). The modal is dismissible and
 offers **Copy details** and **Contact Support**.
 
-Codes are the single source of truth in [`error_codes.py`](../error_codes.py);
+Codes are the single source of truth in [`services/error_codes.py`](../services/error_codes.py);
 this document is generated from that registry. They are grouped by subsystem:
 
 - **E-1xx** — startup / initialization

@@ -38,63 +38,44 @@ class CriticalError:
     suggested_action: str
 
 
-def _e(code, category, title, message, suggested_action) -> CriticalError:
-    return CriticalError(code, category, title, message, suggested_action)
+_e = CriticalError
 
 
 # --- E-1xx: startup / initialization ----------------------------------------
 _STARTUP = [
-    _e(
-        "E-101", "startup",
-        "Sensor self-check failed",
-        "The sensor reported that one or more internal devices (I2C mux, IMU, "
-        "a camera, or an FPGA) did not respond during its power-on self-check. "
-        "The system cannot scan reliably in this state.",
-        "Power-cycle the sensor and reconnect. If it persists, the sensor "
-        "hardware needs service — contact support.",
-    ),
-    _e(
-        "E-102", "startup",
-        "Sensor self-check unreadable",
-        "The sensor connected but did not return its power-on self-check "
-        "result, so its internal device health is unknown.",
-        "Power-cycle the sensor and reconnect. If it persists, update the "
-        "sensor firmware or contact support.",
-    ),
-    _e(
-        "E-103", "startup",
-        "Console initialization failed",
-        "The console connected but its laser-power configuration could not be "
-        "applied. The laser may not operate correctly until this is resolved.",
-        "Power-cycle the console and reconnect. If it persists, contact "
-        "support — the console firmware or config may need attention.",
-    ),
-    _e(
-        "E-105", "startup",
-        "Camera power-on failed",
-        "The sensor could not power on its cameras during initialization, so "
-        "camera identities could not be read.",
-        "Power-cycle the sensor and reconnect. If only some cameras are "
-        "affected, the camera board may need service.",
-    ),
-    _e(
-        "E-107", "startup",
-        "Storage almost full",
-        "The drive that stores scan data has less than 1 GB free. Scans "
-        "cannot be started until space is freed.",
-        "Free up space on the data drive (or export and remove old scans) "
-        "before starting a scan. Contact support if the drive should not "
-        "be full.",
-    ),
-    _e(
-        "E-108", "startup",
-        "Scan storage inaccessible",
-        "The scan database in the data folder is not encrypted. This build "
-        "stores patient data only in encrypted form, so it will not open "
-        "that database and scans cannot be started.",
-        "Do not delete or move the data folder: it may hold patient data. "
-        "Contact support with the session log attached.",
-    ),
+    _e("E-101", "startup", "Sensor self-check failed",
+       "The sensor reported that one or more internal devices (I2C mux, IMU, "
+       "a camera, or an FPGA) did not respond during its power-on self-check. "
+       "The system cannot scan reliably in this state.",
+       "Power-cycle the sensor and reconnect. If it persists, the sensor "
+       "hardware needs service — contact support."),
+    _e("E-102", "startup", "Sensor self-check unreadable",
+       "The sensor connected but did not return its power-on self-check "
+       "result, so its internal device health is unknown.",
+       "Power-cycle the sensor and reconnect. If it persists, update the "
+       "sensor firmware or contact support."),
+    _e("E-103", "startup", "Console initialization failed",
+       "The console connected but its laser-power configuration could not be "
+       "applied. The laser may not operate correctly until this is resolved.",
+       "Power-cycle the console and reconnect. If it persists, contact "
+       "support — the console firmware or config may need attention."),
+    _e("E-105", "startup", "Camera power-on failed",
+       "The sensor could not power on its cameras during initialization, so "
+       "camera identities could not be read.",
+       "Power-cycle the sensor and reconnect. If only some cameras are "
+       "affected, the camera board may need service."),
+    _e("E-107", "startup", "Storage almost full",
+       "The drive that stores scan data has less than 1 GB free. Scans "
+       "cannot be started until space is freed.",
+       "Free up space on the data drive (or export and remove old scans) "
+       "before starting a scan. Contact support if the drive should not "
+       "be full."),
+    _e("E-108", "startup", "Scan storage inaccessible",
+       "The scan database in the data folder is not encrypted. This build "
+       "stores patient data only in encrypted form, so it will not open "
+       "that database and scans cannot be started.",
+       "Do not delete or move the data folder: it may hold patient data. "
+       "Contact support with the session log attached."),
 ]
 
 # Note: E-104 (console not detected) and E-106 (sensor not detected) are NOT in
@@ -105,97 +86,68 @@ _STARTUP = [
 
 # --- E-2xx: laser safety -----------------------------------------------------
 _SAFETY = [
-    _e(
-        "E-201", "safety",
-        "Laser safety monitor unresponsive",
-        "The laser-safety monitor stopped reporting a known-good state for "
-        "longer than the allowed transient window, so laser safety cannot be "
-        "confirmed. The laser was shut off as a precaution.",
-        "Power-cycle the system and reconnect. Do not scan until this clears "
-        "— contact support if it persists; the safety I2C link may be "
-        "failing.",
-    ),
-    _e(
-        "E-202", "safety",
-        "Laser safety trip",
-        "The laser-safety monitor tripped during a scan and the laser was shut "
-        "off. The scan was stopped.",
-        "Remove any obstruction, let the system settle, and start a new scan. "
-        "If it trips repeatedly, stop and contact support.",
-    ),
-    _e(
-        "E-203", "safety",
-        "Laser safety trip",
-        "The laser-safety monitor tripped while no scan was running and the "
-        "laser was shut off. The safety interlock stays latched until the "
-        "console is power-cycled.",
-        "Power-cycle the console and reconnect before starting a scan. If it "
-        "trips again, stop and contact support.",
-    ),
+    _e("E-201", "safety", "Laser safety monitor unresponsive",
+       "The laser-safety monitor stopped reporting a known-good state for "
+       "longer than the allowed transient window, so laser safety cannot be "
+       "confirmed. The laser was shut off as a precaution.",
+       "Power-cycle the system and reconnect. Do not scan until this clears "
+       "— contact support if it persists; the safety I2C link may be "
+       "failing."),
+    _e("E-202", "safety", "Laser safety trip",
+       "The laser-safety monitor tripped during a scan and the laser was shut "
+       "off. The scan was stopped.",
+       "Remove any obstruction, let the system settle, and start a new scan. "
+       "If it trips repeatedly, stop and contact support."),
+    _e("E-203", "safety", "Laser safety trip",
+       "The laser-safety monitor tripped while no scan was running and the "
+       "laser was shut off. The safety interlock stays latched until the "
+       "console is power-cycled.",
+       "Power-cycle the console and reconnect before starting a scan. If it "
+       "trips again, stop and contact support."),
 ]
 
 # --- E-3xx: scan / capture ---------------------------------------------------
 _SCAN = [
-    _e(
-        "E-301", "scan",
-        "Scan aborted before start",
-        "A scan was requested but a precondition check failed, so the scan was "
-        "aborted before the laser fired.",
-        "Resolve the reported precondition (connection, safety, or "
-        "configuration) and start the scan again.",
-    ),
-    _e(
-        "E-302", "scan",
-        "Scan could not start",
-        "The system refused to start a new scan, usually because a previous "
-        "scan is still finishing.",
-        "Wait a few seconds for the previous scan to finish, then try again. "
-        "Reconnect if the system stays busy.",
-    ),
-    _e(
-        "E-303", "scan",
-        "Camera data lost during scan",
-        "Every camera stopped delivering data and acquisition could not "
-        "continue, so the scan was stopped. Data captured before the loss "
-        "was saved.",
-        "Check the sensor cables and power, then reconnect and start a new "
-        "scan. If it happens repeatedly, contact support.",
-    ),
-    _e(
-        "E-304", "scan",
-        "Device disconnected during scan",
-        "A console or sensor was disconnected while the scan was running, so "
-        "the scan was stopped. Some data loss may have occurred — data "
-        "captured before the disconnection is not guaranteed to have been "
-        "saved.",
-        "Check the USB cables and power, reconnect the system, and start a "
-        "new scan. If it keeps happening, contact support.",
-    ),
-    _e(
-        "E-305", "scan",
-        "Not enough storage to start scan",
-        "The drive that stores scan data has less than 1 GB free, so the "
-        "scan was not started and the laser did not fire.",
-        "Free up space on the data drive (or export and remove old scans), "
-        "then start the scan again. Contact support if the drive should "
-        "not be full.",
-    ),
-    _e(
-        "E-306", "scan",
-        "Scan stopped: storage almost full",
-        "The drive that stores scan data dropped below 100 MB free during "
-        "the scan, so the scan was stopped before the drive filled up. Data "
-        "captured so far was saved.",
-        "Free up space on the data drive (or export and remove old scans) "
-        "before starting another scan. Contact support if the drive should "
-        "not be full.",
-    ),
+    _e("E-301", "scan", "Scan aborted before start",
+       "A scan was requested but a precondition check failed, so the scan was "
+       "aborted before the laser fired.",
+       "Resolve the reported precondition (connection, safety, or "
+       "configuration) and start the scan again."),
+    _e("E-302", "scan", "Scan could not start",
+       "The system refused to start a new scan, usually because a previous "
+       "scan is still finishing.",
+       "Wait a few seconds for the previous scan to finish, then try again. "
+       "Reconnect if the system stays busy."),
+    _e("E-303", "scan", "Camera data lost during scan",
+       "Every camera stopped delivering data and acquisition could not "
+       "continue, so the scan was stopped. Data captured before the loss "
+       "was saved.",
+       "Check the sensor cables and power, then reconnect and start a new "
+       "scan. If it happens repeatedly, contact support."),
+    _e("E-304", "scan", "Device disconnected during scan",
+       "A console or sensor was disconnected while the scan was running, so "
+       "the scan was stopped. Some data loss may have occurred — data "
+       "captured before the disconnection is not guaranteed to have been "
+       "saved.",
+       "Check the USB cables and power, reconnect the system, and start a "
+       "new scan. If it keeps happening, contact support."),
+    _e("E-305", "scan", "Not enough storage to start scan",
+       "The drive that stores scan data has less than 1 GB free, so the "
+       "scan was not started and the laser did not fire.",
+       "Free up space on the data drive (or export and remove old scans), "
+       "then start the scan again. Contact support if the drive should "
+       "not be full."),
+    _e("E-306", "scan", "Scan stopped: storage almost full",
+       "The drive that stores scan data dropped below 100 MB free during "
+       "the scan, so the scan was stopped before the drive filled up. Data "
+       "captured so far was saved.",
+       "Free up space on the data drive (or export and remove old scans) "
+       "before starting another scan. Contact support if the drive should "
+       "not be full."),
 ]
 
 
-ERROR_CODES: dict[str, CriticalError] = {
-    err.code: err for err in (*_STARTUP, *_SAFETY, *_SCAN)
-}
+ERROR_CODES: dict[str, CriticalError] = {err.code: err for err in (*_STARTUP, *_SAFETY, *_SCAN)}
 
 
 def lookup(code: str) -> CriticalError:
@@ -205,13 +157,7 @@ def lookup(code: str) -> CriticalError:
     code, so the modal can always show *something* even for a code that
     predates this build.
     """
-    err = ERROR_CODES.get(code)
-    if err is not None:
-        return err
-    return CriticalError(
-        code=code,
-        category="startup",
-        title="Error",
-        message="An error occurred.",
+    return ERROR_CODES.get(code) or CriticalError(
+        code=code, category="startup", title="Error", message="An error occurred.",
         suggested_action="Contact support with the session log attached.",
     )

@@ -47,6 +47,4 @@ def below(free: Optional[int], limit_mb: float) -> bool:
     """True when known free space is under ``limit_mb``. An unknown
     ``free`` (None) or a non-positive limit (check disabled) is never
     below."""
-    if free is None or limit_mb <= 0:
-        return False
-    return free < limit_mb * MB
+    return free is not None and limit_mb > 0 and free < limit_mb * MB

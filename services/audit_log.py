@@ -47,14 +47,14 @@ EV_DEBUG_BUNDLE_CREATED = "debug_bundle_created"
 
 # CSV export column order.
 _CSV_FIELDS = ["ts_iso", "ts_epoch", "event_type", "details"]
+# Keys of the dicts query() returns.
+_QUERY_COLUMNS = ("id", "ts_epoch", "ts_iso", "event_type", "details")
 
 
 def _escape_like(needle: str) -> str:
     """Escape LIKE wildcards so ``needle`` matches literally (used with
     ``ESCAPE '\\'``)."""
-    return (
-        needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    )
+    return needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def parse_date_bound(text: Any, end: bool = False) -> Optional[float]:
@@ -95,17 +95,11 @@ def gather_host_info() -> Dict[str, Any]:
             import ctypes
 
             class _MEMSTATUSEX(ctypes.Structure):
-                _fields_ = [
-                    ("dwLength", ctypes.c_ulong),
-                    ("dwMemoryLoad", ctypes.c_ulong),
-                    ("ullTotalPhys", ctypes.c_ulonglong),
-                    ("ullAvailPhys", ctypes.c_ulonglong),
-                    ("ullTotalPageFile", ctypes.c_ulonglong),
-                    ("ullAvailPageFile", ctypes.c_ulonglong),
-                    ("ullTotalVirtual", ctypes.c_ulonglong),
-                    ("ullAvailVirtual", ctypes.c_ulonglong),
-                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-                ]
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong)] + [
+                    (name, ctypes.c_ulonglong) for name in (
+                        "ullTotalPhys", "ullAvailPhys", "ullTotalPageFile",
+                        "ullAvailPageFile", "ullTotalVirtual", "ullAvailVirtual",
+                        "ullAvailExtendedVirtual")]
 
             mem = _MEMSTATUSEX()
             mem.dwLength = ctypes.sizeof(_MEMSTATUSEX)
@@ -125,23 +119,31 @@ class AuditLog:
         self._lock = threading.Lock()
         self._conn: Optional[sqlite3.Connection] = None
         if not db_path:
-            logger.info(
-                "AuditLog: no db_path — audit logging disabled (no-op)."
-            )
+            logger.info("AuditLog: no db_path — audit logging disabled (no-op).")
             return
         try:
-            # Open through the SDK helper, not stdlib sqlite3. On a clinical
-            # build scans.db is SQLCipher-encrypted, and a stdlib connection
-            # raises "file is not a database" — which the fail-soft handler
+            # Open through the SDK helper, not stdlib sqlite3: on a clinical
+            # build scans.db is SQLCipher-encrypted and a stdlib connection
+            # raises "file is not a database", which the fail-soft handler
             # below would swallow, silently disabling the audit log on exactly
             # the builds that need it. db_open picks the driver from the
-            # process encryption policy, applies the key, and sets the same
-            # WAL/busy_timeout PRAGMAs this used to set by hand. AuditLog
-            # itself never sees the key.
+            # process encryption policy, applies the key and sets the
+            # WAL/busy_timeout PRAGMAs. AuditLog itself never sees the key.
             from omotion import db_open
 
             self._conn = db_open.connect(db_path)
-            self._init_schema()
+            self._conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS logs (
+                    id          INTEGER PRIMARY KEY,
+                    ts_epoch    REAL NOT NULL,
+                    ts_iso      TEXT NOT NULL,
+                    event_type  TEXT NOT NULL,
+                    details     TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs(ts_epoch);
+                """
+            )
         except Exception:
             logger.warning(
                 "AuditLog: failed to open %s — disabling audit logging.",
@@ -149,41 +151,21 @@ class AuditLog:
             )
             self._conn = None
 
-    def _init_schema(self) -> None:
-        assert self._conn is not None
-        self._conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS logs (
-                id          INTEGER PRIMARY KEY,
-                ts_epoch    REAL NOT NULL,
-                ts_iso      TEXT NOT NULL,
-                event_type  TEXT NOT NULL,
-                details     TEXT
-            );
-            CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs(ts_epoch);
-            """
-        )
-
     @property
     def enabled(self) -> bool:
+        """False when the log degraded to a no-op."""
         return self._conn is not None
 
-    def log(
-        self, event_type: str, details: Optional[Dict[str, Any]] = None
-    ) -> None:
+    def log(self, event_type: str, details: Optional[Dict[str, Any]] = None) -> None:
         """Append one event. ``details`` (if not None) is stored as compact,
         deterministic JSON. Never raises."""
         ts_epoch = time.time()
-        ts_iso = (
-            datetime.datetime.fromtimestamp(ts_epoch)
-            .astimezone()
-            .isoformat(timespec="seconds")
-        )
-        details_json = (
-            json.dumps(details, separators=(",", ":"), sort_keys=True,
-                       default=str)
-            if details is not None else None
-        )
+        ts_iso = datetime.datetime.fromtimestamp(ts_epoch).astimezone().isoformat(
+            timespec="seconds")
+        details_json = None
+        if details is not None:
+            details_json = json.dumps(
+                details, separators=(",", ":"), sort_keys=True, default=str)
         try:
             with self._lock:
                 if self._conn is None:
@@ -195,9 +177,19 @@ class AuditLog:
                 )
                 self._conn.commit()
         except Exception:
-            logger.warning(
-                "AuditLog: failed to write %s event", event_type, exc_info=True
-            )
+            logger.warning("AuditLog: failed to write %s event", event_type, exc_info=True)
+
+    def _fetch(self, what: str, sql: str, params=()) -> Optional[list]:
+        """Rows for ``sql``, or None when disabled or on error (logged as
+        "AuditLog: <what> failed")."""
+        try:
+            with self._lock:
+                if self._conn is None:
+                    return None
+                return self._conn.execute(sql, params).fetchall()
+        except Exception:
+            logger.warning("AuditLog: %s failed", what, exc_info=True)
+            return None
 
     def query(
         self,
@@ -219,7 +211,6 @@ class AuditLog:
 
         ``limit`` applies to the filtered rows.
         """
-        sql = "SELECT id, ts_epoch, ts_iso, event_type, details FROM logs"
         where: List[str] = []
         params: List[Any] = []
         if event_type:
@@ -234,83 +225,45 @@ class AuditLog:
         if contains:
             pat = f"%{_escape_like(str(contains))}%"
             where.append(
-                "(event_type LIKE ? ESCAPE '\\'"
-                " OR IFNULL(details, '') LIKE ? ESCAPE '\\')"
-            )
+                "(event_type LIKE ? ESCAPE '\\' OR IFNULL(details, '') LIKE ? ESCAPE '\\')")
             params += [pat, pat]
+        sql = f"SELECT {', '.join(_QUERY_COLUMNS)} FROM logs"
         if where:
             sql += " WHERE " + " AND ".join(where)
-        sql += " ORDER BY id DESC LIMIT ?"
-        params.append(int(limit))
-        try:
-            with self._lock:
-                if self._conn is None:
-                    return []
-                cur = self._conn.execute(sql, params)
-                cols = [c[0] for c in cur.description]
-                return [dict(zip(cols, row)) for row in cur.fetchall()]
-        except Exception:
-            logger.warning("AuditLog: query failed", exc_info=True)
-            return []
+        rows = self._fetch("query", sql + " ORDER BY id DESC LIMIT ?", params + [int(limit)])
+        return [dict(zip(_QUERY_COLUMNS, row)) for row in rows or []]
 
     def distinct_event_types(self) -> List[str]:
         """Sorted list of the distinct event types present in the log
         (for filter dropdowns). Empty when disabled / on error."""
-        try:
-            with self._lock:
-                if self._conn is None:
-                    return []
-                cur = self._conn.execute(
-                    "SELECT DISTINCT event_type FROM logs"
-                    " ORDER BY event_type ASC"
-                )
-                return [row[0] for row in cur.fetchall()]
-        except Exception:
-            logger.warning("AuditLog: distinct_event_types failed",
-                           exc_info=True)
-            return []
+        rows = self._fetch(
+            "distinct_event_types", "SELECT DISTINCT event_type FROM logs ORDER BY event_type ASC")
+        return [row[0] for row in rows or []]
 
     def count(self) -> int:
         """Total number of log rows (0 when disabled / on error)."""
-        try:
-            with self._lock:
-                if self._conn is None:
-                    return 0
-                row = self._conn.execute(
-                    "SELECT COUNT(*) FROM logs"
-                ).fetchone()
-                return int(row[0]) if row else 0
-        except Exception:
-            logger.warning("AuditLog: count failed", exc_info=True)
-            return 0
+        rows = self._fetch("count", "SELECT COUNT(*) FROM logs")
+        return int(rows[0][0]) if rows else 0
 
     def export_csv(self, dest_path: str | Path) -> int:
         """Write the full log (oldest first) to ``dest_path`` as CSV.
         Returns the number of data rows written (0 on any failure)."""
-        with self._lock:
-            if self._conn is None:
-                return 0
-            try:
-                rows = self._conn.execute(
-                    "SELECT ts_iso, ts_epoch, event_type, details"
-                    " FROM logs ORDER BY id ASC"
-                ).fetchall()
-            except Exception:
-                logger.warning("AuditLog: export_csv query failed",
-                               exc_info=True)
-                return 0
+        rows = self._fetch(
+            "export_csv query", f"SELECT {', '.join(_CSV_FIELDS)} FROM logs ORDER BY id ASC")
+        if rows is None:
+            return 0
         try:
             with open(dest_path, "w", newline="", encoding="utf-8") as f:
                 w = csv.writer(f)
                 w.writerow(_CSV_FIELDS)
                 w.writerows(rows)
         except OSError:
-            logger.warning("AuditLog: export_csv write to %s failed",
-                           dest_path, exc_info=True)
+            logger.warning("AuditLog: export_csv write to %s failed", dest_path, exc_info=True)
             return 0
         return len(rows)
 
     def close(self) -> None:
+        """Close the connection; later calls are no-ops."""
         with self._lock:
             if self._conn is not None:
                 self._conn.close()

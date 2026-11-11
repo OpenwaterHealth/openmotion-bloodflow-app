@@ -65,7 +65,7 @@ def _make_sink(conn, live_source=None):
     """Helper: build a _LivePlotSink with a stub live_source if not provided."""
     if live_source is None:
         live_source = _RecorderLiveSource()
-    return _LivePlotSink(connector=conn, plot_t0=0.0, live_source=live_source), live_source
+    return _LivePlotSink(connector=conn, live_source=live_source), live_source
 
 
 def test_live_plot_sink_appends_only_source_camera_for_each_row():
@@ -436,7 +436,7 @@ def test_live_plot_sink_records_every_arrival_into_gap_tracker():
     conn = _connector()
     tracker = NanGapTracker()
     src = _RecorderLiveSource()
-    sink = _LivePlotSink(connector=conn, plot_t0=0.0, live_source=src,
+    sink = _LivePlotSink(connector=conn, live_source=src,
                          nan_gap_tracker=tracker)
     batch = SimpleNamespace(
         bfi_live=np.zeros((3, 2, 8), dtype=np.float32),
@@ -482,7 +482,7 @@ def test_live_plot_sink_covered_camera_appends_nan_gap_samples():
     conn = _connector()
     tracker = NanGapTracker()
     src = _RecorderLiveSource()
-    sink = _LivePlotSink(connector=conn, plot_t0=0.0, live_source=src,
+    sink = _LivePlotSink(connector=conn, live_source=src,
                          nan_gap_tracker=tracker)
     batch = SimpleNamespace(
         bfi_live=np.full((2, 2, 8), np.nan, dtype=np.float32),
@@ -660,7 +660,7 @@ def test_live_plot_sink_side_average_records_arrivals_into_tracker():
     conn = _connector()
     tracker = NanGapTracker()
     src = _RecorderLiveSource()
-    sink = _LivePlotSink(connector=conn, plot_t0=0.0, live_source=src,
+    sink = _LivePlotSink(connector=conn, live_source=src,
                          nan_gap_tracker=tracker)
 
     sink.consume("live_side", SimpleNamespace(

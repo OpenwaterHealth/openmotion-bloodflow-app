@@ -2,15 +2,11 @@
 import json
 import time
 
-from PyQt6.QtCore import QTimer, QVariant, QRecursiveMutex, pyqtProperty, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QTimer, QRecursiveMutex, pyqtProperty, pyqtSignal, pyqtSlot
 from connector._common import logger
 from hardware.motion_config import (
     TEC_TRIP_MAX_C, TEC_TRIP_MIN_C, TecTripOutcome, ensure_tec_trip, tec_voltage_params,
 )
-
-# constants for calculations
-SCALE_V = 0.0909
-SCALE_I = 0.25
 
 # Console front-panel RGB LED states: wire values of the firmware's
 # OW_CTRL_SET_IND command (console-fw led_driver.h: LED_NONE=0, LED_RED=1,
@@ -30,23 +26,39 @@ _ERROR_LED_BLINK_MS = 500  # on/off half-period, matches firmware Error_Handler
 # surface before the laser can be fired).
 SAFETY_UNKNOWN_STREAK_THRESHOLD = 3
 
+
 def _safety_unknown_streak_decision(snap, prev_streak, threshold=SAFETY_UNKNOWN_STREAK_THRESHOLD):
-    """Update the safety-unknown streak counter and decide whether to fire.
+    """Update the safety-unknown streak; returns ``(new_streak, should_fire)``.
 
-    Returns ``(new_streak, should_fire)``.
-
-    - ``safety_known=False`` (chip unresponsive on this poll): increment
-      the streak and report ``should_fire=True`` once it reaches the
-      threshold. The connector's outer ``if not self._safetyFailure``
-      guard prevents the toast from re-firing on every subsequent poll.
-    - ``safety_known=True`` (or missing, for backward compat with legacy
-      SDK snapshots): reset the streak; the caller handles the
-      ``safety_ok`` branch separately.
+    ``safety_known=False`` (chip unresponsive on this poll) increments the
+    streak and fires once it reaches the threshold; the caller's
+    ``if not self._safetyFailure`` guard stops re-fires on later polls.
+    ``safety_known=True`` (or missing, on legacy snapshots) resets it.
     """
     if not getattr(snap, "safety_known", True):
         new_streak = prev_streak + 1
         return new_streak, new_streak >= threshold
     return 0, False
+
+
+# The two steps every laser-safety trip shares. Module functions (not
+# methods) so readSafetyStatus stays callable on the bare fakes the tests use.
+def _latch_safety_failure(conn, fault_detail: str) -> None:
+    """Log the trip, latch ``safetyFailure`` and fire the persistent toast."""
+    logger.error(f"Laser safety failure: {fault_detail}")
+    conn.safetyFailure = True
+    conn._fire_safety_notification(fault_detail)
+
+
+def _shut_laser_off(conn) -> None:
+    """Stop the trigger and tell QML the laser is off.
+
+    laserStateChanged is the zero-arg notify signal of ``laserOn``: set the
+    state and emit() without args (passing ``False`` raises in PyQt).
+    """
+    conn.stopTrigger()
+    conn._laserOn = False
+    conn.laserStateChanged.emit()
 
 
 class ConsoleMixin:
@@ -65,13 +77,6 @@ class ConsoleMixin:
         self._console_connected_at: float | None = None
         self._tec_voltage_params = tec_voltage_params()
         self._console_mutex = QRecursiveMutex()
-        self._tec_voltage = 0.0
-        self._tec_temp = 0.0
-        self._tec_monV = 0.0
-        self._tec_monC = 0.0
-        self._tec_good = False
-        self._pdu_raws = [0] * 16
-        self._pdu_vals = [0.0] * 16
         # Console error-LED blink (issue #257): while the critical-error
         # modal is up, blink the console front-panel LED blue instead of
         # leaving it solid green. Started via _errorLedBlinkRequested
@@ -82,18 +87,16 @@ class ConsoleMixin:
         self._error_led_timer.timeout.connect(self._on_error_led_tick)
         self._error_led_on = False  # True while the blue half-period is lit
 
-    laserStateChanged = pyqtSignal()  # Signal to notify QML of laser state changes
-    safetyFailureStateChanged = pyqtSignal()  # Signal to notify QML of safety
-    safetyTripDuringCaptureRequested = pyqtSignal()  # Emitted when safety trips while scan running (main-thread slot shows message & schedules cancel)
-    triggerStateChanged = pyqtSignal()  # Signal to notify QML of trigger state changes
+    laserStateChanged = pyqtSignal()
+    safetyFailureStateChanged = pyqtSignal()
+    # Safety tripped while a scan runs; the main-thread slot shows the
+    # message and schedules the cancel.
+    safetyTripDuringCaptureRequested = pyqtSignal()
+    triggerStateChanged = pyqtSignal()
     # Private worker→main marshalling: _raise_critical may fire from USB I/O
     # or scanner worker threads, but the console error-LED blink QTimer lives
     # on the GUI thread that owns it (issue #257). Wired in connect_signals.
     _errorLedBlinkRequested = pyqtSignal()
-    # post-processing signals
-
-    pduMonChanged = pyqtSignal()
-    tecStatusChanged = pyqtSignal()
 
     @pyqtProperty(bool, notify=laserStateChanged)
     def laserOn(self):
@@ -110,11 +113,8 @@ class ConsoleMixin:
         if self._safetyFailure != value:
             self._safetyFailure = value
             self.safetyFailureStateChanged.emit()
-            # Clear the persistent laser-safety toast on recovery. The
-            # toast is *fired* by ``_fire_safety_notification`` in the
-            # call site (readSafetyStatus) where the decoded fault
-            # detail is available — we only handle dismissal here so
-            # we don't double-fire without context.
+            # Recovery clears the persistent toast; it is *fired* by
+            # readSafetyStatus, where the decoded fault detail is available.
             if not value:
                 self.dismissNotification("laser_safety")
 
@@ -132,76 +132,32 @@ class ConsoleMixin:
         )
         if fault_detail and self._app_config.get("engineeringMode", False):
             msg += f"\n[dev] {fault_detail}"
-        self.notify(
-            msg,
-            type_="error",
-            duration_ms=0,
-            dismissible=False,
-            tag="laser_safety",
-        )
+        self.notify(msg, type_="error", duration_ms=0, dismissible=False, tag="laser_safety")
 
     @pyqtProperty(str, notify=triggerStateChanged)
     def triggerState(self):
+        """Expose the trigger state ("ON" / "OFF") to QML."""
         return self._trigger_state
 
     def _on_telemetry_update(self, snap) -> None:
+        """SDK telemetry-poll callback (~1 Hz): feed the laser-safety check."""
         if not snap.read_ok:
             logger.warning("Telemetry poll error: %s", snap.error)
             return
-
-        try:
-            self.tec_status(snap)
-            logger.debug(
-                "TEC Status – temp: %.2f set: %.2f tec_c: %.3f tec_v: %.3f good: %s",
-                self._tec_voltage, self._tec_temp,
-                snap.tec_curr_raw, snap.tec_volt_raw, snap.tec_good,
-            )
-        except Exception as exc:
-            logger.error("_on_telemetry_update TEC error: %s", exc)
-
-        try:
-            self.pdu_mon(snap)
-            if snap.pdu_volts:
-                logger.debug(
-                    "PDU MON ADC0 vals: %s",
-                    " ".join(f"{(v / SCALE_V):.3f}" for v in snap.pdu_volts[:8]),
-                )
-                adc1_scaled = [
-                    (v / SCALE_V) if idx == 6 else (v / SCALE_I)
-                    for idx, v in enumerate(snap.pdu_volts[8:])
-                ]
-                logger.debug(
-                    "PDU MON ADC1 vals: %s",
-                    " ".join(f"{v:.3f}" for v in adc1_scaled),
-                )
-        except Exception as exc:
-            logger.error("_on_telemetry_update PDU error: %s", exc)
-
         try:
             self.readSafetyStatus(snap)
         except Exception as exc:
             logger.error("_on_telemetry_update safety error: %s", exc)
 
-        try:
-            logger.debug(
-                "Analog Values – TCM: %d, TCL: %d, PDC: %.3f",
-                snap.tcm, snap.tcl, snap.pdc,
-            )
-        except Exception as exc:
-            logger.error("_on_telemetry_update analog error: %s", exc)
-
     def _on_safety_trip_during_capture(self):
-        """Called on main thread when safety tripped while scan was running: show message and cancel scan in 5 s."""
+        """Main thread: safety tripped mid-scan; show E-202 and cancel the scan in 5 s."""
         if not self._capture_running or self._safety_cancel_scheduled:
             return
         self._safety_cancel_scheduled = True
-        self.captureLog.emit(
-            "Laser safety system tripped. Scan will be cancelled in 5 seconds."
-        )
+        self.captureLog.emit("Laser safety system tripped. Scan will be cancelled in 5 seconds.")
         self._note_scan_abort(
             "E-202",
-            f"laser safety system tripped mid-scan "
-            f"(scan elapsed {self._scan_elapsed_str()})",
+            f"laser safety system tripped mid-scan (scan elapsed {self._scan_elapsed_str()})",
         )
         self._raise_critical("E-202")
         QTimer.singleShot(5000, self.stopCapture)
@@ -222,82 +178,31 @@ class ConsoleMixin:
         else:
             self._raise_critical("E-203", detail=fault_detail)
 
-    @pyqtSlot(result=QVariant)
-    def tec_status(self, snap=None):
-        if snap is None:
-            snap = self._interface.console.telemetry.get_snapshot()
-        if snap is None or not snap.read_ok:
-            return False
-
-        from omotion.console_telemetry_conversions import (
-            tec_thermistor_voltage_to_celsius,
-            tec_current_to_amps,
-            tec_voltage_to_volts,
-        )
-
-        self._tec_voltage = round(
-            tec_thermistor_voltage_to_celsius(snap.tec_v_raw), 2
-        )
-        self._tec_temp = round(
-            tec_thermistor_voltage_to_celsius(snap.tec_set_raw), 2
-        )
-        self._tec_monC = round(tec_current_to_amps(snap.tec_curr_raw), 3)
-        self._tec_monV = round(tec_voltage_to_volts(snap.tec_volt_raw), 3)
-        self._tec_good = bool(snap.tec_good)
-
-        self.tecStatusChanged.emit()
-        return True
-
-    @pyqtSlot(result=QVariant)
-    def pdu_mon(self, snap=None):
-        if snap is None:
-            snap = self._interface.console.telemetry.get_snapshot()
-        if snap is None or not snap.read_ok or not snap.pdu_raws:
-            return {"ok": False, "error": "no data"}
-
-        self._pdu_raws = list(snap.pdu_raws)
-        self._pdu_vals = list(snap.pdu_volts)
-        self.pduMonChanged.emit()
-
-        return {
-            "ok": True,
-            "adc0": {"raws": self._pdu_raws[:8], "vals": self._pdu_vals[:8]},
-            "adc1": {"raws": self._pdu_raws[8:], "vals": self._pdu_vals[8:]},
-        }
-
     @pyqtSlot()
     def readSafetyStatus(self, snap=None):
+        """Check one telemetry snapshot for a laser-safety trip and surface it.
+
+        A trip latches ``safetyFailure`` (so it surfaces once), fires the
+        persistent toast, stops the trigger and raises a blocking modal:
+        E-201 when the interlock chip is unresponsive, else E-202 / E-203
+        via ``_surface_safety_trip``.
+        """
         if snap is None:
             snap = self._interface.console.telemetry.get_snapshot()
         if snap is None:
             logger.warning("readSafetyStatus: no telemetry snapshot yet")
             return
         try:
-            # If the safety interlock chip didn't respond on this poll,
-            # ``safety_ok`` is the dataclass default ``True`` — not a
-            # verified clear signal. Earlier #107 fix tripped on the
-            # first unresponsive poll, but #119 showed that a single
-            # missed I2C read can be a transient during a USB
-            # disconnect cascade rather than a real chip fault. Require
-            # a streak (~3 s at 1 Hz) before firing; still well under
-            # the time a user takes to reach Check.
-            #
-            # **GRACE PERIOD**: During the first 5 seconds after console
-            # connection (power-on or reconnect), allow transient
-            # unresponsiveness without triggering a safety failure. This
-            # prevents spurious warnings during rapid power cycles where
-            # the safety chip may not respond immediately while hardware
-            # initializes. After the grace period, any unresponsiveness
-            # is treated as a persistent fault.
-            #
-            # Backward compat: snapshots from older SDK builds without
-            # ``safety_known`` keep the existing (less safe) behavior
-            # of trusting the default ``True``.
             self._safety_unknown_streak, should_fire_unknown = (
                 _safety_unknown_streak_decision(snap, self._safety_unknown_streak)
             )
+            # Chip didn't respond on this poll: ``safety_ok`` is then the
+            # dataclass default ``True``, not a verified clear (#107). A
+            # snapshot without ``safety_known`` is trusted, as before.
             if not getattr(snap, "safety_known", True):
-                # Grace period: suppress all trips during first 5 s after connect
+                # Grace period: for 5 s after console connect the chip may
+                # not answer yet while hardware initialises (rapid power
+                # cycles); suppress every trip in that window.
                 if self._console_connected_at is not None:
                     time_since_connect = time.monotonic() - self._console_connected_at
                     if time_since_connect < 5.0:
@@ -306,54 +211,35 @@ class ConsoleMixin:
                             f"{time_since_connect:.1f}s after connect (within grace period)"
                         )
                         return
-                # After grace period: require streak before firing
-                if not should_fire_unknown:
-                    return  # transient miss; wait for streak to confirm
-                if not self._safetyFailure:
-                    fault_detail = (
-                        "safety interlock chip unresponsive — cannot "
-                        "verify laser safety state"
-                    )
-                    logger.error(f"Laser safety failure: {fault_detail}")
-                    self.safetyFailure = True
-                    self._fire_safety_notification(fault_detail)
-                    self._raise_critical("E-201", detail=fault_detail)
-                    self.stopTrigger()
-                    self._laserOn = False
-                    self.laserStateChanged.emit()
-                    if self._capture_running and not self._safety_cancel_scheduled:
-                        self.safetyTripDuringCaptureRequested.emit()
-                return
-            if snap.safety_ok:
+                # #119: one missed I2C read can be a transient of a USB
+                # disconnect cascade; wait for the streak to confirm.
+                if not should_fire_unknown or self._safetyFailure:
+                    return
+                fault_detail = (
+                    "safety interlock chip unresponsive — cannot verify laser safety state")
+                _latch_safety_failure(self, fault_detail)
+                self._raise_critical("E-201", detail=fault_detail)
+                _shut_laser_off(self)
+                if self._capture_running and not self._safety_cancel_scheduled:
+                    self.safetyTripDuringCaptureRequested.emit()
+            elif snap.safety_ok:
                 if self._safetyFailure:
                     self.safetyFailure = False
-            else:
-                if not self._safetyFailure:
-                    # Decode which safety bits tripped so the engineering-
-                    # mode toast (and the log) can name them. The SDK
-                    # owns the bit→label mapping in ConsoleTelemetry.
-                    from omotion.ConsoleTelemetry import _decode_safety_faults
-                    se_faults = _decode_safety_faults(snap.safety_se)
-                    so_faults = _decode_safety_faults(snap.safety_so)
-                    fault_detail = (
-                        f"safety_se=0x{snap.safety_se:02X} "
-                        f"({', '.join(se_faults) or 'no faults'}); "
-                        f"safety_so=0x{snap.safety_so:02X} "
-                        f"({', '.join(so_faults) or 'no faults'})"
-                    )
-                    logger.error(f"Laser safety failure: {fault_detail}")
-                    self.safetyFailure = True
-                    self._fire_safety_notification(fault_detail)
-                    self.stopTrigger()
-                    # laserStateChanged is the notify signal for the
-                    # zero-arg laserOn pyqtProperty — set the underlying
-                    # state and emit() without args so QML re-reads the
-                    # property. Previous form passed `False` and PyQt
-                    # raised "signal has 0 arguments but 1 provided",
-                    # which surfaced via the dev-mode safety toast.
-                    self._laserOn = False
-                    self.laserStateChanged.emit()
-                    self._surface_safety_trip(fault_detail)
+            elif not self._safetyFailure:
+                # Name the tripped bits for the engineering toast and the
+                # log; the SDK owns the bit→label mapping.
+                from omotion.ConsoleTelemetry import _decode_safety_faults
+                se_faults = _decode_safety_faults(snap.safety_se)
+                so_faults = _decode_safety_faults(snap.safety_so)
+                fault_detail = (
+                    f"safety_se=0x{snap.safety_se:02X} "
+                    f"({', '.join(se_faults) or 'no faults'}); "
+                    f"safety_so=0x{snap.safety_so:02X} "
+                    f"({', '.join(so_faults) or 'no faults'})"
+                )
+                _latch_safety_failure(self, fault_detail)
+                _shut_laser_off(self)
+                self._surface_safety_trip(fault_detail)
         except Exception as e:
             logger.error(f"readSafetyStatus failed: {e}")
             self.safetyFailure = True
@@ -362,52 +248,30 @@ class ConsoleMixin:
                 self.safetyTripDuringCaptureRequested.emit()
 
     @pyqtSlot(str, result=bool)
-    def setTrigger(self, triggerjson):  # Lock auto-released at function exit
+    def setTrigger(self, triggerjson):
+        """Push a trigger config (JSON; only the fields to change) to the console."""
         try:
-            json_trigger_data = json.loads(triggerjson)
-
-            # Resolve to (interface default ⊕ override). QML callers
-            # only need to specify the fields they want to change
-            # (typically just ``TriggerStatus``); absent fields fall
-            # through to the SDK's resolved default rather than being
-            # sent as missing keys.
-            json_trigger_data = self._interface.resolve_trigger_config(
-                json_trigger_data
-            )
-
-            # Engineering override (#446 family): alternative laser pulse
-            # width, applied to every trigger push while enabled. (The
-            # dark-frame skip needs no counterpart here — it lives in the
-            # interface's default_trigger_config (main.py, #449), so the
-            # resolve above already carries it.)
-            json_trigger_data = self._apply_alt_laser_pulse_width(
-                json_trigger_data
-            )
-
-            trigger_setting = self._interface.console.set_trigger_json(
-                data=json_trigger_data
-            )
+            # Absent fields fall through to the interface's resolved default
+            # (which already carries the dark-frame skip, #449); then the
+            # engineering alternative laser pulse width (#446 family).
+            data = self._apply_alt_laser_pulse_width(
+                self._interface.resolve_trigger_config(json.loads(triggerjson)))
+            trigger_setting = self._interface.console.set_trigger_json(data=data)
             if trigger_setting:
                 logger.info(f"Trigger Setting: {trigger_setting}")
                 return True
-            else:
-                logger.error("Failed to set trigger setting.")
-                return False
-
+            logger.error("Failed to set trigger setting.")
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse JSON data: {e}")
-            return False
-
         except AttributeError as e:
             logger.error(f"Invalid interface or method: {e}")
-            return False
-
         except Exception as e:
             logger.error(f"Unexpected error while setting trigger: {e}")
-            return False
+        return False
 
     @pyqtSlot(result=bool)
     def startTrigger(self):
+        """Start the console trigger; True on success."""
         success = self._interface.console.start_trigger()
         if success:
             self._trigger_state = "ON"
@@ -417,16 +281,16 @@ class ConsoleMixin:
 
     @pyqtSlot()
     def stopTrigger(self):
+        """Stop the console trigger."""
         self._interface.console.stop_trigger()
         self._trigger_state = "OFF"
         self.triggerStateChanged.emit()
         logger.info("Trigger stopped.")
 
     def set_laser_power_from_config(self, interface):
-        # Laser-power config now lives in the SDK (omotion.laser): it bundles
-        # the FPGA register map + the laser param set and writes them over I2C.
-        # force_fault honors the forceLaserFail app flag (loads the
-        # safety-trip param set to exercise the interlock).
+        """Write the SDK's laser-power config (omotion.laser: FPGA register
+        map + laser params over I2C). forceLaserFail loads the safety-trip
+        param set instead, to exercise the interlock."""
         return interface.apply_laser_power(force_fault=self._force_laser_fail)
 
     def apply_tec_trip_from_config(self, interface) -> TecTripOutcome:
@@ -454,8 +318,7 @@ class ConsoleMixin:
         elif outcome is TecTripOutcome.SKIPPED_INVALID:
             logger.error(
                 f"Invalid tecTripTempC={temp_c!r}; leaving console over-temp "
-                f"trip untouched (expected a number in "
-                f"{TEC_TRIP_MIN_C}-{TEC_TRIP_MAX_C} °C)"
+                f"trip untouched (expected a number in {TEC_TRIP_MIN_C}-{TEC_TRIP_MAX_C} °C)"
             )
         else:  # TecTripOutcome.FAILED
             logger.error(f"Failed to apply TEC_TRIP={temp_c} °C to console")
@@ -495,6 +358,5 @@ class ConsoleMixin:
         try:
             return self._interface.console.set_rgb_led(state) == state
         except Exception:
-            logger.debug("console LED write failed (state %d)", state,
-                         exc_info=True)
+            logger.debug("console LED write failed (state %d)", state, exc_info=True)
             return False

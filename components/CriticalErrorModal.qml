@@ -4,7 +4,7 @@ import QtQuick.Layouts 6.0
 import OpenMotion 1.0
 
 /*  CriticalErrorModal — blocking, dismissible alert for showstopper
- *  conditions carrying a stable error code (see error_codes.py /
+ *  conditions carrying a stable error code (see services/error_codes.py /
  *  docs/ERROR_CODES.md).
  *
  *  Host once, top-level, above everything else:

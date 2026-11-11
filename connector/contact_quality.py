@@ -3,7 +3,7 @@ import threading
 import time
 
 from PyQt6.QtCore import pyqtSignal, pyqtSlot
-from connector._common import logger
+from connector._common import SIDES, logger
 
 # Contact-quality defaults (overridable via app_config keys
 # cq_dark_threshold_per_camera / cq_light_threshold_per_camera /
@@ -27,23 +27,16 @@ class ContactQualityMixin:
     contactQualityCheckStarted = pyqtSignal(int)  # expected duration in seconds
     contactQualityCheckFinished = pyqtSignal(bool, str, 'QVariantList')  # ok, error, warnings
     contactQualityWarning = pyqtSignal(str, str, str, float)  # camera, typeKey, typeText, value
-    # Mid-scan CQ state change (active=True on activation, False on clear).
-    # BloodFlow.qml's ``onContactQualityIssueStateChanged`` consumes the
-    # ``False`` edge to clear an entry from the live modal.
+    # Mid-scan CQ state change (active=True on activation, False on clear);
+    # BloodFlow.qml consumes the ``False`` edge to clear a live-modal entry.
     contactQualityIssueStateChanged = pyqtSignal(str, str, str, float, bool)
     contactQualityScanInProgress = pyqtSignal(bool)
-    # Runner thread → main thread marshal for live CQ transitions from the
-    # SDK's ContactQualityMonitor. Same pattern as _cq_result_signal; QML
-    # must never be touched from the pipeline worker thread.
+    # Private worker→main marshalling (QML must never be touched from a
+    # worker thread): live transitions from the SDK's ContactQualityMonitor
+    # (runner thread), and the ContactQualityResult of the pre-scan check.
     _cqTransitionSignal = pyqtSignal(str, int, str, float, bool)
-    # Private signal used to marshal ContactQualityResult from the CQ worker
-    # thread back to the main Qt thread (emitted by the _worker closure in
-    # runContactQualityCheck, consumed by _on_cq_result_ready).
     _cq_result_signal = pyqtSignal(object)
 
-    # ------------------------------------------------------------------
-    # Contact-quality quick-check
-    # ------------------------------------------------------------------
     @staticmethod
     def _camera_label(side: str, cam_id: int) -> str:
         prefix = "L" if side == "left" else "R"
@@ -56,23 +49,26 @@ class ContactQualityMixin:
             "poor_contact": "Poor sensor contact",
         }.get(type_key, type_key)
 
-    # ──────────────────────────────────────────────────────────────────
+    def _cq_thresholds(self) -> tuple[list, list]:
+        """Configured per-camera (dark, light) thresholds in DN."""
+        cfg = self._app_config or {}
+        return (
+            list(cfg.get("cq_dark_threshold_per_camera") or [CQ_DEFAULT_DARK_THRESHOLD_DN] * 8),
+            list(cfg.get("cq_light_threshold_per_camera") or [CQ_DEFAULT_LIGHT_THRESHOLD_DN] * 8),
+        )
+
     @pyqtSlot(int, int)
     def runContactQualityCheck(self, left_camera_mask: int, right_camera_mask: int):
-        """Run the contact-quality check via the SDK's ContactQualityWorkflow.
+        """Run the pre-scan contact-quality check (SDK ContactQualityWorkflow).
 
-        Delegates to interface.contact_quality_workflow.check(), which runs
-        a short scan internally and returns a ContactQualityResult with
-        per-camera BFI statistics. The SDK call is synchronous/blocking, so
-        we run it in a background thread and marshal results back via a
-        private signal.
+        ``check()`` runs a short scan and blocks, so it runs on a worker
+        thread and its ContactQualityResult (per-camera statistics) comes
+        back through ``_cq_result_signal``.
 
-        left_camera_mask / right_camera_mask: the *configured scan* mask
-        (bloodFlow.leftMask/rightMask — cameras the user actually selected,
-        with any camera set to "None" cleared). Only these cameras are
-        evaluated; a camera excluded from the scan must not be required to
-        pass contact quality. Still AND-gated on sensor-connected state
-        below, matching the pre-existing safety check.
+        The masks are the *configured scan* masks (bloodFlow.leftMask /
+        rightMask, cameras set to "None" cleared): a camera excluded from
+        the scan must not be required to pass contact quality. They are
+        still AND-gated on the sensor being connected.
         """
         err = self._ensure_idle()
         if err is not None:
@@ -81,12 +77,7 @@ class ContactQualityMixin:
 
         cfg = self._app_config or {}
         duration_s = float(cfg.get("cq_check_duration_sec", 1.0))
-        dark_thresholds = list(
-            cfg.get("cq_dark_threshold_per_camera") or [CQ_DEFAULT_DARK_THRESHOLD_DN] * 8
-        )
-        light_thresholds = list(
-            cfg.get("cq_light_threshold_per_camera") or [CQ_DEFAULT_LIGHT_THRESHOLD_DN] * 8
-        )
+        dark_thresholds, light_thresholds = self._cq_thresholds()
         rolling_window = int(cfg.get("cq_rolling_avg_window", CQ_DEFAULT_ROLLING_WINDOW))
 
         if not (self._leftSensorConnected or self._rightSensorConnected):
@@ -100,17 +91,15 @@ class ContactQualityMixin:
         left_mask = int(left_camera_mask) if self._leftSensorConnected else 0x00
         right_mask = int(right_camera_mask) if self._rightSensorConnected else 0x00
 
-        # #510: the preflight must run under the same registers the scan it
-        # gates will use — apply (or restore) the Engineering-mode
-        # alternative camera + laser settings before the check scan, exactly
-        # as startCapture does. Synchronous on this thread, before the SDK
-        # worker spawns, mirroring the scan-start call.
+        # #510: the preflight must run under the same registers as the scan
+        # it gates: apply (or restore) the Engineering-mode alternative
+        # camera + laser settings first, synchronously on this thread before
+        # the SDK worker spawns, exactly as startCapture does.
         self._sync_alt_scan_settings(left_mask, right_mask)
 
         self._cq_t0 = time.monotonic()
         logger.info(
-            "=== Contact-quality check started: duration=%.1fs "
-            "left=0x%02X right=0x%02X ===",
+            "=== Contact-quality check started: duration=%.1fs left=0x%02X right=0x%02X ===",
             duration_s, left_mask, right_mask,
         )
 
@@ -129,129 +118,78 @@ class ContactQualityMixin:
                 logger.exception("CQ workflow check raised: %s", exc)
                 self._cq_result_signal.emit(None)
 
-        t = threading.Thread(target=_worker, daemon=True, name="CQWorkflow-check")
-        t.start()
+        threading.Thread(target=_worker, daemon=True, name="CQWorkflow-check").start()
 
     @pyqtSlot(object)
     def _on_cq_result_ready(self, result):
-        """Main-thread slot: convert ContactQualityResult → UI warning list and
-        emit contactQualityCheckFinished.  Connected to _cq_result_signal in
-        __init__ (via connect_signals).
-        """
-        cfg = self._app_config or {}
-        dark_thresholds = list(
-            cfg.get("cq_dark_threshold_per_camera") or [CQ_DEFAULT_DARK_THRESHOLD_DN] * 8
-        )
-        light_thresholds = list(
-            cfg.get("cq_light_threshold_per_camera") or [CQ_DEFAULT_LIGHT_THRESHOLD_DN] * 8
-        )
-
+        """Main thread (queued via _cq_result_signal): turn a
+        ContactQualityResult into the warning list ContactQualityModal
+        expects and emit contactQualityCheckFinished."""
         self._cq_quick_running = False
         self.contactQualityScanInProgress.emit(False)
 
-        elapsed_s = (
-            time.monotonic() - self._cq_t0 if self._cq_t0 is not None else 0.0
-        )
+        elapsed_s = time.monotonic() - self._cq_t0 if self._cq_t0 is not None else 0.0
         if result is None:
-            logger.info(
-                "=== Contact-quality check ended: failed after %.1fs ===",
-                elapsed_s,
-            )
+            logger.info("=== Contact-quality check ended: failed after %.1fs ===", elapsed_s)
             self.contactQualityCheckFinished.emit(False, "CQ check failed", [])
             return
+        logger.info("=== Contact-quality check ended: completed after %.1fs ===", elapsed_s)
+
+        def dn(value) -> str:
+            return f"{value:.2f}" if value == value else "n/a"  # NaN != NaN
+
+        def threshold(values, cam_id, default):
+            return values[cam_id] if cam_id < len(values) else default
+
+        dark_thresholds, light_thresholds = self._cq_thresholds()
+        warnings: list[dict] = []
+        logger.info("CQ Final Compare (DN, pedestal-subtracted; rolling-avg light, max dark):")
         logger.info(
-            "=== Contact-quality check ended: completed after %.1fs ===",
-            elapsed_s,
-        )
-
-        # Convert CamCQResult.reason → (typeKey, warning dict) that the QML
-        # ContactQualityModal expects.
-        warnings_by_key: dict[tuple[str, str], dict] = {}
-        table_rows: list[dict] = []
-
-        # Iterate over active cameras in mask order for consistent logging.
-        for side_idx, (side, mask) in enumerate((("left", 0xFF), ("right", 0xFF))):
+            "| Camera | LightAvg | DarkMax | DarkThr | LightThr | Reason         | Warnings |")
+        logger.info(
+            "|--------|----------|---------|---------|----------|----------------|----------|")
+        for side in SIDES:
             for cam_id in range(8):
                 cam_res = result.per_camera.get((side, cam_id))
                 if cam_res is None:
                     continue  # camera not evaluated (outside mask)
                 camera = self._camera_label(side, cam_id)
-                dark_threshold = (
-                    dark_thresholds[cam_id] if cam_id < len(dark_thresholds)
-                    else CQ_DEFAULT_DARK_THRESHOLD_DN
-                )
-                light_threshold = (
-                    light_thresholds[cam_id] if cam_id < len(light_thresholds)
-                    else CQ_DEFAULT_LIGHT_THRESHOLD_DN
-                )
-                light_avg_dn = cam_res.light_avg_dn
-                dark_max_dn = cam_res.dark_max_dn
-                reason = cam_res.reason
-                warn_tags = []
-
-                if reason == "ambient_light":
-                    warnings_by_key[(camera, "ambient_light")] = {
+                # The modal knows two type keys; "no_signal" reads as poor contact.
+                type_key, value = {
+                    "ambient_light": ("ambient_light", cam_res.dark_max_dn),
+                    "poor_contact": ("poor_contact", cam_res.light_avg_dn),
+                    "no_signal": ("poor_contact", cam_res.light_avg_dn),
+                }.get(cam_res.reason, ("", 0.0))
+                if type_key:
+                    warnings.append({
                         "camera": camera,
-                        "typeKey": "ambient_light",
-                        "typeText": self._warning_text("ambient_light"),
-                        "value": float(dark_max_dn) if dark_max_dn == dark_max_dn else 0.0,
-                    }
-                    warn_tags.append("ambient_light")
-                elif reason in ("poor_contact", "no_signal"):
-                    warnings_by_key[(camera, "poor_contact")] = {
-                        "camera": camera,
-                        "typeKey": "poor_contact",
-                        "typeText": self._warning_text("poor_contact"),
-                        "value": float(light_avg_dn) if light_avg_dn == light_avg_dn else 0.0,
-                    }
-                    warn_tags.append("poor_contact")
+                        "typeKey": type_key,
+                        "typeText": self._warning_text(type_key),
+                        "value": float(value) if value == value else 0.0,
+                    })
+                logger.info(
+                    "| %-6s | %8s | %7s | %7.2f | %8.2f | %-14s | %-8s |",
+                    camera, dn(cam_res.light_avg_dn), dn(cam_res.dark_max_dn),
+                    threshold(dark_thresholds, cam_id, CQ_DEFAULT_DARK_THRESHOLD_DN),
+                    threshold(light_thresholds, cam_id, CQ_DEFAULT_LIGHT_THRESHOLD_DN),
+                    cam_res.reason, type_key or "-",
+                )
 
-                table_rows.append({
-                    "camera": camera,
-                    "light_avg_dn": f"{light_avg_dn:.2f}" if light_avg_dn == light_avg_dn else "n/a",
-                    "dark_max_dn":  f"{dark_max_dn:.2f}"  if dark_max_dn  == dark_max_dn  else "n/a",
-                    "dark_threshold": dark_threshold,
-                    "light_threshold": light_threshold,
-                    "reason": reason,
-                    "warnings": ",".join(warn_tags) if warn_tags else "-",
-                })
-
-        logger.info("CQ Final Compare (DN, pedestal-subtracted; rolling-avg light, max dark):")
-        logger.info(
-            "| Camera | LightAvg | DarkMax | DarkThr | LightThr | Reason         | Warnings |"
-        )
-        logger.info(
-            "|--------|----------|---------|---------|----------|----------------|----------|"
-        )
-        for row in table_rows:
-            logger.info(
-                "| %-6s | %8s | %7s | %7.2f | %8.2f | %-14s | %-8s |",
-                row["camera"],
-                row["light_avg_dn"],
-                row["dark_max_dn"],
-                row["dark_threshold"],
-                row["light_threshold"],
-                row["reason"],
-                row["warnings"],
-            )
-
-        warning_list = list(warnings_by_key.values())
         ok = result.passed
-        err_msg = "" if ok else "Contact quality check failed"
-        self.contactQualityCheckFinished.emit(ok, err_msg, warning_list)
+        self.contactQualityCheckFinished.emit(
+            ok, "" if ok else "Contact quality check failed", warnings)
 
     def _on_cq_transition(self, side, cam_id, reason, value, active):
-        """Runner-thread callback from the SDK's ContactQualityMonitor.
+        """Runner-thread callback from the SDK's ContactQualityMonitor: only
+        hops to the main thread (cross-thread gotcha in CLAUDE.md).
 
-        Does nothing but hop to the main thread — see the cross-thread
-        gotcha in CLAUDE.md. Never raises: an exception escaping a sink's
-        consume() aborts that batch mid-flight and the loss is invisible,
-        which is exactly the regression this feature exists to fix (#364).
+        Never raises: an exception escaping a sink's consume() aborts that
+        batch mid-flight and the loss is invisible, which is exactly the
+        regression this feature exists to fix (#364).
         """
         try:
             self._cqTransitionSignal.emit(
-                str(side), int(cam_id), str(reason), float(value), bool(active)
-            )
+                str(side), int(cam_id), str(reason), float(value), bool(active))
         except Exception as exc:
             logger.warning("contact-quality transition marshal failed: %s", exc)
 
@@ -259,25 +197,20 @@ class ContactQualityMixin:
     def _on_cq_transition_main(self, side, cam_id, reason, value, active):
         """Main thread: adapt an SDK CQ transition to the modal's signals.
 
-        Mirrors the deleted _on_cq_warning closure. contactQualityWarning
-        fires on activation only; contactQualityIssueStateChanged fires on
-        every edge so QML can clear the entry.
+        contactQualityWarning fires on activation only;
+        contactQualityIssueStateChanged fires on every edge so QML can clear
+        the entry.
         """
         label = self._camera_label(side, cam_id)
-        # The modal knows two type keys. Defensive, not a live path today:
-        # the SDK's ContactQualityMonitor skips non-finite readings before
-        # on_transition ever fires, so it does not currently emit
-        # "no_signal". Collapsing it to poor_contact here costs nothing and
-        # keeps live and preflight wording identical — matching
-        # _on_cq_result_ready's preflight mapping — if that contract ever
-        # changes.
+        # Defensive, not a live path today: the SDK's ContactQualityMonitor
+        # skips non-finite readings before on_transition fires, so it never
+        # emits "no_signal". Collapsing it to poor_contact keeps live and
+        # preflight wording identical (see _on_cq_result_ready) if that changes.
         type_key = "poor_contact" if reason == "no_signal" else reason
         type_text = self._warning_text(type_key)
         try:
             if active:
                 self.contactQualityWarning.emit(label, type_key, type_text, value)
-            self.contactQualityIssueStateChanged.emit(
-                label, type_key, type_text, value, active
-            )
+            self.contactQualityIssueStateChanged.emit(label, type_key, type_text, value, active)
         except Exception as exc:
             logger.warning("contact-quality signal emit failed: %s", exc)

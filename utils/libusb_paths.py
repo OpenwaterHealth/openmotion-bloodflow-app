@@ -32,14 +32,10 @@ VENDOR_DIRS = (
 
 
 def candidate_dirs(base: str | os.PathLike) -> list[str]:
+    """Every vendored-libusb directory to probe under ``base`` (not ``base`` itself)."""
     base = os.fspath(base)
-    out = []
-    for root in LAYOUT_ROOTS:
-        for parts in VENDOR_DIRS:
-            if not root and not parts:
-                continue
-            out.append(os.path.join(base, root, *parts) if root else os.path.join(base, *parts))
-    return out
+    return [os.path.join(base, root, *parts)
+            for root in LAYOUT_ROOTS for parts in VENDOR_DIRS if root or parts]
 
 
 def register_vendored_libusb(base: str | os.PathLike) -> list[str]:

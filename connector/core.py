@@ -44,14 +44,9 @@ class MotionConnector(
         self._setup_history()
         self.connect_signals()
 
-        try:
-            sdk_version = interface.get_sdk_version()
-            sdk_version = sdk_version if isinstance(sdk_version, str) else ""
-        except Exception:
-            sdk_version = ""
         self._audit.log("system_startup", {
             "app_version": self._app_version,
-            "sdk_version": sdk_version,
+            "sdk_version": self._sdk_version(),
             "data_dir": self._directory,
         })
         self._audit.log("system_info", gather_host_info())

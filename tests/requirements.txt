@@ -20,7 +20,7 @@ pyautogui          # mouse / keyboard input
 pygetwindow        # top-level window enumeration
 pywinauto          # UI Automation tree walking
 
-# Required by motion_connector.py (imported indirectly by test_dropped_camera_gate.py)
+# Required by the connector package (imported indirectly by test_dropped_camera_gate.py)
 PyQt6
 base58
 numpy

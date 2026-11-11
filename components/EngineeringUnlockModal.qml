@@ -11,7 +11,7 @@ import OpenMotion 1.0
 // It brings its own entry point: a double-click area placed over the header
 // logo (logoItem, set by main.qml), so a build without this file has no
 // logo double-click handler at all. MotionInterface.unlockEngineeringMode
-// checks the engineering password in Python (engineering_unlock.py), turns
+// checks the engineering password in Python (services/engineering_unlock.py), turns
 // engineering mode on for the session and audits the attempt.
 PasswordPromptModal {
     id: root

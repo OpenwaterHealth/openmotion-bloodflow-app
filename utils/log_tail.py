@@ -34,16 +34,13 @@ def latest_log_path(logs_dir) -> str:
         names = sorted(p.name for p in Path(logs_dir).glob(LOG_GLOB))
     except OSError:
         return ""
-    if not names:
-        return ""
-    return str(Path(logs_dir) / names[-1])
+    return str(Path(logs_dir) / names[-1]) if names else ""
 
 
 class LogTail:
     """Stateful incremental reader for a single log file."""
 
-    def __init__(self, path,
-                 max_initial_bytes: int = MAX_INITIAL_BYTES,
+    def __init__(self, path, max_initial_bytes: int = MAX_INITIAL_BYTES,
                  max_poll_bytes: int = MAX_POLL_BYTES):
         self.path = str(path)
         self._max_initial_bytes = max_initial_bytes

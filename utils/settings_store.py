@@ -57,10 +57,12 @@ class SettingsStore:
 
     @property
     def enabled(self) -> bool:
+        """False when the store degraded to a session-only no-op."""
         return self._conn is not None
 
     @property
     def path(self) -> Optional[str]:
+        """The database path this store was given, or None."""
         return self._path
 
     def load(self) -> Dict[str, Any]:
@@ -73,9 +75,7 @@ class SettingsStore:
         out: Dict[str, Any] = {}
         try:
             with self._lock:
-                rows = self._conn.execute(
-                    f"SELECT key, value FROM {self.TABLE}"
-                ).fetchall()
+                rows = self._conn.execute(f"SELECT key, value FROM {self.TABLE}").fetchall()
         except Exception:
             logger.warning("SettingsStore: read failed", exc_info=True)
             return {}
@@ -101,38 +101,36 @@ class SettingsStore:
                 logger.error("SettingsStore: cannot serialize %r; not saved", key)
         if not rows:
             return False
-        try:
-            with self._lock:
-                self._conn.executemany(
-                    f"INSERT INTO {self.TABLE} (key, value, updated_epoch)"
-                    " VALUES (?, ?, ?)"
-                    " ON CONFLICT(key) DO UPDATE SET"
-                    " value = excluded.value, updated_epoch = excluded.updated_epoch",
-                    rows,
-                )
-                self._conn.commit()
-            return len(rows) == len(values)
-        except Exception:
-            logger.warning("SettingsStore: write failed", exc_info=True)
-            return False
+        written = self._executemany(
+            "write",
+            f"INSERT INTO {self.TABLE} (key, value, updated_epoch) VALUES (?, ?, ?)"
+            " ON CONFLICT(key) DO UPDATE SET"
+            " value = excluded.value, updated_epoch = excluded.updated_epoch",
+            rows,
+        )
+        return written and len(rows) == len(values)
 
     def delete(self, keys: Iterable[str]) -> bool:
         """Remove the given keys (a key back at its compiled value)."""
         keys = [str(k) for k in keys]
         if self._conn is None or not keys:
             return False
+        return self._executemany(
+            "delete", f"DELETE FROM {self.TABLE} WHERE key = ?", [(k,) for k in keys])
+
+    def _executemany(self, what: str, sql: str, rows: list) -> bool:
+        """Run ``sql`` over ``rows`` and commit; False (logged) on any error."""
         try:
             with self._lock:
-                self._conn.executemany(
-                    f"DELETE FROM {self.TABLE} WHERE key = ?", [(k,) for k in keys]
-                )
+                self._conn.executemany(sql, rows)
                 self._conn.commit()
             return True
         except Exception:
-            logger.warning("SettingsStore: delete failed", exc_info=True)
+            logger.warning("SettingsStore: %s failed", what, exc_info=True)
             return False
 
     def close(self) -> None:
+        """Close the connection; later calls are no-ops."""
         with self._lock:
             if self._conn is not None:
                 try:

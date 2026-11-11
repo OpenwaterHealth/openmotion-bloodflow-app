@@ -63,12 +63,10 @@ def merged_config_block(
     width = max((len(k) for k in merged), default=0)
     lines = []
     for key in sorted(merged):
-        tier = compiled.tier_of(key) or "?"
-        mark = marks.get(key, "")
-        lines.append(
-            f"  {key:<{width}} = {_fmt_value(merged[key])}  <{tier}>"
-            + (f"  {mark}" if mark else "")
-        )
+        line = f"  {key:<{width}} = {_fmt_value(merged[key])}  <{compiled.tier_of(key) or '?'}>"
+        if marks.get(key):
+            line += f"  {marks[key]}"
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -100,8 +98,7 @@ def log_startup_report(
                  if clinical else "Research")
         log.info("Install mode:   %s (portableMode=%s, frozen=%s, bundler=%s)",
                  mode, portable, frozen, bundler())
-        log.info("Config:         compiled (config/app_config.py), "
-                 "%d keys, values sha256=%s",
+        log.info("Config:         compiled (config/app_config.py), %d keys, values sha256=%s",
                  len(compiled.APP_CONFIG), compiled_fingerprint())
 
         # SDK identity. __version__ is an install-time metadata stamp — on an
@@ -110,16 +107,14 @@ def log_startup_report(
         # imported (editable checkout vs bundled wheel, and which checkout).
         try:
             import omotion
-            log.info("SDK:            %s (%s)",
-                     getattr(omotion, "__version__", "unknown"),
+            log.info("SDK:            %s (%s)", getattr(omotion, "__version__", "unknown"),
                      Path(omotion.__file__).resolve().parent)
         except Exception as e:
             log.info("SDK:            unresolvable (%s)", e)
 
         try:
             from PyQt6.QtCore import PYQT_VERSION_STR, qVersion
-            log.info("Qt runtime:     Qt %s / PyQt6 %s",
-                     qVersion(), PYQT_VERSION_STR)
+            log.info("Qt runtime:     Qt %s / PyQt6 %s", qVersion(), PYQT_VERSION_STR)
         except Exception as e:
             log.info("Qt runtime:     unresolvable (%s)", e)
 
@@ -132,10 +127,8 @@ def log_startup_report(
         log.info("Settings store: %s (%s)", settings_path or "none", state)
 
         log.info(
-            "Effective app config (%s=saved preference, %s=dev launch flag; "
-            "<tier> per key):\n%s",
-            MARK_SAVED, MARK_DEV,
-            merged_config_block(merged, baseline, dev_keys, saved_keys),
+            "Effective app config (%s=saved preference, %s=dev launch flag; <tier> per key):\n%s",
+            MARK_SAVED, MARK_DEV, merged_config_block(merged, baseline, dev_keys, saved_keys),
         )
     except Exception:
         log.warning("Startup report failed", exc_info=True)

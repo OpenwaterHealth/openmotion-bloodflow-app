@@ -1501,7 +1501,7 @@ Item {
                             enabled: MotionInterface.appConfig.altCameraSettingsEnabled === true
                             // Only VALID exposures: the sensor's coarse
                             // exposure register counts whole 9 µs rows
-                            // (HTS 432 px / 48 MHz — see motion_config.py).
+                            // (HTS 432 px / 48 MHz — see hardware/motion_config.py).
                             // The dropdown offers a ~100 µs-spaced subset
                             // (each target snapped to the nearest whole
                             // row) plus the 648 µs firmware default; a
@@ -1550,7 +1550,7 @@ Item {
                     // inflates the dark reference. The app runs the 1800 µs
                     // skip because 2400 shortens the post-dark gap below the
                     // RATE_LL floor stock consoles ship with, which latches
-                    // the safety interlock — see motion_config.py. Shown only
+                    // the safety interlock — see hardware/motion_config.py. Shown only
                     // when the selected exposure actually crosses the line.
                     Text {
                         objectName: "altExposureDarkContaminationWarning"

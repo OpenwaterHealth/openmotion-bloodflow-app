@@ -1,10 +1,10 @@
 """Resolve writable, user-data locations outside the (read-only) install dir.
 
 When the app is installed to Program Files, its bundled files are read-only.
-Runtime-writable state (config overrides, logs, scan data) lives under
-the launching user's %LOCALAPPDATA%\\Openwater\\ instead — or next to the exe
-when portableMode is set (see writable_root). In a dev (non-frozen) run,
-everything stays under the cwd so local development is unchanged.
+Runtime-writable state (logs, scan data) lives under the launching user's
+%LOCALAPPDATA%\\Openwater\\ instead — or next to the exe when portableMode is
+set (see writable_root). In a dev (non-frozen) run, everything stays under
+the cwd so local development is unchanged.
 
 The installed root is per-user on purpose (#581). A Clinical build encrypts
 scans.db and the SDK keeps the key in Windows Credential Manager, which is
@@ -88,26 +88,18 @@ def _known_folder(folder_id: str) -> Path | None:
         from ctypes import wintypes
 
         class GUID(ctypes.Structure):
-            _fields_ = [
-                ("Data1", wintypes.DWORD),
-                ("Data2", wintypes.WORD),
-                ("Data3", wintypes.WORD),
-                ("Data4", wintypes.BYTE * 8),
-            ]
+            _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD),
+                        ("Data3", wintypes.WORD), ("Data4", wintypes.BYTE * 8)]
 
         ole32 = ctypes.windll.ole32
-        shell32 = ctypes.windll.shell32
         guid = GUID()
         if ole32.CLSIDFromString(folder_id, ctypes.byref(guid)) != 0:
             return None
         out = ctypes.c_wchar_p()
-        hr = shell32.SHGetKnownFolderPath(
-            ctypes.byref(guid), 0, None, ctypes.byref(out)
-        )
+        hr = ctypes.windll.shell32.SHGetKnownFolderPath(
+            ctypes.byref(guid), 0, None, ctypes.byref(out))
         try:
-            if hr != 0 or not out.value:
-                return None
-            return Path(out.value)
+            return Path(out.value) if hr == 0 and out.value else None
         finally:
             ole32.CoTaskMemFree(out)
     except Exception:
@@ -123,7 +115,7 @@ def installed_dir() -> Path | None:
     writes its HKLM values under WOW6432Node and installs to
     ``Program Files (x86)``. Reading only the 64-bit view (as #546 shipped)
     never found the marker, so every installed build took itself for a
-    portable copy and died creating ``logs\`` next to the exe (#577).
+    portable copy and died creating ``logs\\`` next to the exe (#577).
     """
     if sys.platform != "win32":
         return None
@@ -133,10 +125,8 @@ def installed_dir() -> Path | None:
         return None
     for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
         try:
-            with winreg.OpenKey(
-                winreg.HKEY_LOCAL_MACHINE, _INSTALL_REG_KEY, 0,
-                winreg.KEY_READ | view,
-            ) as key:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _INSTALL_REG_KEY, 0,
+                                winreg.KEY_READ | view) as key:
                 value, kind = winreg.QueryValueEx(key, _INSTALL_REG_VALUE)
         except OSError:
             continue
@@ -153,8 +143,7 @@ def is_installed_exe() -> bool:
     if target is None:
         return False
     try:
-        exe_dir = executable_path().resolve().parent
-        return exe_dir == target.resolve()
+        return executable_path().resolve().parent == target.resolve()
     except OSError:
         return False
 
@@ -164,7 +153,7 @@ def _can_write(root: Path) -> bool:
 
     ``os.access(root, os.W_OK)`` is not that test on Windows: it looks at the
     read-only attribute and ignores ACLs, so it answers True for
-    ``C:\Program Files`` and the ~/Documents fallback below never triggered
+    ``C:\\Program Files`` and the ~/Documents fallback below never triggered
     (#577).
     """
     probe = root / f".open-motion-write-test-{os.getpid()}"
@@ -186,9 +175,7 @@ def portable_mode() -> bool:
     macOS are never portable (cwd / Application Support respectively)."""
     if PORTABLE_MODE_OVERRIDE is not None:
         return bool(PORTABLE_MODE_OVERRIDE)
-    if not is_frozen() or sys.platform != "win32":
-        return False
-    return not is_installed_exe()
+    return is_frozen() and sys.platform == "win32" and not is_installed_exe()
 
 
 def _home_dir() -> Path:
@@ -215,9 +202,7 @@ def _local_app_data_dir() -> Path:
     """This user's LocalAppData folder (stock location under the profile if
     the shell call fails). Per-user, never the machine-wide ProgramData —
     see the module docstring (#581)."""
-    return _known_folder(_FOLDERID_LOCAL_APP_DATA) or (
-        _home_dir() / "AppData" / "Local"
-    )
+    return _known_folder(_FOLDERID_LOCAL_APP_DATA) or (_home_dir() / "AppData" / "Local")
 
 
 def writable_root(portable: bool | None = None) -> Path:
@@ -237,20 +222,19 @@ def writable_root(portable: bool | None = None) -> Path:
         root.mkdir(parents=True, exist_ok=True)
         return root
 
-    if is_frozen():
-        if sys.platform == "darwin":
-            # macOS has no %LOCALAPPDATA%, and the portable layout can't apply
-            # either: writing inside Open-Motion.app invalidates its code
-            # signature. Both variants use the standard per-user data location.
-            root = _home_dir() / "Library" / "Application Support" / _APP_DIRNAME
-        elif portable:
-            # The launched exe (utils.frozen resolves Nuitka's outer exe; the
-            # interpreter path there is the extracted copy, #548).
-            root = executable_path().resolve().parent
-        else:
-            root = _local_app_data_dir() / _APP_DIRNAME
-    else:
+    if not is_frozen():
         root = Path.cwd()
+    elif sys.platform == "darwin":
+        # macOS has no %LOCALAPPDATA%, and the portable layout can't apply
+        # either: writing inside Open-Motion.app invalidates its code
+        # signature. Both variants use the standard per-user data location.
+        root = _home_dir() / "Library" / "Application Support" / _APP_DIRNAME
+    elif portable:
+        # The launched exe (utils.frozen resolves Nuitka's outer exe; the
+        # interpreter path there is the extracted copy, #548).
+        root = executable_path().resolve().parent
+    else:
+        root = _local_app_data_dir() / _APP_DIRNAME
 
     # A read-only parent (Finder launches the app with cwd="/") makes mkdir
     # itself raise, before the write probe below could ever redirect us.
@@ -264,4 +248,3 @@ def writable_root(portable: bool | None = None) -> Path:
         root = _home_dir() / "Documents" / "Open-Motion"
         root.mkdir(parents=True, exist_ok=True)
     return root
-

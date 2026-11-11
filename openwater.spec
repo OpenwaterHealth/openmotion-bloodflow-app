@@ -128,7 +128,7 @@ hidden += [
 # third-party deps, and PyInstaller's static analysis doesn't trace into them
 # either - same class of gap as the serial/usb block above. requests backs
 # omotion.firmware_update; crcmod backs omotion's i2c packet framing; base58
-# is imported directly by motion_connector.py. cryptography checks a firmware
+# is imported directly by the connector package. cryptography checks a firmware
 # image's signature before omotion.dfu writes it (SDK 1.14.0, #739); it is
 # imported inside the check, so a missing module would only surface when a
 # user starts a firmware update.
@@ -269,7 +269,7 @@ _mirror_vendor_from_collected(om_bins)
 runtime_hooks = ["rthook_libusb_paths.py"]
 
 # Mixed-Qt guards, plus the app self-updater for a clinical build (#543,
-# tracker M-02): motion_connector only imports app_updater when the stamped
+# tracker M-02): connector.updates only imports services.app_updater when the stamped
 # CLINICAL_MODE is False, and excluding it here keeps the module out of the
 # clinical PYZ entirely rather than merely unused. Guarded by
 # tests/test_updater_compiled_out.py.

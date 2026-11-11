@@ -147,7 +147,7 @@ def launcher_alive(pid: int, folder_created: float) -> bool:
 
 
 def _is_link(path: Path) -> bool:
-    return path.is_symlink() or bool(getattr(os.path, "isjunction", lambda _: False)(path))
+    return path.is_symlink() or os.path.isjunction(path)
 
 
 def _size(path: Path) -> int:
@@ -170,10 +170,7 @@ def _rmtree(path: Path) -> None:
         except OSError:
             pass
 
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(path, onexc=retry_writable)
-    else:
-        shutil.rmtree(path, onerror=retry_writable)
+    shutil.rmtree(path, onexc=retry_writable)
 
 
 def _remove(path: Path, name: str, result: SweepResult, size: Optional[int] = None) -> None:
@@ -190,9 +187,7 @@ def _remove(path: Path, name: str, result: SweepResult, size: Optional[int] = No
 
 
 def sweep(
-    temp_root: Path,
-    own_name: str,
-    *,
+    temp_root: Path, own_name: str, *,
     is_launcher_alive: Optional[Callable[[int, float], bool]] = None,
 ) -> SweepResult:
     """Remove the orphaned Open-Motion extraction folders in ``temp_root``.
@@ -257,10 +252,8 @@ def _run(own: Path) -> None:
             ", ".join(result.removed) or "-",
         )
     if result.incomplete:
-        logger.warning(
-            "Could not fully remove %s; the next launch retries",
-            ", ".join(result.incomplete),
-        )
+        logger.warning("Could not fully remove %s; the next launch retries",
+                       ", ".join(result.incomplete))
     for name, reason in result.skipped:
         logger.info("Left extraction folder %s in place (%s)", name, reason)
 
@@ -275,8 +268,6 @@ def start_background_sweep() -> Optional[threading.Thread]:
     own = own_extraction_dir()
     if own is None:
         return None
-    thread = threading.Thread(
-        target=_run, args=(own,), name="onefile-cleanup", daemon=True
-    )
+    thread = threading.Thread(target=_run, args=(own,), name="onefile-cleanup", daemon=True)
     thread.start()
     return thread
