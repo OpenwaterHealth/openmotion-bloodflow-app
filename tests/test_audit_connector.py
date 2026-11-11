@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from motion_connector import MotionConnector
+from connector import MotionConnector
 
 pytestmark = pytest.mark.unit
 
@@ -20,12 +20,11 @@ def _connector(tmp_path, scan_db_path=None, app_config=None):
         interface=iface,
         app_config=app_config or {"engineeringMode": False},
         data_dir=str(tmp_path),
-        config_dir="config",
     )
 
 
 def _types(c):
-    return [e["event_type"] for e in c.auditLogEntries()]
+    return [e["event_type"] for e in c.filteredAuditLogEntries({})]
 
 
 def test_construct_logs_startup_and_system_info(tmp_path):
@@ -78,7 +77,7 @@ def test_no_db_path_noop(tmp_path):
     # still construct and the slots must return gracefully (no raise).
     import os
     c = _connector(tmp_path, scan_db_path=None)
-    assert c.auditLogEntries() == []
+    assert c.filteredAuditLogEntries({}) == []
     c.recordAuditLogViewed()       # must not raise
     dest = str(tmp_path / "out.csv")
     c.exportAuditLogCsv(dest)      # no raise; nothing written when disabled
@@ -118,7 +117,7 @@ def test_connect_logs_device_connected_and_stats(tmp_path):
     t = _types(c)
     assert "device_connected" in t
     assert "device_stats" in t
-    stats = [e for e in c.auditLogEntries()
+    stats = [e for e in c.filteredAuditLogEntries({})
              if e["event_type"] == "device_stats"]
     assert stats
     d = json.loads(stats[0]["details"])
@@ -133,7 +132,7 @@ def test_run_calibration_logs_started(tmp_path):
     c._interface.start_calibration.return_value = True
     c._app_config["engineeringMode"] = True   # Calibrate is engineering-only (#706)
     c.runCalibration("left")
-    ev = [e for e in c.auditLogEntries()
+    ev = [e for e in c.filteredAuditLogEntries({})
           if e["event_type"] == "calibration_started"]
     assert ev
     assert json.loads(ev[0]["details"])["target"] == "left"
@@ -149,7 +148,7 @@ def test_calibration_complete_logs_ended(tmp_path):
     result.passed = True
     result.csv_path = "cal.csv"
     c._on_calibration_complete(result)
-    ev = [e for e in c.auditLogEntries()
+    ev = [e for e in c.filteredAuditLogEntries({})
           if e["event_type"] == "calibration_ended"]
     assert ev
     assert json.loads(ev[0]["details"])["outcome"] == "passed"
@@ -159,7 +158,7 @@ def test_set_config_logs_settings_changed(tmp_path):
     c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
     c._save_app_config = lambda: None      # don't touch the real config
     c.setConfig("plotWindowSec", 30)
-    ev = [e for e in c.auditLogEntries()
+    ev = [e for e in c.filteredAuditLogEntries({})
           if e["event_type"] == "settings_changed"]
     assert ev
     d = json.loads(ev[0]["details"])
@@ -171,7 +170,7 @@ def test_save_configs_logs_only_changed_keys(tmp_path):
     c._save_app_config = lambda: None
     c._app_config["plotWindowSec"] = 15
     c.saveConfigs({"plotWindowSec": 15, "bfiMax": 12.0})
-    ev = [e for e in c.auditLogEntries()
+    ev = [e for e in c.filteredAuditLogEntries({})
           if e["event_type"] == "settings_changed"]
     assert ev
     d = json.loads(ev[-1]["details"])["changes"]
@@ -188,7 +187,7 @@ def test_delete_scans_logs_scan_deleted(tmp_path):
     db.close()
     c = _connector(tmp_path, scan_db_path=db_path)
     c.deleteScans([sid])
-    ev = [e for e in c.auditLogEntries()
+    ev = [e for e in c.filteredAuditLogEntries({})
           if e["event_type"] == "scan_deleted"]
     assert ev
     assert json.loads(ev[0]["details"])["count"] == 1
@@ -198,7 +197,7 @@ def test_load_past_scan_logs_scan_viewed(tmp_path):
     db_path = str(tmp_path / "scans.db")
     c = _connector(tmp_path, scan_db_path=db_path)
     c.loadPastScan(1, "20260101_000000_owABC")
-    ev = [e for e in c.auditLogEntries()
+    ev = [e for e in c.filteredAuditLogEntries({})
           if e["event_type"] == "scan_viewed"]
     assert ev
     details = json.loads(ev[0]["details"])
@@ -263,7 +262,7 @@ def test_filtered_entries_date_range(tmp_path):
 def test_filtered_entries_empty_filters_match_unfiltered(tmp_path):
     c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
     c._audit.log("scan_started", {"n": 1})
-    unfiltered = c.auditLogEntries()
+    unfiltered = c.filteredAuditLogEntries({})
     for f in ({}, {"eventType": "", "dateFrom": "", "dateTo": "",
                    "text": ""}):
         out = c.filteredAuditLogEntries(f)
@@ -305,7 +304,7 @@ def test_audit_event_types_no_db_noop(tmp_path):
 def test_prepare_debug_bundle_failure_returns_empty(tmp_path, monkeypatch):
     # If the bundle build raises, the slot must return "" and NOT log a
     # debug_bundle_created event (fail-soft, mirrors the other slots).
-    import debug_bundle
+    from services import debug_bundle
     c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
     c._reveal_in_explorer = lambda p: None
 
@@ -320,7 +319,7 @@ def test_prepare_debug_bundle_failure_returns_empty(tmp_path, monkeypatch):
 # ── scan_ended termination cause (#535) ─────────────────────────────────
 
 def _scan_ended(c):
-    ev = [e for e in c.auditLogEntries() if e["event_type"] == "scan_ended"]
+    ev = [e for e in c.filteredAuditLogEntries({}) if e["event_type"] == "scan_ended"]
     return [json.loads(e["details"]) for e in ev]
 
 
@@ -333,7 +332,7 @@ def _arm_running_scan(c, subject="owTEST"):
 
 
 def test_data_stall_abort_records_e303(tmp_path):
-    from motion_connector import ScanOutcome
+    from connector.sinks import ScanOutcome
     c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
     _arm_running_scan(c)
     c._abort_scan_data_stall(4.0)
@@ -355,7 +354,7 @@ def test_data_stall_abort_records_e303(tmp_path):
 
 
 def test_device_disconnect_abort_records_e304(tmp_path):
-    from motion_connector import ScanOutcome
+    from connector.sinks import ScanOutcome
     c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
     _arm_running_scan(c)
     c._abort_scan_device_disconnect("left")
@@ -379,7 +378,7 @@ def test_first_abort_code_wins(tmp_path):
 
 
 def test_operator_stop_is_stopped_not_aborted(tmp_path):
-    from motion_connector import ScanOutcome
+    from connector.sinks import ScanOutcome
     c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
     _arm_running_scan(c)
     c.stopCapture()

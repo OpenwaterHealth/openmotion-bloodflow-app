@@ -1,6 +1,6 @@
 """Sustained-gap detection over frame-arrival timestamps.
 
-During a scan, _LivePlotSink (motion_connector.py) calls record() for every
+During a scan, _LivePlotSink (connector/sinks.py) calls record() for every
 frame that ARRIVES for a camera, keyed by (side, cam_id) — cam_id is -1 for
 the clinical-mode per-side average. Frames flow at ~40 Hz, so during healthy
 delivery each key's timestamp advances every ~25 ms. A stretch where a key
@@ -18,8 +18,7 @@ ranges (a range = "at least one camera received no frames here") and
 appends them to the session notes via gap_note_line().
 
 Pure Python, no Qt — unit-testable without hardware
-(tests/test_nan_gap_tracker.py). Extracted per the motion_config.py
-precedent rather than growing motion_connector.py further.
+(tests/test_nan_gap_tracker.py).
 
 Spec: docs/superpowers/specs/2026-06-11-nan-gap-notes-footer-design.md
 (gap semantics updated to arrival-based, 2026-07)
@@ -89,20 +88,15 @@ class NanGapTracker:
             end_t = self._t_max
         gaps = list(self._gaps)
         if end_t is not None:
-            # Defensive copy. The class is not thread-safe; in the app,
-            # record() and merged_gaps() both run on the pipeline runner
+            # list(): defensive copy. The class is not thread-safe; in the
+            # app, record() and merged_gaps() both run on the pipeline runner
             # thread (on_complete fires after all consumes).
-            for last in list(self._last.values()):
-                if (end_t - last) > self.min_gap_s:
-                    gaps.append((last, end_t))
-        if not gaps:
-            return []
-        gaps.sort()
-        merged = [gaps[0]]
-        for lo, hi in gaps[1:]:
-            if lo <= merged[-1][1]:
-                if hi > merged[-1][1]:
-                    merged[-1] = (merged[-1][0], hi)
+            gaps += [(last, end_t) for last in list(self._last.values())
+                     if (end_t - last) > self.min_gap_s]
+        merged: list[tuple[float, float]] = []
+        for lo, hi in sorted(gaps):
+            if merged and lo <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
             else:
                 merged.append((lo, hi))
         return merged
@@ -113,9 +107,7 @@ def format_gaps(ranges: list[tuple[float, float]], t0: Optional[float]) -> str:
     t0 is the scan's first finite timestamp (NanGapTracker.t0); None means
     timestamps are already zero-based."""
     origin = t0 or 0.0
-    return ", ".join(
-        f"{lo - origin:.1f}–{hi - origin:.1f}s" for lo, hi in ranges
-    )
+    return ", ".join(f"{lo - origin:.1f}–{hi - origin:.1f}s" for lo, hi in ranges)
 
 
 def gap_note_line(tracker: NanGapTracker) -> str:
@@ -126,7 +118,4 @@ def gap_note_line(tracker: NanGapTracker) -> str:
     ranges = tracker.merged_gaps()
     if not ranges:
         return ""
-    return (
-        f"\nData gaps (>{tracker.min_gap_s:.1f}s): "
-        + format_gaps(ranges, tracker.t0)
-    )
+    return f"\nData gaps (>{tracker.min_gap_s:.1f}s): " + format_gaps(ranges, tracker.t0)

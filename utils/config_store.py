@@ -23,11 +23,11 @@ from config import app_config as compiled
 
 logger = logging.getLogger("openmotion.bloodflow-app.config")
 
-_INT_KEYS = (
-    "leftMask", "rightMask", "clinicalModeLeftMask", "clinicalModeRightMask",
-)
+_INT_KEYS = ("leftMask", "rightMask", "clinicalModeLeftMask", "clinicalModeRightMask")
+
 
 def _coerce_ints(cfg: dict) -> dict:
+    """Make the camera-mask values ints, in place; returns ``cfg``."""
     for key in _INT_KEYS:
         if cfg.get(key) is not None:
             cfg[key] = int(cfg[key])
@@ -40,10 +40,12 @@ def compiled_config() -> dict:
 
 
 def tier_of(key: str) -> Optional[str]:
+    """The tier ``key`` is compiled into, or None for an unknown key."""
     return compiled.tier_of(key)
 
 
 def is_persisted(key: str) -> bool:
+    """True for a PREFERENCE / STATE key (the only ones ever stored)."""
     return key in compiled.PERSISTED_KEYS
 
 

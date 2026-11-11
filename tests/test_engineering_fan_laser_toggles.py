@@ -17,7 +17,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from motion_connector import MotionConnector
+from connector import MotionConnector
 
 pytestmark = pytest.mark.unit
 
@@ -40,7 +40,7 @@ def _connector(tmp_path, app_config=None, console=True, left=True, right=True):
     iface.right.set_fan_control.return_value = True
     c = MotionConnector(
         interface=iface, app_config=app_config or {},
-        data_dir=str(tmp_path), config_dir="config",
+        data_dir=str(tmp_path), 
     )
     c._save_app_config = MagicMock()
     return c, iface

@@ -1,5 +1,5 @@
 """Unit test for the QML-facing scanElapsedStr slot (no hardware)."""
-from motion_connector import MotionConnector
+from connector import MotionConnector
 
 
 def test_scan_elapsed_str_slot_delegates(monkeypatch):

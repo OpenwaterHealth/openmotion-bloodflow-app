@@ -75,10 +75,8 @@ def apply_window_class_icon(hwnd, ico_path) -> bool:
         user32 = ctypes.WinDLL("user32", use_last_error=True)
 
         user32.LoadImageW.restype = wintypes.HANDLE
-        user32.LoadImageW.argtypes = [
-            wintypes.HMODULE, wintypes.LPCWSTR, wintypes.UINT,
-            ctypes.c_int, ctypes.c_int, wintypes.UINT,
-        ]
+        user32.LoadImageW.argtypes = [wintypes.HMODULE, wintypes.LPCWSTR, wintypes.UINT,
+                                      ctypes.c_int, ctypes.c_int, wintypes.UINT]
         user32.GetSystemMetrics.restype = ctypes.c_int
         user32.GetSystemMetrics.argtypes = [ctypes.c_int]
 
@@ -89,19 +87,14 @@ def apply_window_class_icon(hwnd, ico_path) -> bool:
         set_class.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_size_t]
 
         installed = []
-        for metric, index, label in (
-            (SM_CXICON, GCLP_HICON, "large"),
-            (SM_CXSMICON, GCLP_HICONSM, "small"),
-        ):
+        for metric, index, label in ((SM_CXICON, GCLP_HICON, "large"),
+                                     (SM_CXSMICON, GCLP_HICONSM, "small")):
             extent = user32.GetSystemMetrics(metric)
             hicon = user32.LoadImageW(
-                None, str(ico_path), IMAGE_ICON, extent, extent, LR_LOADFROMFILE
-            )
+                None, str(ico_path), IMAGE_ICON, extent, extent, LR_LOADFROMFILE)
             if not hicon:
-                logger.warning(
-                    "Window-class icon: LoadImage(%s, %dpx) failed (err %d)",
-                    ico_path, extent, ctypes.get_last_error(),
-                )
+                logger.warning("Window-class icon: LoadImage(%s, %dpx) failed (err %d)",
+                               ico_path, extent, ctypes.get_last_error())
                 continue
             _class_icons.append(hicon)
             set_class(wintypes.HWND(hwnd), index, ctypes.c_size_t(hicon))

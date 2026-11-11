@@ -1,15 +1,10 @@
-"""TEC-parameter helper.
+"""Hardware parameter helpers: TEC setpoint / over-temp trip, alternative
+camera and laser-pulse settings, and the dark-frame skip delay.
 
-Reads the TEC DAC setpoints from the compiled `config.tec_params` module
-(formerly `config/tec_params.json`, #546) and picks the one matching the
-connected console's hardware revision. Extracted from `motion_connector.py`
-to keep that file focused on the Qt connector.
-
-The laser-power application and FPGA register map that used to live here now
-live in the SDK (`omotion.laser` — bundled `laser_params.json` /
-`fpga_model.json` and `apply_laser_power`), so the SDK is the single owner of
-that config. The thermistor R-T lookup likewise lives in
-`omotion.console_telemetry_conversions`.
+Pure functions over an SDK console / sensor handle; none of them logs (the
+caller owns logging). The laser-power application and FPGA register map live
+in the SDK (`omotion.laser`), which is the single owner of that config; the
+register locations hardcoded here are only fallbacks for a missing SDK entry.
 """
 
 from __future__ import annotations
@@ -78,9 +73,7 @@ def tec_voltage_params() -> TecVoltageParams:
         logger.error("Invalid EVT2_BOARD_IDS=%r (expected a list), using default %r",
                      ids_raw, EVT2_BOARD_IDS_DEFAULT)
         evt2_board_ids = EVT2_BOARD_IDS_DEFAULT
-    return TecVoltageParams(
-        default_v=default_v, evt2_v=evt2_v, evt2_board_ids=evt2_board_ids,
-    )
+    return TecVoltageParams(default_v=default_v, evt2_v=evt2_v, evt2_board_ids=evt2_board_ids)
 
 
 def select_tec_voltage(console, params: TecVoltageParams):
@@ -139,8 +132,8 @@ def ensure_tec_trip(console, temp_c) -> TecTripOutcome:
     - UNCHANGED: the device already holds this value (no write performed).
     - WROTE: the value was valid, differed from the device, and was written.
     """
-    # 1. Validate — never let a bad value reach the device. The range check
-    #    alone rejects 0/negative/NaN/out-of-range (NaN fails any comparison).
+    # Never let a bad value reach the device. The range check alone rejects
+    # 0/negative/NaN/out-of-range (NaN fails any comparison).
     try:
         value = float(temp_c)
     except (TypeError, ValueError):
@@ -148,30 +141,27 @@ def ensure_tec_trip(console, temp_c) -> TecTripOutcome:
     if not (TEC_TRIP_MIN_C <= value <= TEC_TRIP_MAX_C):
         return TecTripOutcome.SKIPPED_INVALID
 
-    # 2. Read the current config (the base for the read-modify-write).
     try:
         cfg = console.read_config()
     except Exception:
-        return TecTripOutcome.FAILED
+        cfg = None
     if cfg is None:
         return TecTripOutcome.FAILED
 
-    # 3. Skip the flash write if the device already matches.
+    # Skip the flash write if the device already matches.
     try:
         if float(cfg.get("TEC_TRIP")) == value:
             return TecTripOutcome.UNCHANGED
     except (TypeError, ValueError):
         pass  # missing/garbage on device -> treat as differing, write it
 
-    # 4. Write only TEC_TRIP; calibration + OPT_*/EE_* ride along unchanged.
+    # Write only TEC_TRIP; calibration + OPT_*/EE_* ride along unchanged.
     try:
         cfg.set("TEC_TRIP", value)
         result = console.write_config(cfg)
     except Exception:
-        return TecTripOutcome.FAILED
-    if result is None:
-        return TecTripOutcome.FAILED
-    return TecTripOutcome.WROTE
+        result = None
+    return TecTripOutcome.FAILED if result is None else TecTripOutcome.WROTE
 
 
 # --- Alternative camera settings (issue #446) ---------------------------------
@@ -204,20 +194,15 @@ FW_DEFAULT_CAMERA_GAINS = (16, 4, 2, 1, 1, 2, 4, 16)
 # (2026-07 drift campaign): the measured OPTICAL pulse is driver-shaped at
 # ~494 µs regardless of longer gates — shorter gates CLIP it. The safety
 # FPGAs' PULSE_WIDTH_UL interlock trips and LATCHES (until console
-# power-cycle) above the unit's ceiling — 1000 µs stock, ~TA x 1.1 ≈ 550 µs
-# on a WI-00015-calibrated console — so while the toggle is on the app
-# raises both ceilings to ALT_PULSE_WIDTH_SAFETY_CEILING_US at scan start,
-# before widening the pulse (#483, safety_pulse_width_ul_writes below). No
-# restore path is needed for the trigger config itself: the scan flow
-# re-resolves it from SDK defaults before every scan, so disabling the
-# toggle is sufficient there.
+# power-cycle) above the unit's ceiling, so while the toggle is on the app
+# raises both ceilings at scan start, before widening the pulse (#483,
+# safety_pulse_width_ul_writes below). The trigger config needs no restore
+# path: the scan flow re-resolves it from SDK defaults before every scan.
 # The 20 µs floor is a HARDWARE limit, not a UI choice — see
-# TA_PULSE_MIN_TICKS below: the TA driver's compare underflows below 55
-# ticks (17.6 µs) and leaves the drive latched on. 20 µs = 63 ticks keeps
-# 8 ticks of margin. Do NOT lower it without re-reading driver_control.v.
+# TA_PULSE_MIN_TICKS below. 20 µs = 63 ticks keeps 8 ticks of margin. Do NOT
+# lower it without re-reading driver_control.v.
 LASER_PULSE_WIDTH_MIN_US = 20
 LASER_PULSE_WIDTH_MAX_US = 2200
-DEFAULT_LASER_PULSE_WIDTH_US = 500
 
 # The register that ACTUALLY shapes the optical pulse. The TA driver FPGA
 # edge-detects the console's laser trigger and times the drive pulse itself
@@ -233,15 +218,14 @@ TA_PULSE_TICK_US = 0.32
 TA_PULSE_WIDTH_BASELINE_TICKS = 1563
 
 # driver_control.v drops the drive at `pulse_count > pulse_width - 55`, so
-# the register is NOT the emitted width: the drive runs ~54 ticks
-# (~17.3 µs) SHORTER than commanded. Irrelevant at 500 µs (3%), dominant at
-# the short end — a commanded 20 µs is a ~3 µs optical pulse. Worse, that
-# compare is 24-bit unsigned: below 55 ticks `pulse_width - 55` wraps to
-# ~16.7M, the compare never fires, and nothing else in the state machine
-# clears `pulse` — the TA drive stays latched ON. So 55 ticks is a hard
-# floor for anything written to this register, enforced here as well as by
-# LASER_PULSE_WIDTH_MIN_US, because this is the write that reaches the
-# laser.
+# the drive runs ~54 ticks (~17.3 µs) SHORTER than commanded: irrelevant at
+# 500 µs (3%), dominant at the short end (a commanded 20 µs is a ~3 µs
+# optical pulse). Worse, that compare is 24-bit unsigned: below 55 ticks
+# `pulse_width - 55` wraps to ~16.7M, the compare never fires, and nothing
+# else in the state machine clears `pulse` — the TA drive stays latched ON.
+# So 55 ticks is a hard floor for anything written to this register,
+# enforced here as well as by LASER_PULSE_WIDTH_MIN_US, because this is the
+# write that reaches the laser.
 TA_PULSE_TRUNCATION_TICKS = 55
 TA_PULSE_MIN_TICKS = TA_PULSE_TRUNCATION_TICKS
 
@@ -269,11 +253,10 @@ TA_PULSE_MIN_TICKS = TA_PULSE_TRUNCATION_TICKS
 # 25000 - 2400 = 22600 us at 40 Hz, which undercuts the EE/OPT_RATE_LL floor
 # every stock console ships with (23125 us observed on real hardware, raw
 # 72266) — the safety FPGAs then trip RATE_LOWER_LIMIT_FAIL and LATCH until a
-# console power-cycle, i.e. no laser at all. Buying clean darks above 1700 us
-# exposure by requiring a fleet-wide safety-config change is the wrong trade:
-# the contamination only exists in engineering high-exposure runs (#446),
-# while the latch breaks every scan on every console. 1800 leaves a 23200 us
-# post-dark gap, which clears both the stock 22500 and the observed 23125.
+# console power-cycle, i.e. no laser at all. The contamination only exists in
+# engineering high-exposure runs (#446), while the latch breaks every scan on
+# every console. 1800 leaves a 23200 us post-dark gap, which clears both the
+# stock 22500 and the observed 23125.
 #
 # TO RUN A >1700 us EXPOSURE EXPERIMENT you must do BOTH, in this order:
 #   1. lower the console's EE/OPT_RATE_LL to <= 22600 us (raw <= 70625) —
@@ -297,6 +280,39 @@ DARK_RATE_LOWER_LIMIT_US = 23200
 DEFAULT_TRIGGER_OVERRIDES = {"LaserPulseSkipDelayUsec": DARK_SKIP_DELAY_US}
 
 
+def _fpga_entry(name):
+    """The SDK fpga_model entry for register ``name``, or None when the SDK
+    has no such entry (missing / renamed) or cannot be asked."""
+    try:
+        from omotion.laser import FpgaMap
+        return FpgaMap().get_entry_by_friendly_name(name)
+    except Exception:
+        return None
+
+
+def _stock_laser_params(names):
+    """``(friendlyName, bytes)`` for each bundled laser_params.json entry
+    named in ``names``, in file order; [] when the SDK data is unavailable."""
+    try:
+        from omotion.laser import load_laser_params
+        return [(p["friendlyName"], bytearray(p["dataToSend"]))
+                for p in load_laser_params() if p.get("friendlyName") in names]
+    except Exception:
+        return []
+
+
+def _i2c_write_kwargs(entry, data, *, channel, reg_addr):
+    """``console.write_i2c_packet`` kwargs for a laser-FPGA register: the SDK
+    ``entry`` when resolved, else the hardcoded location (mux 1, I2C 0x41)."""
+    return {
+        "mux_index": entry["mux_idx"] if entry else 1,
+        "channel": entry["channel"] if entry else channel,
+        "device_addr": entry["i2c_addr"] if entry else 0x41,
+        "reg_addr": entry["start_address"] if entry else reg_addr,
+        "data": data,
+    }
+
+
 def ta_pulse_width_write(width_us=None):
     """Build the I2C write that programs the TA driver's pulse_width.
 
@@ -307,40 +323,16 @@ def ta_pulse_width_write(width_us=None):
     available and fall back to the constants above (same data, hardcoded)
     so a missing/renamed SDK entry can't break scan start.
     """
-    entry = None
-    try:
-        from omotion.laser import FpgaMap
-        entry = FpgaMap().get_entry_by_friendly_name("TA_PULSE_WIDTH")
-    except Exception:
-        entry = None
-
+    entry = _fpga_entry("TA_PULSE_WIDTH")
     if width_us is None:
-        data = None
-        try:
-            from omotion.laser import load_laser_params
-            for param in load_laser_params():
-                if param.get("friendlyName") == "TA_PULSE_WIDTH":
-                    data = bytearray(param["dataToSend"])
-                    break
-        except Exception:
-            data = None
-        if data is None:
-            data = bytearray(
-                TA_PULSE_WIDTH_BASELINE_TICKS.to_bytes(3, "little"))
+        stock = _stock_laser_params(("TA_PULSE_WIDTH",))
+        data = stock[0][1] if stock else bytearray(
+            TA_PULSE_WIDTH_BASELINE_TICKS.to_bytes(3, "little"))
         ticks = int.from_bytes(bytes(data), "little")
     else:
-        ticks = max(TA_PULSE_MIN_TICKS,
-                    int(round(float(width_us) / TA_PULSE_TICK_US)))
+        ticks = max(TA_PULSE_MIN_TICKS, int(round(float(width_us) / TA_PULSE_TICK_US)))
         data = bytearray(ticks.to_bytes(3, "little"))
-
-    write_kwargs = {
-        "mux_index": entry["mux_idx"] if entry else 1,
-        "channel": entry["channel"] if entry else 4,
-        "device_addr": entry["i2c_addr"] if entry else 0x41,
-        "reg_addr": entry["start_address"] if entry else 0,
-        "data": data,
-    }
-    return write_kwargs, ticks
+    return _i2c_write_kwargs(entry, data, channel=4, reg_addr=0), ticks
 
 
 # --- Alt-pulse-width safety ceiling (#483) ------------------------------------
@@ -377,6 +369,21 @@ SAFETY_PULSE_WIDTH_UL_REGISTERS = (
 )
 
 
+def _safety_baseline_ticks(name, user_config, stock):
+    """``(ticks, source)`` to restore register ``name`` to: the console's
+    numeric flash user-config value if it has one, else the stock bytes."""
+    override = user_config.get(name) if isinstance(user_config, dict) else None
+    if override is not None and not isinstance(override, bool):
+        try:
+            return (int(round(float(override) / SAFETY_PULSE_TICK_US)),
+                    "console user-config restore")
+        except (TypeError, ValueError):
+            pass
+    data = stock.get(name)
+    ticks = int.from_bytes(bytes(data), "little") if data else SAFETY_PULSE_WIDTH_UL_STOCK_TICKS
+    return ticks, "laser_params baseline restore"
+
+
 def safety_pulse_width_ul_writes(ceiling_us=None, user_config=None):
     """Build the I2C writes that program both safety FPGAs' PULSE_WIDTH_UL.
 
@@ -395,66 +402,29 @@ def safety_pulse_width_ul_writes(ceiling_us=None, user_config=None):
     the constants above (same data, hardcoded) so a missing/renamed SDK
     entry can't break scan start.
     """
-    names = tuple(name for name, _ in SAFETY_PULSE_WIDTH_UL_REGISTERS)
-    try:
-        from omotion.laser import FpgaMap
-        fpga_map = FpgaMap()
-    except Exception:
-        fpga_map = None
-
     stock = {}
     if ceiling_us is None:
-        try:
-            from omotion.laser import load_laser_params
-            for param in load_laser_params():
-                if param.get("friendlyName") in names:
-                    stock[param["friendlyName"]] = bytearray(param["dataToSend"])
-        except Exception:
-            stock = {}
+        stock = dict(_stock_laser_params(
+            tuple(name for name, _ in SAFETY_PULSE_WIDTH_UL_REGISTERS)))
 
     writes = []
     for name, fallback_channel in SAFETY_PULSE_WIDTH_UL_REGISTERS:
-        entry = None
-        if fpga_map is not None:
-            try:
-                entry = fpga_map.get_entry_by_friendly_name(name)
-            except Exception:
-                entry = None
+        entry = _fpga_entry(name)
         num_bytes = SAFETY_PULSE_WIDTH_UL_BYTES
         try:
             if entry and entry.get("data_size"):
                 num_bytes = int(str(entry["data_size"]).rstrip("B")) // 8
         except (TypeError, ValueError):
-            num_bytes = SAFETY_PULSE_WIDTH_UL_BYTES
+            pass
 
         if ceiling_us is not None:
             ticks = int(round(float(ceiling_us) / SAFETY_PULSE_TICK_US))
             source = "alternative pulse width ceiling"
         else:
-            ticks, source = None, None
-            override = (user_config.get(name)
-                        if isinstance(user_config, dict) else None)
-            if override is not None and not isinstance(override, bool):
-                try:
-                    ticks = int(round(float(override) / SAFETY_PULSE_TICK_US))
-                    source = "console user-config restore"
-                except (TypeError, ValueError):
-                    ticks = None
-            if ticks is None:
-                data = stock.get(name)
-                ticks = (int.from_bytes(bytes(data), "little") if data
-                         else SAFETY_PULSE_WIDTH_UL_STOCK_TICKS)
-                source = "laser_params baseline restore"
+            ticks, source = _safety_baseline_ticks(name, user_config, stock)
         ticks = max(0, min((1 << (8 * num_bytes)) - 1, ticks))
         data = bytearray(ticks.to_bytes(num_bytes, "little"))
-
-        write_kwargs = {
-            "mux_index": entry["mux_idx"] if entry else 1,
-            "channel": entry["channel"] if entry else fallback_channel,
-            "device_addr": entry["i2c_addr"] if entry else 0x41,
-            "reg_addr": entry["start_address"] if entry else 0x04,
-            "data": data,
-        }
+        write_kwargs = _i2c_write_kwargs(entry, data, channel=fallback_channel, reg_addr=0x04)
         writes.append((name, write_kwargs, ticks, source))
     return writes
 
@@ -468,6 +438,7 @@ class CameraSettings:
 
     @property
     def exposure_us(self) -> float:
+        """The exposure in microseconds."""
         return self.exposure_rows * CAMERA_EXPOSURE_ROW_US
 
 
@@ -509,10 +480,7 @@ def camera_settings_from_config(exposure_us, gains):
         if isinstance(g, bool) or not isinstance(g, (int, float)) or g != int(g):
             return None, f"camera {i + 1} gain {g!r} is not a valid gain"
         if int(g) not in CAMERA_GAIN_CHOICES:
-            return None, (
-                f"camera {i + 1} gain {g!r} is not one of "
-                f"{list(CAMERA_GAIN_CHOICES)}"
-            )
+            return None, f"camera {i + 1} gain {g!r} is not one of {list(CAMERA_GAIN_CHOICES)}"
         clean.append(int(g))
     return CameraSettings(exposure_rows=int(rows), gains=tuple(clean)), ""
 
@@ -574,10 +542,7 @@ def apply_camera_settings(sensor, camera_mask: int, settings: CameraSettings):
             sensor.switch_camera(cam_id)
             for reg, value in regs:
                 ok = sensor.camera_i2c_write(
-                    I2C_Packet(
-                        device_address=0x36, register_address=reg, data=value
-                    )
-                )
+                    I2C_Packet(device_address=0x36, register_address=reg, data=value))
                 if ok is False:
                     failures.append(f"camera {cam_id + 1} reg 0x{reg:04X}")
         except Exception as e:

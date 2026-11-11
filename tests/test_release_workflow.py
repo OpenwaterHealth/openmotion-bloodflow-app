@@ -306,7 +306,7 @@ def test_nuitka_is_the_default_compiler_with_pyinstaller_as_dispatch_fallback(wo
     assert 'Join-Path (Join-Path $DistRoot $outName) "Open-Motion"' in script
     # clinical must not carry the self-updater (#543): Nuitka follows the
     # conditional import statically, so the build tells it not to.
-    assert '"--nofollow-import-to=app_updater"' in script
+    assert '"--nofollow-import-to=services.app_updater"' in script
     packaging = (REPO_ROOT / "scripts" / "package_artifacts.ps1").read_text(encoding="utf-8-sig")
     assert '[ValidateSet("pyinstaller", "nuitka")][string]$Compiler = "nuitka"' in packaging
 

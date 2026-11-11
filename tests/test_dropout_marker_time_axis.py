@@ -38,9 +38,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import motion_connector  # noqa: E402
-from data_sources import LiveScanSource  # noqa: E402
-from motion_connector import MotionConnector  # noqa: E402
+import connector.scan  # noqa: E402
+from plot.data_sources import LiveScanSource  # noqa: E402
+from connector import MotionConnector  # noqa: E402
 
 pytestmark = pytest.mark.unit
 
@@ -104,7 +104,7 @@ def test_dropout_marker_lands_on_sample_time_axis(monkeypatch):
         plot_t0=1000.0,
         last_seen={("left", 0): 1018.0, ("left", 1): 1021.0},
     )
-    monkeypatch.setattr(motion_connector.time, "monotonic", lambda: 1021.0)
+    monkeypatch.setattr(connector.scan.time, "monotonic", lambda: 1021.0)
 
     MotionConnector._on_dropout_check(fake)
 
@@ -134,7 +134,7 @@ def test_dropout_marker_without_samples_does_not_mark_nan(monkeypatch):
         plot_t0=1000.0,
         last_seen={("right", 3): 1018.0},
     )
-    monkeypatch.setattr(motion_connector.time, "monotonic", lambda: 1021.0)
+    monkeypatch.setattr(connector.scan.time, "monotonic", lambda: 1021.0)
 
     MotionConnector._on_dropout_check(fake)
 
@@ -157,7 +157,7 @@ def test_dropout_marker_uses_camera_own_trace_end_not_live_edge(monkeypatch):
         plot_t0=500.0,
         last_seen={("right", 6): 510.0, ("right", 7): 515.0},
     )
-    monkeypatch.setattr(motion_connector.time, "monotonic", lambda: 515.0)
+    monkeypatch.setattr(connector.scan.time, "monotonic", lambda: 515.0)
 
     MotionConnector._on_dropout_check(fake)
 

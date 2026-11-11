@@ -3,7 +3,7 @@ BFI/BVI sample timestamps (spec: 2026-06-11-nan-gap-notes-footer)."""
 
 import pytest
 
-from nan_gap_tracker import NanGapTracker, format_gaps, gap_note_line
+from plot.nan_gap_tracker import NanGapTracker, format_gaps, gap_note_line
 
 pytestmark = pytest.mark.unit
 

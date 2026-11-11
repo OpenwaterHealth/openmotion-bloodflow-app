@@ -26,7 +26,7 @@ Rectangle {
 
     // Connection state — drives start button icon and enablement.
     // A laser-safety trip is surfaced via a persistent NotificationCenter
-    // toast (see motion_connector.safetyFailure setter), not by faking
+    // toast (see the safetyFailure setter in connector/console.py), not by faking
     // a disconnect here.
     property bool allConnected: MotionInterface.consoleConnected &&
         (MotionInterface.leftSensorConnected || MotionInterface.rightSensorConnected)

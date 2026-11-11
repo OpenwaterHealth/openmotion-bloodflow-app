@@ -9,7 +9,7 @@ offered "update" 1.1.3 over a local 1.2.0-dev build).
 
 import pytest
 
-from app_updater import version_newer
+from services.app_updater import version_newer
 
 pytestmark = pytest.mark.unit
 

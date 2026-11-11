@@ -5,12 +5,9 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from motion_connector import (
-    MotionConnector,
-    _config_name,
-    _sdk_flags_from_session,
-)
-from data_sources import _CameraBuffer
+from connector import MotionConnector
+from connector.history import _config_name, _sdk_flags_from_session
+from plot.data_sources import _CameraBuffer
 from omotion.ScanDatabase import ScanDatabase
 
 pytestmark = pytest.mark.unit
@@ -24,7 +21,7 @@ def _connector(tmp_path, scan_db_path):
     iface.scan_db_path = scan_db_path
     return MotionConnector(
         interface=iface, app_config={"engineeringMode": False},
-        data_dir=str(tmp_path), config_dir="config",
+        data_dir=str(tmp_path), 
     )
 
 
@@ -381,8 +378,7 @@ def test_load_past_scan_worker_emits_display_meta_from_session(tmp_path, monkeyp
     captured = []
     c._pastScanBuffersReady.connect(lambda *a: captured.append(a))
     c._load_past_scan_worker(
-        c._past_scan_load_seq, sid, "20260623_111935_PatientA", db_path,
-        None)
+        c._past_scan_load_seq, sid, "20260623_111935_PatientA", db_path)
 
     assert captured, "worker did not emit _pastScanBuffersReady"
     display_meta = captured[-1][-1]

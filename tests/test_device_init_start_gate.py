@@ -24,7 +24,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from motion_connector import MotionConnector
+from connector import MotionConnector
 
 pytestmark = pytest.mark.unit
 
@@ -41,7 +41,7 @@ def _connector(tmp_path, app_config=None):
     cfg.update(app_config or {})
     conn = MotionConnector(
         interface=iface, app_config=cfg,
-        data_dir=str(tmp_path), config_dir="config",
+        data_dir=str(tmp_path), 
     )
     # Fast no-op bring-ups; tests that need a real sequence call it directly.
     conn._init_sensor = lambda side, gen: None

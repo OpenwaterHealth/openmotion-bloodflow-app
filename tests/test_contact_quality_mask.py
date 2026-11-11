@@ -34,7 +34,7 @@ class _SyncThread:
 
 @pytest.fixture
 def connector(monkeypatch):
-    from motion_connector import MotionConnector
+    from connector import MotionConnector
 
     fake_iface = MagicMock()
     fake_iface.console = MagicMock()
@@ -58,13 +58,12 @@ def connector(monkeypatch):
         interface=fake_iface,
         app_config={"engineeringMode": False},
         data_dir=".",
-        config_dir="config",
     )
     c._consoleConnected = True
     c._leftSensorConnected = True
     c._rightSensorConnected = True
 
-    monkeypatch.setattr("motion_connector.threading.Thread", _SyncThread)
+    monkeypatch.setattr("connector.contact_quality.threading.Thread", _SyncThread)
     return c
 
 

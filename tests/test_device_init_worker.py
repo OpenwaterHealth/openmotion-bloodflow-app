@@ -14,8 +14,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import motion_connector
-from motion_connector import MotionConnector
+import connector.devices
+from connector import MotionConnector
 
 pytestmark = pytest.mark.unit
 
@@ -31,7 +31,7 @@ def _connector(tmp_path):
     iface.console.get_version.return_value = ""
     return MotionConnector(
         interface=iface, app_config={"engineeringMode": False},
-        data_dir=str(tmp_path), config_dir="config",
+        data_dir=str(tmp_path), 
     )
 
 
@@ -102,7 +102,7 @@ def test_console_connect_does_no_console_io_in_the_slot(tmp_path):
 
 
 def test_console_init_runs_every_step_in_order(tmp_path, monkeypatch):
-    monkeypatch.setattr(motion_connector, "select_tec_voltage",
+    monkeypatch.setattr(connector.devices, "select_tec_voltage",
                         lambda console, params: (-0.07, "test"))
     c = _connector(tmp_path)
     _console_connect(c)

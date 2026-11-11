@@ -11,7 +11,7 @@ import math
 import pytest
 from omotion import MotionConfig
 
-from motion_config import (
+from hardware.motion_config import (
     TEC_TRIP_MAX_C,
     TEC_TRIP_MIN_C,
     TecTripOutcome,

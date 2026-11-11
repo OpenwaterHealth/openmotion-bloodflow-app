@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from motion_connector import _LivePlotSink
+from connector.sinks import _LivePlotSink
 
 pytestmark = pytest.mark.unit
 
@@ -65,7 +65,7 @@ def _make_sink(conn, live_source=None):
     """Helper: build a _LivePlotSink with a stub live_source if not provided."""
     if live_source is None:
         live_source = _RecorderLiveSource()
-    return _LivePlotSink(connector=conn, plot_t0=0.0, live_source=live_source), live_source
+    return _LivePlotSink(connector=conn, live_source=live_source), live_source
 
 
 def test_live_plot_sink_appends_only_source_camera_for_each_row():
@@ -431,12 +431,12 @@ def test_live_plot_sink_records_every_arrival_into_gap_tracker():
     """The gap tracker is fed on frame ARRIVAL — an unlit frame whose
     BFI is NaN (covered sensor) is still delivery, not a data gap. Gaps
     now mean "frames stopped arriving"."""
-    from nan_gap_tracker import NanGapTracker
+    from plot.nan_gap_tracker import NanGapTracker
 
     conn = _connector()
     tracker = NanGapTracker()
     src = _RecorderLiveSource()
-    sink = _LivePlotSink(connector=conn, plot_t0=0.0, live_source=src,
+    sink = _LivePlotSink(connector=conn, live_source=src,
                          nan_gap_tracker=tracker)
     batch = SimpleNamespace(
         bfi_live=np.zeros((3, 2, 8), dtype=np.float32),
@@ -477,12 +477,12 @@ def test_live_plot_sink_covered_camera_appends_nan_gap_samples():
     keep advancing so the time axis scrolls through a contact loss; the
     renderer draws NaN runs as a blank gap. mean/contrast stay None
     (non-finite); chip temperature is real and keeps flowing."""
-    from nan_gap_tracker import NanGapTracker
+    from plot.nan_gap_tracker import NanGapTracker
 
     conn = _connector()
     tracker = NanGapTracker()
     src = _RecorderLiveSource()
-    sink = _LivePlotSink(connector=conn, plot_t0=0.0, live_source=src,
+    sink = _LivePlotSink(connector=conn, live_source=src,
                          nan_gap_tracker=tracker)
     batch = SimpleNamespace(
         bfi_live=np.full((2, 2, 8), np.nan, dtype=np.float32),
@@ -563,29 +563,6 @@ def test_live_plot_sink_warmup_and_stale_nan_still_skipped():
     assert src.appended == []
 
 
-def test_live_plot_sink_legacy_batch_nan_still_skipped():
-    """Batches without side_ids/cam_ids fan every row out to all 16
-    cameras; a finite BFI is the only evidence a camera produced the
-    row. NaN rows must stay unappended there or every camera's buffer
-    would collect 16-way NaN garbage (issue #418)."""
-    conn = _connector()
-    sink, src = _make_sink(conn)
-    batch = SimpleNamespace(
-        bfi_live=np.full((1, 2, 8), np.nan, dtype=np.float32),
-        bvi_live=np.full((1, 2, 8), np.nan, dtype=np.float32),
-        mean_dc_rt=np.full((1, 2, 8), np.nan, dtype=np.float32),
-        contrast_sn_rt=np.full((1, 2, 8), np.nan, dtype=np.float32),
-        temperature_c=np.full((1, 2, 8), 35.0, dtype=np.float32),
-        frame_type=np.array(["light"], dtype="<U8"),
-        timestamp_s=np.array([0.5], dtype=np.float64),
-        abs_frame_ids=np.array([1], dtype=np.int64),
-    )
-
-    sink.consume("live", batch)
-
-    assert src.appended == []
-
-
 def test_live_plot_sink_rearms_dropped_camera_on_frame_arrival():
     """A camera in the dropped set that sends a fresh frame is re-armed:
     removed from the set, recovery surfaced, and the sample plotted —
@@ -655,12 +632,12 @@ def test_live_plot_sink_low_light_transition_logged_after_debounce():
 
 
 def test_live_plot_sink_side_average_records_arrivals_into_tracker():
-    from nan_gap_tracker import NanGapTracker
+    from plot.nan_gap_tracker import NanGapTracker
 
     conn = _connector()
     tracker = NanGapTracker()
     src = _RecorderLiveSource()
-    sink = _LivePlotSink(connector=conn, plot_t0=0.0, live_source=src,
+    sink = _LivePlotSink(connector=conn, live_source=src,
                          nan_gap_tracker=tracker)
 
     sink.consume("live_side", SimpleNamespace(

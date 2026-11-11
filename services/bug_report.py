@@ -22,14 +22,8 @@ _SMTP_REQUIRED_FIELDS = ("host", "port", "username", "password", "from_addr")
 
 # --- pure helpers -----------------------------------------------------------
 def build_report_text(
-    *,
-    code: str,
-    title: str,
-    message: str,
-    timestamp: str,
-    app_version: str,
-    device_info: str,
-    log_path: str,
+    *, code: str, title: str, message: str, timestamp: str, app_version: str,
+    device_info: str, log_path: str,
 ) -> str:
     """Human-readable report body included in the email / clipboard."""
     return (
@@ -49,15 +43,12 @@ def build_report_text(
 
 def smtp_config_complete(cfg: dict | None) -> bool:
     """True iff every required SMTP field is present and non-empty."""
-    if not cfg:
-        return False
-    return all(str(cfg.get(f, "")).strip() for f in _SMTP_REQUIRED_FIELDS)
+    return bool(cfg) and all(str(cfg.get(f, "")).strip() for f in _SMTP_REQUIRED_FIELDS)
 
 
 def build_mailto_url(address: str, *, subject: str, body: str) -> str:
     """Build a ``mailto:`` URL with URL-encoded subject and body."""
-    query = urlencode({"subject": subject, "body": body})
-    return f"mailto:{address}?{query}"
+    return f"mailto:{address}?{urlencode({'subject': subject, 'body': body})}"
 
 
 # --- I/O wrappers (side-effecting; not unit-tested) -------------------------
@@ -75,9 +66,7 @@ def send_via_smtp(cfg: dict, *, to_addr: str, subject: str, body: str,
     if log_path and os.path.isfile(log_path):
         with open(log_path, "rb") as fh:
             msg.add_attachment(
-                fh.read(), maintype="text", subtype="plain",
-                filename=os.path.basename(log_path),
-            )
+                fh.read(), maintype="text", subtype="plain", filename=os.path.basename(log_path))
 
     with smtplib.SMTP(cfg["host"], int(cfg["port"]), timeout=30) as srv:
         if cfg.get("use_tls", True):

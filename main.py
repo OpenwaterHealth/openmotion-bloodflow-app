@@ -1,21 +1,15 @@
-import sys
-import os
-import warnings
-import logging
+import argparse
 import datetime
 import json
+import logging
+import os
+import sys
+import warnings
 
-
-# PyInstaller --windowed/--noconsole builds set sys.stdout and sys.stderr
-# to None because there's no console attached. Any code that does
-# `sys.stdout.write(...)` (including logging.StreamHandler) raises
-# AttributeError: 'NoneType' object has no attribute 'write' on the
-# first call. The SDK's shutdown path logs from a finally-block, so a
-# crash there propagates as a CRITICAL "Unhandled Python exception" and
-# terminates the bloodflow process mid-test.
-#
-# Fix: redirect None streams to a safe sink BEFORE any logging is set up.
-# This must happen before any other import that might attach a logger.
+# A windowed build has no console, so sys.stdout / sys.stderr are None and the
+# first write (any logging.StreamHandler, the SDK's shutdown logging) raises
+# AttributeError and kills the process. Point them at a sink before anything
+# can attach a logger.
 if sys.stdout is None:
     sys.stdout = open(os.devnull, "w", encoding="utf-8", buffering=1)
 if sys.stderr is None:
@@ -34,15 +28,13 @@ if is_frozen():
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtQml import (
-    QQmlApplicationEngine,
-    qmlRegisterSingletonInstance,
-    qmlRegisterSingletonType,
+    QQmlApplicationEngine, qmlRegisterSingletonInstance, qmlRegisterSingletonType,
 )
 from PyQt6.QtCore import qInstallMessageHandler, QtMsgType, QTimer, QUrl
 
 from config.app_config import SERVICE_BUILD
-from motion_connector import MotionConnector
-from motion_config import DEFAULT_TRIGGER_OVERRIDES
+from connector import MotionConnector
+from hardware.motion_config import DEFAULT_TRIGGER_OVERRIDES
 from omotion import MotionInterface, db_open
 from utils.single_instance import check_single_instance, cleanup_single_instance
 from version import get_version
@@ -62,32 +54,30 @@ _APP_CONFIG_BASELINE: dict = {}
 # Keys a source-run launch flag forced this launch (for the startup report).
 _DEV_CONFIG_KEYS: set = set()
 
-
 logger = logging.getLogger("openmotion.bloodflow-app")
-logger.setLevel(logging.INFO)  # or INFO depending on what you want to see
+logger.setLevel(logging.INFO)
 
 # Suppress PyQt6 DeprecationWarnings related to SIP
 warnings.simplefilter("ignore", DeprecationWarning)
 
+_QT_LOG_LEVELS = {
+    QtMsgType.QtDebugMsg: logging.DEBUG,
+    QtMsgType.QtInfoMsg: logging.INFO,
+    QtMsgType.QtWarningMsg: logging.WARNING,
+    QtMsgType.QtCriticalMsg: logging.ERROR,
+    QtMsgType.QtFatalMsg: logging.CRITICAL,
+}
 
-# Wire up the things that get logged out of QT app to the proper logs
+
 def qt_message_handler(msg_type, context, message):
-    """Forward QML messages to the SDK log at the matching severity.
+    """Forward QML messages to the app log at the matching severity.
 
     `console.log()` in QML is `QtDebugMsg` and is filtered out by default.
     Use `console.warn()` / `console.error()` from QML for things that
     should always reach the run log.
     """
-    log_level_map = {
-        QtMsgType.QtDebugMsg: logging.DEBUG,
-        QtMsgType.QtInfoMsg: logging.INFO,
-        QtMsgType.QtWarningMsg: logging.WARNING,
-        QtMsgType.QtCriticalMsg: logging.ERROR,
-        QtMsgType.QtFatalMsg: logging.CRITICAL,
-    }
-    log_level = log_level_map.get(msg_type, logging.INFO)
-    qml_logger = logging.getLogger("openmotion.bloodflow-app.qml-console")
-    qml_logger.log(log_level, "QML: %s", message)
+    logging.getLogger("openmotion.bloodflow-app.qml-console").log(
+        _QT_LOG_LEVELS.get(msg_type, logging.INFO), "QML: %s", message)
 
 
 def _load_app_config(
@@ -96,28 +86,24 @@ def _load_app_config(
 ) -> dict:
     """The effective app config before saved preferences are applied.
 
-    Since #546 the shipped values are compiled in (``config/app_config.py``)
-    and there is no configuration file to read. ``clinical`` / ``portable``
-    / ``overrides`` are the dev-only launch flags parsed from the command
-    line by ``_parse_dev_args`` (``None`` = keep the compiled value); a
-    frozen build never passes them, and the process environment is never
-    consulted. Saved operator preferences are overlaid later in ``main``,
-    once the scan database (which holds the settings table) is available.
+    The shipped values are compiled in (``config/app_config.py``, #546).
+    ``clinical`` / ``portable`` / ``overrides`` are the dev-only launch flags
+    from ``_parse_dev_args`` (``None`` = keep the compiled value); a frozen
+    build never passes them, and the process environment is never consulted.
+    Saved operator preferences are overlaid later in ``main``, once the scan
+    database (which holds the settings table) is open.
+
+    Logs nothing about the config: this runs before the log-file handler is
+    attached, so the startup report does that afterwards (#527).
     """
     cfg = config_store.compiled_config()
     dev_keys = set()
-
-    # Dev-only launch overrides. main() only passes them for a source run:
-    # a frozen build drops the flags, so a packaged artifact boots
-    # identically on every machine. The build-time stamp of CLINICAL_MODE
-    # in config/app_config.py is the source of truth for shipped artifacts.
     if clinical is not None:
         cfg["clinicalMode"] = bool(clinical)
         dev_keys.add("clinicalMode")
-    # portableMode is derived, not configured: a frozen build asks
-    # app_paths whether the installer registered this exe. --portable only
-    # matters for the startup report on a source run (the writable root of
-    # a source run is the cwd either way).
+    # portableMode is derived, not configured: a frozen build asks app_paths
+    # whether the installer registered this exe. --portable only matters for
+    # the startup report (a source run writes under the cwd either way).
     if portable is not None:
         cfg["portableMode"] = bool(portable)
         dev_keys.add("portableMode")
@@ -125,15 +111,11 @@ def _load_app_config(
         cfg["portableMode"] = app_paths.portable_mode()
     dev_keys |= config_store.apply_dev_overrides(cfg, overrides)
 
-    # macOS is a research-only platform: it is never validated or shipped for
-    # clinical use. This has to win over the compiled value AND the dev flag,
-    # because clinicalMode drives require_encrypted_db (see the
-    # MotionInterface construction below), and the SDK refuses the scan-db
-    # keystore on macOS outright — so a "clinical" macOS session cannot start
-    # at all, it can only fail later and less clearly. Forcing it here is what
-    # makes the DMG a coherent research build rather than a broken clinical
-    # one. build_macos.sh has no variant stamp of its own (unlike
-    # scripts/build_common.ps1), so this is the only gate.
+    # macOS is research-only. This has to win over the compiled value AND the
+    # dev flag: clinicalMode drives require_encrypted_db and the SDK refuses
+    # the scan-db keystore on macOS, so a "clinical" macOS session could only
+    # fail later and less clearly. build_macos.sh has no variant stamp of its
+    # own (unlike scripts/build_common.ps1), so this is the only gate.
     if sys.platform == "darwin" and cfg.get("clinicalMode"):
         logger.warning(
             "clinicalMode requested on macOS — forcing Research. macOS builds "
@@ -148,56 +130,32 @@ def _load_app_config(
     _APP_CONFIG_BASELINE["clinicalMode"] = cfg["clinicalMode"]
     _DEV_CONFIG_KEYS.clear()
     _DEV_CONFIG_KEYS.update(dev_keys)
-    # No config logging here: this runs before the log-file handler is
-    # attached (the log's location depends on the config), so anything
-    # logged here reaches only the console. The startup report logs the
-    # effective config after the handler exists (#527).
     return cfg
 
-# Qt runtime knobs the host environment could otherwise inject. Every one of
-# these changes how the window comes up (platform plugin, style/theme, DPI
-# scaling, render backend, logging) with no change to the build — exactly
-# what a validated artifact must not allow. They are removed before the first
-# QApplication is constructed; the three the app relies on are then pinned.
+
+# Qt runtime knobs the host environment could otherwise inject. Each changes
+# how the window comes up (platform plugin, style/theme, DPI scaling, render
+# backend, logging) with no change to the build, which a validated artifact
+# must not allow. They are removed before the first QApplication is
+# constructed; the three the app relies on are then pinned.
 #
 # Deliberately NOT listed: QT_PLUGIN_PATH, QML2_IMPORT_PATH and PATH.
 # PyInstaller's PyQt6 runtime hook sets those to the bundle's own Qt tree at
 # process start, and the frozen build needs them to find its plugins.
 _QT_ENV_SCRUB = (
-    "QT_QPA_PLATFORM",
-    "QT_QPA_PLATFORMTHEME",
-    "QT_QPA_PLATFORM_PLUGIN_PATH",
-    "QT_QPA_FONTDIR",
-    "QML_IMPORT_PATH",
-    "QT_STYLE_OVERRIDE",
-    "QT_QUICK_CONTROLS_CONF",
-    "QT_QUICK_CONTROLS_FALLBACK_STYLE",
-    "QT_QUICK_CONTROLS_HOVER_ENABLED",
-    "QT_QUICK_CONTROLS_MATERIAL_VARIANT",
-    "QT_QUICK_CONTROLS_MATERIAL_ACCENT",
-    "QT_QUICK_CONTROLS_MATERIAL_PRIMARY",
-    "QT_QUICK_CONTROLS_MATERIAL_FOREGROUND",
-    "QT_QUICK_CONTROLS_MATERIAL_BACKGROUND",
-    "QT_SCALE_FACTOR",
-    "QT_SCREEN_SCALE_FACTORS",
-    "QT_AUTO_SCREEN_SCALE_FACTOR",
-    "QT_ENABLE_HIGHDPI_SCALING",
-    "QT_SCALE_FACTOR_ROUNDING_POLICY",
-    "QT_FONT_DPI",
-    "QT_USE_PHYSICAL_DPI",
-    "QT_QUICK_BACKEND",
-    "QSG_RHI_BACKEND",
-    "QSG_RENDER_LOOP",
-    "QSG_INFO",
-    "QT_OPENGL",
-    "QT_ANGLE_PLATFORM",
-    "QT_D3D_ADAPTER_INDEX",
-    "QT_MESSAGE_PATTERN",
-    "QT_DEBUG_PLUGINS",
-    "QT_FATAL_WARNINGS",
-    "QML_DISABLE_DISK_CACHE",
-    "QML_FORCE_DISK_CACHE",
-    "QML_DISK_CACHE_PATH",
+    "QT_QPA_PLATFORM", "QT_QPA_PLATFORMTHEME", "QT_QPA_PLATFORM_PLUGIN_PATH",
+    "QT_QPA_FONTDIR", "QML_IMPORT_PATH", "QT_STYLE_OVERRIDE",
+    "QT_QUICK_CONTROLS_CONF", "QT_QUICK_CONTROLS_FALLBACK_STYLE",
+    "QT_QUICK_CONTROLS_HOVER_ENABLED", "QT_QUICK_CONTROLS_MATERIAL_VARIANT",
+    "QT_QUICK_CONTROLS_MATERIAL_ACCENT", "QT_QUICK_CONTROLS_MATERIAL_PRIMARY",
+    "QT_QUICK_CONTROLS_MATERIAL_FOREGROUND", "QT_QUICK_CONTROLS_MATERIAL_BACKGROUND",
+    "QT_SCALE_FACTOR", "QT_SCREEN_SCALE_FACTORS", "QT_AUTO_SCREEN_SCALE_FACTOR",
+    "QT_ENABLE_HIGHDPI_SCALING", "QT_SCALE_FACTOR_ROUNDING_POLICY",
+    "QT_FONT_DPI", "QT_USE_PHYSICAL_DPI",
+    "QT_QUICK_BACKEND", "QSG_RHI_BACKEND", "QSG_RENDER_LOOP", "QSG_INFO",
+    "QT_OPENGL", "QT_ANGLE_PLATFORM", "QT_D3D_ADAPTER_INDEX",
+    "QT_MESSAGE_PATTERN", "QT_DEBUG_PLUGINS", "QT_FATAL_WARNINGS",
+    "QML_DISABLE_DISK_CACHE", "QML_FORCE_DISK_CACHE", "QML_DISK_CACHE_PATH",
 )
 
 _QT_ENV_PINNED = {
@@ -236,16 +194,12 @@ def _parse_dev_args(argv, *, frozen=None) -> tuple[dict, list[str]]:
 
     These flags let a source checkout launch as either build variant (the
     Zed tasks: ``--portable --clinical`` and ``--portable --research
-    --data-root <dir>``). They replaced the OPENMOTION_CLINICAL /
-    OPENMOTION_PORTABLE / OPENWATER_DATA_ROOT env vars so nothing ambient
-    can steer a launch. ``--config-override '{"engineeringMode": true}'``
-    (#546) is what the HIL harness uses instead of editing a config file:
-    it can force any compiled key, constants included, on a source run.
-    A frozen build ignores all of them entirely: the artifact's variant is
-    compiled in by scripts/build_common.ps1 (#233 / #546).
+    --data-root <dir>``); nothing ambient (an env var) can steer a launch.
+    ``--config-override '{"engineeringMode": true}'`` (#546) is what the HIL
+    harness uses: it can force any compiled key, constants included, on a
+    source run. A frozen build ignores all of them: the artifact's variant
+    is compiled in by scripts/build_common.ps1 (#233 / #546).
     """
-    import argparse
-
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--clinical", dest="clinical", action="store_true", default=None)
@@ -263,32 +217,21 @@ def _parse_dev_args(argv, *, frozen=None) -> tuple[dict, list[str]]:
             raise SystemExit(f"--config-override is not valid JSON: {e}")
         if not isinstance(overrides, dict):
             raise SystemExit("--config-override must be a JSON object")
-    dev = {
-        "clinical": ns.clinical,
-        "portable": ns.portable,
-        "data_root": ns.data_root,
-        "config_override": overrides,
-        "ignored": None,
-    }
+    dev = {"clinical": ns.clinical, "portable": ns.portable, "data_root": ns.data_root,
+           "config_override": overrides, "ignored": None}
+    given = {k: v for k, v in dev.items() if v is not None}
     if frozen is None:
         frozen = is_frozen()
-    given = {k: v for k, v in dev.items() if k != "ignored" and v is not None}
     if frozen and given:
-        dev = {
-            "clinical": None, "portable": None, "data_root": None,
-            "config_override": None, "ignored": given,
-        }
+        dev = dict.fromkeys(dev)
+        dev["ignored"] = given
     return dev, argv[:1] + rest
 
 
 def _app_icon() -> QIcon:
-    """Application icon with a PNG fallback.
-
-    Prefer the multi-size .ico (the taskbar wants the 16-48px frames).
-    If the ICO fails to load — e.g. a packaged build missing Qt's ico
-    image-format plugin — fall back to the 1024px PNG so the window
-    never shows the generic Windows icon.
-    """
+    """The multi-size .ico (the taskbar wants its 16-48px frames), or the
+    1024px PNG when the ICO does not load (e.g. a packaged build missing Qt's
+    ico image-format plugin), so the window never shows the generic icon."""
     icon = QIcon(str(resource_path("assets", "images", "favicon.ico")))
     if icon.isNull() or not icon.availableSizes():
         icon = QIcon(str(resource_path("assets", "images", "favicon.png")))
@@ -307,95 +250,95 @@ def _scan_db_is_encrypted(scan_db_path: str) -> bool:
     return db_open.classify_file(scan_db_path) != "plaintext"
 
 
-def main():
-    # Set the Windows AppUserModelID before any QApplication (and thus any
-    # HWND) exists: Windows binds the taskbar button to the process identity
-    # when the first window appears, so this has to be settled first. It must
-    # run before check_single_instance()'s message box too.
-    #
-    # DO NOT bump this string again. It was bumped once ("Openwater.OpenMotion"
-    # -> ".1") on the theory that Explorer caches an icon per AUMID and that a
-    # fresh ID would clear a poisoned entry. That theory did not hold up: the
-    # generic-icon bug reproduced under a brand-new AUMID and a clean relaunch
-    # under the *same* AUMID showed the correct icon, so the AUMID was never
-    # what was broken. The real cause was the Win32 window-class icon (see the
-    # #223 note further down, and utils/win_taskbar_icon.py). Changing the
-    # AUMID only mints a new identity and strands every taskbar pin users have
-    # made since 1.4.0 — a one-way cost with no benefit.
-    # Keep in sync with the ShortcutProperty in installer/app.wxs.
-    if sys.platform == "win32":
-        try:
-            import ctypes
+def _set_app_user_model_id() -> None:
+    """Set the Windows AppUserModelID (the taskbar identity).
 
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-                "Openwater.OpenMotion.1"
-            )
-        except Exception:
-            pass  # Ignore if not available
+    DO NOT bump this string again: it mints a new identity and strands every
+    taskbar pin users have made since 1.4.0. It was bumped once (to ".1") on
+    the theory that Explorer caches an icon per AUMID; the generic-icon bug
+    reproduced under the new one, and the real cause was the Win32
+    window-class icon (#223, utils/win_taskbar_icon.py).
+    Keep in sync with the ShortcutProperty in installer/app.wxs.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Openwater.OpenMotion.1")
+    except Exception:
+        pass  # cosmetic only
+
+
+def _show_already_running(qt_argv) -> None:
+    """Tell the user another instance is running (needs its own QApplication)."""
+    app = QApplication(qt_argv)
+    app.setWindowIcon(_app_icon())
+    msg_box = QMessageBox()
+    msg_box.setIcon(QMessageBox.Icon.Warning)
+    msg_box.setWindowTitle("Open-Motion")
+    msg_box.setText("Another instance of the application is already running.")
+    msg_box.setInformativeText("Please close the existing instance before opening a new one.")
+    msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+    msg_box.exec()
+
+
+def _log_handler(handler, formatter) -> logging.Handler:
+    """``handler`` at INFO with the app's line format."""
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(formatter)
+    return handler
+
+
+def _app_display_name(app_config) -> str:
+    """The taskbar name by build variant: clinicalMode=false is the Research
+    distribution, and the clinical service tool (#706) names itself so it
+    can't pass for a patient build."""
+    if not app_config.get("clinicalMode", False):
+        return "Open-Motion Research"
+    return "Open-Motion Service" if SERVICE_BUILD else "Open-Motion"
+
+
+def main():
+    # Before any QApplication (and thus any HWND) exists, including the
+    # single-instance message box: Windows binds the taskbar button to the
+    # process identity when the first window appears.
+    _set_app_user_model_id()
 
     # Startup must not depend on the inherited environment. Strip the Qt
     # knobs a host machine could inject and pin ours (before the first
-    # QApplication, including the single-instance message box below), and
-    # take the dev-only launch flags from argv — never from env vars.
+    # QApplication), and take the dev-only launch flags from argv — never
+    # from env vars.
     scrubbed_qt_env = _pin_qt_environment()
     dev, qt_argv = _parse_dev_args(sys.argv)
     if dev["data_root"]:
         app_paths.set_data_root_override(dev["data_root"])
 
-    # Check if another instance is already running
     if not check_single_instance():
-        # Create a minimal QApplication to show message box
-        app = QApplication(qt_argv)
-        app.setWindowIcon(_app_icon())
-        msg_box = QMessageBox()
-        msg_box.setIcon(QMessageBox.Icon.Warning)
-        msg_box.setWindowTitle("Open-Motion")
-        msg_box.setText("Another instance of the application is already running.")
-        msg_box.setInformativeText(
-            "Please close the existing instance before opening a new one."
-        )
-        msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
-        msg_box.exec()
+        _show_already_running(qt_argv)
         sys.exit(1)
 
-    # Qt style/theme/logging are pinned by _pin_qt_environment() at the top of
-    # main(), before the first QApplication.
-
-    # Configure logging
-    formatter = logging.Formatter(
-        "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
-    )
-    # Configure console logging
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(formatter)
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s")
+    console_handler = _log_handler(logging.StreamHandler(), formatter)
     logger.addHandler(console_handler)
 
-    # Configure file logging
     app_config = _load_app_config(
-        clinical=dev["clinical"], portable=dev["portable"],
-        overrides=dev["config_override"],
-    )
+        clinical=dev["clinical"], portable=dev["portable"], overrides=dev["config_override"])
     # Single output root: dataDirectory, or app_paths.writable_root() (which
-    # already applies the frozen/portable/dev-cwd precedence + the
-    # ~/Documents fallback for an unwritable candidate — e.g. macOS Finder
-    # launch where cwd is "/"). Two fixed children live under it: logs/
-    # (this run's log file) and data/ (scans.db, scan CSVs, calibrations,
-    # debug-bundles, downloaded updates).
+    # applies the frozen/portable/dev-cwd precedence and the ~/Documents
+    # fallback for an unwritable candidate). Two fixed children live under
+    # it: logs/ (this run's log file) and data/ (scans.db, scan CSVs,
+    # calibrations, debug-bundles, downloaded updates).
     _data_dir = app_config.get("dataDirectory") or str(
-        app_paths.writable_root(app_config.get("portableMode"))
-    )
+        app_paths.writable_root(app_config.get("portableMode")))
     os.makedirs(_data_dir, exist_ok=True)
     run_dir = os.path.join(_data_dir, app_paths.LOGS_DIRNAME)
     os.makedirs(run_dir, exist_ok=True)
-    ts = datetime.datetime.now().strftime(
-        "%Y%m%d_%H%M%S"
-    )  # Build timestamp like 20251029_124455
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     logfile_path = os.path.join(run_dir, f"open-motion-{ts}.log")
 
-    file_handler = logging.FileHandler(logfile_path, mode="w", encoding="utf-8")
-    file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(formatter)
+    file_handler = _log_handler(
+        logging.FileHandler(logfile_path, mode="w", encoding="utf-8"), formatter)
     logger.addHandler(file_handler)
     logger.info("=" * 64)
     logger.info("Open-Motion %s starting", APP_VERSION)
@@ -403,37 +346,30 @@ def main():
     logger.info("Data directory: %s", _data_dir)
     logger.info("=" * 64)
 
-    # Startup-environment report. Logged here rather than at the top of
-    # main() so it lands in the file log, not just the (often hidden) console.
+    # Logged here rather than at the top of main() so it lands in the file
+    # log, not just the (often hidden) console.
     if scrubbed_qt_env:
-        logger.info(
-            "Ignored Qt environment overrides from the host: %s", scrubbed_qt_env
-        )
+        logger.info("Ignored Qt environment overrides from the host: %s", scrubbed_qt_env)
     if dev["ignored"]:
         logger.warning(
             "Ignoring dev-only launch flags %s: a packaged build's variant and "
             "data root are fixed at build time.", dev["ignored"],
         )
-    elif any(dev[k] is not None for k in
-             ("clinical", "portable", "data_root", "config_override")):
+    elif any(v is not None for v in dev.values()):
         logger.info(
-            "Dev launch overrides: clinical=%s portable=%s data_root=%s "
-            "config_override=%s",
-            dev["clinical"], dev["portable"], dev["data_root"],
-            dev["config_override"],
+            "Dev launch overrides: clinical=%s portable=%s data_root=%s config_override=%s",
+            dev["clinical"], dev["portable"], dev["data_root"], dev["config_override"],
         )
 
-    # Configure the SDK logger hierarchy to use the same handlers
+    # The SDK logger hierarchy writes through the same handlers, not the root.
     sdk_logger = logging.getLogger("openmotion.sdk")
     sdk_logger.setLevel(logging.INFO)
     sdk_logger.addHandler(console_handler)
     sdk_logger.addHandler(file_handler)
-    sdk_logger.propagate = False  # Don't propagate to root, use our handlers
+    sdk_logger.propagate = False
 
-    # Construct the MotionInterface and inject into the connector below.
-    # data_dir + scan_db_path point the new pipeline's default CsvSink and
-    # ScanDBSink at <_data_dir>/data — the same folder the connector uses
-    # for calibrations/debug-bundles (self._data_root).
+    # <_data_dir>/data holds the SDK's default CsvSink / ScanDBSink output
+    # and the connector's calibrations / debug-bundles (self._data_root).
     _scan_data_dir = os.path.join(_data_dir, app_paths.DATA_DIRNAME)
     os.makedirs(_scan_data_dir, exist_ok=True)
     _scan_db_path = os.path.join(_scan_data_dir, "scans.db")
@@ -458,24 +394,18 @@ def main():
     )
 
     # Operator preferences (#546): the PREFERENCE / STATE tiers of the
-    # compiled config live in the settings table of scans.db — encrypted and
-    # HMAC-protected on a clinical build — instead of a plaintext overrides
-    # file. Opened here because it needs the encryption policy set (above).
-    # A pre-#546 app_config.local.json, if one is still on the machine, is
-    # ignored: nothing reads it.
+    # compiled config live in the settings table of scans.db (encrypted and
+    # HMAC-protected on a clinical build). Opened here because it needs the
+    # encryption policy set above.
     settings = settings_store.SettingsStore(_scan_db_path)
     saved_keys = config_store.apply_saved_preferences(app_config, settings.load())
 
-    # Startup diagnostics (issue #527): build variant, install mode, where
-    # preferences persist, and the effective config with every key that is
-    # not at its compiled value marked. AFTER the file handler attaches —
-    # everything logged inside _load_app_config reaches only the console.
+    # Startup diagnostics (#527), after the file handler is attached.
     startup_report.log_startup_report(
         logger, app_config, _APP_CONFIG_BASELINE,
         dev_keys=set(_DEV_CONFIG_KEYS), saved_keys=saved_keys,
         settings_path=settings.path, settings_enabled=settings.enabled,
     )
-
     motion_interface.log_system_info()
 
     # Delete the %TEMP% extraction folders earlier launches orphaned when
@@ -486,22 +416,8 @@ def main():
     qInstallMessageHandler(qt_message_handler)
 
     app = QApplication(qt_argv)
-
-    # AppUserModelID is set at the top of main() (before any QApplication /
-    # HWND exists) so the taskbar icon binds reliably.
     app.setWindowIcon(_app_icon())
-
-    # Set application properties for Windows taskbar. Display name reflects
-    # the build variant: clinicalMode=false is the Research distribution,
-    # and the clinical service tool (#706) names itself so it can't pass
-    # for a patient build.
-    if not app_config.get("clinicalMode", False):
-        app_display_name = "Open-Motion Research"
-    elif SERVICE_BUILD:
-        app_display_name = "Open-Motion Service"
-    else:
-        app_display_name = "Open-Motion"
-    app.setApplicationName(app_display_name)
+    app.setApplicationName(_app_display_name(app_config))
     app.setApplicationVersion(APP_VERSION)
     app.setOrganizationName("Openwater")
 
@@ -513,31 +429,23 @@ def main():
         app_version=APP_VERSION, log_path=logfile_path,
     )
     qmlRegisterSingletonInstance("OpenMotion", 1, 0, "MotionInterface", connector)
-    # AppTheme as a true QML singleton: one QObject with ~40 color
-    # bindings instead of one instance per file (~24 of them, each
-    # re-evaluating every binding on a darkMode flip). Registered into
-    # the same OpenMotion module QML already imports for MotionInterface;
-    # instantiated lazily on first use, after both registrations.
+    # AppTheme as a true QML singleton: one QObject with ~40 color bindings
+    # instead of one instance per file. Registered into the OpenMotion module
+    # QML already imports; instantiated lazily on first use.
     qmlRegisterSingletonType(
         QUrl.fromLocalFile(str(resource_path("components", "AppTheme.qml"))),
         "OpenMotion", 1, 0, "AppTheme",
     )
     engine.rootContext().setContextProperty("appVersion", APP_VERSION)
 
-    # Load the QML file
     engine.load(str(resource_path("main.qml")))
-
     if not engine.rootObjects():
         logger.error("Error: Failed to load QML file")
         sys.exit(-1)
 
-    # Pin the Win32 window-class icon (issue #223). Qt answers Explorer's
-    # WM_GETICON probe with the icon set above, but the shell asks with
-    # SMTO_ABORTIFHUNG and falls back to the *class* icon when the GUI thread
-    # is busy — and Qt leaves that at the generic IDI_APPLICATION, because its
-    # LoadImage(hInst, L"IDI_ICON1", ...) lookup finds nothing in a PyInstaller
-    # build. Frozen builds get the resource from openwater.spec's build hook;
-    # this makes the fallback correct at runtime too, including from source.
+    # Pin the Win32 window-class icon (#223): the shell falls back to it when
+    # the GUI thread is too busy to answer WM_GETICON, and Qt leaves it at the
+    # generic IDI_APPLICATION. See utils/win_taskbar_icon.py.
     if sys.platform == "win32":
         from utils.win_taskbar_icon import apply_window_class_icon
 
@@ -546,22 +454,19 @@ def main():
             resource_path("assets", "images", "favicon.ico"),
         )
 
-    # wait=False: the QML window is already visible at this point (main.qml's
-    # ApplicationWindow is `visible: true`) and Qt's event loop hasn't started
-    # yet (app.exec() is below) — a blocking wait here starves Explorer's
-    # taskbar icon/thumbnail negotiation for the freshly-shown window and can
-    # leave it showing the generic icon (issue #223). Real console handshakes
-    # take ~5s normally, well past the old 2s cap, so this reliably blocked on
-    # any hardware-attached launch. Already-attached devices still reach the
-    # UI via the same _on_handle_state_changed signal path as any hotplug.
-    # Low-storage check (issue #506): E-107 critical modal when the data
-    # drive is nearly full. Deferred to the first event-loop turn so the
-    # QML modal is listening when it fires.
+    # Low-storage check (#506): E-107 critical modal when the data drive is
+    # nearly full. Deferred to the first event-loop turn so the QML modal is
+    # listening when it fires.
     QTimer.singleShot(0, connector.check_startup_storage)
     if _plaintext_scan_db:
         QTimer.singleShot(0, lambda: connector.raise_startup_error(
             "E-108", detail=f"{_scan_db_path} is a plaintext database."))
 
+    # wait=False: the QML window is already visible and the event loop has not
+    # started, so a blocking wait here (a console handshake takes ~5 s) starves
+    # Explorer's taskbar icon negotiation for the new window (#223).
+    # Already-attached devices reach the UI through the same
+    # _on_handle_state_changed signal path as any hotplug.
     logger.info("Starting Motion monitoring...")
     motion_interface.start(wait=False)
 

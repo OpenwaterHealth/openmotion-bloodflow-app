@@ -1,4 +1,4 @@
-"""loadPastScan / get_scan_details — resolve DB sessions by unique id.
+"""loadPastScan — resolve DB sessions by unique id.
 
 Regression for issue #254 (same family as the export fix in PR #296):
 ``get_session_by_label`` returns the newest session with that label, so
@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from motion_connector import MotionConnector
+from connector import MotionConnector
 from omotion.ScanDatabase import ScanDatabase
 
 pytestmark = pytest.mark.unit
@@ -27,7 +27,7 @@ def _connector(tmp_path, scan_db_path=None):
     iface.scan_db_path = scan_db_path
     return MotionConnector(
         interface=iface, app_config={"engineeringMode": False},
-        data_dir=str(tmp_path), config_dir="config",
+        data_dir=str(tmp_path), 
     )
 
 
@@ -42,31 +42,6 @@ def _session(db_path, label, start, notes=None, meta=None):
 DUP_LABEL = "20260610_163915_owDUP"
 
 
-# ── get_scan_details ─────────────────────────────────────────────────
-
-
-def test_get_scan_details_by_id_wins_over_duplicate_labels(tmp_path):
-    """Two sessions sharing a label: session_id must select the exact
-    session, not the newest one with that label."""
-    db_path = str(tmp_path / "scans.db")
-    older = _session(db_path, DUP_LABEL, 1.0, notes="older notes")
-    newer = _session(db_path, DUP_LABEL, 2.0, notes="newer notes")
-    assert older != newer
-    c = _connector(tmp_path, scan_db_path=db_path)
-
-    details = c.get_scan_details(DUP_LABEL, session_id=older)
-    assert details["notes"] == "older notes"
-
-
-def test_get_scan_details_without_id_keeps_by_label_fallback(tmp_path):
-    """No session_id → the legacy by-label lookup still works (used by
-    callers that only have a label, e.g. CSV-era scans)."""
-    db_path = str(tmp_path / "scans.db")
-    _session(db_path, DUP_LABEL, 1.0, notes="only notes")
-    c = _connector(tmp_path, scan_db_path=db_path)
-
-    details = c.get_scan_details(DUP_LABEL)
-    assert details["notes"] == "only notes"
 
 
 # ── loadPastScan worker ──────────────────────────────────────────────
@@ -97,7 +72,7 @@ def test_worker_loads_the_selected_session_not_newest_dup(tmp_path):
     c = _connector(tmp_path, scan_db_path=db_path)
     emitted = _worker_emissions(c)
 
-    c._load_past_scan_worker(1, older, DUP_LABEL, db_path, None)
+    c._load_past_scan_worker(1, older, DUP_LABEL, db_path)
 
     assert len(emitted) == 1
     seq, label, sid, buffers, _tag, flags, _meta = emitted[0]
@@ -113,7 +88,7 @@ def test_worker_missing_id_emits_failure(tmp_path):
     c = _connector(tmp_path, scan_db_path=db_path)
     emitted = _worker_emissions(c)
 
-    c._load_past_scan_worker(1, 9999, DUP_LABEL, db_path, None)
+    c._load_past_scan_worker(1, 9999, DUP_LABEL, db_path)
 
     assert len(emitted) == 1
     _seq, _label, sid, buffers, *_ = emitted[0]
@@ -161,7 +136,7 @@ def test_load_past_scan_audits_label_and_id(tmp_path, monkeypatch):
 
     c.loadPastScan(sid, DUP_LABEL)
 
-    ev = [e for e in c.auditLogEntries()
+    ev = [e for e in c.filteredAuditLogEntries({})
           if e["event_type"] == "scan_viewed"]
     assert ev
     details = json.loads(ev[0]["details"])

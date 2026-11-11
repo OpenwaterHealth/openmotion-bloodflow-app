@@ -31,7 +31,7 @@ from pathlib import Path
 
 import pytest
 
-from data_sources import (
+from plot.data_sources import (
     BVI_LPF_DEFAULT_CUTOFF_HZ,
     LiveScanSource,
     bvi_lpf_alpha,
@@ -254,7 +254,7 @@ def test_live_toggle_off_then_on_reseeds():
 def _connector(tmp_path, app_config):
     from unittest.mock import MagicMock
 
-    from motion_connector import MotionConnector
+    from connector import MotionConnector
 
     iface = MagicMock()
     iface.is_device_connected.return_value = (True, True, True)
@@ -262,7 +262,7 @@ def _connector(tmp_path, app_config):
     iface.scan_workflow.config_running = False
     iface.scan_db_path = None          # audit log is a no-op
     c = MotionConnector(interface=iface, app_config=app_config,
-                        data_dir=str(tmp_path), config_dir="config")
+                        data_dir=str(tmp_path))
     c._save_app_config = MagicMock()   # never touch real persistence
     return c
 

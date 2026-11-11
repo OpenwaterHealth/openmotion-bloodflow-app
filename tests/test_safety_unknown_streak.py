@@ -27,10 +27,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from motion_connector import (
-    SAFETY_UNKNOWN_STREAK_THRESHOLD,
-    _safety_unknown_streak_decision,
-)
+from connector.console import SAFETY_UNKNOWN_STREAK_THRESHOLD, _safety_unknown_streak_decision
 
 pytestmark = pytest.mark.unit
 

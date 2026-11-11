@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from motion_connector import MotionConnector
+from connector import MotionConnector
 from omotion.config import DEBUG_FLAG_HISTO_CMP, DEBUG_FLAG_SEND_DEFER
 
 pytestmark = pytest.mark.unit
@@ -30,7 +30,7 @@ def _connector(tmp_path, app_config=None, left=True, right=True):
     iface.right.set_debug_flags.return_value = True
     c = MotionConnector(
         interface=iface, app_config=app_config or {},
-        data_dir=str(tmp_path), config_dir="config",
+        data_dir=str(tmp_path), 
     )
     c._save_app_config = MagicMock()
     return c, iface

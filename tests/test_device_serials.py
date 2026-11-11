@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from motion_connector import MotionConnector
+from connector import MotionConnector
 
 pytestmark = pytest.mark.unit
 
@@ -25,7 +25,6 @@ def _connector(tmp_path):
         interface=iface,
         app_config={"engineeringMode": False},
         data_dir=str(tmp_path),
-        config_dir="config",
     )
     c._save_app_config = MagicMock()
     return c
@@ -57,7 +56,7 @@ def test_console_serial_cached_notified_and_audited(tmp_path):
 
     assert c.consoleSerialNumber == "WWW04Q40005"
     assert fired, "deviceIdentityChanged should fire so QML rebinds"
-    stats = [e for e in c.auditLogEntries()
+    stats = [e for e in c.filteredAuditLogEntries({})
              if e["event_type"] == "device_stats"]
     assert json.loads(stats[0]["details"])["serial"] == "WWW04Q40005"
 

@@ -12,8 +12,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from motion_connector import MotionConnector
-from data_sources import LiveScanSource, PastScanSource
+from connector import MotionConnector
+from plot.data_sources import LiveScanSource, PastScanSource
 
 pytestmark = pytest.mark.unit
 
@@ -26,7 +26,7 @@ def _connector(tmp_path):
     iface.scan_db_path = None
     return MotionConnector(
         interface=iface, app_config={"engineeringMode": False},
-        data_dir=str(tmp_path), config_dir="config",
+        data_dir=str(tmp_path), 
     )
 
 

@@ -215,7 +215,7 @@ procedure in [AGENTS.md](AGENTS.md).
 | Path | What it is |
 |---|---|
 | `main.py` | Entry point: Qt app, QML engine, logging, dev flags |
-| `motion_connector.py` | The `MotionInterface` QML singleton: all UI ⇄ hardware glue |
+| `connector/` | The `MotionInterface` QML singleton: all UI ⇄ hardware glue, one module per concern |
 | `main.qml`, `pages/`, `components/` | QML UI. `pages/BloodFlow.qml` is the main screen |
 | `config/` | Compiled app configuration |
 | `utils/` | Paths, settings storage, frozen-build helpers |

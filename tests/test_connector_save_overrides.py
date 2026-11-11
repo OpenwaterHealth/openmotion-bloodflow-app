@@ -4,7 +4,7 @@ constant keys never do; a runtime write to a constant is refused and
 audited."""
 import pytest
 
-from motion_connector import MotionConnector
+from connector import MotionConnector
 from utils import config_store
 
 pytestmark = pytest.mark.unit

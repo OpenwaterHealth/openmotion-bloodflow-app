@@ -118,15 +118,15 @@ $args = @(
 )
 if ($Jobs -gt 0) { $args += "--jobs=$Jobs" }
 # A clinical build must not carry the self-updater (#543, tracker M-02).
-# motion_connector imports app_updater only when the compiled CLINICAL_MODE
+# connector.updates imports services.app_updater only when the compiled CLINICAL_MODE
 # is False, but Nuitka follows the import statically regardless of the
 # branch, so tell it not to; openwater.spec does the same with excludes=.
-if ($Variant -eq "clinical") { $args += "--nofollow-import-to=app_updater" }
+if ($Variant -eq "clinical") { $args += "--nofollow-import-to=services.app_updater" }
 # Nor the engineering-mode unlock (#706), unless this is the service tool:
 # the Python module (imported on the same compiled constants) and its QML
 # prompt, so a clinical bundle carries neither the check nor the dialog.
 if ($Variant -eq "clinical" -and -not $Service) {
-    $args += "--nofollow-import-to=engineering_unlock"
+    $args += "--nofollow-import-to=services.engineering_unlock"
     $args += "--noinclude-data-files=components/EngineeringUnlockModal.qml"
 }
 

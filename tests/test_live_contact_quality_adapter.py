@@ -32,7 +32,7 @@ def test_cq_live_debounce_keys_are_compiled_constants():
 def _connector():
     """A MotionConnector instance without running __init__ — we exercise the
     adapter methods only, and __init__ builds hardware/threads."""
-    from motion_connector import MotionConnector
+    from connector import MotionConnector
 
     return MotionConnector.__new__(MotionConnector)
 
@@ -113,7 +113,7 @@ def _make_scan_connector(tmp_path, app_config):
     ScanRequest.sinks list it builds, not just the adapter methods."""
     from unittest.mock import MagicMock
 
-    from motion_connector import MotionConnector
+    from connector import MotionConnector
 
     iface = MagicMock()
     iface.console = MagicMock()
@@ -132,7 +132,6 @@ def _make_scan_connector(tmp_path, app_config):
         interface=iface,
         app_config=app_config,
         data_dir=str(tmp_path),
-        config_dir="config",
     )
     c._consoleConnected = True
     c._leftSensorConnected = True
@@ -204,9 +203,9 @@ def test_startcapture_survives_null_light_debounce_config(tmp_path):
     Each edge must fall back to its OWN shipped default instead of raising:
     a null activate → 10, a null clear → 80 (they are distinct defaults, so
     this also proves the two fallbacks are not conflated)."""
-    from motion_connector import (
-        _CQ_DEFAULT_LIVE_ACTIVATE_FRAMES,
-        _CQ_DEFAULT_LIVE_CLEAR_FRAMES,
+    from connector.contact_quality import (
+        CQ_DEFAULT_LIVE_ACTIVATE_FRAMES,
+        CQ_DEFAULT_LIVE_CLEAR_FRAMES,
     )
     from omotion.contact_quality import ContactQualityMonitor
 
@@ -219,8 +218,8 @@ def test_startcapture_survives_null_light_debounce_config(tmp_path):
 
     cq_sinks = [s for s in req.sinks if isinstance(s, ContactQualityMonitor)]
     assert len(cq_sinks) == 1
-    assert cq_sinks[0]._light_activate_debounce == _CQ_DEFAULT_LIVE_ACTIVATE_FRAMES
-    assert cq_sinks[0]._light_clear_debounce == _CQ_DEFAULT_LIVE_CLEAR_FRAMES
+    assert cq_sinks[0]._light_activate_debounce == CQ_DEFAULT_LIVE_ACTIVATE_FRAMES
+    assert cq_sinks[0]._light_clear_debounce == CQ_DEFAULT_LIVE_CLEAR_FRAMES
 
 
 def test_startcapture_survives_non_numeric_debounce_config(tmp_path):
@@ -229,9 +228,9 @@ def test_startcapture_survives_non_numeric_debounce_config(tmp_path):
     a hand-edited config must degrade to the shipped default rather than
     raise out of the ScanRequest(...) construction on the clinical scan
     path. Checked on both edges independently."""
-    from motion_connector import (
-        _CQ_DEFAULT_LIVE_ACTIVATE_FRAMES,
-        _CQ_DEFAULT_LIVE_CLEAR_FRAMES,
+    from connector.contact_quality import (
+        CQ_DEFAULT_LIVE_ACTIVATE_FRAMES,
+        CQ_DEFAULT_LIVE_CLEAR_FRAMES,
     )
     from omotion.contact_quality import ContactQualityMonitor
 
@@ -244,8 +243,8 @@ def test_startcapture_survives_non_numeric_debounce_config(tmp_path):
 
     cq_sinks = [s for s in req.sinks if isinstance(s, ContactQualityMonitor)]
     assert len(cq_sinks) == 1
-    assert cq_sinks[0]._light_activate_debounce == _CQ_DEFAULT_LIVE_ACTIVATE_FRAMES
-    assert cq_sinks[0]._light_clear_debounce == _CQ_DEFAULT_LIVE_CLEAR_FRAMES
+    assert cq_sinks[0]._light_activate_debounce == CQ_DEFAULT_LIVE_ACTIVATE_FRAMES
+    assert cq_sinks[0]._light_clear_debounce == CQ_DEFAULT_LIVE_CLEAR_FRAMES
 
 
 def test_startcapture_zero_debounce_config_is_not_conflated_with_missing(tmp_path):
@@ -276,7 +275,7 @@ def test_startcapture_zero_debounce_config_is_not_conflated_with_missing(tmp_pat
 def test_startcapture_survives_null_rolling_window_config(tmp_path):
     """Same null-config hazard as the debounce case above, for the
     sibling cq_rolling_avg_window key that feeds the same construction."""
-    from motion_connector import _CQ_DEFAULT_ROLLING_WINDOW
+    from connector.contact_quality import CQ_DEFAULT_ROLLING_WINDOW
     from omotion.contact_quality import ContactQualityMonitor
 
     connector = _make_scan_connector(tmp_path, {"cq_rolling_avg_window": None})
@@ -285,7 +284,7 @@ def test_startcapture_survives_null_rolling_window_config(tmp_path):
 
     cq_sinks = [s for s in req.sinks if isinstance(s, ContactQualityMonitor)]
     assert len(cq_sinks) == 1
-    assert cq_sinks[0]._window_size == _CQ_DEFAULT_ROLLING_WINDOW
+    assert cq_sinks[0]._window_size == CQ_DEFAULT_ROLLING_WINDOW
 
 
 def test_startcapture_survives_malformed_threshold_array_element(tmp_path):
@@ -296,9 +295,9 @@ def test_startcapture_survives_malformed_threshold_array_element(tmp_path):
     to confirm the fallback is the documented combined one — both arrays
     go to defaults together, not just the offending one — so this is not
     mistaken for a partial fix if that ever changes."""
-    from motion_connector import (
-        _CQ_DEFAULT_DARK_THRESHOLD_DN,
-        _CQ_DEFAULT_LIGHT_THRESHOLD_DN,
+    from connector.contact_quality import (
+        CQ_DEFAULT_DARK_THRESHOLD_DN,
+        CQ_DEFAULT_LIGHT_THRESHOLD_DN,
     )
     from omotion.contact_quality import ContactQualityMonitor
 
@@ -310,8 +309,8 @@ def test_startcapture_survives_malformed_threshold_array_element(tmp_path):
 
     cq_sinks = [s for s in req.sinks if isinstance(s, ContactQualityMonitor)]
     assert len(cq_sinks) == 1
-    assert cq_sinks[0]._thresholds.dark == tuple([_CQ_DEFAULT_DARK_THRESHOLD_DN] * 8)
-    assert cq_sinks[0]._thresholds.light == tuple([_CQ_DEFAULT_LIGHT_THRESHOLD_DN] * 8)
+    assert cq_sinks[0]._thresholds.dark == tuple([CQ_DEFAULT_DARK_THRESHOLD_DN] * 8)
+    assert cq_sinks[0]._thresholds.light == tuple([CQ_DEFAULT_LIGHT_THRESHOLD_DN] * 8)
 
 
 def test_marshal_coerces_numpy_scalar_types_to_plain_python():

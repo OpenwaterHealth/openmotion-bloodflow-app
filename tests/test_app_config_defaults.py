@@ -83,7 +83,7 @@ def test_camera_over_temp_threshold_is_defined_once():
     """110 °C, compiled in one place (#702). The connector's fallback used
     to carry its own 105 °C, so a config without the key alerted 5 °C early."""
     assert compiled.APP_CONFIG["cameraTempAlertThresholdC"] == 110
-    src = (REPO_ROOT / "motion_connector.py").read_text(encoding="utf-8")
+    src = (REPO_ROOT / "connector" / "scan.py").read_text(encoding="utf-8")
     assert re.search(
         r'"cameraTempAlertThresholdC"\s*,\s*[-\d.]+\s*\)', src) is None
 

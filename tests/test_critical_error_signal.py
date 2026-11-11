@@ -4,9 +4,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import error_codes
-import motion_connector
-from motion_connector import MotionConnector
+from services import error_codes
+import connector.devices
+from connector import MotionConnector
 
 pytestmark = pytest.mark.unit
 
@@ -26,7 +26,7 @@ def _connector(tmp_path, app_config=None, connected=(True, True, True)):
         cfg.update(app_config)
     return MotionConnector(
         interface=iface, app_config=cfg,
-        data_dir=str(tmp_path), config_dir="config",
+        data_dir=str(tmp_path), 
     )
 
 
@@ -123,7 +123,7 @@ def _notifs(conn):
 
 
 def test_connector_connection_timeout_defaults_to_twelve_seconds(tmp_path):
-    """Guards the fallback at motion_connector.py's
+    """Guards the fallback at connector.devices.py's
     `cfg.get("connectionTimeoutSec", 12)`: this applies whenever a caller
     constructs MotionConnector with a partial config dict that omits the
     key — including `_connector()` here, whose default app_config doesn't
@@ -221,7 +221,7 @@ def test_watchdog_respects_min_sensors_config(tmp_path):
 
 
 class _Timers:
-    """Stands in for motion_connector.QTimer: records singleShot calls
+    """Stands in for connector.devices.QTimer: records singleShot calls
     instead of arming real timers, so a test fires them explicitly."""
 
     def __init__(self):
@@ -235,7 +235,7 @@ def _timers(monkeypatch):
     # Patched after the connector is built: its constructor makes QTimer
     # instances, which the stand-in does not provide.
     timers = _Timers()
-    monkeypatch.setattr(motion_connector, "QTimer", timers)
+    monkeypatch.setattr(connector.devices, "QTimer", timers)
     return timers
 
 
@@ -256,7 +256,7 @@ def _state_event(conn, name, old, new, reason="poll_arrived"):
 
 def _watchdog_rechecks(timers):
     return [fn for ms, fn in timers.shots
-            if ms == motion_connector._CONNECTION_WATCHDOG_CONNECTING_GRACE_SEC * 1000]
+            if ms == connector.devices._CONNECTION_WATCHDOG_CONNECTING_GRACE_SEC * 1000]
 
 
 def _dismissed_tags(conn):

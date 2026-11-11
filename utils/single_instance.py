@@ -11,11 +11,12 @@ import sys
 import atexit
 import logging
 
-# Module-level state for lock management
+# Handle of the named mutex this process holds, or None.
 _mutex = None
 
-# Get logger (may not be configured when this module is imported)
 logger = logging.getLogger("openmotion.bloodflow-app")
+
+_ERROR_ALREADY_EXISTS = 183
 
 
 def check_single_instance(app_name: str = "OpenWaterBloodflowApp") -> bool:
@@ -34,40 +35,25 @@ def check_single_instance(app_name: str = "OpenWaterBloodflowApp") -> bool:
     """
     global _mutex
 
-    # Only enforce single-instance on Windows
     if sys.platform != "win32":
         return True
-
-    # Use named mutex on Windows
     try:
         import ctypes
 
-        # Create a named mutex
-        mutex_name = f"Global\\{app_name}"
-        _mutex = ctypes.windll.kernel32.CreateMutexW(
-            None,  # Default security attributes
-            True,  # Initial owner
-            mutex_name,
-        )
-
-        # Check if mutex already exists (GetLastError returns ERROR_ALREADY_EXISTS)
-        last_error = ctypes.windll.kernel32.GetLastError()
-
-        if last_error == 183:  # ERROR_ALREADY_EXISTS
-            # Another instance is running
-            ctypes.windll.kernel32.CloseHandle(_mutex)
+        kernel32 = ctypes.windll.kernel32
+        # Default security attributes; this process is the initial owner.
+        _mutex = kernel32.CreateMutexW(None, True, f"Global\\{app_name}")
+        if kernel32.GetLastError() == _ERROR_ALREADY_EXISTS:
+            kernel32.CloseHandle(_mutex)
             _mutex = None
             return False
-
-        # Register cleanup function
         atexit.register(cleanup_single_instance)
         return True
-
     except Exception:
-        # Logging may not be configured yet; a handler-less logger still
-        # swallows this safely, so no print fallback is needed.
+        # Fail open: an instance that cannot create the mutex still starts.
+        # Logging may not be configured yet; a handler-less logger swallows
+        # this safely.
         logger.error("Failed to create single-instance mutex", exc_info=True)
-        # On error, allow the instance to proceed (fail open)
         return True
 
 
@@ -82,5 +68,4 @@ def cleanup_single_instance():
             ctypes.windll.kernel32.CloseHandle(_mutex)
             _mutex = None
         except Exception:
-            logger.debug("single-instance mutex cleanup failed",
-                         exc_info=True)
+            logger.debug("single-instance mutex cleanup failed", exc_info=True)

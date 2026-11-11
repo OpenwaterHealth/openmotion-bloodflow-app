@@ -40,8 +40,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import motion_connector  # noqa: E402
-from motion_connector import MotionConnector  # noqa: E402
+import connector.scan  # noqa: E402
+from connector import MotionConnector  # noqa: E402
 
 pytestmark = pytest.mark.unit
 
@@ -91,7 +91,7 @@ def test_watchdog_silent_after_scan_abort_notified(monkeypatch):
         | {("right", i): 0.0 for i in range(2)},
         toasts=toasts, aborts=aborts,
     )
-    monkeypatch.setattr(motion_connector.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(connector.scan.time, "monotonic", lambda: 100.0)
 
     MotionConnector._on_dropout_check(fake)
 
@@ -112,7 +112,7 @@ def test_watchdog_still_fires_during_live_scan(monkeypatch):
         last_seen={("left", 0): 95.0, ("right", 0): 100.0},
         toasts=toasts, aborts=aborts,
     )
-    monkeypatch.setattr(motion_connector.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(connector.scan.time, "monotonic", lambda: 100.0)
 
     MotionConnector._on_dropout_check(fake)
 

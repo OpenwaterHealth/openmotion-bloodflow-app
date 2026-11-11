@@ -13,7 +13,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from audit_log import gather_host_info
+from services.audit_log import gather_host_info
 from utils.app_paths import LOGS_DIRNAME
 
 logger = logging.getLogger("openmotion.bloodflow-app.debug-bundle")
@@ -21,22 +21,28 @@ logger = logging.getLogger("openmotion.bloodflow-app.debug-bundle")
 WINDOW_HOURS = 48
 
 
-def _system_info_text(
-    now_epoch: float, extra_info: Optional[Dict[str, Any]]
-) -> str:
+def _system_info_text(now_epoch: float, extra_info: Optional[Dict[str, Any]]) -> str:
     """Render host info (+ caller-supplied extras) as sorted key: value
     lines, with a leading local-time 'generated' stamp."""
     info = gather_host_info()
-    if extra_info:
-        info.update(extra_info)
-    generated = (
-        datetime.datetime.fromtimestamp(now_epoch)
-        .astimezone()
-        .isoformat(timespec="seconds")
-    )
-    lines = [f"generated: {generated}"]
-    lines += [f"{k}: {info[k]}" for k in sorted(info)]
+    info.update(extra_info or {})
+    generated = datetime.datetime.fromtimestamp(now_epoch).astimezone().isoformat(
+        timespec="seconds")
+    lines = [f"generated: {generated}"] + [f"{k}: {info[k]}" for k in sorted(info)]
     return "\n".join(lines) + "\n"
+
+
+def _recent_logs(log_dir: Path, cutoff: float) -> list:
+    """The ``*.log`` files under ``log_dir`` modified at or after ``cutoff``."""
+    recent = []
+    if log_dir.is_dir():
+        for p in sorted(log_dir.glob("*.log")):
+            try:
+                if p.stat().st_mtime >= cutoff:
+                    recent.append(p)
+            except OSError:
+                logger.warning("debug_bundle: stat failed for %s", p, exc_info=True)
+    return recent
 
 
 def build_debug_bundle(
@@ -67,26 +73,9 @@ def build_debug_bundle(
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    cutoff = now_epoch - window_hours * 3600
-    log_dir = root_dir / LOGS_DIRNAME
-    recent_logs = []
-    if log_dir.is_dir():
-        for p in sorted(log_dir.glob("*.log")):
-            try:
-                if p.stat().st_mtime >= cutoff:
-                    recent_logs.append(p)
-            except OSError:
-                logger.warning(
-                    "debug_bundle: stat failed for %s", p, exc_info=True
-                )
-
-    if config_path is None:
-        config_path = root_dir / "app_config.json"
-    config_path = Path(config_path)
-
-    stamp = datetime.datetime.fromtimestamp(now_epoch).strftime(
-        "%Y%m%d_%H%M%S"
-    )
+    recent_logs = _recent_logs(root_dir / LOGS_DIRNAME, now_epoch - window_hours * 3600)
+    config_path = Path(root_dir / "app_config.json" if config_path is None else config_path)
+    stamp = datetime.datetime.fromtimestamp(now_epoch).strftime("%Y%m%d_%H%M%S")
     dest = dest_dir / f"debug-bundle-{stamp}.zip"
 
     file_count = 0
@@ -96,9 +85,7 @@ def build_debug_bundle(
                 zf.write(p, arcname=f"{LOGS_DIRNAME}/{p.name}")
                 file_count += 1
             except OSError:
-                logger.warning(
-                    "debug_bundle: could not add %s", p, exc_info=True
-                )
+                logger.warning("debug_bundle: could not add %s", p, exc_info=True)
         if config_json is not None:
             zf.writestr("app_config.json", config_json)
             file_count += 1
@@ -108,12 +95,8 @@ def build_debug_bundle(
                 file_count += 1
             except OSError:
                 logger.warning(
-                    "debug_bundle: could not add config %s", config_path,
-                    exc_info=True,
-                )
-        zf.writestr(
-            "system_info.txt", _system_info_text(now_epoch, extra_info)
-        )
+                    "debug_bundle: could not add config %s", config_path, exc_info=True)
+        zf.writestr("system_info.txt", _system_info_text(now_epoch, extra_info))
         file_count += 1
 
     return {

@@ -136,7 +136,7 @@ def _connector(tmp_path, log_path=""):
     test_console_debug_flags.py. scan_db_path=None keeps the audit log a
     no-op; _save_app_config is stubbed so nothing touches the repo config.
     """
-    from motion_connector import MotionConnector
+    from connector import MotionConnector
 
     iface = MagicMock()
     iface.is_device_connected.return_value = (True, True, True)
@@ -145,7 +145,7 @@ def _connector(tmp_path, log_path=""):
     iface.scan_db_path = None
     c = MotionConnector(
         interface=iface, app_config={}, data_dir=str(tmp_path),
-        config_dir="config", log_path=log_path,
+ log_path=log_path,
     )
     c._save_app_config = MagicMock()
     return c
