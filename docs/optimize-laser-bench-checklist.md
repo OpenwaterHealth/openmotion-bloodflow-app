@@ -34,11 +34,20 @@ values, cameras at 72 rows and gains 16/4/2/1/1/2/4/16.
 | B1 | Run with the study defaults (target 100 ± 10 DN, 20 in-range points, start at highest output) | Ends on target or partial; iteration count and per-camera signal recorded |
 | B2 | Registers after B1 | `PULSE_WIDTH_UL` 2200 µs, `RATE_LL` 22400 µs, TA pulse width and current at the run's result, no safety fault |
 | B3 | Scan, 10 s, saved to the scan DB | Starts with no extra call from the caller; priority cameras read within the passing range; `session_meta.optimize_laser` is in the DB record; no safety fault |
-| B4 | Reload stock laser power (what a console reconnect does), then scan | The scan re-applies the settings itself: TA pulse width is back at the run's result, no safety fault |
+| B4 | Put the TA pulse width and current back to stock by hand (limits left widened), then scan | The scan re-applies the settings itself: TA pulse width is back at the run's result, no safety fault |
 | B5 | Scan on fewer cameras than the run (half the mask) | Starts and completes; no camera-write failure |
 | B6 | Contact-quality check with settings active | Its scan runs under the 2400 µs dark skip; no safety fault (the verdict itself is informational: thresholds are for stock settings) |
 
 ## C. Getting back to stock
+
+On a console calibrated below the current the run used, every restore first
+puts the laser back at stock and fires a half-second burst, then tightens the
+limits. Expect to see the laser fire briefly during C1 to C3.
+
+**Known limit, do not test casually:** a console USB reconnect or an app
+relaunch while settings are active reloads the laser at connect, which
+tightens the current limit with no pulse first. On such a console that latches
+the interlock (E-202) and needs a power-cycle. Restore before unplugging.
 
 | # | Step | Pass when |
 |---|---|---|
