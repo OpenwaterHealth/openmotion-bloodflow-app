@@ -563,29 +563,6 @@ def test_live_plot_sink_warmup_and_stale_nan_still_skipped():
     assert src.appended == []
 
 
-def test_live_plot_sink_legacy_batch_nan_still_skipped():
-    """Batches without side_ids/cam_ids fan every row out to all 16
-    cameras; a finite BFI is the only evidence a camera produced the
-    row. NaN rows must stay unappended there or every camera's buffer
-    would collect 16-way NaN garbage (issue #418)."""
-    conn = _connector()
-    sink, src = _make_sink(conn)
-    batch = SimpleNamespace(
-        bfi_live=np.full((1, 2, 8), np.nan, dtype=np.float32),
-        bvi_live=np.full((1, 2, 8), np.nan, dtype=np.float32),
-        mean_dc_rt=np.full((1, 2, 8), np.nan, dtype=np.float32),
-        contrast_sn_rt=np.full((1, 2, 8), np.nan, dtype=np.float32),
-        temperature_c=np.full((1, 2, 8), 35.0, dtype=np.float32),
-        frame_type=np.array(["light"], dtype="<U8"),
-        timestamp_s=np.array([0.5], dtype=np.float64),
-        abs_frame_ids=np.array([1], dtype=np.int64),
-    )
-
-    sink.consume("live", batch)
-
-    assert src.appended == []
-
-
 def test_live_plot_sink_rearms_dropped_camera_on_frame_arrival():
     """A camera in the dropped set that sends a fresh frame is re-armed:
     removed from the set, recovery surfaced, and the sample plotted —

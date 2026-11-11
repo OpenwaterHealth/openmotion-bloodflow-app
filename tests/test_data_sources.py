@@ -499,29 +499,6 @@ def test_past_scan_source_buffers_are_unbounded(session_data_db):
         assert buf._max_capacity is None
 
 
-def test_past_scan_source_csv_fallback_when_db_has_no_bfi(tmp_path):
-    """A pre-pipeline scan with no BFI/BVI in the DB falls back to the clinical
-    corrected CSV, which populates the cam_id=-1 side buffers."""
-    db_path = tmp_path / "scan.db"
-    conn = sqlite3.connect(str(db_path))
-    conn.executescript(_SESSION_DATA_DDL)
-    conn.commit()
-    db = _FakeScanDatabase(conn)  # empty DB → no BFI → CSV fallback
-
-    csv_path = tmp_path / "clinical.csv"
-    csv_path.write_text(
-        "frame_id,timestamp_s,bfi_left,bfi_right,bvi_left,bvi_right\n"
-        "0,0.0,2.5,3.5,12.0,13.0\n"
-        "1,0.025,2.6,3.6,12.1,13.1\n",
-        encoding="utf-8",
-    )
-    src = PastScanSource(scan_db=db, session_id=1, corrected_csv_path=str(csv_path))
-
-    left_bfi = src.buffers[("left", -1, "bfi")]
-    assert left_bfi.n == 2
-    assert float(left_bfi.v[0]) == pytest.approx(2.5)
-
-
 def test_past_scan_source_skips_null_metric_values(tmp_path):
     """A row with NULL bfi/bvi/mean/contrast must not crash and must not
     insert a NaN where the SQL was NULL — that metric just isn't recorded
@@ -569,32 +546,6 @@ def test_load_past_scan_buffers_matches_sync_constructor(session_data_db):
         assert buf.n == sync_buf.n
         np.testing.assert_array_equal(buf.t[:buf.n], sync_buf.t[:sync_buf.n])
         np.testing.assert_array_equal(buf.v[:buf.n], sync_buf.v[:sync_buf.n])
-
-
-def test_load_past_scan_buffers_csv_fallback(tmp_path):
-    """No BFI/BVI in the DB → the corrected-CSV fallback populates the
-    clinical-mode cam_id=-1 side buffers, same as the sync path."""
-    db_path = tmp_path / "scan.db"
-    conn = sqlite3.connect(str(db_path))
-    conn.executescript(_SESSION_DATA_DDL)
-    conn.commit()
-    db = _FakeScanDatabase(conn)  # empty DB → no BFI → CSV fallback
-
-    csv_path = tmp_path / "clinical.csv"
-    csv_path.write_text(
-        "frame_id,timestamp_s,bfi_left,bfi_right,bvi_left,bvi_right\n"
-        "0,0.0,2.5,3.5,12.0,13.0\n"
-        "1,0.025,2.6,3.6,12.1,13.1\n",
-        encoding="utf-8",
-    )
-    buffers, has_bfi = load_past_scan_buffers(db, 1, str(csv_path))
-    assert has_bfi is False  # DB itself carried no BFI
-    left_bfi = buffers[("left", -1, "bfi")]
-    assert left_bfi.n == 2
-    assert float(left_bfi.v[0]) == pytest.approx(2.5)
-    # CSV-fallback buffers must be unbounded too.
-    for buf in buffers.values():
-        assert buf._max_capacity is None
 
 
 def test_past_scan_source_adopts_preloaded_buffers(session_data_db):

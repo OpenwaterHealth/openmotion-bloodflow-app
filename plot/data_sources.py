@@ -801,13 +801,10 @@ def _bucketize_session_rows(scan_db, session_id: int, t_lo: Optional[float] = No
 
 def _load_corrected_csv_into(buffers: dict, csv_path: str) -> None:
     """Load the corrected CSV the SDK's CsvSink writes for every scan (not
-    gated by writeRawCsv) into `buffers`. Two layouts (docs/csv-formats.md):
-
-    - Per-camera: frame_id, timestamp_s, then bfi/bvi/mean/contrast (and
-      ignored temp) columns ``<metric>_l1..l8`` / ``_r1..r8``. Columns are
-      1-indexed; each populates (side, cam_id=0..7, metric).
-    - Clinical (6 cols): frame_id, timestamp_s, bfi_left, bfi_right,
-      bvi_left, bvi_right; each populates (side, cam_id=-1, metric).
+    gated by writeRawCsv) into `buffers`. The per-camera layout
+    (docs/csv-formats.md): frame_id, timestamp_s, then bfi/bvi/mean/contrast (and
+    ignored temp) columns ``<metric>_l1..l8`` / ``_r1..r8``. Columns are
+    1-indexed; each populates (side, cam_id=0..7, metric).
 
     Empty and unparsable cells are skipped. Best-effort: a missing or
     malformed file just means the viewer shows whatever else is in
@@ -820,9 +817,6 @@ def _load_corrected_csv_into(buffers: dict, csv_path: str) -> None:
                 columns = [(f"{metric}_{prefix}{cam + 1}", (side, cam, metric))
                            for metric in _METRICS for side, prefix in _SIDES
                            for cam in range(8)]
-            elif "bfi_left" in fieldnames:
-                columns = [(f"{metric}_{side}", (side, -1, metric))
-                           for metric in ("bfi", "bvi") for side, _ in _SIDES]
             else:
                 return
             for row in reader:
@@ -906,8 +900,7 @@ def _clinical_from_flags(flags) -> Optional[int]:
     return 1 if flags["reduced_mode"] else 0
 
 
-def load_past_scan_buffers(scan_db, session_id: int,
-                           corrected_csv_path: Optional[str] = None) -> tuple[dict, bool]:
+def load_past_scan_buffers(scan_db, session_id: int) -> tuple[dict, bool]:
     """Bulk-load a past scan's samples into a plain
     {(side, cam_id, metric): _CameraBuffer} dict. Returns (buffers, has_bfi).
 
@@ -916,12 +909,8 @@ def load_past_scan_buffers(scan_db, session_id: int,
     Deliberately Qt-free so callers can run it on a worker thread and hand
     the dict to PastScanSource(preloaded_buffers=...) on the GUI thread.
 
-    See _bucketize_session_rows for the layout. Pre-pipeline scans carry no
-    BFI/BVI in the DB; the corrected CSV covers those."""
-    buffers, has_bfi = _bucketize_session_rows(scan_db, int(session_id))
-    if not has_bfi and corrected_csv_path:
-        _load_corrected_csv_into(buffers, corrected_csv_path)
-    return buffers, has_bfi
+    See _bucketize_session_rows for the layout."""
+    return _bucketize_session_rows(scan_db, int(session_id))
 
 
 def load_csv_scan_buffers(csv_path: str) -> dict:
@@ -950,8 +939,8 @@ class PastScanSource(ScanDataSource):
     and stays on the GUI thread (issue #152). Without it, `scan_db`
     (omotion.ScanDatabase, duck-typed for tests) is read synchronously."""
 
-    def __init__(self, scan_db, session_id: int, corrected_csv_path: Optional[str] = None,
-                 parent: Optional[QObject] = None, preloaded_buffers: Optional[dict] = None,
+    def __init__(self, scan_db, session_id: int, parent: Optional[QObject] = None,
+                 preloaded_buffers: Optional[dict] = None,
                  recorded_flags: Optional[dict] = None,
                  user_label: str = "", date_time: str = "") -> None:
         super().__init__(plot_t0=0.0, parent=parent, buffer_max_capacity=None)
@@ -962,7 +951,7 @@ class PastScanSource(ScanDataSource):
         if preloaded_buffers is not None:
             self.buffers = preloaded_buffers
         else:
-            self.buffers, _ = load_past_scan_buffers(scan_db, self.session_id, corrected_csv_path)
+            self.buffers, _ = load_past_scan_buffers(scan_db, self.session_id)
 
         # Lay the grid out from THIS scan's configuration, not the operator's
         # live selection (issue #175). Prefer the config the scan was RUN

@@ -27,22 +27,6 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger("openmotion.bloodflow-app.audit")
 
 # ── Event-type constants ────────────────────────────────────────────────
-EV_SYSTEM_STARTUP = "system_startup"
-EV_SYSTEM_INFO = "system_info"
-EV_SYSTEM_SHUTDOWN = "system_shutdown"
-EV_DEVICE_CONNECTED = "device_connected"
-EV_DEVICE_DISCONNECTED = "device_disconnected"
-EV_DEVICE_STATS = "device_stats"
-EV_SCAN_STARTED = "scan_started"
-EV_SCAN_ENDED = "scan_ended"
-EV_CAMERA_OVER_TEMPERATURE = "camera_over_temperature"
-EV_CALIBRATION_STARTED = "calibration_started"
-EV_CALIBRATION_ENDED = "calibration_ended"
-EV_SETTINGS_CHANGED = "settings_changed"
-EV_SCAN_VIEWED = "scan_viewed"
-EV_SCAN_DELETED = "scan_deleted"
-EV_AUDIT_LOG_VIEWED = "audit_log_viewed"
-EV_AUDIT_LOG_EXPORTED = "audit_log_exported"
 EV_DEBUG_BUNDLE_CREATED = "debug_bundle_created"
 
 # CSV export column order.

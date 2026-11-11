@@ -653,7 +653,6 @@ class DevicesMixin:
             self.deviceIdentityChanged.emit()
         if self._firmware_update_available.get(name):
             self._firmware_update_available[name] = False
-            self._firmware_latest[name] = ""
             self.firmwareUpdateInfoChanged.emit()
         # Abort an in-flight FPGA flash / sensor-configure pipeline. The SDK
         # does not subscribe to disconnect events for the configure-cameras

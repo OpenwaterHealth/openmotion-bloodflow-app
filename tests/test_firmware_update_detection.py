@@ -69,7 +69,6 @@ def test_worker_flags_update_and_emits(tmp_path, monkeypatch):
 
     assert c._firmware_update_available["left"] is True
     assert c._firmware_update_available["right"] is False
-    assert c.leftSensorFirmwareLatest == "1.5.0"
     assert ("left", "v1.0.0", "1.5.0") in events
 
 

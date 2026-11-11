@@ -59,13 +59,6 @@ class SupportMixin:
             logger.warning("%s failed", slot, exc_info=True)
             return []
 
-    @pyqtSlot(result="QVariantList")
-    @pyqtSlot(int, result="QVariantList")
-    def auditLogEntries(self, limit: int = 500):
-        """Audit-log rows (newest first) for the Logs modal. Pure read: it
-        does not itself log, so refreshing never double-logs."""
-        return self._audit_rows("auditLogEntries", lambda: self._audit.query(int(limit)))
-
     @pyqtSlot("QVariantMap", result="QVariantList")
     def filteredAuditLogEntries(self, filters):
         """Audit-log rows (newest first) matching the Logs modal's filter
@@ -73,7 +66,7 @@ class SupportMixin:
         ``dateFrom`` / ``dateTo`` (``YYYY-MM-DD``, local, inclusive whole
         days), ``text`` (case-insensitive substring across event type +
         details), ``limit`` (default 500). Empty/invalid values are ignored.
-        Pure read, like auditLogEntries."""
+        Pure read: it does not itself log."""
         def read():
             f = dict(filters or {})
             return self._audit.query(

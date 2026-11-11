@@ -269,16 +269,6 @@ class ConsoleMixin:
             logger.error(f"Unexpected error while setting trigger: {e}")
         return False
 
-    @pyqtSlot(result=bool)
-    def startTrigger(self):
-        """Start the console trigger; True on success."""
-        success = self._interface.console.start_trigger()
-        if success:
-            self._trigger_state = "ON"
-            self.triggerStateChanged.emit()
-            logger.info("Trigger started successfully.")
-        return success
-
     @pyqtSlot()
     def stopTrigger(self):
         """Stop the console trigger."""

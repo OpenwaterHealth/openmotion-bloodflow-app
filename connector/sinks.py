@@ -8,10 +8,6 @@ from omotion.pipeline.batch import TerminalDarkResult, TriggerStateEvent
 
 from connector._common import SIDES, logger
 
-# Legacy fan-out: every (side index, camera) of a batch without row addressing.
-_ALL_CAMERAS = [(side_idx, cam_id) for side_idx in range(len(SIDES)) for cam_id in range(8)]
-
-
 def _rearm_dropped_camera(side: str, cam_id: int, dropped: set) -> str | None:
     """Un-mark a camera the dropout watchdog flagged 'Connection Lost', now
     that a fresh frame has arrived (issue #85 follow-up).
@@ -102,14 +98,8 @@ class _LivePlotSink(_Sink):
             return
         batch = payload
         now_mono = time.monotonic()
-        # Hand-built batches (tests) may omit these optional FrameBatch fields.
+        # Hand-built batches (tests) may omit this optional FrameBatch field.
         low_light_rt = getattr(batch, "low_light_rt", None)
-        side_ids = getattr(batch, "side_ids", None)
-        cam_ids = getattr(batch, "cam_ids", None)
-        # Legacy batches without side_ids/cam_ids fan every row out to all 16
-        # cameras; there a finite BFI is the only evidence that a camera
-        # actually produced the row.
-        row_addressed = side_ids is not None and cam_ids is not None
 
         for i in range(batch.bfi_live.shape[0]):
             ft = str(batch.frame_type[i]) if batch.frame_type is not None else "light"
@@ -120,62 +110,55 @@ class _LivePlotSink(_Sink):
             is_dark = ft == "dark"
             ts = float(batch.timestamp_s[i])
             frame_id = int(batch.abs_frame_ids[i]) if batch.abs_frame_ids is not None else i
-            cameras = _ALL_CAMERAS
-            if row_addressed:
-                side_idx, cam_id = int(side_ids[i]), int(cam_ids[i])
-                if not (0 <= side_idx < len(SIDES) and 0 <= cam_id < 8):
-                    continue
-                cameras = [(side_idx, cam_id)]
+            side_idx, cam_id = int(batch.side_ids[i]), int(batch.cam_ids[i])
+            if not (0 <= side_idx < len(SIDES) and 0 <= cam_id < 8):
+                continue
+            index = (i, side_idx, cam_id)
+            key = (SIDES[side_idx], cam_id)
+            bfi = float(batch.bfi_live[index])
+            bvi = float(batch.bvi_live[index])
+            temp_c = float(batch.temperature_c[index])
+            finite = math.isfinite(bfi) and math.isfinite(bvi)
 
-            for side_idx, cam_id in cameras:
-                index = (i, side_idx, cam_id)
-                key = (SIDES[side_idx], cam_id)
-                bfi = float(batch.bfi_live[index])
-                bvi = float(batch.bvi_live[index])
-                temp_c = float(batch.temperature_c[index])
-                finite = math.isfinite(bfi) and math.isfinite(bvi)
+            # An unlit camera streams NaN BFI/BVI but is connected: it
+            # must keep feeding the heartbeat and the delivery-gap tracker.
+            self._record_alive(key, now_mono, ts)
+            # Warmup frames prove liveness but carry no display signal.
+            if ft == "warmup":
+                continue
+            # Light frames only: scheduled dark frames are expected to be
+            # unlit and have no meaningful temperature reading. Before the
+            # NaN gate: a covered camera still reports a real chip
+            # temperature and can still overheat.
+            if not is_dark:
+                if low_light_rt is not None:
+                    self._note_low_light(key, bool(low_light_rt[index]))
+                if math.isfinite(temp_c):
+                    self._note_temperature(key, temp_c)
 
-                # An unlit camera streams NaN BFI/BVI but is connected: it
-                # must keep feeding the heartbeat and the delivery-gap tracker.
-                if row_addressed or finite:
-                    self._record_alive(key, now_mono, ts)
-                # Warmup frames prove liveness but carry no display signal.
-                if ft == "warmup":
-                    continue
-                # Light frames only: scheduled dark frames are expected to be
-                # unlit and have no meaningful temperature reading. Before the
-                # NaN gate: a covered camera still reports a real chip
-                # temperature and can still overheat.
-                if not is_dark:
-                    if low_light_rt is not None:
-                        self._note_low_light(key, bool(low_light_rt[index]))
-                    if math.isfinite(temp_c):
-                        self._note_temperature(key, temp_c)
+            # Non-finite BFI/BVI: LIGHT rows are appended anyway (issue
+            # #418), so an unlit camera keeps advancing its
+            # buffers and the source's liveEdge and the time axis scrolls
+            # through a contact loss (PlotCell breaks the trace at NaN).
+            # Dark rows keep the finite gate (a NaN at every scheduled
+            # dark would notch the trace each ~15 s).
+            if not finite and is_dark:
+                continue
 
-                # Non-finite BFI/BVI: row-addressed LIGHT rows are appended
-                # anyway (issue #418), so an unlit camera keeps advancing its
-                # buffers and the source's liveEdge and the time axis scrolls
-                # through a contact loss (PlotCell breaks the trace at NaN).
-                # Dark rows keep the finite gate (a NaN at every scheduled
-                # dark would notch the trace each ~15 s), as do legacy
-                # fan-out batches.
-                if not finite and (is_dark or not row_addressed):
-                    continue
-
-                # Realtime dark-corrected mean and shot-noise-corrected
-                # contrast; the accurate corrected record lands in the scan DB
-                # through the SDK's ScanDBSink. None = "not available for this
-                # sample": dark frames, and NaN values (early light frames
-                # before the first dark observation have NaN mean_dc_rt).
-                # temp feeds the per-cell dev-mode readout (issue #165).
-                mean = contrast = temp = None
-                if not is_dark:
-                    mean = _finite_or_none(batch.mean_dc_rt, index)
-                    contrast = _finite_or_none(batch.contrast_sn_rt, index)
-                    temp = temp_c if math.isfinite(temp_c) else None
-                self._live_source.append_uncorrected(
-                    side=key[0], cam_id=cam_id, frame_id=frame_id, t=ts,
-                    bfi=bfi, bvi=bvi, mean=mean, contrast=contrast, temp=temp)
+            # Realtime dark-corrected mean and shot-noise-corrected
+            # contrast; the accurate corrected record lands in the scan DB
+            # through the SDK's ScanDBSink. None = "not available for this
+            # sample": dark frames, and NaN values (early light frames
+            # before the first dark observation have NaN mean_dc_rt).
+            # temp feeds the per-cell dev-mode readout (issue #165).
+            mean = contrast = temp = None
+            if not is_dark:
+                mean = _finite_or_none(batch.mean_dc_rt, index)
+                contrast = _finite_or_none(batch.contrast_sn_rt, index)
+                temp = temp_c if math.isfinite(temp_c) else None
+            self._live_source.append_uncorrected(
+                side=key[0], cam_id=cam_id, frame_id=frame_id, t=ts,
+                bfi=bfi, bvi=bvi, mean=mean, contrast=contrast, temp=temp)
 
     def _record_alive(self, key: tuple[str, int], now_mono: float, ts: float) -> None:
         """A frame arrived from this camera: feed the dropout watchdog's

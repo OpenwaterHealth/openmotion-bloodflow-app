@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtCore import QObject, QVariant, pyqtProperty, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, pyqtProperty, pyqtSignal, pyqtSlot
 from connector._common import DEVICES, logger, scan_db, spawn
 from plot.data_sources import (
     LiveScanSource, PastScanSource, ScanDataSource, buffers_are_empty, load_csv_scan_buffers,
@@ -216,52 +216,6 @@ class HistoryMixin:
                     len(sample.buffers), sum(b.n for b in sample.buffers.values()), csv_path)
 
     # --- session list / details / delete ---
-
-    @pyqtSlot(str, result=QVariant)
-    def get_scan_details(self, scan_id: str, session_id: int = -1):
-        """Resolve a scan's canonical per-cam CSV and its notes.
-
-        scan_id is 'YYYYMMDD_HHMMSS_userLabel' (new / mid format) or
-        'userLabel_YYYYMMDD_HHMMSS' (legacy). The CSV is looked up across all
-        naming generations (#44):
-          New:    {scan_id}.csv
-          Mid:    {scan_id}_corrected.csv
-          Legacy: scan_{scan_id}_corrected.csv
-
-        session_id, when >= 0, selects the DB session for the notes; a
-        by-label lookup returns the newest session with that label, so
-        duplicate labels would read a different session's notes (#254). File
-        resolution always keys off scan_id: the CSVs are named by label."""
-        base = Path(self._data_root)
-        if re.match(r'^\d{8}_\d{6}_', scan_id):
-            notes_path = base / f"{scan_id}_notes.txt"
-            corrected = (next((p for p in base.glob(f"{scan_id}.csv") if p.is_file()), None)
-                         or next(base.glob(f"{scan_id}_corrected.csv"), None))
-        else:
-            notes_path = base / f"scan_{scan_id}_notes.txt"
-            corrected = next(base.glob(f"scan_{scan_id}_corrected.csv"), None)
-
-        # Notes live in the scan DB (sessions.session_notes); scans from
-        # before the DB migration only have a *_notes.txt on disk.
-        notes = ""
-        try:
-            with scan_db(self._interface) as db:
-                if db is not None and session_id >= 0:
-                    session = db.get_session(int(session_id))
-                elif db is not None:
-                    session = db.get_session_by_label(scan_id)
-                else:
-                    session = None
-                notes = (session or {}).get("session_notes") or ""
-        except Exception:
-            logger.warning("get_scan_details: could not read notes/rows from DB", exc_info=True)
-        if not notes:
-            try:
-                notes = notes_path.read_text(encoding="utf-8")
-            except OSError:
-                # Expected for anything recorded since notes moved into scans.db.
-                logger.debug("no legacy notes file at %s", notes_path)
-        return {"correctedPath": str(corrected) if corrected else "", "notes": notes}
 
     @staticmethod
     def _friendly_ts(ts: str, tz=None) -> str:
@@ -479,19 +433,13 @@ class HistoryMixin:
             self.pastScanLoadFinished.emit(session_label, False)
             return
         self._audit.log("scan_viewed", {"label": session_label, "session_id": int(session_id)})
-        # The per-cam corrected CSV ({scan_id}.csv, 82-col wide format) is the
-        # only source of per-cam BFI/BVI/mean/contrast for past replay: the
-        # DB's session_data only holds side-aggregated corrected-frame
-        # placeholders. Resolving the path is a cheap directory glob, fine on
-        # the GUI thread; the heavy parse happens on the worker.
-        details = self.get_scan_details(session_label, session_id=int(session_id)) or {}
         self._past_scan_load_seq += 1
         seq = self._past_scan_load_seq
         spawn(self._load_past_scan_worker, seq, int(session_id), session_label, str(db_path),
-              details.get("correctedPath") or None, name=f"past-scan-load-{seq}")
+              name=f"past-scan-load-{seq}")
 
     def _load_past_scan_worker(self, seq: int, session_id: int, session_label: str,
-                               db_path: str, corrected_csv: Optional[str]) -> None:
+                               db_path: str) -> None:
         """Worker thread: bulk-load a past scan's samples (the heavy,
         Qt-free part of loadPastScan). Opens its own ScanDatabase handle;
         results cross back to the GUI thread via _pastScanBuffersReady
@@ -519,14 +467,11 @@ class HistoryMixin:
                 except Exception:
                     logger.warning("loadPastScan: could not derive badge meta for %r",
                                    session_label, exc_info=True)
-                buffers, _ = load_past_scan_buffers(db, session_id, corrected_csv)
-            # Which source populated per-cam BFI: if any (side, cam_id != -1,
-            # bfi) buffer exists, the DB was sufficient and the CSV fallback
-            # was skipped.
-            if any(k[1] >= 0 and k[2] == "bfi" for k in buffers):
-                source_tag = "db"
-            else:
-                source_tag = "csv" if corrected_csv else "db-only-sentinel"
+                buffers, _ = load_past_scan_buffers(db, session_id)
+            # "db" when the session holds per-camera BFI, else only the
+            # clinical side average (or nothing).
+            per_cam = any(k[1] >= 0 and k[2] == "bfi" for k in buffers)
+            source_tag = "db" if per_cam else "db-only-sentinel"
             self._pastScanBuffersReady.emit(
                 seq, session_label, session_id, buffers, source_tag, recorded_flags, display_meta)
         except Exception:

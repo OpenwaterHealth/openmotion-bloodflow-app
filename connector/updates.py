@@ -45,7 +45,6 @@ class UpdatesMixin:
     """Firmware autoupdate (Research builds) and the app self-updater."""
 
     def _setup_updates(self) -> None:
-        self._firmware_latest: dict[str, str] = {n: "" for n in DEVICES}
         self._firmware_update_available: dict[str, bool] = {n: False for n in DEVICES}
         self._firmware_latest_by_kind: dict[str, str] = {}   # "console"/"sensor" -> tag
         self._firmware_checking_kinds: set = set()           # in-flight network checks
@@ -76,12 +75,6 @@ class UpdatesMixin:
         bool, "_firmware_update_available", "left", firmwareUpdateInfoChanged)
     rightSensorFirmwareUpdateAvailable = _device_property(
         bool, "_firmware_update_available", "right", firmwareUpdateInfoChanged)
-    consoleFirmwareLatest = _device_property(
-        str, "_firmware_latest", "console", firmwareUpdateInfoChanged)
-    leftSensorFirmwareLatest = _device_property(
-        str, "_firmware_latest", "left", firmwareUpdateInfoChanged)
-    rightSensorFirmwareLatest = _device_property(
-        str, "_firmware_latest", "right", firmwareUpdateInfoChanged)
 
     @staticmethod
     def _kind_for_device(name: str) -> FirmwareKind:
@@ -141,7 +134,6 @@ class UpdatesMixin:
         latest = self._firmware_latest_by_kind.get(self._kind_for_device(name).value, "")
         avail = bool(latest) and is_update_available(
             installed, latest, prerelease=self._beta_enabled())
-        self._firmware_latest[name] = latest
         self._firmware_update_available[name] = avail
         self.firmwareUpdateInfoChanged.emit()
         if avail:
@@ -156,7 +148,6 @@ class UpdatesMixin:
         self._firmware_checking_kinds.clear()
         self._firmware_check_generation += 1
         for name in DEVICES:
-            self._firmware_latest[name] = ""
             self._firmware_update_available[name] = False
         self.firmwareUpdateInfoChanged.emit()
         for name in DEVICES:
