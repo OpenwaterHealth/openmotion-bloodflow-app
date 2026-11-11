@@ -17,12 +17,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from motion_connector import (
-    MotionConnector,
-    _RGB_LED_BLUE,
-    _RGB_LED_GREEN,
-    _RGB_LED_OFF,
-)
+from connector import MotionConnector
+from connector.console import _RGB_LED_BLUE, _RGB_LED_GREEN, _RGB_LED_OFF
 
 pytestmark = pytest.mark.unit
 
@@ -37,7 +33,7 @@ def _connector(tmp_path):
     iface.console.set_rgb_led.side_effect = lambda s: s
     return MotionConnector(
         interface=iface, app_config={"engineeringMode": False},
-        data_dir=str(tmp_path), config_dir="config",
+        data_dir=str(tmp_path), 
     )
 
 

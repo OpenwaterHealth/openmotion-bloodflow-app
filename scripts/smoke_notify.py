@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PyQt6.QtCore import QCoreApplication
-from motion_connector import MotionConnector
+from connector import MotionConnector
 
 
 def _make_connector():

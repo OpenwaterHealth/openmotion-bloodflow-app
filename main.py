@@ -41,8 +41,8 @@ from PyQt6.QtQml import (
 from PyQt6.QtCore import qInstallMessageHandler, QtMsgType, QTimer, QUrl
 
 from config.app_config import SERVICE_BUILD
-from motion_connector import MotionConnector
-from motion_config import DEFAULT_TRIGGER_OVERRIDES
+from connector import MotionConnector
+from hardware.motion_config import DEFAULT_TRIGGER_OVERRIDES
 from omotion import MotionInterface, db_open
 from utils.single_instance import check_single_instance, cleanup_single_instance
 from version import get_version

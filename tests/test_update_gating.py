@@ -6,9 +6,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import motion_connector
+import connector.settings
+import connector.updates
 import version as version_mod
-from motion_connector import MotionConnector
+from connector import MotionConnector
 
 pytestmark = pytest.mark.unit
 
@@ -22,7 +23,7 @@ def _connector(tmp_path, **cfg):
     iface.get_sdk_version.return_value = "9.9.9"
     return MotionConnector(
         interface=iface, app_config=cfg,
-        data_dir=str(tmp_path), config_dir="config",
+        data_dir=str(tmp_path), 
     )
 
 
@@ -44,7 +45,7 @@ def test_beta_enabled_matrix(tmp_path, clinical, eng, beta, expected):
 def eng_pw():
     """The engineering password: only unlockEngineeringMode turns engineering
     mode on (#706)."""
-    import engineering_unlock
+    from services import engineering_unlock
     return engineering_unlock._ENGINEERING_PASSWORD
 
 
@@ -63,7 +64,7 @@ def test_eng_mode_change_makes_no_network_call_in_clinical_service_build(
         tmp_path, eng_pw, monkeypatch):
     # Only the clinical service tool can turn engineering mode on in a
     # clinical build (#706); it still makes no outbound app-update call.
-    monkeypatch.setattr(motion_connector, "_SERVICE_BUILD", True)
+    monkeypatch.setattr(connector.settings, "_SERVICE_BUILD", True)
     c = _connector(tmp_path, clinicalMode=True, engineeringMode=False,
                    downloadBetaUpdates=False)
     fw, app = [], []
@@ -94,18 +95,18 @@ _DRAFT = {"tag_name": "1.7.0", "draft": True, "prerelease": False, "assets": []}
 
 
 def test_select_release_beta_takes_newest_non_draft():
-    from app_updater import _select_release
+    from services.app_updater import _select_release
     # GitHub lists newest-first; the draft is skipped, the rc is taken.
     assert _select_release([_DRAFT, _RC, _STABLE], include_prerelease=True) is _RC
 
 
 def test_select_release_stable_skips_prerelease():
-    from app_updater import _select_release
+    from services.app_updater import _select_release
     assert _select_release([_DRAFT, _RC, _STABLE], include_prerelease=False) is _STABLE
 
 
 def test_select_release_empty_is_none():
-    from app_updater import _select_release
+    from services.app_updater import _select_release
     assert _select_release([], include_prerelease=True) is None
     assert _select_release([_DRAFT], include_prerelease=True) is None
 
@@ -184,7 +185,7 @@ def test_apply_update_refused_in_clinical(tmp_path, monkeypatch):
     c = _connector(tmp_path, clinicalMode=True)
     started = []
     monkeypatch.setattr(
-        motion_connector.threading, "Thread",
+        connector.updates.threading, "Thread",
         lambda **k: MagicMock(start=lambda: started.append(1)))
     c.applyUpdate("https://x/Open-Motion-Research-Setup-1.6.0-rc.1.exe")
     assert started == [], "clinical build must not start an app-update install"
@@ -209,7 +210,7 @@ def test_eng_off_withdraws_firmware_offer(tmp_path, monkeypatch):
         seen["beta"] = include_prerelease
         return None
 
-    monkeypatch.setattr(motion_connector, "check_latest", fake_check)
+    monkeypatch.setattr(connector.updates, "check_latest", fake_check)
     c = _connector(tmp_path, clinicalMode=False, engineeringMode=True,
                    downloadBetaUpdates=True)
     c.checkForUpdates = lambda: None
@@ -217,7 +218,7 @@ def test_eng_off_withdraws_firmware_offer(tmp_path, monkeypatch):
     c._firmware_latest_by_kind["sensor"] = "1.8.1-dev.5"
     c._firmware_update_available["left"] = True
     monkeypatch.setattr(
-        motion_connector.threading, "Thread",
+        connector.updates.threading, "Thread",
         lambda **k: MagicMock(start=lambda: k["target"](*k["args"])))
     c.setConfig("engineeringMode", False)
     assert c._firmware_update_available["left"] is False   # stale beta withdrawn

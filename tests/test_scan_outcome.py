@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 from omotion.pipeline.batch import TerminalDarkResult
 
-from motion_connector import ScanOutcome, classify_scan_outcome, _ScanOutcomeSink
+from connector.sinks import ScanOutcome, classify_scan_outcome, _ScanOutcomeSink
 
 pytestmark = pytest.mark.unit
 
@@ -118,7 +118,7 @@ def test_sink_resets_on_scan_start():
 # verdict above: every app-side abort cancels the SDK scan, so `canceled`
 # alone cannot tell a fault from an operator Stop.
 
-from motion_connector import audit_scan_ended_details  # noqa: E402
+from connector.sinks import audit_scan_ended_details  # noqa: E402
 
 _AUDIT_KEYS = {"outcome", "data", "error_code", "reason"}
 

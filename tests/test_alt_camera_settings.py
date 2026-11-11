@@ -16,7 +16,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from motion_config import (
+from hardware.motion_config import (
     DARK_RATE_LOWER_LIMIT_US,
     DARK_SKIP_CLEAN_EXPOSURE_MAX_US,
     DARK_SKIP_DELAY_US,
@@ -33,7 +33,7 @@ from motion_config import (
     TA_PULSE_TRUNCATION_TICKS,
     safety_pulse_width_ul_writes,
 )
-from motion_connector import MotionConnector
+from connector import MotionConnector
 
 pytestmark = pytest.mark.unit
 
@@ -164,7 +164,7 @@ def _connector(tmp_path, app_config):
     iface.scan_db_path = None  # MagicMock path would break the audit log
     c = MotionConnector(
         interface=iface, app_config=app_config,
-        data_dir=str(tmp_path), config_dir="config",
+        data_dir=str(tmp_path), 
     )
     # Swap the fakes in AFTER construction — connect_signals() wires Qt
     # signals on the handles, which the plain FakeSensor doesn't have.
@@ -363,7 +363,7 @@ class TestTaPulseWidthWrite:
         driver_control.v (`pulse_count > pulse_width - 55`), below which the
         TA drive would never be cleared. The clamp is belt-and-braces: the
         validator already floors the config at 20 µs."""
-        from motion_config import TA_PULSE_MIN_TICKS
+        from hardware.motion_config import TA_PULSE_MIN_TICKS
 
         _, ticks = ta_pulse_width_write(20)
         assert ticks == 62

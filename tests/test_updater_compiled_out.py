@@ -15,8 +15,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import motion_connector
-from motion_connector import MotionConnector
+import connector.updates
+from connector import MotionConnector
 
 pytestmark = pytest.mark.unit
 
@@ -32,19 +32,19 @@ def _connector(tmp_path, **cfg):
     iface.get_sdk_version.return_value = "9.9.9"
     return MotionConnector(
         interface=iface, app_config=cfg,
-        data_dir=str(tmp_path), config_dir="config",
+        data_dir=str(tmp_path), 
     )
 
 
 def test_research_source_tree_binds_the_updater_module():
     """The repo constant is False (Research), so the module is bound."""
-    import app_updater
-    assert motion_connector.app_updater is app_updater
+    from services import app_updater
+    assert connector.updates.app_updater is app_updater
 
 
 def test_check_and_apply_are_noops_without_the_module(tmp_path, monkeypatch):
     """What a clinical binary does: research-looking config, no module."""
-    monkeypatch.setattr(motion_connector, "app_updater", None)
+    monkeypatch.setattr(connector.updates, "app_updater", None)
     calls = []
     monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: calls.append(1))
     c = _connector(tmp_path, clinicalMode=False, engineeringMode=True,
@@ -64,15 +64,16 @@ def test_check_and_apply_are_noops_without_the_module(tmp_path, monkeypatch):
 
 
 def test_connector_import_is_gated_on_the_compiled_constant():
-    src = (REPO_ROOT / "motion_connector.py").read_text(encoding="utf-8")
+    src = "\n".join(p.read_text(encoding="utf-8")
+                    for p in sorted((REPO_ROOT / "connector").glob("*.py")))
     assert "from config.app_config import CLINICAL_MODE as _CLINICAL_BUILD" in src
     assert re.search(
         r"if _CLINICAL_BUILD:\n    app_updater = None\nelse:\n    try:\n"
-        r"        import app_updater\n", src,
+        r"        from services import app_updater\n", src,
     ), "app_updater must only be imported when the build is not clinical"
     # Nothing else in the connector may pull the module in unconditionally.
     assert src.count("import app_updater") == 1
-    assert "from app_updater import" not in src
+    assert "from services.app_updater import" not in src
     # The helpers really left: a clinical connector must not carry them.
     for name in ("def _authenticode_status", "def _update_decision",
                  "def _build_update_helper_script", "_REQUIRE_SIGNED_UPDATES",
@@ -82,7 +83,7 @@ def test_connector_import_is_gated_on_the_compiled_constant():
 
 def test_spec_excludes_the_updater_from_clinical_builds():
     src = (REPO_ROOT / "openwater.spec").read_text(encoding="utf-8")
-    assert re.search(r'if _is_clinical:\n    _excludes\.append\("app_updater"\)', src)
+    assert re.search(r'if _is_clinical:\n    _excludes\.append\("services\.app_updater"\)', src)
     assert "excludes=_excludes" in src
 
 
@@ -90,12 +91,12 @@ def test_app_updater_does_not_depend_on_the_connector():
     """No import cycle, and nothing that would drag the connector's hardware
     stack (the SDK) into the updater module."""
     import ast
-    tree = ast.parse((REPO_ROOT / "app_updater.py").read_text(encoding="utf-8"))
+    tree = ast.parse((REPO_ROOT / "services" / "app_updater.py").read_text(encoding="utf-8"))
     imported = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             imported.update(alias.name.split(".")[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module.split(".")[0])
-    assert "motion_connector" not in imported
+    assert "connector" not in imported
     assert "omotion" not in imported

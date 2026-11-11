@@ -24,7 +24,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import error_codes
+from services import error_codes
 from config import app_config as compiled
 from utils import app_paths, config_store
 
@@ -230,14 +230,14 @@ def test_scan_db_is_encrypted_accepts_what_the_sdk_writes(tmp_path, clinical_pol
 # --------------------------------------------------------------------------
 
 def test_raise_startup_error_emits_the_e108_modal(tmp_path):
-    from motion_connector import MotionConnector
+    from connector import MotionConnector
 
     iface = MagicMock()
     iface.is_device_connected.return_value = (False, False, False)
     iface.scan_db_path = None
     conn = MotionConnector(
         interface=iface, app_config={"engineeringMode": False},
-        data_dir=str(tmp_path), config_dir="config",
+        data_dir=str(tmp_path), 
     )
     received = []
     conn.criticalErrorRaised.connect(lambda *a: received.append(a))
@@ -254,7 +254,7 @@ def test_raise_startup_error_emits_the_e108_modal(tmp_path):
 def test_after_e108_nothing_opens_the_plaintext_scans_db(tmp_path, clinical_policy):
     """The app stays open after E-108. Under the clinical policy every store
     it opens refuses the plaintext file, which stays byte-identical."""
-    from audit_log import AuditLog
+    from services.audit_log import AuditLog
     from omotion import db_key
     from omotion.ScanDatabase import ScanDatabase
     from utils.settings_store import SettingsStore

@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from motion_connector import MotionConnector
+from connector import MotionConnector
 from omotion.ScanDatabase import ScanDatabase
 
 pytestmark = pytest.mark.unit
@@ -27,7 +27,7 @@ def _connector(tmp_path, scan_db_path=None):
     iface.scan_db_path = scan_db_path
     return MotionConnector(
         interface=iface, app_config={"engineeringMode": False},
-        data_dir=str(tmp_path), config_dir="config",
+        data_dir=str(tmp_path), 
     )
 
 

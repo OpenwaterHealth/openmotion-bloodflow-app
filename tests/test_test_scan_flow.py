@@ -22,7 +22,7 @@ def connector(monkeypatch):
     Uses pytest.mark.unit so the autouse HIL fixtures in conftest.py
     short-circuit and no app launch / panel-button calibration happens.
     """
-    from motion_connector import MotionConnector
+    from connector import MotionConnector
 
     fake_iface = MagicMock()
     fake_iface.console = MagicMock()
@@ -37,7 +37,6 @@ def connector(monkeypatch):
         interface=fake_iface,
         app_config={"engineeringMode": False},
         data_dir=".",
-        config_dir="config",
     )
     c._consoleConnected = True
     c._leftSensorConnected = True

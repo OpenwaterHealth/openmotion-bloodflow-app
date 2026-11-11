@@ -21,10 +21,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from data_sources import (
+from plot.data_sources import (
     PastScanSource, buffers_are_empty, load_csv_scan_buffers,
 )
-from motion_connector import MotionConnector
+from connector import MotionConnector
 
 pytestmark = pytest.mark.unit
 
@@ -187,7 +187,7 @@ def _connector(tmp_path, *, console, left, right, scan_db_path=None,
         cfg.update(app_config)
     return MotionConnector(
         interface=iface, app_config=cfg,
-        data_dir=str(tmp_path), config_dir="config",
+        data_dir=str(tmp_path), 
     )
 
 
@@ -228,7 +228,7 @@ def test_sample_source_replaced_by_a_real_scan_source(tmp_path):
     sample = c.currentScanSource
     assert isinstance(sample, PastScanSource)
 
-    from data_sources import LiveScanSource
+    from plot.data_sources import LiveScanSource
     live = LiveScanSource(plot_t0=0.0, parent=c)
     c._live_scan_source = live
     c._set_current_scan_source(live)

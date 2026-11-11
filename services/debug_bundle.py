@@ -13,7 +13,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from audit_log import gather_host_info
+from services.audit_log import gather_host_info
 from utils.app_paths import LOGS_DIRNAME
 
 logger = logging.getLogger("openmotion.bloodflow-app.debug-bundle")

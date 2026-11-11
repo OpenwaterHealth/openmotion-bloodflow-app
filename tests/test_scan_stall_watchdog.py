@@ -39,10 +39,8 @@ import pytest
 # turning the project into an installed package.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from motion_connector import (  # noqa: E402
-    MotionConnector,
-    _scan_data_stall_decision,
-)
+from connector import MotionConnector  # noqa: E402
+from connector.scan import _scan_data_stall_decision  # noqa: E402
 
 pytestmark = pytest.mark.unit
 

@@ -32,8 +32,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import motion_connector  # noqa: E402
-from motion_connector import MotionConnector  # noqa: E402
+import connector.scan  # noqa: E402
+from connector import MotionConnector  # noqa: E402
 from utils import disk_space  # noqa: E402
 
 pytestmark = pytest.mark.unit
@@ -210,7 +210,7 @@ def test_scan_warns_once_when_crossing_1gb(free_space, fake):
     assert type_ == "warning"
     assert "900 MB free" in text
     assert duration_ms == 0  # sticky until dismissed
-    assert tag == motion_connector._LOW_STORAGE_TOAST_TAG
+    assert tag == connector.scan._LOW_STORAGE_TOAST_TAG
 
     # Still under 1 GB on later ticks: no repeat.
     free_space["free"] = 800 * MB
@@ -244,7 +244,7 @@ def test_scan_stops_under_100mb_with_e306_modal(free_space, fake):
     # low-storage warning and per-camera dropout toasts (#489 pattern).
     assert len(fake.toasts) == 1
     assert sorted(c[0] for c in fake.notificationDismissByTagRequested.calls) == [
-        "dropout_left_2", motion_connector._LOW_STORAGE_TOAST_TAG]
+        "dropout_left_2", connector.scan._LOW_STORAGE_TOAST_TAG]
 
     # One-shot: later ticks don't stop or raise again.
     _tick(fake)
@@ -275,12 +275,12 @@ def test_watchdog_polls_storage_at_most_every_interval(monkeypatch, fake):
 
     monkeypatch.setattr(disk_space, "free_bytes", counting_free)
     now = {"t": 1000.0}
-    monkeypatch.setattr(motion_connector.time, "monotonic", lambda: now["t"])
+    monkeypatch.setattr(connector.scan.time, "monotonic", lambda: now["t"])
 
     MotionConnector._on_dropout_check(fake)       # first tick checks
     now["t"] += 1.0
     MotionConnector._on_dropout_check(fake)       # 1 s later: skipped
     assert len(calls) == 1
-    now["t"] += motion_connector._STORAGE_CHECK_INTERVAL_S
+    now["t"] += connector.scan._STORAGE_CHECK_INTERVAL_S
     MotionConnector._on_dropout_check(fake)
     assert len(calls) == 2

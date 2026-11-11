@@ -37,7 +37,7 @@ import pytest
 # turning the project into an installed package.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from motion_connector import _rearm_dropped_camera  # noqa: E402
+from connector.sinks import _rearm_dropped_camera  # noqa: E402
 
 pytestmark = pytest.mark.unit
 

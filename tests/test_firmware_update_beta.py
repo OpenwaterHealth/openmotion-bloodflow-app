@@ -3,8 +3,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import motion_connector
-from motion_connector import MotionConnector
+import connector.updates
+from connector import MotionConnector
 from omotion.firmware_update import FirmwareKind, LatestInfo
 
 pytestmark = pytest.mark.unit
@@ -20,7 +20,7 @@ def _connector(tmp_path, dev_mode=True, beta=False):
     return MotionConnector(
         interface=iface,
         app_config={"engineeringMode": dev_mode, "downloadBetaUpdates": beta},
-        data_dir=str(tmp_path), config_dir="config",
+        data_dir=str(tmp_path), 
     )
 
 
@@ -31,7 +31,7 @@ def test_beta_flag_passed_to_check_latest(tmp_path, monkeypatch):
         seen["beta"] = include_prerelease
         return None
 
-    monkeypatch.setattr(motion_connector, "check_latest", fake_check)
+    monkeypatch.setattr(connector.updates, "check_latest", fake_check)
     c = _connector(tmp_path, beta=True)
     c._firmware_versions["left"] = "1.8.0"
     c._firmware_check_worker(FirmwareKind.SENSOR)
@@ -40,7 +40,7 @@ def test_beta_flag_passed_to_check_latest(tmp_path, monkeypatch):
 
 def test_beta_uses_release_identity(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        motion_connector, "check_latest",
+        connector.updates, "check_latest",
         lambda kind, *, include_prerelease=False:
             LatestInfo(FirmwareKind.SENSOR, "1.8.1-dev.5", "motion-sensor-fw.bin"),
     )
@@ -69,7 +69,7 @@ def test_toggle_invalidates_and_rechecks(tmp_path):
 
 def test_check_worker_discards_superseded_generation(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        motion_connector, "check_latest",
+        connector.updates, "check_latest",
         lambda kind, **_: LatestInfo(FirmwareKind.SENSOR, "1.8.1-dev.5", "motion-sensor-fw.bin"),
     )
     c = _connector(tmp_path, beta=True)

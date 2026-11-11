@@ -40,11 +40,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from motion_connector import (  # noqa: E402
-    MotionConnector,
-    _should_abort_on_disconnect,
-    _disconnect_toast_text,
-)
+from connector import MotionConnector  # noqa: E402
+from connector.devices import _should_abort_on_disconnect, _disconnect_toast_text  # noqa: E402
 
 pytestmark = pytest.mark.unit
 

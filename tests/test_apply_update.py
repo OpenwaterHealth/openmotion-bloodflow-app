@@ -1,5 +1,5 @@
 import pytest
-from app_updater import (
+from services.app_updater import (
     BUNDLE_FILENAME,
     SignatureInfo,
     _build_update_helper_script,

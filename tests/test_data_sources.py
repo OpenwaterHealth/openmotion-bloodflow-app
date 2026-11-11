@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from data_sources import _CameraBuffer
+from plot.data_sources import _CameraBuffer
 
 pytestmark = pytest.mark.unit
 
@@ -137,7 +137,7 @@ def test_camera_buffer_window_decimated_preserves_nan_gap():
 # ScanDataSource (base)
 # ─────────────────────────────────────────────────────────────────────────────
 
-from data_sources import ScanDataSource
+from plot.data_sources import ScanDataSource
 
 
 def test_scan_data_source_starts_with_no_buffers():
@@ -193,7 +193,7 @@ def test_scan_data_source_flush_clears_pending():
 # LiveScanSource
 # ─────────────────────────────────────────────────────────────────────────────
 
-from data_sources import LiveScanSource
+from plot.data_sources import LiveScanSource
 
 
 def test_live_scan_source_live_flag_true():
@@ -309,7 +309,7 @@ def test_live_scan_source_mark_dropped_sets_buffer_dropped_at():
 # PastScanSource
 # ─────────────────────────────────────────────────────────────────────────────
 
-from data_sources import PastScanSource
+from plot.data_sources import PastScanSource
 
 
 # Schema mirrors openmotion-sdk/omotion/ScanDatabase.py:115-129.
@@ -552,7 +552,7 @@ def test_past_scan_source_skips_null_metric_values(tmp_path):
 # off-thread bulk-load path used by the async loadPastScan (issue #152).
 # ─────────────────────────────────────────────────────────────────────────────
 
-from data_sources import load_past_scan_buffers
+from plot.data_sources import load_past_scan_buffers
 
 
 def test_load_past_scan_buffers_matches_sync_constructor(session_data_db):
@@ -697,7 +697,7 @@ def test_past_scan_source_masks_unknown_when_no_per_cam_streams():
 # tri-state: -1 unknown, 0 per-camera, 1 clinical — derived from the loaded
 # buffer cam_ids (clinical scans store only cam_id=-1; per-camera store 0..7).
 
-from data_sources import _derive_clinical_from_buffers
+from plot.data_sources import _derive_clinical_from_buffers
 
 
 def _one_sample_buffer():
@@ -913,7 +913,7 @@ def test_live_scan_source_has_blank_label_fields():
 # ─────────────────────────────────────────────────────────────────────────────
 
 from PyQt6.QtCore import QObject, pyqtSignal
-from data_sources import LiveScanSource, ScanDataSource
+from plot.data_sources import LiveScanSource, ScanDataSource
 
 
 def _make_holder():
@@ -1776,7 +1776,7 @@ def isfinite_or_nan(v):
 # buffers_are_empty (Task 4 — interrupted-scan guard)
 # ─────────────────────────────────────────────────────────────────────────────
 
-from data_sources import buffers_are_empty
+from plot.data_sources import buffers_are_empty
 
 
 def test_buffers_are_empty_true_for_none_and_empty():
@@ -1799,7 +1799,7 @@ def test_buffers_are_empty_false_when_any_sample_present():
 # release() — retirement of superseded sources (leak fix)
 # ─────────────────────────────────────────────────────────────────────────────
 
-from data_sources import LiveScanSource, PastScanSource
+from plot.data_sources import LiveScanSource, PastScanSource
 
 
 def test_release_stops_flush_timer_and_is_idempotent():

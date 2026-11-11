@@ -7,7 +7,7 @@ import threading
 
 import pytest
 
-from audit_log import (
+from services.audit_log import (
     AuditLog,
     gather_host_info,
     parse_date_bound,
@@ -156,7 +156,7 @@ def test_query_filters_by_event_type(tmp_path):
 
 
 def test_query_filters_by_epoch_range(tmp_path, monkeypatch):
-    import audit_log as mod
+    from services import audit_log as mod
     # Modern epochs — Windows can't .astimezone() near-1970 timestamps.
     t0 = 1_750_000_000.0
     a = AuditLog(str(tmp_path / "scans.db"))

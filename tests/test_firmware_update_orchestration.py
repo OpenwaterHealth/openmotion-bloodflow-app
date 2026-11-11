@@ -4,10 +4,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import motion_connector
-from motion_connector import (
-    MotionConnector, RUNNING, READY, DISCONNECTED, CONSOLE_CONNECTED,
-)
+import connector.updates
+from connector import MotionConnector
+from connector._common import RUNNING, READY, DISCONNECTED, CONSOLE_CONNECTED
 from omotion import ConnectionState
 
 pytestmark = pytest.mark.unit
@@ -17,7 +16,7 @@ pytestmark = pytest.mark.unit
 def _no_network_check(monkeypatch):
     # Unit tests must not hit GitHub. _maybe_check_firmware_update may spawn a
     # background thread; stub check_latest so it returns immediately with no emit.
-    monkeypatch.setattr(motion_connector, "check_latest", lambda kind, **_: None)
+    monkeypatch.setattr(connector.updates, "check_latest", lambda kind, **_: None)
 
 
 def _connector(tmp_path, dev_mode=True, clinical=False):
@@ -30,7 +29,7 @@ def _connector(tmp_path, dev_mode=True, clinical=False):
     return MotionConnector(
         interface=iface,
         app_config={"engineeringMode": dev_mode, "clinicalMode": clinical},
-        data_dir=str(tmp_path), config_dir="config",
+        data_dir=str(tmp_path), 
     )
 
 
@@ -49,7 +48,7 @@ def test_refuses_in_clinical_mode(tmp_path, monkeypatch):
     # Defensive: if the gate were wrong, this stops a real DFU flash from a test.
     monkeypatch.setattr(c, "_firmware_update_worker", lambda dev: None)
     monkeypatch.setattr(
-        motion_connector.threading, "Thread",
+        connector.updates.threading, "Thread",
         lambda **k: MagicMock(start=lambda: k["target"](*k["args"])))
     assert c.startFirmwareUpdate("left") is False
 
@@ -62,7 +61,7 @@ def test_allowed_in_research_without_eng(tmp_path, monkeypatch):
     started = []
     monkeypatch.setattr(c, "_firmware_update_worker", lambda dev: started.append(dev))
     monkeypatch.setattr(
-        motion_connector.threading, "Thread",
+        connector.updates.threading, "Thread",
         lambda **k: MagicMock(start=lambda: k["target"](*k["args"])))
     assert c.startFirmwareUpdate("left") is True
     assert c._firmware_update_in_progress == "left"
@@ -122,7 +121,7 @@ def _run_worker(tmp_path, monkeypatch, phases, needs_power_cycle):
     from omotion.dfu.progress import DFUProgress
 
     c = _connector(tmp_path, dev_mode=False)
-    monkeypatch.setattr(motion_connector, "check_latest",
+    monkeypatch.setattr(connector.updates, "check_latest",
                         lambda kind, **_: MagicMock(tag="9.9.9"))
     monkeypatch.setattr(fwu, "download_firmware",
                         lambda info, dest: tmp_path / "fw.bin")

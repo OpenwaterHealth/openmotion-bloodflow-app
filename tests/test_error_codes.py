@@ -2,7 +2,7 @@
 
 import pytest
 
-import error_codes
+from services import error_codes
 
 pytestmark = pytest.mark.unit
 

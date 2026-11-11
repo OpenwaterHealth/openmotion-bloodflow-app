@@ -23,7 +23,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from motion_connector import MotionConnector
+from connector import MotionConnector
 
 pytestmark = pytest.mark.unit
 
@@ -45,7 +45,6 @@ def _make_connector(tmp_path, app_config=None):
         interface=iface,
         app_config=app_config or {"engineeringMode": False},
         data_dir=str(tmp_path),
-        config_dir="config",
     )
     c._consoleConnected = True
     c._leftSensorConnected = True

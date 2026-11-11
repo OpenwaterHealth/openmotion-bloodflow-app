@@ -14,7 +14,7 @@ behavior. EVT2 is the only special case.
 import pytest
 
 from config import tec_params as compiled
-from motion_config import (
+from hardware.motion_config import (
     EVT2_BOARD_IDS_DEFAULT,
     TEC_VOLTAGE_EVT2_DEFAULT,
     TecVoltageParams,

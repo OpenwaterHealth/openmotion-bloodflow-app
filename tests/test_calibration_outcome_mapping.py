@@ -14,14 +14,13 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture
 def connector(monkeypatch):
-    from motion_connector import MotionConnector
+    from connector import MotionConnector
     fake_iface = MagicMock()
     fake_iface.is_device_connected.return_value = (True, True, True)
     c = MotionConnector(
         interface=fake_iface,
         app_config={"engineeringMode": True},
         data_dir=".",
-        config_dir="config",
     )
     return c
 

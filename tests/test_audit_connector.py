@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from motion_connector import MotionConnector
+from connector import MotionConnector
 
 pytestmark = pytest.mark.unit
 
@@ -20,7 +20,6 @@ def _connector(tmp_path, scan_db_path=None, app_config=None):
         interface=iface,
         app_config=app_config or {"engineeringMode": False},
         data_dir=str(tmp_path),
-        config_dir="config",
     )
 
 
@@ -305,7 +304,7 @@ def test_audit_event_types_no_db_noop(tmp_path):
 def test_prepare_debug_bundle_failure_returns_empty(tmp_path, monkeypatch):
     # If the bundle build raises, the slot must return "" and NOT log a
     # debug_bundle_created event (fail-soft, mirrors the other slots).
-    import debug_bundle
+    from services import debug_bundle
     c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
     c._reveal_in_explorer = lambda p: None
 
@@ -333,7 +332,7 @@ def _arm_running_scan(c, subject="owTEST"):
 
 
 def test_data_stall_abort_records_e303(tmp_path):
-    from motion_connector import ScanOutcome
+    from connector.sinks import ScanOutcome
     c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
     _arm_running_scan(c)
     c._abort_scan_data_stall(4.0)
@@ -355,7 +354,7 @@ def test_data_stall_abort_records_e303(tmp_path):
 
 
 def test_device_disconnect_abort_records_e304(tmp_path):
-    from motion_connector import ScanOutcome
+    from connector.sinks import ScanOutcome
     c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
     _arm_running_scan(c)
     c._abort_scan_device_disconnect("left")
@@ -379,7 +378,7 @@ def test_first_abort_code_wins(tmp_path):
 
 
 def test_operator_stop_is_stopped_not_aborted(tmp_path):
-    from motion_connector import ScanOutcome
+    from connector.sinks import ScanOutcome
     c = _connector(tmp_path, scan_db_path=str(tmp_path / "scans.db"))
     _arm_running_scan(c)
     c.stopCapture()

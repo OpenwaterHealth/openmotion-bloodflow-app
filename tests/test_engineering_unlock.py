@@ -18,10 +18,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import engineering_unlock
-import motion_connector
+from services import engineering_unlock
+import connector.settings
 from config import app_config
-from motion_connector import MotionConnector
+from connector import MotionConnector
 
 pytestmark = pytest.mark.unit
 
@@ -40,7 +40,7 @@ def no_update_checks(monkeypatch):
 @pytest.fixture
 def clinical_bundle(monkeypatch):
     """What the shipped clinical exe runs: the unlock module is absent."""
-    monkeypatch.setattr(motion_connector, "engineering_unlock", None)
+    monkeypatch.setattr(connector.settings, "engineering_unlock", None)
 
 
 def _connector(tmp_path, **cfg):
@@ -54,7 +54,7 @@ def _connector(tmp_path, **cfg):
     config.update(cfg)
     return MotionConnector(
         interface=iface, app_config=config,
-        data_dir=str(tmp_path), config_dir="config",
+        data_dir=str(tmp_path), 
     )
 
 
@@ -164,7 +164,7 @@ def test_clinical_engineering_mode_stays_off_however_driven(tmp_path, clinical_b
 def test_clinical_source_run_behaves_like_the_clinical_exe(tmp_path):
     # `python main.py --clinical`: the module is importable (the constant
     # is still the repo's False), but the runtime clinicalMode check holds.
-    assert motion_connector.engineering_unlock is engineering_unlock
+    assert connector.settings.engineering_unlock is engineering_unlock
     c = _connector(tmp_path, clinicalMode=True)
     assert c.engineeringUnlockAvailable is False
     assert c.unlockEngineeringMode(GOOD) is False
@@ -172,7 +172,7 @@ def test_clinical_source_run_behaves_like_the_clinical_exe(tmp_path):
 
 
 def test_clinical_service_build_keeps_the_unlock(tmp_path, monkeypatch):
-    monkeypatch.setattr(motion_connector, "_SERVICE_BUILD", True)
+    monkeypatch.setattr(connector.settings, "_SERVICE_BUILD", True)
     c = _connector(tmp_path, clinicalMode=True)
     assert c.engineeringUnlockAvailable is True
     assert c.serviceBuild is True
@@ -182,7 +182,7 @@ def test_clinical_service_build_keeps_the_unlock(tmp_path, monkeypatch):
 
 
 def test_service_stamp_alone_does_not_label_a_research_build(tmp_path, monkeypatch):
-    monkeypatch.setattr(motion_connector, "_SERVICE_BUILD", True)
+    monkeypatch.setattr(connector.settings, "_SERVICE_BUILD", True)
     c = _connector(tmp_path, clinicalMode=False)
     assert c.serviceBuild is False
 
@@ -238,7 +238,7 @@ def test_the_engineering_password_is_only_in_engineering_unlock():
         text = path.read_text(encoding="utf-8", errors="replace")
         for name in ("checkEngineeringPassword", "engineering_password_matches"):
             assert name not in text, f"{name} in {rel}"
-        if rel == "engineering_unlock.py":
+        if rel == "services/engineering_unlock.py":
             continue
         assert "_ENGINEERING_PASSWORD" not in text, rel
         assert literal not in text, f"the engineering password literal is in {rel}"
@@ -252,14 +252,15 @@ def test_repo_stamps_are_the_research_defaults():
 
 
 def test_connector_import_is_gated_on_the_compiled_constants():
-    src = (REPO_ROOT / "motion_connector.py").read_text(encoding="utf-8")
+    src = "\n".join(p.read_text(encoding="utf-8")
+                    for p in sorted((REPO_ROOT / "connector").glob("*.py")))
     assert re.search(
         r"if _CLINICAL_BUILD and not _SERVICE_BUILD:\n"
         r"    engineering_unlock = None\nelse:\n    try:\n"
-        r"        import engineering_unlock\n", src,
+        r"        from services import engineering_unlock\n", src,
     ), "engineering_unlock must only be imported when the build keeps it"
     assert src.count("import engineering_unlock") == 1
-    assert "from engineering_unlock import" not in src
+    assert "from services.engineering_unlock import" not in src
     # The connector itself never sets the flag on; only the module does.
     assert not re.search(r"""\["engineeringMode"\]\s*=\s*True""", src)
 
@@ -268,7 +269,7 @@ def test_pyinstaller_spec_leaves_the_unlock_out_of_a_clinical_bundle():
     spec = (REPO_ROOT / "openwater.spec").read_text(encoding="utf-8")
     assert "_has_engineering_unlock = not _is_clinical or _is_service" in spec
     assert re.search(r'if not _has_engineering_unlock:\n'
-                     r'    _excludes\.append\("engineering_unlock"\)', spec)
+                     r'    _excludes\.append\("services\.engineering_unlock"\)', spec)
     assert 'os.path.join("components", "EngineeringUnlockModal.qml")' in spec
     assert re.search(r"if not _has_engineering_unlock:\n"
                      r"    a\.datas = \[e for e in a\.datas if _norm\(e\[0\]\) != _UNLOCK_QML\]",
@@ -281,7 +282,7 @@ def test_nuitka_build_leaves_the_unlock_out_of_a_clinical_bundle():
         r'if \(\$Variant -eq "clinical" -and -not \$Service\) \{(.*?)\n\}',
         ps1, re.S)
     assert block, "clinical-without-service exclusion block missing"
-    assert '"--nofollow-import-to=engineering_unlock"' in block.group(1)
+    assert '"--nofollow-import-to=services.engineering_unlock"' in block.group(1)
     assert '"--noinclude-data-files=components/EngineeringUnlockModal.qml"' in block.group(1)
     assert "Set-BuildVariant -Clinical ($Variant -eq \"clinical\") -Service $Service.IsPresent" in ps1
 

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from motion_connector import _LivePlotSink
+from connector.sinks import _LivePlotSink
 
 pytestmark = pytest.mark.unit
 
@@ -431,7 +431,7 @@ def test_live_plot_sink_records_every_arrival_into_gap_tracker():
     """The gap tracker is fed on frame ARRIVAL — an unlit frame whose
     BFI is NaN (covered sensor) is still delivery, not a data gap. Gaps
     now mean "frames stopped arriving"."""
-    from nan_gap_tracker import NanGapTracker
+    from plot.nan_gap_tracker import NanGapTracker
 
     conn = _connector()
     tracker = NanGapTracker()
@@ -477,7 +477,7 @@ def test_live_plot_sink_covered_camera_appends_nan_gap_samples():
     keep advancing so the time axis scrolls through a contact loss; the
     renderer draws NaN runs as a blank gap. mean/contrast stay None
     (non-finite); chip temperature is real and keeps flowing."""
-    from nan_gap_tracker import NanGapTracker
+    from plot.nan_gap_tracker import NanGapTracker
 
     conn = _connector()
     tracker = NanGapTracker()
@@ -655,7 +655,7 @@ def test_live_plot_sink_low_light_transition_logged_after_debounce():
 
 
 def test_live_plot_sink_side_average_records_arrivals_into_tracker():
-    from nan_gap_tracker import NanGapTracker
+    from plot.nan_gap_tracker import NanGapTracker
 
     conn = _connector()
     tracker = NanGapTracker()

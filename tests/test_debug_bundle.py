@@ -4,7 +4,7 @@ import zipfile
 
 import pytest
 
-from debug_bundle import build_debug_bundle, WINDOW_HOURS
+from services.debug_bundle import build_debug_bundle, WINDOW_HOURS
 
 pytestmark = pytest.mark.unit
 

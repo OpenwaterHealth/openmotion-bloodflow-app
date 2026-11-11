@@ -275,13 +275,13 @@ runtime_hooks = ["rthook_libusb_paths.py"]
 # tests/test_updater_compiled_out.py.
 _excludes = ["PySide6", "shiboken6", "PySide2", "PyQt5"]
 if _is_clinical:
-    _excludes.append("app_updater")
+    _excludes.append("services.app_updater")
 # Same for the engineering-mode unlock (#706): a clinical build that is not
 # the service tool leaves out the Python unlock here and its QML prompt
 # below, so it carries neither the check nor the dialog. Guarded by
 # tests/test_engineering_unlock.py.
 if not _has_engineering_unlock:
-    _excludes.append("engineering_unlock")
+    _excludes.append("services.engineering_unlock")
 
 a = Analysis(
     [ENTRY],

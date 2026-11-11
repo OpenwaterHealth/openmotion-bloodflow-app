@@ -4,7 +4,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-import bug_report
+from services import bug_report
 
 pytestmark = pytest.mark.unit
 

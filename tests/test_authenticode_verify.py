@@ -13,8 +13,8 @@ import sys
 
 import pytest
 
-import app_updater
-from app_updater import ACCEPTED_SIGNER_SHA256, SignatureInfo, _update_decision
+from services import app_updater
+from services.app_updater import ACCEPTED_SIGNER_SHA256, SignatureInfo, _update_decision
 
 pytestmark = pytest.mark.unit
 
