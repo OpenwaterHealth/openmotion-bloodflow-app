@@ -12,6 +12,7 @@ import time
 
 from PyQt6.QtCore import (
     Q_ARG,
+    Q_RETURN_ARG,
     QMetaObject,
     QObject,
     Qt,
@@ -306,3 +307,25 @@ def test_banner_summarises_everything_pending(stub_make):
     assert banner.property("visible") is True
     summary = banner.property("summary")
     assert "Application 2.0.0" in summary and "right sensor" in summary
+
+
+def _confirm_text(modal, action):
+    return QMetaObject.invokeMethod(
+        modal, "_confirmText", Qt.ConnectionType.DirectConnection,
+        Q_RETURN_ARG("QVariant"), Q_ARG("QVariant", action))
+
+
+def test_confirm_names_the_version_being_installed(stub_make):
+    # #743: every confirm says which version it installs.
+    stub, make = stub_make
+    modal = make("modal")
+    stub.offer_fw("left", "1.8.2", "1.8.3")
+    stub.offer_fw("console", "", "1.9.0")
+    stub.offer_app("1.6.0")
+
+    assert "(1.8.2 → 1.8.3)" in _confirm_text(modal, "left")
+    assert "(to 1.9.0)" in _confirm_text(modal, "console")
+    assert "to 1.6.0" in _confirm_text(modal, "app")
+    every = _confirm_text(modal, "all")
+    assert "Left sensor (1.8.2 → 1.8.3)" in every
+    assert "Console (to 1.9.0)" in every

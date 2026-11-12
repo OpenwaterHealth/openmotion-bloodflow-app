@@ -118,7 +118,8 @@ Item {
             for (var i = 0; i < rows.length; i++) {
                 if (!rows[i].available) continue
                 if (rows[i].key === "app") hasApp = true
-                else fw.push(rows[i].name.replace(" firmware", ""))
+                else fw.push(rows[i].name.replace(" firmware", "")
+                             + _versionSpan(rows[i]))
             }
             var t = ""
             if (fw.length)
@@ -132,10 +133,25 @@ Item {
                    + "the console and sensors afterwards so they boot the new firmware."
             return t
         }
+        var row = _rowFor(action)
         if (action === "app")
-            return "The application update is downloaded and verified, then "
+            return "The application update" + (row && row.latest ? " to " + row.latest : "")
+                 + " is downloaded and verified, then "
                  + "the app closes, installs it and relaunches."
-        return _labelFor(action) + " will reboot into DFU mode and be re-flashed." + fwNote
+        return _labelFor(action) + " will reboot into DFU mode and be re-flashed"
+             + (row ? " " + _versionSpan(row).trim() : "") + "." + fwNote
+    }
+
+    // #743: every confirm names the version being installed.
+    function _rowFor(key) {
+        for (var i = 0; i < rows.length; i++) if (rows[i].key === key) return rows[i]
+        return null
+    }
+    function _versionSpan(row) {
+        if (!row || !row.latest) return ""
+        return row.current && row.current !== "—"
+            ? " (" + row.current + " → " + row.latest + ")"
+            : " (to " + row.latest + ")"
     }
 
     function _run(action) {
