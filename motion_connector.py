@@ -1785,8 +1785,8 @@ class MotionConnector(QObject):
 
         The cameras were just powered on for the ID-cache fill and stay
         powered until a scan start drops the ones outside its mask, so the
-        one-time FPGA bring-up
-        can happen here in the init worker, overlapping operator setup,
+        one-time FPGA bring-up can happen here in the init worker, overlapping
+        operator setup,
         instead of inflating the first Start press. This is pre-work, not a
         scan gate: the scan-start configure re-reads the firmware's
         per-camera status (bit 1 programmed / bit 2 configured, both cleared
@@ -1819,14 +1819,14 @@ class MotionConnector(QObject):
                         side,
                         pos + 1,
                     )
-            # Re-read so only cameras that really hold a programmed FPGA get
-            # their registers written — a failed program above must not be
-            # configured blind.
+            # The cameras were just powered up, so every programmed one gets
+            # its registers written, whatever its configured bit says. Only
+            # programming is conditional. Re-read so only cameras that really
+            # hold a programmed FPGA are written: a failed program above must
+            # not be configured blind.
             status_map = sensor.get_camera_status(0xFF) or {}
             conf_mask = sum(
-                1 << pos
-                for pos, st in status_map.items()
-                if (st & 0x02) and not (st & 0x04)
+                1 << pos for pos, st in status_map.items() if st & 0x02
             )
             configured_ok = True
             if conf_mask:
@@ -1840,12 +1840,7 @@ class MotionConnector(QObject):
                         side,
                         conf_mask,
                     )
-            ready = sum(
-                1
-                for pos, st in status_map.items()
-                if (st & 0x02)
-                and ((st & 0x04) or (configured_ok and (conf_mask >> pos) & 1))
-            )
+            ready = bin(conf_mask).count("1") if configured_ok else 0
             logger.info(
                 "%s sensor: camera warm-up done in %.1f s "
                 "(%d FPGA(s) programmed, %d/%d cameras scan-ready)",

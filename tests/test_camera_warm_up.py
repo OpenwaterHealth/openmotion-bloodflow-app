@@ -1,6 +1,7 @@
 """Connect-time camera warm-up (#494).
 
-_init_sensor programs camera FPGAs + writes default registers while
+_init_sensor programs unprogrammed camera FPGAs + writes every programmed
+camera's default registers while
 the init worker already has the cameras powered for the ID-cache fill, so the
 first Start press doesn't pay the one-time bring-up. Best-effort by contract:
 every failure path must fall through to today's behavior (scan-start
@@ -65,11 +66,14 @@ def connector(tmp_path):
     return c
 
 
-def test_warm_cameras_touch_nothing(connector):
+def test_programmed_cameras_are_still_configured(connector):
+    # The cameras were just powered up: programming follows the status bit,
+    # but every programmed camera gets its registers written, even one whose
+    # configured bit is set.
     sensor = _FakeSensor([[READY | PROGRAMMED | CONFIGURED] * 8] * 2)
     connector._warm_up_cameras("left", sensor)
     assert sensor.programmed == []
-    assert sensor.configured == []
+    assert sensor.configured == [0xFF]
 
 
 def test_cold_cameras_programmed_then_configured_in_bulk(connector):
@@ -85,14 +89,14 @@ def test_cold_cameras_programmed_then_configured_in_bulk(connector):
 
 
 def test_failed_program_is_not_configured_blind(connector):
-    # Camera 0 never reaches PROGRAMMED on the re-read; only camera 1 may
-    # have its registers written.
+    # Camera 0 never reaches PROGRAMMED on the re-read, so it is the one
+    # camera whose registers are not written.
     first = [READY, READY] + [READY | PROGRAMMED | CONFIGURED] * 6
     second = [READY, READY | PROGRAMMED] + [READY | PROGRAMMED | CONFIGURED] * 6
     sensor = _FakeSensor([first, second])
     connector._warm_up_cameras("left", sensor)
     assert sensor.programmed == [0x01, 0x02]
-    assert sensor.configured == [0x02]
+    assert sensor.configured == [0xFE]
 
 
 def test_status_read_failure_is_quiet(connector):
