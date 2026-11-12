@@ -398,6 +398,17 @@ def version_newer(remote: str, local: str) -> bool:
     return False
 
 
+def release_page_url(cfg, tag: str) -> str:
+    """The GitHub release page for ``tag`` (portable builds link here, #597).
+
+    Same repo the check queries (``updateRepo`` or the production repo).
+    """
+    repo = cfg.get("updateRepo") or GITHUB_REPO
+    tag = str(tag or "").strip()
+    base = f"https://github.com/{repo}/releases"
+    return f"{base}/tag/{tag}" if tag else base
+
+
 def check_for_updates(connector) -> None:
     """Query GitHub for a newer release and emit the connector's update
     signals. Runs on the connector's background thread; the connector has
@@ -480,6 +491,17 @@ def apply_update(connector, download_url: str) -> bool:
     import subprocess
 
     cfg = connector._app_config
+    if cfg.get("portableMode", False):
+        # A portable build never installs itself (#597): the Setup bundle
+        # would turn it into an installed copy whose scans, settings and
+        # logs live under %LOCALAPPDATA% instead of next to this exe, so
+        # the operator's history would look empty after the "update".
+        # Portable users download the new zip from the release page.
+        logger.warning("Portable build: refusing in-app install of %s", download_url)
+        connector.updateCheckFailed.emit(
+            "Portable builds don't install updates. Download the new "
+            "version from the release page.")
+        return False
     try:
         if not _is_bundle_url(download_url):
             connector.updateCheckFailed.emit("No installer for this update.")

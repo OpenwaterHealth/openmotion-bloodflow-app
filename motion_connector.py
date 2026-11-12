@@ -2099,6 +2099,23 @@ class MotionConnector(QObject):
     def appUpdateUrl(self) -> str:
         return self._app_update_url
 
+    @pyqtProperty(bool, constant=True)
+    def appUpdateInstallable(self) -> bool:
+        """False on a portable build (#597): its app updates are offered
+        and linked to the release page, never installed in place (the
+        Setup bundle would move its data root). Firmware updates are
+        unaffected."""
+        return not bool(self._app_config.get("portableMode", False))
+
+    @pyqtSlot()
+    def openAppReleasePage(self) -> None:
+        """Open the offered release's page in the browser (portable builds)."""
+        if app_updater is None:
+            return
+        import webbrowser
+        webbrowser.open(app_updater.release_page_url(
+            self._app_config, self._app_update_latest))
+
     @pyqtProperty(bool, notify=updateBusyChanged)
     def updateBusy(self) -> bool:
         """Any flash, app install or "Update all" run is in flight; the
@@ -2772,7 +2789,8 @@ class MotionConnector(QObject):
         """Steps "Update all" would run right now, in order."""
         steps = [d for d in self.BATCH_FIRMWARE_ORDER
                  if self._firmware_update_available.get(d, False)]
-        if self._app_update_url and app_updater is not None:
+        if (self._app_update_url and app_updater is not None
+                and self.appUpdateInstallable):
             steps.append("app")
         return steps
 

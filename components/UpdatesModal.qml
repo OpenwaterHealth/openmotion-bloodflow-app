@@ -29,6 +29,9 @@ Item {
     property bool deferAutoOpen: false
 
     readonly property bool _clinical: MotionInterface.appConfig.clinicalMode === true
+    // Portable builds offer the app update as a link to its release page
+    // and never install it in place (#597); firmware rows are unaffected.
+    readonly property bool _appInstallable: MotionInterface.appUpdateInstallable
 
     // Per-row progress, keyed "app"/"console"/"left"/"right":
     // { state: "running"|"done"|"failed", text: string, pct: int }.
@@ -75,6 +78,14 @@ Item {
         for (var i = 0; i < rows.length; i++) if (rows[i].available) n++
         return n
     }
+    // Items "Update all" would run: every pending row except a portable
+    // build's app row, which is a download link.
+    readonly property int batchCount: {
+        var n = 0
+        for (var i = 0; i < rows.length; i++)
+            if (rows[i].available && (rows[i].key !== "app" || _appInstallable)) n++
+        return n
+    }
 
     function open() {
         if (root._clinical) return
@@ -117,7 +128,7 @@ Item {
             var fw = [], hasApp = false
             for (var i = 0; i < rows.length; i++) {
                 if (!rows[i].available) continue
-                if (rows[i].key === "app") hasApp = true
+                if (rows[i].key === "app") hasApp = root._appInstallable
                 else fw.push(rows[i].name.replace(" firmware", "")
                              + _versionSpan(rows[i]))
             }
@@ -261,8 +272,12 @@ Item {
 
             Text {
                 visible: root.pendingCount > 0
-                text: "Update each item on its own, or choose Update all to flash "
-                    + "the device firmware first and then install the application update."
+                text: root._appInstallable
+                    ? "Update each item on its own, or choose Update all to flash "
+                      + "the device firmware first and then install the application update."
+                    : "This portable copy doesn't install application updates: Download "
+                      + "opens the release page, where you can get the new zip. "
+                      + "Firmware updates install from here."
                 color: AppTheme.textSecondary
                 font.pixelSize: 13
                 wrapMode: Text.WordWrap
@@ -343,10 +358,17 @@ Item {
                             }
 
                             ModalButton {
+                                readonly property bool linkOnly:
+                                    row.modelData.key === "app" && !root._appInstallable
                                 visible: row.modelData.available && row.phase !== "running"
-                                text: row.phase === "failed" ? "Retry" : "Update"
-                                enabled: !MotionInterface.updateBusy && root.confirmAction === ""
-                                onClicked: root.confirmAction = row.modelData.key
+                                text: linkOnly ? "Download"
+                                    : row.phase === "failed" ? "Retry" : "Update"
+                                enabled: linkOnly
+                                    || (!MotionInterface.updateBusy && root.confirmAction === "")
+                                onClicked: {
+                                    if (linkOnly) MotionInterface.openAppReleasePage()
+                                    else root.confirmAction = row.modelData.key
+                                }
                             }
                         }
 
@@ -424,7 +446,7 @@ Item {
                 }
                 ModalButton {
                     primary: true
-                    visible: root.pendingCount > 1
+                    visible: root.batchCount > 1
                     text: MotionInterface.batchUpdateRunning ? "Updating…" : "Update all"
                     enabled: !MotionInterface.updateBusy
                     onClicked: root.confirmAction = "all"
