@@ -1816,20 +1816,21 @@ class MotionConnector(QObject):
         # init, just raises the modal if the sensor reports trouble.
         self._check_sensor_i2c_health(side)
 
-        # Power on all cameras, fill the ID cache (serial numbers, connection info), then power off
+        # Power on all cameras, fill the ID cache (serial numbers, connection
+        # info), then bring them up and leave them powered so the first Start
+        # finds them ready (#494). powerOffUnusedCameras is a scan-time rule:
+        # the scan-start configure powers off the cameras outside the scan
+        # mask. Powering everything off here would undo the warm-up.
         try:
             sensor = getattr(self._interface, side, None) if self._interface else None
             if sensor is not None and sensor.is_connected():
                 enable_power = getattr(sensor, "enable_camera_power", None)
-                disable_power = getattr(sensor, "disable_camera_power", None)
                 refresh_cache = getattr(sensor, "refresh_id_cache", None)
-                if enable_power and disable_power and refresh_cache:
+                if enable_power and refresh_cache:
                     if enable_power(0xFF):
                         time.sleep(0.5)  # settle time
                         refresh_cache()
-                        if self._power_off_unused_cameras:
-                            disable_power(0xFF)
-                            time.sleep(0.05)
+                        self._warm_up_cameras(side, sensor)
                     else:
                         logger.warning(
                             "Could not power on cameras on %s sensor for ID cache fill",
@@ -1854,6 +1855,84 @@ class MotionConnector(QObject):
         self._log_device_stats(side)
 
         self.connectionStatusChanged.emit()
+
+    def _warm_up_cameras(self, side: str, sensor) -> None:
+        """Program camera FPGAs + write default registers at connect (#494).
+
+        The cameras were just powered on for the ID-cache fill and stay
+        powered until a scan start drops the ones outside its mask, so the
+        one-time FPGA bring-up can happen here in the init worker, overlapping
+        operator setup,
+        instead of inflating the first Start press. This is pre-work, not a
+        scan gate: the scan-start configure re-reads the firmware's
+        per-camera status (bit 1 programmed / bit 2 configured, both cleared
+        whenever a camera loses power — including the firmware's own
+        stall-recovery rail-cycle) and redoes whatever is missing, so any
+        failure here just falls back to today's behavior. Absent or broken
+        cameras log and are left for the scan flow to surface.
+        """
+        try:
+            t0 = time.monotonic()
+            status_map = sensor.get_camera_status(0xFF)
+            if not status_map:
+                logger.warning(
+                    "%s sensor: camera warm-up skipped (status read failed)",
+                    side,
+                )
+                return
+            to_program = [
+                pos
+                for pos, st in sorted(status_map.items())
+                if (st & 0x01) and not (st & 0x02)
+            ]
+            for pos in to_program:
+                if not sensor.program_fpga(
+                    camera_position=1 << pos, manual_process=False
+                ):
+                    logger.warning(
+                        "%s camera %d: connect-time FPGA program failed "
+                        "(scan start will retry)",
+                        side,
+                        pos + 1,
+                    )
+            # The cameras were just powered up, so every programmed one gets
+            # its registers written, whatever its configured bit says. Only
+            # programming is conditional. Re-read so only cameras that really
+            # hold a programmed FPGA are written: a failed program above must
+            # not be configured blind.
+            status_map = sensor.get_camera_status(0xFF) or {}
+            conf_mask = sum(
+                1 << pos for pos, st in status_map.items() if st & 0x02
+            )
+            configured_ok = True
+            if conf_mask:
+                configured_ok = bool(
+                    sensor.camera_configure_registers(camera_position=conf_mask)
+                )
+                if not configured_ok:
+                    logger.warning(
+                        "%s sensor: connect-time camera register configure "
+                        "failed (mask 0x%02X, scan start will retry)",
+                        side,
+                        conf_mask,
+                    )
+            ready = bin(conf_mask).count("1") if configured_ok else 0
+            logger.info(
+                "%s sensor: camera warm-up done in %.1f s "
+                "(%d FPGA(s) programmed, %d/%d cameras scan-ready)",
+                side,
+                time.monotonic() - t0,
+                len(to_program),
+                ready,
+                len(status_map),
+            )
+        except Exception:
+            logger.warning(
+                "%s sensor: camera warm-up failed; scan start will run the "
+                "full configure",
+                side,
+                exc_info=True,
+            )
 
     def _check_sensor_i2c_health(self, side: str) -> None:
         """Raise E-101/E-102 if a sensor's boot-time I2C self-check is bad.
