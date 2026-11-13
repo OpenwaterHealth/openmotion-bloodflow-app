@@ -479,8 +479,10 @@ def main():
     # ignored: nothing reads it.
     settings = settings_store.SettingsStore(_scan_db_path)
     saved_keys = config_store.apply_saved_preferences(app_config, settings.load())
-    if _fresh_install and app_config.get(whats_new.SEEN_KEY) is None:
+    if (whats_new.seed_on_first_run(_fresh_install, app_config.get("portableMode"))
+            and app_config.get(whats_new.SEEN_KEY) is None):
         # Nothing is "new" on a first install; start the history here.
+        # Not for portable: a new zip in a new folder is also "fresh".
         app_config[whats_new.SEEN_KEY] = APP_VERSION
         settings.save({whats_new.SEEN_KEY: APP_VERSION})
 

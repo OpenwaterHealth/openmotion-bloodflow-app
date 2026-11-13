@@ -61,6 +61,8 @@ class _Stub(QObject):
 
     def reset(self):
         self.clinical = False
+        self.installable = True
+        self.pc_pending = False
         self.fw = {d: {"cur": "", "latest": "", "avail": False}
                    for d in ("console", "left", "right")}
         self.app_latest, self.app_url = "", ""
@@ -114,6 +116,24 @@ class _Stub(QObject):
     @pyqtProperty(str, notify=appInfoChanged)
     def appUpdateUrl(self):
         return self.app_url
+
+    consolePowerCycleChanged = pyqtSignal()
+
+    @pyqtProperty(bool, notify=consolePowerCycleChanged)
+    def consolePowerCyclePending(self):
+        return getattr(self, "pc_pending", False)
+
+    @pyqtProperty(bool, notify=appConfigChanged)
+    def appUpdateInstallable(self):
+        return self.installable
+
+    def set_installable(self, value):
+        self.installable = value
+        self.appConfigChanged.emit()
+
+    @pyqtSlot()
+    def openAppReleasePage(self):
+        self.calls.append(("release-page",))
 
     @pyqtProperty(bool, notify=busyChanged)
     def updateBusy(self):
@@ -179,6 +199,7 @@ def stub_make(env):
     stub, make = env
     stub.reset()
     stub.set_clinical(False)
+    stub.set_installable(True)
     stub.fwInfoChanged.emit()
     stub.appInfoChanged.emit()
     stub.busyChanged.emit()
@@ -329,3 +350,46 @@ def test_confirm_names_the_version_being_installed(stub_make):
     every = _confirm_text(modal, "all")
     assert "Left sensor (1.8.2 → 1.8.3)" in every
     assert "Console (to 1.9.0)" in every
+
+
+def test_portable_app_row_is_not_part_of_update_all(stub_make):
+    """#597: a portable build lists the app update but "Update all" only
+    covers firmware, and the confirm text doesn't promise an install."""
+    stub, make = stub_make
+    stub.set_installable(False)
+    modal = make("modal")
+    stub.offer_app("2.0.0")
+    stub.offer_fw("left", "1.0.0", "1.1.0")
+    assert _row_keys(modal) == ["left", "app"]
+    assert modal.property("pendingCount") == 2
+    assert modal.property("batchCount") == 1
+    ret = QMetaObject.invokeMethod(
+        modal, "_confirmText", Qt.ConnectionType.DirectConnection,
+        Q_RETURN_ARG("QVariant"), Q_ARG("QVariant", "all"))
+    assert "application" not in str(ret).lower()
+
+
+def test_installed_build_counts_app_in_update_all(stub_make):
+    stub, make = stub_make
+    modal = make("modal")
+    stub.offer_app("2.0.0")
+    stub.offer_fw("left", "1.0.0", "1.1.0")
+    assert modal.property("batchCount") == 2
+
+
+def test_console_row_stops_asking_once_power_cycle_clears(stub_make):
+    """#767: the row's "power-cycle now" text goes once the interlock is clear."""
+    stub, make = stub_make
+    modal = make("modal")
+    stub.offer_fw("console", "1.8.0", "1.8.1")
+    stub.pc_pending = True
+    stub.consolePowerCycleChanged.emit()
+    stub.firmwareUpdateFinished.emit("console", True, "Firmware written. Power-cycle the console now")
+    st = modal.property("rowStatus")
+    st = st.toVariant() if hasattr(st, "toVariant") else st
+    assert "power-cycle" in st["console"]["text"].lower()
+    stub.pc_pending = False
+    stub.consolePowerCycleChanged.emit()
+    st = modal.property("rowStatus")
+    st = st.toVariant() if hasattr(st, "toVariant") else st
+    assert st["console"] == {"state": "done", "text": "Updated.", "pct": -1}

@@ -38,7 +38,7 @@ def fake_updater(monkeypatch):
     return calls
 
 
-def _connector(tmp_path, clinical=False):
+def _connector(tmp_path, clinical=False, portable=False):
     iface = MagicMock()
     iface.is_device_connected.return_value = (True, True, True)
     iface.scan_workflow.running = False
@@ -47,7 +47,8 @@ def _connector(tmp_path, clinical=False):
     iface.get_sdk_version.return_value = "9.9.9"
     c = MotionConnector(
         interface=iface,
-        app_config={"engineeringMode": False, "clinicalMode": clinical},
+        app_config={"engineeringMode": False, "clinicalMode": clinical,
+                    "portableMode": portable},
         data_dir=str(tmp_path), config_dir="config",
     )
     c._state = READY
@@ -153,6 +154,63 @@ def test_app_step_skipped_when_updater_not_in_build(
     c = _connector(tmp_path)
     c.updateAvailable.emit("9.9.9", "https://x/setup.exe")
     assert c._batch_update_plan() == []
+
+
+def test_portable_flashes_firmware_but_never_installs_the_app(
+        tmp_path, monkeypatch, sync_threads, fake_updater):
+    """#597: a portable build would become an installed copy with its
+    data root moved, so "Update all" skips the app step there."""
+    c = _connector(tmp_path, portable=True)
+    _offer_everything(c)
+    order = []
+    c.batchUpdateStep.connect(order.append)
+    flashed = _record_flashes(c, monkeypatch)
+    out = _finished(c)
+
+    assert c.appUpdateInstallable is False
+    assert c.appUpdateAvailable is True, "the offer is still shown"
+    assert c.startUpdateAll() is True
+
+    assert order == ["left", "right", "console"]
+    assert flashed == ["left", "right", "console"]
+    assert fake_updater == []
+    assert out[-1][0] is True
+
+
+def test_portable_app_offer_alone_is_not_a_batch(tmp_path):
+    c = _connector(tmp_path, portable=True)
+    c.updateAvailable.emit("9.9.9", "https://x/setup.exe")
+    assert c._batch_update_plan() == []
+
+
+def test_installed_build_app_is_installable(tmp_path):
+    assert _connector(tmp_path).appUpdateInstallable is True
+
+
+def test_portable_release_page_link(tmp_path, monkeypatch, fake_updater):
+    import webbrowser
+    import app_updater
+    opened = []
+    monkeypatch.setattr(webbrowser, "open", opened.append)
+    motion_connector.app_updater.release_page_url.side_effect = (
+        app_updater.release_page_url)
+    c = _connector(tmp_path, portable=True)
+    c.updateAvailable.emit("1.6.0", "https://x/setup.exe")
+    c.openAppReleasePage()
+    assert opened == [
+        "https://github.com/OpenwaterHealth/openmotion-bloodflow-app"
+        "/releases/tag/1.6.0"]
+
+
+def test_apply_update_refuses_portable():
+    """Defence in depth: app_updater itself refuses a portable config,
+    before downloading anything."""
+    import app_updater
+    conn = MagicMock()
+    conn._app_config = {"portableMode": True, "clinicalMode": False}
+    assert app_updater.apply_update(conn, "https://x/setup.exe") is False
+    conn.updateCheckFailed.emit.assert_called_once()
+    conn.updateProgress.emit.assert_not_called()
 
 
 # ── Gates ─────────────────────────────────────────────────────────────────

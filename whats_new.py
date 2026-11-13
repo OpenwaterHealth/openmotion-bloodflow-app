@@ -119,6 +119,18 @@ def notes_between(
     return "\n\n".join(picked)
 
 
+def seed_on_first_run(fresh_install: bool, portable: bool) -> bool:
+    """Whether a first launch records the running version as already seen.
+
+    A fresh installed copy has nothing "new" to show. A portable build
+    can't tell a fresh copy from an upgrade: its data sits next to the
+    exe, so unzipping a new release into a new folder always looks fresh.
+    Portable therefore never seeds, and every first portable launch shows
+    the running release's notes once.
+    """
+    return bool(fresh_install) and not bool(portable)
+
+
 def notes_path() -> Path:
     from utils.resource_path import resource_path
 

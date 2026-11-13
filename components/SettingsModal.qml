@@ -1872,9 +1872,15 @@ Item {
                         }
                         UpdateChip {
                             visible: !root.clinicalMode && root.appUpdateStatus === "available"
-                            label: root.appUpdating ? root.appUpdateProgressText : "Update"
+                            // Portable builds link to the release page (#597).
+                            label: !MotionInterface.appUpdateInstallable ? "Download"
+                                 : root.appUpdating ? root.appUpdateProgressText : "Update"
                             chipEnabled: !root.appUpdating
                             onChipClicked: {
+                                if (!MotionInterface.appUpdateInstallable) {
+                                    MotionInterface.openAppReleasePage()
+                                    return
+                                }
                                 root.appUpdating = true
                                 root.appUpdateProgressText = "Starting…"
                                 MotionInterface.applyUpdate(root.appDownloadUrl)
