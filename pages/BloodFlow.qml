@@ -292,7 +292,7 @@ Rectangle {
         id: modalManager
         modals: [scanSettingsModal, notesModal, historyModal,
                  settingsModal, contactQualityModal, logsModal,
-                 sampleScanOfferModal]
+                 sampleScanOfferModal, whatsNewModal]
         // Hiding an item does not take its keyboard focus away (#517). A
         // modal closed while one of its text fields had focus left that
         // invisible field holding it: it took every later Space as typed
@@ -379,6 +379,23 @@ Rectangle {
         id: sampleScanOfferModal
     }
 
+    // Release notes after an upgrade (#597). Pulled once, shortly after
+    // launch so the window is on screen first; the connector returns ""
+    // when nothing is new. Opened from Settings too (onWhatsNewRequested).
+    WhatsNewModal {
+        id: whatsNewModal
+    }
+
+    Timer {
+        interval: 800
+        running: true
+        repeat: false
+        onTriggered: {
+            if (modalManager.current) return
+            whatsNewModal.openWith(MotionInterface.pendingWhatsNew())
+        }
+    }
+
     // Spacebar during an active scan pops the Notes modal with a fresh
     // newline + [elapsed / wall-clock] timestamp, cursor ready to type.
     // Gated so it only fires mid-scan and never over another modal; once
@@ -440,6 +457,10 @@ Rectangle {
         onLogsRequested: {
             settingsModal.close()
             modalManager.toggle(logsModal)
+        }
+        onWhatsNewRequested: {
+            settingsModal.close()
+            modalManager.toggle(whatsNewModal)
         }
     }
 
