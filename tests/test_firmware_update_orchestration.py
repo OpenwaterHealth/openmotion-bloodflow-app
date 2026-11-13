@@ -174,3 +174,25 @@ def test_console_flash_asks_for_power_cycle_and_marks_it_pending(tmp_path, monke
 def test_sensor_flash_does_not_mark_console_power_cycle(tmp_path, monkeypatch):
     _run_worker(tmp_path, monkeypatch, ["download"], False)
     assert _run_worker.connector.consolePowerCyclePending is False
+
+
+def test_console_power_cycle_is_marked_before_the_flash_runs(tmp_path, monkeypatch):
+    """update() returns only after the console is back, by which time its
+    telemetry has already reported the latch: the flag must be set first."""
+    import omotion.firmware_update as fwu
+    c = _connector(tmp_path, dev_mode=False)
+    monkeypatch.setattr(motion_connector, "check_latest",
+                        lambda kind, **_: MagicMock(tag="9.9.9"))
+    monkeypatch.setattr(fwu, "download_firmware", lambda info, dest: tmp_path / "fw.bin")
+    seen = []
+
+    class _Updater:
+        def update(self, handle, bin_path, progress_cb=None):
+            seen.append(c.consolePowerCyclePending)
+            raise RuntimeError("DFU write failed")
+
+    monkeypatch.setattr(fwu, "FirmwareUpdater", _Updater)
+    c._firmware_update_in_progress = "console"
+    c._firmware_update_worker("console")
+    assert seen == [True]
+    assert c.consolePowerCyclePending is True, "a failed flash still reset the MCU"

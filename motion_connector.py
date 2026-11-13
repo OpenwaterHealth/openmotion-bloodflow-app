@@ -2351,7 +2351,8 @@ class MotionConnector(QObject):
         )
 
     def _mark_console_flashed(self) -> None:
-        """A console firmware write succeeded: a power cycle is now due."""
+        """A console flash is starting: once the MCU resets, the safety
+        FPGAs latch until a power cycle, whether or not the write succeeds."""
         self._console_flash_done_at = time.monotonic()
         self._set_console_power_cycle_pending(True)
         logger.warning("Console firmware written; power cycle required "
@@ -2821,6 +2822,12 @@ class MotionConnector(QObject):
                 }.get(p.phase, str(p.phase).capitalize())
                 self.firmwareUpdateProgress.emit(device_key, p.phase, pct, label)
 
+            if device_key == "console":
+                # #767: entering DFU alone latches the safety FPGAs, and
+                # update() only returns after the console is back and its
+                # telemetry has already reported the latch. Mark the power
+                # cycle as due before the reset, not after.
+                self._mark_console_flashed()
             self.firmwareUpdateProgress.emit(
                 device_key, "flash", -1, "Entering DFU and flashing…")
             result = FirmwareUpdater().update(handle, bin_path, progress_cb=_prog)
@@ -2845,7 +2852,6 @@ class MotionConnector(QObject):
             self._firmware_latest_by_kind.pop(
                 self._kind_for_device(device_key).value, None)
             if ok and device_key == "console":
-                self._mark_console_flashed()
                 msg = ("Firmware written. Power-cycle the console now to "
                        "finish; scanning stays off until it restarts.")
             if ok:
