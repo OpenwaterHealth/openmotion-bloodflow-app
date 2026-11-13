@@ -46,6 +46,11 @@ After a production release, the signed Clinical installer is a **manual**
 run of `clinical-release.yml` in the private repo on that tag. Never add a
 Clinical build, artifact upload or release asset to a workflow in this repo.
 
+Every Research release also carries the user manual,
+`Open-Motion-Research-User-Manual-<tag>.pdf`, rendered from
+`docs/user-manual/` at the tag (#371). The manual is Research-only too:
+never add a clinical or engineering manual here.
+
 ## Release progression
 
 For a given version `X.Y.Z` the natural progression is:
@@ -106,6 +111,15 @@ git push origin next X.Y.Z-rc.N
 (Typically after `next` is merged down to `main`. Only after the
 matching SDK version is live on PyPI.)
 
+**Update the user manual first.** Review
+`docs/user-manual/open-motion-research-user-manual.md` against the release,
+set its cover row `| **Application version** | X.Y.Z |`, rebuild the PDF
+(`python docs/user-manual/build_pdf.py`) and merge that to `next` → `main`
+before tagging. A production tag whose manual documents a different version
+fails at the first step of the build, before anything is signed; dev/rc tags
+only warn. Check locally with
+`python docs/user-manual/build_pdf.py --check-only --check-version X.Y.Z --strict`.
+
 ```bash
 git checkout main
 git pull
@@ -115,6 +129,8 @@ git push origin main X.Y.Z
 
 ## What the workflow does on a tag push
 
+- Checks that the Research user manual documents the tag's version
+  (fatal on production tags, a warning on dev/rc).
 - Resolves SDK source per the table above.
 - Stamps the tag (without leading `v`) into `version.py`'s
   `_FALLBACK_VERSION` so the frozen exe reports the right version.
