@@ -936,6 +936,7 @@ class MotionConnector(QObject):
     deviceInitBusyChanged = pyqtSignal()
     stateChanged = pyqtSignal()  # Signal to notify QML of state changes
     laserStateChanged = pyqtSignal()  # Signal to notify QML of laser state changes
+    consolePowerCycleChanged = pyqtSignal()  # notify for consolePowerCyclePending (#767)
     safetyFailureStateChanged = pyqtSignal()  # Signal to notify QML of safety
     safetyTripDuringCaptureRequested = pyqtSignal()  # Emitted when safety trips while scan running (main-thread slot shows message & schedules cancel)
     scanWorkerFailedDuringCapture = pyqtSignal(str)  # Emitted from the SDK scan worker thread when it aborts after start_scan returned True (main-thread slot raises E-301 & tears down capture). Issue #213.
@@ -1306,6 +1307,9 @@ class MotionConnector(QObject):
         self._laserOn = False
         self._safetyFailure = False
         self._safety_unknown_streak = 0  # see SAFETY_UNKNOWN_STREAK_THRESHOLD
+        # When this launch finished a console flash (#767); None if it
+        # didn't (a pending flag persisted by an earlier launch).
+        self._console_flash_done_at: float | None = None
         self._running = False
         self._trigger_state = "OFF"
         self._state = DISCONNECTED
@@ -2311,6 +2315,76 @@ class MotionConnector(QObject):
             tag="laser_safety",
         )
 
+    # --- Power cycle after a console firmware update (#767) --------------
+    # A console update resets only the STM32; the Safety EE/OPT FPGAs stay
+    # powered and latch RATE_LOWER_LIMIT_FAIL (0x04) across the reset (the
+    # trigger line is undriven until main() sets nTRIG). That latch is an
+    # expected consequence of our own flash, not a laser event, so while a
+    # power cycle is pending the app asks for one instead of raising E-203.
+    # Scanning stays blocked either way: startCapture refuses while
+    # safetyFailure is set, and only a power cycle clears the latch.
+    POST_FLASH_LATCH_BITS = 0x04            # RATE_LOWER_LIMIT_FAIL
+    POWER_CYCLE_CLEAR_AFTER_S = 10.0        # interlock clear this long => done
+    POWER_CYCLE_TOAST_TAG = "console_power_cycle"
+
+    @pyqtProperty(bool, notify=consolePowerCycleChanged)
+    def consolePowerCyclePending(self) -> bool:
+        return bool(self._app_config.get("consolePowerCyclePending", False))
+
+    def _set_console_power_cycle_pending(self, value: bool) -> None:
+        cfg = getattr(self, "_app_config", None)
+        if cfg is None or bool(cfg.get("consolePowerCyclePending", False)) == value:
+            return
+        cfg["consolePowerCyclePending"] = value
+        self._save_app_config()
+        sig = getattr(self, "consolePowerCycleChanged", None)
+        if sig is not None:
+            sig.emit()
+
+    def _notify_console_power_cycle(self) -> None:
+        self.notify(
+            "Power-cycle the console to finish its firmware update: switch "
+            "it off, wait 5 seconds, switch it back on. Scanning stays off "
+            "until it restarts.",
+            type_="warning", duration_ms=0, dismissible=False,
+            tag=self.POWER_CYCLE_TOAST_TAG,
+        )
+
+    def _mark_console_flashed(self) -> None:
+        """A console firmware write succeeded: a power cycle is now due."""
+        self._console_flash_done_at = time.monotonic()
+        self._set_console_power_cycle_pending(True)
+        logger.warning("Console firmware written; power cycle required "
+                       "before scanning (#767)")
+        self._notify_console_power_cycle()
+
+    def _is_expected_post_flash_latch(self, se: int, so: int) -> bool:
+        """Only the rate-lower-limit latch, and only while a power cycle
+        is pending after our own console flash. Any other fault bit is a
+        real safety event and still raises E-203."""
+        cfg = getattr(self, "_app_config", None) or {}
+        if not cfg.get("consolePowerCyclePending", False):
+            return False
+        bits = (se or 0) | (so or 0)
+        return bits != 0 and (bits & ~self.POST_FLASH_LATCH_BITS) == 0
+
+    def _maybe_finish_console_power_cycle(self) -> None:
+        """Interlock reads clear: once it has stayed that way for a while
+        after the console (re)connected, the power cycle is done."""
+        cfg = getattr(self, "_app_config", None) or {}
+        if not cfg.get("consolePowerCyclePending", False):
+            return
+        connected_at = getattr(self, "_console_connected_at", None)
+        if connected_at is None:
+            return
+        ref = max(connected_at, getattr(self, "_console_flash_done_at", None) or 0.0)
+        if time.monotonic() - ref < self.POWER_CYCLE_CLEAR_AFTER_S:
+            return
+        logger.info("Console safety interlock clear after firmware update; "
+                    "power cycle complete (#767)")
+        self._set_console_power_cycle_pending(False)
+        self.dismissNotification(self.POWER_CYCLE_TOAST_TAG)
+
     @pyqtProperty(int, notify=stateChanged)
     def state(self):
         """Expose state as a QML property."""
@@ -2770,6 +2844,10 @@ class MotionConnector(QObject):
             # is read back after the device re-enumerates.
             self._firmware_latest_by_kind.pop(
                 self._kind_for_device(device_key).value, None)
+            if ok and device_key == "console":
+                self._mark_console_flashed()
+                msg = ("Firmware written. Power-cycle the console now to "
+                       "finish; scanning stays off until it restarts.")
             if ok:
                 # Written, but the device runs the old image until it is
                 # power-cycled; stop offering it so neither the banner nor
@@ -5633,8 +5711,23 @@ class MotionConnector(QObject):
             if snap.safety_ok:
                 if self._safetyFailure:
                     self.safetyFailure = False
+                self._maybe_finish_console_power_cycle()
             else:
-                if not self._safetyFailure:
+                if not self._safetyFailure and self._is_expected_post_flash_latch(
+                        snap.safety_se, snap.safety_so):
+                    # #767: the latch our own console flash causes. Same
+                    # shutdown, but ask for the power cycle instead of
+                    # alarming the operator with E-203 / "contact support".
+                    logger.warning(
+                        "Safety interlock latched after console firmware "
+                        "update (safety_se=0x%02X safety_so=0x%02X); waiting "
+                        "for a power cycle", snap.safety_se, snap.safety_so)
+                    self.safetyFailure = True
+                    self.stopTrigger()
+                    self._laserOn = False
+                    self.laserStateChanged.emit()
+                    self._notify_console_power_cycle()
+                elif not self._safetyFailure:
                     # Decode which safety bits tripped so the engineering-
                     # mode toast (and the log) can name them. The SDK
                     # owns the bit→label mapping in ConsoleTelemetry.

@@ -205,6 +205,11 @@ APP_CONFIG = {
     # Version whose "What's new" notes the operator last dismissed (#597);
     # None until the first dismissal. See whats_new.py.
     "whatsNewSeenVersion": None,
+    # A console firmware update finished and the console has not been
+    # power-cycled since (#767): the safety FPGAs latch RATE_LOWER_LIMIT
+    # across the MCU reset, so the app asks for a power cycle instead of
+    # raising E-203. Cleared once the interlock reads clear again.
+    "consolePowerCyclePending": False,
 }
 
 # ── Tiers ──────────────────────────────────────────────────────────────────
@@ -257,6 +262,7 @@ PREFERENCE_KEYS = frozenset({
 STATE_KEYS = frozenset({
     "altCameraSettingsDirty", "altLaserPulseWidthDirty",
     "altLaserSafetyCeilingDirty", "whatsNewSeenVersion",
+    "consolePowerCyclePending",
 })
 
 PERSISTED_KEYS = PREFERENCE_KEYS | STATE_KEYS

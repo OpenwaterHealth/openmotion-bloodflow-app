@@ -189,8 +189,12 @@ Item {
             root._setRow(deviceKey, "running", msg, percent)
         }
         function onFirmwareUpdateFinished(deviceKey, ok, msg) {
+            // The console's own message asks for the power cycle that
+            // clears the post-update safety latch (#767).
             root._setRow(deviceKey, ok ? "done" : "failed",
-                         ok ? "Written. Power-cycle to finish." : msg)
+                         ok ? (deviceKey === "console" && msg
+                               ? msg : "Written. Power-cycle to finish.")
+                            : msg)
         }
         function onUpdateProgress(message) { root._setRow("app", "running", message) }
         function onUpdateCheckFailed(msg) {
