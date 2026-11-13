@@ -2382,8 +2382,8 @@ class MotionConnector(QObject):
         ref = max(connected_at, getattr(self, "_console_flash_done_at", None) or 0.0)
         if time.monotonic() - ref < self.POWER_CYCLE_CLEAR_AFTER_S:
             return
-        logger.info("Console safety interlock clear after firmware update; "
-                    "power cycle complete (#767)")
+        logger.info("Console safety interlock reads clear after the firmware "
+                    "update; no power cycle needed any more (#767)")
         self._set_console_power_cycle_pending(False)
         self.dismissNotification(self.POWER_CYCLE_TOAST_TAG)
 

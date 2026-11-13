@@ -62,6 +62,7 @@ class _Stub(QObject):
     def reset(self):
         self.clinical = False
         self.installable = True
+        self.pc_pending = False
         self.fw = {d: {"cur": "", "latest": "", "avail": False}
                    for d in ("console", "left", "right")}
         self.app_latest, self.app_url = "", ""
@@ -115,6 +116,12 @@ class _Stub(QObject):
     @pyqtProperty(str, notify=appInfoChanged)
     def appUpdateUrl(self):
         return self.app_url
+
+    consolePowerCycleChanged = pyqtSignal()
+
+    @pyqtProperty(bool, notify=consolePowerCycleChanged)
+    def consolePowerCyclePending(self):
+        return getattr(self, "pc_pending", False)
 
     @pyqtProperty(bool, notify=appConfigChanged)
     def appUpdateInstallable(self):
@@ -368,3 +375,21 @@ def test_installed_build_counts_app_in_update_all(stub_make):
     stub.offer_app("2.0.0")
     stub.offer_fw("left", "1.0.0", "1.1.0")
     assert modal.property("batchCount") == 2
+
+
+def test_console_row_stops_asking_once_power_cycle_clears(stub_make):
+    """#767: the row's "power-cycle now" text goes once the interlock is clear."""
+    stub, make = stub_make
+    modal = make("modal")
+    stub.offer_fw("console", "1.8.0", "1.8.1")
+    stub.pc_pending = True
+    stub.consolePowerCycleChanged.emit()
+    stub.firmwareUpdateFinished.emit("console", True, "Firmware written. Power-cycle the console now")
+    st = modal.property("rowStatus")
+    st = st.toVariant() if hasattr(st, "toVariant") else st
+    assert "power-cycle" in st["console"]["text"].lower()
+    stub.pc_pending = False
+    stub.consolePowerCycleChanged.emit()
+    st = modal.property("rowStatus")
+    st = st.toVariant() if hasattr(st, "toVariant") else st
+    assert st["console"] == {"state": "done", "text": "Updated.", "pct": -1}

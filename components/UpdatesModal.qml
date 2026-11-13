@@ -188,6 +188,13 @@ Item {
         function onFirmwareUpdateProgress(deviceKey, stage, percent, msg) {
             root._setRow(deviceKey, "running", msg, percent)
         }
+        // #767: once the console's safety interlock reads clear again
+        // (power-cycled, or it never latched) the row stops asking.
+        function onConsolePowerCycleChanged() {
+            var st = root.rowStatus["console"]
+            if (!MotionInterface.consolePowerCyclePending && st && st.state === "done")
+                root._setRow("console", "done", "Updated.")
+        }
         function onFirmwareUpdateFinished(deviceKey, ok, msg) {
             // The console's own message asks for the power cycle that
             // clears the post-update safety latch (#767).
