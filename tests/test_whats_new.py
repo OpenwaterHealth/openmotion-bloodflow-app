@@ -145,3 +145,13 @@ def test_current_whats_new_ignores_seen_state(monkeypatch):
     assert c.pendingWhatsNew() == ""
     assert c.currentWhatsNew().startswith("## 1.7.0")
     assert "1.6.1" not in c.currentWhatsNew()
+
+
+@pytest.mark.parametrize("fresh,portable,expected", [
+    (True, False, True),     # fresh installed copy: nothing is new
+    (True, True, False),     # new portable folder: can't tell, show notes
+    (False, False, False),   # existing data: upgrade, show notes
+    (False, True, False),
+])
+def test_seed_on_first_run(fresh, portable, expected):
+    assert whats_new.seed_on_first_run(fresh, portable) is expected
