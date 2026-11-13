@@ -115,7 +115,7 @@ def test_disconnect_suppressed_during_flash(tmp_path):
     assert c._state != DISCONNECTED, "state machine must not transition during a flash"
 
 
-def _run_worker(tmp_path, monkeypatch, phases, needs_power_cycle):
+def _run_worker(tmp_path, monkeypatch, phases, needs_power_cycle, device="left"):
     """Run the flash worker inline against a stubbed SDK updater that reports
     ``phases`` and then returns a 1.14.0-style FirmwareUpdateResult (#739)."""
     import omotion.firmware_update as fwu
@@ -138,8 +138,9 @@ def _run_worker(tmp_path, monkeypatch, phases, needs_power_cycle):
     progress = []
     c.firmwareUpdateProgress.connect(lambda d, s, p, m: progress.append((s, m)))
     out = _finished(c)
-    c._firmware_update_in_progress = "left"
-    c._firmware_update_worker("left")
+    c._firmware_update_in_progress = device
+    c._firmware_update_worker(device)
+    _run_worker.connector = c
     return dict(progress), out
 
 
@@ -158,3 +159,42 @@ def test_power_cycle_wait_tells_the_user(tmp_path, monkeypatch):
 def test_finished_message_follows_needs_power_cycle(tmp_path, monkeypatch):
     _, out = _run_worker(tmp_path, monkeypatch, ["download"], True)
     assert out[0][1] is True and "power-cycle" in out[0][2].lower()
+
+
+def test_console_flash_asks_for_power_cycle_and_marks_it_pending(tmp_path, monkeypatch):
+    """#767: a console update ends with the safety FPGAs latched until a
+    power cycle, even when the console restarted on its own."""
+    _, out = _run_worker(tmp_path, monkeypatch, ["download"], False, device="console")
+    c = _run_worker.connector
+    assert out[0][0] == "console" and out[0][1] is True
+    assert "power-cycle the console" in out[0][2].lower()
+    assert c.consolePowerCyclePending is True
+
+
+def test_sensor_flash_does_not_mark_console_power_cycle(tmp_path, monkeypatch):
+    _run_worker(tmp_path, monkeypatch, ["download"], False)
+    assert _run_worker.connector.consolePowerCyclePending is False
+
+
+def test_console_power_cycle_is_marked_before_the_flash_runs(tmp_path, monkeypatch):
+    """update() returns only after the console is back, by which time its
+    telemetry has already reported the latch: the flag must be set first."""
+    import omotion.firmware_update as fwu
+    c = _connector(tmp_path, dev_mode=False)
+    monkeypatch.setattr(motion_connector, "check_latest",
+                        lambda kind, **_: MagicMock(tag="9.9.9"))
+    monkeypatch.setattr(fwu, "download_firmware", lambda info, dest: tmp_path / "fw.bin")
+    seen, toasts = [], []
+    c.notificationRequested.connect(lambda n: toasts.append(n.get("tag")))
+
+    class _Updater:
+        def update(self, handle, bin_path, progress_cb=None):
+            seen.append((c.consolePowerCyclePending, list(toasts)))
+            raise RuntimeError("DFU write failed")
+
+    monkeypatch.setattr(fwu, "FirmwareUpdater", _Updater)
+    c._firmware_update_in_progress = "console"
+    c._firmware_update_worker("console")
+    assert seen == [(True, [])], "pending before the flash, but no prompt mid-flash"
+    assert c.consolePowerCyclePending is True, "a failed flash still reset the MCU"
+    assert "console_power_cycle" in toasts, "asked once the flash ended"
