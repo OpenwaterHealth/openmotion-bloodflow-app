@@ -2352,12 +2352,13 @@ class MotionConnector(QObject):
 
     def _mark_console_flashed(self) -> None:
         """A console flash is starting: once the MCU resets, the safety
-        FPGAs latch until a power cycle, whether or not the write succeeds."""
+        FPGAs latch until a power cycle, whether or not the write succeeds.
+        The power-cycle toast waits for the flash to finish
+        (_flash_device) so it never asks mid-flash."""
         self._console_flash_done_at = time.monotonic()
         self._set_console_power_cycle_pending(True)
-        logger.warning("Console firmware written; power cycle required "
-                       "before scanning (#767)")
-        self._notify_console_power_cycle()
+        logger.warning("Console flash starting; power cycle required "
+                       "before scanning afterwards (#767)")
 
     def _is_expected_post_flash_latch(self, se: int, so: int) -> bool:
         """Only the rate-lower-limit latch, and only while a power cycle
@@ -2851,6 +2852,10 @@ class MotionConnector(QObject):
             # is read back after the device re-enumerates.
             self._firmware_latest_by_kind.pop(
                 self._kind_for_device(device_key).value, None)
+            if device_key == "console":
+                # The MCU was reset either way, so the latch needs clearing.
+                self._console_flash_done_at = time.monotonic()
+                self._notify_console_power_cycle()
             if ok and device_key == "console":
                 msg = ("Firmware written. Power-cycle the console now to "
                        "finish; scanning stays off until it restarts.")
@@ -5732,7 +5737,10 @@ class MotionConnector(QObject):
                     self.stopTrigger()
                     self._laserOn = False
                     self.laserStateChanged.emit()
-                    self._notify_console_power_cycle()
+                    # Mid-flash the console row is still showing progress;
+                    # _flash_device asks for the power cycle when it ends.
+                    if getattr(self, "_firmware_update_in_progress", None) != "console":
+                        self._notify_console_power_cycle()
                 elif not self._safetyFailure:
                     # Decode which safety bits tripped so the engineering-
                     # mode toast (and the log) can name them. The SDK

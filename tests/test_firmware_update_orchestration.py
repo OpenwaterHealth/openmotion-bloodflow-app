@@ -184,15 +184,17 @@ def test_console_power_cycle_is_marked_before_the_flash_runs(tmp_path, monkeypat
     monkeypatch.setattr(motion_connector, "check_latest",
                         lambda kind, **_: MagicMock(tag="9.9.9"))
     monkeypatch.setattr(fwu, "download_firmware", lambda info, dest: tmp_path / "fw.bin")
-    seen = []
+    seen, toasts = [], []
+    c.notificationRequested.connect(lambda n: toasts.append(n.get("tag")))
 
     class _Updater:
         def update(self, handle, bin_path, progress_cb=None):
-            seen.append(c.consolePowerCyclePending)
+            seen.append((c.consolePowerCyclePending, list(toasts)))
             raise RuntimeError("DFU write failed")
 
     monkeypatch.setattr(fwu, "FirmwareUpdater", _Updater)
     c._firmware_update_in_progress = "console"
     c._firmware_update_worker("console")
-    assert seen == [True]
+    assert seen == [(True, [])], "pending before the flash, but no prompt mid-flash"
     assert c.consolePowerCyclePending is True, "a failed flash still reset the MCU"
+    assert "console_power_cycle" in toasts, "asked once the flash ended"

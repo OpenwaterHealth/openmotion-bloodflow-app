@@ -179,12 +179,20 @@ def _flashed(monkeypatch, connected_ago=1.0):
     return c, now
 
 
-def test_flash_marks_power_cycle_pending_and_asks_for_it(monkeypatch):
+def test_flash_start_marks_pending_without_asking_yet(monkeypatch):
+    """The prompt must not appear while the flash is still running."""
     c, _ = _flashed(monkeypatch)
     assert c._app_config["consolePowerCyclePending"] is True
     assert c.saves == 1 and c.consolePowerCycleChanged.count == 1
-    assert [t for t, _, _ in c.notices] == ["console_power_cycle"]
-    assert "power-cycle the console" in c.notices[0][2].lower()
+    assert c.notices == []
+
+
+def test_latch_seen_mid_flash_waits_for_the_flash_to_end(monkeypatch):
+    c, _ = _flashed(monkeypatch)
+    c._firmware_update_in_progress = "console"
+    c.readSafetyStatus(_latch())
+    assert c.criticals == [] and c.notices == []
+    assert c.safetyFailure is True
 
 
 def test_post_flash_rate_latch_asks_for_power_cycle_not_e203(monkeypatch):
@@ -198,6 +206,7 @@ def test_post_flash_rate_latch_asks_for_power_cycle_not_e203(monkeypatch):
     assert c.safetyFailure is True
     assert c.trigger_stops == 1 and c._laserOn is False
     assert c.notices[-1][0] == "console_power_cycle"
+    assert "power-cycle the console" in c.notices[-1][2].lower()
 
 
 def test_other_fault_bits_after_flash_still_raise_e203(monkeypatch):
