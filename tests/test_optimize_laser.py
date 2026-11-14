@@ -28,8 +28,8 @@ def test_the_long_exposure_dark_skip_matches_the_sdk():
     included, so it can't import it from an SDK that may predate the
     constant. This keeps the two numbers from drifting apart."""
     import motion_config
-    from omotion import config as sdk_config
-    assert motion_config.DARK_SKIP_HIGH_EXPOSURE_US == sdk_config.LONG_EXPOSURE_DARK_SKIP_US
+    from omotion.OptimizeLaserWorkflow import DARK_SKIP_US
+    assert motion_config.DARK_SKIP_HIGH_EXPOSURE_US == DARK_SKIP_US
 
 RESEARCH_ENG = {"clinicalMode": False, "engineeringMode": True}
 
