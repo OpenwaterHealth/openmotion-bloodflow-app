@@ -1,4 +1,4 @@
-import QtQuick 6.0
+import QtQuick 6.7
 import QtQuick.Controls 6.0
 import QtQuick.Layouts 6.0
 import OpenMotion 1.0
