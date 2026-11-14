@@ -110,6 +110,10 @@ Item {
     // governed) LogsModal in response. No password in any build (#703).
     signal logsRequested()
 
+    // Settings → Application → "What's new": BloodFlow.qml closes Settings
+    // and opens WhatsNewModal with the running release's notes (#597).
+    signal whatsNewRequested()
+
     // ── Lifecycle ───────────────────────────────────────────────────────────
     function _loadFromConfig() {
         var cfg = MotionInterface.appConfig
@@ -2158,6 +2162,23 @@ Item {
                     FieldRow {
                         label: "Application"
                         Text { text: appVersion; color: root.colTextPri; font.pixelSize: 13; font.family: "Consolas" }
+                        Text {
+                            id: whatsNewLink
+                            text: "What's new"
+                            // Nothing to reopen when this build ships no notes.
+                            visible: MotionInterface.currentWhatsNew() !== ""
+                            color: AppTheme.accentInteractive
+                            font.pixelSize: 12
+                            font.underline: whatsNewArea.containsMouse
+                            Layout.leftMargin: 8
+                            MouseArea {
+                                id: whatsNewArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.whatsNewRequested()
+                            }
+                        }
                         Item { Layout.fillWidth: true }
                         Text {
                             visible: !root.clinicalMode && root.appUpdateStatus === "uptodate"
@@ -2173,9 +2194,15 @@ Item {
                         }
                         UpdateChip {
                             visible: !root.clinicalMode && root.appUpdateStatus === "available"
-                            label: root.appUpdating ? root.appUpdateProgressText : "Update"
+                            // Portable builds link to the release page (#597).
+                            label: !MotionInterface.appUpdateInstallable ? "Download"
+                                 : root.appUpdating ? root.appUpdateProgressText : "Update"
                             chipEnabled: !root.appUpdating
                             onChipClicked: {
+                                if (!MotionInterface.appUpdateInstallable) {
+                                    MotionInterface.openAppReleasePage()
+                                    return
+                                }
                                 root.appUpdating = true
                                 root.appUpdateProgressText = "Starting…"
                                 MotionInterface.applyUpdate(root.appDownloadUrl)
@@ -2228,8 +2255,13 @@ Item {
                         property bool connected: false
                         property string current: ""
                         property bool updateAvailable: false
+                        // #743: the version an update would install.
+                        property string latest: ""
                         Text {
-                            text: connected ? (current || "—") : "Not connected"
+                            text: !connected ? "Not connected"
+                                : (current || "—")
+                                  + (!root.clinicalMode && updateAvailable && latest
+                                     ? "  →  " + latest : "")
                             color: connected ? root.colTextPri : root.colTextMuted
                             font.pixelSize: 13
                             font.family: "Consolas"
@@ -2245,7 +2277,7 @@ Item {
                         }
                         UpdateChip {
                             visible: !root.clinicalMode && connected && updateAvailable
-                            onChipClicked: fwConfirm.openFor(label, dev)
+                            onChipClicked: fwConfirm.openFor(label, dev, current, latest)
                         }
                     }
 
@@ -2254,18 +2286,21 @@ Item {
                         connected: MotionInterface.consoleConnected
                         current: MotionInterface.consoleFirmwareVersion
                         updateAvailable: MotionInterface.consoleFirmwareUpdateAvailable
+                        latest: MotionInterface.consoleFirmwareLatest
                     }
                     DeviceRow {
                         label: "Left Sensor FW"; dev: "left"
                         connected: MotionInterface.leftSensorConnected
                         current: MotionInterface.leftSensorFirmwareVersion
                         updateAvailable: MotionInterface.leftSensorFirmwareUpdateAvailable
+                        latest: MotionInterface.leftSensorFirmwareLatest
                     }
                     DeviceRow {
                         label: "Right Sensor FW"; dev: "right"
                         connected: MotionInterface.rightSensorConnected
                         current: MotionInterface.rightSensorFirmwareVersion
                         updateAvailable: MotionInterface.rightSensorFirmwareUpdateAvailable
+                        latest: MotionInterface.rightSensorFirmwareLatest
                     }
 
                     // Hardware identity (#529): the programmed serial number
@@ -2432,10 +2467,12 @@ Item {
         anchors.centerIn: Overlay.overlay
         title: "Confirm Firmware Update"
         property string _dev: ""
-        function openFor(lbl, dev) {
+        function openFor(lbl, dev, current, latest) {
             _dev = dev
             fwConfirmText.text = lbl + " will reboot into DFU mode and be "
-                + "re-flashed. Do not unplug it until this completes."
+                + "re-flashed"
+                + (latest ? (current ? " from " + current : "") + " to " + latest : "")
+                + ". Do not unplug it until this completes."
             open()
         }
         contentItem: Text {
@@ -2457,10 +2494,20 @@ Item {
         }
     }
 
+    // " → 1.8.3" for the progress line: the version being installed (#743).
+    function _fwTargetSuffix(deviceKey) {
+        var v = { console: MotionInterface.consoleFirmwareLatest,
+                  left:    MotionInterface.leftSensorFirmwareLatest,
+                  right:   MotionInterface.rightSensorFirmwareLatest }[deviceKey]
+        return v ? " → " + v : ""
+    }
+
     Connections {
         target: MotionInterface
         function onFirmwareUpdateProgress(deviceKey, stage, percent, msg) {
-            fwStatus.text = deviceKey + " — " + msg
+            fwStatus.text = deviceKey
+                + root._fwTargetSuffix(deviceKey)
+                + " — " + msg
                 + (percent >= 0 ? "  " + percent + "%" : "")
             fwStatus.color = root.colTextMuted
             fwBar.visible = true
@@ -2468,7 +2515,9 @@ Item {
             fwBar.value = (percent < 0 ? 0 : percent)
         }
         function onFirmwareUpdateFinished(deviceKey, ok, msg) {
-            fwStatus.text = deviceKey + " — " + msg
+            fwStatus.text = deviceKey
+                + root._fwTargetSuffix(deviceKey)
+                + " — " + msg
             fwStatus.color = ok ? AppTheme.accentGreen : AppTheme.accentRed
             fwBar.visible = false
         }

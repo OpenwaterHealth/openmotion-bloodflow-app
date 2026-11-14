@@ -398,6 +398,17 @@ def version_newer(remote: str, local: str) -> bool:
     return False
 
 
+def release_page_url(cfg, tag: str) -> str:
+    """The GitHub release page for ``tag`` (portable builds link here, #597).
+
+    Same repo the check queries (``updateRepo`` or the production repo).
+    """
+    repo = cfg.get("updateRepo") or GITHUB_REPO
+    tag = str(tag or "").strip()
+    base = f"https://github.com/{repo}/releases"
+    return f"{base}/tag/{tag}" if tag else base
+
+
 def check_for_updates(connector) -> None:
     """Query GitHub for a newer release and emit the connector's update
     signals. Runs on the connector's background thread; the connector has
@@ -469,19 +480,32 @@ def check_for_updates(connector) -> None:
         connector.updateCheckFailed.emit(str(e))
 
 
-def apply_update(connector, download_url: str) -> None:
+def apply_update(connector, download_url: str) -> bool:
     """Download the bundle, verify its signature against the publisher pin,
     spawn the detached install helper and ask Qt to quit. Runs on the
     connector's background thread; the connector owns the re-entry flag
-    around this call."""
+    around this call. Returns True once the install is handed off (the app
+    is quitting), False on any failure (already reported through
+    ``updateCheckFailed``)."""
     import urllib.request
     import subprocess
 
     cfg = connector._app_config
+    if cfg.get("portableMode", False):
+        # A portable build never installs itself (#597): the Setup bundle
+        # would turn it into an installed copy whose scans, settings and
+        # logs live under %LOCALAPPDATA% instead of next to this exe, so
+        # the operator's history would look empty after the "update".
+        # Portable users download the new zip from the release page.
+        logger.warning("Portable build: refusing in-app install of %s", download_url)
+        connector.updateCheckFailed.emit(
+            "Portable builds don't install updates. Download the new "
+            "version from the release page.")
+        return False
     try:
         if not _is_bundle_url(download_url):
             connector.updateCheckFailed.emit("No installer for this update.")
-            return
+            return False
 
         portable = bool(cfg.get("portableMode", False))
         updates_dir = app_paths.writable_root(portable) / app_paths.DATA_DIRNAME / "updates"
@@ -506,7 +530,7 @@ def apply_update(connector, download_url: str) -> None:
             connector.updateCheckFailed.emit(
                 "Downloaded update is not a valid installer."
             )
-            return
+            return False
 
         info = verify_authenticode(str(dest))
         should_launch, error = _update_decision(info)
@@ -515,7 +539,7 @@ def apply_update(connector, download_url: str) -> None:
                     "install" if should_launch else "refuse")
         if not should_launch:
             connector.updateCheckFailed.emit(error)
-            return
+            return False
 
         # The app cannot replace its own running files, and the Burn
         # bundle does not relaunch the app. So write a detached helper
@@ -566,6 +590,8 @@ def apply_update(connector, download_url: str) -> None:
             "quit",
             Qt.ConnectionType.QueuedConnection,
         )
+        return True
     except Exception as e:
         logger.error("applyUpdate failed: %s", e)
         connector.updateCheckFailed.emit(str(e))
+        return False

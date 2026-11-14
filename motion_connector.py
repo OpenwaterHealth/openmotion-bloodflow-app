@@ -62,6 +62,7 @@ from motion_config import (
 )
 import error_codes
 import bug_report
+import whats_new
 from nan_gap_tracker import NanGapTracker, gap_note_line
 from utils.resource_path import resource_path
 from utils import app_paths, config_store, disk_space, log_tail
@@ -1020,6 +1021,7 @@ class MotionConnector(QObject):
     deviceInitBusyChanged = pyqtSignal()
     stateChanged = pyqtSignal()  # Signal to notify QML of state changes
     laserStateChanged = pyqtSignal()  # Signal to notify QML of laser state changes
+    consolePowerCycleChanged = pyqtSignal()  # notify for consolePowerCyclePending (#767)
     safetyFailureStateChanged = pyqtSignal()  # Signal to notify QML of safety
     safetyTripDuringCaptureRequested = pyqtSignal()  # Emitted when safety trips while scan running (main-thread slot shows message & schedules cancel)
     scanWorkerFailedDuringCapture = pyqtSignal(str)  # Emitted from the SDK scan worker thread when it aborts after start_scan returned True (main-thread slot raises E-301 & tears down capture). Issue #213.
@@ -1173,6 +1175,11 @@ class MotionConnector(QObject):
     updateNotAvailable = pyqtSignal()
     updateCheckFailed = pyqtSignal(str)      # error message
     updateProgress = pyqtSignal(str)         # human-readable progress status
+    # Unified updates modal (#514): cached app offer + "Update all" batch.
+    appUpdateInfoChanged = pyqtSignal()      # notify for appUpdate* properties
+    updateBusyChanged = pyqtSignal()         # notify for updateBusy / batchUpdateRunning
+    batchUpdateStep = pyqtSignal(str)        # step starting: "left"/"right"/"console"/"app"
+    batchUpdateFinished = pyqtSignal(bool, str)  # ok, msg (ok+app step = app is quitting)
 
     def __init__(
         self,
@@ -1411,6 +1418,9 @@ class MotionConnector(QObject):
         self._laserOn = False
         self._safetyFailure = False
         self._safety_unknown_streak = 0  # see SAFETY_UNKNOWN_STREAK_THRESHOLD
+        # When this launch finished a console flash (#767); None if it
+        # didn't (a pending flag persisted by an earlier launch).
+        self._console_flash_done_at: float | None = None
         self._running = False
         self._trigger_state = "OFF"
         self._state = DISCONNECTED
@@ -1442,6 +1452,15 @@ class MotionConnector(QObject):
         self._firmware_check_lock = threading.Lock()         # guards check-then-add on _firmware_checking_kinds
         self._firmware_check_generation: int = 0
         self._firmware_update_in_progress: str | None = None # deviceKey being flashed
+        # Last app-update offer from app_updater (#514), cached so the
+        # updates modal can list it next to the firmware rows and so
+        # "Update all" knows what to install after the firmware flashes.
+        self._app_update_latest: str = ""
+        self._app_update_url: str = ""
+        self._update_in_progress: bool = False       # app download/install running
+        self._batch_update_running: bool = False     # "Update all" worker running
+        self.updateAvailable.connect(self._on_app_update_available)
+        self.updateNotAvailable.connect(self._on_app_update_withdrawn)
         # Track console connection time for safety grace period (issue #107 follow-up)
         self._console_connected_at: float | None = None
         # Real-time plot viewer source — assigned at scan start by startCapture.
@@ -1872,20 +1891,21 @@ class MotionConnector(QObject):
         # init, just raises the modal if the sensor reports trouble.
         self._check_sensor_i2c_health(side)
 
-        # Power on all cameras, fill the ID cache (serial numbers, connection info), then power off
+        # Power on all cameras, fill the ID cache (serial numbers, connection
+        # info), then bring them up and leave them powered so the first Start
+        # finds them ready (#494). powerOffUnusedCameras is a scan-time rule:
+        # the scan-start configure powers off the cameras outside the scan
+        # mask. Powering everything off here would undo the warm-up.
         try:
             sensor = getattr(self._interface, side, None) if self._interface else None
             if sensor is not None and sensor.is_connected():
                 enable_power = getattr(sensor, "enable_camera_power", None)
-                disable_power = getattr(sensor, "disable_camera_power", None)
                 refresh_cache = getattr(sensor, "refresh_id_cache", None)
-                if enable_power and disable_power and refresh_cache:
+                if enable_power and refresh_cache:
                     if enable_power(0xFF):
                         time.sleep(0.5)  # settle time
                         refresh_cache()
-                        if self._power_off_unused_cameras:
-                            disable_power(0xFF)
-                            time.sleep(0.05)
+                        self._warm_up_cameras(side, sensor)
                     else:
                         logger.warning(
                             "Could not power on cameras on %s sensor for ID cache fill",
@@ -1910,6 +1930,84 @@ class MotionConnector(QObject):
         self._log_device_stats(side)
 
         self.connectionStatusChanged.emit()
+
+    def _warm_up_cameras(self, side: str, sensor) -> None:
+        """Program camera FPGAs + write default registers at connect (#494).
+
+        The cameras were just powered on for the ID-cache fill and stay
+        powered until a scan start drops the ones outside its mask, so the
+        one-time FPGA bring-up can happen here in the init worker, overlapping
+        operator setup,
+        instead of inflating the first Start press. This is pre-work, not a
+        scan gate: the scan-start configure re-reads the firmware's
+        per-camera status (bit 1 programmed / bit 2 configured, both cleared
+        whenever a camera loses power — including the firmware's own
+        stall-recovery rail-cycle) and redoes whatever is missing, so any
+        failure here just falls back to today's behavior. Absent or broken
+        cameras log and are left for the scan flow to surface.
+        """
+        try:
+            t0 = time.monotonic()
+            status_map = sensor.get_camera_status(0xFF)
+            if not status_map:
+                logger.warning(
+                    "%s sensor: camera warm-up skipped (status read failed)",
+                    side,
+                )
+                return
+            to_program = [
+                pos
+                for pos, st in sorted(status_map.items())
+                if (st & 0x01) and not (st & 0x02)
+            ]
+            for pos in to_program:
+                if not sensor.program_fpga(
+                    camera_position=1 << pos, manual_process=False
+                ):
+                    logger.warning(
+                        "%s camera %d: connect-time FPGA program failed "
+                        "(scan start will retry)",
+                        side,
+                        pos + 1,
+                    )
+            # The cameras were just powered up, so every programmed one gets
+            # its registers written, whatever its configured bit says. Only
+            # programming is conditional. Re-read so only cameras that really
+            # hold a programmed FPGA are written: a failed program above must
+            # not be configured blind.
+            status_map = sensor.get_camera_status(0xFF) or {}
+            conf_mask = sum(
+                1 << pos for pos, st in status_map.items() if st & 0x02
+            )
+            configured_ok = True
+            if conf_mask:
+                configured_ok = bool(
+                    sensor.camera_configure_registers(camera_position=conf_mask)
+                )
+                if not configured_ok:
+                    logger.warning(
+                        "%s sensor: connect-time camera register configure "
+                        "failed (mask 0x%02X, scan start will retry)",
+                        side,
+                        conf_mask,
+                    )
+            ready = bin(conf_mask).count("1") if configured_ok else 0
+            logger.info(
+                "%s sensor: camera warm-up done in %.1f s "
+                "(%d FPGA(s) programmed, %d/%d cameras scan-ready)",
+                side,
+                time.monotonic() - t0,
+                len(to_program),
+                ready,
+                len(status_map),
+            )
+        except Exception:
+            logger.warning(
+                "%s sensor: camera warm-up failed; scan start will run the "
+                "full configure",
+                side,
+                exc_info=True,
+            )
 
     def _check_sensor_i2c_health(self, side: str) -> None:
         """Raise E-101/E-102 if a sensor's boot-time I2C self-check is bad.
@@ -2203,6 +2301,48 @@ class MotionConnector(QObject):
         """Right sensor module serial; see consoleSerialNumber."""
         return self._device_serials["right"]
 
+    @pyqtProperty(bool, notify=appUpdateInfoChanged)
+    def appUpdateAvailable(self) -> bool:
+        """True while app_updater's last check offered a newer release."""
+        return bool(self._app_update_url)
+
+    @pyqtProperty(str, notify=appUpdateInfoChanged)
+    def appUpdateLatest(self) -> str:
+        return self._app_update_latest
+
+    @pyqtProperty(str, notify=appUpdateInfoChanged)
+    def appUpdateUrl(self) -> str:
+        return self._app_update_url
+
+    @pyqtProperty(bool, constant=True)
+    def appUpdateInstallable(self) -> bool:
+        """False on a portable build (#597): its app updates are offered
+        and linked to the release page, never installed in place (the
+        Setup bundle would move its data root). Firmware updates are
+        unaffected."""
+        return not bool(self._app_config.get("portableMode", False))
+
+    @pyqtSlot()
+    def openAppReleasePage(self) -> None:
+        """Open the offered release's page in the browser (portable builds)."""
+        if app_updater is None:
+            return
+        import webbrowser
+        webbrowser.open(app_updater.release_page_url(
+            self._app_config, self._app_update_latest))
+
+    @pyqtProperty(bool, notify=updateBusyChanged)
+    def updateBusy(self) -> bool:
+        """Any flash, app install or "Update all" run is in flight; the
+        updates modal disables every Update button while this is true."""
+        return (self._batch_update_running
+                or self._firmware_update_in_progress is not None
+                or self._update_in_progress)
+
+    @pyqtProperty(bool, notify=updateBusyChanged)
+    def batchUpdateRunning(self) -> bool:
+        return self._batch_update_running
+
     @pyqtProperty(bool, notify=firmwareUpdateInfoChanged)
     def anyFirmwareUpdateAvailable(self) -> bool:
         return any(self._firmware_update_available.values())
@@ -2385,6 +2525,78 @@ class MotionConnector(QObject):
             dismissible=False,
             tag="laser_safety",
         )
+
+    # --- Power cycle after a console firmware update (#767) --------------
+    # A console update resets only the STM32; the Safety EE/OPT FPGAs stay
+    # powered and latch RATE_LOWER_LIMIT_FAIL (0x04) across the reset (the
+    # trigger line is undriven until main() sets nTRIG). That latch is an
+    # expected consequence of our own flash, not a laser event, so while a
+    # power cycle is pending the app asks for one instead of raising E-203.
+    # Scanning stays blocked either way: startCapture refuses while
+    # safetyFailure is set, and only a power cycle clears the latch.
+    POST_FLASH_LATCH_BITS = 0x04            # RATE_LOWER_LIMIT_FAIL
+    POWER_CYCLE_CLEAR_AFTER_S = 10.0        # interlock clear this long => done
+    POWER_CYCLE_TOAST_TAG = "console_power_cycle"
+
+    @pyqtProperty(bool, notify=consolePowerCycleChanged)
+    def consolePowerCyclePending(self) -> bool:
+        return bool(self._app_config.get("consolePowerCyclePending", False))
+
+    def _set_console_power_cycle_pending(self, value: bool) -> None:
+        cfg = getattr(self, "_app_config", None)
+        if cfg is None or bool(cfg.get("consolePowerCyclePending", False)) == value:
+            return
+        cfg["consolePowerCyclePending"] = value
+        self._save_app_config()
+        sig = getattr(self, "consolePowerCycleChanged", None)
+        if sig is not None:
+            sig.emit()
+
+    def _notify_console_power_cycle(self) -> None:
+        self.notify(
+            "Power-cycle the console to finish its firmware update: switch "
+            "it off, wait 5 seconds, switch it back on. Scanning stays off "
+            "until it restarts.",
+            type_="warning", duration_ms=0, dismissible=False,
+            tag=self.POWER_CYCLE_TOAST_TAG,
+        )
+
+    def _mark_console_flashed(self) -> None:
+        """A console flash is starting: once the MCU resets, the safety
+        FPGAs latch until a power cycle, whether or not the write succeeds.
+        The power-cycle toast waits for the flash to finish
+        (_flash_device) so it never asks mid-flash."""
+        self._console_flash_done_at = time.monotonic()
+        self._set_console_power_cycle_pending(True)
+        logger.warning("Console flash starting; power cycle required "
+                       "before scanning afterwards (#767)")
+
+    def _is_expected_post_flash_latch(self, se: int, so: int) -> bool:
+        """Only the rate-lower-limit latch, and only while a power cycle
+        is pending after our own console flash. Any other fault bit is a
+        real safety event and still raises E-203."""
+        cfg = getattr(self, "_app_config", None) or {}
+        if not cfg.get("consolePowerCyclePending", False):
+            return False
+        bits = (se or 0) | (so or 0)
+        return bits != 0 and (bits & ~self.POST_FLASH_LATCH_BITS) == 0
+
+    def _maybe_finish_console_power_cycle(self) -> None:
+        """Interlock reads clear: once it has stayed that way for a while
+        after the console (re)connected, the power cycle is done."""
+        cfg = getattr(self, "_app_config", None) or {}
+        if not cfg.get("consolePowerCyclePending", False):
+            return
+        connected_at = getattr(self, "_console_connected_at", None)
+        if connected_at is None:
+            return
+        ref = max(connected_at, getattr(self, "_console_flash_done_at", None) or 0.0)
+        if time.monotonic() - ref < self.POWER_CYCLE_CLEAR_AFTER_S:
+            return
+        logger.info("Console safety interlock reads clear after the firmware "
+                    "update; no power cycle needed any more (#767)")
+        self._set_console_power_cycle_pending(False)
+        self.dismissNotification(self.POWER_CYCLE_TOAST_TAG)
 
     @pyqtProperty(int, notify=stateChanged)
     def state(self):
@@ -2762,7 +2974,8 @@ class MotionConnector(QObject):
             self.firmwareUpdateFinished.emit(
                 device_key, False, "Cannot update firmware during a scan.")
             return False
-        if self._firmware_update_in_progress is not None:
+        if (self._firmware_update_in_progress is not None
+                or self._batch_update_running or self._update_in_progress):
             self.firmwareUpdateFinished.emit(
                 device_key, False, "Another firmware update is in progress.")
             return False
@@ -2771,12 +2984,19 @@ class MotionConnector(QObject):
                 device_key, False, "No update available for this device.")
             return False
         self._firmware_update_in_progress = device_key
+        self.updateBusyChanged.emit()
         threading.Thread(
             target=self._firmware_update_worker, args=(device_key,), daemon=True
         ).start()
         return True
 
     def _firmware_update_worker(self, device_key: str) -> None:
+        self._flash_device(device_key)
+
+    def _flash_device(self, device_key: str) -> bool:
+        """Download + flash one device synchronously on the calling worker
+        thread. The caller has already set ``_firmware_update_in_progress``;
+        this clears it, emits ``firmwareUpdateFinished`` and returns ok."""
         import tempfile
         from omotion.firmware_update import FirmwareUpdater, download_firmware
 
@@ -2814,6 +3034,12 @@ class MotionConnector(QObject):
                 }.get(p.phase, str(p.phase).capitalize())
                 self.firmwareUpdateProgress.emit(device_key, p.phase, pct, label)
 
+            if device_key == "console":
+                # #767: entering DFU alone latches the safety FPGAs, and
+                # update() only returns after the console is back and its
+                # telemetry has already reported the latch. Mark the power
+                # cycle as due before the reset, not after.
+                self._mark_console_flashed()
             self.firmwareUpdateProgress.emit(
                 device_key, "flash", -1, "Entering DFU and flashing…")
             result = FirmwareUpdater().update(handle, bin_path, progress_cb=_prog)
@@ -2837,7 +3063,104 @@ class MotionConnector(QObject):
             # is read back after the device re-enumerates.
             self._firmware_latest_by_kind.pop(
                 self._kind_for_device(device_key).value, None)
+            if device_key == "console":
+                # The MCU was reset either way, so the latch needs clearing.
+                self._console_flash_done_at = time.monotonic()
+                self._notify_console_power_cycle()
+            if ok and device_key == "console":
+                msg = ("Firmware written. Power-cycle the console now to "
+                       "finish; scanning stays off until it restarts.")
+            if ok:
+                # Written, but the device runs the old image until it is
+                # power-cycled; stop offering it so neither the banner nor
+                # "Update all" tries to flash a device that cannot enter DFU.
+                self._firmware_update_available[device_key] = False
+                self.firmwareUpdateInfoChanged.emit()
+            self.updateBusyChanged.emit()
             self.firmwareUpdateFinished.emit(device_key, ok, msg)
+        return ok
+
+    # Flash order for "Update all" (#514): sensors before the console, so a
+    # console reboot into DFU can never take a sensor down mid-flash, and
+    # every firmware before the app, because the app install quits us.
+    BATCH_FIRMWARE_ORDER = ("left", "right", "console")
+
+    def _batch_update_plan(self) -> list[str]:
+        """Steps "Update all" would run right now, in order."""
+        steps = [d for d in self.BATCH_FIRMWARE_ORDER
+                 if self._firmware_update_available.get(d, False)]
+        if (self._app_update_url and app_updater is not None
+                and self.appUpdateInstallable):
+            steps.append("app")
+        return steps
+
+    @pyqtSlot(result=bool)
+    def startUpdateAll(self) -> bool:
+        """Install every pending update in one run (#514): flash each
+        firmware in BATCH_FIRMWARE_ORDER, then hand off to the app
+        self-updater, which quits and relaunches. A firmware failure stops
+        the run before anything else is touched. Research builds only."""
+        if self._app_config.get("clinicalMode", False):
+            return False   # clinical builds never update anything (#96, #386)
+        if self._state == RUNNING or self._running:
+            self.batchUpdateFinished.emit(False, "Cannot update during a scan.")
+            return False
+        if self.updateBusy:
+            self.batchUpdateFinished.emit(False, "An update is already in progress.")
+            return False
+        steps = self._batch_update_plan()
+        if not steps:
+            self.batchUpdateFinished.emit(False, "No updates available.")
+            return False
+        self._batch_update_running = True
+        self.updateBusyChanged.emit()
+        logger.info("Update all: %s", " -> ".join(steps))
+        threading.Thread(
+            target=self._batch_update_worker, args=(steps,), daemon=True
+        ).start()
+        return True
+
+    def _batch_update_worker(self, steps: list[str]) -> None:
+        ok, msg = True, ""
+        try:
+            for step in steps:
+                self.batchUpdateStep.emit(step)
+                if step == "app":
+                    # Firmware is written; the app install quits us, so the
+                    # devices get power-cycled after it relaunches.
+                    self._update_in_progress = True
+                    try:
+                        ok = bool(app_updater.apply_update(self, self._app_update_url))
+                    finally:
+                        self._update_in_progress = False
+                    msg = ("Installing the application update; it will relaunch."
+                           if ok else "Application update failed.")
+                    break
+                if self._state == RUNNING or self._running:
+                    ok, msg = False, "A scan started; update stopped."
+                    break
+                self._firmware_update_in_progress = step
+                self.updateBusyChanged.emit()
+                if not self._flash_device(step):
+                    ok, msg = False, (
+                        f"{self._device_label(step)} firmware update failed; "
+                        "the remaining updates were skipped.")
+                    break
+            else:
+                msg = "Firmware written. Power-cycle the devices to finish."
+        except Exception as e:                       # noqa: BLE001 - reported to UI
+            logger.exception("Update all failed")
+            ok, msg = False, str(e)
+        finally:
+            self._batch_update_running = False
+            self.updateBusyChanged.emit()
+            logger.info("Update all finished: ok=%s %s", ok, msg)
+            self.batchUpdateFinished.emit(ok, msg)
+
+    @staticmethod
+    def _device_label(device_key: str) -> str:
+        return {"console": "Console", "left": "Left sensor",
+                "right": "Right sensor"}.get(device_key, device_key)
 
     def update_state(self):
         """Update system state based on connection and configuration."""
@@ -3957,6 +4280,46 @@ class MotionConnector(QObject):
         state (which reads DISCONNECTED for a single sensor with no
         console)."""
         return any(self._sdk_connected(n) for n in _DEVICES)
+
+    # --- What's new (#597) -------------------------------------------------
+    def _whats_new_notes(self, last_seen) -> str:
+        return whats_new.notes_between(
+            whats_new.load_notes_text(), self._app_version, last_seen,
+            clinical=bool(self._app_config.get("clinicalMode", False)),
+        )
+
+    @pyqtSlot(result=str)
+    def pendingWhatsNew(self) -> str:
+        """Notes for every release since the last one dismissed, or "".
+
+        Pulled by BloodFlow.qml once at startup. Every outcome is logged:
+        the modal is a once-per-release event, so a silent "" would leave
+        no way to tell "nothing new" from "notes missing from the build".
+        """
+        last_seen = self._app_config.get(whats_new.SEEN_KEY)
+        if last_seen == self._app_version:
+            return ""
+        notes = self._whats_new_notes(last_seen)
+        if notes:
+            logger.info("[WhatsNew] showing notes for %s (last seen %s)",
+                        self._app_version, last_seen)
+        else:
+            logger.info("[WhatsNew] no notes for %s (last seen %s); nothing "
+                        "to show", self._app_version, last_seen)
+        return notes
+
+    @pyqtSlot(result=str)
+    def currentWhatsNew(self) -> str:
+        """The running release's own notes (Settings -> "What's new")."""
+        return self._whats_new_notes(None)
+
+    @pyqtSlot()
+    def markWhatsNewSeen(self) -> None:
+        """Record the running version once the operator dismisses the modal."""
+        if self._app_config.get(whats_new.SEEN_KEY) == self._app_version:
+            return
+        self._app_config[whats_new.SEEN_KEY] = self._app_version
+        self._save_app_config()
 
     @pyqtSlot()
     def loadSampleScan(self) -> None:
@@ -5998,8 +6361,26 @@ class MotionConnector(QObject):
             if snap.safety_ok:
                 if self._safetyFailure:
                     self.safetyFailure = False
+                self._maybe_finish_console_power_cycle()
             else:
-                if not self._safetyFailure:
+                if not self._safetyFailure and self._is_expected_post_flash_latch(
+                        snap.safety_se, snap.safety_so):
+                    # #767: the latch our own console flash causes. Same
+                    # shutdown, but ask for the power cycle instead of
+                    # alarming the operator with E-203 / "contact support".
+                    logger.warning(
+                        "Safety interlock latched after console firmware "
+                        "update (safety_se=0x%02X safety_so=0x%02X); waiting "
+                        "for a power cycle", snap.safety_se, snap.safety_so)
+                    self.safetyFailure = True
+                    self.stopTrigger()
+                    self._laserOn = False
+                    self.laserStateChanged.emit()
+                    # Mid-flash the console row is still showing progress;
+                    # _flash_device asks for the power cycle when it ends.
+                    if getattr(self, "_firmware_update_in_progress", None) != "console":
+                        self._notify_console_power_cycle()
+                elif not self._safetyFailure:
                     # Decode which safety bits tripped so the engineering-
                     # mode toast (and the log) can name them. The SDK
                     # owns the bit→label mapping in ConsoleTelemetry.
@@ -7961,6 +8342,15 @@ class MotionConnector(QObject):
             return
         app_updater.check_for_updates(self)
 
+    def _on_app_update_available(self, version: str, url: str) -> None:
+        self._app_update_latest, self._app_update_url = version, url
+        self.appUpdateInfoChanged.emit()
+
+    def _on_app_update_withdrawn(self) -> None:
+        if self._app_update_url or self._app_update_latest:
+            self._app_update_latest, self._app_update_url = "", ""
+            self.appUpdateInfoChanged.emit()
+
     @pyqtSlot(str)
     def openDownloadUrl(self, url: str):
         """Open the download URL in the system browser."""
@@ -7976,10 +8366,11 @@ class MotionConnector(QObject):
         """
         if self._app_config.get("clinicalMode", False):
             return   # clinical builds never install app updates (#96, #386)
-        if getattr(self, "_update_in_progress", False):
+        if self._update_in_progress or self._batch_update_running:
             logger.info("Update already in progress; ignoring repeat request")
             return
         self._update_in_progress = True
+        self.updateBusyChanged.emit()
         t = threading.Thread(
             target=self._apply_update_worker, args=(download_url,), daemon=True
         )
@@ -7995,3 +8386,4 @@ class MotionConnector(QObject):
             # Cleared so a failed attempt can be retried (on success the app
             # is already quitting).
             self._update_in_progress = False
+            self.updateBusyChanged.emit()

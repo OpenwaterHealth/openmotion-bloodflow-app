@@ -19,9 +19,15 @@ ApplicationWindow {
     flags: Qt.FramelessWindowHint | Qt.Window | Qt.CustomizeWindowHint | Qt.WindowTitleHint
     color: "transparent"
 
+    // Rounded corners of the frameless window. Fullscreen fills the
+    // screen edge to edge, so the corners go square there (otherwise the
+    // desktop shows through the four cut-outs) and come back on leaving.
+    readonly property int cornerRadius:
+        visibility === Window.FullScreen ? 0 : 20
+
     // ── Liquid Glass ambient backdrop ─────────────────────────────
     // Behind all content, only while the glass theme is on. The window
-    // is frameless + transparent with 20px rounded corners, so the
+    // is frameless + transparent with rounded corners (cornerRadius), so the
     // ambient (and its blurred blobs) is masked to that same rounded
     // shape — otherwise the rectangular blur layer would poke square
     // glowing corners past the window edge. In the normal theme this
@@ -46,7 +52,7 @@ ApplicationWindow {
         anchors.fill: parent
         visible: false
         layer.enabled: true
-        Rectangle { anchors.fill: parent; radius: 20; color: "white" }
+        Rectangle { anchors.fill: parent; radius: window.cornerRadius; color: "white" }
     }
 
 
@@ -192,7 +198,7 @@ ApplicationWindow {
     Rectangle {
         anchors.fill: parent
         color: AppTheme.bgBase
-        radius: 20
+        radius: window.cornerRadius
         border.color: "transparent"
 
         // Header Section (with drag functionality)
@@ -244,21 +250,14 @@ ApplicationWindow {
             }
         }
 
-        // Update available banner (slides in below header)
+        // Updates-available banner (app and/or device firmware, #514);
+        // "Review" opens the updates modal.
         UpdateBanner {
             id: updateBanner
             anchors.top: headerMenu.bottom
             anchors.left: parent.left
             anchors.right: parent.right
-        }
-
-        // Firmware update banner (Research builds only)
-        FirmwareUpdateBanner {
-            id: firmwareUpdateBanner
-            anchors.top: updateBanner.bottom
-            anchors.left: parent.left
-            anchors.right: parent.right
-            onViewRequested: bloodFlowPage.openSettings()
+            onReviewRequested: updatesModal.open()
         }
 
         // Toast notification overlay — fills the window, positions toasts in its own bottom-right corner
@@ -271,7 +270,6 @@ ApplicationWindow {
         Item {
             anchors.fill: parent
             anchors.topMargin: 65 + (updateBanner.visible ? updateBanner.height : 0)
-                               + (firmwareUpdateBanner.visible ? firmwareUpdateBanner.height : 0)
             anchors.rightMargin: 8
             anchors.bottomMargin: 8
             anchors.leftMargin: 8
@@ -293,6 +291,15 @@ ApplicationWindow {
             active: MotionInterface.engineeringUnlockAvailable === true
             source: active ? "components/EngineeringUnlockModal.qml" : ""
             onLoaded: item.logoItem = headerMenu.logoItem
+        }
+
+        // Pending app + firmware updates (#514). Raises itself on a new
+        // detection, but never over a running scan / check, and not over
+        // the "What's new" notes (#597): after an upgrade the operator
+        // reads those first, then sees whatever is still pending.
+        UpdatesModal {
+            id: updatesModal
+            deferAutoOpen: window._anyInProgress || bloodFlowPage.whatsNewOpen
         }
     }
 
