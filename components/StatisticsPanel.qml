@@ -6,10 +6,11 @@ import OpenMotion 1.0
 // menu's Statistics switch is on (PlotViewer.statsActive). One row per
 // plot the current view draws, grouped by module. For each metric of the
 // plotted pair: the latest value ("Live", the number the cell's value
-// label shows when the pane is off), its average over the last 5 s, and
-// its peak-to-peak (the 5 s rolling max − min, averaged over the last
-// 5 s; see data_sources.window_stats). Below them the LEFT − RIGHT
-// differential for every plot whose opposite-side plot is drawn too.
+// label shows when the pane is off), its average over the last 5 s, its
+// peak-to-peak (the 5 s rolling max − min, averaged over the last 5 s;
+// see data_sources.window_stats) and its pulsatility index, peak-to-peak
+// over average (#744). Below them the LEFT − RIGHT differential for every
+// plot whose opposite-side plot is drawn too.
 // Display-only; the numbers come from ScanDataSource.statistics_at.
 Rectangle {
     id: panel
@@ -37,10 +38,14 @@ Rectangle {
     // plot rate would not be readable anyway.
     readonly property int refreshMs: 100
     // Per metric, left to right; rowValues returns them in this order.
+    // clamp: a reading of the metric, display-clamped like every other.
+    // PI takes a third decimal: BVI's runs ~0.01–0.03.
     readonly property var _columns: [
-        { field: "",     caption: "Live" },
-        { field: "_avg", caption: panel.windowSec + " s avg" },
-        { field: "_p2p", caption: "Peak-to-peak" }
+        { field: "",     caption: "Live",         clamp: true,  decimals: 2 },
+        { field: "_avg", caption: panel.windowSec + " s avg",
+                                                  clamp: true,  decimals: 2 },
+        { field: "_p2p", caption: "Peak-to-peak", clamp: false, decimals: 2 },
+        { field: "_pi",  caption: "PI",           clamp: false, decimals: 3 }
     ]
 
     // ── Sizing ─────────────────────────────────────────────────────────
@@ -90,10 +95,11 @@ Rectangle {
         + 0.5 + 0.35
     readonly property real _labelPerPx:
         0.85 * labelMetrics.advanceWidth / 100 + 0.6 + 0.35
-    readonly property real _widthPerPx: _labelPerPx + 6 * _columnPerPx + 0.9
+    readonly property real _widthPerPx:
+        _labelPerPx + 2 * _columns.length * _columnPerPx + 0.9
     readonly property real _valueWidth: Math.ceil(panel._columnPerPx * panel._fontPx)
     readonly property real _labelWidth: Math.ceil(panel._labelPerPx * panel._fontPx)
-    implicitWidth: 2 * _pad + _labelWidth + 6 * _valueWidth + _groupGap
+    implicitWidth: 2 * _pad + _labelWidth + 2 * _columns.length * _valueWidth + _groupGap
 
     // Lining, equal-width digits so the columns line up and read as a
     // table: "Roboto Mono" is not bundled, and some platform fallbacks
@@ -152,7 +158,8 @@ Rectangle {
     }
 
     // ── Data ───────────────────────────────────────────────────────────
-    // "side:camId" → { <metric>: live, <metric>_avg, <metric>_p2p }.
+    // "side:camId" → { <metric>: live, <metric>_avg, <metric>_p2p,
+    // <metric>_pi }.
     property var _snapshot: ({})
 
     function poll() {
@@ -233,8 +240,9 @@ Rectangle {
 
     // One row's numbers from the latest poll, _columns for the primary
     // metric then for the secondary. Live and average are clamped for
-    // display like every other readout of the metric; peak-to-peak is a
-    // span, not a reading, so it is not. A differential row subtracts its
+    // display like every other readout of the metric; peak-to-peak (a
+    // span) and PI (a ratio) are not readings, so they are not, and PI
+    // comes from the unclamped average. A differential row subtracts its
     // opposite plot's displayed numbers, so it is the difference of the
     // two rows above it.
     function rowValues(row) {
@@ -242,30 +250,30 @@ Rectangle {
         var metrics = [panel.primaryMetric, panel.secondaryMetric]
         for (var m = 0; m < metrics.length; m++) {
             for (var c = 0; c < panel._columns.length; c++) {
-                var field = metrics[m] + panel._columns[c].field
-                var v = panel._shown(row.key, metrics[m], field)
-                if (row.oppKey) v -= panel._shown(row.oppKey, metrics[m], field)
+                var col = panel._columns[c]
+                var v = panel._shown(row.key, metrics[m], col)
+                if (row.oppKey) v -= panel._shown(row.oppKey, metrics[m], col)
                 out.push(v)
             }
         }
         return out
     }
 
-    function _shown(key, metric, field) {
+    function _shown(key, metric, column) {
         var r = panel._snapshot[key]
-        var v = r ? r[field] : NaN
-        return field === metric + "_p2p"
-            ? (v === undefined || v === null ? NaN : v)
-            : panel._clamp(metric, v)
+        var v = r ? r[metric + column.field] : NaN
+        return column.clamp
+            ? panel._clamp(metric, v)
+            : (v === undefined || v === null ? NaN : v)
     }
 
-    // Two decimals like the cell labels; a differential carries its sign
-    // and never shows "-0.00".
-    function _fmt(v, signed) {
+    // The column's decimals (two, like the cell labels, but for PI); a
+    // differential carries its sign and never shows "-0.00".
+    function _fmt(v, signed, decimals) {
         if (!isFinite(v)) return "--"
-        var s = v.toFixed(2)
+        var s = v.toFixed(decimals)
         if (!signed) return s
-        if (s === "-0.00" || s === "0.00") return "0.00"
+        if (Number(s) === 0) return (0).toFixed(decimals)
         return v > 0 ? "+" + s : s
     }
 
@@ -382,7 +390,7 @@ Rectangle {
                             height: panel._rowHeight
 
                             // Zebra stripe: keeps the eye on one row across
-                            // the four columns.
+                            // the columns.
                             Rectangle {
                                 anchors.fill: parent
                                 radius: 3
@@ -412,8 +420,10 @@ Rectangle {
                                         rightPadding: panel._cellPad
                                         verticalAlignment: Text.AlignVCenter
                                         horizontalAlignment: Text.AlignRight
-                                        text: panel._fmt(statRow.values[index],
-                                                         section.sectionData.diff)
+                                        text: panel._fmt(
+                                            statRow.values[index],
+                                            section.sectionData.diff,
+                                            panel._columns[index % panel._columns.length].decimals)
                                         color: AppTheme.textPrimary
                                         font.pixelSize: panel._fontPx
                                         font.weight: Font.Medium
