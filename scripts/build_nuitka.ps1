@@ -130,6 +130,14 @@ if ($Variant -eq "clinical" -and -not $Service) {
     $args += "--nofollow-import-to=engineering_unlock"
     $args += "--noinclude-data-files=components/EngineeringUnlockModal.qml"
 }
+# Nor Optimize Laser, service tool included: it widens the laser-safety
+# limits. The app module and the SDK's workflow + exposure package (imported
+# lazily by MotionInterface, followed statically by Nuitka).
+if ($Variant -eq "clinical") {
+    $args += "--nofollow-import-to=optimize_laser"
+    $args += "--nofollow-import-to=omotion.OptimizeLaserWorkflow"
+    $args += "--nofollow-import-to=omotion.exposure"
+}
 
 # Data blobs (the program's constants, the onefile payload) go in as COFF
 # objects that Nuitka writes itself (#698). That is MSVC's default, so CI is
