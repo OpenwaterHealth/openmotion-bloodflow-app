@@ -242,21 +242,14 @@ ApplicationWindow {
             }
         }
 
-        // Update available banner (slides in below header)
+        // Updates-available banner (app and/or device firmware, #514);
+        // "Review" opens the updates modal.
         UpdateBanner {
             id: updateBanner
             anchors.top: headerMenu.bottom
             anchors.left: parent.left
             anchors.right: parent.right
-        }
-
-        // Firmware update banner (Research builds only)
-        FirmwareUpdateBanner {
-            id: firmwareUpdateBanner
-            anchors.top: updateBanner.bottom
-            anchors.left: parent.left
-            anchors.right: parent.right
-            onViewRequested: bloodFlowPage.openSettings()
+            onReviewRequested: updatesModal.open()
         }
 
         // Toast notification overlay — fills the window, positions toasts in its own bottom-right corner
@@ -269,7 +262,6 @@ ApplicationWindow {
         Item {
             anchors.fill: parent
             anchors.topMargin: 65 + (updateBanner.visible ? updateBanner.height : 0)
-                               + (firmwareUpdateBanner.visible ? firmwareUpdateBanner.height : 0)
             anchors.rightMargin: 8
             anchors.bottomMargin: 8
             anchors.leftMargin: 8
@@ -291,6 +283,15 @@ ApplicationWindow {
             active: MotionInterface.engineeringUnlockAvailable === true
             source: active ? "components/EngineeringUnlockModal.qml" : ""
             onLoaded: item.logoItem = headerMenu.logoItem
+        }
+
+        // Pending app + firmware updates (#514). Raises itself on a new
+        // detection, but never over a running scan / check, and not over
+        // the "What's new" notes (#597): after an upgrade the operator
+        // reads those first, then sees whatever is still pending.
+        UpdatesModal {
+            id: updatesModal
+            deferAutoOpen: window._anyInProgress || bloodFlowPage.whatsNewOpen
         }
     }
 
