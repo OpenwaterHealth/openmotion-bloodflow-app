@@ -1,7 +1,7 @@
 """#783: movement shading on the plots.
 
 The SDK stores one IMU average per histogram frame and side (the samples
-received since that side's previous frame: accel_dev_g = mean | |a| - 1 g |,
+received since that side's previous frame: accel_dev_g = mean |a - a_mean_2s|,
 gyro_dps = mean |omega|, n_samples). The app keeps each frame's trailing
 1/8 s rolling average and turns it into yellow / red spans with the GUI
 thresholds: ``motion_bands_for_window``. Also covered: the config keys and
