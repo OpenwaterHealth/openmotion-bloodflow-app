@@ -766,7 +766,7 @@ class _ImuMotionSink:
         except Exception:
             logger.debug("IMU motion bin dropped", exc_info=True)
 
-    def on_scan_end(self, meta) -> None:
+    def on_complete(self) -> None:
         pass
 
 

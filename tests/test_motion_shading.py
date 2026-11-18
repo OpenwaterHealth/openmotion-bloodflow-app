@@ -147,6 +147,8 @@ def test_motion_sink_feeds_the_live_source(src):
         side, t_start_s, t_end_s, accel_dev_g, gyro_dps = "right", 1.0, 1.125, 0.5, 0.0
 
     sink = motion_connector._ImuMotionSink(src)
+    sink.on_scan_start(None)
+    sink.on_complete()          # the runner calls it on every sink
     sink.consume("diagnostics", Bin())          # other channels ignored
     sink.consume("imu_motion", Bin())
     sink.consume("imu_motion", object())        # malformed: dropped quietly
