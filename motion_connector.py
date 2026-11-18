@@ -42,6 +42,7 @@ from omotion.config import (
     DEBUG_FLAG_HISTO_STALL,
 )
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
+import dataclasses as _dataclasses
 from omotion.contact_quality import CQSettings, CQThresholds, ContactQualityTransitionSink
 from motion_config import (
     FW_DEFAULT_CAMERA_SETTINGS,
@@ -215,6 +216,15 @@ def _sdk_flags_from_session(session) -> Optional[dict]:
 
 
 logger = logging.getLogger("openmotion.bloodflow-app.connector")
+
+# sdk#357 added ScanRequest.write_imu_csv (#779). Checked once so the connector
+# still runs against an SDK that predates it.
+try:
+    _SCAN_REQUEST_HAS_IMU_CSV = "write_imu_csv" in {
+        f.name for f in _dataclasses.fields(ScanRequest)
+    }
+except TypeError:  # not a dataclass
+    _SCAN_REQUEST_HAS_IMU_CSV = False
 
 # Define system states
 DISCONNECTED = 0
@@ -1345,6 +1355,9 @@ class MotionConnector(QObject):
         # Engineering → "Save telemetry CSV" (#471); default False so a
         # config missing the key fails closed for clinical use.
         self._write_telemetry_csv         = bool(cfg.get("writeTelemetryCsv", False))
+        # Per-scan IMU CSV (#779): Settings → Data Output → "Save IMU CSV",
+        # same mode gate as the raw CSVs. Default False fails closed.
+        self._write_imu_csv               = bool(cfg.get("writeImuCsv", False))
 
         # Initialize CSV output directory to user's home directory
         self._csv_output_directory = os.path.expanduser("~")
@@ -4073,6 +4086,15 @@ class MotionConnector(QObject):
         logger.debug(f"[Connector] writeRawCsv set to {self._write_raw_csv}")
 
     @pyqtSlot(bool)
+    def setWriteImuCsv(self, enabled: bool) -> None:
+        """Update writeImuCsv in both the runtime cache and persisted config (#779)."""
+        self._write_imu_csv = bool(enabled)
+        self._app_config["writeImuCsv"] = self._write_imu_csv
+        self._save_app_config()
+        self.appConfigChanged.emit()
+        logger.debug(f"[Connector] writeImuCsv set to {self._write_imu_csv}")
+
+    @pyqtSlot(bool)
     def setWriteTelemetryCsv(self, enabled: bool) -> None:
         """Update writeTelemetryCsv in both the runtime cache and persisted config."""
         self._write_telemetry_csv = bool(enabled)
@@ -5611,7 +5633,22 @@ class MotionConnector(QObject):
         # shared with the preflight signal-quality check (#510).
         self._sync_alt_scan_settings(left_camera_mask, right_camera_mask)
 
+        # Per-scan IMU CSV (#779): same mode gate as the raw CSVs (#234/#43),
+        # re-checked here so a stale writeImuCsv=true never writes on a plain
+        # clinical build. Only passed when the installed SDK knows the field
+        # (sdk#357), so an older SDK still starts the scan without it.
+        imu_csv_kwargs = {}
+        if raw_csv_allowed and self._write_imu_csv:
+            if _SCAN_REQUEST_HAS_IMU_CSV:
+                imu_csv_kwargs["write_imu_csv"] = True
+            else:
+                logger.warning(
+                    "Save IMU CSV is on but the installed SDK has no "
+                    "ScanRequest.write_imu_csv; no IMU CSV for this scan"
+                )
+
         req = ScanRequest(
+            **imu_csv_kwargs,
             subject_id=subject_id,
             duration_sec=duration_sec,
             left_camera_mask=left_camera_mask,

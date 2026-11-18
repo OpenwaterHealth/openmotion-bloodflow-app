@@ -61,6 +61,9 @@ APP_CONFIG = {
     "dataDirectory": None,
     "writeRawCsv": False,
     "rawCsvDurationSec": None,
+    # Per-scan IMU CSV (#779): {scan_id}_{subject}_imu.csv, same gate as
+    # writeRawCsv (!clinicalMode || engineeringMode), re-checked at scan start.
+    "writeImuCsv": False,
     # Research-only (#598): export the History → Export CSV file into data/
     # automatically when each scan ends. Never exports on a clinical build.
     "autoExportCsv": False,
@@ -256,7 +259,7 @@ PREFERENCE_KEYS = frozenset({
     # build: the scan-start gate is (!clinicalMode || engineeringMode), and
     # engineeringMode is session-only. autoExportCsv is gated on
     # !clinicalMode alone at scan end.
-    "writeRawCsv", "rawCsvDurationSec", "autoExportCsv",
+    "writeRawCsv", "rawCsvDurationSec", "autoExportCsv", "writeImuCsv",
 })
 
 STATE_KEYS = frozenset({

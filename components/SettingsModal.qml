@@ -61,6 +61,7 @@ Item {
     property real   contrastMax: 1.0
     property bool   writeRawCsv:       false
     property var    rawCsvDurationSec: 60
+    property bool   writeImuCsv:       false
     // Research-only (#598): export each scan's CSV into data/ at scan end.
     property bool   autoExportCsv:     false
 
@@ -139,6 +140,7 @@ Item {
         writeRawCsv       = cfg.writeRawCsv       !== undefined ? cfg.writeRawCsv       : false
         rawCsvDurationSec = cfg.rawCsvDurationSec !== undefined ? cfg.rawCsvDurationSec : null
         autoExportCsv     = cfg.autoExportCsv     === true
+        writeImuCsv       = cfg.writeImuCsv       === true
         // Theme selector (themeCombo) binds its currentIndex directly to
         // appConfig.darkMode/liquidGlass, so no manual sync is needed here.
     }
@@ -193,6 +195,7 @@ Item {
         })
         MotionInterface.setWriteRawCsv(writeRawCsv)
         MotionInterface.setRawCsvDurationSec(rawCsvDurationSec)
+        MotionInterface.setWriteImuCsv(writeImuCsv)
         settingsChanged()
         root.visible = false
     }
@@ -761,6 +764,28 @@ Item {
                             text: "seconds  (blank = full scan)"
                             color: root.colTextMuted
                             font.pixelSize: 11
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    // ── IMU CSV (#779) ────────────────────────────────────────
+                    // Same gate as the raw CSVs: research, or engineering on a
+                    // clinical build. The connector re-checks it at scan start.
+                    FieldRow {
+                        visible: !root.clinicalMode
+                                 || MotionInterface.appConfig.engineeringMode === true
+                        label: "Save IMU CSV"
+                        PillSwitch {
+                            objectName: "saveImuCsvSwitch"
+                            Accessible.name: "Save IMU CSV"
+                            checked: root.writeImuCsv
+                            onCheckedChanged: root.writeImuCsv = checked
+                        }
+                        Text {
+                            text: root.writeImuCsv ? "On — accelerometer + gyroscope, 40 Hz per sensor"
+                                                   : "Off"
+                            color: root.writeImuCsv ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
                         }
                         Item { Layout.fillWidth: true }
                     }

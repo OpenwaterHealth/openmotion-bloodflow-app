@@ -8,11 +8,12 @@ per-scan output. This page describes each CSV file, column by column.
 |---|---|---|
 | [Exported scan](#exported-scan-csv) `<label>_export.csv` | **History → Export CSV** | All |
 | [Raw histograms](#raw-histogram-csv) `<label>_<side>_mask<XX>_raw.csv` | **Settings → Data Output → Save raw CSV** is on during a scan | Research |
+| [IMU](#imu-csv) `<label>_imu.csv` | **Settings → Data Output → Save IMU CSV** is on during a scan | Research (and clinical with engineering mode) |
 | [Console telemetry](#console-telemetry-csv) `<label>_telemetry.csv` | Engineering mode is unlocked and **Settings → Engineering → Save telemetry CSV** is on during a scan | All, engineering mode only |
 | [Audit log](#other-csv-files) | Audit-log viewer → **Export CSV** | All |
 | [Calibration / test results](#other-csv-files) | A calibration or test run | All |
 
-Per-scan files (raw and telemetry) land in the `data/` folder under the app's
+Per-scan files (raw, IMU and telemetry) land in the `data/` folder under the app's
 data directory, the same folder that holds `scans.db`. Exports go where you
 choose.
 
@@ -276,6 +277,54 @@ raw = pd.read_csv("20260909_185839_ow9YC09G_left_maskC3_raw.csv")
 light = raw[raw["type"] == "light"]
 hist = light[[str(b) for b in range(1024)]].to_numpy()   # (rows, 1024)
 ```
+
+---
+
+## IMU CSV
+
+**How to get it:** turn on **Settings → Data Output → Save IMU CSV** before
+the scan. Research builds show the switch; a clinical build shows it only
+with engineering mode unlocked, and the app re-checks that at scan start.
+Needs sensor firmware 1.6.2 or later: a sensor on older firmware is skipped
+(logged as a warning) because its IMU read could disturb the cameras.
+
+**File:** `data/<label>_imu.csv`, one row per IMU sample, both sensor modules
+in the same file (`side` tells them apart). Each sensor samples its IMU at
+40 Hz on its own timer, which is not locked to the camera frames.
+
+**Lining it up with the scan:** `timestamp_s` is on the same axis as the
+scan's `timestamp_s` (exported CSV, raw CSV, `scans.db`): for each side, 0 is
+that side's first camera frame. Match an IMU row to the nearest frame of the
+same side. Samples taken before the first frame have negative times.
+
+`time_source` says how good that match is:
+
+- `host`: today's sensor firmware doesn't timestamp IMU samples, so the time
+  is when the computer received the sample. Expect about ±10–20 ms of USB
+  delivery jitter against the frame times.
+- `device`: the sample carries the sensor's own clock (`device_ms`), the
+  same clock that stamps camera frames, so the alignment is exact. Written
+  once the sensor firmware adds that field.
+
+### Columns (22)
+
+| Column | Meaning |
+|---|---|
+| `side` | `left` or `right`. |
+| `imu_frame` | The sensor's IMU sample counter, from 0 when the scan turned the IMU on. A gap means the sensor skipped samples. |
+| `timestamp_s` | Seconds on the scan's time axis (see above). |
+| `time_source` | `host` or `device` (see above). |
+| `device_ms` | The sensor's clock in ms, when the firmware sends it; otherwise empty. |
+| `host_time_unix` | Host computer time when the sample arrived: Unix time, in seconds. |
+| `ax`, `ay`, `az` | Accelerometer, raw signed 16-bit counts. |
+| `gx`, `gy`, `gz` | Gyroscope, raw signed 16-bit counts. |
+| `mx`, `my`, `mz` | Magnetometer, raw counts as the sensor reports them. |
+| `accel_x_g` … `accel_z_g` | Acceleration in g (raw / 2048; the sensor runs at ±16 g). |
+| `gyro_x_dps` … `gyro_z_dps` | Rotation rate in degrees per second (raw / 16.4; ±2000 dps). |
+| `temp_c` | IMU die temperature, °C. |
+
+The sensor low-pass filters both the accelerometer and gyroscope at about
+11.5 Hz before sampling.
 
 ---
 
