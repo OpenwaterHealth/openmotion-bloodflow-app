@@ -5723,14 +5723,12 @@ class MotionConnector(QObject):
                     "ScanRequest.write_imu_csv; no IMU CSV for this scan"
                 )
 
-        # Movement shading (#783) needs the SDK's IMU motion bins: engineering
-        # mode with the shading on. Display-only; the bins also land in
-        # scans.db so replay can shade the same scan.
-        imu_motion_on = bool(
-            engineering_mode
-            and self._app_config.get("motionShadingEnabled", False)
-            and _SCAN_REQUEST_HAS_IMU_MOTION
-        )
+        # IMU motion bins (#783) are recorded on every scan, in every build:
+        # the SDK writes them to scans.db, and the movement shading reads
+        # them live (the sink below) and on replay. Whether they are drawn
+        # is a display setting (motionShadingEnabled, research or clinical
+        # with the engineering unlock), so the switch can change mid-scan.
+        imu_motion_on = _SCAN_REQUEST_HAS_IMU_MOTION
         if imu_motion_on:
             imu_csv_kwargs["imu_motion"] = True
 

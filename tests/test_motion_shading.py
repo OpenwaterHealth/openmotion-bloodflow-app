@@ -1,4 +1,4 @@
-"""#783: engineering-mode movement shading.
+"""#783: movement shading on the plots.
 
 The SDK reduces each sensor's IMU stream to 1/8 s motion bins
 (accel_dev_g = max | |a| - 1 g |, gyro_dps = max |omega|). The app only
@@ -82,17 +82,20 @@ def test_malformed_bins_are_ignored(src):
 
 
 def test_config_keys_are_preferences_with_sane_defaults():
-    assert APP_CONFIG["motionShadingEnabled"] is True
-    assert APP_CONFIG["motionAccelThresholdG"] == pytest.approx(0.1)
+    assert APP_CONFIG["motionShadingEnabled"] is False
+    assert APP_CONFIG["motionAccelThresholdG"] == pytest.approx(0.05)
     assert APP_CONFIG["motionGyroThresholdDps"] == pytest.approx(20.0)
     for k in ("motionShadingEnabled", "motionAccelThresholdG",
               "motionGyroThresholdDps"):
         assert k in PREFERENCE_KEYS
 
 
-def test_viewer_shows_shading_only_in_engineering_mode():
+def test_viewer_gates_shading_like_the_raw_csvs():
     qml = (ROOT / "components" / "PlotViewer.qml").read_text(encoding="utf-8")
-    assert "showMotion: MotionInterface.appConfig.engineeringMode === true" in qml
+    gate = qml[qml.index("showMotion:"):qml.index("motionAccelThresholdG:")]
+    assert "motionShadingEnabled === true" in gate
+    assert "clinicalMode !== true" in gate
+    assert "engineeringMode === true" in gate
 
 
 def test_cell_draws_bands_before_the_traces():
@@ -113,20 +116,30 @@ _needs_sdk = pytest.mark.skipif(
 
 
 @_needs_sdk
-@pytest.mark.parametrize("engineering, shading, expected", [
-    (True, True, True),
+@pytest.mark.parametrize("clinical, engineering, shading", [
+    (False, False, False),
+    (False, True, True),
     (True, False, False),
-    (False, True, False),
+    (True, False, True),
 ])
-def test_scan_asks_for_motion_bins_only_in_engineering_mode(
-        tmp_path, engineering, shading, expected):
+def test_every_scan_records_motion_bins(tmp_path, clinical, engineering, shading):
+    """Ethan, 2026-11-17: record the motion magnitude to the DB always,
+    whatever the build, mode or shading switch."""
     c = _make_connector(tmp_path, {
-        "engineeringMode": engineering, "motionShadingEnabled": shading})
+        "clinicalMode": clinical, "engineeringMode": engineering,
+        "motionShadingEnabled": shading})
     req = _captured_request(c)
-    assert req.imu_motion is expected
-    has_sink = any(isinstance(s, motion_connector._ImuMotionSink)
+    assert req.imu_motion is True
+    assert any(isinstance(s, motion_connector._ImuMotionSink) for s in req.sinks)
+
+
+def test_old_sdk_without_imu_motion_still_starts(tmp_path, monkeypatch):
+    monkeypatch.setattr(motion_connector, "_SCAN_REQUEST_HAS_IMU_MOTION", False)
+    c = _make_connector(tmp_path, {})
+    req = _captured_request(c)
+    assert getattr(req, "imu_motion", False) is False
+    assert not any(isinstance(s, motion_connector._ImuMotionSink)
                    for s in req.sinks)
-    assert has_sink is expected
 
 
 def test_motion_sink_feeds_the_live_source(src):

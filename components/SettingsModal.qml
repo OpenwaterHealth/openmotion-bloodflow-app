@@ -867,6 +867,72 @@ Item {
                         Item { Layout.fillWidth: true }
                     }
 
+                    // Movement shading (#783): red band under every plot
+                    // trace while the sensor's IMU motion (SDK, 1/8 s bins)
+                    // reaches a threshold. Research builds, or a clinical
+                    // build with the engineering unlock. Every scan records
+                    // the bins, so this applies instantly, live and in
+                    // replay; a threshold slid to 0 turns that channel off.
+                    FieldRow {
+                        visible: !root.clinicalMode
+                                 || MotionInterface.appConfig.engineeringMode === true
+                        label: "Movement shading"
+                        PillSwitch {
+                            objectName: "motionShadingSwitch"
+                            Accessible.name: "Movement shading"
+                            checked: MotionInterface.appConfig.motionShadingEnabled === true
+                            onToggled: MotionInterface.setConfig("motionShadingEnabled", checked)
+                        }
+                        Text {
+                            text: MotionInterface.appConfig.motionShadingEnabled === true ? "On" : "Off"
+                            color: MotionInterface.appConfig.motionShadingEnabled === true ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    Repeater {
+                        model: [
+                            { key: "motionAccelThresholdG",  label: "Movement: accel",
+                              to: 0.2, step: 0.005, decimals: 3, unit: "g" },
+                            { key: "motionGyroThresholdDps", label: "Movement: rotation",
+                              to: 50, step: 1, decimals: 0, unit: "°/s" }
+                        ]
+                        delegate: FieldRow {
+                            required property var modelData
+                            visible: !root.clinicalMode
+                                     || MotionInterface.appConfig.engineeringMode === true
+                            label: modelData.label
+                            opacity: MotionInterface.appConfig.motionShadingEnabled === true ? 1.0 : 0.4
+                            Slider {
+                                id: motionThresholdSlider
+                                objectName: modelData.key + "Slider"
+                                Accessible.name: modelData.label
+                                Layout.preferredWidth: 220
+                                enabled: MotionInterface.appConfig.motionShadingEnabled === true
+                                from: 0
+                                to: modelData.to
+                                stepSize: modelData.step
+                                snapMode: Slider.SnapAlways
+                                value: Number(MotionInterface.appConfig[modelData.key]) || 0
+                                // Write on release (and on keyboard steps), not
+                                // on every drag tick: each write persists to
+                                // the settings table and re-shades every plot.
+                                onMoved: if (!pressed) MotionInterface.setConfig(modelData.key, value)
+                                onPressedChanged: if (!pressed) MotionInterface.setConfig(modelData.key, value)
+                            }
+                            Text {
+                                Layout.preferredWidth: 70
+                                text: motionThresholdSlider.value > 0
+                                      ? motionThresholdSlider.value.toFixed(modelData.decimals) + " " + modelData.unit
+                                      : "Off"
+                                color: motionThresholdSlider.value > 0 ? root.colTextPri : root.colTextMuted
+                                font.pixelSize: 12
+                            }
+                            Item { Layout.fillWidth: true }
+                        }
+                    }
+
                     FieldRow {
                         visible: MotionInterface.appConfig.engineeringMode ? true : false
                         label: "Trace colors"
@@ -1273,69 +1339,6 @@ Item {
                             font.pixelSize: 12
                         }
                         Item { Layout.fillWidth: true }
-                    }
-
-                    // Movement shading (#783): red band under every plot
-                    // trace while the sensor's IMU motion (SDK, 1/8 s bins)
-                    // reaches either threshold. Applies instantly, live and
-                    // in replay. A blank or 0 threshold turns that channel off.
-                    FieldRow {
-                        label: "Movement shading"
-                        PillSwitch {
-                            objectName: "motionShadingSwitch"
-                            Accessible.name: "Movement shading"
-                            checked: MotionInterface.appConfig.motionShadingEnabled === true
-                            onToggled: MotionInterface.setConfig("motionShadingEnabled", checked)
-                        }
-                        Text {
-                            text: MotionInterface.appConfig.motionShadingEnabled === true ? "On" : "Off"
-                            color: MotionInterface.appConfig.motionShadingEnabled === true ? root.colAccent : root.colTextMuted
-                            font.pixelSize: 12
-                        }
-                        Item { Layout.fillWidth: true }
-                    }
-
-                    Repeater {
-                        model: [
-                            { key: "motionAccelThresholdG",  label: "Movement: accel",
-                              unit: "g away from 1 g  (blank = off)" },
-                            { key: "motionGyroThresholdDps", label: "Movement: rotation",
-                              unit: "°/s  (blank = off)" }
-                        ]
-                        delegate: FieldRow {
-                            required property var modelData
-                            label: modelData.label
-                            opacity: MotionInterface.appConfig.motionShadingEnabled === true ? 1.0 : 0.4
-                            TextField {
-                                id: motionThresholdField
-                                objectName: modelData.key + "Field"
-                                Accessible.name: modelData.label
-                                Layout.preferredWidth: 80
-                                Layout.preferredHeight: 32
-                                enabled: MotionInterface.appConfig.motionShadingEnabled === true
-                                property var _cfg: MotionInterface.appConfig[modelData.key]
-                                text: (_cfg !== undefined && _cfg !== null && _cfg > 0) ? String(_cfg) : ""
-                                validator: DoubleValidator { bottom: 0; decimals: 3; notation: DoubleValidator.StandardNotation }
-                                inputMethodHints: Qt.ImhFormattedNumbersOnly
-                                color: root.colTextPri
-                                background: Rectangle {
-                                    color: root.colBgInput
-                                    border.color: motionThresholdField.activeFocus ? root.colAccent : root.colBorderSoft
-                                    radius: 4
-                                }
-                                onEditingFinished: {
-                                    var v = parseFloat(text)
-                                    MotionInterface.setConfig(modelData.key,
-                                        (text === "" || isNaN(v) || v <= 0) ? 0.0 : v)
-                                }
-                            }
-                            Text {
-                                text: modelData.unit
-                                color: root.colTextMuted
-                                font.pixelSize: 11
-                            }
-                            Item { Layout.fillWidth: true }
-                        }
                     }
 
                     // Laser-safety interlock test flag (issue #464) —

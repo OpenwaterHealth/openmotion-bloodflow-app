@@ -792,14 +792,20 @@ def test_imu_csv_switch_follows_the_raw_csv_gate(modal_factory):
         assert _control_visible(modal, "saveImuCsvSwitch") is shown
 
 
-def test_movement_shading_controls_are_engineering_only(modal_factory):
-    """#783: the shading switch and both thresholds live in the
-    Engineering card."""
+def test_movement_shading_controls_follow_the_raw_csv_gate(modal_factory):
+    """#783: the shading switch and both threshold sliders sit in Realtime
+    Plot Display for research builds, and for a clinical build only with
+    the engineering unlock."""
     stub = modal_factory.stub
     modal = modal_factory()
-    stub.setFlags(clinical=False, engineering=True)
-    assert _control_visible(modal, "motionShadingSwitch") is True
-    for name in ("motionAccelThresholdGField", "motionGyroThresholdDpsField"):
-        assert _find_item(modal, name) is not None, name
+    for clinical, engineering, shown in (
+            (False, False, True), (True, True, True), (True, False, False)):
+        stub.setFlags(clinical=clinical, engineering=engineering)
+        assert _control_visible(modal, "motionShadingSwitch") is shown
     stub.setFlags(clinical=False, engineering=False)
-    assert _control_visible(modal, "motionShadingSwitch") is False
+    accel = _find_item(modal, "motionAccelThresholdGSlider")
+    gyro = _find_item(modal, "motionGyroThresholdDpsSlider")
+    assert accel is not None and gyro is not None
+    assert accel.property("from") == 0
+    assert accel.property("to") == pytest.approx(0.2)
+    assert accel.property("value") == pytest.approx(0.1)   # stub's value
