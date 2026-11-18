@@ -1205,8 +1205,10 @@ Rectangle {
                         showMotion: MotionInterface.appConfig.motionShadingEnabled === true
                                     && (MotionInterface.appConfig.clinicalMode !== true
                                         || MotionInterface.appConfig.engineeringMode === true)
-                        motionAccelThresholdG: Number(MotionInterface.appConfig.motionAccelThresholdG) || 0
-                        motionGyroThresholdDps: Number(MotionInterface.appConfig.motionGyroThresholdDps) || 0
+                        motionAccelYellowG: Number(MotionInterface.appConfig.motionAccelYellowG) || 0
+                        motionAccelRedG: Number(MotionInterface.appConfig.motionAccelRedG) || 0
+                        motionGyroYellowDps: Number(MotionInterface.appConfig.motionGyroYellowDps) || 0
+                        motionGyroRedDps: Number(MotionInterface.appConfig.motionGyroRedDps) || 0
                         paintTick: viewer.paintTick
                         liveEdgeSnapshot: viewer.liveEdgeSnapshot
                         panZoomTarget: viewer

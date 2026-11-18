@@ -865,18 +865,36 @@ class ScanDataSource(QObject):
         with self._motion_lock:
             return any(self._motion.values())
 
-    @pyqtSlot(str, float, float, float, float, result="QVariantList")
+    @staticmethod
+    def _motion_level(acc: float, gyr: float, thresholds) -> int:
+        """0 still, 1 yellow (small motion: talking), 2 red (large motion).
+        ``thresholds`` is (accel_yellow_g, accel_red_g, gyro_yellow_dps,
+        gyro_red_dps); a threshold <= 0 or NaN is off. Either channel can
+        raise the level, and red wins over yellow."""
+        ay, ar, gy, gr = thresholds
+
+        def hit(v, t):
+            return math.isfinite(t) and t > 0 and v >= t
+
+        if hit(acc, ar) or hit(gyr, gr):
+            return 2
+        if hit(acc, ay) or hit(gyr, gy):
+            return 1
+        return 0
+
+    @pyqtSlot(str, float, float, float, float, float, float,
+              result="QVariantList")
     def motion_bands_for_window(self, side: str, t_lo: float, t_hi: float,
-                                accel_threshold_g: float,
-                                gyro_threshold_dps: float) -> list:
-        """Spans ``[t_lo, t_hi]`` inside the window where this side moved:
-        a bin whose ``accel_dev_g`` is at least ``accel_threshold_g`` or
-        whose ``gyro_dps`` is at least ``gyro_threshold_dps``. A threshold
-        ``<= 0`` (or NaN) turns that channel off. Touching bins merge into
-        one span, so PlotCell draws one rectangle per movement."""
-        acc_on = math.isfinite(accel_threshold_g) and accel_threshold_g > 0
-        gyr_on = math.isfinite(gyro_threshold_dps) and gyro_threshold_dps > 0
-        if not (acc_on or gyr_on) or not (t_hi > t_lo):
+                                accel_yellow_g: float, accel_red_g: float,
+                                gyro_yellow_dps: float,
+                                gyro_red_dps: float) -> list:
+        """Movement spans ``[t_lo, t_hi, level]`` inside the window for one
+        side, level 1 = yellow and 2 = red (see ``_motion_level``). Touching
+        bins of the same level merge, so PlotCell draws one rectangle per
+        stretch of movement."""
+        thresholds = (accel_yellow_g, accel_red_g, gyro_yellow_dps, gyro_red_dps)
+        if not any(math.isfinite(t) and t > 0 for t in thresholds) \
+                or not (t_hi > t_lo):
             return []
         with self._motion_lock:
             rows = self._motion.get(side)
@@ -891,14 +909,14 @@ class ScanDataSource(QObject):
         for t0, t1, acc, gyr in window:
             if t1 < t_lo or t0 > t_hi:
                 continue
-            if not ((acc_on and acc >= accel_threshold_g)
-                    or (gyr_on and gyr >= gyro_threshold_dps)):
+            level = self._motion_level(acc, gyr, thresholds)
+            if level == 0:
                 continue
             lo, hi = max(t0, t_lo), min(t1, t_hi)
-            if out and lo <= out[-1][1] + 1e-6:
+            if out and out[-1][2] == level and lo <= out[-1][1] + 1e-6:
                 out[-1][1] = max(out[-1][1], hi)
             else:
-                out.append([lo, hi])
+                out.append([lo, hi, level])
         return out
 
     @pyqtSlot(str, int, result=float)

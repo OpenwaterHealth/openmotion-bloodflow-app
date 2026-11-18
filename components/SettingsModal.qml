@@ -869,7 +869,7 @@ Item {
 
                     // Movement shading (#783): red band under every plot
                     // trace while the sensor's IMU motion (SDK, 1/8 s bins)
-                    // reaches a threshold. Research builds, or a clinical
+                    // reaches the red threshold, yellow for the smaller one. Research builds, or a clinical
                     // build with the engineering unlock. Every scan records
                     // the bins, so this applies instantly, live and in
                     // replay; a threshold slid to 0 turns that channel off.
@@ -892,11 +892,17 @@ Item {
                     }
 
                     Repeater {
+                        // Yellow = small motion (talking), red = large
+                        // motion. Either channel can raise a level; red wins.
                         model: [
-                            { key: "motionAccelThresholdG",  label: "Movement: accel",
-                              to: 0.2, step: 0.005, decimals: 3, unit: "g" },
-                            { key: "motionGyroThresholdDps", label: "Movement: rotation",
-                              to: 50, step: 1, decimals: 0, unit: "°/s" }
+                            { key: "motionAccelYellowG",  label: "Yellow: accel",
+                              to: 0.2, step: 0.005, decimals: 3, unit: "g", red: false },
+                            { key: "motionAccelRedG",     label: "Red: accel",
+                              to: 0.2, step: 0.005, decimals: 3, unit: "g", red: true },
+                            { key: "motionGyroYellowDps", label: "Yellow: rotation",
+                              to: 50, step: 1, decimals: 0, unit: "°/s", red: false },
+                            { key: "motionGyroRedDps",    label: "Red: rotation",
+                              to: 50, step: 1, decimals: 0, unit: "°/s", red: true }
                         ]
                         delegate: FieldRow {
                             required property var modelData
@@ -904,6 +910,10 @@ Item {
                                      || MotionInterface.appConfig.engineeringMode === true
                             label: modelData.label
                             opacity: MotionInterface.appConfig.motionShadingEnabled === true ? 1.0 : 0.4
+                            Rectangle {
+                                width: 12; height: 12; radius: 2
+                                color: modelData.red ? AppTheme.accentRed : "#F1C40F"
+                            }
                             Slider {
                                 id: motionThresholdSlider
                                 objectName: modelData.key + "Slider"

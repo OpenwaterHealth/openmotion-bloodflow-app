@@ -129,8 +129,10 @@ class _StubMotionInterface(QObject):
             "writeTelemetryCsv": self._write_telemetry_csv,
             "debugHistoStallTest": self._histo_stall_test,
             "motionShadingEnabled": True,
-            "motionAccelThresholdG": 0.1,
-            "motionGyroThresholdDps": 20.0,
+            "motionAccelYellowG": 0.02,
+            "motionAccelRedG": 0.1,
+            "motionGyroYellowDps": 10.0,
+            "motionGyroRedDps": 20.0,
             **self._trace_colors,
         }
 
@@ -793,7 +795,8 @@ def test_imu_csv_switch_follows_the_raw_csv_gate(modal_factory):
 
 
 def test_movement_shading_controls_follow_the_raw_csv_gate(modal_factory):
-    """#783: the shading switch and both threshold sliders sit in Realtime
+    """#783: the shading switch and the four threshold sliders (yellow and
+    red, accel and rotation) sit in Realtime
     Plot Display for research builds, and for a clinical build only with
     the engineering unlock."""
     stub = modal_factory.stub
@@ -803,9 +806,10 @@ def test_movement_shading_controls_follow_the_raw_csv_gate(modal_factory):
         stub.setFlags(clinical=clinical, engineering=engineering)
         assert _control_visible(modal, "motionShadingSwitch") is shown
     stub.setFlags(clinical=False, engineering=False)
-    accel = _find_item(modal, "motionAccelThresholdGSlider")
-    gyro = _find_item(modal, "motionGyroThresholdDpsSlider")
-    assert accel is not None and gyro is not None
-    assert accel.property("from") == 0
-    assert accel.property("to") == pytest.approx(0.2)
-    assert accel.property("value") == pytest.approx(0.1)   # stub's value
+    for name in ("motionAccelYellowGSlider", "motionAccelRedGSlider",
+                 "motionGyroYellowDpsSlider", "motionGyroRedDpsSlider"):
+        assert _find_item(modal, name) is not None, name
+    red = _find_item(modal, "motionAccelRedGSlider")
+    assert red.property("from") == 0
+    assert red.property("to") == pytest.approx(0.2)
+    assert red.property("value") == pytest.approx(0.1)   # stub's value

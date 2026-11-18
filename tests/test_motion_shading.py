@@ -27,6 +27,12 @@ def _bins(values, t0=0.0):
     return [(t0 + i * B, t0 + (i + 1) * B, a, g) for i, (a, g) in enumerate(values)]
 
 
+def bands(src, side, t_lo, t_hi, accel, gyro):
+    """Red-only query (yellow off): the single-threshold behaviour."""
+    return [b[:2] for b in src.motion_bands_for_window(
+        side, t_lo, t_hi, 0.0, accel, 0.0, gyro)]
+
+
 @pytest.fixture
 def src():
     s = LiveScanSource(plot_t0=0.0)
@@ -36,33 +42,33 @@ def src():
 
 def test_quiet_bins_draw_nothing(src):
     src.add_motion_bins("left", _bins([(0.01, 1.0)] * 16))
-    assert src.motion_bands_for_window("left", 0.0, 2.0, 0.1, 20.0) == []
+    assert bands(src, "left", 0.0, 2.0, 0.1, 20.0) == []
 
 
 def test_touching_bins_merge_into_one_span(src):
     vals = [(0.0, 0.0)] * 4 + [(0.3, 0.0)] * 3 + [(0.0, 0.0)] * 4
     src.add_motion_bins("left", _bins(vals))
-    assert src.motion_bands_for_window("left", 0.0, 2.0, 0.1, 20.0) == [
+    assert bands(src, "left", 0.0, 2.0, 0.1, 20.0) == [
         pytest.approx([0.5, 0.875])]
 
 
 def test_either_channel_triggers_and_zero_turns_a_channel_off(src):
     vals = [(0.3, 0.0), (0.0, 0.0), (0.0, 50.0)]
     src.add_motion_bins("left", _bins(vals))
-    both = src.motion_bands_for_window("left", 0.0, 1.0, 0.1, 20.0)
+    both = bands(src, "left", 0.0, 1.0, 0.1, 20.0)
     assert both == [pytest.approx([0.0, 0.125]), pytest.approx([0.25, 0.375])]
-    accel_only = src.motion_bands_for_window("left", 0.0, 1.0, 0.1, 0.0)
+    accel_only = bands(src, "left", 0.0, 1.0, 0.1, 0.0)
     assert accel_only == [pytest.approx([0.0, 0.125])]
-    gyro_only = src.motion_bands_for_window("left", 0.0, 1.0, 0.0, 20.0)
+    gyro_only = bands(src, "left", 0.0, 1.0, 0.0, 20.0)
     assert gyro_only == [pytest.approx([0.25, 0.375])]
-    assert src.motion_bands_for_window("left", 0.0, 1.0, 0.0, 0.0) == []
+    assert bands(src, "left", 0.0, 1.0, 0.0, 0.0) == []
 
 
 def test_spans_are_clipped_to_the_window_and_sides_are_separate(src):
     src.add_motion_bins("left", _bins([(1.0, 0.0)] * 16))   # 0 .. 2 s
-    assert src.motion_bands_for_window("left", 0.5, 1.0, 0.1, 20.0) == [
+    assert bands(src, "left", 0.5, 1.0, 0.1, 20.0) == [
         pytest.approx([0.5, 1.0])]
-    assert src.motion_bands_for_window("right", 0.0, 2.0, 0.1, 20.0) == []
+    assert bands(src, "right", 0.0, 2.0, 0.1, 20.0) == []
 
 
 def test_late_out_of_order_bins_still_land_in_order(src):
@@ -70,29 +76,50 @@ def test_late_out_of_order_bins_still_land_in_order(src):
     # bins (negative times) can arrive after later ones.
     src.add_motion_bins("left", _bins([(1.0, 0.0)] * 2, t0=1.0))
     src.add_motion_bins("left", _bins([(1.0, 0.0)] * 2, t0=-0.25))
-    assert src.motion_bands_for_window("left", -1.0, 2.0, 0.1, 20.0) == [
+    assert bands(src, "left", -1.0, 2.0, 0.1, 20.0) == [
         pytest.approx([-0.25, 0.0]), pytest.approx([1.0, 1.25])]
 
 
 def test_malformed_bins_are_ignored(src):
     src.add_motion_bins("left", [None, (1.0,), (0.5, 0.25, 1, 1),
                                  (float("nan"), 1.0, 1, 1), (0.0, 0.125, 1.0, 0.0)])
-    assert src.motion_bands_for_window("left", 0.0, 1.0, 0.1, 20.0) == [
+    assert bands(src, "left", 0.0, 1.0, 0.1, 20.0) == [
         pytest.approx([0.0, 0.125])]
+
+
+def test_yellow_and_red_levels():
+    """Small motion (talking) shades yellow, large motion red; either
+    channel raises the level and red wins."""
+    s = LiveScanSource(plot_t0=0.0)
+    try:
+        vals = [(0.03, 0.0), (0.03, 0.0), (0.08, 0.0), (0.0, 12.0),
+                (0.0, 30.0), (0.0, 0.0)]
+        s.add_motion_bins("left", _bins(vals))
+        out = s.motion_bands_for_window("left", 0.0, 1.0, 0.02, 0.05, 10.0, 20.0)
+        assert [b[2] for b in out] == [1, 2, 1, 2]
+        assert out[0][:2] == pytest.approx([0.0, 0.25])     # two yellow bins merge
+        assert out[1][:2] == pytest.approx([0.25, 0.375])
+        # Yellow off: only the red bins remain.
+        red = s.motion_bands_for_window("left", 0.0, 1.0, 0.0, 0.05, 0.0, 20.0)
+        assert [b[2] for b in red] == [2, 2]
+    finally:
+        s.release()
 
 
 def test_config_keys_are_preferences_with_sane_defaults():
     assert APP_CONFIG["motionShadingEnabled"] is False
-    assert APP_CONFIG["motionAccelThresholdG"] == pytest.approx(0.05)
-    assert APP_CONFIG["motionGyroThresholdDps"] == pytest.approx(20.0)
-    for k in ("motionShadingEnabled", "motionAccelThresholdG",
-              "motionGyroThresholdDps"):
+    assert APP_CONFIG["motionAccelYellowG"] == pytest.approx(0.02)
+    assert APP_CONFIG["motionAccelRedG"] == pytest.approx(0.05)
+    assert APP_CONFIG["motionGyroYellowDps"] == pytest.approx(10.0)
+    assert APP_CONFIG["motionGyroRedDps"] == pytest.approx(20.0)
+    for k in ("motionShadingEnabled", "motionAccelYellowG", "motionAccelRedG",
+              "motionGyroYellowDps", "motionGyroRedDps"):
         assert k in PREFERENCE_KEYS
 
 
 def test_viewer_gates_shading_like_the_raw_csvs():
     qml = (ROOT / "components" / "PlotViewer.qml").read_text(encoding="utf-8")
-    gate = qml[qml.index("showMotion:"):qml.index("motionAccelThresholdG:")]
+    gate = qml[qml.index("showMotion:"):qml.index("motionAccelYellowG:")]
     assert "motionShadingEnabled === true" in gate
     assert "clinicalMode !== true" in gate
     assert "engineeringMode === true" in gate
@@ -152,7 +179,7 @@ def test_motion_sink_feeds_the_live_source(src):
     sink.consume("diagnostics", Bin())          # other channels ignored
     sink.consume("imu_motion", Bin())
     sink.consume("imu_motion", object())        # malformed: dropped quietly
-    assert src.motion_bands_for_window("right", 0.0, 2.0, 0.1, 20.0) == [
+    assert bands(src, "right", 0.0, 2.0, 0.1, 20.0) == [
         pytest.approx([1.0, 1.125])]
 
 
