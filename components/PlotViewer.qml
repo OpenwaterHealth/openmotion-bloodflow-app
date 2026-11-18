@@ -1200,6 +1200,11 @@ Rectangle {
                         showValueLabels: viewer.showCellValues
                         showAxisLabels: viewer.showAxisLabels
                         showTemperature: MotionInterface.appConfig.engineeringMode === true
+                        // Movement shading (#783): engineering mode only.
+                        showMotion: MotionInterface.appConfig.engineeringMode === true
+                                    && MotionInterface.appConfig.motionShadingEnabled === true
+                        motionAccelThresholdG: Number(MotionInterface.appConfig.motionAccelThresholdG) || 0
+                        motionGyroThresholdDps: Number(MotionInterface.appConfig.motionGyroThresholdDps) || 0
                         paintTick: viewer.paintTick
                         liveEdgeSnapshot: viewer.liveEdgeSnapshot
                         panZoomTarget: viewer

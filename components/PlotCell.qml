@@ -71,6 +71,13 @@ Item {
     // binds this from appConfig.engineeringMode (issue #165).
     property bool showTemperature: false
 
+    // Movement shading (#783, engineering mode): the viewer turns it on
+    // and passes the thresholds; spans come from
+    // source.motion_bands_for_window, i.e. the SDK's 1/8 s IMU motion bins.
+    property bool showMotion: false
+    property real motionAccelThresholdG: 0.1
+    property real motionGyroThresholdDps: 20.0
+
     // Connection-lost badge (issue #174) — the viewer sets this true
     // while the connector's dropout watchdog has this (side, camId)
     // marked Connection Lost; clears when frames resume.
@@ -98,6 +105,9 @@ Item {
     onSecondaryYMinChanged: traceCanvas.requestPaint()
     onSecondaryYMaxChanged: traceCanvas.requestPaint()
     onShowAxisLabelsChanged: traceCanvas.requestPaint()
+    onShowMotionChanged: traceCanvas.requestPaint()
+    onMotionAccelThresholdGChanged: traceCanvas.requestPaint()
+    onMotionGyroThresholdDpsChanged: traceCanvas.requestPaint()
     // Note: cursorT changes do NOT trigger a direct repaint — that
     // would spam paints on every mouse-move event. Instead the viewer
     // sets _dirty on cursorAt() so the next paintThrottle tick
@@ -166,6 +176,25 @@ Item {
     // metric/color/yMin/yMax. Defined as a JS function on the cell so
     // both primary and secondary draws share it. Returns the number of
     // points actually painted so the profile HUD can sum across cells.
+    // Movement bands (#783): full-height translucent fills under the
+    // traces, drawn like the wellness app's rejected-beat bands. Slivers
+    // under half a pixel are skipped.
+    function _drawMotionBands(ctx, tLo, tHi, dt, w, h) {
+        if (!cell.showMotion || !cell.source || !cell.source.motion_bands_for_window)
+            return
+        var bands = cell.source.motion_bands_for_window(
+            cell.side, tLo, tHi,
+            cell.motionAccelThresholdG, cell.motionGyroThresholdDps)
+        if (!bands || bands.length === 0) return
+        ctx.fillStyle = AppTheme.motionShade
+        for (var i = 0; i < bands.length; ++i) {
+            var x0 = ((bands[i][0] - tLo) / dt) * w
+            var x1 = ((bands[i][1] - tLo) / dt) * w
+            if (x1 - x0 < 0.5) continue
+            ctx.fillRect(x0, 0, x1 - x0, h)
+        }
+    }
+
     function _drawTrace(ctx, metricName, color, yMinVal, yMaxVal,
                        tLo, tHi, dt, maxPts, w, h) {
         if (!metricName || metricName.length === 0) return 0
@@ -262,6 +291,9 @@ Item {
             // ramp-up paint-throttle gap in half and giving us a lower
             // steady-state per-paint marshalling cost.
             var maxPts = Math.max(50, Math.floor(width * 0.5))
+
+            // Under the traces, so they stay readable over the shading.
+            cell._drawMotionBands(ctx, tLo, tHi, dt, width, height)
 
             profPts += cell._drawTrace(ctx, cell.metric, cell.traceColor,
                             cell.yMin, cell.yMax,

@@ -128,6 +128,9 @@ class _StubMotionInterface(QObject):
             "altCameraExposureUs": getattr(self, "_alt_exposure_us", 648),
             "writeTelemetryCsv": self._write_telemetry_csv,
             "debugHistoStallTest": self._histo_stall_test,
+            "motionShadingEnabled": True,
+            "motionAccelThresholdG": 0.1,
+            "motionGyroThresholdDps": 20.0,
             **self._trace_colors,
         }
 
@@ -164,6 +167,10 @@ class _StubMotionInterface(QObject):
 
     @pyqtSlot("QVariant")
     def setRawCsvDurationSec(self, value):
+        pass
+
+    @pyqtSlot(bool)
+    def setWriteImuCsv(self, enabled):
         pass
 
     @pyqtSlot(str, bool)
@@ -772,3 +779,27 @@ def test_connector_exposes_the_baseline_as_default_config(tmp_path):
                         config_dir="config")
     assert c.property("defaultConfig") == baseline
     assert c.property("appConfig") == _PICKED_COLORS
+
+
+def test_imu_csv_switch_follows_the_raw_csv_gate(modal_factory):
+    """#779: 'Save IMU CSV' shows where 'Save raw CSV' does: research, or
+    clinical with the engineering unlock."""
+    stub = modal_factory.stub
+    modal = modal_factory()
+    for clinical, engineering, shown in (
+            (False, False, True), (True, True, True), (True, False, False)):
+        stub.setFlags(clinical=clinical, engineering=engineering)
+        assert _control_visible(modal, "saveImuCsvSwitch") is shown
+
+
+def test_movement_shading_controls_are_engineering_only(modal_factory):
+    """#783: the shading switch and both thresholds live in the
+    Engineering card."""
+    stub = modal_factory.stub
+    modal = modal_factory()
+    stub.setFlags(clinical=False, engineering=True)
+    assert _control_visible(modal, "motionShadingSwitch") is True
+    for name in ("motionAccelThresholdGField", "motionGyroThresholdDpsField"):
+        assert _find_item(modal, name) is not None, name
+    stub.setFlags(clinical=False, engineering=False)
+    assert _control_visible(modal, "motionShadingSwitch") is False

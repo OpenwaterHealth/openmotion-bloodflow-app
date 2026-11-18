@@ -130,6 +130,10 @@ QtObject {
                                                          : Qt.rgba(1,1,1,0.82))
                                                  : (dark ? "#1A1A1C" : "#FFFFFF")
 
+    // Movement shading under the plot traces (#783). Same value as the
+    // wellness app's rejectDetector band so the two apps read alike.
+    readonly property color motionShade: Qt.rgba(0.906, 0.298, 0.235, 0.16)
+
     // ── floating overlays (pills, popups, tooltips over the plot) ──
     // Translucent in both modes; dark values match the previous
     // hard-coded Qt.rgba constants so dark mode is unchanged. Light

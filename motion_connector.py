@@ -225,6 +225,13 @@ try:
     }
 except TypeError:  # not a dataclass
     _SCAN_REQUEST_HAS_IMU_CSV = False
+# sdk#357 also added ScanRequest.imu_motion: 1/8 s IMU motion bins (#783).
+try:
+    _SCAN_REQUEST_HAS_IMU_MOTION = "imu_motion" in {
+        f.name for f in _dataclasses.fields(ScanRequest)
+    }
+except TypeError:
+    _SCAN_REQUEST_HAS_IMU_MOTION = False
 
 # Define system states
 DISCONNECTED = 0
@@ -728,6 +735,66 @@ class _LivePlotSink:
         # per side (#606, #621); a no-op when the source doesn't derive
         # (clinical).
         self._live_source.flush_side_average()
+
+
+class _ImuMotionSink:
+    """Feeds the SDK's 1/8 s IMU motion bins (#783) into the live plot
+    source, which the engineering-mode movement shading reads.
+
+    The SDK calls ``consume`` on that side's IMU reader thread, so this only
+    appends under the source's own lock; the plots pick the bins up on their
+    next paint tick. The movement thresholds are applied at draw time, so a
+    threshold change re-shades the whole scan.
+    """
+
+    channels: set = frozenset({"imu_motion"})
+
+    def __init__(self, live_source):
+        self._live_source = live_source
+
+    def on_scan_start(self, meta) -> None:
+        pass
+
+    def consume(self, channel: str, payload) -> None:
+        if channel != "imu_motion":
+            return
+        try:
+            self._live_source.add_motion_bins(payload.side, [(
+                payload.t_start_s, payload.t_end_s,
+                payload.accel_dev_g, payload.gyro_dps,
+            )])
+        except Exception:
+            logger.debug("IMU motion bin dropped", exc_info=True)
+
+    def on_scan_end(self, meta) -> None:
+        pass
+
+
+def _load_motion_bins(db, session_id: int) -> dict:
+    """A past scan's IMU motion bins (#783) as
+    ``{"left"|"right": [(t_start_s, t_end_s, accel_dev_g, gyro_dps), ...]}``.
+    Empty when the SDK predates ``ScanDatabase.get_imu_motion`` or the scan
+    was recorded without them; never raises (replay must still open)."""
+    getter = getattr(db, "get_imu_motion", None)
+    if getter is None:
+        return {}
+    try:
+        rows = getter(int(session_id))
+    except Exception:
+        logger.warning("Could not read IMU motion bins for session %s",
+                       session_id, exc_info=True)
+        return {}
+    out: dict = {}
+    for r in rows or ():
+        try:
+            side = "left" if int(r["side"]) == 0 else "right"
+            out.setdefault(side, []).append((
+                float(r["t_start_s"]), float(r["t_end_s"]),
+                float(r["accel_dev_g"]), float(r["gyro_dps"]),
+            ))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
 
 
 class _TriggerStateSink:
@@ -4480,6 +4547,13 @@ class MotionConnector(QObject):
                     db, session_id, corrected_csv,
                     derive_side_average=self._derive_side_average(),
                 )
+                # IMU motion bins for the movement shading (#783). Only the
+                # engineering view draws them; older SDKs and scans recorded
+                # without them simply have none.
+                motion = _load_motion_bins(db, session_id)
+                if motion:
+                    display_meta = dict(display_meta or {})
+                    display_meta["motionBins"] = motion
             finally:
                 db.close()
             # Detect which source actually populated per-cam BFI: if
@@ -4556,6 +4630,8 @@ class MotionConnector(QObject):
                 user_label=dm.get("userLabel", ""),
                 date_time=dm.get("dateTime", ""),
             )
+            for side, bins in (dm.get("motionBins") or {}).items():
+                past.add_motion_bins(side, bins)
             self._set_current_scan_source(past)
             # Diagnostic — left in for now so we can spot regressions
             # in past-scan loading. Cheap (one log line per click).
@@ -5647,6 +5723,17 @@ class MotionConnector(QObject):
                     "ScanRequest.write_imu_csv; no IMU CSV for this scan"
                 )
 
+        # Movement shading (#783) needs the SDK's IMU motion bins: engineering
+        # mode with the shading on. Display-only; the bins also land in
+        # scans.db so replay can shade the same scan.
+        imu_motion_on = bool(
+            engineering_mode
+            and self._app_config.get("motionShadingEnabled", False)
+            and _SCAN_REQUEST_HAS_IMU_MOTION
+        )
+        if imu_motion_on:
+            imu_csv_kwargs["imu_motion"] = True
+
         req = ScanRequest(
             **imu_csv_kwargs,
             subject_id=subject_id,
@@ -5703,7 +5790,7 @@ class MotionConnector(QObject):
                 # since. Not `critical`: a contact fault must never abort a
                 # clinical scan in progress.
                 ContactQualityTransitionSink(on_transition=self._on_cq_transition),
-            ],
+            ] + ([_ImuMotionSink(live_source)] if imu_motion_on else []),
             # Async backstop (#213): if the worker aborts after start_scan
             # returned True (e.g. a critical sink dies because the scan DB
             # became unwritable past the preflight), it can't ride the return

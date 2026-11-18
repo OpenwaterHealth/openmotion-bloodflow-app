@@ -1275,6 +1275,69 @@ Item {
                         Item { Layout.fillWidth: true }
                     }
 
+                    // Movement shading (#783): red band under every plot
+                    // trace while the sensor's IMU motion (SDK, 1/8 s bins)
+                    // reaches either threshold. Applies instantly, live and
+                    // in replay. A blank or 0 threshold turns that channel off.
+                    FieldRow {
+                        label: "Movement shading"
+                        PillSwitch {
+                            objectName: "motionShadingSwitch"
+                            Accessible.name: "Movement shading"
+                            checked: MotionInterface.appConfig.motionShadingEnabled === true
+                            onToggled: MotionInterface.setConfig("motionShadingEnabled", checked)
+                        }
+                        Text {
+                            text: MotionInterface.appConfig.motionShadingEnabled === true ? "On" : "Off"
+                            color: MotionInterface.appConfig.motionShadingEnabled === true ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    Repeater {
+                        model: [
+                            { key: "motionAccelThresholdG",  label: "Movement: accel",
+                              unit: "g away from 1 g  (blank = off)" },
+                            { key: "motionGyroThresholdDps", label: "Movement: rotation",
+                              unit: "°/s  (blank = off)" }
+                        ]
+                        delegate: FieldRow {
+                            required property var modelData
+                            label: modelData.label
+                            opacity: MotionInterface.appConfig.motionShadingEnabled === true ? 1.0 : 0.4
+                            TextField {
+                                id: motionThresholdField
+                                objectName: modelData.key + "Field"
+                                Accessible.name: modelData.label
+                                Layout.preferredWidth: 80
+                                Layout.preferredHeight: 32
+                                enabled: MotionInterface.appConfig.motionShadingEnabled === true
+                                property var _cfg: MotionInterface.appConfig[modelData.key]
+                                text: (_cfg !== undefined && _cfg !== null && _cfg > 0) ? String(_cfg) : ""
+                                validator: DoubleValidator { bottom: 0; decimals: 3; notation: DoubleValidator.StandardNotation }
+                                inputMethodHints: Qt.ImhFormattedNumbersOnly
+                                color: root.colTextPri
+                                background: Rectangle {
+                                    color: root.colBgInput
+                                    border.color: motionThresholdField.activeFocus ? root.colAccent : root.colBorderSoft
+                                    radius: 4
+                                }
+                                onEditingFinished: {
+                                    var v = parseFloat(text)
+                                    MotionInterface.setConfig(modelData.key,
+                                        (text === "" || isNaN(v) || v <= 0) ? 0.0 : v)
+                                }
+                            }
+                            Text {
+                                text: modelData.unit
+                                color: root.colTextMuted
+                                font.pixelSize: 11
+                            }
+                            Item { Layout.fillWidth: true }
+                        }
+                    }
+
                     // Laser-safety interlock test flag (issue #464) —
                     // persisted only; laser params are written once per
                     // console connect, so the change rides the next console

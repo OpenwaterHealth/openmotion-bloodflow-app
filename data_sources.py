@@ -16,6 +16,7 @@ Nothing in QML consumes these yet — Phase 1 is purely additive.
 
 from __future__ import annotations
 
+import bisect
 import logging
 import math
 import threading
@@ -645,6 +646,15 @@ class ScanDataSource(QObject):
         # against double-release and marks the flush timer as stopped.
         self._released = False
 
+        # IMU motion bins per side (#783): sorted (t_start_s, t_end_s,
+        # accel_dev_g, gyro_dps) on the scan's timestamp_s axis, computed by
+        # the SDK (1/8 s bins). Appended from the pipeline thread on a live
+        # source, bulk-loaded on a past one; read by PlotCell's movement
+        # shading through motion_bands_for_window.
+        self._motion: dict[str, list[tuple[float, float, float, float]]] = {}
+        self._motion_starts: dict[str, list[float]] = {}
+        self._motion_lock = threading.Lock()
+
         # Throttle timer — fires every 100 ms while the source is alive.
         # Tests can call _flush() directly and ignore the timer entirely.
         self._flush_timer = QTimer(self)
@@ -819,6 +829,76 @@ class ScanDataSource(QObject):
                 row[metric + "_avg"] = avg
                 row[metric + "_p2p"] = p2p
             out[str(key)] = row
+        return out
+
+    # ── IMU motion (#783) ────────────────────────────────────────────────
+
+    def add_motion_bins(self, side: str, bins) -> None:
+        """Add SDK motion bins for one side. ``bins`` holds
+        ``(t_start_s, t_end_s, accel_dev_g, gyro_dps)`` tuples; they may
+        arrive late or out of order (the SDK holds IMU samples until the
+        side's first camera frame anchors the time axis)."""
+        rows = []
+        for b in bins:
+            try:
+                t0, t1, acc, gyr = (float(b[0]), float(b[1]),
+                                    float(b[2]), float(b[3]))
+            except (TypeError, ValueError, IndexError):
+                continue
+            if math.isfinite(t0) and math.isfinite(t1) and t1 > t0:
+                rows.append((t0, t1, acc, gyr))
+        if not rows:
+            return
+        with self._motion_lock:
+            cur = self._motion.setdefault(side, [])
+            in_order = (not cur or rows[0][0] >= cur[-1][0]) and all(
+                rows[i][0] <= rows[i + 1][0] for i in range(len(rows) - 1))
+            cur.extend(rows)
+            starts = self._motion_starts.setdefault(side, [])
+            if in_order:
+                starts.extend(r[0] for r in rows)
+            else:
+                cur.sort(key=lambda r: r[0])
+                starts[:] = [r[0] for r in cur]
+
+    def has_motion(self) -> bool:
+        with self._motion_lock:
+            return any(self._motion.values())
+
+    @pyqtSlot(str, float, float, float, float, result="QVariantList")
+    def motion_bands_for_window(self, side: str, t_lo: float, t_hi: float,
+                                accel_threshold_g: float,
+                                gyro_threshold_dps: float) -> list:
+        """Spans ``[t_lo, t_hi]`` inside the window where this side moved:
+        a bin whose ``accel_dev_g`` is at least ``accel_threshold_g`` or
+        whose ``gyro_dps`` is at least ``gyro_threshold_dps``. A threshold
+        ``<= 0`` (or NaN) turns that channel off. Touching bins merge into
+        one span, so PlotCell draws one rectangle per movement."""
+        acc_on = math.isfinite(accel_threshold_g) and accel_threshold_g > 0
+        gyr_on = math.isfinite(gyro_threshold_dps) and gyro_threshold_dps > 0
+        if not (acc_on or gyr_on) or not (t_hi > t_lo):
+            return []
+        with self._motion_lock:
+            rows = self._motion.get(side)
+            if not rows:
+                return []
+            starts = self._motion_starts[side]
+            # A bin starting up to one bin-width before t_lo can overlap it.
+            i = max(0, bisect.bisect_left(starts, t_lo) - 1)
+            j = bisect.bisect_right(starts, t_hi)
+            window = rows[i:j]
+        out: list = []
+        for t0, t1, acc, gyr in window:
+            if t1 < t_lo or t0 > t_hi:
+                continue
+            if not ((acc_on and acc >= accel_threshold_g)
+                    or (gyr_on and gyr >= gyro_threshold_dps)):
+                continue
+            lo, hi = max(t0, t_lo), min(t1, t_hi)
+            if out and lo <= out[-1][1] + 1e-6:
+                out[-1][1] = max(out[-1][1], hi)
+            else:
+                out.append([lo, hi])
         return out
 
     @pyqtSlot(str, int, result=float)
