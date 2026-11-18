@@ -225,7 +225,7 @@ try:
     }
 except TypeError:  # not a dataclass
     _SCAN_REQUEST_HAS_IMU_CSV = False
-# sdk#357 also added ScanRequest.imu_motion: 1/8 s IMU motion bins (#783).
+# sdk#357 also added ScanRequest.imu_motion: per-frame IMU averages (#783).
 try:
     _SCAN_REQUEST_HAS_IMU_MOTION = "imu_motion" in {
         f.name for f in _dataclasses.fields(ScanRequest)
@@ -738,16 +738,17 @@ class _LivePlotSink:
 
 
 class _ImuMotionSink:
-    """Feeds the SDK's 1/8 s IMU motion bins (#783) into the live plot
-    source, which the engineering-mode movement shading reads.
+    """Feeds the SDK's per-frame IMU averages (#783, ``"imu_frame"``
+    channel, ``ImuFrameMotion``) into the live plot source, which keeps the
+    1/8 s rolling average the movement shading thresholds.
 
-    The SDK calls ``consume`` on that side's IMU reader thread, so this only
-    appends under the source's own lock; the plots pick the bins up on their
-    next paint tick. The movement thresholds are applied at draw time, so a
-    threshold change re-shades the whole scan.
+    The runner calls ``consume`` on its own thread, with the batch; this
+    only appends under the source's lock, and the plots pick the frames up
+    on their next paint tick. The thresholds are applied at draw time, so a
+    slider change re-shades the whole scan.
     """
 
-    channels: set = frozenset({"imu_motion"})
+    channels: set = frozenset({"imu_frame"})
 
     def __init__(self, live_source):
         self._live_source = live_source
@@ -756,32 +757,32 @@ class _ImuMotionSink:
         pass
 
     def consume(self, channel: str, payload) -> None:
-        if channel != "imu_motion":
+        if channel != "imu_frame":
             return
         try:
-            self._live_source.add_motion_bins(payload.side, [(
-                payload.t_start_s, payload.t_end_s,
+            self._live_source.add_motion_frames(payload.side, [(
+                payload.timestamp_s, payload.n_samples,
                 payload.accel_dev_g, payload.gyro_dps,
             )])
         except Exception:
-            logger.debug("IMU motion bin dropped", exc_info=True)
+            logger.debug("IMU frame dropped", exc_info=True)
 
     def on_complete(self) -> None:
         pass
 
 
-def _load_motion_bins(db, session_id: int) -> dict:
-    """A past scan's IMU motion bins (#783) as
-    ``{"left"|"right": [(t_start_s, t_end_s, accel_dev_g, gyro_dps), ...]}``.
-    Empty when the SDK predates ``ScanDatabase.get_imu_motion`` or the scan
+def _load_motion_frames(db, session_id: int) -> dict:
+    """A past scan's per-frame IMU averages (#783) as
+    ``{"left"|"right": [(timestamp_s, n_samples, accel_dev_g, gyro_dps)]}``.
+    Empty when the SDK predates ``ScanDatabase.get_imu_frames`` or the scan
     was recorded without them; never raises (replay must still open)."""
-    getter = getattr(db, "get_imu_motion", None)
+    getter = getattr(db, "get_imu_frames", None)
     if getter is None:
         return {}
     try:
         rows = getter(int(session_id))
     except Exception:
-        logger.warning("Could not read IMU motion bins for session %s",
+        logger.warning("Could not read IMU frames for session %s",
                        session_id, exc_info=True)
         return {}
     out: dict = {}
@@ -789,8 +790,8 @@ def _load_motion_bins(db, session_id: int) -> dict:
         try:
             side = "left" if int(r["side"]) == 0 else "right"
             out.setdefault(side, []).append((
-                float(r["t_start_s"]), float(r["t_end_s"]),
-                float(r["accel_dev_g"]), float(r["gyro_dps"]),
+                float(r["timestamp_s"]), int(r["n_samples"] or 0),
+                r["accel_dev_g"], r["gyro_dps"],
             ))
         except (KeyError, TypeError, ValueError):
             continue
@@ -4547,13 +4548,12 @@ class MotionConnector(QObject):
                     db, session_id, corrected_csv,
                     derive_side_average=self._derive_side_average(),
                 )
-                # IMU motion bins for the movement shading (#783). Only the
-                # engineering view draws them; older SDKs and scans recorded
-                # without them simply have none.
-                motion = _load_motion_bins(db, session_id)
+                # Per-frame IMU averages for the movement shading (#783);
+                # older SDKs and scans recorded without them have none.
+                motion = _load_motion_frames(db, session_id)
                 if motion:
                     display_meta = dict(display_meta or {})
-                    display_meta["motionBins"] = motion
+                    display_meta["motionFrames"] = motion
             finally:
                 db.close()
             # Detect which source actually populated per-cam BFI: if
@@ -4630,8 +4630,8 @@ class MotionConnector(QObject):
                 user_label=dm.get("userLabel", ""),
                 date_time=dm.get("dateTime", ""),
             )
-            for side, bins in (dm.get("motionBins") or {}).items():
-                past.add_motion_bins(side, bins)
+            for side, frames in (dm.get("motionFrames") or {}).items():
+                past.add_motion_frames(side, frames)
             self._set_current_scan_source(past)
             # Diagnostic — left in for now so we can spot regressions
             # in past-scan loading. Cheap (one log line per click).
@@ -5723,7 +5723,7 @@ class MotionConnector(QObject):
                     "ScanRequest.write_imu_csv; no IMU CSV for this scan"
                 )
 
-        # IMU motion bins (#783) are recorded on every scan, in every build:
+        # Per-frame IMU averages (#783) are recorded on every scan, every build:
         # the SDK writes them to scans.db, and the movement shading reads
         # them live (the sink below) and on replay. Whether they are drawn
         # is a display setting (motionShadingEnabled, research or clinical

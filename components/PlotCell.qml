@@ -71,9 +71,9 @@ Item {
     // binds this from appConfig.engineeringMode (issue #165).
     property bool showTemperature: false
 
-    // Movement shading (#783, engineering mode): the viewer turns it on
-    // and passes the thresholds; spans come from
-    // source.motion_bands_for_window, i.e. the SDK's 1/8 s IMU motion bins.
+    // Movement shading (#783): the viewer turns it on and passes the
+    // thresholds; spans come from source.motion_bands_for_window, i.e. the
+    // 1/8 s rolling average of the SDK's per-frame IMU averages.
     property bool showMotion: false
     property real motionAccelYellowG: 0.02
     property real motionAccelRedG: 0.05
