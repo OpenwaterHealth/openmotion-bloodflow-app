@@ -1,7 +1,7 @@
 """#783: movement shading on the plots.
 
 The SDK stores one IMU average per histogram frame and side (the samples
-received since that side's previous frame: accel_dev_g = mean | |a| - 1 g |,
+received since that side's previous frame: accel_dev_g = mean |a - a_mean_2s|,
 gyro_dps = mean |omega|, n_samples). The app keeps each frame's trailing
 1/8 s rolling average and turns it into yellow / red spans with the GUI
 thresholds: ``motion_bands_for_window``. Also covered: the config keys and
@@ -153,10 +153,10 @@ def test_yellow_and_red_levels(src):
 
 def test_config_keys_are_preferences_with_sane_defaults():
     assert APP_CONFIG["motionShadingEnabled"] is False
-    assert APP_CONFIG["motionAccelYellowG"] == pytest.approx(0.02)
+    assert APP_CONFIG["motionAccelYellowG"] == pytest.approx(0.015)
     assert APP_CONFIG["motionAccelRedG"] == pytest.approx(0.05)
-    assert APP_CONFIG["motionGyroYellowDps"] == pytest.approx(10.0)
-    assert APP_CONFIG["motionGyroRedDps"] == pytest.approx(20.0)
+    assert APP_CONFIG["motionGyroYellowDps"] == pytest.approx(8.0)
+    assert APP_CONFIG["motionGyroRedDps"] == pytest.approx(25.0)
     for k in ("motionShadingEnabled", "motionAccelYellowG", "motionAccelRedG",
               "motionGyroYellowDps", "motionGyroRedDps"):
         assert k in PREFERENCE_KEYS

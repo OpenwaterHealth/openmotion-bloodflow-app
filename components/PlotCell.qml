@@ -75,10 +75,10 @@ Item {
     // thresholds; spans come from source.motion_bands_for_window, i.e. the
     // 1/8 s rolling average of the SDK's per-frame IMU averages.
     property bool showMotion: false
-    property real motionAccelYellowG: 0.02
+    property real motionAccelYellowG: 0.015
     property real motionAccelRedG: 0.05
-    property real motionGyroYellowDps: 10.0
-    property real motionGyroRedDps: 20.0
+    property real motionGyroYellowDps: 8.0
+    property real motionGyroRedDps: 25.0
 
     // Connection-lost badge (issue #174) — the viewer sets this true
     // while the connector's dropout watchdog has this (side, camId)
