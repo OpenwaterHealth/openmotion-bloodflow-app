@@ -310,6 +310,7 @@ def test_flash_waits_for_connect_time_init(tmp_path, monkeypatch):
         return MagicMock(success=True, needs_power_cycle=False)
 
     _stub_flash_io(monkeypatch, update)
+    monkeypatch.setattr(MotionConnector, "FLASH_INIT_SETTLE_S", 0.2)
     labels = []
     c.firmwareUpdateProgress.connect(lambda d, ph, pct, lbl: labels.append(ph))
     c._device_init_note("console", +1)          # bring-up running
@@ -317,7 +318,7 @@ def test_flash_waits_for_connect_time_init(tmp_path, monkeypatch):
 
     t0 = time.monotonic()
     assert c._flash_device("console") is True
-    assert time.monotonic() - t0 >= 0.25
+    assert time.monotonic() - t0 >= 0.45      # 0.3 s bring-up + 0.2 s settle
     assert seen == [0, True]
     assert "wait_init" in labels
     assert not c._device_init_run_locks["console"].locked()
@@ -331,9 +332,38 @@ def test_flash_gives_up_when_init_never_finishes(tmp_path, monkeypatch):
     update = MagicMock()
     _stub_flash_io(monkeypatch, update)
     monkeypatch.setattr(MotionConnector, "FLASH_INIT_WAIT_S", 0.2)
+    monkeypatch.setattr(MotionConnector, "FLASH_INIT_SETTLE_S", 0.05)
     c._device_init_note("left", +1)              # stuck bring-up
 
     assert c._flash_device("left") is False
     update.assert_not_called()
     assert c._firmware_update_available["left"] is True   # still offered
     assert not c._device_init_run_locks["left"].locked()
+
+
+def test_flash_waits_for_a_bring_up_scheduled_just_after_connect(tmp_path, monkeypatch):
+    """The SDK reports CONNECTED before the GUI-thread slot schedules the
+    bring-up; a device that just looked idle must stay idle for the settle
+    time before DFU."""
+    import threading
+    c = _connector(tmp_path)
+    c._interface.right = MagicMock()
+    c._firmware_update_available["right"] = True
+    c._firmware_update_in_progress = "right"
+    order = []
+
+    def update(h, p, progress_cb=None):
+        order.append("flash")
+        return MagicMock(success=True, needs_power_cycle=False)
+
+    _stub_flash_io(monkeypatch, update)
+    monkeypatch.setattr(MotionConnector, "FLASH_INIT_SETTLE_S", 0.4)
+
+    def late_bring_up():                     # queued slot runs 0.1 s later
+        c._device_init_note("right", +1)
+        order.append("init")
+        threading.Timer(0.2, lambda: c._device_init_note("right", -1)).start()
+
+    threading.Timer(0.1, late_bring_up).start()
+    assert c._flash_device("right") is True
+    assert order == ["init", "flash"]

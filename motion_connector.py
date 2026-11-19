@@ -3124,22 +3124,37 @@ class MotionConnector(QObject):
     # giving up. The console's sequence takes ~4 s; a sensor's ~1-2 s after
     # its 1 s settle delay.
     FLASH_INIT_WAIT_S = 60.0
+    # The device must look idle this long before DFU. The SDK reports
+    # CONNECTED on its own thread, but the bring-up is only scheduled once
+    # the queued state-change slot runs on the GUI thread; in between, a
+    # just-reconnected device reads idle with its bring-up not yet counted.
+    FLASH_INIT_SETTLE_S = 1.5
 
     def _wait_for_device_init(self, device_key: str, run_lock) -> bool:
-        """Block (on the flash worker) until ``device_key`` has no bring-up
-        scheduled or running, then acquire ``run_lock`` and return True. The
-        caller releases it. False, with the lock not held, after
-        FLASH_INIT_WAIT_S."""
+        """Block (on the flash worker) until ``device_key`` has had no bring-up
+        scheduled or running for FLASH_INIT_SETTLE_S, then acquire
+        ``run_lock`` and return True. The caller releases it. False, with the
+        lock not held, after FLASH_INIT_WAIT_S."""
         deadline = time.monotonic() + self.FLASH_INIT_WAIT_S
         announced = False
+        idle_since = None
         while True:
             with self._device_init_lock:
                 pending = self._device_init_pending.get(device_key, 0)
+            now = time.monotonic()
             if pending == 0:
-                remaining = max(0.0, deadline - time.monotonic())
-                if run_lock.acquire(timeout=remaining or 0.01):
-                    return True
-                return False
+                if idle_since is None:
+                    idle_since = now
+                if now - idle_since >= self.FLASH_INIT_SETTLE_S:
+                    remaining = max(0.0, deadline - now)
+                    if run_lock.acquire(timeout=remaining or 0.01):
+                        return True
+                    return False
+                if now >= deadline:
+                    return False
+                time.sleep(0.1)
+                continue
+            idle_since = None
             if not announced:
                 announced = True
                 logger.info("Firmware update for %s waits for its "
