@@ -70,10 +70,10 @@ APP_CONFIG = {
     # builds (or clinical with the engineering unlock); off by default. A
     # threshold <= 0 turns that level/channel off.
     "motionShadingEnabled": False,
-    "motionAccelYellowG": 0.02,
+    "motionAccelYellowG": 0.015,
     "motionAccelRedG": 0.05,
-    "motionGyroYellowDps": 10.0,
-    "motionGyroRedDps": 20.0,
+    "motionGyroYellowDps": 8.0,
+    "motionGyroRedDps": 25.0,
     # Research-only (#598): export the History → Export CSV file into data/
     # automatically when each scan ends. Never exports on a clinical build.
     "autoExportCsv": False,

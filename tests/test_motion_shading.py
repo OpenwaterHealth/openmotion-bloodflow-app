@@ -153,10 +153,10 @@ def test_yellow_and_red_levels(src):
 
 def test_config_keys_are_preferences_with_sane_defaults():
     assert APP_CONFIG["motionShadingEnabled"] is False
-    assert APP_CONFIG["motionAccelYellowG"] == pytest.approx(0.02)
+    assert APP_CONFIG["motionAccelYellowG"] == pytest.approx(0.015)
     assert APP_CONFIG["motionAccelRedG"] == pytest.approx(0.05)
-    assert APP_CONFIG["motionGyroYellowDps"] == pytest.approx(10.0)
-    assert APP_CONFIG["motionGyroRedDps"] == pytest.approx(20.0)
+    assert APP_CONFIG["motionGyroYellowDps"] == pytest.approx(8.0)
+    assert APP_CONFIG["motionGyroRedDps"] == pytest.approx(25.0)
     for k in ("motionShadingEnabled", "motionAccelYellowG", "motionAccelRedG",
               "motionGyroYellowDps", "motionGyroRedDps"):
         assert k in PREFERENCE_KEYS
