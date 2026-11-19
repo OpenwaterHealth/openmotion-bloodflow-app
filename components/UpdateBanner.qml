@@ -27,7 +27,7 @@ Rectangle {
     // cycle would brick it. The banner turns red, cannot be dismissed, and
     // "Review" opens the updates modal, which has the Retry.
     readonly property bool _interrupted: !_clinicalMode
-                                         && MotionInterface.firmwareResumeDevice !== ""
+                                         && !!MotionInterface.firmwareResumeDevice
     visible: _interrupted || (!_clinicalMode && (_appAvail || _fwAvail) && !_dismissed)
 
     readonly property string summary: {

@@ -301,7 +301,7 @@ Item {
             // download (retryFirmwareUpdate); its progress shows in the row.
             Rectangle {
                 Layout.fillWidth: true
-                visible: !root._clinical && MotionInterface.firmwareResumeDevice !== ""
+                visible: !root._clinical && !!MotionInterface.firmwareResumeDevice
                 implicitHeight: resumeCol.implicitHeight + 24
                 radius: 8
                 color: "transparent"
@@ -347,7 +347,7 @@ Item {
 
             Text {
                 visible: root.rows.length === 0
-                         && MotionInterface.firmwareResumeDevice === ""
+                         && !MotionInterface.firmwareResumeDevice
                 text: "Everything is up to date."
                 color: AppTheme.textSecondary
                 font.pixelSize: 13
