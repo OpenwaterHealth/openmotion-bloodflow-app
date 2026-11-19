@@ -113,6 +113,8 @@ def test_connect_logs_device_connected_and_stats(tmp_path):
         handle, ConnectionState.DISCONNECTED, ConnectionState.CONNECTED,
         "found",
     )
+    # The connect-time bring-up (a worker in the app) logs the stats.
+    c._run_device_init("console", c._device_connect_gen["console"])
     t = _types(c)
     assert "device_connected" in t
     assert "device_stats" in t
@@ -129,6 +131,7 @@ def test_run_calibration_logs_started(tmp_path):
     c._consoleConnected = True
     c._leftSensorConnected = True
     c._interface.start_calibration.return_value = True
+    c._app_config["engineeringMode"] = True   # Calibrate is engineering-only (#706)
     c.runCalibration("left")
     ev = [e for e in c.auditLogEntries()
           if e["event_type"] == "calibration_started"]

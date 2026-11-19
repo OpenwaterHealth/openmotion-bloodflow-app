@@ -20,7 +20,7 @@ BUILD_DIR="build"
 # report "+dirty"), then git describe, then a placeholder.
 VERSION="${OPENMOTION_VERSION:-$(python version.py 2>/dev/null || echo "0.0.0")}"
 export OPENMOTION_VERSION="${VERSION}"   # let the spec's Info.plist use the same value
-DMG_NAME="Open-Motion-${VERSION}-macOS.dmg"
+DMG_NAME="Open-Motion-Research-${VERSION}-macOS.dmg"
 
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║  Building ${APP_NAME} v${VERSION} for macOS                 "
@@ -148,6 +148,13 @@ hidden += [
     "usb", "usb.core", "usb.util", "usb.backend.libusb1",
     "requests", "urllib3", "charset_normalizer", "certifi", "idna",
     "base58", "pandas", "numpy", "matplotlib", "crcmod",
+    # firmware image signature check in omotion.dfu (SDK 1.14.0, #739);
+    # imported inside the check, so keep it listed like openwater.spec does
+    "cryptography", "cryptography.exceptions",
+    "cryptography.hazmat.primitives.hashes",
+    "cryptography.hazmat.primitives.serialization",
+    "cryptography.hazmat.primitives.asymmetric.ec",
+    "cryptography.hazmat.primitives.asymmetric.utils",
 ]
 
 # ── Bundle Homebrew libusb (matching current arch) ──
@@ -158,6 +165,17 @@ else:
     _libusb_dir = "/usr/local/lib"
 _libusb = os.path.join(_libusb_dir, "libusb-1.0.0.dylib")
 if os.path.exists(_libusb):
+    # libusb >= 1.0.30 only (#669): it fixes denial-of-service bugs a
+    # malicious USB device can trigger with malformed descriptors.
+    sys.path.insert(0, os.path.join(SPECPATH, "scripts"))
+    from check_libusb import MIN_VERSION, homebrew_libusb_version
+    _libusb_ver = homebrew_libusb_version(_libusb)
+    if _libusb_ver is None or _libusb_ver < MIN_VERSION:
+        raise SystemExit(
+            f"[spec] FATAL: {os.path.realpath(_libusb)} is not Homebrew "
+            "libusb >= 1.0.30 (#669) - run `brew upgrade libusb`"
+        )
+    print(f"[spec] bundling Homebrew libusb {'.'.join(map(str, _libusb_ver))}")
     binaries.append((_libusb, "."))
 
 # ── Runtime hook for libusb on macOS ──

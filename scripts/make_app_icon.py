@@ -23,6 +23,11 @@ now ships and is byte-for-byte reproducible from this script, not
 because the shell requires it. Regenerating the icon is not a fix for
 any icon bug; don't reach for it as one.
 
+Byte-for-byte holds only with the Pillow that requirements.txt pins: the
+256 px PNG frame's compressed bytes change between Pillow releases even
+though its pixels do not (#696). Run this with that Pillow, and rerun it
+whenever the pin moves.
+
 Usage:  python scripts/make_app_icon.py
 """
 

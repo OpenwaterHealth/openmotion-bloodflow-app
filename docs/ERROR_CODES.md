@@ -50,6 +50,29 @@ identities could not be read.
 **What to do:** Power-cycle the sensor and reconnect. If only some cameras are
 affected, the camera board may need service.
 
+### E-107 — Storage almost full
+The drive that stores scan data has less than 1 GB free. Scans cannot be started
+until space is freed. Checked once at app launch, against `minFreeDiskMb`
+(default 1024 MB); the modal detail shows the free space and the data folder. A
+free-space query that fails raises nothing.
+
+**What to do:** Free up space on the data drive (or export and remove old
+scans) before starting a scan — no restart needed, Start re-checks. Contact
+support if the drive should not be full.
+
+### E-108 — Scan storage inaccessible
+The scan database in the data folder is not encrypted. This build stores
+patient data only in encrypted form, so it will not open that database and
+scans cannot be started. Checked at every launch of a clinical build, before
+anything opens `scans.db`; the modal detail shows the database path. A
+plaintext `scans.db` can be left in the data folder by a Research install or by
+a version before 1.5.0, and the app never converts it. The app stays open, but
+it never reads or writes that file: settings last for the session only, and
+pressing Start is refused with E-301.
+
+**What to do:** Do not delete or move the data folder: it may hold patient
+data. Contact support with the session log attached.
+
 ## E-2xx — Laser safety
 
 ### E-201 — Laser safety monitor unresponsive
@@ -66,6 +89,16 @@ scan was stopped.
 
 **What to do:** Remove any obstruction, let the system settle, and start a new
 scan. If it trips repeatedly, stop and contact support.
+
+### E-203 — Laser safety trip
+The laser-safety monitor tripped while no scan was running and the laser was
+shut off. The safety interlock stays latched until the console is power-cycled.
+Raised for a trip at any time outside a scan (idle, the preflight signal-quality
+check, test/calibrate); a trip during a scan raises E-202 instead. The
+persistent laser-safety toast stays up until the monitor reports clear.
+
+**What to do:** Power-cycle the console and reconnect before starting a scan. If
+it trips again, stop and contact support.
 
 ## E-3xx — Scan / capture
 
@@ -105,6 +138,30 @@ device while not scanning, does not raise this.
 **What to do:** Check the USB cables and power, reconnect the system, and start a
 new scan. If it keeps happening, contact support.
 
+### E-305 — Not enough storage to start scan
+The drive that stores scan data has less than 1 GB free, so the scan was not
+started and the laser did not fire. Checked when **Start** is pressed — before
+the clinical pre-scan contact check — and again when the capture itself starts,
+against `minFreeDiskMb` (default 1024 MB). A free-space query that fails does
+not block the scan.
+
+**What to do:** Free up space on the data drive (or export and remove old
+scans), then start the scan again. Contact support if the drive should not be
+full.
+
+### E-306 — Scan stopped: storage almost full
+The drive that stores scan data dropped below 100 MB free during the scan, so
+the scan was stopped before the drive filled up. Data captured so far was saved.
+Checked every 5 s while a scan runs, against `scanStopFreeDiskMb` (default
+100 MB). The scan is stopped gracefully, like pressing Stop. The remaining space
+lets the scan database finish writing. The modal replaces the "Storage is
+running low" warning toast (see [Storage warnings](#storage-warnings-during-a-scan)),
+and its detail shows the free space, the data folder and the scan time elapsed.
+
+**What to do:** Free up space on the data drive (or export and remove old
+scans) before starting another scan. Contact support if the drive should not be
+full.
+
 ## Startup warnings (connection watchdog)
 
 A one-shot check armed at app launch flags expected devices that never showed
@@ -122,6 +179,11 @@ within `connectionTimeoutSec` (default 12 s) after launch:
 
 The codes E-104/E-106 still appear in the app log for support traceability.
 
+A device that is still connecting (mid-handshake) when the timeout expires is
+not reported yet: the check runs once more 10 s later and reports whatever is
+still not connected then. The toast comes down by itself as soon as the devices
+it warned about connect; otherwise it auto-dismisses after 10 s.
+
 Tunable in [`config/app_config.json`](../config/app_config.json):
 
 - `connectionTimeoutSec` (default `12`) — grace period before the check runs;
@@ -132,6 +194,20 @@ Tunable in [`config/app_config.json`](../config/app_config.json):
 
 Disconnects that happen *after* startup are handled by the normal connection
 status UI, not by this watchdog.
+
+## Storage warnings (during a scan)
+
+While a scan runs the app re-checks free space on the data drive every 5 s.
+
+- **Below 1 GB free** (`minFreeDiskMb`) → a **yellow warning toast**, shown once
+  per scan and kept until dismissed: `"Storage is running low: <n> MB free on
+  the data drive. The scan will stop automatically at 100 MB."` The scan keeps
+  running.
+- **Below 100 MB free** (`scanStopFreeDiskMb`) → the scan is stopped and the
+  [E-306](#e-306--scan-stopped-storage-almost-full) critical modal replaces the
+  toast. E-306 is also the audit log's `scan_ended` abort code.
+
+Either threshold set to `0` or below disables its checks.
 
 ## Contacting support
 

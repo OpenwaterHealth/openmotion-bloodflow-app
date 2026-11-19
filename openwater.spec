@@ -37,9 +37,8 @@ for item in ("main.qml",):
 # NOTE: config/ is no longer a data folder — config/app_config.py and
 # config/tec_params.py are Python modules that main.py imports, so the
 # Analysis below compiles them into the bundle like any other code (#546).
-# processing/ is deliberately absent: visualize_bloodflow.py is a standalone
-# CSV script the app never imports, and shipping the folder as data put its
-# source in the bundle as plaintext (#557).
+# processing/ was dropped as a data folder in #557 (shipping it put plaintext
+# source in the bundle) and the directory itself was removed in #539.
 for folder in ("pages", "components", "assets"):
     if not os.path.isdir(folder):
         raise SystemExit(
@@ -129,7 +128,10 @@ hidden += [
 # third-party deps, and PyInstaller's static analysis doesn't trace into them
 # either - same class of gap as the serial/usb block above. requests backs
 # omotion.firmware_update; crcmod backs omotion's i2c packet framing; base58
-# is imported directly by motion_connector.py.
+# is imported directly by motion_connector.py. cryptography checks a firmware
+# image's signature before omotion.dfu writes it (SDK 1.14.0, #739); it is
+# imported inside the check, so a missing module would only surface when a
+# user starts a firmware update.
 hidden += [
     "requests",
     "urllib3",
@@ -138,6 +140,12 @@ hidden += [
     "idna",
     "crcmod",
     "base58",
+    "cryptography",
+    "cryptography.exceptions",
+    "cryptography.hazmat.primitives.hashes",
+    "cryptography.hazmat.primitives.serialization",
+    "cryptography.hazmat.primitives.asymmetric.ec",
+    "cryptography.hazmat.primitives.asymmetric.utils",
 ]
 
 # --- scan-DB encryption stack (clinical builds) ---
@@ -182,12 +190,21 @@ import re as _re
 try:
     with open(os.path.join(SPECPATH, "config", "app_config.py"),
               encoding="utf-8") as _f:
-        _m = _re.search(r"^CLINICAL_MODE = (True|False)$", _f.read(), _re.M)
+        _config_text = _f.read()
+    _m = _re.search(r"^CLINICAL_MODE = (True|False)$", _config_text, _re.M)
     _is_clinical = bool(_m and _m.group(1) == "True")
+    _m = _re.search(r"^SERVICE_BUILD = (True|False)$", _config_text, _re.M)
+    _is_service = bool(_m and _m.group(1) == "True")
 except Exception:
     _is_clinical = False
-print(f"[spec] building the {'Clinical' if _is_clinical else 'Research'} "
-      "variant (CLINICAL_MODE stamp in config/app_config.py)")
+    _is_service = False
+# The engineering-mode unlock ships in Research builds and in the clinical
+# service tool only (#706).
+_has_engineering_unlock = not _is_clinical or _is_service
+_variant_label = ("Clinical service" if _is_clinical and _is_service
+                  else "Clinical" if _is_clinical else "Research")
+print(f"[spec] building the {_variant_label} variant (CLINICAL_MODE / "
+      "SERVICE_BUILD stamps in config/app_config.py)")
 if _is_clinical:
     _missing = []
     for _mod in ("keyring", "sqlcipher3"):
@@ -259,6 +276,12 @@ runtime_hooks = ["rthook_libusb_paths.py"]
 _excludes = ["PySide6", "shiboken6", "PySide2", "PyQt5"]
 if _is_clinical:
     _excludes.append("app_updater")
+# Same for the engineering-mode unlock (#706): a clinical build that is not
+# the service tool leaves out the Python unlock here and its QML prompt
+# below, so it carries neither the check nor the dialog. Guarded by
+# tests/test_engineering_unlock.py.
+if not _has_engineering_unlock:
+    _excludes.append("engineering_unlock")
 
 a = Analysis(
     [ENTRY],
@@ -271,6 +294,41 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+
+# The unlock prompt rides in with the components/ folder; drop it from a
+# clinical bundle (#706). main.qml loads it only when the connector says the
+# build has the unlock, so nothing references the missing file.
+_UNLOCK_QML = _norm(os.path.join("components", "EngineeringUnlockModal.qml"))
+if not _has_engineering_unlock:
+    a.datas = [e for e in a.datas if _norm(e[0]) != _UNLOCK_QML]
+    print(f"[spec] left {_UNLOCK_QML} out of the clinical bundle (#706)")
+
+# ---------- libusb >= 1.0.30 only (#669) ----------
+# Every libusb the app ships comes from the SDK package (omotion\_vendor).
+# The libusb1 wheel's hook adds another, usb1\libusb-1.0.dll (1.0.28 in
+# libusb1 3.3.1), that is never loaded: only the SDK's Linux/macOS hotplug
+# provider imports usb1. If anything imported it here, its loader would fall
+# back to the bare libusb-1.0.dll name, which resolves to the SDK's copy in
+# the _vendor directories main.py registers. (SDKs before 1.14.0 also shipped
+# dfu-util.exe / lsusb.exe, whose dependency scan pulled in the BUILD HOST's
+# libusb-1.0.dll; the filter still drops any such copy.)
+# So it stays out, and every libusb-1.0.dll left in the payload must be
+# >= 1.0.30. An rc build pinned to an SDK release with older DLLs stops here.
+_OM_DIR = os.path.normcase(os.path.abspath(
+    list(_om_spec.submodule_search_locations)[0])) + os.sep
+
+
+def _foreign_libusb(entry):
+    return (os.path.basename(_norm(entry[0])).lower() == "libusb-1.0.dll"
+            and not os.path.normcase(os.path.abspath(entry[1])).startswith(_OM_DIR))
+
+
+a.binaries = [e for e in a.binaries if not _foreign_libusb(e)]
+sys.path.insert(0, os.path.join(SPECPATH, "scripts"))
+from check_libusb import check as _check_libusb
+_libusb_errors = _check_libusb((e[0], e[1]) for e in a.binaries + a.datas)
+if _libusb_errors:
+    raise SystemExit("[spec] FATAL: " + "; ".join(_libusb_errors))
 
 pyz = PYZ(a.pure)
 
@@ -289,7 +347,6 @@ pyz = PYZ(a.pure)
 # rewriting resources after that point truncates the appended archive and
 # produces an exe that cannot start.
 if sys.platform == "win32":
-    sys.path.insert(0, os.path.join(SPECPATH, "scripts"))
     from win_icon_resource import install_pyinstaller_hook, has_named_group_icon
     install_pyinstaller_hook()
 

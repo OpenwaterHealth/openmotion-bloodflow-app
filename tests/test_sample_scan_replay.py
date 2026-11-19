@@ -172,8 +172,13 @@ def test_past_scan_source_from_csv_serves_replay_points(tmp_path):
 
 def _connector(tmp_path, *, console, left, right, scan_db_path=None,
                app_config=None):
+    from omotion import ConnectionState
     iface = MagicMock()
     iface.is_device_connected.return_value = (console, left, right)
+    # The startup watchdog and its offer gate read the handles' live state.
+    for name, up in (("console", console), ("left", left), ("right", right)):
+        getattr(iface, name).state = (ConnectionState.CONNECTED if up
+                                      else ConnectionState.DISCONNECTED)
     iface.scan_workflow.running = False
     iface.scan_workflow.config_running = False
     iface.scan_db_path = scan_db_path
@@ -448,6 +453,21 @@ def test_watchdog_no_offer_when_any_device_is_connected(
     with a live sensor attached must never be offered a sample."""
     c = _connector(tmp_path, console=console, left=left, right=right,
                    app_config={"clinicalMode": False})
+    offers = _offers(c)
+
+    c._check_connection_watchdog()
+
+    assert offers == []
+
+
+def test_watchdog_no_offer_when_the_sdk_reports_a_device_connected(tmp_path):
+    """A console the SDK reports CONNECTED counts even while its CONNECTED
+    event is still queued behind a busy GUI thread (#667): the rig gets the
+    E-106 sensor warning, not a sample-dataset offer."""
+    from omotion import ConnectionState
+    c = _connector(tmp_path, console=False, left=False, right=False,
+                   app_config={"clinicalMode": False})
+    c._interface.console.state = ConnectionState.CONNECTED
     offers = _offers(c)
 
     c._check_connection_watchdog()

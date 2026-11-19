@@ -65,6 +65,8 @@ def test_connect_caches_then_disconnect_clears(tmp_path):
     c._on_handle_state_changed_impl(
         handle, ConnectionState.DISCONNECTED, ConnectionState.CONNECTED, "found"
     )
+    # The connect-time bring-up (a worker in the app) reads the version.
+    c._run_device_init("console", c._device_connect_gen["console"])
     assert c.consoleFirmwareVersion == "v1.0.0"
 
     c._on_handle_state_changed_impl(

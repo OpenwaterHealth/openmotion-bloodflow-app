@@ -77,6 +77,24 @@ _STARTUP = [
         "Power-cycle the sensor and reconnect. If only some cameras are "
         "affected, the camera board may need service.",
     ),
+    _e(
+        "E-107", "startup",
+        "Storage almost full",
+        "The drive that stores scan data has less than 1 GB free. Scans "
+        "cannot be started until space is freed.",
+        "Free up space on the data drive (or export and remove old scans) "
+        "before starting a scan. Contact support if the drive should not "
+        "be full.",
+    ),
+    _e(
+        "E-108", "startup",
+        "Scan storage inaccessible",
+        "The scan database in the data folder is not encrypted. This build "
+        "stores patient data only in encrypted form, so it will not open "
+        "that database and scans cannot be started.",
+        "Do not delete or move the data folder: it may hold patient data. "
+        "Contact support with the session log attached.",
+    ),
 ]
 
 # Note: E-104 (console not detected) and E-106 (sensor not detected) are NOT in
@@ -104,6 +122,15 @@ _SAFETY = [
         "off. The scan was stopped.",
         "Remove any obstruction, let the system settle, and start a new scan. "
         "If it trips repeatedly, stop and contact support.",
+    ),
+    _e(
+        "E-203", "safety",
+        "Laser safety trip",
+        "The laser-safety monitor tripped while no scan was running and the "
+        "laser was shut off. The safety interlock stays latched until the "
+        "console is power-cycled.",
+        "Power-cycle the console and reconnect before starting a scan. If it "
+        "trips again, stop and contact support.",
     ),
 ]
 
@@ -143,6 +170,25 @@ _SCAN = [
         "saved.",
         "Check the USB cables and power, reconnect the system, and start a "
         "new scan. If it keeps happening, contact support.",
+    ),
+    _e(
+        "E-305", "scan",
+        "Not enough storage to start scan",
+        "The drive that stores scan data has less than 1 GB free, so the "
+        "scan was not started and the laser did not fire.",
+        "Free up space on the data drive (or export and remove old scans), "
+        "then start the scan again. Contact support if the drive should "
+        "not be full.",
+    ),
+    _e(
+        "E-306", "scan",
+        "Scan stopped: storage almost full",
+        "The drive that stores scan data dropped below 100 MB free during "
+        "the scan, so the scan was stopped before the drive filled up. Data "
+        "captured so far was saved.",
+        "Free up space on the data drive (or export and remove old scans) "
+        "before starting another scan. Contact support if the drive should "
+        "not be full.",
     ),
 ]
 

@@ -44,7 +44,12 @@ def _connector(clinical_mode=False):
         captureLog=_Signal(),
         recovered=[],
         notified=[],
+        audited=[],
     )
+    # Audit-log surface — records (event_type, details).
+    conn._audit = SimpleNamespace(
+        log=lambda event_type, details=None:
+        conn.audited.append((event_type, details)))
     # Called by the sink when a dropped camera's frames resume.
     conn._on_camera_dropout_recovered = (
         lambda side, cam_id: conn.recovered.append((side, cam_id)))
@@ -302,15 +307,44 @@ def test_over_temp_fires_a_toast_not_just_a_log_line():
     assert len(conn.captureLog.calls) == 1
 
 
-def test_over_temp_toast_suppressed_in_clinical_mode():
-    """Clinical builds get the log line but no mid-scan popup."""
+def test_over_temp_toast_shown_in_clinical_mode():
+    """Clinical builds show the over-temperature warning too (#702) — it
+    used to be log-only there, so the operator never saw it."""
     conn = _connector(clinical_mode=True)
     sink, _ = _make_sink(conn)
 
     sink.consume("live", _over_temp_batch(temp_c=112.0))
 
-    assert conn.notified == []
+    assert len(conn.notified) == 1
+    assert conn.notified[0]["type"] == "warning"
+    assert conn.notified[0]["tag"] == "temp_left_2"
     assert len(conn.captureLog.calls) == 1
+
+
+@pytest.mark.parametrize("clinical_mode", [False, True])
+def test_over_temp_writes_an_audit_entry(clinical_mode):
+    """Every over-temperature alert lands in the audit log (#702)."""
+    conn = _connector(clinical_mode=clinical_mode)
+    sink, _ = _make_sink(conn)
+
+    sink.consume("live", _over_temp_batch(temp_c=112.0))
+
+    assert conn.audited == [("camera_over_temperature", {
+        "side": "left", "camera": 3, "temp_c": 112.0, "threshold_c": 100.0,
+    })]
+
+
+def test_over_temp_audit_entry_once_per_camera_per_scan():
+    conn = _connector()
+    sink, _ = _make_sink(conn)
+
+    for _ in range(5):
+        sink.consume("live", _over_temp_batch(temp_c=112.0))
+    assert len(conn.audited) == 1
+
+    sink.on_scan_start(None)
+    sink.consume("live", _over_temp_batch(temp_c=112.0))
+    assert len(conn.audited) == 2
 
 
 def test_over_temp_toast_fires_once_per_camera_per_scan():
@@ -338,6 +372,7 @@ def test_no_over_temp_toast_below_threshold():
 
     assert conn.notified == []
     assert conn.captureLog.calls == []
+    assert conn.audited == []
 
 
 def test_live_plot_sink_no_temp_for_dark_frames():

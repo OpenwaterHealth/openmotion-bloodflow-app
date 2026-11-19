@@ -30,7 +30,7 @@ These are the only builds this repository publishes.
 |---|---|---|
 | `Open-Motion-Research-Setup-<version>.exe` | Windows 11 | Installer. It also installs the USB driver for the sensor modules. **Recommended.** |
 | `Open-Motion-Research-<version>.zip` | Windows 11 | Portable. Unzip it anywhere and run `Open-Motion.exe`. Install the [USB driver](#usb-drivers) separately. Pre-releases only. |
-| `Open-Motion-<version>-macOS.dmg` | macOS (Apple Silicon) | See [macOS](#macos) below. |
+| `Open-Motion-Research-<version>-macOS.dmg` | macOS (Apple Silicon) | See [macOS](#macos) below. |
 
 ### Release types
 
@@ -91,7 +91,9 @@ xattr -dr com.apple.quarantine /Applications/Open-Motion.app
   and scrub real BFI/BVI traces in the plot viewer. Nothing loads unless you
   accept.
 - **History → Export CSV** exports any stored scan. By default the app writes no
-  per-scan CSV files; everything is kept in the local scan database.
+  per-scan CSV files; everything is kept in the local scan database. The
+  [CSV format reference](docs/csv-formats.md) describes every column of the
+  exported, raw and telemetry CSVs.
 - **Errors** show a stable code such as `E-104`. The
   [error code catalog](docs/ERROR_CODES.md) explains each code and what to do
   about it.
@@ -228,7 +230,7 @@ The Setup installer needs WiX 5 and the .NET 8 SDK. Without them,
 ```bash
 brew install libusb
 pip install --upgrade "pyinstaller>=6.13"
-./build_macos.sh          # → dist/Open-Motion.app + dist/Open-Motion-<version>-macOS.dmg
+./build_macos.sh          # → dist/Open-Motion.app + dist/Open-Motion-Research-<version>-macOS.dmg
 ```
 
 **Releases** are built by CI (`.github/workflows/release-build.yml`) when a

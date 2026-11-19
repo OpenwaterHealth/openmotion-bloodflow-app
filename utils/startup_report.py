@@ -94,7 +94,10 @@ def log_startup_report(
             mode = "portable (writable state next to exe)"
         else:
             mode = "installed (writable state under %LOCALAPPDATA%, per user)"
-        log.info("Build variant:  %s", "Clinical" if clinical else "Research")
+        log.info("Build variant:  %s",
+                 ("Clinical service tool (engineering unlock compiled in)"
+                  if compiled.SERVICE_BUILD else "Clinical")
+                 if clinical else "Research")
         log.info("Install mode:   %s (portableMode=%s, frozen=%s, bundler=%s)",
                  mode, portable, frozen, bundler())
         log.info("Config:         compiled (config/app_config.py), "

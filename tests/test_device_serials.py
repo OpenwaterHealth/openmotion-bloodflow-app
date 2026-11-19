@@ -107,6 +107,8 @@ def test_connect_caches_then_disconnect_clears(tmp_path):
     c._on_handle_state_changed_impl(
         handle, ConnectionState.DISCONNECTED, ConnectionState.CONNECTED, "found"
     )
+    # The connect-time bring-up (a worker in the app) reads the serial.
+    c._run_device_init("left", c._device_connect_gen["left"])
     assert c.leftSensorSerialNumber == "QWW04Q10003"
     n = len(fired)
 

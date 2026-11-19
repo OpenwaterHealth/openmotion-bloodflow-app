@@ -38,15 +38,17 @@ from PyQt6.QtQml import (
     qmlRegisterSingletonInstance,
     qmlRegisterSingletonType,
 )
-from PyQt6.QtCore import qInstallMessageHandler, QtMsgType, QUrl
+from PyQt6.QtCore import qInstallMessageHandler, QtMsgType, QTimer, QUrl
 
+from config.app_config import SERVICE_BUILD
 from motion_connector import MotionConnector
 from motion_config import DEFAULT_TRIGGER_OVERRIDES
-from omotion import MotionInterface
+from omotion import MotionInterface, db_open
 from utils.single_instance import check_single_instance, cleanup_single_instance
 from version import get_version
 from utils.resource_path import resource_path
 from utils import app_paths, config_store, settings_store, startup_report
+from utils.onefile_cleanup import start_background_sweep
 
 
 APP_VERSION = get_version()
@@ -293,6 +295,18 @@ def _app_icon() -> QIcon:
     return icon
 
 
+def _scan_db_is_encrypted(scan_db_path: str) -> bool:
+    """Whether a clinical build may open scans.db (#683).
+
+    Clinical builds keep scans.db encrypted at rest. A missing (or still
+    empty) file passes: MotionInterface turns the SDK's encryption policy
+    on, and the SDK then creates the database encrypted. A plaintext SQLite
+    file does not. A Research install or a version before 1.5.0 can leave
+    one in the same data folder, and a clinical build never converts it.
+    """
+    return db_open.classify_file(scan_db_path) != "plaintext"
+
+
 def main():
     # Set the Windows AppUserModelID before any QApplication (and thus any
     # HWND) exists: Windows binds the taskbar button to the process identity
@@ -426,8 +440,11 @@ def main():
     # Clinical builds encrypt scans.db at rest (SQLCipher, key in the Windows
     # Credential Manager). The flag is the SIGNED build config, so the encrypt
     # decision cannot be independently forgotten. Constructing MotionInterface
-    # sets the SDK's process-wide policy exactly once.
+    # sets the SDK's process-wide policy exactly once. A clinical build checks
+    # scans.db first: a plaintext one left in the data folder is reported as
+    # E-108 once the window is up (#683), and the SDK refuses to open it.
     _clinical = bool(app_config.get("clinicalMode", False))
+    _plaintext_scan_db = _clinical and not _scan_db_is_encrypted(_scan_db_path)
     motion_interface = MotionInterface(
         data_dir=_scan_data_dir,
         scan_db_path=_scan_db_path,
@@ -440,38 +457,12 @@ def main():
         default_trigger_config=DEFAULT_TRIGGER_OVERRIDES,
     )
 
-    # An existing PLAINTEXT scans.db must be encrypted before anything opens it:
-    # under the policy the SDK refuses to open plaintext (it never silently
-    # appends PHI in the clear), and AuditLog opens the same file inside
-    # MotionConnector below. So this has to happen here — after the policy is
-    # set, before the connector exists.
-    if _clinical:
-        from omotion import db_migrate
-
-        try:
-            if db_migrate.migrate_plaintext_to_encrypted(_scan_db_path):
-                logger.warning(
-                    "scans.db was plaintext and has been encrypted in place. A "
-                    "backup of the original remains at %s.pre-encryption.bak — "
-                    "remove it per SOP once this build is confirmed.",
-                    _scan_db_path,
-                )
-        except Exception:
-            # Fail loudly but let the app start: the SDK's own pre-flight will
-            # refuse the scan before the laser fires, which is a far clearer
-            # failure than a dead splash screen.
-            logger.exception(
-                "scans.db encryption migration FAILED — scanning will be "
-                "refused until this is resolved. The original database is "
-                "untouched."
-            )
-
     # Operator preferences (#546): the PREFERENCE / STATE tiers of the
     # compiled config live in the settings table of scans.db — encrypted and
     # HMAC-protected on a clinical build — instead of a plaintext overrides
-    # file. Opened here because it needs the encryption policy set (above)
-    # and the plaintext migration done. A pre-#546 app_config.local.json,
-    # if one is still on the machine, is ignored: nothing reads it.
+    # file. Opened here because it needs the encryption policy set (above).
+    # A pre-#546 app_config.local.json, if one is still on the machine, is
+    # ignored: nothing reads it.
     settings = settings_store.SettingsStore(_scan_db_path)
     saved_keys = config_store.apply_saved_preferences(app_config, settings.load())
 
@@ -487,6 +478,11 @@ def main():
 
     motion_interface.log_system_info()
 
+    # Delete the %TEMP% extraction folders earlier launches orphaned when
+    # their onefile launcher was killed (#727). Only after the
+    # single-instance check: no other instance may be running from one.
+    start_background_sweep()
+
     qInstallMessageHandler(qt_message_handler)
 
     app = QApplication(qt_argv)
@@ -496,8 +492,15 @@ def main():
     app.setWindowIcon(_app_icon())
 
     # Set application properties for Windows taskbar. Display name reflects
-    # the build variant: clinicalMode=false is the Research distribution.
-    app_display_name = "Open-Motion" if app_config.get("clinicalMode", False) else "Open-Motion Research"
+    # the build variant: clinicalMode=false is the Research distribution,
+    # and the clinical service tool (#706) names itself so it can't pass
+    # for a patient build.
+    if not app_config.get("clinicalMode", False):
+        app_display_name = "Open-Motion Research"
+    elif SERVICE_BUILD:
+        app_display_name = "Open-Motion Service"
+    else:
+        app_display_name = "Open-Motion"
     app.setApplicationName(app_display_name)
     app.setApplicationVersion(APP_VERSION)
     app.setOrganizationName("Openwater")
@@ -551,6 +554,14 @@ def main():
     # take ~5s normally, well past the old 2s cap, so this reliably blocked on
     # any hardware-attached launch. Already-attached devices still reach the
     # UI via the same _on_handle_state_changed signal path as any hotplug.
+    # Low-storage check (issue #506): E-107 critical modal when the data
+    # drive is nearly full. Deferred to the first event-loop turn so the
+    # QML modal is listening when it fires.
+    QTimer.singleShot(0, connector.check_startup_storage)
+    if _plaintext_scan_db:
+        QTimer.singleShot(0, lambda: connector.raise_startup_error(
+            "E-108", detail=f"{_scan_db_path} is a plaintext database."))
+
     logger.info("Starting Motion monitoring...")
     motion_interface.start(wait=False)
 

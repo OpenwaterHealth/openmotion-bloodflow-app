@@ -12,12 +12,10 @@ read or export it.
 
 1. Open **Settings** (gear icon).
 2. Scroll to the **Audit Log** section and click **View Logs**.
-3. Enter the access password when prompted.
 
-> The password is the same one used for other protected actions in the app
-> (e.g. starting a calibration or deleting scans). Ask your system
-> administrator if you don't have it. The audit log is read-only from the
-> UI — there is no way to edit or delete individual entries through the app.
+> No password is needed, in any build. Opening the log is itself recorded
+> (`audit_log_viewed`). The audit log is read-only from the UI — there is
+> no way to edit or delete individual entries through the app.
 
 The viewer lists entries **newest first**, with three columns:
 
@@ -67,6 +65,10 @@ plus a small JSON `details` payload. The app records the following events:
 | `calibration_override_accepted` | At the pre-write gate, the operator authorised overwriting the console calibration despite below-threshold scan means/contrast. | `target`, `cameras_below_threshold` |
 | `calibration_override_declined` | The operator declined at the pre-write gate; the console kept its existing calibration and nothing was written. | `target`, `cameras_below_threshold` |
 | `settings_changed` | A setting is changed and saved. | `changes` — only the keys that actually changed, each as `{ "old": …, "new": … }` |
+| `engineering_mode_unlocked` | Engineering mode is unlocked with the engineering password (Research builds and the clinical service tool only). | — |
+| `engineering_unlock_failed` | An engineering unlock is attempted with a wrong password. | — |
+| `engineering_unlock_refused` | An engineering unlock is attempted in a build that has none (a clinical build). | `reason` |
+| `engineering_action_refused` | Calibrate or Test is called without engineering mode. | `action` (`calibrate`/`test_scan`) |
 | `scan_viewed` | A past scan is opened in the viewer. | `label` |
 | `scan_deleted` | One or more scans are deleted. | `session_ids`, `count` |
 | `audit_log_viewed` | The audit log itself is opened. | `entry_count` |

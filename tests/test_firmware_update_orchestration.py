@@ -113,3 +113,48 @@ def test_disconnect_suppressed_during_flash(tmp_path):
     assert c.consoleFirmwareVersion == "v1.0.0", "expected DFU drop must not clear version"
     assert c._consoleConnected is True, "DFU disconnect must not clear the connected flag"
     assert c._state != DISCONNECTED, "state machine must not transition during a flash"
+
+
+def _run_worker(tmp_path, monkeypatch, phases, needs_power_cycle):
+    """Run the flash worker inline against a stubbed SDK updater that reports
+    ``phases`` and then returns a 1.14.0-style FirmwareUpdateResult (#739)."""
+    import omotion.firmware_update as fwu
+    from omotion.dfu.progress import DFUProgress
+
+    c = _connector(tmp_path, dev_mode=False)
+    monkeypatch.setattr(motion_connector, "check_latest",
+                        lambda kind, **_: MagicMock(tag="9.9.9"))
+    monkeypatch.setattr(fwu, "download_firmware",
+                        lambda info, dest: tmp_path / "fw.bin")
+
+    class _Updater:
+        def update(self, handle, bin_path, progress_cb=None):
+            for phase in phases:
+                progress_cb(DFUProgress(phase=phase, percent=None, bytes_written=None,
+                                        message="raw SDK text", elapsed_s=0.0))
+            return MagicMock(success=True, needs_power_cycle=needs_power_cycle)
+
+    monkeypatch.setattr(fwu, "FirmwareUpdater", _Updater)
+    progress = []
+    c.firmwareUpdateProgress.connect(lambda d, s, p, m: progress.append((s, m)))
+    out = _finished(c)
+    c._firmware_update_in_progress = "left"
+    c._firmware_update_worker("left")
+    return dict(progress), out
+
+
+def test_power_cycle_wait_tells_the_user(tmp_path, monkeypatch):
+    """update() blocks while it waits for a manual power-cycle; the status
+    line must say so instead of showing the bare phase name."""
+    progress, out = _run_worker(tmp_path, monkeypatch,
+                                ["verify", "wait", "power_cycle"], False)
+    assert progress["verify"] == "Verifying"
+    assert "restart" in progress["wait"].lower()
+    assert "power-cycle" in progress["power_cycle"].lower()
+    assert out == [("left", True,
+                    "Firmware updated. The device restarted with the new version.")]
+
+
+def test_finished_message_follows_needs_power_cycle(tmp_path, monkeypatch):
+    _, out = _run_worker(tmp_path, monkeypatch, ["download"], True)
+    assert out[0][1] is True and "power-cycle" in out[0][2].lower()

@@ -7,8 +7,8 @@ import OpenMotion 1.0
 // Audit-log viewer. Lists machine-readable audit entries (newest first),
 // filterable by event type / date range / free text (#226), and exports
 // them as CSV (always the COMPLETE log — filters are view-only, so the
-// export stays the full audit record). Opened from the password gate in
-// SettingsModal. Governed by ModalManager (see HistoryModal.qml for the
+// export stays the full audit record). Opened from View Logs in
+// SettingsModal (no password, #703). Governed by ModalManager (see HistoryModal.qml for the
 // modal contract).
 Item {
     id: root

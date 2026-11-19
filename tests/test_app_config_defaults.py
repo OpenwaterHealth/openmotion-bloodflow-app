@@ -7,6 +7,7 @@ clinical flow depends on, the dev-only launch overrides, and the tombstones
 for flags that were removed and must never come back.
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -76,6 +77,15 @@ def test_tec_trip_temp_is_compiled_nonzero():
     """A shipped 0 would disable the firmware over-temp trip entirely."""
     assert compiled.APP_CONFIG["tecTripTempC"] == 40
     assert app_main._load_app_config()["tecTripTempC"] == 40
+
+
+def test_camera_over_temp_threshold_is_defined_once():
+    """110 °C, compiled in one place (#702). The connector's fallback used
+    to carry its own 105 °C, so a config without the key alerted 5 °C early."""
+    assert compiled.APP_CONFIG["cameraTempAlertThresholdC"] == 110
+    src = (REPO_ROOT / "motion_connector.py").read_text(encoding="utf-8")
+    assert re.search(
+        r'"cameraTempAlertThresholdC"\s*,\s*[-\d.]+\s*\)', src) is None
 
 
 def test_connection_timeout_is_twelve_seconds():

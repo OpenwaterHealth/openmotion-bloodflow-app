@@ -177,14 +177,14 @@ Rectangle {
             }
             elapsedMs += interval
             // A config in flight legitimately blocks for ~50 s — match
-            // ScanRunner's flash watchdog bound. The post-connect sensor
-            // init (issue #303) legitimately holds the pipeline for a few
+            // ScanRunner's flash watchdog bound. The connect-time device
+            // bring-up (issue #303) legitimately holds the pipeline for a few
             // seconds after a (re)connect — wait that out on its own bound
-            // so a start armed just as a sensor replugs defers instead of
+            // so a start armed just as a device replugs defers instead of
             // erroring. Anything else holding the pipeline past 8 s is
             // stuck; give up loudly.
             var deadline = MotionInterface.isConfigInFlight() ? 250000
-                         : MotionInterface.sensorInitBusy ? 30000
+                         : MotionInterface.deviceInitBusy ? 30000
                          : 8000
             if (elapsedMs >= deadline) {
                 stop()
@@ -214,12 +214,12 @@ Rectangle {
         scanning: bloodFlow.scanning
         waiting: bloodFlow.scanStartPending
         // Issue #303: hold Start/Check disabled while the connector's async
-        // post-connect sensor init (debug flags, camera power masks, info
-        // reads) is still in flight — a start in that window collides with
-        // the init sequence ("Failed to program FPGA" on both sensors) and
-        // can wedge a camera until DUT power-cycle. sensorInitBusy re-arms
-        // on every sensor (re)connect, so a mid-session replug re-gates too.
-        camerasReady: bloodFlow.camerasReady && !MotionInterface.sensorInitBusy
+        // connect-time bring-up is still in flight — a start in that window
+        // collides with it: on a sensor, "Failed to program FPGA" and a
+        // camera wedged until DUT power-cycle; on the console, a scan before
+        // the laser registers are loaded. deviceInitBusy re-arms on every
+        // (re)connect, so a mid-session replug re-gates too.
+        camerasReady: bloodFlow.camerasReady && !MotionInterface.deviceInitBusy
         clinicalMode: bloodFlow.clinicalMode
 
         // Action buttons — close any open modal first (which by
@@ -239,6 +239,10 @@ Rectangle {
                 // has been appended to scanNotes. Opening it here would
                 // race the append and pop an empty modal.
             } else {
+                // Low-storage gate (#506): under 1 GB free on the data
+                // drive the connector raises the E-305 critical modal and
+                // nothing starts — not even the clinical pre-scan check.
+                if (!MotionInterface.checkStorageForScan()) return
                 if (bloodFlow.clinicalMode) {
                     clinicalStartPending = true
                     contactQualityModal.preScanMode = true
@@ -288,10 +292,18 @@ Rectangle {
         modals: [scanSettingsModal, notesModal, historyModal,
                  settingsModal, contactQualityModal, logsModal,
                  sampleScanOfferModal]
+        // Hiding an item does not take its keyboard focus away (#517). A
+        // modal closed while one of its text fields had focus left that
+        // invisible field holding it: it took every later Space as typed
+        // text, so the notes shortcut below worked once and then went dead
+        // until the operator clicked back into the app. Hand focus back to
+        // the viewer, where it starts, whenever the last modal closes.
+        onCurrentChanged: if (current === null) plotViewer.forceActiveFocus()
     }
 
     // Data viewer — fills remaining space to the right of ButtonPanel.
     PlotViewer {
+        id: plotViewer
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         anchors.left: buttonPanel.right
@@ -384,6 +396,8 @@ Rectangle {
     // the modal from onStartStopClicked or scanFinished races the
     // append because scanRunner.scanFinished fires synchronously from
     // cancel(), before the SDK has unwound and _on_complete has run.
+    // If the operator already has the modal open (Space mid-scan), open()
+    // keeps their unsaved text and adds the footer below it (#617).
     Connections {
         target: MotionInterface
         function onScanNotesReady() { notesModal.open() }

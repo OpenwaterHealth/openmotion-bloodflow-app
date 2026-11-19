@@ -15,6 +15,9 @@ Every key belongs to exactly one tier, declared in the sets at the bottom:
              it, reset to the compiled value at every launch, never written
              anywhere. The engineering unlock is per session, so nothing it
              enables may outlive the session that authorized it.
+             ``engineeringMode`` itself is turned on only by the connector's
+             ``unlockEngineeringMode`` (#706); a ``setConfig`` of True is
+             refused like a constant.
 * PREFERENCE operator preferences that survive a relaunch. Persisted in the
              ``settings`` table of ``scans.db`` (SQLCipher-encrypted and
              HMAC-protected in clinical builds), never in a plaintext file.
@@ -36,6 +39,14 @@ import sys
 # Stamped per artifact by scripts/build_common.ps1 (regex on this exact
 # line). Source runs may override it with --clinical / --research.
 CLINICAL_MODE = False
+
+# A clinical build normally has the engineering-mode unlock compiled out
+# (#706). SERVICE_BUILD = True keeps it in: the clinical service tool,
+# stamped only at build time by `build_nuitka.ps1 -Variant clinical -Service`
+# (or Invoke-VariantBuild -Service), which CI runs only for the windows-build
+# action's unsigned service-tool build. The repo value must stay False. It has
+# no effect on a Research build, which always carries the unlock.
+SERVICE_BUILD = False
 
 # ── Tier names ─────────────────────────────────────────────────────────────
 CONSTANT = "constant"
@@ -124,6 +135,13 @@ APP_CONFIG = {
     # Whole-scan data-stall watchdog (#248): abort with E-303 when no camera
     # delivers a frame for this long while the trigger is on; <= 0 disables.
     "scanDataStallTimeoutSec": 3,
+    # Low-storage checks (#506), MB free on the data drive. Under
+    # minFreeDiskMb: critical error at startup (E-107) and on Start
+    # (E-305), plus one warning toast per running scan. Under
+    # scanStopFreeDiskMb: the running scan is stopped gracefully with
+    # the E-306 critical modal. <= 0 disables the respective checks.
+    "minFreeDiskMb": 1024,
+    "scanStopFreeDiskMb": 100,
     # Console over-temp trip (C) pushed to the console user config on
     # connect; validated 1-60 before any write (motion_config.ensure_tec_trip).
     "tecTripTempC": 40,
@@ -189,6 +207,7 @@ CONSTANT_KEYS = frozenset({
     "cq_live_activate_frames", "cq_live_clear_frames",
     "cq_dark_threshold_per_camera", "cq_light_threshold_per_camera",
     "cameraTempAlertThresholdC", "scanDataStallTimeoutSec", "tecTripTempC",
+    "minFreeDiskMb", "scanStopFreeDiskMb",
     "powerOffUnusedCameras", "histoThrottle", "deferHistoSend",
     "commVerbose", "verboseCommandHandling",
     "support_email", "connectionTimeoutSec", "requireConsole", "minSensors",

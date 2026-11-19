@@ -5,14 +5,19 @@ from unittest.mock import MagicMock
 import pytest
 
 import error_codes
+import motion_connector
 from motion_connector import MotionConnector
 
 pytestmark = pytest.mark.unit
 
 
 def _connector(tmp_path, app_config=None, connected=(True, True, True)):
+    from omotion import ConnectionState as S
     iface = MagicMock()
     iface.is_device_connected.return_value = connected
+    # The startup watchdog reads the handles' live SDK state.
+    for name, up in zip(("console", "left", "right"), connected):
+        getattr(iface, name).state = S.CONNECTED if up else S.DISCONNECTED
     iface.scan_workflow.running = False
     iface.scan_workflow.config_running = False
     iface.scan_db_path = None
@@ -210,6 +215,234 @@ def test_watchdog_respects_min_sensors_config(tmp_path):
     assert len(notifs) == 1
     assert notifs[0]["type"] == "warning"
     assert "Sensor" in notifs[0]["text"]
+
+
+# ── Startup watchdog vs a device that is still connecting (#667) ─────────
+
+
+class _Timers:
+    """Stands in for motion_connector.QTimer: records singleShot calls
+    instead of arming real timers, so a test fires them explicitly."""
+
+    def __init__(self):
+        self.shots = []
+
+    def singleShot(self, ms, fn):
+        self.shots.append((ms, fn))
+
+
+def _timers(monkeypatch):
+    # Patched after the connector is built: its constructor makes QTimer
+    # instances, which the stand-in does not provide.
+    timers = _Timers()
+    monkeypatch.setattr(motion_connector, "QTimer", timers)
+    return timers
+
+
+def _sdk_state(conn, name, state):
+    """The SDK's own state change, before its queued event reaches the
+    connector because the GUI thread is busy."""
+    getattr(conn._interface, name).state = state
+
+
+def _state_event(conn, name, old, new, reason="poll_arrived"):
+    """A state change the connector has handled. The SDK sets its state
+    before it emits, so the live state already reads ``new``."""
+    _sdk_state(conn, name, new)
+    handle = MagicMock()
+    handle.name = name
+    conn._on_handle_state_changed_impl(handle, old, new, reason)
+
+
+def _watchdog_rechecks(timers):
+    return [fn for ms, fn in timers.shots
+            if ms == motion_connector._CONNECTION_WATCHDOG_CONNECTING_GRACE_SEC * 1000]
+
+
+def _dismissed_tags(conn):
+    out = []
+    conn.notificationDismissByTagRequested.connect(lambda t: out.append(t))
+    return out
+
+
+def test_watchdog_defers_while_sensor_connecting_qa_sequence(tmp_path, monkeypatch):
+    """The QA log behind #667: console up, the right sensor went
+    DISCONNECTED -> CONNECTING 0.4 s before the deadline and reached
+    CONNECTED 1.7 s after it. No E-106 toast at all."""
+    from omotion import ConnectionState as S
+    conn = _connector(tmp_path, connected=(True, False, False))
+    timers = _timers(monkeypatch)
+    notifs = _notifs(conn)
+
+    _state_event(conn, "right", S.DISCONNECTED, S.CONNECTING)
+    conn._check_connection_watchdog()
+
+    assert notifs == []
+    rechecks = _watchdog_rechecks(timers)
+    assert len(rechecks) == 1
+
+    _state_event(conn, "right", S.CONNECTING, S.CONNECTED)
+    rechecks[0]()
+
+    assert [n for n in notifs if n["tag"] == "connection-watchdog"] == []
+    assert len(_watchdog_rechecks(timers)) == 1  # the re-check is final
+
+
+def test_watchdog_defers_on_sdk_connecting_before_its_event_arrives(
+        tmp_path, monkeypatch):
+    """The 1.5.4-dev.4 QA failure (#667): the console's connect-time setup
+    held the GUI thread ~3.7 s, the left sensor went CONNECTING in the SDK
+    inside that window, and the overdue deadline ran before the queued
+    CONNECTING event. The connector's own flags still said "missing"; the
+    SDK's live state says "connecting", so the check waits."""
+    from omotion import ConnectionState as S
+    conn = _connector(tmp_path, connected=(True, False, False))
+    timers = _timers(monkeypatch)
+    notifs = _notifs(conn)
+
+    _sdk_state(conn, "left", S.CONNECTING)
+    conn._check_connection_watchdog()
+
+    assert notifs == []
+    rechecks = _watchdog_rechecks(timers)
+    assert len(rechecks) == 1
+
+    _state_event(conn, "left", S.DISCONNECTED, S.CONNECTING)
+    _state_event(conn, "left", S.CONNECTING, S.CONNECTED, "ping_ok")
+    rechecks[0]()
+
+    assert [n for n in notifs if n["tag"] == "connection-watchdog"] == []
+
+
+def test_watchdog_counts_sdk_connected_before_its_event_arrives(
+        tmp_path, monkeypatch):
+    """A sensor the SDK already reports CONNECTED is not missing, even with
+    its CONNECTED event still queued: no warning and no re-check."""
+    from omotion import ConnectionState as S
+    conn = _connector(tmp_path, connected=(True, False, False))
+    timers = _timers(monkeypatch)
+    notifs = _notifs(conn)
+
+    _sdk_state(conn, "right", S.CONNECTED)
+    conn._check_connection_watchdog()
+
+    assert notifs == []
+    assert _watchdog_rechecks(timers) == []
+
+
+def test_watchdog_recheck_reports_sensor_that_failed_to_connect(
+        tmp_path, monkeypatch):
+    from omotion import ConnectionState as S
+    conn = _connector(tmp_path, connected=(True, False, False))
+    timers = _timers(monkeypatch)
+    notifs = _notifs(conn)
+
+    _state_event(conn, "right", S.DISCONNECTED, S.CONNECTING)
+    conn._check_connection_watchdog()
+    _state_event(conn, "right", S.CONNECTING, S.DISCONNECTED, "connect_failed")
+    _watchdog_rechecks(timers)[0]()
+
+    assert len(notifs) == 1
+    assert "Sensor not detected" in notifs[0]["text"]
+    assert notifs[0]["tag"] == "connection-watchdog"
+
+
+def test_watchdog_recheck_reports_sensor_still_connecting(tmp_path, monkeypatch):
+    """A sensor that keeps failing its handshake spends most of its time in
+    CONNECTING. The re-check is final: it reports it instead of waiting
+    again, or such a sensor would never be reported."""
+    from omotion import ConnectionState as S
+    conn = _connector(tmp_path, connected=(True, False, False))
+    timers = _timers(monkeypatch)
+    notifs = _notifs(conn)
+
+    _state_event(conn, "right", S.DISCONNECTED, S.CONNECTING)
+    conn._check_connection_watchdog()
+    _state_event(conn, "right", S.CONNECTING, S.DISCONNECTED, "connect_failed")
+    _state_event(conn, "right", S.DISCONNECTED, S.CONNECTING)
+    _watchdog_rechecks(timers)[0]()
+
+    assert len(notifs) == 1
+    assert "Sensor not detected" in notifs[0]["text"]
+    assert len(_watchdog_rechecks(timers)) == 1
+
+
+def test_watchdog_defers_while_console_connecting(tmp_path, monkeypatch):
+    from omotion import ConnectionState as S
+    conn = _connector(tmp_path, connected=(False, True, False))
+    timers = _timers(monkeypatch)
+    notifs = _notifs(conn)
+
+    _state_event(conn, "console", S.DISCONNECTED, S.CONNECTING)
+    conn._check_connection_watchdog()
+
+    assert notifs == []
+    assert len(_watchdog_rechecks(timers)) == 1
+
+
+def test_watchdog_ignores_connecting_device_it_does_not_need(
+        tmp_path, monkeypatch):
+    """Only a device the warning is about can defer it: a sensor that is
+    connecting does not hold back a missing-console warning."""
+    from omotion import ConnectionState as S
+    conn = _connector(tmp_path, connected=(False, True, False))
+    timers = _timers(monkeypatch)
+    notifs = _notifs(conn)
+
+    _state_event(conn, "right", S.DISCONNECTED, S.CONNECTING)
+    conn._check_connection_watchdog()
+
+    assert len(notifs) == 1
+    assert "Console not detected" in notifs[0]["text"]
+    assert _watchdog_rechecks(timers) == []
+
+
+def test_watchdog_toast_withdrawn_when_missing_sensor_connects(
+        tmp_path, monkeypatch):
+    from omotion import ConnectionState as S
+    conn = _connector(tmp_path, connected=(True, False, False))
+    _timers(monkeypatch)
+    dismissed = _dismissed_tags(conn)
+
+    conn._check_connection_watchdog()
+    assert "connection-watchdog" not in dismissed
+
+    _state_event(conn, "left", S.DISCONNECTED, S.CONNECTING)
+    assert "connection-watchdog" not in dismissed
+    _state_event(conn, "left", S.CONNECTING, S.CONNECTED)
+
+    assert dismissed.count("connection-watchdog") == 1
+
+    # A later reconnect has no watchdog toast to take down.
+    _state_event(conn, "left", S.CONNECTED, S.DISCONNECTED, "unplugged")
+    _state_event(conn, "left", S.DISCONNECTED, S.CONNECTED)
+    assert dismissed.count("connection-watchdog") == 1
+
+
+def test_watchdog_system_not_found_toast_stays_until_sensor_connects(
+        tmp_path, monkeypatch):
+    from omotion import ConnectionState as S
+    conn = _connector(tmp_path, connected=(False, False, False))
+    _timers(monkeypatch)
+    dismissed = _dismissed_tags(conn)
+
+    conn._check_connection_watchdog()
+    _state_event(conn, "console", S.DISCONNECTED, S.CONNECTED, "found")
+    assert "connection-watchdog" not in dismissed
+
+    _state_event(conn, "right", S.DISCONNECTED, S.CONNECTED, "found")
+    assert dismissed.count("connection-watchdog") == 1
+
+
+def test_connect_without_watchdog_toast_dismisses_nothing(tmp_path, monkeypatch):
+    from omotion import ConnectionState as S
+    conn = _connector(tmp_path, connected=(True, False, False))
+    _timers(monkeypatch)
+    dismissed = _dismissed_tags(conn)
+
+    _state_event(conn, "left", S.DISCONNECTED, S.CONNECTED, "found")
+
+    assert "connection-watchdog" not in dismissed
 
 
 def test_send_bug_report_selects_smtp_when_configured(tmp_path, monkeypatch):
