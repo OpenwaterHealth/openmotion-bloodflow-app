@@ -533,10 +533,14 @@ it's the audit trail, not something to delete.
 
 ### In-app "What's new" notes (issue #597)
 
-The app shows a "What's new" modal the first time it launches after an
-upgrade. Its content is **bundled**, not fetched: `resources/whats_new.md`,
-one `## X.Y.Z` section per release, newest first (authoring rules in the
-file's header comment; `- [research]` bullets are dropped from Clinical).
+A **Research** build shows a "What's new" modal the first time it launches
+after an upgrade. **Clinical builds never show it**: the connector returns no
+notes there (which also hides the Settings link), `main.py` doesn't seed the
+seen key, and `openwater.spec` / `build_nuitka.ps1` leave the notes file out
+of the clinical bundle. Its content is **bundled**, not fetched:
+`resources/whats_new.md`, one `## X.Y.Z` section per release, newest first
+(authoring rules in the file's header comment; a `- [research]` tag is
+accepted and stripped for display).
 **Add the section before tagging the first rc of a release** — a build
 whose version has no section shows no modal at all. Pre-release suffixes
 share the base section, so testers see it once across dev/rc/final. The
@@ -549,7 +553,8 @@ shows on a first run, so don't keep sections for releases that predate
 the feature. Logic in `whats_new.py`,
 UI in `components/WhatsNewModal.qml` (reopenable from Settings →
 Application → "What's new"). The file is bundled by `openwater.spec`, the
-`build_macos.sh` heredoc and `scripts/build_nuitka.ps1` — keep all three.
+`build_macos.sh` heredoc and `scripts/build_nuitka.ps1` (Research only) —
+keep all three.
 
 ## "Start here" by task
 

@@ -15,8 +15,9 @@ Versions compare on their ``X.Y.Z`` base only: ``1.6.0-rc.1``,
 ``1.6.0-dev.3`` and ``1.6.0+4.gabc1234`` all read the ``1.6.0`` section,
 so a tester moving rc.1 -> rc.2 -> 1.6.0 sees the notes once.
 
-A ``- [research]`` bullet is dropped from a Clinical build and shown
-without the tag in a Research one.
+The feature is Research-only: a Clinical build shows no notes at all
+(``notes_between`` returns "" and the build leaves the notes file out).
+A ``- [research]`` tag on a bullet is accepted and stripped for display.
 """
 from __future__ import annotations
 
@@ -69,13 +70,11 @@ def parse_sections(text: str) -> List[Tuple[Version, str, str]]:
     return sections
 
 
-def _filter_variant(body: str, clinical: bool) -> str:
+def _strip_research_tags(body: str) -> str:
     out = []
     for line in body.splitlines():
         m = _RESEARCH_TAG_RE.match(line)
         if m:
-            if clinical:
-                continue
             line = m.group(1) + line[m.end():]
         out.append(line)
     return "\n".join(out).strip()
@@ -93,8 +92,11 @@ def notes_between(
     (an install from before this feature): only the running release's
     section is shown, not the whole history. Empty string when the running
     release has no section of its own, so a build whose notes were never
-    written shows nothing rather than an older release's news.
+    written shows nothing rather than an older release's news. Always
+    empty for a Clinical build: What's new is Research-only.
     """
+    if clinical:
+        return ""
     cur = base_version(current)
     if cur is None:
         return ""
@@ -109,7 +111,7 @@ def notes_between(
                 continue
         elif version <= seen:
             continue
-        body = _filter_variant(body, clinical)
+        body = _strip_research_tags(body)
         if not body:
             continue
         has_current = has_current or version == cur
