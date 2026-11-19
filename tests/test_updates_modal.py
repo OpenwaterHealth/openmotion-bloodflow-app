@@ -54,6 +54,7 @@ class _Stub(QObject):
     firmwareUpdateFinished = pyqtSignal(str, bool, str)
     batchUpdateStep = pyqtSignal(str)
     batchUpdateFinished = pyqtSignal(bool, str)
+    firmwareResumeChanged = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -67,6 +68,7 @@ class _Stub(QObject):
                    for d in ("console", "left", "right")}
         self.app_latest, self.app_url = "", ""
         self.busy = False
+        self.resume_dev, self.resume_msg = "", ""
         self.calls = []
 
     def offer_fw(self, dev, cur, latest):
@@ -157,6 +159,24 @@ class _Stub(QObject):
         self.calls.append(("fw", dev))
         return True
 
+    # Interrupted firmware update (#737).
+    @pyqtProperty(str, notify=firmwareResumeChanged)
+    def firmwareResumeDevice(self):
+        return self.resume_dev
+
+    @pyqtProperty(str, notify=firmwareResumeChanged)
+    def firmwareResumeMessage(self):
+        return self.resume_msg
+
+    def interrupt(self, dev, msg):
+        self.resume_dev, self.resume_msg = dev, msg
+        self.firmwareResumeChanged.emit()
+
+    @pyqtSlot(str, result=bool)
+    def retryFirmwareUpdate(self, dev):
+        self.calls.append(("retry", dev))
+        return True
+
     @pyqtSlot()
     def checkForUpdates(self):
         self.calls.append(("check",))
@@ -203,6 +223,7 @@ def stub_make(env):
     stub.fwInfoChanged.emit()
     stub.appInfoChanged.emit()
     stub.busyChanged.emit()
+    stub.firmwareResumeChanged.emit()
     return stub, make
 
 
@@ -328,6 +349,30 @@ def test_banner_summarises_everything_pending(stub_make):
     assert banner.property("visible") is True
     summary = banner.property("summary")
     assert "Application 2.0.0" in summary and "right sensor" in summary
+
+
+def test_banner_turns_red_and_stays_while_a_unit_waits(stub_make):
+    """#737: a unit waiting in update mode with incomplete firmware must not
+    be power-cycled, so the banner shows without any offer and can't be
+    dismissed."""
+    stub, make = stub_make
+    banner = make("banner")
+    assert banner.property("visible") is False
+    stub.interrupt("console", "Do not power it off.")
+    assert banner.property("visible") is True
+    assert banner.property("_interrupted") is True
+    banner.setProperty("_dismissed", True)
+    assert banner.property("visible") is True
+    stub.interrupt("", "")
+    assert banner.property("visible") is False
+
+
+def test_interrupted_banner_is_clinical_gated(stub_make):
+    stub, make = stub_make
+    stub.set_clinical(True)
+    banner = make("banner")
+    stub.interrupt("left", "Do not power it off.")
+    assert banner.property("visible") is False
 
 
 def _confirm_text(modal, action):

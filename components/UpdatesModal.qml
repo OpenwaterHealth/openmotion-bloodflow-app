@@ -295,8 +295,59 @@ Item {
                 Layout.fillWidth: true
             }
 
+            // ── Interrupted firmware update (#737) ──────────────────────
+            // A unit waits in update mode with incomplete firmware; a power
+            // cycle would brick it. Retry rewrites it from the cached
+            // download (retryFirmwareUpdate); its progress shows in the row.
+            Rectangle {
+                Layout.fillWidth: true
+                visible: !root._clinical && !!MotionInterface.firmwareResumeDevice
+                implicitHeight: resumeCol.implicitHeight + 24
+                radius: 8
+                color: "transparent"
+                border.color: AppTheme.accentRed
+                border.width: 1
+
+                ColumnLayout {
+                    id: resumeCol
+                    anchors.fill: parent
+                    anchors.margins: 12
+                    spacing: 8
+                    Text {
+                        text: "Firmware update interrupted — do not power off"
+                        color: AppTheme.accentRed
+                        font.pixelSize: 13
+                        font.weight: Font.DemiBold
+                        Layout.fillWidth: true
+                    }
+                    Text {
+                        text: MotionInterface.firmwareResumeMessage
+                        color: AppTheme.textPrimary
+                        font.pixelSize: 12
+                        wrapMode: Text.WordWrap
+                        Layout.fillWidth: true
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Item { Layout.fillWidth: true }
+                        ModalButton {
+                            primary: true
+                            text: "Retry update"
+                            enabled: !MotionInterface.updateBusy
+                            onClicked: {
+                                var dev = MotionInterface.firmwareResumeDevice
+                                root.footerText = ""
+                                root._setRow(dev, "running", "Starting…")
+                                MotionInterface.retryFirmwareUpdate(dev)
+                            }
+                        }
+                    }
+                }
+            }
+
             Text {
                 visible: root.rows.length === 0
+                         && !MotionInterface.firmwareResumeDevice
                 text: "Everything is up to date."
                 color: AppTheme.textSecondary
                 font.pixelSize: 13
@@ -371,7 +422,10 @@ Item {
                             ModalButton {
                                 readonly property bool linkOnly:
                                     row.modelData.key === "app" && !root._appInstallable
+                                // The interrupted unit's Retry is in the red
+                                // block above, never a second button here.
                                 visible: row.modelData.available && row.phase !== "running"
+                                         && MotionInterface.firmwareResumeDevice !== row.modelData.key
                                 text: linkOnly ? "Download"
                                     : row.phase === "failed" ? "Retry" : "Update"
                                 enabled: linkOnly

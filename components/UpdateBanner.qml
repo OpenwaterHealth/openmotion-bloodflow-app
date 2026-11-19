@@ -23,7 +23,12 @@ Rectangle {
     readonly property bool _fwAvail: MotionInterface.anyFirmwareUpdateAvailable
     // Dismiss hides the current offer only; a fresh detection re-shows it.
     property bool _dismissed: false
-    visible: !_clinicalMode && (_appAvail || _fwAvail) && !_dismissed
+    // A unit waits in update mode with incomplete firmware (#737): a power
+    // cycle would brick it. The banner turns red, cannot be dismissed, and
+    // "Review" opens the updates modal, which has the Retry.
+    readonly property bool _interrupted: !_clinicalMode
+                                         && !!MotionInterface.firmwareResumeDevice
+    visible: _interrupted || (!_clinicalMode && (_appAvail || _fwAvail) && !_dismissed)
 
     readonly property string summary: {
         var parts = []
@@ -36,7 +41,7 @@ Rectangle {
         return parts.join(" · ")
     }
 
-    color: AppTheme.accentInteractive
+    color: _interrupted ? AppTheme.accentRed : AppTheme.accentInteractive
     radius: 0
 
     Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutQuad } }
@@ -54,7 +59,12 @@ Rectangle {
         }
 
         Text {
-            text: "<b>Updates available:</b> " + banner.summary
+            text: banner._interrupted
+                  ? "<b>Firmware update interrupted</b> — do not power off the "
+                    + ({"console": "console", "left": "left sensor",
+                        "right": "right sensor"}[MotionInterface.firmwareResumeDevice]
+                       || "unit")
+                  : "<b>Updates available:</b> " + banner.summary
             color: "#FFFFFF"
             font.pixelSize: 13
             textFormat: Text.RichText
@@ -72,7 +82,7 @@ Rectangle {
                 id: reviewBtn
                 anchors.centerIn: parent
                 text: "Review"
-                color: AppTheme.accentInteractive
+                color: banner.color
                 font.pixelSize: 12
                 font.weight: Font.DemiBold
             }
@@ -87,6 +97,7 @@ Rectangle {
         }
 
         Rectangle {
+            visible: !banner._interrupted
             width: 22; height: 22; radius: 11
             color: dismissArea.containsMouse ? "#FFFFFF30" : "transparent"
 
