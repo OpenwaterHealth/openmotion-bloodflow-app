@@ -89,6 +89,9 @@ Item {
                 Text {
                     id: notesText
                     width: scroller.availableWidth
+                    // Keep line ends clear of the overlay scrollbar, which
+                    // sits inside availableWidth.
+                    rightPadding: scroller.ScrollBar.vertical.width + 4
                     text: root.notes
                     textFormat: Text.MarkdownText
                     wrapMode: Text.WordWrap
