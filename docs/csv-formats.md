@@ -8,11 +8,12 @@ per-scan output. This page describes each CSV file, column by column.
 |---|---|---|
 | [Exported scan](#exported-scan-csv) `<label>_export.csv` | **History → Export CSV** | All |
 | [Raw histograms](#raw-histogram-csv) `<label>_<side>_mask<XX>_raw.csv` | **Settings → Data Output → Save raw CSV** is on during a scan | Research |
+| [IMU](#imu-csv) `<label>_imu.csv` | **Settings → Data Output → Save IMU CSV** is on during a scan | Research (and clinical with engineering mode) |
 | [Console telemetry](#console-telemetry-csv) `<label>_telemetry.csv` | Engineering mode is unlocked and **Settings → Engineering → Save telemetry CSV** is on during a scan | All, engineering mode only |
 | [Audit log](#other-csv-files) | Audit-log viewer → **Export CSV** | All |
 | [Calibration / test results](#other-csv-files) | A calibration or test run | All |
 
-Per-scan files (raw and telemetry) land in the `data/` folder under the app's
+Per-scan files (raw, IMU and telemetry) land in the `data/` folder under the app's
 data directory, the same folder that holds `scans.db`. Exports go where you
 choose.
 
@@ -71,7 +72,7 @@ Written for scans recorded on a Research build.
 | `mean_l1` … `mean_r8` | 16 | Dark-subtracted mean intensity, in DN (camera pixel-value units). |
 | `contrast_l1` … `contrast_r8` | 16 | Speckle contrast (unitless), corrected for dark level and shot noise. |
 | `temp_l1` … `temp_r8` | 16 | Camera temperature, °C. |
-| `quality_l1` … `quality_r8` | 16 | How the frame's timing was recorded (see below). |
+| `quality_l1` … `quality_r8` | 16 | Flags on that camera's frame: a corrected timestamp, an unlit camera, and the contact-quality warning shown during the scan (see below). |
 
 All 16 cameras always have columns. Cameras that weren't scanned have empty
 columns.
@@ -88,14 +89,18 @@ Written for scans recorded on a Clinical build.
 | `bvi_left`, `bvi_right` | BVI averaged the same way. |
 
 Values have up to 6 decimals. A camera with no value at a frame is left out
-of that frame's average.
+of that frame's average. An unlit camera (covered, lifted, or a decoupled
+fiber) has no BVI, so it is left out of the BVI average, but it still counts
+toward the BFI average, where its BFI can be far below zero (see "What the
+values mean").
 
-> **Known issue:** when a module's average BFI (or BVI) can't be computed at
-> a frame but the other metric can, the export writes `0.0` in that cell
-> instead of leaving it empty. This happens, for example, when every camera
-> on one module is covered: BVI is still computed, BFI is not. Treat a `0.0`
-> in a Clinical export as possibly missing. The Research layout is not
-> affected.
+When a module's average BFI (or BVI) can't be computed at a frame but the
+other metric can, the export writes `0.0` in that cell instead of leaving it
+empty. This is intended. It happens, for example, when every camera on one
+module is covered: BFI is still computed, BVI is not. The Clinical layout has
+no quality columns, so nothing in the file marks such a cell: treat a `0.0`
+in a Clinical export as possibly missing. The Research layout leaves the
+cell empty.
 
 ### Rows
 
@@ -126,20 +131,47 @@ holds the computed value without clamping, so values below 0 or above 10 do
 appear.
 
 A per-camera cell is empty when that camera has no valid measurement at that
-frame. Three things cause that: the frame was lost in transfer; the camera
-saw no light above its dark level (covered or unlit); or its variance fell
-below the shot-noise floor, which leaves `contrast` and `bfi` empty while
-`mean` and `bvi` can still have values. The full processing chain is
-described in the SDK's
+frame. Three things cause that:
+
+- The frame was lost in transfer. Every cell is empty.
+- The camera saw no light above its dark level: it was covered or lifted,
+  or its fiber was decoupled. `quality` carries `low_light` on those frames,
+  and `bvi` is empty: from a mean near 0 it would read 10, the top of the
+  scale. `mean` (near 0), `contrast` and `bfi` are kept as computed.
+  `contrast` and `bfi` are often empty anyway, and otherwise far outside a
+  lit camera's range (BFI down to around −10,000), so filter on `low_light`
+  before using them.
+- Its variance fell below the shot-noise floor. `contrast` and `bfi` are
+  empty, while `mean` and `bvi` can still have values.
+
+The full processing chain is described in the SDK's
 [Science Pipeline reference](https://github.com/OpenwaterHealth/openmotion-sdk/blob/next/docs/SciencePipeline.md#58-darkcorrectionstage).
 
-**`quality`** values:
+**`quality`** is a `;`-separated list of flags, for example
+`ts_corrected;poor_contact`. A cell with no flag reads `ok`. Flags are always
+listed in the order of this table:
 
-| Value | Meaning |
+| Flag | Meaning |
 |---|---|
-| `ok` | Recorded as captured. |
 | `ts_corrected` | The frame arrived with a timestamp off the 25 ms cadence; `timestamp_s` was replaced by one interpolated from its neighbours. The other values are measured. |
 | `nan_filled` | A placeholder for a frame that never arrived. Such frames have no values, so in practice they rarely appear. |
+| `low_light` | The camera saw no light above its dark level on this frame (see above). `bvi` is empty; `contrast` and `bfi` are kept as computed and can be far out of range. |
+| `poor_contact` | The poor-contact warning was showing for this camera at this frame. |
+| `ambient_light` | The ambient-light warning was showing for this camera at this frame. |
+
+`poor_contact` and `ambient_light` record the live contact-quality warning
+the operator was shown during the scan. They are not a fresh judgment of the
+exported values, and they follow the warning's timing:
+
+- `poor_contact` is raised once the camera's signal, averaged over its last
+  5 frames, has stayed below its contact threshold for 10 consecutive frames
+  (about 0.25 s). It clears after 80 consecutive good frames (about 2 s). So
+  the flag starts slightly after contact degrades and stays about 2 s after
+  it recovers. A camera that sees no light at all counts as poor contact, so
+  an unlit camera usually reads `low_light;poor_contact`.
+- `ambient_light` is checked only on dark frames, about once every 15 s. It
+  is raised on a dark frame that sees too much light and stays until a later
+  dark frame is clean, so it covers whole 15 s stretches.
 
 ### Older scans
 
@@ -245,6 +277,54 @@ raw = pd.read_csv("20260909_185839_ow9YC09G_left_maskC3_raw.csv")
 light = raw[raw["type"] == "light"]
 hist = light[[str(b) for b in range(1024)]].to_numpy()   # (rows, 1024)
 ```
+
+---
+
+## IMU CSV
+
+**How to get it:** turn on **Settings → Data Output → Save IMU CSV** before
+the scan. Research builds show the switch; a clinical build shows it only
+with engineering mode unlocked, and the app re-checks that at scan start.
+Needs sensor firmware 1.6.2 or later: a sensor on older firmware is skipped
+(logged as a warning) because its IMU read could disturb the cameras.
+
+**File:** `data/<label>_imu.csv`, one row per IMU sample, both sensor modules
+in the same file (`side` tells them apart). Each sensor samples its IMU at
+40 Hz on its own timer, which is not locked to the camera frames.
+
+**Lining it up with the scan:** `timestamp_s` is on the same axis as the
+scan's `timestamp_s` (exported CSV, raw CSV, `scans.db`): for each side, 0 is
+that side's first camera frame. Match an IMU row to the nearest frame of the
+same side. Samples taken before the first frame have negative times.
+
+`time_source` says how good that match is:
+
+- `host`: today's sensor firmware doesn't timestamp IMU samples, so the time
+  is when the computer received the sample. Expect about ±10–20 ms of USB
+  delivery jitter against the frame times.
+- `device`: the sample carries the sensor's own clock (`device_ms`), the
+  same clock that stamps camera frames, so the alignment is exact. Written
+  once the sensor firmware adds that field.
+
+### Columns (22)
+
+| Column | Meaning |
+|---|---|
+| `side` | `left` or `right`. |
+| `imu_frame` | The sensor's IMU sample counter, from 0 when the scan turned the IMU on. A gap means the sensor skipped samples. |
+| `timestamp_s` | Seconds on the scan's time axis (see above). |
+| `time_source` | `host` or `device` (see above). |
+| `device_ms` | The sensor's clock in ms, when the firmware sends it; otherwise empty. |
+| `host_time_unix` | Host computer time when the sample arrived: Unix time, in seconds. |
+| `ax`, `ay`, `az` | Accelerometer, raw signed 16-bit counts. |
+| `gx`, `gy`, `gz` | Gyroscope, raw signed 16-bit counts. |
+| `mx`, `my`, `mz` | Magnetometer, raw counts as the sensor reports them. |
+| `accel_x_g` … `accel_z_g` | Acceleration in g (raw / 2048; the sensor runs at ±16 g). |
+| `gyro_x_dps` … `gyro_z_dps` | Rotation rate in degrees per second (raw / 16.4; ±2000 dps). |
+| `temp_c` | IMU die temperature, °C. |
+
+The sensor low-pass filters both the accelerometer and gyroscope at about
+11.5 Hz before sampling.
 
 ---
 

@@ -16,6 +16,7 @@ Nothing in QML consumes these yet — Phase 1 is purely additive.
 
 from __future__ import annotations
 
+import bisect
 import logging
 import math
 import threading
@@ -25,6 +26,13 @@ import numpy as np
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot, pyqtProperty
 
 logger = logging.getLogger("openmotion.bloodflow-app.data_sources")
+
+# Movement shading (#783): the window of the rolling average the yellow /
+# red thresholds are applied to (Ethan, 2026-11-18: the SDK stores one IMU
+# average per frame, the app does the 1/8 s smoothing), and the most time a
+# single frame may shade, so a gap in the frames isn't painted over.
+MOTION_AVG_WINDOW_S = 0.125
+MOTION_FRAME_SPAN_MAX_S = 0.1
 
 
 _MAX_CAPACITY = 72000       # ≈ 30 min @ 40 Hz; ring-trim above this.
@@ -645,6 +653,14 @@ class ScanDataSource(QObject):
         # against double-release and marks the flush timer as stopped.
         self._released = False
 
+        # IMU motion per side (#783): the SDK's per-frame IMU averages
+        # (one row per histogram frame) plus each frame's trailing 1/8 s
+        # rolling average, on the scan's timestamp_s axis. Appended from
+        # the pipeline thread on a live source, bulk-loaded on a past one;
+        # read by PlotCell's movement shading via motion_bands_for_window.
+        self._motion: dict[str, dict] = {}
+        self._motion_lock = threading.Lock()
+
         # Throttle timer — fires every 100 ms while the source is alive.
         # Tests can call _flush() directly and ignore the timer entirely.
         self._flush_timer = QTimer(self)
@@ -819,6 +835,161 @@ class ScanDataSource(QObject):
                 row[metric + "_avg"] = avg
                 row[metric + "_p2p"] = p2p
             out[str(key)] = row
+        return out
+
+    # ── IMU motion (#783) ────────────────────────────────────────────────
+
+    @staticmethod
+    def _new_motion_side() -> dict:
+        # rows: the frames as added; t: their timestamps; cn / ca / cg:
+        # prefix sums of n, n*accel, n*gyro; avg_a / avg_g: each frame's
+        # trailing 1/8 s rolling average; lo: start of the newest window.
+        return {"rows": [], "t": [], "cn": [], "ca": [], "cg": [],
+                "avg_a": [], "avg_g": [], "lo": 0}
+
+    def add_motion_frames(self, side: str, frames) -> None:
+        """Add the SDK's per-frame IMU averages for one side. ``frames``
+        holds ``(timestamp_s, n_samples, accel_dev_g, gyro_dps)`` tuples, one
+        per histogram frame: the IMU samples received since that side's
+        previous frame, averaged. A frame with no IMU samples (``n_samples``
+        0, None values) is kept, since it still ends the previous frame's
+        span, but weighs nothing in the rolling average. Frames arrive up
+        to ~1 s late (the SDK waits for the IMU to catch up) and, on a past
+        scan, in whatever order the rows come."""
+        rows = []
+        for f in frames:
+            try:
+                t = float(f[0])
+                n = int(f[1] or 0)
+                acc = float(f[2]) if f[2] is not None else math.nan
+                gyr = float(f[3]) if f[3] is not None else math.nan
+            except (TypeError, ValueError, IndexError):
+                continue
+            if not math.isfinite(t):
+                continue
+            if n <= 0 or not (math.isfinite(acc) and math.isfinite(gyr)):
+                n, acc, gyr = 0, 0.0, 0.0
+            rows.append((t, n, acc, gyr))
+        if not rows:
+            return
+        with self._motion_lock:
+            m = self._motion.get(side)
+            if m is None:
+                m = self._motion[side] = self._new_motion_side()
+            in_order = (not m["t"] or rows[0][0] > m["t"][-1]) and all(
+                rows[i][0] < rows[i + 1][0] for i in range(len(rows) - 1))
+            if in_order:
+                for r in rows:
+                    self._motion_append(m, r)
+                return
+            merged = {r[0]: r for r in m["rows"]}
+            merged.update((r[0], r) for r in rows)
+            fresh = self._new_motion_side()
+            for t in sorted(merged):
+                self._motion_append(fresh, merged[t])
+            self._motion[side] = fresh
+
+    @staticmethod
+    def _motion_append(m: dict, row) -> None:
+        """Append one frame and its trailing rolling average,
+        sum(v*n) / sum(n) over the frames timestamped in
+        (t - MOTION_AVG_WINDOW_S, t]; NaN when they hold no samples."""
+        t, n, acc, gyr = row
+        m["rows"].append(row)
+        m["t"].append(t)
+        m["cn"].append((m["cn"][-1] if m["cn"] else 0) + n)
+        m["ca"].append((m["ca"][-1] if m["ca"] else 0.0) + n * acc)
+        m["cg"].append((m["cg"][-1] if m["cg"] else 0.0) + n * gyr)
+        k = len(m["t"]) - 1
+        lo = m["lo"]
+        while m["t"][lo] <= t - MOTION_AVG_WINDOW_S + 1e-9:
+            lo += 1
+        m["lo"] = lo
+        cnt = m["cn"][k] - (m["cn"][lo - 1] if lo else 0)
+        if cnt > 0:
+            m["avg_a"].append((m["ca"][k] - (m["ca"][lo - 1] if lo else 0.0)) / cnt)
+            m["avg_g"].append((m["cg"][k] - (m["cg"][lo - 1] if lo else 0.0)) / cnt)
+        else:
+            m["avg_a"].append(math.nan)
+            m["avg_g"].append(math.nan)
+
+    def has_motion(self) -> bool:
+        with self._motion_lock:
+            return any(m["t"] for m in self._motion.values())
+
+    def motion_rolling_at(self, side: str, t: float):
+        """``(accel_dev_g, gyro_dps)``: the 1/8 s rolling averages at the
+        newest frame at or before ``t``, or None before the first frame."""
+        with self._motion_lock:
+            m = self._motion.get(side)
+            if not m:
+                return None
+            k = bisect.bisect_right(m["t"], t) - 1
+            if k < 0:
+                return None
+            return (m["avg_a"][k], m["avg_g"][k])
+
+    @staticmethod
+    def _motion_level(acc: float, gyr: float, thresholds) -> int:
+        """0 still, 1 yellow (small motion: talking), 2 red (large motion).
+        ``thresholds`` is (accel_yellow_g, accel_red_g, gyro_yellow_dps,
+        gyro_red_dps); a threshold <= 0 or NaN is off. Either channel can
+        raise the level, and red wins over yellow. A NaN value (no IMU
+        samples in the window) raises nothing."""
+        ay, ar, gy, gr = thresholds
+
+        def hit(v, t):
+            return math.isfinite(t) and t > 0 and math.isfinite(v) and v >= t
+
+        if hit(acc, ar) or hit(gyr, gr):
+            return 2
+        if hit(acc, ay) or hit(gyr, gy):
+            return 1
+        return 0
+
+    @pyqtSlot(str, float, float, float, float, float, float,
+              result="QVariantList")
+    def motion_bands_for_window(self, side: str, t_lo: float, t_hi: float,
+                                accel_yellow_g: float, accel_red_g: float,
+                                gyro_yellow_dps: float,
+                                gyro_red_dps: float) -> list:
+        """Movement spans ``[t_lo, t_hi, level]`` inside the window for one
+        side, level 1 = yellow and 2 = red (see ``_motion_level``), judged
+        on each frame's 1/8 s rolling average. A frame covers the time
+        since the side's previous frame, at most
+        ``MOTION_FRAME_SPAN_MAX_S`` (so a gap in the frames stays
+        unshaded). Touching frames of the same level merge, so PlotCell
+        draws one rectangle per stretch of movement."""
+        thresholds = (accel_yellow_g, accel_red_g, gyro_yellow_dps, gyro_red_dps)
+        if not any(math.isfinite(x) and x > 0 for x in thresholds) \
+                or not (t_hi > t_lo):
+            return []
+        with self._motion_lock:
+            m = self._motion.get(side)
+            if not m or not m["t"]:
+                return []
+            ts = m["t"]
+            i = bisect.bisect_left(ts, t_lo)
+            j = min(len(ts), bisect.bisect_right(ts, t_hi) + 1)
+            spans = []
+            for k in range(i, j):
+                t1 = ts[k]
+                t0 = t1 - MOTION_FRAME_SPAN_MAX_S
+                if k > 0:
+                    t0 = max(t0, ts[k - 1])
+                spans.append((t0, t1, m["avg_a"][k], m["avg_g"][k]))
+        out: list = []
+        for t0, t1, acc, gyr in spans:
+            lo, hi = max(t0, t_lo), min(t1, t_hi)
+            if hi <= lo:
+                continue
+            level = self._motion_level(acc, gyr, thresholds)
+            if level == 0:
+                continue
+            if out and out[-1][2] == level and lo <= out[-1][1] + 1e-6:
+                out[-1][1] = max(out[-1][1], hi)
+            else:
+                out.append([lo, hi, level])
         return out
 
     @pyqtSlot(str, int, result=float)

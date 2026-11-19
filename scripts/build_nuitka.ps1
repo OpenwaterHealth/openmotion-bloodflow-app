@@ -90,6 +90,7 @@ $args = @(
     "--include-data-dir=components=components",
     "--include-data-dir=assets=assets",
     "--include-data-files=resources\sample_scan.csv=resources\sample_scan.csv",
+    "--include-data-files=resources\whats_new.md=resources\whats_new.md",
     # the SDK: modules compiled, package data copied (the bootloader public
     # keys omotion\dfu\keys\*.pem among it). Its vendored libusb DLLs are NOT
     # data to Nuitka - --include-data-dir silently drops .dll - so that tree

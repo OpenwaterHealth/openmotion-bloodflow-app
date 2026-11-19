@@ -91,6 +91,27 @@ def test_load_csv_maps_columns_to_side_cam_metric(tmp_path):
     assert round(float(contrast_l1.v[0]), 3) == round(300 + 1, 3)    # 301.0
 
 
+def test_load_csv_ignores_quality_flag_lists(tmp_path):
+    """#600: an export's quality_* cells hold ;-separated flag lists such as
+    ``ts_corrected;poor_contact``. The loader ignores those columns, so the
+    values load exactly as without them."""
+    plain = tmp_path / "plain.csv"
+    _write_synthetic_csv(plain, n_frames=3)
+    lines = plain.read_text(encoding="utf-8").splitlines()
+    quality_cols = [f"quality_{p}{c}" for p in ("l", "r") for c in range(1, 9)]
+    flagged = tmp_path / "flagged.csv"
+    flagged.write_text("\n".join(
+        [lines[0] + "," + ",".join(quality_cols)]
+        + [line + "," + ",".join(["ts_corrected;poor_contact"] * 16) for line in lines[1:]]
+    ) + "\n", encoding="utf-8")
+
+    want = load_csv_scan_buffers(str(plain))
+    got = load_csv_scan_buffers(str(flagged))
+    assert got.keys() == want.keys()
+    for key in want:
+        assert list(got[key].v[:got[key].n]) == list(want[key].v[:want[key].n]), key
+
+
 def test_load_csv_preserves_timestamps_and_frame_ids(tmp_path):
     csv_path = tmp_path / "sample.csv"
     _write_synthetic_csv(csv_path, n_frames=4)

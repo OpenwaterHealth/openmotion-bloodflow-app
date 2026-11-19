@@ -61,6 +61,19 @@ APP_CONFIG = {
     "dataDirectory": None,
     "writeRawCsv": False,
     "rawCsvDurationSec": None,
+    # Per-scan IMU CSV (#779): {scan_id}_{subject}_imu.csv, same gate as
+    # writeRawCsv (!clinicalMode || engineeringMode), re-checked at scan start.
+    "writeImuCsv": False,
+    # Movement shading on the plots (#783): a yellow band (small motion,
+    # e.g. talking) or red band (large motion) where the SDK's 1/8 s IMU
+    # motion bin reaches that level's threshold on either channel. Research
+    # builds (or clinical with the engineering unlock); off by default. A
+    # threshold <= 0 turns that level/channel off.
+    "motionShadingEnabled": False,
+    "motionAccelYellowG": 0.015,
+    "motionAccelRedG": 0.05,
+    "motionGyroYellowDps": 8.0,
+    "motionGyroRedDps": 25.0,
     # Research-only (#598): export the History → Export CSV file into data/
     # automatically when each scan ends. Never exports on a clinical build.
     "autoExportCsv": False,
@@ -206,6 +219,14 @@ APP_CONFIG = {
     # #737), so an update that left a bare-metal unit waiting in the ROM
     # loader can be finished after a restart. None when nothing is pending.
     "firmwareUpdatePending": None,
+    # Version whose "What's new" notes the operator last dismissed (#597);
+    # None until the first dismissal. See whats_new.py.
+    "whatsNewSeenVersion": None,
+    # A console firmware update finished and the console has not been
+    # power-cycled since (#767): the safety FPGAs latch RATE_LOWER_LIMIT
+    # across the MCU reset, so the app asks for a power cycle instead of
+    # raising E-203. Cleared once the interlock reads clear again.
+    "consolePowerCyclePending": False,
 }
 
 # ── Tiers ──────────────────────────────────────────────────────────────────
@@ -252,12 +273,17 @@ PREFERENCE_KEYS = frozenset({
     # build: the scan-start gate is (!clinicalMode || engineeringMode), and
     # engineeringMode is session-only. autoExportCsv is gated on
     # !clinicalMode alone at scan end.
-    "writeRawCsv", "rawCsvDurationSec", "autoExportCsv",
+    "writeRawCsv", "rawCsvDurationSec", "autoExportCsv", "writeImuCsv",
+    # Plot display (#783), same (!clinicalMode || engineeringMode) gate as
+    # the raw CSVs, re-checked at scan start and in the viewer.
+    "motionShadingEnabled", "motionAccelYellowG", "motionAccelRedG",
+    "motionGyroYellowDps", "motionGyroRedDps",
 })
 
 STATE_KEYS = frozenset({
     "altCameraSettingsDirty", "altLaserPulseWidthDirty",
     "altLaserSafetyCeilingDirty", "firmwareUpdatePending",
+    "whatsNewSeenVersion", "consolePowerCyclePending",
 })
 
 PERSISTED_KEYS = PREFERENCE_KEYS | STATE_KEYS

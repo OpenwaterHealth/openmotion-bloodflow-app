@@ -388,6 +388,65 @@ def test_another_device_cannot_be_updated_while_a_unit_waits(tmp_path, updater, 
     assert "Finish the interrupted console" in out["finished"][-1][2]
 
 
+def test_updating_the_waiting_unit_itself_finishes_its_update(tmp_path, updater, downloads):
+    """The updates modal's Update / Retry on the waiting unit must not try to
+    send it into DFU again: the unit is already there (#737 with #514)."""
+    c = _connector(tmp_path)
+    _interrupt(c, tmp_path, updater)
+    downloads.clear()
+
+    assert _start(c, "console") is True
+
+    assert downloads == [], "nothing is fetched again"
+    assert updater.calls[0]["handle"] is None
+    assert updater.calls[0]["dfu_serial"] == "ROM-UID"
+    assert c.firmwareResumeDevice == ""
+
+
+def test_update_all_is_refused_while_a_unit_waits(tmp_path, updater, downloads):
+    c = _connector(tmp_path)
+    _interrupt(c, tmp_path, updater)
+    c._firmware_update_available["left"] = True
+    results = []
+    c.batchUpdateFinished.connect(lambda ok, m: results.append((ok, m)))
+
+    assert c.startUpdateAll() is False
+
+    assert updater.calls == []
+    assert results and results[-1][0] is False
+    assert "Finish the interrupted console" in results[-1][1]
+
+
+def test_retry_is_refused_while_update_all_runs(tmp_path, updater, downloads):
+    c = _connector(tmp_path)
+    _interrupt(c, tmp_path, updater)
+    c._batch_update_running = True
+    out = _signals(c)
+
+    assert c.retryFirmwareUpdate("console") is False
+    assert updater.calls == []
+    assert "in progress" in out["finished"][-1][2]
+
+
+def test_an_interrupted_console_is_never_told_to_power_cycle(
+        tmp_path, updater, downloads, monkeypatch):
+    """#767 asks for a console power cycle after every console flash; with
+    the console waiting in update mode that power cycle would brick it."""
+    c = _connector(tmp_path)
+    notes = []
+    monkeypatch.setattr(c, "_notify_console_power_cycle",
+                        lambda: notes.append("power-cycle"))
+    updater.outcomes = [_interrupted(tmp_path)]
+
+    _start(c)
+    assert notes == []
+    assert c.firmwareResumeDevice == "console"
+
+    c.retryFirmwareUpdate("console")
+    assert notes == ["power-cycle"], "asked once the update has finished"
+    assert c.firmwareResumeDevice == ""
+
+
 def test_the_device_reconnecting_drops_the_resume_state(tmp_path, updater, downloads):
     c = _connector(tmp_path)
     _interrupt(c, tmp_path, updater)

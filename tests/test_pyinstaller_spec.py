@@ -26,18 +26,21 @@ def _macos_spec_source() -> str:
 
 
 def _bundles_sample_scan(source: str) -> bool:
-    """True when `source` declares the replay sample scan as a data file.
+    return _bundles_resource(source, "_SAMPLE_SCAN", "sample_scan.csv")
+
+
+def _bundles_resource(source: str, var: str, filename: str) -> bool:
+    """True when `source` declares resources/<filename> as a data file.
 
     Structural rather than a substring match: looks for the module-level
-    ``_SAMPLE_SCAN = os.path.join("resources", "sample_scan.csv")`` binding
-    both specs use, so a spec that merely mentions the file in a comment
-    does not pass.
+    ``<var> = os.path.join("resources", "<filename>")`` binding both specs
+    use, so a spec that merely mentions the file in a comment does not pass.
     """
     for node in ast.walk(ast.parse(source)):
         if not isinstance(node, ast.Assign):
             continue
         if not any(
-            isinstance(t, ast.Name) and t.id == "_SAMPLE_SCAN"
+            isinstance(t, ast.Name) and t.id == var
             for t in node.targets
         ):
             continue
@@ -45,7 +48,7 @@ def _bundles_sample_scan(source: str) -> bool:
             a.value for a in getattr(node.value, "args", [])
             if isinstance(a, ast.Constant) and isinstance(a.value, str)
         ]
-        if parts == ["resources", "sample_scan.csv"]:
+        if parts == ["resources", filename]:
             return True
     return False
 
@@ -99,6 +102,18 @@ def test_every_spec_bundles_the_replay_sample_scan(spec):
         else _macos_spec_source()
     )
     assert _bundles_sample_scan(source)
+
+
+@pytest.mark.parametrize("spec", ["windows", "macos"])
+def test_every_spec_bundles_the_whats_new_notes(spec):
+    """Both platform specs must ship resources/whats_new.md (#597); a build
+    without it silently never shows the What's new modal."""
+    assert _bundles_resource(_spec_source(spec), "_WHATS_NEW", "whats_new.md")
+
+
+def test_nuitka_build_bundles_the_whats_new_notes():
+    script = (_REPO_ROOT / "scripts" / "build_nuitka.ps1").read_text(encoding="utf-8-sig")
+    assert r'"--include-data-files=resources\whats_new.md=resources\whats_new.md"' in script
 
 
 def test_tracked_macos_spec_matches_build_script():

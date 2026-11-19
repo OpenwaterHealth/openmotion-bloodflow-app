@@ -61,6 +61,7 @@ Item {
     property real   contrastMax: 1.0
     property bool   writeRawCsv:       false
     property var    rawCsvDurationSec: 60
+    property bool   writeImuCsv:       false
     // Research-only (#598): export each scan's CSV into data/ at scan end.
     property bool   autoExportCsv:     false
 
@@ -110,6 +111,10 @@ Item {
     // governed) LogsModal in response. No password in any build (#703).
     signal logsRequested()
 
+    // Settings → Application → "What's new": BloodFlow.qml closes Settings
+    // and opens WhatsNewModal with the running release's notes (#597).
+    signal whatsNewRequested()
+
     // ── Lifecycle ───────────────────────────────────────────────────────────
     function _loadFromConfig() {
         var cfg = MotionInterface.appConfig
@@ -135,6 +140,7 @@ Item {
         writeRawCsv       = cfg.writeRawCsv       !== undefined ? cfg.writeRawCsv       : false
         rawCsvDurationSec = cfg.rawCsvDurationSec !== undefined ? cfg.rawCsvDurationSec : null
         autoExportCsv     = cfg.autoExportCsv     === true
+        writeImuCsv       = cfg.writeImuCsv       === true
         // Theme selector (themeCombo) binds its currentIndex directly to
         // appConfig.darkMode/liquidGlass, so no manual sync is needed here.
     }
@@ -189,6 +195,7 @@ Item {
         })
         MotionInterface.setWriteRawCsv(writeRawCsv)
         MotionInterface.setRawCsvDurationSec(rawCsvDurationSec)
+        MotionInterface.setWriteImuCsv(writeImuCsv)
         settingsChanged()
         root.visible = false
     }
@@ -760,6 +767,28 @@ Item {
                         }
                         Item { Layout.fillWidth: true }
                     }
+
+                    // ── IMU CSV (#779) ────────────────────────────────────────
+                    // Same gate as the raw CSVs: research, or engineering on a
+                    // clinical build. The connector re-checks it at scan start.
+                    FieldRow {
+                        visible: !root.clinicalMode
+                                 || MotionInterface.appConfig.engineeringMode === true
+                        label: "Save IMU CSV"
+                        PillSwitch {
+                            objectName: "saveImuCsvSwitch"
+                            Accessible.name: "Save IMU CSV"
+                            checked: root.writeImuCsv
+                            onCheckedChanged: root.writeImuCsv = checked
+                        }
+                        Text {
+                            text: root.writeImuCsv ? "On — accelerometer + gyroscope, 40 Hz per sensor"
+                                                   : "Off"
+                            color: root.writeImuCsv ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
                 }
 
                 // ── Realtime Plot Display ────────────────────────────────────
@@ -836,6 +865,82 @@ Item {
                             font.pixelSize: 12
                         }
                         Item { Layout.fillWidth: true }
+                    }
+
+                    // Movement shading (#783): red band under every plot
+                    // trace while the sensor's IMU motion (SDK, 1/8 s bins)
+                    // reaches the red threshold, yellow for the smaller one. Research builds, or a clinical
+                    // build with the engineering unlock. Every scan records
+                    // the bins, so this applies instantly, live and in
+                    // replay; a threshold slid to 0 turns that channel off.
+                    FieldRow {
+                        visible: !root.clinicalMode
+                                 || MotionInterface.appConfig.engineeringMode === true
+                        label: "Movement shading"
+                        PillSwitch {
+                            objectName: "motionShadingSwitch"
+                            Accessible.name: "Movement shading"
+                            checked: MotionInterface.appConfig.motionShadingEnabled === true
+                            onToggled: MotionInterface.setConfig("motionShadingEnabled", checked)
+                        }
+                        Text {
+                            text: MotionInterface.appConfig.motionShadingEnabled === true ? "On" : "Off"
+                            color: MotionInterface.appConfig.motionShadingEnabled === true ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    Repeater {
+                        // Yellow = small motion (talking), red = large
+                        // motion. Either channel can raise a level; red wins.
+                        model: [
+                            { key: "motionAccelYellowG",  label: "Yellow: accel",
+                              to: 0.2, step: 0.005, decimals: 3, unit: "g", red: false },
+                            { key: "motionAccelRedG",     label: "Red: accel",
+                              to: 0.2, step: 0.005, decimals: 3, unit: "g", red: true },
+                            { key: "motionGyroYellowDps", label: "Yellow: rotation",
+                              to: 50, step: 1, decimals: 0, unit: "°/s", red: false },
+                            { key: "motionGyroRedDps",    label: "Red: rotation",
+                              to: 50, step: 1, decimals: 0, unit: "°/s", red: true }
+                        ]
+                        delegate: FieldRow {
+                            required property var modelData
+                            visible: !root.clinicalMode
+                                     || MotionInterface.appConfig.engineeringMode === true
+                            label: modelData.label
+                            opacity: MotionInterface.appConfig.motionShadingEnabled === true ? 1.0 : 0.4
+                            Rectangle {
+                                width: 12; height: 12; radius: 2
+                                color: modelData.red ? AppTheme.accentRed : "#F1C40F"
+                            }
+                            Slider {
+                                id: motionThresholdSlider
+                                objectName: modelData.key + "Slider"
+                                Accessible.name: modelData.label
+                                Layout.preferredWidth: 220
+                                enabled: MotionInterface.appConfig.motionShadingEnabled === true
+                                from: 0
+                                to: modelData.to
+                                stepSize: modelData.step
+                                snapMode: Slider.SnapAlways
+                                value: Number(MotionInterface.appConfig[modelData.key]) || 0
+                                // Write on release (and on keyboard steps), not
+                                // on every drag tick: each write persists to
+                                // the settings table and re-shades every plot.
+                                onMoved: if (!pressed) MotionInterface.setConfig(modelData.key, value)
+                                onPressedChanged: if (!pressed) MotionInterface.setConfig(modelData.key, value)
+                            }
+                            Text {
+                                Layout.preferredWidth: 70
+                                text: motionThresholdSlider.value > 0
+                                      ? motionThresholdSlider.value.toFixed(modelData.decimals) + " " + modelData.unit
+                                      : "Off"
+                                color: motionThresholdSlider.value > 0 ? root.colTextPri : root.colTextMuted
+                                font.pixelSize: 12
+                            }
+                            Item { Layout.fillWidth: true }
+                        }
                     }
 
                     FieldRow {
@@ -1836,6 +1941,23 @@ Item {
                     FieldRow {
                         label: "Application"
                         Text { text: appVersion; color: root.colTextPri; font.pixelSize: 13; font.family: "Consolas" }
+                        Text {
+                            id: whatsNewLink
+                            text: "What's new"
+                            // Nothing to reopen when this build ships no notes.
+                            visible: MotionInterface.currentWhatsNew() !== ""
+                            color: AppTheme.accentInteractive
+                            font.pixelSize: 12
+                            font.underline: whatsNewArea.containsMouse
+                            Layout.leftMargin: 8
+                            MouseArea {
+                                id: whatsNewArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.whatsNewRequested()
+                            }
+                        }
                         Item { Layout.fillWidth: true }
                         Text {
                             visible: !root.clinicalMode && root.appUpdateStatus === "uptodate"
@@ -1851,9 +1973,15 @@ Item {
                         }
                         UpdateChip {
                             visible: !root.clinicalMode && root.appUpdateStatus === "available"
-                            label: root.appUpdating ? root.appUpdateProgressText : "Update"
+                            // Portable builds link to the release page (#597).
+                            label: !MotionInterface.appUpdateInstallable ? "Download"
+                                 : root.appUpdating ? root.appUpdateProgressText : "Update"
                             chipEnabled: !root.appUpdating
                             onChipClicked: {
+                                if (!MotionInterface.appUpdateInstallable) {
+                                    MotionInterface.openAppReleasePage()
+                                    return
+                                }
                                 root.appUpdating = true
                                 root.appUpdateProgressText = "Starting…"
                                 MotionInterface.applyUpdate(root.appDownloadUrl)
@@ -1906,8 +2034,13 @@ Item {
                         property bool connected: false
                         property string current: ""
                         property bool updateAvailable: false
+                        // #743: the version an update would install.
+                        property string latest: ""
                         Text {
-                            text: connected ? (current || "—") : "Not connected"
+                            text: !connected ? "Not connected"
+                                : (current || "—")
+                                  + (!root.clinicalMode && updateAvailable && latest
+                                     ? "  →  " + latest : "")
                             color: connected ? root.colTextPri : root.colTextMuted
                             font.pixelSize: 13
                             font.family: "Consolas"
@@ -1923,7 +2056,7 @@ Item {
                         }
                         UpdateChip {
                             visible: !root.clinicalMode && connected && updateAvailable
-                            onChipClicked: fwConfirm.openFor(label, dev)
+                            onChipClicked: fwConfirm.openFor(label, dev, current, latest)
                         }
                     }
 
@@ -1932,18 +2065,21 @@ Item {
                         connected: MotionInterface.consoleConnected
                         current: MotionInterface.consoleFirmwareVersion
                         updateAvailable: MotionInterface.consoleFirmwareUpdateAvailable
+                        latest: MotionInterface.consoleFirmwareLatest
                     }
                     DeviceRow {
                         label: "Left Sensor FW"; dev: "left"
                         connected: MotionInterface.leftSensorConnected
                         current: MotionInterface.leftSensorFirmwareVersion
                         updateAvailable: MotionInterface.leftSensorFirmwareUpdateAvailable
+                        latest: MotionInterface.leftSensorFirmwareLatest
                     }
                     DeviceRow {
                         label: "Right Sensor FW"; dev: "right"
                         connected: MotionInterface.rightSensorConnected
                         current: MotionInterface.rightSensorFirmwareVersion
                         updateAvailable: MotionInterface.rightSensorFirmwareUpdateAvailable
+                        latest: MotionInterface.rightSensorFirmwareLatest
                     }
 
                     // Interrupted firmware update (#737): the unit is waiting
@@ -1985,6 +2121,7 @@ Item {
                                 Item { Layout.fillWidth: true }
                                 ActionButton {
                                     text: "Retry update"
+                                    enabled: !MotionInterface.updateBusy
                                     onClicked: MotionInterface.retryFirmwareUpdate(
                                         MotionInterface.firmwareResumeDevice)
                                 }
@@ -2156,10 +2293,12 @@ Item {
         anchors.centerIn: Overlay.overlay
         title: "Confirm Firmware Update"
         property string _dev: ""
-        function openFor(lbl, dev) {
+        function openFor(lbl, dev, current, latest) {
             _dev = dev
             fwConfirmText.text = lbl + " will reboot into DFU mode and be "
-                + "re-flashed. Do not unplug it until this completes."
+                + "re-flashed"
+                + (latest ? (current ? " from " + current : "") + " to " + latest : "")
+                + ". Do not unplug it until this completes."
             open()
         }
         contentItem: Text {
@@ -2181,10 +2320,20 @@ Item {
         }
     }
 
+    // " → 1.8.3" for the progress line: the version being installed (#743).
+    function _fwTargetSuffix(deviceKey) {
+        var v = { console: MotionInterface.consoleFirmwareLatest,
+                  left:    MotionInterface.leftSensorFirmwareLatest,
+                  right:   MotionInterface.rightSensorFirmwareLatest }[deviceKey]
+        return v ? " → " + v : ""
+    }
+
     Connections {
         target: MotionInterface
         function onFirmwareUpdateProgress(deviceKey, stage, percent, msg) {
-            fwStatus.text = deviceKey + " — " + msg
+            fwStatus.text = deviceKey
+                + root._fwTargetSuffix(deviceKey)
+                + " — " + msg
                 + (percent >= 0 ? "  " + percent + "%" : "")
             fwStatus.color = root.colTextMuted
             fwBar.visible = true
@@ -2192,7 +2341,9 @@ Item {
             fwBar.value = (percent < 0 ? 0 : percent)
         }
         function onFirmwareUpdateFinished(deviceKey, ok, msg) {
-            fwStatus.text = deviceKey + " — " + msg
+            fwStatus.text = deviceKey
+                + root._fwTargetSuffix(deviceKey)
+                + " — " + msg
             fwStatus.color = ok ? AppTheme.accentGreen : AppTheme.accentRed
             fwBar.visible = false
         }

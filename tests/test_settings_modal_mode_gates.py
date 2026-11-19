@@ -128,6 +128,11 @@ class _StubMotionInterface(QObject):
             "altCameraExposureUs": getattr(self, "_alt_exposure_us", 648),
             "writeTelemetryCsv": self._write_telemetry_csv,
             "debugHistoStallTest": self._histo_stall_test,
+            "motionShadingEnabled": True,
+            "motionAccelYellowG": 0.02,
+            "motionAccelRedG": 0.1,
+            "motionGyroYellowDps": 10.0,
+            "motionGyroRedDps": 20.0,
             **self._trace_colors,
         }
 
@@ -164,6 +169,10 @@ class _StubMotionInterface(QObject):
 
     @pyqtSlot("QVariant")
     def setRawCsvDurationSec(self, value):
+        pass
+
+    @pyqtSlot(bool)
+    def setWriteImuCsv(self, enabled):
         pass
 
     @pyqtSlot(str, bool)
@@ -772,3 +781,35 @@ def test_connector_exposes_the_baseline_as_default_config(tmp_path):
                         config_dir="config")
     assert c.property("defaultConfig") == baseline
     assert c.property("appConfig") == _PICKED_COLORS
+
+
+def test_imu_csv_switch_follows_the_raw_csv_gate(modal_factory):
+    """#779: 'Save IMU CSV' shows where 'Save raw CSV' does: research, or
+    clinical with the engineering unlock."""
+    stub = modal_factory.stub
+    modal = modal_factory()
+    for clinical, engineering, shown in (
+            (False, False, True), (True, True, True), (True, False, False)):
+        stub.setFlags(clinical=clinical, engineering=engineering)
+        assert _control_visible(modal, "saveImuCsvSwitch") is shown
+
+
+def test_movement_shading_controls_follow_the_raw_csv_gate(modal_factory):
+    """#783: the shading switch and the four threshold sliders (yellow and
+    red, accel and rotation) sit in Realtime
+    Plot Display for research builds, and for a clinical build only with
+    the engineering unlock."""
+    stub = modal_factory.stub
+    modal = modal_factory()
+    for clinical, engineering, shown in (
+            (False, False, True), (True, True, True), (True, False, False)):
+        stub.setFlags(clinical=clinical, engineering=engineering)
+        assert _control_visible(modal, "motionShadingSwitch") is shown
+    stub.setFlags(clinical=False, engineering=False)
+    for name in ("motionAccelYellowGSlider", "motionAccelRedGSlider",
+                 "motionGyroYellowDpsSlider", "motionGyroRedDpsSlider"):
+        assert _find_item(modal, name) is not None, name
+    red = _find_item(modal, "motionAccelRedGSlider")
+    assert red.property("from") == 0
+    assert red.property("to") == pytest.approx(0.2)
+    assert red.property("value") == pytest.approx(0.1)   # stub's value
