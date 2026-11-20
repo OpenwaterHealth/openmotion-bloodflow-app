@@ -2553,13 +2553,20 @@ class MotionConnector(QObject):
 
     # --- Power cycle after a console firmware update (#767) --------------
     # A console update resets only the STM32; the Safety EE/OPT FPGAs stay
-    # powered and latch RATE_LOWER_LIMIT_FAIL (0x04) across the reset (the
-    # trigger line is undriven until main() sets nTRIG). That latch is an
-    # expected consequence of our own flash, not a laser event, so while a
-    # power cycle is pending the app asks for one instead of raising E-203.
-    # Scanning stays blocked either way: startCapture refuses while
-    # safetyFailure is set, and only a power cycle clears the latch.
-    POST_FLASH_LATCH_BITS = 0x04            # RATE_LOWER_LIMIT_FAIL
+    # powered and latch across the reset. On the board R176 pulls nTRIG
+    # (the trigger buffer U56's active-low enable) to ground, so whenever the
+    # MCU is not driving it (every reset and the whole DFU session) the
+    # floating PC6 trigger fires real TA pulses. The FPGAs sense the drive
+    # current (EE) and the photodiode (OPT), so what latches varies from
+    # flash to flash: RATE_LOWER_LIMIT_FAIL (0x04, two pulses 9-22.5 ms apart)
+    # or PULSE_WIDTH (0x02; PULSE_WIDTH_LL is 0, so an upper-limit pulse)
+    # both seen on the bench. Either is an expected consequence of our own
+    # flash, so while a power cycle is pending the app asks for one instead
+    # of raising E-203. PEAK (0x01) still raises E-203: an over-current
+    # reading is never explained away. Scanning stays blocked either way:
+    # startCapture refuses while safetyFailure is set, and only a power cycle
+    # clears the latch.
+    POST_FLASH_LATCH_BITS = 0x04 | 0x02     # RATE_LOWER_LIMIT | PULSE_WIDTH
     POWER_CYCLE_CLEAR_AFTER_S = 10.0        # interlock clear this long => done
     POWER_CYCLE_TOAST_TAG = "console_power_cycle"
 
@@ -2597,9 +2604,9 @@ class MotionConnector(QObject):
                        "before scanning afterwards (#767)")
 
     def _is_expected_post_flash_latch(self, se: int, so: int) -> bool:
-        """Only the rate-lower-limit latch, and only while a power cycle
-        is pending after our own console flash. Any other fault bit is a
-        real safety event and still raises E-203."""
+        """Only rate-lower-limit / pulse-width latches, and only while a
+        power cycle is pending after our own console flash. The peak bit is
+        a real safety event and still raises E-203."""
         cfg = getattr(self, "_app_config", None) or {}
         if not cfg.get("consolePowerCyclePending", False):
             return False
