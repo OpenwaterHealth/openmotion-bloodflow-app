@@ -130,14 +130,13 @@ def workflow(release_workflow, windows_build) -> str:
 def test_release_builds_install_the_pinned_sdk(workflow):
     """No more 'latest' anywhere: rc/production (and main/dispatch) builds
     install openmotion-sdk==<sdk-version.txt>; only dev/next builds source-
-    install, and on next-next (the 1.6.0 line) from SDK next-next (#761) —
-    a 1.6.0 dev build must not bundle SDK next. Back to @next at the fold-in."""
+    install, from SDK next (next-next folded into next after 1.5.4, #761)."""
     assert "pip install --upgrade openmotion-sdk" not in workflow
     assert "releases/latest" not in workflow
     assert workflow.count('SDK_PIN=$(tr -d \'[:space:]\' < sdk-version.txt)') == 2
     assert workflow.count('pip install "openmotion-sdk==${SDK_PIN}"') == 2
-    assert workflow.count('openmotion-sdk.git@next-next"') == 2
-    assert 'openmotion-sdk.git@next"' not in workflow
+    assert workflow.count('openmotion-sdk.git@next"') == 2
+    assert 'openmotion-sdk.git@next-next' not in workflow
 
 
 def test_release_builds_verify_the_pin_in_both_jobs(workflow):
