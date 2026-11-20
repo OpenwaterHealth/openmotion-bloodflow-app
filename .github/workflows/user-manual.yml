@@ -1,0 +1,73 @@
+name: User manual
+
+# The Research user manual (#371): docs/user-manual/open-motion-research-user-manual.md
+# rendered to PDF by docs/user-manual/build_pdf.py. Research-only; this repo is
+# public, so no clinical or engineering manual is built or published here.
+#
+# On every PR and push to next/main this workflow:
+#   * fails a PR that changes the manual's sources (markdown, img/, build_pdf.py)
+#     without regenerating the committed PDF next to them;
+#   * warns when a PR changes operator-facing UI without touching the manual;
+#   * renders the PDF from the checked-out sources and uploads it as an artifact.
+# Tagged releases build and attach the PDF in release-build.yml.
+
+on:
+  pull_request:
+    branches: [next, main]
+  push:
+    branches: [next, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  manual:
+    runs-on: windows-latest   # Edge is preinstalled; same renderer as local builds
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Committed PDF regenerated with its sources
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          changed=$(git diff --name-only "$BASE" HEAD)
+          sources=$(echo "$changed" | grep -E '^docs/user-manual/(open-motion-research-user-manual\.md|build_pdf\.py|img/.+)$' || true)
+          pdf=$(echo "$changed" | grep -xF 'docs/user-manual/Open-Motion-Research-User-Manual.pdf' || true)
+          if [ -n "$sources" ] && [ -z "$pdf" ]; then
+            echo "::error::The user manual's sources changed but docs/user-manual/Open-Motion-Research-User-Manual.pdf did not. Run 'python docs/user-manual/build_pdf.py' and commit the PDF."
+            echo "$sources" | sed 's/^/  changed: /'
+            exit 1
+          fi
+          ui=$(echo "$changed" | grep -E '^(components/|pages/|main\.qml$|error_codes\.py$)' || true)
+          if [ -n "$ui" ] && [ -z "$sources" ]; then
+            echo "::warning::This PR changes operator-facing UI but not the user manual. If operators will see the change, update docs/user-manual/open-motion-research-user-manual.md (and screenshots) and rebuild the PDF."
+            echo "$ui" | sed 's/^/  ui: /'
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Render the PDF
+        id: pdf
+        shell: bash
+        run: |
+          set -euo pipefail
+          VER=$(git describe --tags --always)
+          OUT="build/manual/Open-Motion-Research-User-Manual-${VER}.pdf"
+          python docs/user-manual/build_pdf.py --version "$VER" --check-version "$VER" --out "$OUT"
+          echo "name=Open-Motion-Research-User-Manual-${VER}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the PDF
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pdf.outputs.name }}
+          path: build/manual/
