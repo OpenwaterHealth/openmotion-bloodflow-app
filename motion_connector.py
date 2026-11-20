@@ -3059,15 +3059,30 @@ class MotionConnector(QObject):
                 }.get(p.phase, str(p.phase).capitalize())
                 self.firmwareUpdateProgress.emit(device_key, p.phase, pct, label)
 
-            if device_key == "console":
-                # #767: entering DFU alone latches the safety FPGAs, and
-                # update() only returns after the console is back and its
-                # telemetry has already reported the latch. Mark the power
-                # cycle as due before the reset, not after.
-                self._mark_console_flashed()
-            self.firmwareUpdateProgress.emit(
-                device_key, "flash", -1, "Entering DFU and flashing…")
-            result = FirmwareUpdater().update(handle, bin_path, progress_cb=_prog)
+            # Never reset a device into DFU in the middle of its connect-time
+            # bring-up: on the bench a power cycle reconnected the console 2 s
+            # before Update all reached it, the DFU reset cut its laser/TEC
+            # writes off and E-103 was raised over the Updates modal. Wait for
+            # the bring-up, then hold its run lock through the flash so a
+            # bring-up scheduled meanwhile (the reconnect after the flash)
+            # starts only once update() has returned.
+            run_lock = self._device_init_run_locks[device_key]
+            if not self._wait_for_device_init(device_key, run_lock):
+                raise RuntimeError(
+                    f"{self._device_label(device_key)} is still starting up; "
+                    "try the update again in a moment.")
+            try:
+                if device_key == "console":
+                    # #767: entering DFU alone latches the safety FPGAs, and
+                    # update() only returns after the console is back and its
+                    # telemetry has already reported the latch. Mark the power
+                    # cycle as due before the reset, not after.
+                    self._mark_console_flashed()
+                self.firmwareUpdateProgress.emit(
+                    device_key, "flash", -1, "Entering DFU and flashing…")
+                result = FirmwareUpdater().update(handle, bin_path, progress_cb=_prog)
+            finally:
+                run_lock.release()
             ok = bool(result.success)
             # needs_power_cycle: the image is written but the device did not
             # come back within the SDK's wait, so it still has to be
@@ -3104,6 +3119,56 @@ class MotionConnector(QObject):
             self.updateBusyChanged.emit()
             self.firmwareUpdateFinished.emit(device_key, ok, msg)
         return ok
+
+    # How long a flash waits for the device's connect-time bring-up before
+    # giving up. The console's sequence takes ~4 s; a sensor's ~1-2 s after
+    # its 1 s settle delay.
+    FLASH_INIT_WAIT_S = 60.0
+    # The device must look idle this long before DFU. The SDK reports
+    # CONNECTED on its own thread, but the bring-up is only scheduled once
+    # the queued state-change slot runs on the GUI thread; in between, a
+    # just-reconnected device reads idle with its bring-up not yet counted.
+    FLASH_INIT_SETTLE_S = 1.5
+
+    def _wait_for_device_init(self, device_key: str, run_lock) -> bool:
+        """Block (on the flash worker) until ``device_key`` has had no bring-up
+        scheduled or running for FLASH_INIT_SETTLE_S, then acquire
+        ``run_lock`` and return True. The caller releases it. False, with the
+        lock not held, after FLASH_INIT_WAIT_S."""
+        deadline = time.monotonic() + self.FLASH_INIT_WAIT_S
+        announced = False
+        idle_since = None
+        while True:
+            with self._device_init_lock:
+                pending = self._device_init_pending.get(device_key, 0)
+            now = time.monotonic()
+            if pending == 0:
+                if idle_since is None:
+                    idle_since = now
+                if now - idle_since >= self.FLASH_INIT_SETTLE_S:
+                    remaining = max(0.0, deadline - now)
+                    if run_lock.acquire(timeout=remaining or 0.01):
+                        return True
+                    return False
+                if now >= deadline:
+                    return False
+                time.sleep(0.1)
+                continue
+            idle_since = None
+            if not announced:
+                announced = True
+                logger.info("Firmware update for %s waits for its "
+                            "connect-time init", device_key)
+                self.firmwareUpdateProgress.emit(
+                    device_key, "wait_init", -1,
+                    f"Waiting for the {self._device_label(device_key).lower()} "
+                    "to finish starting up…")
+            if time.monotonic() >= deadline:
+                logger.warning("Firmware update for %s: connect-time init "
+                               "still running after %.0f s", device_key,
+                               self.FLASH_INIT_WAIT_S)
+                return False
+            time.sleep(0.1)
 
     # Flash order for "Update all" (#514): sensors before the console, so a
     # console reboot into DFU can never take a sensor down mid-flash, and

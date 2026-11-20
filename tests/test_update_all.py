@@ -277,3 +277,93 @@ def test_successful_flash_withdraws_the_offer(tmp_path, monkeypatch):
     assert c._firmware_update_available["left"] is False
     assert c._firmware_update_in_progress is None
     assert c._batch_update_plan() == []
+
+
+# ── Never flash a device mid bring-up (bench 2026-11-19) ──────────────────
+
+def _stub_flash_io(monkeypatch, update):
+    info = MagicMock(tag="1.1.0")
+    monkeypatch.setattr(motion_connector, "check_latest", lambda kind, **_: info)
+    import omotion.firmware_update as fw
+    monkeypatch.setattr(fw, "download_firmware", lambda info, dest: "x.bin")
+    monkeypatch.setattr(fw, "FirmwareUpdater", lambda: MagicMock(update=update))
+
+
+def test_flash_waits_for_connect_time_init(tmp_path, monkeypatch):
+    """A console that reconnected just before its Update all step is still
+    loading its laser/TEC registers; DFU must wait for that bring-up."""
+    import threading
+    import time
+    c = _connector(tmp_path)
+    c._interface.console = MagicMock()
+    c._mark_console_flashed = MagicMock()
+    c._notify_console_power_cycle = MagicMock()
+    c._firmware_update_available["console"] = True
+    c._firmware_update_in_progress = "console"
+    seen = []
+
+    def update(h, p, progress_cb=None):
+        with c._device_init_lock:
+            seen.append(c._device_init_pending["console"])
+        # The run lock is held through the flash.
+        seen.append(c._device_init_run_locks["console"].locked())
+        return MagicMock(success=True, needs_power_cycle=False)
+
+    _stub_flash_io(monkeypatch, update)
+    monkeypatch.setattr(MotionConnector, "FLASH_INIT_SETTLE_S", 0.2)
+    labels = []
+    c.firmwareUpdateProgress.connect(lambda d, ph, pct, lbl: labels.append(ph))
+    c._device_init_note("console", +1)          # bring-up running
+    threading.Timer(0.3, lambda: c._device_init_note("console", -1)).start()
+
+    t0 = time.monotonic()
+    assert c._flash_device("console") is True
+    assert time.monotonic() - t0 >= 0.45      # 0.3 s bring-up + 0.2 s settle
+    assert seen == [0, True]
+    assert "wait_init" in labels
+    assert not c._device_init_run_locks["console"].locked()
+
+
+def test_flash_gives_up_when_init_never_finishes(tmp_path, monkeypatch):
+    c = _connector(tmp_path)
+    c._interface.left = MagicMock()
+    c._firmware_update_available["left"] = True
+    c._firmware_update_in_progress = "left"
+    update = MagicMock()
+    _stub_flash_io(monkeypatch, update)
+    monkeypatch.setattr(MotionConnector, "FLASH_INIT_WAIT_S", 0.2)
+    monkeypatch.setattr(MotionConnector, "FLASH_INIT_SETTLE_S", 0.05)
+    c._device_init_note("left", +1)              # stuck bring-up
+
+    assert c._flash_device("left") is False
+    update.assert_not_called()
+    assert c._firmware_update_available["left"] is True   # still offered
+    assert not c._device_init_run_locks["left"].locked()
+
+
+def test_flash_waits_for_a_bring_up_scheduled_just_after_connect(tmp_path, monkeypatch):
+    """The SDK reports CONNECTED before the GUI-thread slot schedules the
+    bring-up; a device that just looked idle must stay idle for the settle
+    time before DFU."""
+    import threading
+    c = _connector(tmp_path)
+    c._interface.right = MagicMock()
+    c._firmware_update_available["right"] = True
+    c._firmware_update_in_progress = "right"
+    order = []
+
+    def update(h, p, progress_cb=None):
+        order.append("flash")
+        return MagicMock(success=True, needs_power_cycle=False)
+
+    _stub_flash_io(monkeypatch, update)
+    monkeypatch.setattr(MotionConnector, "FLASH_INIT_SETTLE_S", 0.4)
+
+    def late_bring_up():                     # queued slot runs 0.1 s later
+        c._device_init_note("right", +1)
+        order.append("init")
+        threading.Timer(0.2, lambda: c._device_init_note("right", -1)).start()
+
+    threading.Timer(0.1, late_bring_up).start()
+    assert c._flash_device("right") is True
+    assert order == ["init", "flash"]
