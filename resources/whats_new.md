@@ -10,8 +10,9 @@ heading is ever shown):
 - Operator-facing changes only, in plain language: same rules as the
   curated GitHub release notes, no engineering-mode content, no issue
   numbers, no Known Issues.
-- Start a bullet with "- [research]" for a change Clinical builds don't
-  have; it is dropped from Clinical and shown untagged in Research.
+- Research builds only: Clinical builds never show this file (and don't
+  ship it). A "- [research]" tag on a bullet is still accepted and is
+  shown untagged.
 - Rendered as Markdown by QML (headings, bullets, **bold**, links).
 -->
 

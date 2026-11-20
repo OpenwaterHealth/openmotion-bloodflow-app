@@ -61,6 +61,19 @@ APP_CONFIG = {
     "dataDirectory": None,
     "writeRawCsv": False,
     "rawCsvDurationSec": None,
+    # Per-scan IMU CSV (#779): {scan_id}_{subject}_imu.csv, same gate as
+    # writeRawCsv (!clinicalMode || engineeringMode), re-checked at scan start.
+    "writeImuCsv": False,
+    # Movement shading on the plots (#783): a yellow band (small motion,
+    # e.g. talking) or red band (large motion) where the SDK's 1/8 s IMU
+    # motion bin reaches that level's threshold on either channel. Research
+    # builds (or clinical with the engineering unlock); off by default. A
+    # threshold <= 0 turns that level/channel off.
+    "motionShadingEnabled": False,
+    "motionAccelYellowG": 0.015,
+    "motionAccelRedG": 0.05,
+    "motionGyroYellowDps": 8.0,
+    "motionGyroRedDps": 25.0,
     # Research-only (#598): export the History → Export CSV file into data/
     # automatically when each scan ends. Never exports on a clinical build.
     "autoExportCsv": False,
@@ -256,7 +269,11 @@ PREFERENCE_KEYS = frozenset({
     # build: the scan-start gate is (!clinicalMode || engineeringMode), and
     # engineeringMode is session-only. autoExportCsv is gated on
     # !clinicalMode alone at scan end.
-    "writeRawCsv", "rawCsvDurationSec", "autoExportCsv",
+    "writeRawCsv", "rawCsvDurationSec", "autoExportCsv", "writeImuCsv",
+    # Plot display (#783), same (!clinicalMode || engineeringMode) gate as
+    # the raw CSVs, re-checked at scan start and in the viewer.
+    "motionShadingEnabled", "motionAccelYellowG", "motionAccelRedG",
+    "motionGyroYellowDps", "motionGyroRedDps",
 })
 
 STATE_KEYS = frozenset({

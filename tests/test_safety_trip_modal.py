@@ -209,6 +209,25 @@ def test_post_flash_rate_latch_asks_for_power_cycle_not_e203(monkeypatch):
     assert "power-cycle the console" in c.notices[-1][2].lower()
 
 
+@pytest.mark.parametrize("se,so", [
+    (0x02, 0x02),            # bench 2026-11-20: pulse-width on both monitors
+    (0x04 | 0x02, 0x02),     # rate + pulse-width
+    (0x02, 0x00),            # one monitor only
+])
+def test_post_flash_pulse_width_latch_asks_for_power_cycle(monkeypatch, se, so):
+    c, _ = _flashed(monkeypatch)
+    c.readSafetyStatus(_latch(se=se, so=so))
+    assert c.criticals == [] and c.toasts == []
+    assert c.safetyFailure is True
+    assert c.notices[-1][0] == "console_power_cycle"
+
+
+def test_peak_fault_after_flash_still_raises_e203(monkeypatch):
+    c, _ = _flashed(monkeypatch)
+    c.readSafetyStatus(_latch(se=0x01, so=0x00))
+    assert [code for code, _ in c.criticals] == ["E-203"]
+
+
 def test_other_fault_bits_after_flash_still_raise_e203(monkeypatch):
     c, _ = _flashed(monkeypatch)
     c.readSafetyStatus(_latch(se=0x04 | 0x01, so=0x04))
@@ -216,9 +235,10 @@ def test_other_fault_bits_after_flash_still_raise_e203(monkeypatch):
     assert len(c.toasts) == 1
 
 
-def test_rate_latch_without_a_pending_flash_is_still_e203():
+@pytest.mark.parametrize("bits", [0x04, 0x02])
+def test_latch_without_a_pending_flash_is_still_e203(bits):
     c = _FakeConnector()
-    c.readSafetyStatus(_latch())
+    c.readSafetyStatus(_latch(se=bits, so=bits))
     assert [code for code, _ in c.criticals] == ["E-203"]
 
 

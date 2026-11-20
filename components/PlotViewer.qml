@@ -1200,6 +1200,15 @@ Rectangle {
                         showValueLabels: viewer.showCellValues
                         showAxisLabels: viewer.showAxisLabels
                         showTemperature: MotionInterface.appConfig.engineeringMode === true
+                        // Movement shading (#783): research, or clinical with
+                        // the engineering unlock.
+                        showMotion: MotionInterface.appConfig.motionShadingEnabled === true
+                                    && (MotionInterface.appConfig.clinicalMode !== true
+                                        || MotionInterface.appConfig.engineeringMode === true)
+                        motionAccelYellowG: Number(MotionInterface.appConfig.motionAccelYellowG) || 0
+                        motionAccelRedG: Number(MotionInterface.appConfig.motionAccelRedG) || 0
+                        motionGyroYellowDps: Number(MotionInterface.appConfig.motionGyroYellowDps) || 0
+                        motionGyroRedDps: Number(MotionInterface.appConfig.motionGyroRedDps) || 0
                         paintTick: viewer.paintTick
                         liveEdgeSnapshot: viewer.liveEdgeSnapshot
                         panZoomTarget: viewer

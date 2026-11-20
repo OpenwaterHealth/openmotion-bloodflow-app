@@ -90,7 +90,6 @@ $args = @(
     "--include-data-dir=components=components",
     "--include-data-dir=assets=assets",
     "--include-data-files=resources\sample_scan.csv=resources\sample_scan.csv",
-    "--include-data-files=resources\whats_new.md=resources\whats_new.md",
     # the SDK: modules compiled, package data copied (the bootloader public
     # keys omotion\dfu\keys\*.pem among it). Its vendored libusb DLLs are NOT
     # data to Nuitka - --include-data-dir silently drops .dll - so that tree
@@ -123,6 +122,9 @@ if ($Jobs -gt 0) { $args += "--jobs=$Jobs" }
 # is False, but Nuitka follows the import statically regardless of the
 # branch, so tell it not to; openwater.spec does the same with excludes=.
 if ($Variant -eq "clinical") { $args += "--nofollow-import-to=app_updater" }
+# What's new (#597) is Research-only: a clinical build never shows it, so its
+# notes file is bundled only into Research.
+if ($Variant -ne "clinical") { $args += "--include-data-files=resources\whats_new.md=resources\whats_new.md" }
 # Nor the engineering-mode unlock (#706), unless this is the service tool:
 # the Python module (imported on the same compiled constants) and its QML
 # prompt, so a clinical bundle carries neither the check nor the dialog.

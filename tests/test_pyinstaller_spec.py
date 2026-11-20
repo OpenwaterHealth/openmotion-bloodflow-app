@@ -111,9 +111,18 @@ def test_every_spec_bundles_the_whats_new_notes(spec):
     assert _bundles_resource(_spec_source(spec), "_WHATS_NEW", "whats_new.md")
 
 
-def test_nuitka_build_bundles_the_whats_new_notes():
+def test_nuitka_build_bundles_the_whats_new_notes_for_research_only():
     script = (_REPO_ROOT / "scripts" / "build_nuitka.ps1").read_text(encoding="utf-8-sig")
-    assert r'"--include-data-files=resources\whats_new.md=resources\whats_new.md"' in script
+    assert (r'if ($Variant -ne "clinical") { $args += '
+            r'"--include-data-files=resources\whats_new.md=resources\whats_new.md" }') in script
+    assert script.count(r"resources\whats_new.md=") == 1
+
+
+def test_windows_spec_drops_the_whats_new_notes_from_clinical():
+    source = (_REPO_ROOT / "openwater.spec").read_text(encoding="utf-8")
+    assert "datas = [d for d in datas if d[0] != _WHATS_NEW]" in source
+    assert source.index("if _is_clinical:\n    _excludes.append(\"app_updater\")") < source.index(
+        "datas = [d for d in datas if d[0] != _WHATS_NEW]")
 
 
 def test_tracked_macos_spec_matches_build_script():

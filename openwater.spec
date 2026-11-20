@@ -69,6 +69,7 @@ else:
 # "What's new" notes shown after an upgrade (#597); read at runtime via
 # utils.resource_path.resource_path("resources", "whats_new.md"). Keep this
 # entry in openwater.spec, the build_macos.sh heredoc and build_nuitka.ps1.
+# Research-only: dropped again below for a clinical build.
 _WHATS_NEW = os.path.join("resources", "whats_new.md")
 if os.path.exists(_WHATS_NEW):
     datas.append((_WHATS_NEW, "resources"))
@@ -286,6 +287,9 @@ runtime_hooks = ["rthook_libusb_paths.py"]
 _excludes = ["PySide6", "shiboken6", "PySide2", "PyQt5"]
 if _is_clinical:
     _excludes.append("app_updater")
+    # What's new is Research-only: the clinical connector never shows it,
+    # so its notes (which describe Research features) stay out too.
+    datas = [d for d in datas if d[0] != _WHATS_NEW]
 # Same for the engineering-mode unlock (#706): a clinical build that is not
 # the service tool leaves out the Python unlock here and its QML prompt
 # below, so it carries neither the check nor the dialog. Guarded by
