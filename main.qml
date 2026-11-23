@@ -19,15 +19,9 @@ ApplicationWindow {
     flags: Qt.FramelessWindowHint | Qt.Window | Qt.CustomizeWindowHint | Qt.WindowTitleHint
     color: "transparent"
 
-    // Rounded corners of the frameless window. Fullscreen fills the
-    // screen edge to edge, so the corners go square there (otherwise the
-    // desktop shows through the four cut-outs) and come back on leaving.
-    readonly property int cornerRadius:
-        visibility === Window.FullScreen ? 0 : 20
-
     // ── Liquid Glass ambient backdrop ─────────────────────────────
     // Behind all content, only while the glass theme is on. The window
-    // is frameless + transparent with rounded corners (cornerRadius), so the
+    // is frameless + transparent with 20px rounded corners, so the
     // ambient (and its blurred blobs) is masked to that same rounded
     // shape — otherwise the rectangular blur layer would poke square
     // glowing corners past the window edge. In the normal theme this
@@ -52,7 +46,7 @@ ApplicationWindow {
         anchors.fill: parent
         visible: false
         layer.enabled: true
-        Rectangle { anchors.fill: parent; radius: window.cornerRadius; color: "white" }
+        Rectangle { anchors.fill: parent; radius: 20; color: "white" }
     }
 
 
@@ -198,7 +192,7 @@ ApplicationWindow {
     Rectangle {
         anchors.fill: parent
         color: AppTheme.bgBase
-        radius: window.cornerRadius
+        radius: 20
         border.color: "transparent"
 
         // Header Section (with drag functionality)

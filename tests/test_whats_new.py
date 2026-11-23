@@ -69,11 +69,10 @@ def test_upgrade_shows_every_release_since_last_seen():
     assert "- Seven research" in notes and "[research]" not in notes
 
 
-def test_clinical_drops_research_bullets_and_empty_sections():
-    notes = whats_new.notes_between(NOTES, "1.7.0", "1.5.0", clinical=True)
-    assert "Seven research" not in notes
-    assert "## 1.6.0" not in notes   # its only bullet was research-only
-    assert "## 1.6.1" in notes
+def test_clinical_shows_nothing():
+    # What's new is Research-only: no notes at all in a Clinical build.
+    assert whats_new.notes_between(NOTES, "1.7.0", "1.5.0", clinical=True) == ""
+    assert whats_new.notes_between(NOTES, "1.7.0", None, clinical=True) == ""
 
 
 def test_never_dismissed_shows_only_the_running_release():
@@ -91,8 +90,6 @@ def test_prerelease_reads_its_base_release_section_once():
 def test_no_section_for_running_release_shows_nothing():
     # Notes never written for 1.8.0: don't resurface 1.7.0's news.
     assert whats_new.notes_between(NOTES, "1.8.0", "1.6.1", clinical=False) == ""
-    # Running release's section is research-only and this is Clinical.
-    assert whats_new.notes_between(NOTES, "1.6.0", "1.5.0", clinical=True) == ""
 
 
 def test_downgrade_or_same_version_shows_nothing():
@@ -145,6 +142,13 @@ def test_current_whats_new_ignores_seen_state(monkeypatch):
     assert c.pendingWhatsNew() == ""
     assert c.currentWhatsNew().startswith("## 1.7.0")
     assert "1.6.1" not in c.currentWhatsNew()
+
+
+def test_clinical_connector_never_offers_notes(monkeypatch):
+    c = _connector(monkeypatch, version="1.7.0", seen="1.6.1", clinical=True)
+    assert c.pendingWhatsNew() == ""
+    # "" also hides the Settings -> "What's new" link.
+    assert c.currentWhatsNew() == ""
 
 
 @pytest.mark.parametrize("fresh,portable,expected", [

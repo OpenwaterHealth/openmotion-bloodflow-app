@@ -42,6 +42,7 @@ from omotion.config import (
     DEBUG_FLAG_HISTO_STALL,
 )
 from omotion.ScanWorkflow import ConfigureRequest, ScanRequest
+import dataclasses as _dataclasses
 from omotion.contact_quality import CQSettings, CQThresholds, ContactQualityTransitionSink
 from motion_config import (
     FW_DEFAULT_CAMERA_SETTINGS,
@@ -229,6 +230,22 @@ def _sdk_flags_from_session(session) -> Optional[dict]:
 
 
 logger = logging.getLogger("openmotion.bloodflow-app.connector")
+
+# sdk#357 added ScanRequest.write_imu_csv (#779). Checked once so the connector
+# still runs against an SDK that predates it.
+try:
+    _SCAN_REQUEST_HAS_IMU_CSV = "write_imu_csv" in {
+        f.name for f in _dataclasses.fields(ScanRequest)
+    }
+except TypeError:  # not a dataclass
+    _SCAN_REQUEST_HAS_IMU_CSV = False
+# sdk#357 also added ScanRequest.imu_motion: per-frame IMU averages (#783).
+try:
+    _SCAN_REQUEST_HAS_IMU_MOTION = "imu_motion" in {
+        f.name for f in _dataclasses.fields(ScanRequest)
+    }
+except TypeError:
+    _SCAN_REQUEST_HAS_IMU_MOTION = False
 
 # Define system states
 DISCONNECTED = 0
@@ -732,6 +749,67 @@ class _LivePlotSink:
         # per side (#606, #621); a no-op when the source doesn't derive
         # (clinical).
         self._live_source.flush_side_average()
+
+
+class _ImuMotionSink:
+    """Feeds the SDK's per-frame IMU averages (#783, ``"imu_frame"``
+    channel, ``ImuFrameMotion``) into the live plot source, which keeps the
+    1/8 s rolling average the movement shading thresholds.
+
+    The runner calls ``consume`` on its own thread, with the batch; this
+    only appends under the source's lock, and the plots pick the frames up
+    on their next paint tick. The thresholds are applied at draw time, so a
+    slider change re-shades the whole scan.
+    """
+
+    channels: set = frozenset({"imu_frame"})
+
+    def __init__(self, live_source):
+        self._live_source = live_source
+
+    def on_scan_start(self, meta) -> None:
+        pass
+
+    def consume(self, channel: str, payload) -> None:
+        if channel != "imu_frame":
+            return
+        try:
+            self._live_source.add_motion_frames(payload.side, [(
+                payload.timestamp_s, payload.n_samples,
+                payload.accel_dev_g, payload.gyro_dps,
+            )])
+        except Exception:
+            logger.debug("IMU frame dropped", exc_info=True)
+
+    def on_complete(self) -> None:
+        pass
+
+
+def _load_motion_frames(db, session_id: int) -> dict:
+    """A past scan's per-frame IMU averages (#783) as
+    ``{"left"|"right": [(timestamp_s, n_samples, accel_dev_g, gyro_dps)]}``.
+    Empty when the SDK predates ``ScanDatabase.get_imu_frames`` or the scan
+    was recorded without them; never raises (replay must still open)."""
+    getter = getattr(db, "get_imu_frames", None)
+    if getter is None:
+        return {}
+    try:
+        rows = getter(int(session_id))
+    except Exception:
+        logger.warning("Could not read IMU frames for session %s",
+                       session_id, exc_info=True)
+        return {}
+    out: dict = {}
+    for r in rows or ():
+        try:
+            side = "left" if int(r["side"]) == 0 else "right"
+            out.setdefault(side, []).append((
+                float(r["timestamp_s"]), int(r["n_samples"] or 0),
+                r["accel_dev_g"], r["gyro_dps"],
+            ))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
 
 
 class _TriggerStateSink:
@@ -1380,6 +1458,9 @@ class MotionConnector(QObject):
         # Engineering → "Save telemetry CSV" (#471); default False so a
         # config missing the key fails closed for clinical use.
         self._write_telemetry_csv         = bool(cfg.get("writeTelemetryCsv", False))
+        # Per-scan IMU CSV (#779): Settings → Data Output → "Save IMU CSV",
+        # same mode gate as the raw CSVs. Default False fails closed.
+        self._write_imu_csv               = bool(cfg.get("writeImuCsv", False))
 
         # Initialize CSV output directory to user's home directory
         self._csv_output_directory = os.path.expanduser("~")
@@ -2528,13 +2609,20 @@ class MotionConnector(QObject):
 
     # --- Power cycle after a console firmware update (#767) --------------
     # A console update resets only the STM32; the Safety EE/OPT FPGAs stay
-    # powered and latch RATE_LOWER_LIMIT_FAIL (0x04) across the reset (the
-    # trigger line is undriven until main() sets nTRIG). That latch is an
-    # expected consequence of our own flash, not a laser event, so while a
-    # power cycle is pending the app asks for one instead of raising E-203.
-    # Scanning stays blocked either way: startCapture refuses while
-    # safetyFailure is set, and only a power cycle clears the latch.
-    POST_FLASH_LATCH_BITS = 0x04            # RATE_LOWER_LIMIT_FAIL
+    # powered and latch across the reset. On the board R176 pulls nTRIG
+    # (the trigger buffer U56's active-low enable) to ground, so whenever the
+    # MCU is not driving it (every reset and the whole DFU session) the
+    # floating PC6 trigger fires real TA pulses. The FPGAs sense the drive
+    # current (EE) and the photodiode (OPT), so what latches varies from
+    # flash to flash: RATE_LOWER_LIMIT_FAIL (0x04, two pulses 9-22.5 ms apart)
+    # or PULSE_WIDTH (0x02; PULSE_WIDTH_LL is 0, so an upper-limit pulse)
+    # both seen on the bench. Either is an expected consequence of our own
+    # flash, so while a power cycle is pending the app asks for one instead
+    # of raising E-203. PEAK (0x01) still raises E-203: an over-current
+    # reading is never explained away. Scanning stays blocked either way:
+    # startCapture refuses while safetyFailure is set, and only a power cycle
+    # clears the latch.
+    POST_FLASH_LATCH_BITS = 0x04 | 0x02     # RATE_LOWER_LIMIT | PULSE_WIDTH
     POWER_CYCLE_CLEAR_AFTER_S = 10.0        # interlock clear this long => done
     POWER_CYCLE_TOAST_TAG = "console_power_cycle"
 
@@ -2572,9 +2660,9 @@ class MotionConnector(QObject):
                        "before scanning afterwards (#767)")
 
     def _is_expected_post_flash_latch(self, se: int, so: int) -> bool:
-        """Only the rate-lower-limit latch, and only while a power cycle
-        is pending after our own console flash. Any other fault bit is a
-        real safety event and still raises E-203."""
+        """Only rate-lower-limit / pulse-width latches, and only while a
+        power cycle is pending after our own console flash. The peak bit is
+        a real safety event and still raises E-203."""
         cfg = getattr(self, "_app_config", None) or {}
         if not cfg.get("consolePowerCyclePending", False):
             return False
@@ -3034,15 +3122,30 @@ class MotionConnector(QObject):
                 }.get(p.phase, str(p.phase).capitalize())
                 self.firmwareUpdateProgress.emit(device_key, p.phase, pct, label)
 
-            if device_key == "console":
-                # #767: entering DFU alone latches the safety FPGAs, and
-                # update() only returns after the console is back and its
-                # telemetry has already reported the latch. Mark the power
-                # cycle as due before the reset, not after.
-                self._mark_console_flashed()
-            self.firmwareUpdateProgress.emit(
-                device_key, "flash", -1, "Entering DFU and flashing…")
-            result = FirmwareUpdater().update(handle, bin_path, progress_cb=_prog)
+            # Never reset a device into DFU in the middle of its connect-time
+            # bring-up: on the bench a power cycle reconnected the console 2 s
+            # before Update all reached it, the DFU reset cut its laser/TEC
+            # writes off and E-103 was raised over the Updates modal. Wait for
+            # the bring-up, then hold its run lock through the flash so a
+            # bring-up scheduled meanwhile (the reconnect after the flash)
+            # starts only once update() has returned.
+            run_lock = self._device_init_run_locks[device_key]
+            if not self._wait_for_device_init(device_key, run_lock):
+                raise RuntimeError(
+                    f"{self._device_label(device_key)} is still starting up; "
+                    "try the update again in a moment.")
+            try:
+                if device_key == "console":
+                    # #767: entering DFU alone latches the safety FPGAs, and
+                    # update() only returns after the console is back and its
+                    # telemetry has already reported the latch. Mark the power
+                    # cycle as due before the reset, not after.
+                    self._mark_console_flashed()
+                self.firmwareUpdateProgress.emit(
+                    device_key, "flash", -1, "Entering DFU and flashing…")
+                result = FirmwareUpdater().update(handle, bin_path, progress_cb=_prog)
+            finally:
+                run_lock.release()
             ok = bool(result.success)
             # needs_power_cycle: the image is written but the device did not
             # come back within the SDK's wait, so it still has to be
@@ -3079,6 +3182,56 @@ class MotionConnector(QObject):
             self.updateBusyChanged.emit()
             self.firmwareUpdateFinished.emit(device_key, ok, msg)
         return ok
+
+    # How long a flash waits for the device's connect-time bring-up before
+    # giving up. The console's sequence takes ~4 s; a sensor's ~1-2 s after
+    # its 1 s settle delay.
+    FLASH_INIT_WAIT_S = 60.0
+    # The device must look idle this long before DFU. The SDK reports
+    # CONNECTED on its own thread, but the bring-up is only scheduled once
+    # the queued state-change slot runs on the GUI thread; in between, a
+    # just-reconnected device reads idle with its bring-up not yet counted.
+    FLASH_INIT_SETTLE_S = 1.5
+
+    def _wait_for_device_init(self, device_key: str, run_lock) -> bool:
+        """Block (on the flash worker) until ``device_key`` has had no bring-up
+        scheduled or running for FLASH_INIT_SETTLE_S, then acquire
+        ``run_lock`` and return True. The caller releases it. False, with the
+        lock not held, after FLASH_INIT_WAIT_S."""
+        deadline = time.monotonic() + self.FLASH_INIT_WAIT_S
+        announced = False
+        idle_since = None
+        while True:
+            with self._device_init_lock:
+                pending = self._device_init_pending.get(device_key, 0)
+            now = time.monotonic()
+            if pending == 0:
+                if idle_since is None:
+                    idle_since = now
+                if now - idle_since >= self.FLASH_INIT_SETTLE_S:
+                    remaining = max(0.0, deadline - now)
+                    if run_lock.acquire(timeout=remaining or 0.01):
+                        return True
+                    return False
+                if now >= deadline:
+                    return False
+                time.sleep(0.1)
+                continue
+            idle_since = None
+            if not announced:
+                announced = True
+                logger.info("Firmware update for %s waits for its "
+                            "connect-time init", device_key)
+                self.firmwareUpdateProgress.emit(
+                    device_key, "wait_init", -1,
+                    f"Waiting for the {self._device_label(device_key).lower()} "
+                    "to finish starting up…")
+            if time.monotonic() >= deadline:
+                logger.warning("Firmware update for %s: connect-time init "
+                               "still running after %.0f s", device_key,
+                               self.FLASH_INIT_WAIT_S)
+                return False
+            time.sleep(0.1)
 
     # Flash order for "Update all" (#514): sensors before the console, so a
     # console reboot into DFU can never take a sensor down mid-flash, and
@@ -4133,6 +4286,15 @@ class MotionConnector(QObject):
         logger.debug(f"[Connector] writeRawCsv set to {self._write_raw_csv}")
 
     @pyqtSlot(bool)
+    def setWriteImuCsv(self, enabled: bool) -> None:
+        """Update writeImuCsv in both the runtime cache and persisted config (#779)."""
+        self._write_imu_csv = bool(enabled)
+        self._app_config["writeImuCsv"] = self._write_imu_csv
+        self._save_app_config()
+        self.appConfigChanged.emit()
+        logger.debug(f"[Connector] writeImuCsv set to {self._write_imu_csv}")
+
+    @pyqtSlot(bool)
     def setWriteTelemetryCsv(self, enabled: bool) -> None:
         """Update writeTelemetryCsv in both the runtime cache and persisted config."""
         self._write_telemetry_csv = bool(enabled)
@@ -4518,6 +4680,12 @@ class MotionConnector(QObject):
                     db, session_id, corrected_csv,
                     derive_side_average=self._derive_side_average(),
                 )
+                # Per-frame IMU averages for the movement shading (#783);
+                # older SDKs and scans recorded without them have none.
+                motion = _load_motion_frames(db, session_id)
+                if motion:
+                    display_meta = dict(display_meta or {})
+                    display_meta["motionFrames"] = motion
             finally:
                 db.close()
             # Detect which source actually populated per-cam BFI: if
@@ -4594,6 +4762,8 @@ class MotionConnector(QObject):
                 user_label=dm.get("userLabel", ""),
                 date_time=dm.get("dateTime", ""),
             )
+            for side, frames in (dm.get("motionFrames") or {}).items():
+                past.add_motion_frames(side, frames)
             self._set_current_scan_source(past)
             # Diagnostic — left in for now so we can spot regressions
             # in past-scan loading. Cheap (one log line per click).
@@ -6046,7 +6216,31 @@ class MotionConnector(QObject):
         # shared with the preflight signal-quality check (#510).
         self._sync_alt_scan_settings(left_camera_mask, right_camera_mask)
 
+        # Per-scan IMU CSV (#779): same mode gate as the raw CSVs (#234/#43),
+        # re-checked here so a stale writeImuCsv=true never writes on a plain
+        # clinical build. Only passed when the installed SDK knows the field
+        # (sdk#357), so an older SDK still starts the scan without it.
+        imu_csv_kwargs = {}
+        if raw_csv_allowed and self._write_imu_csv:
+            if _SCAN_REQUEST_HAS_IMU_CSV:
+                imu_csv_kwargs["write_imu_csv"] = True
+            else:
+                logger.warning(
+                    "Save IMU CSV is on but the installed SDK has no "
+                    "ScanRequest.write_imu_csv; no IMU CSV for this scan"
+                )
+
+        # Per-frame IMU averages (#783) are recorded on every scan, every build:
+        # the SDK writes them to scans.db, and the movement shading reads
+        # them live (the sink below) and on replay. Whether they are drawn
+        # is a display setting (motionShadingEnabled, research or clinical
+        # with the engineering unlock), so the switch can change mid-scan.
+        imu_motion_on = _SCAN_REQUEST_HAS_IMU_MOTION
+        if imu_motion_on:
+            imu_csv_kwargs["imu_motion"] = True
+
         req = ScanRequest(
+            **imu_csv_kwargs,
             subject_id=subject_id,
             duration_sec=duration_sec,
             left_camera_mask=left_camera_mask,
@@ -6101,7 +6295,7 @@ class MotionConnector(QObject):
                 # since. Not `critical`: a contact fault must never abort a
                 # clinical scan in progress.
                 ContactQualityTransitionSink(on_transition=self._on_cq_transition),
-            ],
+            ] + ([_ImuMotionSink(live_source)] if imu_motion_on else []),
             # Async backstop (#213): if the worker aborts after start_scan
             # returned True (e.g. a critical sink dies because the scan DB
             # became unwritable past the preflight), it can't ride the return

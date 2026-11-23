@@ -61,6 +61,7 @@ Item {
     property real   contrastMax: 1.0
     property bool   writeRawCsv:       false
     property var    rawCsvDurationSec: 60
+    property bool   writeImuCsv:       false
     // Research-only (#598): export each scan's CSV into data/ at scan end.
     property bool   autoExportCsv:     false
 
@@ -139,6 +140,7 @@ Item {
         writeRawCsv       = cfg.writeRawCsv       !== undefined ? cfg.writeRawCsv       : false
         rawCsvDurationSec = cfg.rawCsvDurationSec !== undefined ? cfg.rawCsvDurationSec : null
         autoExportCsv     = cfg.autoExportCsv     === true
+        writeImuCsv       = cfg.writeImuCsv       === true
         // Theme selector (themeCombo) binds its currentIndex directly to
         // appConfig.darkMode/liquidGlass, so no manual sync is needed here.
     }
@@ -197,6 +199,7 @@ Item {
         })
         MotionInterface.setWriteRawCsv(writeRawCsv)
         MotionInterface.setRawCsvDurationSec(rawCsvDurationSec)
+        MotionInterface.setWriteImuCsv(writeImuCsv)
         settingsChanged()
         root.visible = false
     }
@@ -770,6 +773,28 @@ Item {
                         }
                         Item { Layout.fillWidth: true }
                     }
+
+                    // ── IMU CSV (#779) ────────────────────────────────────────
+                    // Same gate as the raw CSVs: research, or engineering on a
+                    // clinical build. The connector re-checks it at scan start.
+                    FieldRow {
+                        visible: !root.clinicalMode
+                                 || MotionInterface.appConfig.engineeringMode === true
+                        label: "Save IMU CSV"
+                        PillSwitch {
+                            objectName: "saveImuCsvSwitch"
+                            Accessible.name: "Save IMU CSV"
+                            checked: root.writeImuCsv
+                            onCheckedChanged: root.writeImuCsv = checked
+                        }
+                        Text {
+                            text: root.writeImuCsv ? "On — accelerometer + gyroscope, 40 Hz per sensor"
+                                                   : "Off"
+                            color: root.writeImuCsv ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
                 }
 
                 // ── Realtime Plot Display ────────────────────────────────────
@@ -846,6 +871,82 @@ Item {
                             font.pixelSize: 12
                         }
                         Item { Layout.fillWidth: true }
+                    }
+
+                    // Movement shading (#783): red band under every plot
+                    // trace while the sensor's IMU motion (SDK, 1/8 s bins)
+                    // reaches the red threshold, yellow for the smaller one. Research builds, or a clinical
+                    // build with the engineering unlock. Every scan records
+                    // the bins, so this applies instantly, live and in
+                    // replay; a threshold slid to 0 turns that channel off.
+                    FieldRow {
+                        visible: !root.clinicalMode
+                                 || MotionInterface.appConfig.engineeringMode === true
+                        label: "Movement shading"
+                        PillSwitch {
+                            objectName: "motionShadingSwitch"
+                            Accessible.name: "Movement shading"
+                            checked: MotionInterface.appConfig.motionShadingEnabled === true
+                            onToggled: MotionInterface.setConfig("motionShadingEnabled", checked)
+                        }
+                        Text {
+                            text: MotionInterface.appConfig.motionShadingEnabled === true ? "On" : "Off"
+                            color: MotionInterface.appConfig.motionShadingEnabled === true ? root.colAccent : root.colTextMuted
+                            font.pixelSize: 12
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    Repeater {
+                        // Yellow = small motion (talking), red = large
+                        // motion. Either channel can raise a level; red wins.
+                        model: [
+                            { key: "motionAccelYellowG",  label: "Yellow: accel",
+                              to: 0.2, step: 0.005, decimals: 3, unit: "g", red: false },
+                            { key: "motionAccelRedG",     label: "Red: accel",
+                              to: 0.2, step: 0.005, decimals: 3, unit: "g", red: true },
+                            { key: "motionGyroYellowDps", label: "Yellow: rotation",
+                              to: 50, step: 1, decimals: 0, unit: "°/s", red: false },
+                            { key: "motionGyroRedDps",    label: "Red: rotation",
+                              to: 50, step: 1, decimals: 0, unit: "°/s", red: true }
+                        ]
+                        delegate: FieldRow {
+                            required property var modelData
+                            visible: !root.clinicalMode
+                                     || MotionInterface.appConfig.engineeringMode === true
+                            label: modelData.label
+                            opacity: MotionInterface.appConfig.motionShadingEnabled === true ? 1.0 : 0.4
+                            Rectangle {
+                                width: 12; height: 12; radius: 2
+                                color: modelData.red ? AppTheme.accentRed : "#F1C40F"
+                            }
+                            Slider {
+                                id: motionThresholdSlider
+                                objectName: modelData.key + "Slider"
+                                Accessible.name: modelData.label
+                                Layout.preferredWidth: 220
+                                enabled: MotionInterface.appConfig.motionShadingEnabled === true
+                                from: 0
+                                to: modelData.to
+                                stepSize: modelData.step
+                                snapMode: Slider.SnapAlways
+                                value: Number(MotionInterface.appConfig[modelData.key]) || 0
+                                // Write on release (and on keyboard steps), not
+                                // on every drag tick: each write persists to
+                                // the settings table and re-shades every plot.
+                                onMoved: if (!pressed) MotionInterface.setConfig(modelData.key, value)
+                                onPressedChanged: if (!pressed) MotionInterface.setConfig(modelData.key, value)
+                            }
+                            Text {
+                                Layout.preferredWidth: 70
+                                text: motionThresholdSlider.value > 0
+                                      ? motionThresholdSlider.value.toFixed(modelData.decimals) + " " + modelData.unit
+                                      : "Off"
+                                color: motionThresholdSlider.value > 0 ? root.colTextPri : root.colTextMuted
+                                font.pixelSize: 12
+                            }
+                            Item { Layout.fillWidth: true }
+                        }
                     }
 
                     FieldRow {
