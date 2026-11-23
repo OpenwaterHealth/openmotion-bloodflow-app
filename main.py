@@ -42,7 +42,6 @@ from PyQt6.QtCore import qInstallMessageHandler, QtMsgType, QTimer, QUrl
 
 from config.app_config import SERVICE_BUILD
 from motion_connector import MotionConnector
-from motion_config import DEFAULT_TRIGGER_OVERRIDES
 from omotion import MotionInterface, db_open
 from utils.single_instance import check_single_instance, cleanup_single_instance
 from version import get_version
@@ -464,11 +463,6 @@ def main():
         scan_db_path=_scan_db_path,
         operator_id="bloodflow-app",
         require_encrypted_db=_clinical,
-        # Dark-frame skip displacement (#449): pinned at the interface level
-        # so EVERY resolved trigger config carries it — including the SDK's
-        # own re-send right before start_trigger, which reverts anything
-        # patched in after resolution. See motion_config.py for the numbers.
-        default_trigger_config=DEFAULT_TRIGGER_OVERRIDES,
     )
 
     # Operator preferences (#546): the PREFERENCE / STATE tiers of the

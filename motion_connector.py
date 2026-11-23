@@ -5440,6 +5440,8 @@ class MotionConnector(QObject):
         if getattr(self, "_optimize_result", None) is not None:
             logger.info("Alternative camera / laser settings skipped: "
                         "Optimize Laser settings are active")
+            # Its scan preparer sets the dark skip itself.
+            self._report_device_timing()
             return
 
         # #446: write exposure + per-camera analog gain via the SDK, every
@@ -5453,6 +5455,34 @@ class MotionConnector(QObject):
         # #483: bracketed by the safety FPGAs' PULSE_WIDTH_UL ceiling —
         # raised before the pulse is widened, restored after it's narrowed.
         self._apply_alt_laser_pulse_width_registers()
+
+        # The SDK picks the dark-frame skip (and the safety RATE_LL floor a
+        # long skip needs) from the camera exposure and laser pulse width,
+        # so it only needs to know what the toggles set.
+        exposure = width = None
+        if self._app_config.get("altCameraSettingsEnabled") is True:
+            settings, _ = camera_settings_from_config(
+                self._app_config.get("altCameraExposureUs"),
+                self._app_config.get("altCameraGains"))
+            if settings is not None:
+                exposure = settings.exposure_us
+        if self._app_config.get("altLaserPulseWidthEnabled") is True:
+            width, _ = laser_pulse_width_from_config(
+                self._app_config.get("altLaserPulseWidthUsec"))
+        self._report_device_timing(exposure, width)
+
+    def _report_device_timing(self, exposure_us=None, pulse_width_us=None):
+        """Tell the SDK the camera exposure and laser pulse width scans run
+        at (None = firmware default). An SDK without the call has no
+        long-exposure dark skip; nothing else changes."""
+        workflow = getattr(self._interface, "scan_workflow", None)
+        report = getattr(workflow, "set_device_timing", None)
+        if report is None:
+            return
+        try:
+            report(camera_exposure_us=exposure_us, laser_pulse_width_us=pulse_width_us)
+        except Exception as e:
+            logger.warning("Could not report camera / laser timing to the SDK: %s", e)
 
     # --- OPTIMIZE LASER (docs/auto_exposure; research + engineering only) ---
     #
@@ -6930,7 +6960,7 @@ class MotionConnector(QObject):
         right_mask = int(right_camera_mask) if self._rightSensorConnected else 0x00
 
         # Same rule as #510 below for Optimize Laser: the check runs under the
-        # settings (and the 2400 µs dark skip) the scan it gates will use.
+        # settings the scan it gates will use.
         # The SDK applies them when the check's scan starts; a failed
         # re-apply refuses that scan, which the worker reports below.
         optimized = self._optimized_for_scan() is not None

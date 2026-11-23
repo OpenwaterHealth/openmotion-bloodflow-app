@@ -17,13 +17,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from motion_config import (
-    DARK_RATE_LOWER_LIMIT_US,
-    DARK_SKIP_CLEAN_EXPOSURE_MAX_US,
-    DARK_SKIP_DELAY_US,
-    DARK_SKIP_HIGH_EXPOSURE_US,
-    DEFAULT_TRIGGER_OVERRIDES,
     FW_DEFAULT_CAMERA_SETTINGS,
-    FW_DEFAULT_EXPOSURE_US,
     apply_camera_settings,
     camera_settings_from_config,
     laser_pulse_width_from_config,
@@ -539,89 +533,51 @@ class TestPreflightAppliesAltSettings:
         assert order == [("camera", 0x0F, 0xF0), ("laser",)]
 
 
-# ── Dark-frame skip delay (pinned 1800 µs, every build — #449) ───────────────
+# ── Camera / laser timing reported to the SDK (dark skip, #747) ─────────────
 
-class TestDarkSkipConstant:
-    """Reverted from 2400 to 1800 on 2026-08-17: 2400 bought clean darks at
-    engineering-only high exposures by requiring a fleet-wide safety-config
-    change, and a console that didn't get it latches its interlock on the
-    first dark frame — no laser at all. Clean darks up to 1700 us beat that."""
+class TestDeviceTimingReport:
+    """The SDK picks the dark-frame skip and the RATE_LL floor it needs from
+    the exposure and pulse width; the app only reports what the toggles set."""
 
-    def test_pinned_skip_clears_stock_console_rate_ll(self):
-        # THE constraint that drove the revert: the post-dark inter-pulse gap
-        # (period - skip) must clear the console's RATE_LL floor or the safety
-        # FPGAs latch. Stock units ship 22500 us and real hardware has been
-        # observed at 23125 us — both must pass on an unprovisioned console.
-        period_us = 1_000_000.0 / 40
-        gap_us = period_us - DARK_SKIP_DELAY_US
-        assert gap_us >= DARK_RATE_LOWER_LIMIT_US
-        assert gap_us >= 23125    # observed stock console (raw 72266)
-        assert gap_us >= 22500    # laser_params.json shipped default
+    def _timing(self, c):
+        call = c._interface.scan_workflow.set_device_timing.call_args
+        return call.kwargs if call else None
 
-    def test_pinned_skip_keeps_the_default_exposure_dark_clean(self):
-        # The displaced pulse starts at delay(100) + skip; every exposure at
-        # or below the clean ceiling must end before it. 648 us (firmware
-        # default, and all a clinical build ever runs) has ~1250 us of room.
-        assert 100 + DARK_SKIP_DELAY_US > DARK_SKIP_CLEAN_EXPOSURE_MAX_US
-        assert 100 + DARK_SKIP_DELAY_US > FW_DEFAULT_EXPOSURE_US
+    def test_defaults_report_none(self, tmp_path):
+        c = _connector(tmp_path, {})
+        c._sync_alt_scan_settings(0xFF, 0xFF)
+        assert self._timing(c) == {"camera_exposure_us": None,
+                                   "laser_pulse_width_us": None}
 
-    def test_high_exposure_alternative_is_documented_and_needs_provisioning(self):
-        # The 2400 us escape hatch stays in the module as a named constant so
-        # the UI warning and the docs can point at it — but taking it REQUIRES
-        # dropping the console's RATE_LL below the gap it produces, which is
-        # under every stock floor. That precondition is the whole reason it
-        # isn't the default.
-        period_us = 1_000_000.0 / 40
-        assert DARK_SKIP_HIGH_EXPOSURE_US > DARK_SKIP_DELAY_US
-        assert 100 + DARK_SKIP_HIGH_EXPOSURE_US >= 2196   # clears the dropdown
-        assert period_us - DARK_SKIP_HIGH_EXPOSURE_US == 22600
-        assert period_us - DARK_SKIP_HIGH_EXPOSURE_US < 23125
-
-    def test_override_dict_pins_exactly_the_skip_key(self):
-        assert DEFAULT_TRIGGER_OVERRIDES == {
-            "LaserPulseSkipDelayUsec": DARK_SKIP_DELAY_US}
-
-
-class TestDarkSkipWiring:
-    """The pin rides MotionInterface's default_trigger_config (main.py) so
-    the SDK's own trigger re-send at scan start carries it too — a
-    connector-side patch after resolve is exactly what ScanWorkflow
-    silently reverted (how the 2026-08-10 dark contamination shipped)."""
-
-    def test_sdk_merge_resolves_to_the_pinned_skip(self):
-        # The real merge the MotionInterface constructor performs.
-        from omotion.config import merge_trigger_config
-        resolved = merge_trigger_config(DEFAULT_TRIGGER_OVERRIDES)
-        assert resolved["LaserPulseSkipDelayUsec"] == DARK_SKIP_DELAY_US
-
-    def _trigger_setup(self, tmp_path, app_config):
-        # Interface stub mirrors main.py's wiring: the override is part of
-        # the resolved default, not patched in by the connector.
-        from omotion.config import DEFAULT_TRIGGER_CONFIG
-        c = _connector(tmp_path, app_config)
-        c._interface.resolve_trigger_config.side_effect = (
-            lambda d: {**DEFAULT_TRIGGER_CONFIG,
-                       **DEFAULT_TRIGGER_OVERRIDES, **d})
-        sent = {}
-        c._interface.console.set_trigger_json.side_effect = (
-            lambda data=None: (sent.clear(), sent.update(data), dict(data))[-1])
-        return c, sent
-
-    def test_every_trigger_push_carries_the_pinned_skip(self, tmp_path):
-        c, sent = self._trigger_setup(tmp_path, {})
-        c.setTrigger(json.dumps({"TriggerStatus": 2}))
-        assert sent["LaserPulseSkipDelayUsec"] == DARK_SKIP_DELAY_US
-
-    def test_clinical_build_carries_it_too(self, tmp_path):
-        # Deliberately unconditional: the SDK's 1800 default was an
-        # uncalibrated guess, not a clinical value anyone tuned — nothing
-        # anywhere preserves it.
-        c, sent = self._trigger_setup(tmp_path, {
-            "clinicalMode": True,
-            "engineeringMode": False,
+    def test_alt_exposure_and_width_are_reported(self, tmp_path):
+        c = _connector(tmp_path, {
+            "altCameraSettingsEnabled": True,
+            "altCameraExposureUs": 2196,
+            "altCameraGains": [1] * 8,
+            "altLaserPulseWidthEnabled": True,
+            "altLaserPulseWidthUsec": 1500,
         })
-        c.setTrigger(json.dumps({"TriggerStatus": 2}))
-        assert sent["LaserPulseSkipDelayUsec"] == DARK_SKIP_DELAY_US
+        c._interface.console.write_i2c_packet.return_value = True
+        c._interface.console.read_config.return_value = None
+        c._sync_alt_scan_settings(0xFF, 0xFF)
+        assert self._timing(c) == {"camera_exposure_us": 2196,
+                                   "laser_pulse_width_us": 1500}
+
+    def test_turning_the_toggles_off_reports_none_again(self, tmp_path):
+        c = _connector(tmp_path, {
+            "altCameraSettingsEnabled": True,
+            "altCameraExposureUs": 2196,
+            "altCameraGains": [1] * 8,
+        })
+        c._sync_alt_scan_settings(0xFF, 0xFF)
+        c._app_config["altCameraSettingsEnabled"] = False
+        c._sync_alt_scan_settings(0xFF, 0xFF)
+        assert self._timing(c)["camera_exposure_us"] is None
+
+    def test_an_sdk_without_the_call_is_fine(self, tmp_path):
+        c = _connector(tmp_path, {})
+        c._interface.scan_workflow = object()
+        c._sync_alt_scan_settings(0xFF, 0xFF)   # no raise
 
 
 # ── QML bridge (2026-08-10 crash regression) ─────────────────────────────────
