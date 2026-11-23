@@ -422,6 +422,47 @@ def test_past_scan_source_bucketizes_rows_into_per_metric_buffers(session_data_d
         assert buf.n == 5
 
 
+def test_db_plot_window_keeps_frame_gaps_and_metric_specific_nulls(tmp_path):
+    from data_sources import _bucketize_session_rows
+    from omotion.ScanDatabase import ScanDatabase
+
+    with ScanDatabase(tmp_path / "scan.db") as db:
+        session = db.create_session(session_label="scan", session_start=0.0)
+        other = db.create_session(session_label="other", session_start=1.0)
+        db.insert_session_data_rows([
+            dict(session_id=session, side=0, cam_id=2, frame_id=19, timestamp_s=2.0,
+                 bfi=4.0, bvi=6.0),
+            dict(session_id=session, side=0, cam_id=2, frame_id=11, timestamp_s=1.0,
+                 bfi=2.0),
+            dict(session_id=session, side=0, cam_id=2, frame_id=16, timestamp_s=1.5,
+                 bvi=5.0),
+            dict(session_id=session, side=0, cam_id=2, frame_id=20, timestamp_s=2.0,
+                 bfi=7.0),
+            dict(session_id=session, side=1, cam_id=-1, frame_id=16, timestamp_s=1.5,
+                 mean=10.0),
+            dict(session_id=session, side=0, cam_id=2, frame_id=10, timestamp_s=0.5,
+                 bfi=100.0),
+            dict(session_id=session, side=0, cam_id=2, frame_id=21, timestamp_s=2.5,
+                 bfi=100.0),
+            dict(session_id=other, side=0, cam_id=2, frame_id=16, timestamp_s=1.5,
+                 bfi=100.0),
+        ])
+        buffers, has_bfi = _bucketize_session_rows(db, session, t_lo=1.0, t_hi=2.0)
+        assert next(db.iter_session_data(session))["frame_id"] == 10
+
+    assert has_bfi
+    assert set(buffers) == {("left", 2, "bfi"), ("left", 2, "bvi"), ("right", -1, "mean")}
+    bfi = buffers[("left", 2, "bfi")]
+    np.testing.assert_array_equal(bfi.t[:bfi.n], [1.0, 2.0, 2.0])
+    np.testing.assert_array_equal(bfi.frame_id[:bfi.n], [11, 19, 20])
+    np.testing.assert_array_equal(bfi.v[:bfi.n], [2.0, 4.0, 7.0])
+    bvi = buffers[("left", 2, "bvi")]
+    np.testing.assert_array_equal(bvi.frame_id[:bvi.n], [16, 19])
+    np.testing.assert_array_equal(bvi.v[:bvi.n], [5.0, 6.0])
+    mean = buffers[("right", -1, "mean")]
+    np.testing.assert_array_equal(mean.v[:mean.n], [10.0])
+
+
 def test_past_scan_source_normalizes_side_integer_to_string(session_data_db):
     db, sid = session_data_db
     src = PastScanSource(scan_db=db, session_id=sid)

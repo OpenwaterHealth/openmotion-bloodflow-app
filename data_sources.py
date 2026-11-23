@@ -20,6 +20,9 @@ import bisect
 import logging
 import math
 import threading
+from contextlib import closing
+from itertools import groupby
+from operator import itemgetter
 from typing import Optional
 
 import numpy as np
@@ -300,8 +303,8 @@ class _CameraBuffer:
         i_hi is right-exclusive. Binary search; O(log n).
 
         Precondition: t[0:n] is monotonically non-decreasing. The live pipeline
-        appends in timestamp order at 40 Hz; PastScanSource reads rows ordered
-        by timestamp_s ASC from the SDK query. Out-of-order append silently
+        appends in timestamp order at 40 Hz, and historical loaders preserve
+        timestamp order within each buffer. Out-of-order append silently
         returns wrong indices — np.searchsorted does not validate."""
         with self._lock:
             if self.n == 0:
@@ -1710,9 +1713,15 @@ def _bucketize_session_rows(
       - cam_id == -1 — the clinical-mode dark-corrected per-side average
         (bfi/bvi/mean/contrast), persisted by ScanDBSink from the cam_id=-1
         frames the SDK's SideAverageStage routes onto the "final" channel.
-    has_bfi reflects whether ANY finite BFI/BVI landed (either layout) — the
+    has_bfi reflects whether ANY non-NULL BFI/BVI landed (either layout) — the
     caller uses it to decide whether to fall back to the corrected CSV (only
     pre-pipeline scans, which carry no BFI/BVI in the DB)."""
+    from omotion.ScanDatabase import ScanDatabase
+
+    if isinstance(scan_db, ScanDatabase):
+        return _load_session_plot_buffers(scan_db._connection(), session_id, t_lo, t_hi)
+
+    # Retain the iterator path for duck-typed scan databases.
     buffers: dict = {}
     has_bfi = False
     for row in scan_db.iter_session_data(session_id, t_lo=t_lo, t_hi=t_hi):
@@ -1738,6 +1747,59 @@ def _bucketize_session_rows(
                 buffers[key] = buf
             buf.append(t=t, v=float(value), frame_id=frame_id)
     return buffers, has_bfi
+
+
+def _load_session_plot_buffers(
+    connection,
+    session_id: int,
+    t_lo: Optional[float],
+    t_hi: Optional[float],
+) -> tuple[dict, bool]:
+    """Stream camera groups from the open SDK database into plot arrays."""
+    clauses = ["session_id = ?"]
+    params = [session_id]
+    if t_lo is not None:
+        clauses.append("timestamp_s >= ?")
+        params.append(float(t_lo))
+    if t_hi is not None:
+        clauses.append("timestamp_s <= ?")
+        params.append(float(t_hi))
+
+    sample_dtype = np.dtype([
+        ("t", np.float64), ("frame_id", np.int64),
+        ("bfi", np.float32), ("bvi", np.float32),
+        ("mean", np.float32), ("contrast", np.float32),
+    ])
+    buffers = {}
+    # Set the row factory on this cursor only, so other SDK queries on the
+    # same connection still receive named rows.
+    with closing(connection.cursor()) as cursor:
+        cursor.row_factory = None
+        cursor.execute(
+            "SELECT side, cam_id, timestamp_s, frame_id, bfi, bvi, mean, contrast "
+            f"FROM session_data WHERE {' AND '.join(clauses)} "
+            "ORDER BY side, cam_id, timestamp_s, id",
+            params,
+        )
+        for (side_id, cam_id), rows in groupby(cursor, key=itemgetter(0, 1)):
+            side = _SIDE_INT_TO_STR.get(side_id)
+            if side is None:
+                continue
+            samples = np.fromiter((row[2:] for row in rows), dtype=sample_dtype)
+            for metric in _AVG_METRICS:
+                # SQLite stores missing samples as NULL. NumPy reads them as
+                # NaN so each metric can skip its own missing values.
+                present = ~np.isnan(samples[metric])
+                count = int(present.sum())
+                if count == 0:
+                    continue
+                buf = _CameraBuffer(initial_capacity=count, max_capacity=None)
+                buf.t[:] = samples["t"][present]
+                buf.frame_id[:] = samples["frame_id"][present]
+                buf.v[:] = samples[metric][present]
+                buf.n = count
+                buffers[(side, cam_id, metric)] = buf
+    return buffers, any(metric in ("bfi", "bvi") for _, _, metric in buffers)
 
 
 def _get_or_create_unbounded(
