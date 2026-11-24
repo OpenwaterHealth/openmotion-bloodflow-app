@@ -151,6 +151,11 @@ APP_CONFIG = {
     # 20-2200. Writes the TA driver's pulse_width register at scan start.
     "altLaserPulseWidthEnabled": False,
     "altLaserPulseWidthUsec": 500,
+    # Optimize Laser settings form (docs/auto_exposure): only the values that
+    # differ from the SDK's OptimizeLaserSettings defaults; {} = all defaults.
+    # Validated by optimize_laser.from_form before it is saved and again at
+    # every run. Research builds with engineering mode only.
+    "optimizeLaserSettings": {},
     # Beta/prerelease channel for both updaters; effective only in a
     # Research build with engineering mode unlocked.
     "downloadBetaUpdates": False,
@@ -274,6 +279,9 @@ PREFERENCE_KEYS = frozenset({
     # the raw CSVs, re-checked at scan start and in the viewer.
     "motionShadingEnabled", "motionAccelYellowG", "motionAccelRedG",
     "motionGyroYellowDps", "motionGyroRedDps",
+    # Harmless to persist: a run needs a research build with engineering
+    # mode unlocked (session-only), so a saved form does nothing by itself.
+    "optimizeLaserSettings",
 })
 
 STATE_KEYS = frozenset({
