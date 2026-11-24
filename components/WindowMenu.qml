@@ -158,23 +158,6 @@ Rectangle {
                     font.weight: Font.Bold
                 }
 
-                Rectangle {
-                    visible: !windowMenu.clinicalMode
-                    width: betaLabel.implicitWidth + 12
-                    height: betaLabel.implicitHeight + 4
-                    radius: 4
-                    color: "#E67E22"
-                    Text {
-                        id: betaLabel
-                        anchors.centerIn: parent
-                        text: "BETA"
-                        color: "#FFFFFF"
-                        font.pixelSize: 10
-                        font.weight: Font.Bold
-                        font.letterSpacing: 1
-                    }
-                }
-
                 // The clinical service tool (#706): a clinical build with
                 // the engineering unlock compiled in. Never a patient build.
                 Rectangle {
