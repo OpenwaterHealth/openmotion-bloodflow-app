@@ -1,4 +1,4 @@
-import QtQuick 6.0
+import QtQuick 6.7
 import QtQuick.Controls 6.0
 import QtQuick.Layouts 6.0
 import OpenMotion 1.0
@@ -9,6 +9,10 @@ Rectangle {
     height: 60
     color: AppTheme.bgContainer // Header background color
     radius: 20
+    // The top corners are the window's own: square in fullscreen,
+    // rounded otherwise. The bottom corners keep the header's shape.
+    topLeftRadius: window.cornerRadius
+    topRightRadius: window.cornerRadius
 
     // Emitted when the user clicks the exit (X) icon in the title
     // bar. main.qml owns the actual quit decision so it can show the
